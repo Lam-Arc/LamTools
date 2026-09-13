@@ -2,7 +2,7 @@
   <section class="settings-panel">
     <header class="settings-title">
       <h1>搜索</h1>
-      <p>管理 web_search 工具使用的搜索引擎内核。默认内核与参数写入 <code>.lam/core/config/websearch.jsonc</code>，保存后即时生效。</p>
+      <p>管理 web_search 工具使用的搜索引擎内核与网络代理，保存到 websearch 插件配置后即时生效。</p>
     </header>
 
     <p v-if="error" class="hook-error">{{ error }}</p>
@@ -64,6 +64,21 @@
         />
       </label>
 
+      <label class="field">
+        <span>DuckDuckGo 本地代理端口（可选）</span>
+        <input
+          v-model.number="form.proxyPort"
+          type="number"
+          min="1"
+          max="65535"
+          inputmode="numeric"
+          placeholder="7890"
+          aria-label="DuckDuckGo 本地代理端口"
+          :disabled="loading || saving"
+        />
+        <span class="hook-meta">留空时直连；填写后使用 http://127.0.0.1:端口。</span>
+      </label>
+
       <p v-if="saved" class="hook-meta" role="status"><Check :size="12" :stroke-width="2.2" aria-hidden="true" /> 已保存</p>
     </article>
 
@@ -85,7 +100,7 @@
         spellcheck="false"
         aria-label="websearch.jsonc 内容"
         :disabled="configSaving"
-        placeholder="{ &quot;provider&quot;: &quot;baidu&quot;, &quot;limit&quot;: 5, &quot;timeout&quot;: 15 }"
+        placeholder="{ &quot;provider&quot;: &quot;ddg&quot;, &quot;proxy_port&quot;: 7890 }"
       />
       <p class="hook-meta" :class="{ 'hook-config-error': configError }">
         <Check v-if="configSaved" :size="12" :stroke-width="2.2" aria-hidden="true" />
@@ -130,6 +145,7 @@ const form = reactive({
   provider: 'baidu',
   limit: 5,
   timeout: 15,
+  proxyPort: 0,
 })
 
 const providerOptions = [
@@ -152,6 +168,7 @@ interface ParsedConfig {
   provider?: string
   limit?: number
   timeout?: number
+  proxy_port?: number
   [key: string]: unknown
 }
 
@@ -208,6 +225,7 @@ function syncFormFromContent(content: string) {
   form.provider = typeof parsed.provider === 'string' && parsed.provider ? parsed.provider : 'baidu'
   form.limit = typeof parsed.limit === 'number' ? parsed.limit : 5
   form.timeout = typeof parsed.timeout === 'number' ? parsed.timeout : 15
+  form.proxyPort = typeof parsed.proxy_port === 'number' ? parsed.proxy_port : 0
   activeProvider.value = form.provider
   configOriginal.value = content || JSON.stringify({ provider: 'baidu' }, null, 2)
   configDraft.value = configOriginal.value
@@ -237,6 +255,8 @@ function toJsoncContent(): string {
   else delete data.limit
   if (form.timeout > 0) data.timeout = form.timeout
   else delete data.timeout
+  if (form.proxyPort > 0) data.proxy_port = form.proxyPort
+  else delete data.proxy_port
   return JSON.stringify(data, null, 2)
 }
 

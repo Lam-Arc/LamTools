@@ -1,4 +1,4 @@
-import { effectScope } from 'vue'
+import { effectScope, nextTick } from 'vue'
 import { describe, expect, it } from 'vitest'
 import { createWorkbench } from '../src/workbench/createWorkbench'
 import type { CoreAppEvent, CoreAppSnapshot } from '../src/appServer/protocol'
@@ -27,6 +27,64 @@ function snapshot(threadId: string): CoreAppSnapshot {
       turns: {},
       items: {},
       item_order: [],
+      requests: {},
+      artifacts: {},
+      status: 'idle',
+    },
+  }
+}
+
+function pagedSnapshot(
+  threadId: string,
+  firstTurn: number,
+  lastTurn: number,
+  hasMore: boolean,
+): CoreAppSnapshot {
+  const turns: NonNullable<CoreAppSnapshot['turns']> = {}
+  const items: NonNullable<CoreAppSnapshot['core']>['items'] = {}
+  const itemOrder: string[] = []
+  for (let index = firstTurn; index <= lastTurn; index += 1) {
+    const turnId = `turn-${index}`
+    const itemId = `assistant-${index}`
+    itemOrder.push(itemId)
+    turns[turnId] = { turn_id: turnId, status: 'completed', items: [itemId] }
+    items[itemId] = {
+      item_id: itemId,
+      turn_id: turnId,
+      seq: index,
+      kind: 'message',
+      type: 'agentMessage',
+      status: 'completed',
+      content: `answer ${index}`,
+      payload: { type: 'agentMessage' },
+    }
+  }
+  return {
+    thread_id: threadId,
+    snapshot_seq: 20,
+    turns,
+    items: {},
+    item_order: [],
+    queue: [],
+    requests: {},
+    status: 'idle',
+    history_page: {
+      char_limit: 200_000,
+      character_count: 0,
+      turn_limit: 10,
+      turn_count: lastTurn - firstTurn + 1,
+      item_count: itemOrder.length,
+      total_items: 20,
+      has_more: hasMore,
+      next_before_item_id: hasMore ? itemOrder[0] : null,
+      next_before_seq: hasMore ? firstTurn : null,
+    },
+    core: {
+      thread_id: threadId,
+      snapshot_seq: 20,
+      turns,
+      items,
+      item_order: itemOrder,
       requests: {},
       artifacts: {},
       status: 'idle',
@@ -88,6 +146,25 @@ class GatedClient implements CoreAppServerRuntimeClient {
   }
   respondServerRequest(): boolean { return false }
   close(): void { this.connected = false }
+}
+
+class HistoryPrefetchClient implements CoreAppServerRuntimeClient {
+  readonly calls: Array<{ method: string; params?: Record<string, unknown> }> = []
+
+  constructor(
+    private readonly threadId: string,
+    private readonly onState: (state: 'connecting' | 'open' | 'closed' | 'error') => void,
+  ) {}
+
+  async connect(): Promise<void> { this.onState('open') }
+  async request(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.calls.push({ method, params })
+    if (method === 'thread/resume') return { snapshot: pagedSnapshot(this.threadId, 11, 20, true) }
+    if (method === 'thread.history') return { snapshot_page: pagedSnapshot(this.threadId, 1, 10, false) }
+    return {}
+  }
+  respondServerRequest(): boolean { return false }
+  close(): void {}
 }
 
 describe('shared Workbench runtime', () => {
@@ -178,6 +255,42 @@ describe('shared Workbench runtime', () => {
     await new Promise((resolve) => setTimeout(resolve, 70))
 
     expect(runtime.sessions.value[0]?.status).toBe('completed')
+    scope.stop()
+  })
+
+  it('prefetches one complete history page and reveals it without a foreground RPC', async () => {
+    const sessions: CoreSessionListItem[] = [
+      { id: 'thread-history', title: 'History', status: 'idle', createdAt: '' },
+    ]
+    let client!: HistoryPrefetchClient
+    const scope = effectScope()
+    const runtime = scope.run(() => createWorkbench({
+      transport: new FakeTransport(),
+      sessions: { listSessions: async () => sessions },
+      clientFactory: {
+        createClient: ({ onConnectionState }) => {
+          client = new HistoryPrefetchClient('thread-history', onConnectionState)
+          return client
+        },
+      },
+    }))!
+
+    await runtime.refreshSessions()
+    await runtime.selectSession('thread-history')
+    await nextTick()
+    await nextTick()
+
+    const prefetchedCalls = client.calls.filter(call => call.method === 'thread.history')
+    expect(prefetchedCalls).toHaveLength(1)
+    expect(prefetchedCalls[0]?.params?.turn_limit).toBe(10)
+    expect(runtime.historyBuffered.value).toBe(true)
+    expect(runtime.messages.value).toHaveLength(10)
+
+    await runtime.loadMoreHistory()
+    expect(client.calls.filter(call => call.method === 'thread.history')).toHaveLength(1)
+    await nextTick()
+    expect(runtime.messages.value).toHaveLength(20)
+    expect(runtime.hasMoreHistory.value).toBe(false)
     scope.stop()
   })
 })

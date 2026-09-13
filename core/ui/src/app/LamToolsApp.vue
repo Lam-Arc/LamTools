@@ -30,6 +30,7 @@
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
+    :show-right-panel-header="false"
     :theme-mode="themeMode"
     :effective-theme-mode="effectiveThemeMode"
     :permission-preset="defaultPermissionPreset"
@@ -55,6 +56,7 @@
     @update-angle="uiPreferences.updateThemeAngle"
     @update-opacity="uiPreferences.updateThemeOpacity"
     @update-text-color="uiPreferences.updateThemeText"
+    @update-process-icon-color="uiPreferences.updateProcessIconColor"
     @add-stop="uiPreferences.addStop"
     @remove-stop="uiPreferences.removeStop"
     @sort-stops="uiPreferences.sortStops"
@@ -111,14 +113,17 @@
   />
   <WorkspaceShell
     ref="shellRef"
-    product-name="LamTools Core"
-    sidebar-title="Core"
+    product-name="Sunday"
+    sidebar-title="Sunday"
     :storage-key="settingsStorageKey"
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
     :show-sidebar-header="false"
     :show-sidebar-header-action="false"
+    :show-right-panel-header="false"
+    :main-content-full-bleed="activePluginMode?.pluginId === 'workflow'"
+    :workflow-mode="activePluginMode?.pluginId === 'workflow'"
     :composer-disabled="composerInputDisabled"
     :composer-send-disabled="composerSendDisabled"
     :composer-placeholder="composerPlaceholder"
@@ -208,10 +213,9 @@
 
     <template #main-header>
       <div v-if="activePluginMode" class="workspace-plugin-header" data-plugin-header></div>
-      <div v-else-if="activeSessionId" class="thread-header">
+      <div v-else-if="activeSessionId" class="thread-header" data-session-header>
         <CoreSessionTitleEditor
           :title="activeSessionTitle"
-          :session-id="activeSessionId"
           :rename="renameActiveSession"
         />
         <button
@@ -247,26 +251,37 @@
         ref="threadScrollEl"
         class="thread"
         :class="{ 'thread--empty-session': isEmptySession }"
-        @scroll.passive="threadScroll.handleScroll"
-        @wheel.passive="threadScroll.handleWheel"
+        @scroll.passive="handleThreadScroll"
+        @wheel="handleThreadWheel"
       >
-        <button
-          v-if="hasMoreHistory"
-          type="button"
-          class="thread-load-earlier"
-          @click="loadEarlierMessages"
-        >
-          加载更早消息（共 {{ totalMessages }} 条）
-        </button>
+        <div class="thread-history-cap-slot">
+          <Transition
+            :css="false"
+            @enter="enterHistoryCap"
+            @leave="leaveHistoryCap"
+            @enter-cancelled="cancelHistoryCapMotion"
+            @leave-cancelled="cancelHistoryCapMotion"
+          >
+            <div
+              v-if="historyPageNetworkLoading"
+              ref="historyCapEl"
+              class="thread-history-cap"
+              role="status"
+              aria-live="polite"
+            >
+              <LoaderCircle class="thread-history-cap-icon" :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <span>正在加载更早消息</span>
+            </div>
+          </Transition>
+        </div>
         <HistoryLoadingIndicator :active="historyLoading" />
         <div
           v-if="isEmptySession"
           class="empty-session-hero"
           data-empty-session-hero
         >
-          <!-- 空会话品牌背景当前不好看，先去掉；后续重新设计后再恢复。 -->
-          <h1 class="empty-session-title">准备开始一个新任务？</h1>
-          <p class="empty-session-description">描述你想完成的事情</p>
+          <SundayLogo class="empty-session-logo" :size="136" animated />
+          <h1 class="empty-session-title">{{ emptySessionGreeting }}</h1>
         </div>
         <ChatThread
           v-else
@@ -294,7 +309,7 @@
         </div>
         <Transition name="thread-jump-latest">
           <button
-            v-if="!isEmptySession && !threadScroll.atBottom.value"
+            v-if="!isEmptySession && !threadScroll.autoFollow.value"
             type="button"
             class="thread-jump-latest"
             aria-label="回到最新消息"
@@ -312,6 +327,12 @@
             <ArrowDown v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </Transition>
+        <div
+          v-if="!isEmptySession"
+          ref="threadBottomSentinel"
+          class="thread-bottom-sentinel"
+          aria-hidden="true"
+        ></div>
       </section>
     </template>
 
@@ -319,7 +340,14 @@
       <div v-if="activePluginMode" class="workspace-plugin-modal" data-plugin-modal></div>
       <CoreProjectSettings
         v-if="showProjectSettings && selectedProject && !activePluginMode"
-        :project="{ id: selectedProject.id, name: selectedProject.name, workRoot: selectedProject.workRoot }"
+        :project="{
+          id: selectedProject.id,
+          name: selectedProject.name,
+          workRoot: selectedProject.workRoot,
+          iconKey: selectedProject.iconKey,
+          colorKey: selectedProject.colorKey,
+        }"
+        :session-id="projectSettingsSessionId"
         :theme="theme"
         :request-rpc="requestConfigOperation"
         :models="availableModels"
@@ -332,6 +360,7 @@
         :project-action-error="projectActionError"
         @close="closeProjectSettings"
         @rename-project="renameProject"
+        @update-project-visual="updateProjectVisual"
         @save-agents="saveAgents"
         @refresh-agents="refreshAgentsContent"
       />
@@ -461,28 +490,30 @@
     </template>
 
     <template #right-panel>
-      <template v-if="activePluginMode">
-        <div class="workspace-plugin-right-panel" data-plugin-right-panel></div>
-      </template>
-      <FileTreePanel
-        v-else-if="stageOpen && activeProjectId"
+      <RightSidebarHost
         :project-id="activeProjectId"
-        :client="projectClient"
-        @open-file="openFileInStage"
-      />
-      <template v-else>
-        <RuntimeChecklistCard class="runtime-checklist-mobile" :step-groups="stepGroups" />
-        <CoreResourceStats
-          :messages="messages"
-          :context-window="executionControls.activeModel.value?.context_window"
-        />
-        <ArtifactPanel
-          v-if="activeProjectId"
-          :project-id="activeProjectId"
-          :transport="transport"
-          :request-rpc="requestConfigOperation"
-        />
-      </template>
+        :work-root="activeProject?.workRoot || null"
+        :session-id="activeSessionId"
+        :request-rpc="requestConfigOperation"
+        :transport="transport"
+        :messages="messages"
+        :context-window="executionControls.activeModel.value?.context_window"
+        :runtime-status="latestStatus"
+        :runtime-mode-label="runtimeModeLabel"
+        :stage-open="stageOpen"
+        :active-plugin-id="activePluginMode?.pluginId || null"
+        :active-mode-id="activePluginMode?.id || null"
+        :plugin-contributions="activePluginSidebarContributions"
+      >
+        <template #stage>
+          <FileTreePanel
+            v-if="activeProjectId"
+            :project-id="activeProjectId"
+            :client="projectClient"
+            @open-file="openFileInStage"
+          />
+        </template>
+      </RightSidebarHost>
     </template>
   </WorkspaceShell>
 
@@ -523,7 +554,9 @@ import { isInternalSession, isPluginOwnedSession } from '../sessions/visibility'
 import {
   buildCoreProjectGroups,
   type CoreProject,
+  type CoreProjectColorKey,
   type CoreProjectCreatePayload,
+  type CoreProjectIconKey,
 } from '../projects/types'
 import { createCoreProjectClient } from '../projects/client'
 import { createCoreProjectWorkspaceActions } from '../projects/workspace'
@@ -535,6 +568,9 @@ import type { LamToolsRuntime } from './runtime'
 import { buildCoreComposerHighlightSegments } from '../composer/inputItems'
 import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
 import {
+  coreApplyHistoryScrollCeiling,
+  coreHistoryAutoLoadThreshold,
+  coreShouldAutoLoadHistory,
   readUpdateAutoCheck,
   useCoreAutoFollowScroll,
   useCoreExecutionControlsState,
@@ -551,7 +587,6 @@ import ChatThread from '../components/ChatThread.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreWorkspaceMenu from '../components/CoreWorkspaceMenu.vue'
-import CoreResourceStats from '../components/CoreResourceStats.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
 import CoreArrangeManager from '../components/CoreArrangeManager.vue'
 import CoreGoalStrip from '../components/CoreGoalStrip.vue'
@@ -562,7 +597,6 @@ import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreProjectPicker from '../components/CoreProjectPicker.vue'
 import CoreStartPage, { type CoreRecentProject } from '../components/CoreStartPage.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
-import ArtifactPanel from '../components/ArtifactPanel.vue'
 import { ContextMenuHost } from '../components/context-menu'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import PluginsShell from '../components/PluginsShell.vue'
@@ -581,9 +615,11 @@ import type {
   MobileControlPairing,
 } from '../components/MobileControlPanel.vue'
 import CoreProjectSettings from '../components/CoreProjectSettings.vue'
+import SundayLogo from '../components/SundayLogo.vue'
 import RuntimeChecklistCard from '../components/RuntimeChecklistCard.vue'
 import SessionSidebar, { type SessionExportFormat } from '../components/SessionSidebar.vue'
 import WorkspaceShell from '../components/WorkspaceShell.vue'
+import RightSidebarHost from '../components/RightSidebarHost.vue'
 import TitleBar from '../components/TitleBar.vue'
 import PluginModeHost from '../components/PluginModeHost.vue'
 import { refreshPluginUIModes } from '../plugins/api'
@@ -1123,6 +1159,9 @@ const activePluginSurface = computed<PluginModeSurface | undefined>(() => {
   const mode = activePluginMode.value
   return mode ? pluginModeRuntime.get(mode.pluginId + ':' + mode.id) : undefined
 })
+const activePluginSidebarContributions = computed(() => (
+  readPluginSurface(activePluginSurface.value?.rightSidebar, [])
+))
 const nextAppModeTitle = computed(() => {
   const modes = appModes.value
   if (modes.length < 2) return '没有可切换的插件模式'
@@ -1141,7 +1180,7 @@ function isActivePluginSession(): boolean {
 const composerPlaceholder = computed(() => (
   activePluginMode.value
     ? readPluginSurface(activePluginSurface.value?.composerPlaceholder, '输入内容…')
-    : '给 Core Agent 发送任务...'
+    : '给 Sunday 发送任务...'
 ))
 
 const composerInputDisabled = computed(() => {
@@ -1154,7 +1193,7 @@ const composerInputDisabled = computed(() => {
 })
 
 const composerSendDisabled = computed(() => {
-  if (activePluginMode.value) return composerInputDisabled.value
+  if (activePluginMode.value) return composerInputDisabled.value || !composerText.value.trim()
   return composerInputDisabled.value
     || !activeSessionId.value
     || (!composerText.value.trim() && pendingAttachments.value.length === 0)
@@ -1279,30 +1318,162 @@ const defaultPermissionPreset = ref<CorePermissionPreset>('ask')
 const allowAccessOutsideWorkdir = ref(false)
 const { pendingAttachments, attachmentInputItems, addUploaded, markFailed, removeAttachment, clearAttachments } = usePendingAttachments()
 const threadScrollEl = ref<HTMLElement | null>(null)
+const threadBottomSentinel = ref<HTMLElement | null>(null)
 const latestActivityIndicator = ref<HTMLElement | null>(null)
-const threadScroll = useCoreAutoFollowScroll(threadScrollEl)
+const historyCapEl = ref<HTMLElement | null>(null)
+const threadScroll = useCoreAutoFollowScroll(threadScrollEl, { sentinelRef: threadBottomSentinel })
+const historyPageLoading = ref(false)
+const historyPageNetworkLoading = ref(false)
 const COMPOSER_MAX_ROWS = 5
-let threadResizeObserver: ResizeObserver | null = null
-let threadResizeObserverTarget: HTMLElement | null = null
+let threadBottomObserver: IntersectionObserver | null = null
+let threadBottomObserverRoot: HTMLElement | null = null
+let threadBottomObserverTarget: HTMLElement | null = null
 let latestActivityMotion: gsap.MatchMedia | null = null
 let latestActivityTween: gsap.core.Tween | null = null
+let historyScrollCeiling: number | null = null
+let restoringHistoryAnchor = false
+
+function historyCapReducedMotion(): boolean {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+function cancelHistoryCapMotion(element?: Element): void {
+  const target = element instanceof HTMLElement ? element : historyCapEl.value
+  if (target) gsap.killTweensOf(target)
+}
+
+function enterHistoryCap(element: Element, done: () => void): void {
+  const target = element as HTMLElement
+  cancelHistoryCapMotion(target)
+  if (historyCapReducedMotion()) {
+    gsap.set(target, { autoAlpha: 1, y: 0 })
+    done()
+    return
+  }
+  gsap.fromTo(
+    target,
+    { autoAlpha: 0, y: -6 },
+    { autoAlpha: 1, y: 0, duration: 0.18, ease: 'power2.out', onComplete: done },
+  )
+}
+
+function leaveHistoryCap(element: Element, done: () => void): void {
+  const target = element as HTMLElement
+  cancelHistoryCapMotion(target)
+  if (historyCapReducedMotion()) {
+    gsap.set(target, { autoAlpha: 0, y: 0 })
+    done()
+    return
+  }
+  gsap.to(target, {
+    autoAlpha: 0,
+    y: -4,
+    duration: 0.12,
+    ease: 'power1.in',
+    onComplete: done,
+  })
+}
+
+interface ThreadHistoryAnchor {
+  element: HTMLElement
+  viewportOffset: number
+}
+
+function captureThreadHistoryAnchor(el: HTMLElement): ThreadHistoryAnchor | null {
+  const viewportTop = el.getBoundingClientRect().top
+  const candidates = Array.from(el.querySelectorAll<HTMLElement>('[data-message-id]'))
+  const element = candidates.find(candidate => candidate.getBoundingClientRect().bottom >= viewportTop)
+  if (!element) return null
+  return {
+    element,
+    viewportOffset: element.getBoundingClientRect().top - viewportTop,
+  }
+}
+
+function restoreThreadHistoryAnchor(el: HTMLElement, anchor: ThreadHistoryAnchor | null): boolean {
+  if (!anchor || !anchor.element.isConnected || !el.contains(anchor.element)) return false
+  const currentOffset = anchor.element.getBoundingClientRect().top - el.getBoundingClientRect().top
+  const delta = currentOffset - anchor.viewportOffset
+  if (Math.abs(delta) >= 0.5) el.scrollTop += delta
+  return true
+}
+
+function afterHistoryLayoutFrame(): Promise<void> {
+  if (typeof requestAnimationFrame !== 'function') return Promise.resolve()
+  return new Promise(resolve => requestAnimationFrame(() => resolve()))
+}
 
 async function loadEarlierMessages(): Promise<void> {
+  if (historyPageLoading.value || !hasMoreHistory.value) return
+  const sessionId = activeSessionId.value
+  if (!sessionId) return
   const el = threadScrollEl.value
   const prevScrollTop = el?.scrollTop ?? 0
   const prevHeight = el?.scrollHeight ?? 0
-  await loadMoreHistory()
-  await nextTick()
-  // Keep the viewport anchored: new history prepends above, so shift the
-  // scroll position by the height delta. The ResizeObserver's follow is
-  // gated by autoFollow (false while the user is not at the bottom), so it
-  // cannot yank us back down.
-  if (el && el.scrollHeight > prevHeight) {
-    el.scrollTop = prevScrollTop + (el.scrollHeight - prevHeight)
-    // Re-sync controller state with the real landed position so the
-    // "回到最新" affordance and follow gate stay truthful after the anchor.
-    threadScroll.handleScroll()
+  const anchor = el ? captureThreadHistoryAnchor(el) : null
+  historyScrollCeiling = el?.scrollTop ?? null
+  historyPageLoading.value = true
+  historyPageNetworkLoading.value = !historyBuffered.value
+  try {
+    await loadMoreHistory()
+    await nextTick()
+    if (activeSessionId.value !== sessionId) return
+    // Preserve the first visible message at its exact viewport coordinate.
+    // Unlike scrollHeight deltas this remains stable with content-visibility
+    // estimates and variable-height process cards.
+    if (el && el === threadScrollEl.value) {
+      restoringHistoryAnchor = true
+      try {
+        if (!restoreThreadHistoryAnchor(el, anchor) && el.scrollHeight > prevHeight) {
+          el.scrollTop = prevScrollTop + (el.scrollHeight - prevHeight)
+        }
+        historyScrollCeiling = el.scrollTop
+        await afterHistoryLayoutFrame()
+        restoreThreadHistoryAnchor(el, anchor)
+        historyScrollCeiling = el.scrollTop
+        threadScroll.handleScroll()
+      } finally {
+        restoringHistoryAnchor = false
+      }
+    }
+  } finally {
+    historyScrollCeiling = null
+    restoringHistoryAnchor = false
+    historyPageLoading.value = false
+    historyPageNetworkLoading.value = false
   }
+}
+
+function handleThreadWheel(event: WheelEvent): void {
+  threadScroll.handleWheel(event)
+  if (historyPageLoading.value && historyScrollCeiling !== null && event.deltaY < 0) {
+    event.preventDefault()
+  }
+}
+
+function handleThreadScroll(): void {
+  const el = threadScrollEl.value
+  if (el && !restoringHistoryAnchor) {
+    const cappedScrollTop = coreApplyHistoryScrollCeiling(
+      el.scrollTop,
+      historyScrollCeiling,
+      historyPageLoading.value,
+    )
+    if (cappedScrollTop !== el.scrollTop) {
+      el.scrollTop = cappedScrollTop
+      return
+    }
+  }
+  threadScroll.handleScroll()
+  if (!el || !coreShouldAutoLoadHistory(
+    el.scrollTop,
+    hasMoreHistory.value,
+    historyPageLoading.value,
+    coreHistoryAutoLoadThreshold(el.clientHeight),
+  )) return
+  void loadEarlierMessages().catch(error => setLoadError(messageFromError(error)))
 }
 
 const defaultModel = computed(() => (
@@ -1469,6 +1640,10 @@ const activeProjectId = computed(() => {
 const activeProject = computed(() => (
   projects.value.find((project) => project.id === activeProjectId.value) || null
 ))
+const projectSettingsSessionId = computed(() => {
+  if (!activeSessionId.value || selectedProject.value?.id !== activeProjectId.value) return undefined
+  return activeSessionId.value
+})
 const projectWorkspace = createCoreProjectWorkspaceActions({
   client: projectClient,
   projects,
@@ -1525,7 +1700,7 @@ const { activeGoal, goalError, refreshGoal, handleCancelGoal } = useCoreGoals({
   activeSessionId,
   requestRpc: appRuntime.requestRpc,
 })
-const { messages, processExpandedIds, toggleProcess, hasMoreHistory, totalMessages, loadMoreHistory } = workbench
+const { messages, processExpandedIds, toggleProcess, hasMoreHistory, historyBuffered, loadMoreHistory } = workbench
 const historyLoading = computed(() => (
   Boolean(activeSessionId.value)
   && historyLoadingSessionId.value === activeSessionId.value
@@ -1536,6 +1711,16 @@ const isEmptySession = computed(() => (
   && !historyLoading.value
   && messages.value.length === 0
 ))
+const EMPTY_SESSION_GREETINGS = ['就当给自己放个假', '芜湖，我来帮忙咯!'] as const
+const pickEmptySessionGreeting = () => (
+  EMPTY_SESSION_GREETINGS[Math.floor(Math.random() * EMPTY_SESSION_GREETINGS.length)]
+)
+const emptySessionGreeting = ref<(typeof EMPTY_SESSION_GREETINGS)[number]>(pickEmptySessionGreeting())
+watch([activeSessionId, isEmptySession], ([sessionId, empty], [previousSessionId, previousEmpty]) => {
+  if (empty && (!previousEmpty || sessionId !== previousSessionId)) {
+    emptySessionGreeting.value = pickEmptySessionGreeting()
+  }
+})
 
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
@@ -1732,7 +1917,11 @@ async function renameProject(nameFromEditor?: string) {
   const project = selectedProject.value
   if (nameFromEditor !== undefined) projectNameDraft.value = nameFromEditor
   const name = projectNameDraft.value.trim()
-  if (!project || !name) return
+  if (!project || !name || projectActionLoading.value) return
+  if (name === project.name) {
+    projectNameDraft.value = project.name
+    return
+  }
   projectActionLoading.value = true
   projectActionError.value = ''
   try {
@@ -1801,6 +1990,24 @@ async function renameSession(sessionId: string, title: string) {
     body: { title },
   }))
   sessions.value = sessions.value.map((session) => session.id === sessionId ? updated : session)
+}
+
+async function updateProjectVisual(iconKey: CoreProjectIconKey, colorKey: CoreProjectColorKey) {
+  const project = selectedProject.value
+  if (!project || projectActionLoading.value) return
+  if (project.iconKey === iconKey && project.colorKey === colorKey) return
+  projectActionLoading.value = true
+  projectActionError.value = ''
+  try {
+    await projectWorkspace.updateProject(project.id, {
+      icon_key: iconKey,
+      color_key: colorKey,
+    })
+  } catch (error) {
+    projectActionError.value = messageFromError(error)
+  } finally {
+    projectActionLoading.value = false
+  }
 }
 
 async function renameSessionFromSidebar(sessionId: string, title: string): Promise<void> {
@@ -2525,24 +2732,17 @@ function persistSessionPermissionPreset(preset: CorePermissionPreset): Promise<v
   const sessionId = activeSessionId.value
   const session = sessions.value.find((item) => item.id === sessionId)
   if (!sessionId || !session) return Promise.resolve()
-
-  const metadata: Record<string, unknown> = { ...(session.metadata || {}) }
-  const existing = metadata.runtime_preferences
-  const preferences = existing && typeof existing === 'object' && !Array.isArray(existing)
-    ? { ...(existing as Record<string, unknown>) }
-    : {}
-  preferences.permission_preset = preset
-  metadata.runtime_preferences = preferences
   const generation = ++permissionPersistenceGeneration
 
   permissionPersistence = permissionPersistence.then(async () => {
     // Keep writes ordered so a quick ask → auto → full_access sequence cannot
     // leave the session with an older response that arrived last.
     try {
-      const updated = await requestJson<RawSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
-        method: 'PATCH',
-        body: { metadata },
+      const result = await requestConfigOperation('session.permissions.set', {
+        thread_id: sessionId,
+        permission_preset: preset,
       })
+      const updated = result.session as RawSession
       if (generation !== permissionPersistenceGeneration) return
       sessions.value = sessions.value.map((item) => (
         item.id === sessionId ? { ...item, metadata: updated.metadata } : item
@@ -2755,33 +2955,35 @@ async function loadModelOptions() {
   }
 }
 
-function syncThreadResizeObserver() {
-  if (typeof ResizeObserver === 'undefined') return
-  const element = threadScrollEl.value
-  if (!element) return
-  // Rebuild only when the observed element actually changed. The .thread
-  // element is replaced when switching the top-level mode (v-if/v-else) or when
-  // the app re-mounts it — pointing the observer at a dead old element would
-  // silently kill auto-follow. Cheap guard: compare against the current
-  // observer's captured element target.
-  if (threadResizeObserver && threadResizeObserverTarget === element) return
-  threadResizeObserver?.disconnect()
-  threadResizeObserver = null
-  threadResizeObserverTarget = null
-  // Single unified channel: any content/size change near the bottom follows,
-  // anything else is ignored by the controller's autoFollow gate.
-  threadResizeObserver = new ResizeObserver(() => {
-    void threadScroll.scrollToBottom()
-  })
-  threadResizeObserverTarget = element
-  threadResizeObserver.observe(element)
-  // Observe direct children (e.g. .chat-thread) — content inside them grows
-  // without necessarily resizing `element` itself if the outer is the scroller.
-  for (const child of Array.from(element.children)) {
-    if (child instanceof HTMLElement) {
-      threadResizeObserver.observe(child)
+function syncThreadBottomObserver() {
+  const root = threadScrollEl.value
+  const target = threadBottomSentinel.value
+  if (
+    threadBottomObserver
+    && threadBottomObserverRoot === root
+    && threadBottomObserverTarget === target
+  ) return
+
+  threadBottomObserver?.disconnect()
+  threadBottomObserver = null
+  threadBottomObserverRoot = root
+  threadBottomObserverTarget = target
+  if (typeof IntersectionObserver === 'undefined' || !root || !target) return
+
+  threadBottomObserver = new IntersectionObserver((entries) => {
+    const entry = entries.find(item => item.target === target)
+    if (!entry) return
+    const wasFollowing = threadScroll.autoFollow.value
+    threadScroll.handleSentinelVisibility(entry.isIntersecting)
+    if (!entry.isIntersecting && wasFollowing) {
+      void threadScroll.scrollToBottom()
     }
-  }
+  }, {
+    root,
+    rootMargin: '0px',
+    threshold: 1,
+  })
+  threadBottomObserver.observe(target)
 }
 
 function toSession(raw: RawSession): CoreSessionListItem {
@@ -2847,8 +3049,7 @@ watch(messages, (newVal, oldVal) => {
   const oldIds = new Set((oldVal || []).map(m => m.id))
   const newUserMsgs = (newVal || []).filter(m => !oldIds.has(m.id) && m.role === 'user')
   if (newUserMsgs.length > 0) pendingPlaceholder.value = null
-  // 滚动跟随已统一由 ResizeObserver 单一通道驱动（见 syncThreadResizeObserver），
-  // 这里不再重建 observer / 隐式滚动 —— 消除历史补丁堆叠。
+  // 滚动跟随由底部哨兵单一通道驱动；这里不再按消息变化隐式写 scrollTop。
 }, { deep: true })
 
 watch([activeSessionId, messages, latestStatus], ([threadId]) => {
@@ -2878,13 +3079,9 @@ onMounted(() => {
   // Ctrl+K 全局搜索（与侧边栏「搜索」同一个 SearchShell——统一入口）
   window.addEventListener('keydown', handleGlobalSearchKeydown)
   window.addEventListener('lamtools:projects-synced', handleProjectsSynced)
-  // 滚动跟随唯一通道：容器高度变化 -> 控制器 gating（易错点 5/9/10）。
-  // 线程元素在顶层模式切换时会被 Vue 销毁重建（v-if/v-else），
-  // 因此这里用 watch(threadScrollEl) 跟随元素生命周期重建 observer，
-  // 而不是 app 生命周期一次性建立。
-  watch(threadScrollEl, () => {
-    syncThreadResizeObserver()
-    // 元素重建后强制回到底部一次，恢复跟随意图
+  // 底部哨兵是吸底的唯一事实来源；元素切换时重建 observer。
+  watch([threadScrollEl, threadBottomSentinel], () => {
+    syncThreadBottomObserver()
     threadScroll.reset()
     void threadScroll.scrollToBottom(true)
   }, { immediate: true })
@@ -2913,9 +3110,13 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalSearchKeydown)
   window.removeEventListener('lamtools:projects-synced', handleProjectsSynced)
   stopLatestActivityMotion()
-  threadResizeObserver?.disconnect()
-  threadResizeObserver = null
-  threadResizeObserverTarget = null
+  cancelHistoryCapMotion()
+  historyScrollCeiling = null
+  restoringHistoryAnchor = false
+  threadBottomObserver?.disconnect()
+  threadBottomObserver = null
+  threadBottomObserverRoot = null
+  threadBottomObserverTarget = null
   workbench.disconnect()
 })
 </script>
@@ -3108,39 +3309,69 @@ onUnmounted(() => {
   color: var(--text, #f2efeb);
 }
 
+/* The zero-height sticky slot keeps the paging status above the viewport
+   without inserting a new row into the message layout. */
+.thread-history-cap-slot {
+  position: sticky;
+  top: var(--space-6, 32px);
+  z-index: var(--z-edge-trigger, 35);
+  height: 0;
+  margin-block-end: calc(-1 * var(--space-4, 16px));
+  display: flex;
+  justify-content: center;
+  overflow: visible;
+  pointer-events: none;
+}
+.thread-history-cap {
+  --text: var(--theme-main-text);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  width: fit-content;
+  margin-top: var(--space-2, 8px);
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius);
+  background: var(--theme-main-background);
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+  box-shadow: var(--shadow-sm);
+  font-size: 12px;
+  line-height: 1;
+  will-change: transform, opacity;
+}
+.thread-history-cap-icon {
+  flex: 0 0 auto;
+  animation: thread-history-cap-spin 0.9s linear infinite;
+  will-change: transform;
+}
+
+.thread-bottom-sentinel {
+  width: 100%;
+  height: 1px;
+  margin-block-start: calc(-1 * var(--space-4, 16px));
+  transform: translateY(calc(
+    var(--composer-bottom-offset, 0px) +
+    var(--composer-rest-bottom, 16px) +
+    var(--composer-clearance, 24px) - 1px
+  ));
+  pointer-events: none;
+}
+@keyframes thread-history-cap-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-history-cap-icon {
+    animation: none;
+    will-change: auto;
+  }
+}
+
 /* ── "回到最新" floating affordance ──
    Anchored to the bottom of the .thread scroll container via sticky
    positioning (the .workspace-main ancestor is itself position:fixed,
    so a fixed-positioned button would escape the content column). Stays
    below the composer (z-edge-trigger < z-composer) and follows the
    control-area surface recipe per the design spec. */
-.thread-load-earlier {
-  --text: var(--theme-control-text);
-  width: fit-content;
-  margin: var(--space-3, 12px) auto var(--space-2, 8px);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  border-radius: var(--radius-sm);
-  background: var(--theme-control-background);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 560;
-  line-height: 1;
-  box-shadow: var(--shadow-sm);
-  cursor: pointer;
-  transition: background .18s ease, transform .18s ease;
-}
-.thread-load-earlier:hover {
-  background: color-mix(in srgb, var(--text) var(--alpha-hover, 8%), var(--theme-control-background));
-}
-.thread-load-earlier:active {
-  background: color-mix(in srgb, var(--text) var(--alpha-active, 12%), var(--theme-control-background));
-  transform: translateY(1px);
-}
 .thread-jump-latest {
   --text: var(--theme-control-text);
   position: sticky;
@@ -3153,20 +3384,66 @@ onUnmounted(() => {
   width: var(--space-6, 32px);
   height: var(--space-6, 32px);
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid color-mix(in srgb, var(--text) 24%, transparent);
   border-radius: 50%;
-  background: var(--theme-control-background);
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--text) 18%, transparent),
+      color-mix(in srgb, var(--theme-control-solid) 58%, transparent)
+    );
   color: var(--text);
-  box-shadow: var(--shadow-sm);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text) 38%, transparent),
+    inset 0 calc(-1 * var(--space-1)) var(--space-2) color-mix(in srgb, var(--theme-control-solid) 28%, transparent),
+    var(--shadow-sm);
+  -webkit-backdrop-filter: blur(var(--space-3)) saturate(1.2);
+  backdrop-filter: blur(var(--space-3)) saturate(1.2);
   cursor: pointer;
-  transition: background .18s ease, transform .18s ease;
+  transition:
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+.thread-jump-latest::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+.thread-jump-latest::after {
+  z-index: 0;
+  inset: 0;
+  border-radius: inherit;
+  background: transparent;
+  transition: background-color var(--dur-base) var(--ease-out);
+}
+.thread-jump-latest > svg,
+.thread-jump-latest-spinner {
+  position: relative;
+  z-index: 1;
 }
 .thread-jump-latest:hover {
-  background: color-mix(in srgb, var(--text) var(--alpha-hover, 8%), var(--theme-control-background));
+  border-color: color-mix(in srgb, var(--text) 38%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text) 46%, transparent),
+    inset 0 calc(-1 * var(--space-1)) var(--space-2) color-mix(in srgb, var(--theme-control-solid) 28%, transparent),
+    var(--shadow-sm);
+  transform: translateY(-1px);
+}
+.thread-jump-latest:hover::after {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover, 8%), transparent);
 }
 .thread-jump-latest:active {
-  background: color-mix(in srgb, var(--text) var(--alpha-active, 12%), var(--theme-control-background));
   transform: translateY(1px);
+}
+.thread-jump-latest:active::after {
+  background: color-mix(in srgb, var(--text) var(--alpha-active, 12%), transparent);
+}
+.thread-jump-latest:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text) 72%, transparent);
+  outline-offset: 2px;
 }
 .thread-jump-latest-spinner {
   display: inline-flex;
@@ -3196,6 +3473,9 @@ onUnmounted(() => {
   .thread-jump-latest-leave-active {
     transition: opacity .18s ease;
     transform: none;
+  }
+  .thread-jump-latest::after {
+    transition: none;
   }
   .thread-jump-latest-enter-from,
   .thread-jump-latest-leave-to {

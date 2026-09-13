@@ -1,8 +1,11 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   DEFAULT_THEME,
+  SUNDAY_DARK_THEME,
+  SUNDAY_LIGHT_THEME,
   addGradientStop,
   normalizeTheme,
+  normalizeColor,
   removeGradientStop,
   sortGradientStops,
   type ThemeArea,
@@ -52,8 +55,8 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
   const contentWidth = ref(780)
   const themeMode = ref<ThemeMode>('system')
   const systemPrefersDark = ref(false)
-  const lightTheme = ref<ThemeData>(normalizeTheme({ ...DEFAULT_THEME }))
-  const darkTheme = ref<ThemeData>(normalizeTheme({ ...DEFAULT_THEME }))
+  const lightTheme = ref<ThemeData>(normalizeTheme({ ...SUNDAY_LIGHT_THEME }))
+  const darkTheme = ref<ThemeData>(normalizeTheme({ ...SUNDAY_DARK_THEME }))
   const effectiveThemeMode = computed<'light' | 'dark'>(() => (
     themeMode.value === 'system' ? (systemPrefersDark.value ? 'dark' : 'light') : themeMode.value
   ))
@@ -124,9 +127,8 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
   }
   function resetTheme() {
     runThemeTransition(() => {
-      const next = normalizeTheme({ ...DEFAULT_THEME })
-      lightTheme.value = next
-      darkTheme.value = next
+      lightTheme.value = normalizeTheme({ ...SUNDAY_LIGHT_THEME })
+      darkTheme.value = normalizeTheme({ ...SUNDAY_DARK_THEME })
       void save()
     })
   }
@@ -141,6 +143,9 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
   function updateThemeAngle(area: ThemeArea, value: number) { setThemeField(`${area}Angle`, value) }
   function updateThemeOpacity(area: ThemeArea, value: number) { setThemeField(`${area}Opacity`, value) }
   function updateThemeText(area: ThemeArea, value: string) { setThemeField(`${area}Text`, value) }
+  function updateProcessIconColor(value: string) {
+    setThemeField('processIconColor', normalizeColor(value, theme.value.processIconColor))
+  }
   function addStop(area: ThemeArea) { editStops(area, addGradientStop) }
   function removeStop(area: ThemeArea, index: number) { editStops(area, stops => removeGradientStop(stops, index)) }
   function sortStops(area: ThemeArea) { editStops(area, sortGradientStops) }
@@ -169,7 +174,7 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
   return {
     density, contentWidth, theme, themeMode, effectiveThemeMode, load, save, snapshot, setDensity, setContentWidth, setThemeMode,
     resetTheme, applyThemePreset, updateThemeStops, updateThemeAngle, updateThemeOpacity,
-    updateThemeText, addStop, removeStop, sortStops,
+    updateThemeText, updateProcessIconColor, addStop, removeStop, sortStops,
   }
 }
 

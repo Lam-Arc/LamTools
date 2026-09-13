@@ -3,15 +3,16 @@
 Each workflow is stored as a **folder** (mirroring the
 :class:`~lamtools_core.skills.SkillRegistry` folder-per-skill convention):
 
+* ``{root}/workflows/<name>/workflow.json`` — canonical atomic V2 document.
 * ``{root}/workflows/<name>/config.json`` — meta (name, description, exposed,
-  tool_name, input_params, output_port, timestamps) + ``map`` (Mermaid-style
-  edge text).
+  tool_name, input_params, output_port, timestamps) + a derived legacy ``map``.
 * ``{root}/workflows/<name>/<nodeId>.json`` — one file per node with
   ``inputs[]``/``outputs[]`` arrays + ``config`` + ``position``.
 
-Splitting nodes into separate files means a single corrupt node file never
-breaks the rest of the workflow (isolation). The ``map`` text is the single
-source of truth for connections; malformed lines are skipped on parse.
+The legacy files are retained for rollback and compatibility but are never a
+second source of truth when ``workflow.json`` exists.  For an old folder with
+no V2 document, explicit edge objects take precedence and ``map`` is only a
+last-resort topology parser.
 
 Legacy single-JSON files (``workflows/<name>.json``) are migrated lazily to
 the folder layout on first read.
@@ -36,6 +37,18 @@ from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     _ports_to_io,
     _serialize_map,
 )
+from .document import (
+    document_from_workflow_def,
+    is_v2_document,
+    workflow_def_from_document,
+)
+
+
+# Managers may be created independently for the same project (for example by
+# an RPC host and a CLI request).  Keep the compare-and-swap critical section
+# keyed by the durable workflow directory rather than by a manager instance so
+# concurrent in-process writers cannot both observe the same revision.
+_MUTATION_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 class WorkflowStore:
@@ -46,6 +59,15 @@ class WorkflowStore:
         # Cache keyed by work_root so concurrent calls with different roots
         # (e.g. global vs project) don't return a stale entry from the other.
         self._cached: dict[str, tuple[Any, list[WorkflowDef]]] = {}
+
+    def mutation_lock(self, work_root: str | Path | None = None) -> asyncio.Lock:
+        """Return the shared mutation lock for one workflow scope."""
+        key = str(self._writable_dir(str(work_root) if work_root else None).resolve()).casefold()
+        lock = _MUTATION_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _MUTATION_LOCKS[key] = lock
+        return lock
 
     # -- discovery --------------------------------------------------------
 
@@ -87,11 +109,13 @@ class WorkflowStore:
         except OSError:
             return
         for p in children:
-            if p.is_dir() and (p / "config.json").is_file():
+            if p.is_dir() and ((p / "workflow.json").is_file() or (p / "config.json").is_file()):
                 _add(p)
             elif p.is_file() and p.suffix == ".json" and p.name != "config.json":
                 # Legacy single-JSON (parent has no config.json).
-                if not (p.parent / "config.json").is_file():
+                if not (p.parent / "config.json").is_file() and not (
+                    p.parent / p.stem / "workflow.json"
+                ).is_file():
                     _add(p)
 
     def _scoped_workflow_entries(self, work_root: str | None) -> list[Path]:
@@ -277,13 +301,8 @@ class WorkflowStore:
             existing = await self._read_entry_async(path)
             if existing is not None and existing.id == definition.id:
                 await self._remove_entry(path)
-        # Remove a legacy single-JSON if it lingers from a pre-folder version.
-        legacy = workflows_dir / (_safe_filename(definition.name) + ".json")
-        if legacy.is_file():
-            try:
-                legacy.unlink()
-            except OSError:
-                pass
+        # Legacy single-JSON sources are retained intentionally.  The V2
+        # folder is preferred on subsequent reads.
         return definition
 
     def _unique_writable_name(self, workflows_dir: Path, name: str) -> str:
@@ -363,13 +382,27 @@ class WorkflowStore:
     def _read_entry(self, path: Path) -> WorkflowDef | None:
         """Read a workflow definition from a folder or legacy single-JSON."""
         try:
-            if path.is_dir() and (path / "config.json").is_file():
+            if path.is_dir() and ((path / "workflow.json").is_file() or (path / "config.json").is_file()):
                 return self._read_folder(path)
         except OSError:
             return None
         return self._read_legacy_file(path)
 
     def _read_folder(self, folder: Path) -> WorkflowDef | None:
+        # V2 is the canonical source whenever present.  Legacy files remain in
+        # place for rollback/interchange but never form a second truth source.
+        document_path = folder / "workflow.json"
+        if document_path.is_file():
+            try:
+                raw_document = json.loads(_read_text(document_path))
+                if is_v2_document(raw_document):
+                    definition = workflow_def_from_document(raw_document)
+                    ensure_workflow_id(definition, seed=str(folder.resolve()))
+                    return definition
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                # A corrupt canonical document must not silently execute stale
+                # legacy files from the same folder.
+                return None
         config_path = folder / "config.json"
         try:
             data = json.loads(_read_text(config_path))
@@ -397,6 +430,7 @@ class WorkflowStore:
         merged = {**data, "nodes": node_dicts, "edges": edges_data}
         definition = WorkflowDef.from_dict(merged)
         ensure_workflow_id(definition, seed=str(folder.resolve()))
+        definition.document = document_from_workflow_def(definition)
         return definition
 
     def _read_legacy_file(self, path: Path) -> WorkflowDef | None:
@@ -409,19 +443,20 @@ class WorkflowStore:
             return None
         definition = WorkflowDef.from_dict(data)
         ensure_workflow_id(definition, seed=str(path.resolve()))
-        if definition.name:
-            # Migrate to folder layout (best-effort, never breaks on failure).
-            folder = path.parent / _safe_filename(definition.name)
-            try:
-                self._write_folder(folder, definition)
-                path.unlink()
-            except OSError:
-                pass  # leave the legacy file; folder may still be readable
+        # Migration is intentionally in-memory and non-destructive.  The next
+        # explicit save writes canonical V2 while retaining this source file.
+        definition.document = document_from_workflow_def(definition)
         return definition
 
     def _write_folder(self, folder: Path, definition: WorkflowDef) -> None:
         """Write config.json + one JSON per node into ``folder``."""
         folder.mkdir(parents=True, exist_ok=True)
+        document = document_from_workflow_def(definition)
+        definition.document = document
+        _write_text_atomic(
+            folder / "workflow.json",
+            json.dumps(document, ensure_ascii=False, indent=2),
+        )
         # config.json — meta + full edges array (source of truth, preserves
         # condition/transform) + human-readable map text (derived rendering).
         config: dict[str, Any] = {
@@ -435,12 +470,13 @@ class WorkflowStore:
             "work_root": definition.work_root,
             "created_at": definition.created_at.isoformat(),
             "updated_at": definition.updated_at.isoformat(),
+            "revision": definition.revision,
             "edges": [e.to_dict() for e in definition.edges],
             "map": _serialize_map(definition.edges, definition.nodes),
         }
         _write_text_atomic(folder / "config.json", json.dumps(config, ensure_ascii=False, indent=2))
         # One JSON per node (inputs/outputs arrays).
-        written: set[Path] = {folder / "config.json"}
+        written: set[Path] = {folder / "config.json", folder / "workflow.json"}
         for node in definition.nodes:
             node_path = folder / (_safe_filename(node.id) + ".json")
             inputs, outputs = _ports_to_io(node)
@@ -453,15 +489,16 @@ class WorkflowStore:
                 "config": _json_copy(node.config),
                 "position": dict(node.position),
             }
+            # Keep the canvas-only relationship in the folder's legacy node
+            # representation too.  ``workflow.json`` remains canonical, but
+            # old-folder readers may have no V2 document to consult.
+            if node.parent_id:
+                node_data["parent_id"] = node.parent_id
             _write_text_atomic(node_path, json.dumps(node_data, ensure_ascii=False, indent=2))
             written.add(node_path)
-        # Clean up orphaned node files (deleted nodes no longer in the def).
-        for existing in folder.glob("*.json"):
-            if existing not in written:
-                try:
-                    existing.unlink()
-                except OSError:
-                    pass
+        # Do not delete legacy node files during V2 migration.  Readers use
+        # workflow.json exclusively, so retained files cannot become a second
+        # source of truth and remain available for rollback/recovery.
 
 
 def _read_text(path: Path) -> str:

@@ -159,6 +159,7 @@ describe('useCoreExecutionControlsState', () => {
         thinking_supported: true,
         thinking_budget: 6_000,
         context_window: 128_000,
+        max_output_tokens: 16_000,
       },
       { id: 'model-2', provider_id: 'provider-2', thinking_supported: true },
     ])
@@ -178,8 +179,8 @@ describe('useCoreExecutionControlsState', () => {
       reasoning_level: 'high',
       shallow_thinking_enabled: true,
       context_window_tokens: 128_000,
+      max_tokens: 16_000,
       active_mode: 'execute',
-      permission_preset: 'ask',
     })
 
     state.selectModel('model-1')

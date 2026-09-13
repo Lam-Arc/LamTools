@@ -1,4 +1,4 @@
-from .files import attachment_modality, detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
+from .files import assert_safe_default_open, attachment_modality, detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
 from .store import CoreAttachmentStore
 from .service import (
     AttachmentRecord,
@@ -16,5 +16,5 @@ __all__ = [
     "CoreAttachmentStore", "attachment_to_dict", "attachment_modality",
     "build_attachment_runtime_input", "build_capability_aware_attachment_input",
     "create_attachment_router", "detect_mime",
-    "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path",
+    "assert_safe_default_open", "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path",
 ]

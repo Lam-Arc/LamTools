@@ -103,6 +103,13 @@ export { default as CoreProjectCreate } from './components/CoreProjectCreate.vue
 export { default as CoreSessionTitleEditor } from './components/CoreSessionTitleEditor.vue';
 export { default as CoreImageGenEditor } from './components/CoreImageGenEditor.vue';
 export { default as ArtifactPanel } from './components/ArtifactPanel.vue';
+export { default as RightSidebarHost } from './components/RightSidebarHost.vue';
+export { default as RightSidebarModule } from './components/RightSidebarModule.vue';
+export { default as RightSidebarLayoutEditor } from './components/RightSidebarLayoutEditor.vue';
+export { default as RightSidebarWidgetRenderer } from './components/RightSidebarWidgetRenderer.vue';
+export { default as RightSidebarRuntimeStatus } from './components/RightSidebarRuntimeStatus.vue';
+export { default as RightSidebarWebSearch } from './components/RightSidebarWebSearch.vue';
+export { default as RightSidebarRag } from './components/RightSidebarRag.vue';
 export { default as CoreAgentsEditor } from './components/CoreAgentsEditor.vue';
 export { default as CoreArrangeManager } from './components/CoreArrangeManager.vue';
 export { default as CoreGoalStrip } from './components/CoreGoalStrip.vue';
@@ -112,16 +119,53 @@ export {
   registerMode,
   getMode,
   listModes,
+  registerWidget,
+  getWidget,
+  listWidgets,
   unregisterPlugin,
+  unregisterWidgets,
 } from './plugins/registry';
-export { listPluginUI, refreshPluginUIModes } from './plugins/api';
+export {
+  listPluginUI,
+  refreshPluginUIModes,
+  listPluginWidgets,
+  getPluginWidget,
+  invokePluginWidget,
+  refreshPluginUIWidgets,
+} from './plugins/api';
+export { PLUGIN_WIDGET_RPC_METHODS } from './plugins/types';
 export type {
   PluginMode,
   PluginModeLoader,
   PluginRpc,
   PluginUIEntry,
   PluginUIListPayload,
+  PluginWidget,
+  PluginWidgetEntry,
+  PluginWidgetLoader,
+  PluginWidgetListPayload,
+  PluginWidgetInvokeParams,
+  PluginWidgetRpcMethod,
+  PluginWidgetAction,
+  RightSidebarWidgetAction,
+  RightSidebarWidgetSnapshot,
 } from './plugins/types';
+export type {
+  RightSidebarLayoutController,
+  RightSidebarLayoutState,
+  RightSidebarModuleDefinition,
+  RightSidebarModuleLoader,
+  RightSidebarModuleStatus,
+  RightSidebarPluginContribution,
+  RightSidebarRpc,
+  RightSidebarWidgetBlock,
+  RightSidebarWidgetState,
+  RightSidebarWidgetTextBlock,
+  RightSidebarWidgetStatusBlock,
+  RightSidebarWidgetMetricBlock,
+  RightSidebarWidgetListBlock,
+  RightSidebarWidgetProgressBlock,
+} from './right-sidebar/types';
 export { default as StagePane } from './components/StagePane.vue';
 export { default as StageCodeEditor } from './components/StageCodeEditor.vue';
 export { default as StageImagePreview } from './components/StageImagePreview.vue';
@@ -207,8 +251,12 @@ export type { ProviderPreset, ProviderPresetModel } from './data/provider-preset
 
 // Composables
 export {
+  CORE_HISTORY_AUTO_LOAD_THRESHOLD_PX,
   CORE_SCROLL_BOTTOM_THRESHOLD_PX,
+  coreApplyHistoryScrollCeiling,
+  coreHistoryAutoLoadThreshold,
   coreIsScrollNearBottom,
+  coreShouldAutoLoadHistory,
   useCoreAutoFollowScroll,
   useCoreExecutionControlsState,
   useCoreApprovalController,
@@ -222,6 +270,7 @@ export {
   useCoreWorkbenchController,
   useCoreGoals,
   type CoreAutoFollowScrollController,
+  type CoreScrollSentinel,
   type CoreExecutionControlsStorage,
   type CoreExecutionControlsState,
   type CoreExecutionControlsStateInitial,
@@ -264,16 +313,29 @@ export {
 
 export {
   buildCoreProjectGroups,
+  CORE_PROJECT_COLOR_KEYS,
+  CORE_PROJECT_GRADIENT_COLOR_KEYS,
+  CORE_PROJECT_ICON_KEYS,
+  CORE_PROJECT_SOLID_COLOR_KEYS,
+  DEFAULT_CORE_PROJECT_COLOR_KEY,
+  DEFAULT_CORE_PROJECT_ICON_KEY,
   type CoreProject,
   type CoreProjectAgents,
+  type CoreProjectColorKey,
   type CoreProjectCreatePayload,
   type CoreProjectCreateResult,
   type CoreProjectGroup,
+  type CoreProjectIconKey,
   type CoreProjectSession,
+  type CoreProjectUpdatePayload,
 } from './projects/types';
 
 export { usePendingAttachments } from './composables/usePendingAttachments';
 export { useComposerCommandPalette } from './composables/useComposerCommandPalette';
+export {
+  useOutsidePointerDismiss,
+  type OutsidePointerDismissOptions,
+} from './composables/useOutsidePointerDismiss';
 
 // Shared Workbench runtime
 export {

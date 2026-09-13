@@ -373,6 +373,58 @@ def test_core_toolbox_auto_approve_keeps_hard_blocks(tmp_path):
     assert escape_call.metadata["approval"]["blocked"] is True
 
 
+@pytest.mark.asyncio
+async def test_core_toolbox_reads_live_session_permissions_before_each_tool(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    target = outside / "note.txt"
+    target.write_text("live\n", encoding="utf-8")
+    permissions = {
+        "approval_policy": "require",
+        "active_tier": "full_edit",
+        "tier_tools": {},
+        "allow_access_outside_workdir": False,
+    }
+    toolbox = build_core_toolbox(
+        work_root=workspace,
+        runtime_permissions_provider=lambda: permissions,
+    )
+
+    first = toolbox.prepare_call(
+        ToolCall(id="write-ask", name="write_file", arguments={"path": "out.txt", "content": "x"})
+    )
+    assert first.requires_approval is True
+
+    permissions.update({
+        "approval_policy": "auto_approve",
+        "allow_access_outside_workdir": False,
+    })
+    second = toolbox.prepare_call(
+        ToolCall(id="write-auto", name="write_file", arguments={"path": "out.txt", "content": "x"})
+    )
+    assert second.requires_approval is False
+    assert second.metadata["approval"]["auto_approved"] is True
+
+    permissions["allow_access_outside_workdir"] = True
+    read = toolbox.prepare_call(
+        ToolCall(id="read-outside", name="read_file", arguments={"path": str(target)})
+    )
+    result = await toolbox.execute(read)
+    assert result.status == "ok"
+    assert "live" in result.content
+
+    permissions.update({
+        "approval_policy": "require",
+        "allow_access_outside_workdir": False,
+    })
+    third = toolbox.prepare_call(
+        ToolCall(id="write-ask-again", name="write_file", arguments={"path": "out.txt", "content": "x"})
+    )
+    assert third.requires_approval is True
+
+
 def test_core_toolbox_question_always_requires_approval(tmp_path):
     """question bypasses ApprovalGate — always requires user input,
     even under auto_approve (full_edit) and regardless of active_tier."""

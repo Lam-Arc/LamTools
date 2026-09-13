@@ -14,6 +14,7 @@ import type { CoreProject } from '../projects/types'
 import type { CoreProjectClient } from '../projects/client'
 import type { LamToolsTransport } from '../transport'
 import type { PluginRpc } from './types'
+import type { RightSidebarPluginContribution } from '../right-sidebar/types'
 
 export interface PluginSidebarSurface {
   groups: MaybeRefOrGetter<ProjectGroup[]>
@@ -43,6 +44,8 @@ export interface PluginModeSurface {
   composerDisabled?: MaybeRefOrGetter<boolean>
   turnOptions?: () => Record<string, unknown>
   sidebar?: PluginSidebarSurface
+  /** Optional trusted/in-process right-rail modules for this plugin mode. */
+  rightSidebar?: MaybeRefOrGetter<RightSidebarPluginContribution[]>
 }
 
 export interface PluginModeRuntime {

@@ -3,12 +3,11 @@
     <div
       ref="settingsOverlayEl"
       class="settings-overlay"
-      @click.self="requestCloseSettings"
     >
       <div ref="settingsCardEl" class="settings-card" :style="settingsThemeStyle">
         <SettingsShell
           :sections="sections"
-          title="Core 设置"
+          title="Sunday 设置"
           :settings-theme-style="settingsThemeStyle"
           @close="requestCloseSettings"
         >
@@ -178,7 +177,7 @@
             <div class="models-empty-mark" aria-hidden="true"><span>+</span></div>
             <div class="models-empty-copy">
               <h2>还没有供应商</h2>
-              <p>从左侧添加一个模型供应商，开始使用 Core。</p>
+              <p>从左侧添加一个模型供应商，开始使用 Sunday。</p>
             </div>
           </section>
           </div>
@@ -197,12 +196,12 @@
       <section v-if="activeSection === 'appearance'" class="settings-panel settings-panel--appearance">
         <header class="settings-title">
           <h1>界面</h1>
-          <p>主题和密度只影响当前 Core 界面。</p>
+          <p>主题和密度只影响当前 Sunday 界面。</p>
         </header>
 
         <ThemeEditor
-          product-name="LamTools Core"
-          content-description="Core 工作区"
+          product-name="Sunday"
+          content-description="Sunday 工作区"
           :density="density"
           :density-options="densityOptions"
           :content-width="contentWidth"
@@ -212,6 +211,7 @@
           :get-angle="getAngle"
           :get-opacity="getOpacity"
           :get-text-color="getTextColor"
+          :process-icon-color="theme.processIconColor"
           :presets="presets"
           :theme-preview-style="themePreviewStyle"
           :theme-preview-main-style="themePreviewMainStyle"
@@ -226,6 +226,7 @@
           @update:angle="(area: ThemeArea, angle: number) => $emit('update-angle', area, angle)"
           @update:opacity="(area: ThemeArea, opacity: number) => $emit('update-opacity', area, opacity)"
           @update:text-color="(area: ThemeArea, color: string) => $emit('update-text-color', area, color)"
+          @update:process-icon-color="(color: string) => $emit('update-process-icon-color', color)"
           @add-stop="(area) => $emit('add-stop', area)"
           @remove-stop="(area, index) => $emit('remove-stop', area, index)"
           @sort-stops="(area) => $emit('sort-stops', area)"
@@ -309,7 +310,7 @@
             <div class="permission-section-heading">
               <div>
                 <h2>安全边界</h2>
-                <p>控制文件操作的默认范围；更高风险的规则仍由 Core 强制执行。</p>
+                <p>控制文件操作的默认范围；更高风险的规则仍由 Sunday 强制执行。</p>
               </div>
             </div>
 
@@ -344,7 +345,7 @@
             <span class="permission-session-note-mark" aria-hidden="true">i</span>
             <div>
               <strong>当前会话</strong>
-              <p>输入框里的“询问 / 自动 / 完全访问”只作用于当前会话或当前运行；任务接受后会冻结权限快照。</p>
+              <p>输入框里的“询问 / 自动 / 完全访问”是当前会话的实时状态；切换到自动或完全访问会立即放行待审批操作。</p>
             </div>
           </section>
 
@@ -585,7 +586,7 @@
             <button class="small-btn primary" type="button" data-download-update @click="downloadUpdate()">下载安装包</button>
             <button class="small-btn quiet" type="button" data-open-release-page @click="openUpdateReleasePage">查看发布说明</button>
           </div>
-          <p class="muted">下载完成后请先退出 LamCore，再运行安装包完成升级。</p>
+          <p class="muted">下载完成后请先退出 Sunday，再运行安装包完成升级。</p>
         </article>
         <article class="setting-card">
           <h3>自动检查</h3>
@@ -616,7 +617,7 @@
       <!-- Floating editor overlay for provider/model edit forms.
            内联渲染即可：Teleport 目标是自身祖先（settings-card），传送等同原地；
            且 ref+Teleport 组合在测试环境（Teleport stub）会触发渲染递归。 -->
-      <div v-if="providerEditor || modelEditor" class="editor-overlay" @click.self="closeEditors">
+      <div v-if="providerEditor || modelEditor" ref="editorOverlayEl" class="editor-overlay">
           <div ref="editorPopoverEl" class="editor-popover" :class="{ 'editor-popover--model': Boolean(modelEditor) }">
             <!-- Validation errors must render INSIDE the popover — the outer
                  noticeText sits behind the overlay's dim/blur and was
@@ -853,6 +854,7 @@ import {
   useCoreUpdateState,
   type CoreUpdateState,
 } from '../composables'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
 
@@ -948,6 +950,7 @@ const emit = defineEmits<{
   'update-angle': [area: ThemeArea, angle: number]
   'update-opacity': [area: ThemeArea, opacity: number]
   'update-text-color': [area: ThemeArea, color: string]
+  'update-process-icon-color': [color: string]
   'add-stop': [area: ThemeArea]
   'remove-stop': [area: ThemeArea, index: number]
   'sort-stops': [area: ThemeArea]
@@ -1557,6 +1560,7 @@ const presets = THEME_PRESETS
 const settingsDirty = ref(false)
 const settingsOverlayEl = ref<HTMLElement | null>(null)
 const settingsCardEl = ref<HTMLElement | null>(null)
+const editorOverlayEl = ref<HTMLElement | null>(null)
 const editorPopoverEl = ref<HTMLElement | null>(null)
 
 let motionContext: gsap.Context | null = null
@@ -1605,6 +1609,18 @@ function requestCloseSettings() {
   if (settingsDirty.value && !window.confirm('有未保存的修改，确定关闭设置吗？')) return
   emit('close')
 }
+
+useOutsidePointerDismiss({
+  overlay: settingsOverlayEl,
+  card: settingsCardEl,
+  onDismiss: requestCloseSettings,
+})
+useOutsidePointerDismiss({
+  overlay: editorOverlayEl,
+  card: editorPopoverEl,
+  isActive: () => Boolean(providerEditor.value || modelEditor.value),
+  onDismiss: closeEditors,
+})
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
@@ -4151,8 +4167,9 @@ onUnmounted(() => {
   flex: 0 1 auto;
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(4, max-content);
+  justify-content: start;
+  gap: var(--space-6);
   margin: 0;
 }
 

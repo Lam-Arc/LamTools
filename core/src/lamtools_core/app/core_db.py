@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 import uuid
 
-from sqlalchemy import DateTime, Float, Index, Integer, JSON, String, UniqueConstraint, delete, func, select, text, update
+from sqlalchemy import DateTime, Float, Index, Integer, JSON, String, UniqueConstraint, delete, event, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -30,6 +30,7 @@ from lamtools_core.runtime.goal import Goal, GoalStatus, GoalStore
 
 from .event_store import SqlAlchemyAppEventStore
 from .persistence_host import AppPersistenceHost
+from .project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
 from .snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
 from .session_actor import SessionActorRegistry
 from .sqlite_write import SQLiteWriteCoordinator, configure_sqlite_engine
@@ -40,6 +41,19 @@ if TYPE_CHECKING:
 
 class CoreDbBase(DeclarativeBase):
     pass
+
+
+CORE_SCHEMA_VERSION = 1
+
+
+class CoreDbMetadata(CoreDbBase):
+    """Small version/maintenance markers that keep startup work one-shot."""
+
+    __tablename__ = "core_db_metadata"
+
+    key: Mapped[str] = mapped_column(String(256), primary_key=True)
+    value: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
 class CoreWorkspaceIdentity(CoreDbBase):
@@ -89,8 +103,19 @@ class CoreThreadSnapshot(CoreDbBase):
     thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     snapshot_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_turn_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+@event.listens_for(CoreThreadSnapshot, "before_insert")
+@event.listens_for(CoreThreadSnapshot, "before_update")
+def _sync_snapshot_active_turn_index(_mapper: Any, _connection: Any, target: CoreThreadSnapshot) -> None:
+    """Keep crash-recovery lookup data correct for every snapshot write path."""
+    from .queue_state import latest_active_turn_id
+
+    payload = target.snapshot_json if isinstance(target.snapshot_json, dict) else {}
+    target.active_turn_id = latest_active_turn_id(payload)
 
 
 class CoreThreadSnapshotItem(CoreDbBase):
@@ -426,6 +451,12 @@ class CoreProject(CoreDbBase):
     workspace_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     work_root: Mapped[str] = mapped_column(String(2048), unique=True, nullable=False)
+    icon_key: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DEFAULT_PROJECT_ICON_KEY
+    )
+    color_key: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DEFAULT_PROJECT_COLOR_KEY
+    )
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -1393,7 +1424,10 @@ async def open_core_app_db(
     async with engine.begin() as conn:
         await conn.run_sync(CoreDbBase.metadata.create_all)
         resolved_workspace_id = await _ensure_workspace_identity(conn, workspace_id)
-        await _migrate_core_app_schema(conn, workspace_id=resolved_workspace_id)
+        schema_version = await _core_schema_version(conn)
+        if schema_version < CORE_SCHEMA_VERSION:
+            await _migrate_core_app_schema(conn, workspace_id=resolved_workspace_id)
+            await _set_core_schema_version(conn, CORE_SCHEMA_VERSION)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     write_coordinator = SQLiteWriteCoordinator(session_factory)
     from .project_store import CoreProjectStore
@@ -1522,6 +1556,27 @@ async def _ensure_workspace_identity(connection: Any, requested: str | None) -> 
     return value
 
 
+async def _core_schema_version(connection: Any) -> int:
+    value = await connection.scalar(
+        select(CoreDbMetadata.value).where(CoreDbMetadata.key == "schema_version")
+    )
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _set_core_schema_version(connection: Any, version: int) -> None:
+    await connection.execute(
+        text(
+            "INSERT INTO core_db_metadata (key, value, updated_at) "
+            "VALUES ('schema_version', :value, :updated_at) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+        ),
+        {"value": str(version), "updated_at": datetime.now()},
+    )
+
+
 async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -> None:
     app_event_columns = {
         row["name"]
@@ -1576,6 +1631,41 @@ async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -
             "UPDATE core_thread_snapshots SET revision = snapshot_seq "
             "WHERE revision = 0 AND snapshot_seq > 0"
         ))
+    active_turn_index_added = "active_turn_id" not in snapshot_columns
+    if active_turn_index_added:
+        await connection.execute(text(
+            "ALTER TABLE core_thread_snapshots ADD COLUMN active_turn_id VARCHAR(64)"
+        ))
+    await connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_core_thread_snapshots_active_turn_id "
+        "ON core_thread_snapshots (active_turn_id)"
+    ))
+    if active_turn_index_added:
+        # Upgrade-only compatibility pass. Runtime writes maintain this lookup
+        # column incrementally; old databases pay the JSON scan exactly once.
+        from .queue_state import latest_active_turn_id
+
+        rows = (
+            await connection.execute(text(
+                "SELECT thread_id, snapshot_json FROM core_thread_snapshots"
+            ))
+        ).mappings().all()
+        for row in rows:
+            payload = row["snapshot_json"]
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except (TypeError, ValueError):
+                    payload = {}
+            active_turn_id = latest_active_turn_id(payload if isinstance(payload, dict) else {})
+            if active_turn_id:
+                await connection.execute(
+                    text(
+                        "UPDATE core_thread_snapshots SET active_turn_id = :active_turn_id "
+                        "WHERE thread_id = :thread_id"
+                    ),
+                    {"active_turn_id": active_turn_id, "thread_id": row["thread_id"]},
+                )
 
     project_columns = {
         row["name"]
@@ -1589,6 +1679,20 @@ async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -
         await connection.execute(text(
             "ALTER TABLE core_projects ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
         ))
+    if "icon_key" not in project_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_projects ADD COLUMN icon_key VARCHAR(32) NOT NULL DEFAULT 'folder'"
+        ))
+    if "color_key" not in project_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_projects ADD COLUMN color_key VARCHAR(32) NOT NULL DEFAULT 'gray'"
+        ))
+    await connection.execute(text(
+        "UPDATE core_projects SET icon_key = :icon_key WHERE icon_key = '' OR icon_key IS NULL"
+    ), {"icon_key": DEFAULT_PROJECT_ICON_KEY})
+    await connection.execute(text(
+        "UPDATE core_projects SET color_key = :color_key WHERE color_key = '' OR color_key IS NULL"
+    ), {"color_key": DEFAULT_PROJECT_COLOR_KEY})
     if workspace_id:
         await connection.execute(text(
             "UPDATE core_projects SET workspace_id = :workspace_id "

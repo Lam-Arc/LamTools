@@ -6,21 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from .files import attachment_modality, detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
+from .files import assert_safe_default_open, attachment_modality, detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
 
 # Uploads are read fully into memory and written to disk; bound the size so a
 # caller cannot exhaust memory/disk (audit 03 S2 / 11 S2).
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
-
-# Extensions whose OS default handler executes the file.  ``open`` refuses
-# these so an uploaded script/executable cannot be launched through the
-# unauthenticated /open endpoint (audit 03 S2).
-_DANGEROUS_OPEN_EXTENSIONS = frozenset({
-    ".exe", ".bat", ".cmd", ".com", ".scr", ".lnk", ".ps1", ".msi", ".reg",
-    ".vbs", ".vbe", ".js", ".jse", ".hta", ".sh", ".jar", ".dll", ".sys",
-    ".pif", ".wsf", ".cpl",
-})
-
 
 @dataclass(frozen=True)
 class AttachmentSession:
@@ -132,15 +122,9 @@ class AttachmentService:
 
     async def open(self, attachment_id: str) -> dict[str, str]:
         record = await self.get(attachment_id)
-        # Opening a file hands it to the OS default handler, which for
-        # script/executable types means executing it.  Refuse those so the
-        # upload+open chain cannot run attacker-controlled code
-        # (audit 03 S2 — the unauthenticated /open endpoint).
-        if _DANGEROUS_OPEN_EXTENSIONS.intersection(
-            {Path(record.filename).suffix.lower() if record.filename else ""}
-        ):
-            raise ValueError("This attachment type cannot be opened for safety")
-        open_with_default_app(_existing_path(record))
+        path = _existing_path(record)
+        assert_safe_default_open(path)
+        open_with_default_app(path)
         return {"status": "opened", "id": record.id}
 
 

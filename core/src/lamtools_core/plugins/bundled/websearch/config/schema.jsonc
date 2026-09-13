@@ -3,7 +3,7 @@
   "properties": {
     "provider": {
       "type": "string",
-      "enum": ["baidu", "bing", "duckduckgo", "custom"],
+      "enum": ["baidu", "bing", "ddg", "custom"],
       "description": "搜索提供方",
       "default": "baidu"
     },
@@ -16,6 +16,21 @@
       "type": "number",
       "description": "搜索超时（秒）",
       "default": 15
+    },
+    "fallback_providers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["baidu", "bing", "ddg"]
+      },
+      "description": "默认内核失败时按顺序尝试的备用内核",
+      "default": ["ddg", "bing"]
+    },
+    "proxy_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "DuckDuckGo 使用的本地 HTTP/mixed 代理端口；留空则直连"
     }
   }
 }

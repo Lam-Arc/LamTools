@@ -523,7 +523,7 @@ describe('core appServer workbench projection', () => {
     })
   })
 
-  it('plans live process expansion for active assistant messages with process parts', () => {
+  it('keeps live process cards collapsed unless the user expands them', () => {
     const current = new Set(['manual'])
     const expanded = nextCoreProcessExpandedIds([
       {
@@ -562,7 +562,7 @@ describe('core appServer workbench projection', () => {
       timestamp: '',
       parts: [{ id: 'text-1', partType: 'model_text', status: 'completed', content: 'answer' }],
     })).toBe(false)
-    expect([...expanded].sort()).toEqual(['assistant-2', 'manual'])
+    expect([...expanded].sort()).toEqual(['manual'])
     expect(nextCoreProcessExpandedIds([], current, false)).toBe(current)
   })
 

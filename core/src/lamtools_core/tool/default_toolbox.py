@@ -5,7 +5,7 @@ import inspect
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Literal, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Literal, Mapping, Protocol, runtime_checkable
 
 from lamtools_core.event import CoreEvent
 from lamtools_core.agent import SUB_AGENT_TOOL_NAME, SUB_AGENT_TOOL_SPEC, SubAgentRunResult
@@ -48,6 +48,57 @@ ApprovalPolicy = Literal["require", "auto_approve"]
 _logger = logging.getLogger(__name__)
 
 
+_WORKFLOW_CONTEXT_METADATA_KEYS = (
+    "parent_session_id",
+    "parent_run_id",
+    "parent_turn_id",
+    "parent_call_id",
+    "cwd",
+    "pause_on_cancel",
+    "permissions",
+    "runtime_permissions",
+    "event_metadata",
+    "attachments",
+    "runtime_snapshot",
+    "snapshot",
+    "environment",
+    "capabilities",
+    "trace_id",
+    "traceId",
+    "correlation_id",
+    "actor_id",
+    "actor_kind",
+    "lineage",
+    "parent_lineage",
+    "workflow_stack",
+    "active_workflows",
+    "depth",
+    "nesting_depth",
+    "max_depth",
+    "max_nesting_depth",
+)
+
+
+def _workflow_context_from_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract the serializable workflow envelope from a ToolCall.
+
+    Tool metadata is the only stable hand-off available to handlers assembled
+    dynamically by the workflow plugin.  Keep this extraction tolerant of
+    both nested and flattened forms while excluding unrelated provider data.
+    """
+    nested = metadata.get("execution_context", metadata.get("workflow_execution"))
+    if callable(getattr(nested, "metadata", None)):
+        try:
+            nested = nested.metadata()
+        except Exception:  # noqa: BLE001 - optional context cannot block a tool
+            nested = None
+    result = deepcopy(dict(nested)) if isinstance(nested, Mapping) else {}
+    for key in _WORKFLOW_CONTEXT_METADATA_KEYS:
+        if key in metadata:
+            result[key] = deepcopy(metadata[key])
+    return result
+
+
 def _missing_dependency_handler(tool_name: str, error: str) -> ToolHandler:
     """依赖缺失占位 handler：返回明确错误（附安装命令），不静默降级。"""
 
@@ -77,6 +128,7 @@ class SubAgentRunner(Protocol):
         parent_call_id: str = "",
         parent_run_id: str = "",
         parent_turn_id: str = "",
+        execution_context: Any | None = None,
     ) -> SubAgentRunResult | str: ...
 
 DEFAULT_COMMAND_TIMEOUT = 120
@@ -939,6 +991,7 @@ class CoreToolbox:
         activated_mcp_servers: set[str] | None = None,
         plugin_tool_providers: list[Callable[..., Any]] | None = None,
         allow_access_outside_workdir: bool = False,
+        runtime_permissions_provider: Callable[[], Mapping[str, Any] | None] | None = None,
         plugin_tool_specs: list[ToolSpec] | None = None,
         plugin_tool_handlers: dict[str, ToolHandler] | None = None,
         plugin_mode_tool_sets: dict[str, set[str]] | None = None,
@@ -990,6 +1043,7 @@ class CoreToolbox:
             for mode, names in (plugin_mode_tool_sets or {}).items()
         }
         self.allow_access_outside_workdir = allow_access_outside_workdir
+        self.runtime_permissions_provider = runtime_permissions_provider
         # B8 共识：工具名全局唯一——与已注入工具（基础/MCP/durable）同名
         # 的插件工具报不可用；插件之间同名同样互斥
         # （先声明的保留，后者报冲突）。bundled_core_tool_specs 是内置
@@ -1203,6 +1257,38 @@ class CoreToolbox:
             return self.manifest_tool_permissions[name]
         return self.tool_permissions.get(name, fallback)
 
+    def _refresh_runtime_permissions(self) -> None:
+        """Apply the latest session permission state before each tool boundary."""
+        if self.runtime_permissions_provider is None:
+            return
+        try:
+            value = self.runtime_permissions_provider()
+        except Exception:  # noqa: BLE001 - retain the last safe state on cache failure
+            return
+        if not isinstance(value, Mapping):
+            return
+        policy = value.get("approval_policy")
+        if policy in {"require", "auto_approve"}:
+            self.approval_policy = policy
+            self.approval_gate.approval_policy = policy
+        tier = value.get("active_tier")
+        if tier in {"read_only", "limited_edit", "full_edit"}:
+            self.active_tier = tier
+            self.approval_gate.active_tier = tier
+        raw_tier_tools = value.get("tier_tools")
+        if isinstance(raw_tier_tools, Mapping):
+            tier_tools = {
+                str(name): {str(tool) for tool in tools}
+                for name, tools in raw_tier_tools.items()
+                if isinstance(tools, (set, frozenset, list, tuple))
+            }
+            self.tier_tools = tier_tools
+            self.approval_gate.tier_tools = tier_tools
+        outside = value.get("allow_access_outside_workdir")
+        if isinstance(outside, bool):
+            self.allow_access_outside_workdir = outside
+            self.approval_gate.allow_access_outside_workdir = outside
+
     def model_tools(
         self,
         *,
@@ -1210,6 +1296,7 @@ class CoreToolbox:
         exclude_tools: set[str] | None = None,
         active_mode: str | None = None,
     ) -> list[dict[str, Any]]:
+        self._refresh_runtime_permissions()
         effective_exclude = set(exclude_tools or set())
         # Apply loadtools active_mode filtering
         if active_mode and self.load_tools:
@@ -1292,6 +1379,7 @@ class CoreToolbox:
         }
 
     def prepare_call(self, call: ToolCall) -> ToolCall:
+        self._refresh_runtime_permissions()
         # Plugin handlers have no closure-injected workspace context (core
         # tools receive work_root/data_dir via factory closures); inject it
         # into call.metadata so plugin tools are first-class citizens.
@@ -1382,7 +1470,7 @@ class CoreToolbox:
         Approval continuations cannot simply execute the serialized call:
         plugin manifests, lifecycle state, mode, tier, and path arguments may
         have changed while the approval card was open.  Re-run the same
-        preparation boundary against the frozen toolbox, then suppress only
+        preparation boundary against the live-refreshed toolbox, then suppress only
         the already-resolved user approval requirement.  A hard block remains
         a hard block.
         """
@@ -1403,6 +1491,7 @@ class CoreToolbox:
         )
 
     async def execute(self, call: ToolCall, context: ToolContext | None = None) -> ToolResult:
+        self._refresh_runtime_permissions()
         # Refresh dynamic declarations before any direct execution path.  This
         # keeps a newly registered manifest hard_block effective even when a
         # caller presents a serialized call without going through
@@ -1522,7 +1611,7 @@ class CoreToolbox:
             max_list_items=max_list_items,
             max_text_length=max_text_length,
             max_search_results=max_search_results,
-            allow_access_outside_workdir=allow_access_outside_workdir,
+            allow_access_outside_workdir=lambda: self.allow_access_outside_workdir,
         )
         for root in self.loaded_skill_roots:
             read_tools.add_resource_root(root)
@@ -1531,7 +1620,7 @@ class CoreToolbox:
             command_timeout=command_timeout,
             loaded_skill_roots=self.loaded_skill_roots,
             core_event_callback=core_event_callback,
-            allow_access_outside_workdir=allow_access_outside_workdir,
+            allow_access_outside_workdir=lambda: self.allow_access_outside_workdir,
         )
 
         async def call_mcp(call: ToolCall) -> ToolResult:
@@ -1635,6 +1724,10 @@ class CoreToolbox:
                 mode = ""
             raw_attachments = args.get("attachments")
             attachments = [str(a) for a in raw_attachments if isinstance(a, (str, int)) and str(a).strip()] if isinstance(raw_attachments, list) else []
+            call_metadata = call.metadata if isinstance(call.metadata, Mapping) else {}
+            execution_context = _workflow_context_from_metadata(call_metadata)
+            if not attachments and isinstance(execution_context.get("attachments"), list):
+                attachments = [str(item) for item in execution_context["attachments"]]
             failure_key = (agent.lower(), task)
             previous_failure = self._failed_sub_agent_calls.get(failure_key)
             if previous_failure is not None:
@@ -1647,16 +1740,34 @@ class CoreToolbox:
                     error=error,
                     metadata={**previous_failure, "duplicate_failure_blocked": True},
                 )
-            outcome = await self.sub_agent_runner.run(
-                task=task,
-                agent=agent,
-                model=model,
-                mode=mode,
-                attachments=attachments,
-                parent_call_id=call.id,
-                parent_run_id=str(call.metadata.get("parent_run_id") or ""),
-                parent_turn_id=str(call.metadata.get("parent_turn_id") or ""),
+            run_kwargs: dict[str, Any] = {
+                "task": task,
+                "agent": agent,
+                "model": model,
+                "mode": mode,
+                "attachments": attachments,
+                "parent_call_id": call.id,
+                "parent_run_id": str(call_metadata.get("parent_run_id") or ""),
+                "parent_turn_id": str(call_metadata.get("parent_turn_id") or ""),
+            }
+            if execution_context:
+                run_kwargs["execution_context"] = execution_context
+            # Existing hosts often provide a deliberately narrow fake/legacy
+            # runner.  Forward the new context only when its signature opts in
+            # (or accepts **kwargs), avoiding a compatibility break while the
+            # production KernelSubAgentRunner receives the full envelope.
+            try:
+                parameters = inspect.signature(self.sub_agent_runner.run).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            accepts_context = (
+                not parameters
+                or "execution_context" in parameters
+                or any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values())
             )
+            if not accepts_context:
+                run_kwargs.pop("execution_context", None)
+            outcome = await self.sub_agent_runner.run(**run_kwargs)
             if isinstance(outcome, SubAgentRunResult):
                 metadata = {
                     "agent": agent,
@@ -1748,8 +1859,14 @@ class CoreToolbox:
         handlers: dict[str, ToolHandler] = {
             **read_tools.as_dict(),
             "load_skill": load_skill,
-            "write_file": make_write_file_handler(self.work_root, allow_access_outside_workdir=allow_access_outside_workdir),
-            "edit_file": make_edit_file_handler(self.work_root, allow_access_outside_workdir=allow_access_outside_workdir),
+            "write_file": make_write_file_handler(
+                self.work_root,
+                allow_access_outside_workdir=lambda: self.allow_access_outside_workdir,
+            ),
+            "edit_file": make_edit_file_handler(
+                self.work_root,
+                allow_access_outside_workdir=lambda: self.allow_access_outside_workdir,
+            ),
             "run_command": command_handlers.run_command,
             "git_status": make_git_status_handler(
                 self.work_root,

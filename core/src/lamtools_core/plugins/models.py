@@ -32,6 +32,38 @@ class PluginUIMode:
 
 
 @dataclass(frozen=True)
+class PluginWidgetAction:
+    """One host-rendered action exposed by a sidebar widget."""
+
+    id: str
+    title: str
+    operation: str
+    input_schema: dict[str, Any] = field(default_factory=dict)
+    dangerous: bool = False
+    mutates: bool = False
+
+
+@dataclass(frozen=True)
+class PluginSidebarWidget:
+    """A right-sidebar contribution declared by a plugin manifest.
+
+    Blocks are untrusted data rendered by Core.  Component entries are code
+    from an already-trusted plugin installation, but the path is still
+    resolved and confined to the plugin root during manifest discovery.
+    """
+
+    id: str
+    title: str
+    renderer: Literal["blocks", "component"]
+    scope: Literal["global", "workspace", "session"]
+    icon: str = ""
+    order: int = 0
+    snapshot_operation: str = ""
+    entry: Path | None = None
+    actions: list[PluginWidgetAction] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class PluginUIContribution:
     """Manifest-declared UI contributions.
 
@@ -43,6 +75,7 @@ class PluginUIContribution:
 
     views: list[PluginUIView] = field(default_factory=list)
     modes: list[PluginUIMode] = field(default_factory=list)
+    sidebar_widgets: list[PluginSidebarWidget] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

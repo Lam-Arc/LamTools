@@ -7,7 +7,7 @@
   >
     <div class="core-start-page-backdrop" aria-hidden="true">准备开干！</div>
     <div class="core-start-page-content">
-      <p class="core-start-page-kicker">LamTools Core</p>
+      <p class="core-start-page-kicker">Sunday</p>
       <h1>{{ hasProject ? '从一个新会话开始' : '先选一个工作目录' }}</h1>
       <p class="core-start-page-description">
         {{ hasProject

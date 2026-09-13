@@ -4,6 +4,13 @@ import type {
   CoreProjectCreatePayload,
   CoreProjectCreateResult,
   CoreProjectSession,
+  CoreProjectUpdatePayload,
+} from './types'
+import {
+  CORE_PROJECT_COLOR_KEYS,
+  CORE_PROJECT_ICON_KEYS,
+  DEFAULT_CORE_PROJECT_COLOR_KEY,
+  DEFAULT_CORE_PROJECT_ICON_KEY,
 } from './types'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'
 
@@ -18,6 +25,7 @@ export interface CoreProjectClient {
   list(): Promise<CoreProject[]>
   create(payload: CoreProjectCreatePayload): Promise<CoreProjectCreateResult>
   get(projectId: string): Promise<CoreProject>
+  update(projectId: string, payload: CoreProjectUpdatePayload): Promise<CoreProject>
   rename(projectId: string, name: string): Promise<CoreProject>
   delete(projectId: string): Promise<void>
   createSession(projectId: string, title?: string): Promise<CoreProjectSession>
@@ -35,6 +43,8 @@ type RawProject = {
   id: string
   name: string
   work_root: string
+  icon_key?: string
+  color_key?: string
   created_at?: string
   updated_at?: string
 }
@@ -59,6 +69,12 @@ export function createCoreProjectClient(transport: LamToolsTransport): CoreProje
     },
     async get(projectId) {
       return toProject(await requestJson<RawProject>(transport, projectPath(projectId)))
+    },
+    async update(projectId, payload) {
+      return toProject(await requestJson<RawProject>(transport, projectPath(projectId), {
+        method: 'PATCH',
+        body: payload,
+      }))
     },
     async rename(projectId, name) {
       return toProject(await requestJson<RawProject>(transport, projectPath(projectId), {
@@ -123,6 +139,12 @@ function toProject(project: RawProject): CoreProject {
     id: project.id,
     name: project.name,
     workRoot: project.work_root,
+    iconKey: CORE_PROJECT_ICON_KEYS.includes(project.icon_key as typeof CORE_PROJECT_ICON_KEYS[number])
+      ? project.icon_key as typeof CORE_PROJECT_ICON_KEYS[number]
+      : DEFAULT_CORE_PROJECT_ICON_KEY,
+    colorKey: CORE_PROJECT_COLOR_KEYS.includes(project.color_key as typeof CORE_PROJECT_COLOR_KEYS[number])
+      ? project.color_key as typeof CORE_PROJECT_COLOR_KEYS[number]
+      : DEFAULT_CORE_PROJECT_COLOR_KEY,
     createdAt: project.created_at,
     updatedAt: project.updated_at,
   }

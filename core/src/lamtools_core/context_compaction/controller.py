@@ -208,13 +208,19 @@ class ContextCompactionController:
         allow_previous_model: bool = True,
         trigger: str = "auto",
         measurement: TokenMeasurement | None = None,
+        force: bool = False,
     ) -> CompactionExecution:
-        """Run bounded compaction, retrying once with the current model."""
+        """Run bounded compaction, retrying once with the current model.
+
+        ``force`` only bypasses the outer trigger-threshold decision.  The
+        selected budget, layout, fitter, summary limits, and retry behavior
+        remain exactly the same as an automatic compaction.
+        """
         resolved_measurement = measurement or self.measure(
             messages,
             trigger_tokens=budget.trigger_tokens,
         )
-        if resolved_measurement.tokens < budget.trigger_tokens:
+        if not force and resolved_measurement.tokens < budget.trigger_tokens:
             return CompactionExecution(
                 result=None,
                 measurement=resolved_measurement,
@@ -372,6 +378,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
     layout = select_context_compaction_layout(
         request.messages,
         preserve_latest_user=request.preserve_latest_user,
+        compact_all=request.options.compact_all,
         limit_tokens=request.limit_tokens,
         estimate_tokens=lambda messages: _estimate_compaction_tokens(request, messages),
     )

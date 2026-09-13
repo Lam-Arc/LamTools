@@ -1,4 +1,4 @@
-"""Update check — query GitHub Releases for a newer LamCore build.
+"""Update check — query GitHub Releases for a newer Sunday build.
 
 The desktop app (设置 → 关于与更新) and the CLI both call :func:`check_update`
 to learn whether a newer release exists and where to download it. Only the
@@ -28,14 +28,17 @@ RELEASES_LATEST_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/late
 #: Public releases page (fallback / human link).
 RELEASES_PAGE_URL = f"https://github.com/{UPDATE_REPO}/releases/latest"
 
-#: Installer asset name pattern inside a release (e.g. LamCore_0.2.2_x64-setup.exe).
-SETUP_ASSET_PATTERN = re.compile(r"-setup\.exe$", re.IGNORECASE)
+#: Repository-owned Inno installer asset name (e.g. Sunday_0.3.2_x64-setup.exe).
+SETUP_ASSET_PATTERN = re.compile(
+    r"^Sunday_\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?_x64-setup\.exe$",
+    re.IGNORECASE,
+)
 
 #: Release notes are trimmed to this many characters for the settings UI.
 NOTES_MAX_CHARS = 800
 
 #: GitHub API is unauthenticated here; a descriptive UA keeps the request clean.
-_USER_AGENT = f"LamCore/{__version__} (update-check)"
+_USER_AGENT = f"Sunday/{__version__} (update-check)"
 
 #: Timeout budget for the whole request (connect + read).
 REQUEST_TIMEOUT_SECONDS = 10.0
@@ -86,7 +89,7 @@ def _setup_asset(release: dict[str, Any]) -> str:
 
 
 def check_update() -> dict[str, Any]:
-    """Check GitHub Releases for a newer LamCore than the running one.
+    """Check GitHub Releases for a newer Sunday than the running one.
 
     Returns one of:
 

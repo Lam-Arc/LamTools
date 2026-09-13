@@ -476,7 +476,7 @@ export function createCoreAppServerRuntimeController<
       command,
       arguments: argumentsText,
       ...(workRoot ? { work_root: workRoot } : {}),
-    }, threadId)
+    }, threadId, 30 * 60_000)
     applyResponse(response)
     return response.result && typeof response.result === 'object'
       ? response.result as Record<string, unknown>
@@ -721,9 +721,11 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
         : isRecord(value.usage) && isContextMetrics(value.usage)
           ? value.usage
           : undefined
+      const durationMs = numericField(runPayload.duration_ms)
       turns[turnId] = {
         ...turn,
         status: status || turn.status,
+        ...(durationMs !== undefined ? { duration_ms: Math.max(0, Math.round(durationMs)) } : {}),
         ...(runtimeMetrics ? {
           context_metrics: { ...(turn.context_metrics ?? {}), ...runtimeMetrics },
         } : {}),

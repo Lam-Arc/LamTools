@@ -36,6 +36,7 @@ from lamtools_core.app.core_db import (
     show_core_session,
 )
 from lamtools_core.app.live_client import CoreAppServerClient
+from lamtools_core.app.project_visuals import PROJECT_COLOR_KEYS, PROJECT_ICON_KEYS
 from lamtools_core.event import CollectingEventSink, RunItemEvent
 from lamtools_core.kernel import CoreLoopKernel, LoopPolicy
 from lamtools_core.llm import (
@@ -490,6 +491,7 @@ async def run_core_cli_task(
 
     resolved_model_id = options.model_id
     context_window_tokens: int | None = None
+    max_output_tokens = options.max_tokens
     model_context: dict[str, Any] = {"model_id": resolved_model_id}
     effective_reasoning_level = reasoning_level_from_legacy(
         reasoning_level=options.reasoning_level,
@@ -501,6 +503,7 @@ async def run_core_cli_task(
         profile = _resolve_adapter_profile(config, options.adapter_dirs)
         resolved_model_id = config.model_id
         context_window_tokens = config.context_window or None
+        max_output_tokens = options.max_tokens or config.max_output_tokens
         model_context = {
             "model_record_id": config.model_record_id,
             "model_id": config.model_id,
@@ -518,7 +521,7 @@ async def run_core_cli_task(
             thinking_budget=options.thinking_budget or config.thinking_budget,
             reasoning_effort=config.reasoning_effort,
             reasoning_level=effective_reasoning_level,
-            max_tokens=options.max_tokens or config.max_output_tokens,
+            max_tokens=max_output_tokens,
             temperature=options.temperature if options.temperature is not None else config.temperature,
         )
     if options.shallow_thinking_enabled:
@@ -636,7 +639,7 @@ async def run_core_cli_task(
             )
         ],
     )
-    core_instructions = "You are LamTools Core Agent, a standalone general-purpose agent runtime."
+    core_instructions = "You are Sunday, a standalone general-purpose AI software agent."
     if options.instructions:
         core_instructions = options.instructions
     context_window_tokens = int(getattr(llm_client, "context_window", 0) or 0) or context_window_tokens
@@ -649,7 +652,7 @@ async def run_core_cli_task(
         thinking_budget=options.thinking_budget,
         shallow_thinking_enabled=options.shallow_thinking_enabled,
         context_window_tokens=context_window_tokens,
-        max_tokens=options.max_tokens,
+        max_tokens=max_output_tokens,
         temperature=options.temperature,
         compact_trigger_tokens=options.compact_trigger_tokens,
         compact_limit_tokens=options.compact_limit_tokens,
@@ -661,7 +664,7 @@ async def run_core_cli_task(
         model_id=resolved_model_id,
         instructions=core_instructions,
         temperature=options.temperature,
-        max_tokens=options.max_tokens,
+        max_tokens=max_output_tokens,
         reasoning_level=effective_reasoning_level,
         thinking_enabled=options.thinking_enabled,
         thinking_budget=options.thinking_budget,
@@ -765,7 +768,7 @@ async def run_core_cli_task(
             model_id=resolved_model_id,
             instructions=core_instructions,
             temperature=options.temperature,
-            max_tokens=options.max_tokens,
+            max_tokens=max_output_tokens,
             reasoning_level=effective_reasoning_level,
             thinking_enabled=options.thinking_enabled,
             thinking_budget=options.thinking_budget,
@@ -1006,10 +1009,10 @@ def build_parser(
     plugin_roots: list[Path | str] | tuple[Path | str, ...] | None = None,
     plugin_state_path: Path | str | None = None,
 ) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="core", description="LamTools Core Agent CLI")
+    parser = argparse.ArgumentParser(prog="core", description="Sunday AI software CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    serve = sub.add_parser("serve", help="Run the Core Agent HTTP app")
+    serve = sub.add_parser("serve", help="Run the Sunday HTTP app")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=5172)
     serve.add_argument("--model-id", default="")
@@ -1037,7 +1040,7 @@ def build_parser(
     migrate.add_argument("--apply", action="store_true", help="Apply the migration (default is a dry-run preview)")
     migrate.set_defaults(func=cmd_migrate_projects)
 
-    run = sub.add_parser("run", help="Start a Core Agent task")
+    run = sub.add_parser("run", help="Start a Sunday task")
     run.add_argument("message", nargs="+")
     run.add_argument("--model-id", default="", help="Model record id, provider model id, or display name")
     run.add_argument("--thread-id", default="", help="Stable Core thread/session id")
@@ -1064,7 +1067,7 @@ def build_parser(
     run.add_argument("--approval-decision", choices=("approve_once", "deny", "other_guidance"))
     run.set_defaults(func=cmd_run)
 
-    run_local = sub.add_parser("run-local", help="Run a Core Agent task directly without a server")
+    run_local = sub.add_parser("run-local", help="Run a Sunday task directly without a server")
     run_local.add_argument("message", nargs="+")
     run_local.add_argument("--model-id", default="", help="Model record id, provider model id, or display name")
     run_local.add_argument("--thread-id", default="", help="Stable Core thread/session id")
@@ -1100,7 +1103,7 @@ def build_parser(
     watch.add_argument("--approval-decision", choices=("approve_once", "deny", "other_guidance"))
     watch.set_defaults(func=cmd_watch)
 
-    start = sub.add_parser("start", help="Start a live Core Agent turn")
+    start = sub.add_parser("start", help="Start a live Sunday turn")
     start.add_argument("thread_id")
     start.add_argument("message", nargs="+")
     start.add_argument("--goal-id", default="", help="Durable Goal ID")
@@ -1126,14 +1129,14 @@ def build_parser(
     start.add_argument("--approval-decision", choices=("approve_once", "deny", "other_guidance"))
     start.set_defaults(func=cmd_start)
 
-    cancel = sub.add_parser("cancel", help="Cancel a live Core Agent turn")
+    cancel = sub.add_parser("cancel", help="Cancel a live Sunday turn")
     cancel.add_argument("thread_id")
     cancel.add_argument("--turn-id", default="")
     _add_live_connection_arguments(cancel)
     cancel.add_argument("--raw", action="store_true")
     cancel.set_defaults(func=cmd_cancel)
 
-    steer = sub.add_parser("steer", help="Steer a live Core Agent turn")
+    steer = sub.add_parser("steer", help="Steer a live Sunday turn")
     steer.add_argument("thread_id")
     steer.add_argument("turn_id")
     steer.add_argument("message", nargs="+")
@@ -1141,7 +1144,7 @@ def build_parser(
     steer.add_argument("--raw", action="store_true")
     steer.set_defaults(func=cmd_steer)
 
-    queue = sub.add_parser("queue", help="Manage live Core Agent queued input")
+    queue = sub.add_parser("queue", help="Manage live Sunday queued input")
     queue_sub = queue.add_subparsers(dest="queue_command", required=True)
     queue_create = queue_sub.add_parser("create", help="Queue input for the next turn")
     queue_create.add_argument("thread_id")
@@ -1175,7 +1178,7 @@ def build_parser(
     queue_guide.add_argument("--raw", action="store_true")
     queue_guide.set_defaults(func=cmd_queue_guide)
 
-    approval = sub.add_parser("approval", help="Respond to a live Core Agent approval")
+    approval = sub.add_parser("approval", help="Respond to a live Sunday approval")
     approval_sub = approval.add_subparsers(dest="approval_command", required=True)
     approval_respond = approval_sub.add_parser("respond", help="Respond to a pending Core approval")
     approval_respond.add_argument("thread_id")
@@ -1249,6 +1252,30 @@ def build_parser(
     _add_live_connection_arguments(plugin_operations_list)
     plugin_operations_list.add_argument("--raw", action="store_true")
     plugin_operations_list.set_defaults(func=cmd_plugin_operations_list)
+    plugin_widget = plugin_sub.add_parser("widget", help="Inspect and invoke plugin sidebar widgets")
+    plugin_widget_sub = plugin_widget.add_subparsers(dest="plugin_widget_command", required=True)
+    plugin_widget_list = plugin_widget_sub.add_parser("list", help="List enabled sidebar widgets")
+    _add_live_connection_arguments(plugin_widget_list)
+    plugin_widget_list.add_argument("--raw", action="store_true")
+    plugin_widget_list.set_defaults(func=cmd_plugin_widget_list)
+    plugin_widget_show = plugin_widget_sub.add_parser("show", help="Show a widget snapshot")
+    plugin_widget_show.add_argument("id")
+    plugin_widget_show.add_argument("--work-root", default="")
+    plugin_widget_show.add_argument("--thread-id", default="")
+    _add_live_connection_arguments(plugin_widget_show)
+    plugin_widget_show.add_argument("--raw", action="store_true")
+    plugin_widget_show.set_defaults(func=cmd_plugin_widget_show)
+    plugin_widget_action = plugin_widget_sub.add_parser("action", help="Invoke a declared widget action")
+    plugin_widget_action.add_argument("id")
+    plugin_widget_action.add_argument("action")
+    plugin_widget_action.add_argument("--input", default="{}", help="Action input JSON object")
+    plugin_widget_action.add_argument("--work-root", default="")
+    plugin_widget_action.add_argument("--thread-id", default="")
+    plugin_widget_action.add_argument("--idempotency-key", default="")
+    plugin_widget_action.add_argument("-y", "--yes", action="store_true", help="Confirm a dangerous action")
+    _add_live_connection_arguments(plugin_widget_action)
+    plugin_widget_action.add_argument("--raw", action="store_true")
+    plugin_widget_action.set_defaults(func=cmd_plugin_widget_action)
 
     skill = sub.add_parser("skill", help="Manage Core skills (list/create/enable/disable/delete)")
     skill_sub = skill.add_subparsers(dest="skill_command", required=True)
@@ -1319,7 +1346,7 @@ def build_parser(
     imagegen_config.add_argument("--model", default=None, help="Image model id")
     imagegen_config.set_defaults(func=cmd_imagegen_config)
 
-    update = sub.add_parser("update", help="Check for a newer LamCore release (设置 → 关于与更新)")
+    update = sub.add_parser("update", help="Check for a newer Sunday release (设置 → 关于与更新)")
     update_sub = update.add_subparsers(dest="update_command", required=True)
     update_check = update_sub.add_parser("check", help="Check GitHub Releases for a newer version")
     update_check.add_argument("--json", action="store_true", help="Print the raw check result as JSON")
@@ -1337,7 +1364,7 @@ def build_parser(
     revoke = mobile_sub.add_parser("revoke", help="Revoke a trusted mobile device")
     revoke.add_argument("device_id")
     revoke.set_defaults(func=cmd_mobile_control, mobile_action="revoke")
-    account = mobile_sub.add_parser("account", help="Bind the desktop Core Agent to a Relay account")
+    account = mobile_sub.add_parser("account", help="Bind Sunday desktop to a Relay account")
     account.add_argument("--mode", choices=("login", "register"), default="login")
     account.add_argument("--base-url", required=True, help="Relay server base URL")
     account.add_argument("--username", required=True)
@@ -1354,27 +1381,31 @@ def build_parser(
     artifact_show.add_argument("artifact_id")
     artifact_show.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
     artifact_show.set_defaults(func=cmd_artifact_show)
+    artifact_open = artifact_sub.add_parser("open", help="Open an artifact with the system default application")
+    artifact_open.add_argument("artifact_id")
+    artifact_open.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
+    artifact_open.set_defaults(func=cmd_artifact_open)
     artifact_delete = artifact_sub.add_parser("delete", help="Soft-delete artifacts (id/manifest 保留)")
     artifact_delete.add_argument("artifact_ids", nargs="+")
     artifact_delete.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
     artifact_delete.set_defaults(func=cmd_artifact_delete)
 
-    session = sub.add_parser("session", help="Query Core Agent sessions")
+    session = sub.add_parser("session", help="Query Sunday sessions")
     session_sub = session.add_subparsers(dest="session_command", required=True)
-    session_list = session_sub.add_parser("list", help="List Core Agent sessions")
+    session_list = session_sub.add_parser("list", help="List Sunday sessions")
     session_list.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     session_list.add_argument("--raw", action="store_true")
     session_list.set_defaults(func=cmd_session_list)
-    session_ls = session_sub.add_parser("ls", help="List Core Agent sessions")
+    session_ls = session_sub.add_parser("ls", help="List Sunday sessions")
     session_ls.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     session_ls.add_argument("--raw", action="store_true")
     session_ls.set_defaults(session_command="list", func=cmd_session_list)
-    session_show = session_sub.add_parser("show", help="Show a Core Agent session")
+    session_show = session_sub.add_parser("show", help="Show a Sunday session")
     session_show.add_argument("thread_id")
     session_show.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     session_show.add_argument("--raw", action="store_true")
     session_show.set_defaults(func=cmd_session_show)
-    session_export = session_sub.add_parser("export", help="Export a Core Agent session")
+    session_export = session_sub.add_parser("export", help="Export a Sunday session")
     session_export.add_argument("thread_id")
     session_export.add_argument(
         "--mode",
@@ -1410,6 +1441,19 @@ def build_parser(
     _add_live_connection_arguments(session_fork)
     session_fork.add_argument("--raw", action="store_true")
     session_fork.set_defaults(func=cmd_session_fork)
+    session_permissions = session_sub.add_parser(
+        "permissions", help="Set the live permission state for a session"
+    )
+    session_permissions.add_argument("thread_id")
+    session_permissions.add_argument(
+        "--approval",
+        required=True,
+        choices=("ask", "auto", "full_access"),
+        help="Live session approval state",
+    )
+    _add_live_connection_arguments(session_permissions)
+    session_permissions.add_argument("--raw", action="store_true")
+    session_permissions.set_defaults(func=cmd_session_permissions)
 
     project = sub.add_parser("project", help="Manage Core project workspaces")
     project_sub = project.add_subparsers(dest="project_command", required=True)
@@ -1419,6 +1463,8 @@ def build_parser(
     project_create = project_sub.add_parser("create", help="Create or reuse a project workspace")
     project_create.add_argument("work_root")
     project_create.add_argument("--name", default=None)
+    project_create.add_argument("--icon", "--icon-key", dest="icon_key", choices=PROJECT_ICON_KEYS, default="folder")
+    project_create.add_argument("--color", "--color-key", dest="color_key", choices=PROJECT_COLOR_KEYS, default="gray")
     project_create.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     project_create.set_defaults(func=cmd_project_create)
     project_show = project_sub.add_parser("show", help="Show a project workspace")
@@ -1430,6 +1476,13 @@ def build_parser(
     project_rename.add_argument("name")
     project_rename.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     project_rename.set_defaults(func=cmd_project_rename)
+    project_update = project_sub.add_parser("update", help="Update project name, icon, or color")
+    project_update.add_argument("project_id")
+    project_update.add_argument("--name", default=None)
+    project_update.add_argument("--icon", "--icon-key", dest="icon_key", choices=PROJECT_ICON_KEYS, default=None)
+    project_update.add_argument("--color", "--color-key", dest="color_key", choices=PROJECT_COLOR_KEYS, default=None)
+    project_update.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    project_update.set_defaults(func=cmd_project_update)
     project_delete = project_sub.add_parser("delete", help="Delete a project record")
     project_delete.add_argument("project_id")
     project_delete.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
@@ -2041,6 +2094,91 @@ async def cmd_plugin_config_set(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_plugin_widget_list(args: argparse.Namespace) -> int:
+    result = await _invoke_live(args, lambda client: client.request("plugin.widget.list", {}))
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        return 0
+    widgets = result.get("widgets") if isinstance(result, dict) else []
+    if not widgets:
+        print("No enabled plugin widgets.", flush=True)
+        return 0
+    for item in widgets:
+        print(
+            f"{item.get('id')} [{item.get('pluginId')}, {item.get('renderer')}, {item.get('scope')}] "
+            f"{item.get('title')}",
+            flush=True,
+        )
+    return 0
+
+
+def _plugin_widget_scope_payload(args: argparse.Namespace) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if getattr(args, "work_root", ""):
+        payload["work_root"] = args.work_root
+    if getattr(args, "thread_id", ""):
+        payload["thread_id"] = args.thread_id
+    return payload
+
+
+async def cmd_plugin_widget_show(args: argparse.Namespace) -> int:
+    payload = {"id": args.id, **_plugin_widget_scope_payload(args)}
+    result = await _invoke_live(args, lambda client: client.request("plugin.widget.get", payload))
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+    else:
+        print(json.dumps(result.get("snapshot"), ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_plugin_widget_action(args: argparse.Namespace) -> int:
+    try:
+        inputs = json.loads(args.input)
+    except json.JSONDecodeError as exc:
+        print(f"error: invalid JSON input: {exc}", flush=True)
+        return 1
+    if not isinstance(inputs, dict):
+        print("error: action input must be a JSON object", flush=True)
+        return 1
+    listed = await _invoke_live(args, lambda client: client.request("plugin.widget.list", {}))
+    widget = next(
+        (item for item in (listed.get("widgets") or []) if item.get("id") == args.id), None
+    )
+    action = next(
+        (item for item in ((widget or {}).get("actions") or []) if item.get("id") == args.action), None
+    )
+    if action is None:
+        print(f"error: widget action '{args.id}/{args.action}' is not declared", flush=True)
+        return 1
+    confirmed = bool(args.yes)
+    if action.get("dangerous") and not confirmed:
+        try:
+            reply = input(f"Invoke dangerous widget action {args.id}/{args.action}? [y/N] ").strip().lower()
+        except EOFError:
+            reply = ""
+        if reply not in ("y", "yes", "ok"):
+            print("Action cancelled.", flush=True)
+            return 1
+        confirmed = True
+    idempotency_key = str(args.idempotency_key or "")
+    if action.get("mutates") and not idempotency_key:
+        import uuid
+
+        idempotency_key = str(uuid.uuid4())
+    payload = {
+        "id": args.id,
+        "action": args.action,
+        "input": inputs,
+        "confirmed": confirmed,
+        **_plugin_widget_scope_payload(args),
+    }
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
+    result = await _invoke_live(args, lambda client: client.request("plugin.widget.invoke", payload))
+    _print_live_result(args, result, f"widget action '{args.id}/{args.action}' invoked")
+    return 0
+
+
 async def cmd_skill_list(args: argparse.Namespace) -> int:
     result = await _invoke_live(args, lambda client: client.request("skill.list", {}))
     if args.raw:
@@ -2180,6 +2318,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
         raise ValueError("--compact-limit-tokens cannot exceed --compact-trigger-tokens")
     thread_id = _resolve_thread_id(args.thread_id)
     context_window_tokens = _resolve_cli_context_window(args)
+    max_output_tokens = _resolve_cli_max_output_tokens(args)
     if not args.raw:
         print(f"[session] {thread_id}", flush=True)
     async def start(client: CoreAppServerClient) -> dict[str, Any]:
@@ -2195,7 +2334,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
             "reasoning_level": reasoning_level,
             "thinking_budget": args.thinking_budget,
             "shallow_thinking_enabled": bool(args.shallow_thinking),
-            "max_tokens": int(args.max_tokens) if args.max_tokens is not None else None,
+            "max_tokens": max_output_tokens,
             "temperature": float(args.temperature),
             "compact_trigger_tokens": compact_trigger_tokens,
             "compact_limit_tokens": compact_limit_tokens,
@@ -2387,6 +2526,27 @@ async def cmd_session_fork(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_session_permissions(args: argparse.Namespace) -> int:
+    client = CoreAppServerClient(args.base_url, path=args.ws_path, token=args.token)
+    try:
+        await client.connect(thread_id=args.thread_id)
+        result = await client.request(
+            "session.permissions.set",
+            {
+                "thread_id": args.thread_id,
+                "permission_preset": args.approval,
+            },
+        )
+    finally:
+        await client.close()
+    _print_live_result(
+        args,
+        result,
+        f"session {args.thread_id} approval={result.get('permission_preset', args.approval)}",
+    )
+    return 0
+
+
 async def cmd_session_show(args: argparse.Namespace) -> int:
     detail = await show_core_cli_session(args.thread_id, core_db=args.core_db or None)
     if args.raw:
@@ -2493,7 +2653,12 @@ async def cmd_project_list(args: argparse.Namespace) -> int:
 async def cmd_project_create(args: argparse.Namespace) -> int:
     db = await open_core_app_db(_resolve_core_db(args.core_db or None))
     try:
-        project, session, created = await db.project_store.create_with_initial_session(args.work_root, name=args.name)
+        project, session, created = await db.project_store.create_with_initial_session(
+            args.work_root,
+            name=args.name,
+            icon_key=args.icon_key,
+            color_key=args.color_key,
+        )
         _print_project_result({"created": created, "project": project.to_dict(), "session": session.to_dict()})
     finally:
         await db.close()
@@ -2516,6 +2681,23 @@ async def cmd_project_rename(args: argparse.Namespace) -> int:
     db = await open_core_app_db(_resolve_core_db(args.core_db or None))
     try:
         project = await db.project_store.rename(args.project_id, args.name)
+        if project is None:
+            raise RuntimeError("Project not found")
+        _print_project_result({"project": project.to_dict()})
+    finally:
+        await db.close()
+    return 0
+
+
+async def cmd_project_update(args: argparse.Namespace) -> int:
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        project = await db.project_store.update(
+            args.project_id,
+            name=args.name,
+            icon_key=args.icon_key,
+            color_key=args.color_key,
+        )
         if project is None:
             raise RuntimeError("Project not found")
         _print_project_result({"project": project.to_dict()})
@@ -3153,7 +3335,7 @@ def normalize_remote_server_base_url(value: str) -> str:
 
 
 async def cmd_update_check(args: argparse.Namespace) -> int:
-    """Check GitHub Releases for a newer LamCore (--json for scripting)."""
+    """Check GitHub Releases for a newer Sunday build (--json for scripting)."""
     from lamtools_core.update.checker import check_update
 
     result = check_update()
@@ -3168,7 +3350,7 @@ async def cmd_update_check(args: argparse.Namespace) -> int:
             print(f"notes:     {result.get('release_notes')}")
         print(f"download:  {result.get('download_url')}")
         print(f"release:   {result.get('release_url')}")
-        print("提示: 下载安装包后关闭 LamCore 再运行安装。")
+        print("提示: 下载安装包后关闭 Sunday 再运行安装。")
         return 0
     if status == "up_to_date":
         print(f"latest:    {result.get('latest_version')}（已是最新）")
@@ -3230,6 +3412,31 @@ async def cmd_artifact_show(args: argparse.Namespace) -> int:
     print(f"children_ids:{', '.join(record.children_ids) or '-'}")
     print(f"created_at:  {record.created_at or '-'}")
     print(f"deleted:     {record.deleted}")
+    return 0
+
+
+async def cmd_artifact_open(args: argparse.Namespace) -> int:
+    from lamtools_core.attachment import open_with_default_app
+
+    registry = _artifact_registry_for_cli(_artifact_work_root(args))
+    record = registry.get(args.artifact_id)
+    if record is None:
+        print(f"[artifact] not found: {args.artifact_id}", file=sys.stderr)
+        return 1
+    if record.path.startswith("attachment://"):
+        print("[artifact] attachment-backed artifacts must use attachment open", file=sys.stderr)
+        return 1
+    relative_path = record.path.removeprefix("workspace://")
+    candidate = (registry.work_root / relative_path).resolve()
+    try:
+        candidate.relative_to(registry.work_root)
+        if not candidate.is_file():
+            raise FileNotFoundError(candidate)
+        open_with_default_app(candidate)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        print(f"[artifact] open failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"[artifact] opened: {record.name}")
     return 0
 
 
@@ -3747,6 +3954,18 @@ def _resolve_cli_context_window(args: argparse.Namespace) -> int | None:
     try:
         config = load_llm_config(model_ref=model_id)
         return config.context_window if config.context_window > 0 else None
+    except Exception:
+        return None
+
+
+def _resolve_cli_max_output_tokens(args: argparse.Namespace) -> int | None:
+    explicit = getattr(args, "max_tokens", None)
+    if explicit is not None:
+        return int(explicit) if int(explicit) > 0 else None
+    model_id = getattr(args, "model_id", "") or ""
+    try:
+        config = load_llm_config(model_ref=model_id)
+        return config.max_output_tokens if config.max_output_tokens > 0 else None
     except Exception:
         return None
 

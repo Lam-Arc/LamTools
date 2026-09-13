@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from copy import deepcopy
 
 from lamtools_core.event import (
@@ -72,6 +72,71 @@ _MODEL_SECRET_PATTERNS = (
     re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s]+"),
     re.compile(r"(?i)((?:api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*)[^\s]+"),
 )
+
+
+# Workflow execution metadata is deliberately kept as a small, explicit
+# envelope.  RuntimeState is the durable seam between the turn input and a
+# later tool dispatch; copying this envelope there prevents a nested
+# workflow-as-tool call from losing the authority and correlation supplied by
+# its parent.  Keep aliases here because plugin hosts may use either spelling
+# while crossing the operation boundary.
+_WORKFLOW_CONTEXT_METADATA_KEYS = (
+    "parent_session_id",
+    "parent_run_id",
+    "parent_turn_id",
+    "parent_call_id",
+    "cwd",
+    "pause_on_cancel",
+    "permissions",
+    "runtime_permissions",
+    "event_metadata",
+    "attachments",
+    "runtime_snapshot",
+    "snapshot",
+    "environment",
+    "capabilities",
+    "trace_id",
+    "traceId",
+    "correlation_id",
+    "actor_id",
+    "actor_kind",
+    "lineage",
+    "parent_lineage",
+    "workflow_stack",
+    "active_workflows",
+    "depth",
+    "nesting_depth",
+    "max_depth",
+    "max_nesting_depth",
+)
+
+
+def _workflow_context_metadata(value: Any) -> dict[str, Any]:
+    """Return a JSON-safe copy of the workflow execution envelope.
+
+    ``workflow_execution`` is the canonical nested form used by workflow
+    adapters.  Flattened aliases are accepted as well so older hosts and
+    direct ``RuntimeTurnInput`` callers retain their metadata.  The helper is
+    intentionally local to the base kit: it must not import the workflow
+    plugin and create an app/runtime import cycle.
+    """
+    if isinstance(value, Mapping):
+        source = dict(value)
+    else:
+        source = {}
+    nested = source.get("workflow_execution", source.get("execution_context"))
+    if callable(getattr(nested, "metadata", None)):
+        try:
+            nested = nested.metadata()
+        except Exception:  # noqa: BLE001 - malformed optional metadata is ignored
+            nested = None
+    result: dict[str, Any] = {}
+    if isinstance(nested, Mapping):
+        result.update(deepcopy(dict(nested)))
+    for key in _WORKFLOW_CONTEXT_METADATA_KEYS:
+        if key in source:
+            result[key] = deepcopy(source[key])
+    return result
 
 
 def _redact_model_tool_evidence(value: str) -> str:
@@ -232,6 +297,15 @@ class CoreBaseAgentKit:
         ):
             state.metadata["runtime_snapshot"] = deepcopy(incoming_snapshot)
             for key, value in incoming_snapshot.items():
+                state.metadata[key] = deepcopy(value)
+        # Keep the parent workflow envelope on the durable child state.  The
+        # model can emit a tool call several turns after this hook runs, so
+        # relying on the transient RuntimeTurnInput would drop attachments,
+        # permissions, and lineage before the workflow tool handler sees it.
+        workflow_context = _workflow_context_metadata(turn_input.metadata)
+        if workflow_context:
+            state.metadata["workflow_execution"] = deepcopy(workflow_context)
+            for key, value in workflow_context.items():
                 state.metadata[key] = deepcopy(value)
         for key in ("model_id", "reasoning_level", "thinking_enabled", "thinking_budget", "reasoning_effort", "shallow_thinking_enabled", "capability", "deferred_attachments", "context_window_tokens", "compact_trigger_tokens", "compact_limit_tokens"):
             if key in turn_input.metadata:
@@ -488,8 +562,23 @@ class CoreBaseAgentKit:
         if routed is not None:
             return routed
 
+        # Rehydrate the workflow envelope from durable state at the tool
+        # boundary.  Dynamic workflow tools only receive ToolCall metadata;
+        # without this copy a child runner would silently lose its parent's
+        # attachments, runtime snapshot, environment/capabilities,
+        # permissions, lineage, and cycle-detection stack.
+        workflow_context = _workflow_context_metadata(state.metadata)
+        if workflow_context:
+            call.metadata["execution_context"] = deepcopy(workflow_context)
+            for key, value in workflow_context.items():
+                call.metadata[key] = deepcopy(value)
+
         call.metadata["_runtime_session_id"] = state.session_id
         call.metadata["_runtime_run_id"] = state.run_id
+        call.metadata.setdefault("session_id", state.session_id)
+        call.metadata.setdefault("thread_id", state.session_id)
+        call.metadata.setdefault("turn_id", str(state.metadata.get("turn_id") or state.run_id))
+        call.metadata.setdefault("work_root", str(self.work_root))
         session_metadata = state.metadata.get("session_metadata") if isinstance(state.metadata, dict) else None
         if isinstance(session_metadata, dict):
             call.metadata["_runtime_session_metadata"] = dict(session_metadata)

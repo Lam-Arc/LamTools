@@ -65,6 +65,7 @@ from .operation_catalog import OperationCatalog, OperationRequest, OperationResu
 from .persistence_host import AppPersistenceHost
 from .snapshot_store import SqlAlchemyThreadSnapshotStore
 from .runtime_permissions import (
+    RUNTIME_PERMISSION_KEYS,
     permissions_from_snapshot,
     resolve_permission_preset,
     runtime_snapshot as build_runtime_snapshot,
@@ -546,6 +547,9 @@ def create_core_agent_operations(
                 enable_arrange_tool=arrange_manager is not None,
                 active_tier=active_tier,
                 tier_tools=tier_tools,
+                runtime_permissions_provider=_session_runtime_permissions_provider(
+                    session_store, thread_id=thread_id, tier_tools=tier_tools
+                ),
                 active_mode=active_mode,
                 permission_preset=(runtime_snapshot or {}).get("permission_preset", "ask"),
                 runtime_snapshot=runtime_snapshot,
@@ -813,12 +817,19 @@ def create_core_agent_operations(
                 )
             if state is None:
                 return OperationResult(name=request.name, status="error", payload={"error": "thread state not found"})
-            # The paused RuntimeState is authoritative.  In particular, a
-            # Composer change made while the approval card is visible must not
-            # alter this continuation's permissions.
+            # Model/thinking options remain tied to the paused turn, while
+            # permission fields come from the session's current live state.
             persisted_snapshot = _runtime_snapshot_from_payload(state.metadata)
             if persisted_snapshot is not None:
-                runtime_snapshot = persisted_snapshot
+                live_permission_snapshot = runtime_snapshot or {}
+                runtime_snapshot = {
+                    **persisted_snapshot,
+                    **{
+                        key: deepcopy(live_permission_snapshot[key])
+                        for key in RUNTIME_PERMISSION_KEYS
+                        if key in live_permission_snapshot
+                    },
+                }
                 approval_policy = str(runtime_snapshot.get("approval_policy") or "require")
                 active_tier = runtime_snapshot.get("active_tier")
                 if active_tier not in ("read_only", "limited_edit", "full_edit"):
@@ -1060,6 +1071,9 @@ def create_core_agent_operations(
                         enable_arrange_tool=arrange_manager is not None,
                         active_tier=active_tier,
                         tier_tools=tier_tools,
+                        runtime_permissions_provider=_session_runtime_permissions_provider(
+                            session_store, thread_id=thread_id, tier_tools=tier_tools
+                        ),
                         active_mode=active_mode,
                         permission_preset=(runtime_snapshot or {}).get("permission_preset", "ask"),
                         runtime_snapshot=runtime_snapshot,
@@ -1305,9 +1319,9 @@ def create_core_agent_operations(
                     toolbox, mcp_registry = await _build_core_runtime_toolbox(
                         work_root=runtime_work_root,
                         plugin_assembly=plugin_assembly,
-                        # This continuation is still part of the original
-                        # turn; preserve its frozen policy while executing the
-                        # approved call instead of silently upgrading it.
+                        # This continuation keeps the original turn's runtime
+                        # options; the toolbox refreshes permissions from the
+                        # current session before executing the approved call.
                         approval_policy=approval_policy,
                         llm_client=runtime_model_provider,
                         model_id=runtime_options.model_id,
@@ -1325,6 +1339,9 @@ def create_core_agent_operations(
                         enable_arrange_tool=arrange_manager is not None,
                         active_tier=active_tier,
                         tier_tools=tier_tools,
+                        runtime_permissions_provider=_session_runtime_permissions_provider(
+                            session_store, thread_id=thread_id, tier_tools=tier_tools
+                        ),
                         active_mode=active_mode,
                         permission_preset=(runtime_snapshot or {}).get("permission_preset", "ask"),
                         activated_mcp_servers=approval_activated_mcp,
@@ -1465,6 +1482,9 @@ def create_core_agent_operations(
                     enable_arrange_tool=arrange_manager is not None,
                     active_tier=active_tier,
                     tier_tools=tier_tools,
+                    runtime_permissions_provider=_session_runtime_permissions_provider(
+                        session_store, thread_id=thread_id, tier_tools=tier_tools
+                    ),
                     active_mode=active_mode,
                     permission_preset=(runtime_snapshot or {}).get("permission_preset", "ask"),
                     activated_mcp_servers=continuation_activated_mcp,
@@ -1903,8 +1923,42 @@ def _work_root_from_state(paths: CoreAgentPaths, state: Any) -> Path:
     return Path(metadata.get("work_root") or paths.work_root).expanduser().resolve()
 
 
+def _session_runtime_permissions_provider(
+    session_store: Any,
+    *,
+    thread_id: str,
+    tier_tools: dict[str, Any] | None,
+) -> Callable[[], Mapping[str, Any] | None] | None:
+    """Build a synchronous view of the current session permission state."""
+    getter = getattr(session_store, "runtime_preferences", None)
+    if not callable(getter) or not thread_id:
+        return None
+
+    def current() -> Mapping[str, Any] | None:
+        preferences = getter(thread_id)
+        if not isinstance(preferences, Mapping):
+            return None
+        resolved = resolve_permission_preset(
+            preset=preferences.get("permission_preset"),
+            base_tier=preferences.get("base_tier"),
+            base_allow_access_outside_workdir=preferences.get(
+                "base_allow_access_outside_workdir"
+            ),
+            tier_tools=tier_tools,
+        )
+        return {
+            "permission_preset": resolved.permission_preset,
+            "approval_policy": resolved.approval_policy,
+            "active_tier": resolved.active_tier,
+            "tier_tools": resolved.tier_tools,
+            "allow_access_outside_workdir": resolved.allow_access_outside_workdir,
+        }
+
+    return current
+
+
 def _runtime_snapshot_from_payload(payload: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Normalize the accepted turn snapshot without consulting live UI state.
+    """Normalize the accepted turn snapshot before live permission overlays.
 
     The live operation normally supplies a canonical ``runtime_snapshot``.
     Direct/legacy callers may still send the old expanded fields; those are
@@ -2310,6 +2364,7 @@ async def _build_core_runtime_toolbox(
     attachment_service: Any = None,
     imagegen_config: dict | None = None,
     allow_access_outside_workdir: bool = False,
+    runtime_permissions_provider: Callable[[], Mapping[str, Any] | None] | None = None,
     model_context_sink: Callable[[Any, Any], Awaitable[None] | None] | None = None,
 ):
     from lamtools_core.mcp import MCPToolRegistry
@@ -2376,6 +2431,7 @@ async def _build_core_runtime_toolbox(
             load_tools=load_tools,
             attachment_service=attachment_service,
             allow_access_outside_workdir=allow_access_outside_workdir,
+            runtime_permissions_provider=runtime_permissions_provider,
             runtime_snapshot=runtime_snapshot,
             model_context_sink=model_context_sink,
         )
@@ -2497,6 +2553,7 @@ async def _build_core_runtime_toolbox(
         plugin_mode_tool_sets=plugin_assembly.get("plugin_mode_tool_sets") or {},
         plugin_availability=plugin_availability,
         allow_access_outside_workdir=allow_access_outside_workdir,
+        runtime_permissions_provider=runtime_permissions_provider,
         plugin_tool_specs=plugin_tool_specs,
         plugin_tool_handlers=plugin_tool_handlers,
         skill_state_store=skill_state_store,

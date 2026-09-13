@@ -419,6 +419,99 @@ describe('useCoreLiveComposerController', () => {
     expect(clearedAttachments).toBe(1)
   })
 
+  it('does not start the ordinary submit lifecycle for a standalone action', async () => {
+    const calls: string[] = []
+    const text = ref('/compact')
+    const controller = useCoreLiveComposerController({
+      activeThreadId: ref<string | null>('thread-1'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(text.value.length),
+      status: ref('idle'),
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async () => {
+        calls.push('start-turn')
+      },
+      interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
+      queueInput: async () => {
+        calls.push('queue-input')
+      },
+      listCommands: async () => [],
+      getWorkRoot: () => 'E:\\LamTools',
+      executeCommand: async (_threadId, command, workRoot, argumentsText) => {
+        calls.push(`command:${command}:${workRoot}:${argumentsText || ''}`)
+        return true
+      },
+      onSubmitStart: () => {
+        calls.push('submit-start')
+      },
+      clearComposer: (submittedText) => {
+        if (text.value.trim() === submittedText) text.value = ''
+      },
+    })
+    controller.commandCatalog.value = [...commands]
+
+    await expect(controller.submit({ clearComposer: true })).resolves.toMatchObject({
+      status: 'command',
+      command: 'compact',
+      ok: true,
+    })
+
+    expect(calls).toEqual(['command:compact:E:\\LamTools:'])
+    expect(text.value).toBe('')
+  })
+
+  it('keeps submit lifecycle for skills and unknown slash text', async () => {
+    const calls: string[] = []
+    const text = ref('')
+    const controller = useCoreLiveComposerController({
+      activeThreadId: ref<string | null>('thread-1'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(0),
+      status: ref('idle'),
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async (_threadId, input) => {
+        calls.push(`start:${JSON.stringify(input)}`)
+      },
+      interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
+      queueInput: async () => {
+        calls.push('queue-input')
+      },
+      listCommands: async () => [],
+      getWorkRoot: () => 'E:\\LamTools',
+      executeCommand: async () => {
+        calls.push('command')
+        return true
+      },
+      onSubmitStart: () => {
+        calls.push('submit-start')
+      },
+      clearComposer: () => {
+        text.value = ''
+      },
+    })
+    controller.commandCatalog.value = [...commands]
+
+    text.value = '/reviewer inspect these changes'
+    await expect(controller.submit({ clearComposer: true })).resolves.toMatchObject({ status: 'started' })
+    text.value = '/unknown keep this as text'
+    await expect(controller.submit({ clearComposer: true })).resolves.toMatchObject({ status: 'started' })
+
+    expect(calls).toEqual([
+      'submit-start',
+      'start:[{"type":"skill","name":"reviewer","source_text":"/reviewer"},{"type":"text","text":" inspect these changes"}]',
+      'submit-start',
+      'start:[{"type":"text","text":"/unknown keep this as text"}]',
+    ])
+  })
+
   it('exposes command catalog failures without hiding the underlying error', async () => {
     const controller = useCoreLiveComposerController({
       activeThreadId: ref<string | null>('thread-1'),

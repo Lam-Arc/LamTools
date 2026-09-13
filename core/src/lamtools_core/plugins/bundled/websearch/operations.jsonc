@@ -1,0 +1,14 @@
+{
+  "operations": [
+    {
+      "name": "websearch.widget.snapshot",
+      "description": "Return the current web search engine configuration summary.",
+      "handler": "lamtools_core.plugins.bundled.websearch.backend.operations:widget_snapshot"
+    },
+    {
+      "name": "websearch.widget.health",
+      "description": "Run a bounded live query against the configured search engine.",
+      "handler": "lamtools_core.plugins.bundled.websearch.backend.operations:widget_health"
+    }
+  ]
+}

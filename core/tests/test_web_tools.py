@@ -79,6 +79,105 @@ async def test_web_search_returns_structured_metadata_and_artifact(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_web_search_falls_back_when_default_provider_fails(monkeypatch):
+    from lamtools_core.tool.search import factory
+
+    class FakeProvider:
+        transport = "inproc"
+
+        def __init__(self, name: str, *, error: str = "") -> None:
+            self.name = name
+            self.error = error
+
+        async def search(self, query, limit=5, domains=None):
+            if self.error:
+                raise RuntimeError(self.error)
+            return [{"title": "Fallback result", "url": "https://example.test", "snippet": query, "source": self.name}]
+
+    monkeypatch.setattr(
+        factory,
+        "_default_config",
+        lambda work_root=None, data_dir=None: {
+            "provider": "baidu",
+            "fallback_providers": ["ddg", "bing"],
+        },
+    )
+    monkeypatch.setattr(
+        factory,
+        "get_provider",
+        lambda name=None, config=None: FakeProvider("baidu", error="captcha")
+        if name == "baidu"
+        else FakeProvider(str(name)),
+    )
+
+    tool = factory.build_web_search_handler("")
+    result = await tool(ToolCall(id="fallback", name="web_search", arguments={"query": "fallback"}))
+
+    assert result.status == "ok"
+    assert result.metadata["provider"] == "ddg"
+    assert result.metadata["attempted_providers"] == ["baidu", "ddg"]
+    assert result.metadata["provider_errors"] == {"baidu": "captcha"}
+
+
+@pytest.mark.asyncio
+async def test_web_search_explicit_provider_does_not_fall_back(monkeypatch):
+    from lamtools_core.tool.search import factory
+
+    class FakeProvider:
+        transport = "inproc"
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def search(self, query, limit=5, domains=None):
+            raise RuntimeError(f"{self.name} unavailable")
+
+    monkeypatch.setattr(
+        factory,
+        "_default_config",
+        lambda work_root=None, data_dir=None: {
+            "provider": "ddg",
+            "fallback_providers": ["bing"],
+        },
+    )
+    monkeypatch.setattr(factory, "get_provider", lambda name=None, config=None: FakeProvider(str(name)))
+
+    tool = factory.build_web_search_handler("")
+    result = await tool(ToolCall(
+        id="explicit",
+        name="web_search",
+        arguments={"query": "strict", "provider": "baidu"},
+    ))
+
+    assert result.status == "failed"
+    assert result.metadata["attempted_providers"] == ["baidu"]
+
+
+def test_web_search_accepts_duckduckgo_alias():
+    from lamtools_core.tool.search.factory import get_provider
+
+    assert get_provider("duckduckgo").name == "ddg"
+
+
+@pytest.mark.asyncio
+async def test_duckduckgo_uses_configured_local_proxy_port(monkeypatch):
+    from lamtools_core.tool.search import duckduckgo
+
+    options: dict = {}
+    client = object()
+
+    def client_factory(**kwargs):
+        options.update(kwargs)
+        return client
+
+    monkeypatch.setattr(duckduckgo.httpx, "AsyncClient", client_factory)
+    provider = duckduckgo.DuckDuckGoSearchProvider({"proxy_port": 7890})
+
+    assert await provider._session() is client
+    assert options["proxy"] == "http://127.0.0.1:7890"
+
+
+@pytest.mark.asyncio
 async def test_web_fetch_blocks_file_protocol():
     tool = make_web_fetch_handler("")
 

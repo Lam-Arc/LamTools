@@ -185,9 +185,24 @@ def _make_workflow_handler(
         active_root = str(active_root_raw or work_root or "").strip()
         if active_root:
             payload["work_root"] = active_root
+        # Preserve the parent execution envelope so workflow-as-tool calls
+        # retain attachments, snapshots, capabilities, cancellation lineage,
+        # and permission authority at the operation boundary.  Unknown tool
+        # metadata is intentionally not copied into the execution context.
+        inherited_keys = {
+            "session_id", "thread_id", "turn_id", "parent_session_id",
+            "parent_run_id", "parent_turn_id", "parent_call_id", "trace_id",
+            "correlation_id", "actor_id", "actor_kind", "attachments",
+            "runtime_snapshot", "snapshot", "environment", "capabilities", "permissions",
+            "runtime_permissions", "lineage", "parent_lineage", "workflow_stack",
+            "active_workflows", "depth", "nesting_depth", "max_depth",
+            "max_nesting_depth", "execution_context", "_runtime_session_metadata",
+        }
+        forwarded = {key: metadata[key] for key in inherited_keys if key in metadata}
         metadata = {
+            **forwarded,
             "source": "agent_tool",
-            "run_id": str(metadata.get("_runtime_run_id") or ""),
+            "run_id": str(metadata.get("_runtime_run_id") or metadata.get("run_id") or ""),
             "tool_call_id": call.id,
             **({"work_root": active_root} if active_root else {}),
         }

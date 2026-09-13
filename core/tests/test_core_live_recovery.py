@@ -141,6 +141,11 @@ async def test_recover_stale_active_turns_clears_running_waiting_and_is_idempote
         # Sanity: both threads currently have an active turn in the snapshot.
         assert latest_active_turn_id(await _load_snapshot(db, "thread-stale")) is not None
         assert latest_active_turn_id(await _load_snapshot(db, "thread-stale-2")) is not None
+        async with db.session_factory() as session:
+            assert set(await db.persistence.list_active_thread_ids(session)) == {
+                "thread-stale",
+                "thread-stale-2",
+            }
 
         recovered = await recover_stale_active_turns(context=context)
         assert recovered == 3
@@ -166,6 +171,8 @@ async def test_recover_stale_active_turns_clears_running_waiting_and_is_idempote
         # Idempotent: a second sweep finds nothing left to reap.
         recovered_again = await recover_stale_active_turns(context=context)
         assert recovered_again == 0
+        async with db.session_factory() as session:
+            assert await db.persistence.list_active_thread_ids(session) == []
     finally:
         await db.close()
 

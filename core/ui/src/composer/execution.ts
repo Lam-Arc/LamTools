@@ -35,6 +35,7 @@ export interface CoreExecutionModelSource {
   thinking_budget?: number
   reasoning_off_supported?: boolean
   context_window?: number
+  max_output_tokens?: number
 }
 
 export interface CoreExecutionProviderSource {

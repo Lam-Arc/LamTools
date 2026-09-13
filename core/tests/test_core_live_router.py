@@ -1220,6 +1220,39 @@ def test_core_live_connection_skips_snapshot_for_plain_run_item() -> None:
     asyncio.run(run())
 
 
+def test_core_live_reader_follows_subscription_when_connection_switches_threads() -> None:
+    async def run() -> None:
+        hub = CoreAppEventHub()
+        connection = CoreLiveConnection(
+            DummyWebSocket(),
+            context=SimpleNamespace(hub=hub, host=SimpleNamespace(sync_journal=None)),
+        )
+        connection._subscribe("thread-a")
+        reader = asyncio.create_task(connection._hub_reader())
+        await asyncio.sleep(0)
+
+        connection._subscribe("thread-b")
+        await hub.publish({
+            "event_id": "event-b",
+            "thread_id": "thread-b",
+            "seq": 1,
+            "method": "session/updated",
+            "payload": {"session": {"title": "live"}},
+            "created_at": "2026-09-10T00:00:00+00:00",
+        })
+
+        try:
+            notification = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert notification["method"] == "session/updated"
+            assert notification["params"]["thread_id"] == "thread-b"
+        finally:
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+
+    asyncio.run(run())
+
+
 def test_core_live_multi_client_fans_out_events_and_keeps_rpc_responses_owned() -> None:
     """Two subscribed clients share Core events without sharing RPC responses.
 

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Sunday 应用图标</title>
+  <desc id="desc">暖白圆角背景上的 Sunday 彩色微笑标志。</desc>
+  <defs>
+    <linearGradient id="surface" x1="148" y1="112" x2="894" y2="928" gradientUnits="userSpaceOnUse"><stop stop-color="#FFFFFF"/><stop offset=".58" stop-color="#FFFDF8"/><stop offset="1" stop-color="#F9F4F7"/></linearGradient>
+    <linearGradient id="warm" x1="296" y1="495" x2="411" y2="291" gradientUnits="userSpaceOnUse"><stop stop-color="#FD4754"/><stop offset=".5" stop-color="#FD843E"/><stop offset="1" stop-color="#FECA30"/></linearGradient>
+    <linearGradient id="sweep" x1="208" y1="516" x2="707" y2="804" gradientUnits="userSpaceOnUse"><stop stop-color="#10AEFD"/><stop offset=".5" stop-color="#1C6BFC"/><stop offset="1" stop-color="#823CFC"/></linearGradient>
+    <linearGradient id="arch" x1="565" y1="430" x2="767" y2="303" gradientUnits="userSpaceOnUse"><stop stop-color="#0453FD"/><stop offset=".5" stop-color="#695BFB"/><stop offset="1" stop-color="#C745FD"/></linearGradient>
+    <filter id="shadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse"><feDropShadow dx="0" dy="18" stdDeviation="26" flood-color="#172451" flood-opacity=".16"/></filter>
+  </defs>
+  <g filter="url(#shadow)"><rect x="32" y="32" width="960" height="960" rx="240" fill="url(#surface)"/><rect x="32.5" y="32.5" width="959" height="959" rx="239.5" stroke="#FFFFFF" stroke-opacity=".85"/></g>
+  <g transform="translate(-71.68 -71.68) scale(1.14)">
+    <ellipse cx="374" cy="405" rx="121" ry="119" fill="url(#warm)"/>
+    <path fill="url(#arch)" d="M817 401c-2-11-7-21-14-28-16-18-42-31-72-39-32-8-64-2-85 8-19 8-35 18-50 32-14 13-26 28-33 44-6 15 0 29 11 37 10 7 24 7 34 2 10-5 15-14 24-23 16-16 38-21 60-20 26 0 47 12 67 33 9 10 24 9 34 4 16-9 28-27 24-50Z"/>
+    <path fill="url(#sweep)" d="M838 546c-2-12-7-21-15-26-11-7-23-6-34-2-18 7-30 19-42 32-19 20-35 37-54 54-27 24-63 41-102 53-33 10-64 12-97 9-27-2-53-9-78-17-32-11-57-27-80-48-24-21-45-46-66-67-10-11-24-17-37-19-15-2-29 4-36 16-9 13-8 30-2 47 8 25 22 51 39 71 25 33 50 56 78 76 31 22 65 36 101 46 54 16 112 17 170 7 43-8 80-24 109-41 32-18 57-39 81-65 21-24 34-45 45-63 13-24 23-47 20-63Z"/>
+  </g>
+</svg>

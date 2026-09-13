@@ -28,6 +28,7 @@ const RENDERABLE_ITEM_TYPES = new Set([
 
 export interface CoreAppServerChatMessage {
   id: string
+  turnId?: string
   role: 'user' | 'assistant'
   content: string
   timestamp?: string
@@ -94,9 +95,11 @@ export function selectChatMessages(
       : undefined
     if (!item) continue
     if (!isRenderableItem(item)) continue
+    const resolvedTurnId = itemTurnId(state, item)
     if (item.type === 'userMessage') {
       messages.push({
         id: item.item_id,
+        ...(resolvedTurnId ? { turnId: resolvedTurnId } : {}),
         role: 'user',
         content: inputToText(item.content),
         parts: [],
@@ -104,7 +107,7 @@ export function selectChatMessages(
       })
       continue
     }
-    const turnId = item.turn_id ?? 'none'
+    const turnId = resolvedTurnId || 'none'
     const last = messages[messages.length - 1]
     if (!last || last.role !== 'assistant' || assistantSegmentTurnId(last.id) !== turnId) {
       const segment = (assistantSegments.get(turnId) ?? 0) + 1
@@ -121,10 +124,12 @@ export function selectChatMessages(
         : providerUsage
       const runtimeModelId = runtimeModelIdForTurn(appTurn, coreTurn)
       const timestamp = runtimeTimestampForTurn(appTurn, coreTurn)
+      const durationMs = runtimeDurationMsForTurn(appTurn, coreTurn)
       messages.push({
         // Real turn ids contain colons (`<session>:turn:<run>`), so segments
         // are separated with `#` — never a colon.
         id: segment === 1 ? `assistant:${turnId}` : `assistant:${turnId}#${segment}`,
+        turnId,
         role: 'assistant',
         content: '',
         ...(timestamp ? { timestamp } : {}),
@@ -142,6 +147,7 @@ export function selectChatMessages(
           } : {}),
           ...(providerUsage ? { usageMetrics: providerUsage } : {}),
           ...(runtimeModelId ? { runtime_model_id: runtimeModelId } : {}),
+          ...(durationMs !== null ? { duration_ms: durationMs } : {}),
         },
       })
     }
@@ -290,6 +296,7 @@ function maybeAppendInitialAssistantWaiting(state: CoreAppSnapshot, messages: Co
   )
   messages.push({
     id: `assistant:waiting:${last.id}`,
+    ...(turnId ? { turnId } : {}),
     role: 'assistant',
     content: '',
     ...(timestamp ? { timestamp } : {}),
@@ -300,6 +307,15 @@ function maybeAppendInitialAssistantWaiting(state: CoreAppSnapshot, messages: Co
       ...(runtimeModelId ? { runtime_model_id: runtimeModelId } : {}),
     },
   })
+}
+
+function itemTurnId(state: CoreAppSnapshot, item: CoreAppItem): string {
+  if (typeof item.turn_id === 'string' && item.turn_id) return item.turn_id
+  for (const turns of [state.turns, state.core?.turns]) {
+    const match = Object.entries(turns ?? {}).find(([, turn]) => turn.items?.includes(item.item_id))
+    if (match) return String(match[1].turn_id || match[0])
+  }
+  return ''
 }
 
 function runtimeModelIdForTurn(
@@ -320,6 +336,14 @@ function runtimeTimestampForTurn(
   const coreRecord = isRecord(coreTurn) ? coreTurn : null
   const timestamp = appRecord?.created_at ?? coreRecord?.created_at
   return typeof timestamp === 'string' ? timestamp.trim() : ''
+}
+
+function runtimeDurationMsForTurn(appTurn: unknown, coreTurn: unknown): number | null {
+  const appRecord = isRecord(appTurn) ? appTurn : null
+  const coreRecord = isRecord(coreTurn) ? coreTurn : null
+  const value = coreRecord?.duration_ms ?? appRecord?.duration_ms
+  const duration = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(duration) && duration >= 0 ? Math.round(duration) : null
 }
 
 /**

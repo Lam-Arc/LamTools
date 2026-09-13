@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --port 5173",
     "build": "vite build",
+    "build:app": "tauri build --no-bundle",
+    "package:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ../../scripts/package.ps1",
     "test:pet": "node --test tests/pet-logic.test.mjs",
     "tauri": "tauri"
   },

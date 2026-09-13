@@ -2,7 +2,19 @@
   <div
     ref="shellElement"
     class="workspace-shell"
-    :class="[shellClass, composerShellClass, { 'workspace-shell--empty-session': emptySession }]"
+    :class="[
+      shellClass,
+      composerShellClass,
+      {
+        'workspace-shell--empty-session': emptySession,
+        'workspace-shell--full-bleed': mainContentFullBleed,
+        'workspace-shell--workflow': workflowMode,
+        'workspace-shell--workflow-composer-has-value': workflowMode && workflowComposerHasValue,
+        'workspace-shell--workflow-composer-stop': workflowMode && composerActionMode === 'stop',
+      },
+    ]"
+    :data-workflow-composer-state="workflowMode ? composerActionMode : undefined"
+    :data-workflow-composer-has-value="workflowMode ? String(workflowComposerHasValue) : undefined"
     :style="{ ...shellStyle, ...composerLayoutStyle }"
     @pointerdown="onSwipePointerDown"
     @pointermove="onSwipePointerMove"
@@ -11,6 +23,7 @@
     @selectstart="onSwipeSelectStart"
     @focusin="onShellFocusIn"
     @focusout="onShellFocusOut"
+    @input.capture="onShellInput"
   >
     <!-- Notifications are owned by the shared toast service. -->
     <CoreToastHost />
@@ -110,7 +123,18 @@
     <!-- ===== Floating Composer ===== -->
     <ComposerBar
       v-if="!hideComposer"
-      :class="[composerRootClass, { 'composer-root--empty-session': emptySession }]"
+      :class="[
+        composerRootClass,
+        {
+          'composer-root--empty-session': emptySession,
+          'composer-root--workflow': workflowMode,
+          'composer-root--workflow-has-value': workflowMode && workflowComposerHasValue,
+          'composer-root--workflow-stop': workflowMode && composerActionMode === 'stop',
+        },
+      ]"
+      :data-workflow-composer="workflowMode ? 'true' : undefined"
+      :data-workflow-composer-state="workflowMode ? composerActionMode : undefined"
+      :data-workflow-composer-has-value="workflowMode ? String(workflowComposerHasValue) : undefined"
       :inert="rightDrawerModal || undefined"
       variant="floating"
       :placeholder="composerPlaceholder"
@@ -127,10 +151,10 @@
         <slot name="composer-popover" />
       </template>
       <template #preamble>
-        <slot name="composer-preamble" />
+        <slot v-if="!workflowMode" name="composer-preamble" />
       </template>
       <template #status>
-        <slot name="composer-status" />
+        <slot v-if="!workflowMode" name="composer-status" />
       </template>
       <template #textarea>
         <slot name="composer-textarea">
@@ -144,7 +168,7 @@
         </slot>
       </template>
       <template #tools>
-        <slot name="composer-tools" />
+        <slot v-if="!workflowMode" name="composer-tools" />
       </template>
       <template #action>
         <slot name="composer-action">
@@ -171,7 +195,7 @@
       :aria-hidden="!rightOpen && !stageOpen"
       @mouseleave="onRightDrawerLeave"
     >
-      <header class="drawer-head">
+      <header v-if="showRightPanelHeader" class="drawer-head">
         <strong>{{ rightPanelTitle }}</strong>
       </header>
       <div class="drawer-body right-body">
@@ -194,7 +218,8 @@
  * Uses useShellLayout for all drawer/pin/theme/density state.
  * Product provides slots for actual content.
  */
-import { ref, toRef, useId, watch } from 'vue'
+import { gsap } from 'gsap'
+import { nextTick, onMounted, onUnmounted, ref, toRef, useId, watch } from 'vue'
 import { useComposerLayout } from '../composables/useComposerLayout'
 import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
@@ -212,8 +237,14 @@ const props = withDefaults(
     storageKey?: string
     density?: 'compact' | 'standard' | 'loose'
     contentWidth?: number
+    /** Let a plugin own the full central surface; headers and overlays remain stacked above it. */
+    mainContentFullBleed?: boolean
+    /** Enables Workflow-specific Composer density and canvas affordances. */
+    workflowMode?: boolean
     theme?: ThemeData
     rightPanelTitle?: string
+    /** Set false when the right-panel slot owns its own modular header. */
+    showRightPanelHeader?: boolean
     composerPlaceholder?: string
     composerDisabled?: boolean
     composerSendDisabled?: boolean
@@ -239,7 +270,10 @@ const props = withDefaults(
     showSidebarHeaderAction: true,
     density: 'standard',
     contentWidth: 780,
+    mainContentFullBleed: false,
+    workflowMode: false,
     rightPanelTitle: '运行状态',
+    showRightPanelHeader: true,
     composerPlaceholder: '输入内容...',
     composerDisabled: false,
     composerSendDisabled: false,
@@ -324,6 +358,80 @@ const composerLayout = useComposerLayout({
 const composerShellClass = composerLayout.shellClass
 const composerRootClass = composerLayout.rootClass
 const composerLayoutStyle = composerLayout.style
+const workflowComposerHasValue = ref(false)
+let composerMotionContext: gsap.Context | null = null
+let composerPlacementTween: gsap.core.Tween | null = null
+let composerPlacementRevision = 0
+
+onMounted(() => {
+  if (!shellElement.value) return
+  composerMotionContext = gsap.context(() => {}, shellElement.value)
+  void nextTick(syncWorkflowComposerValue)
+})
+
+watch(
+  [() => props.workflowMode, () => props.composerActionMode],
+  () => { void nextTick(syncWorkflowComposerValue) },
+)
+
+function syncWorkflowComposerValue(): void {
+  if (!props.workflowMode) {
+    workflowComposerHasValue.value = false
+    return
+  }
+  const textarea = shellElement.value?.querySelector<HTMLTextAreaElement>('.floating-composer textarea')
+  workflowComposerHasValue.value = Boolean(textarea?.value.trim())
+}
+
+function onShellInput(event: Event): void {
+  if (!props.workflowMode) return
+  const target = event.target
+  if (!(target instanceof HTMLTextAreaElement) || !target.closest('.floating-composer')) return
+  workflowComposerHasValue.value = Boolean(target.value.trim())
+}
+
+watch(composerLayout.placement, async () => {
+  const composer = shellElement.value?.querySelector<HTMLElement>('.floating-composer') ?? null
+  if (!composer) return
+
+  const revision = ++composerPlacementRevision
+  const previousTop = composer.getBoundingClientRect().top
+  await nextTick()
+  if (revision !== composerPlacementRevision || !composer.isConnected) return
+
+  const offsetY = previousTop - composer.getBoundingClientRect().top
+  composerPlacementTween?.kill()
+  composerPlacementTween = null
+  gsap.set(composer, { clearProps: 'transform,willChange' })
+  if (
+    Math.abs(offsetY) < 1
+    || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    || !composerMotionContext
+  ) return
+
+  composerMotionContext.add(() => {
+    composerPlacementTween = gsap.fromTo(
+      composer,
+      { y: offsetY, willChange: 'transform' },
+      {
+        y: 0,
+        duration: 0.5,
+        ease: 'power3.inOut',
+        overwrite: 'auto',
+        clearProps: 'transform,willChange',
+        onComplete: () => { composerPlacementTween = null },
+      },
+    )
+  })
+})
+
+onUnmounted(() => {
+  composerPlacementRevision += 1
+  composerPlacementTween?.kill()
+  composerPlacementTween = null
+  composerMotionContext?.revert()
+  composerMotionContext = null
+})
 
 function syncComposerKeyboardInset(): void {
   composerLayout.syncKeyboardInset()
@@ -333,7 +441,7 @@ function syncComposerKeyboardInset(): void {
 function onShellFocusIn(event: FocusEvent): void {
   const target = event.target
   if (target instanceof Element && target.closest('.floating-composer')) {
-    composerLayout.enterBottom()
+    syncWorkflowComposerValue()
     syncComposerKeyboardInset()
   }
 }
@@ -345,10 +453,10 @@ function onShellFocusOut(): void {
 function onComposerSubmit(): void {
   composerLayout.enterBottom()
   emit('composer-submit')
+  void nextTick(syncWorkflowComposerValue)
 }
 
 function onComposerDrop(event: DragEvent): void {
-  composerLayout.enterBottom()
   emit('composer-drop', event)
 }
 

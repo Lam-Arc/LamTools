@@ -9,6 +9,11 @@ from pathlib import Path
 
 TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".csv", ".tsv", ".log", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".ps1", ".bat", ".sh", ".toml", ".ini", ".cfg", ".sql"}
 TEXT_MIME_TYPES = {"application/json", "application/xml", "application/x-yaml", "application/yaml"}
+DANGEROUS_OPEN_EXTENSIONS = frozenset({
+    ".exe", ".bat", ".cmd", ".com", ".scr", ".lnk", ".ps1", ".msi", ".reg",
+    ".vbs", ".vbe", ".js", ".jse", ".hta", ".sh", ".jar", ".dll", ".sys",
+    ".pif", ".wsf", ".cpl",
+})
 
 
 def safe_filename(filename: str) -> str:
@@ -77,7 +82,13 @@ def read_text_preview(path: Path, limit: int = 200_000) -> str:
     return f"{text}\n\n... 内容已截断，完整文件请用默认方式打开。" if path.stat().st_size > limit else text
 
 
+def assert_safe_default_open(path: Path) -> None:
+    if path.suffix.lower() in DANGEROUS_OPEN_EXTENSIONS:
+        raise ValueError("This file type cannot be opened for safety")
+
+
 def open_with_default_app(path: Path) -> None:
+    assert_safe_default_open(path)
     if sys.platform.startswith("win"):
         os.startfile(str(path))  # type: ignore[attr-defined]
     elif sys.platform == "darwin":
@@ -86,4 +97,4 @@ def open_with_default_app(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)])
 
 
-__all__ = ["attachment_modality", "detect_mime", "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path"]
+__all__ = ["assert_safe_default_open", "attachment_modality", "detect_mime", "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path"]

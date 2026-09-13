@@ -1,27 +1,78 @@
 <template>
-  <div class="workflow-view" data-plugin-mode="workflow">
+  <div
+    class="workflow-view"
+    data-plugin-mode="workflow"
+    :data-workflow-running="workflowRunning ? 'true' : 'false'"
+  >
+    <nav v-if="workflowTabs.length > 1" class="wf-workflow-tabs" role="tablist" aria-label="打开的工作流">
+      <button
+        v-for="tab in workflowTabs"
+        :key="tab.id"
+        type="button"
+        class="wf-workflow-tab"
+        :class="{ active: tab.id === activeWorkflowId }"
+        role="tab"
+        :aria-selected="tab.id === activeWorkflowId ? 'true' : 'false'"
+        :tabindex="tab.id === activeWorkflowId ? 0 : -1"
+        @click="selectWorkflow(tab.id)"
+      >
+        <span class="wf-workflow-tab-title">{{ tab.name || '未命名工作流' }}</span>
+        <span v-if="tab.dirty" class="wf-workflow-tab-dirty" aria-label="有未保存修改">●</span>
+        <span
+          class="wf-workflow-tab-close"
+          role="button"
+          tabindex="0"
+          aria-label="关闭工作流标签"
+          @click.stop="closeWorkflowTab(tab.id)"
+          @keydown.enter.stop.prevent="closeWorkflowTab(tab.id)"
+          @keydown.space.stop.prevent="closeWorkflowTab(tab.id)"
+        >×</span>
+      </button>
+    </nav>
     <WorkflowCanvas
       :definition="workflowDefinition || emptyWorkflow"
       :node-states="workflowNodeStates"
       :selected-node-id="selectedNodeId || undefined"
       :available-tools="availableTools"
       :available-models="availableModels"
+      :node-schemas="nodeSchemas"
       :locked="canvasLocked"
       @update:definition="onWorkflowUpdate"
       @select-node="onSelectNode"
       @run-from="runFromNode"
       @run-node="runSingleNode"
-    />
-    <WorkflowControlBar
-      :running="workflowRunning"
-      :exposed="workflowDefinition?.exposed"
-      :status-text="workflowStatusText"
-      @run="runWorkflow"
-      @step="stepWorkflow"
-      @save="saveWorkflow"
-      @cancel="cancelWorkflowRun"
-      @toggle-exposed="toggleExpose"
-    />
+    >
+      <template #controls>
+        <WorkflowControlBar
+          :running="workflowRunning"
+          :status-text="workflowStatusText"
+          :dirty="workflowDirty"
+          :save-error="workflowSaveErrorMessage"
+          :conflict="workflowConflictMessage"
+          :can-undo="workflowDocumentState?.canUndo"
+          :can-redo="workflowDocumentState?.canRedo"
+          @run="runWorkflow"
+          @step="stepWorkflow"
+          @save="saveWorkflow"
+          @undo="undoWorkflow"
+          @redo="redoWorkflow"
+          @cancel="cancelWorkflowRun"
+          @accept-remote="acceptRemoteWorkflow"
+          @keep-local="keepLocalAndRetryWorkflow"
+        />
+      </template>
+    </WorkflowCanvas>
+    <div v-if="workflowSwitchGuard" class="wf-switch-guard" role="dialog" aria-modal="true" aria-labelledby="wf-switch-guard-title">
+      <div class="wf-switch-guard-card">
+        <h2 id="wf-switch-guard-title">工作流有未保存修改</h2>
+        <p>切换前要如何处理当前草稿？</p>
+        <div class="wf-switch-guard-actions">
+          <button type="button" class="text-btn" @click="resolveWorkflowSwitch('cancel')">取消</button>
+          <button type="button" class="text-btn" @click="resolveWorkflowSwitch('discard')">放弃修改</button>
+          <button type="button" class="primary-btn" @click="resolveWorkflowSwitch('save')">保存并切换</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <Teleport v-if="workflowDefinition" defer to=".workspace-plugin-header">
@@ -42,78 +93,6 @@
         <svg v-if="canvasLocked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
         <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>
       </button>
-    </div>
-  </Teleport>
-
-  <Teleport defer to=".workspace-plugin-right-panel">
-    <div class="wf-right-panel">
-      <section class="wf-right-nodes">
-        <h3>节点</h3>
-        <ul v-if="workflowDefinition?.nodes.length" class="wf-node-list">
-          <li
-            v-for="node in workflowDefinition.nodes"
-            :key="node.id"
-            class="wf-node-list-item"
-            :class="{ active: node.id === selectedNodeId }"
-            @click="onSelectNode(node.id)"
-          >
-            <span class="wf-node-list-kind" aria-hidden="true">
-              <component :is="nodeKindIcon(node.kind)" :size="12" :stroke-width="1.8" />
-            </span>
-            <span class="wf-node-list-title" :title="node.title || node.id">{{ node.title || node.id }}</span>
-          </li>
-        </ul>
-        <p v-else class="wf-right-empty">暂无节点</p>
-      </section>
-
-      <section class="wf-right-info">
-        <template v-if="selectedNodeId">
-          <div class="wf-right-info-head">
-            <h3>{{ selectedNode?.title || selectedNodeId }}</h3>
-            <button type="button" class="text-btn" title="返回对话" @click="onSelectNode(null)">
-              <ArrowLeft :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </button>
-          </div>
-          <div v-if="selectedNode" class="wf-node-info-body">
-            <p class="wf-node-info-row"><span>类型</span><strong>{{ selectedNode.kind }}</strong></p>
-            <div v-if="selectedNode.config.instruction" class="wf-node-info-block">
-              <span>指令</span><pre>{{ String(selectedNode.config.instruction) }}</pre>
-            </div>
-            <div v-if="selectedNode.config.command" class="wf-node-info-block">
-              <span>命令</span><code>{{ String(selectedNode.config.command) }}</code>
-            </div>
-            <p v-if="selectedNode.config.model_id" class="wf-node-info-row"><span>模型</span><strong>{{ String(selectedNode.config.model_id) }}</strong></p>
-            <p v-if="selectedNode.config.mode" class="wf-node-info-row"><span>模式</span><strong>{{ String(selectedNode.config.mode) }}</strong></p>
-            <p class="wf-node-info-row"><span>端口</span><strong>{{ selectedNode.ports.map((port) => port.name).join(', ') || '—' }}</strong></p>
-          </div>
-        </template>
-        <template v-else>
-          <div class="wf-convo-card">
-            <header class="wf-convo-head">
-              <h3>对话</h3>
-              <button type="button" class="text-btn" title="放大" @click="conversationExpanded = true">⤢</button>
-            </header>
-            <div class="wf-convo-body">
-              <ChatThread
-                :messages="chat.messages.value"
-                :process-expanded-ids="chat.processExpandedIds.value"
-                :message-actions="true"
-                :transport="transport"
-                :project-id="activeProjectId ?? selectedProjectId"
-                :work-root="activeProject?.workRoot"
-                :active-turn-id="chat.activeTurnId.value"
-                :turn-active="chat.activeTurnRunning.value"
-                :checkpoint-turn-ids="chat.checkpointTurnIds.value"
-                @toggle-process="chat.toggleProcess"
-                @decision-select="chat.onDecisionSelect"
-                @fork-message="chat.onForkMessage"
-                @rollback-message="chat.onRollbackMessage"
-                @edit-message="chat.onEditMessage"
-              />
-            </div>
-          </div>
-        </template>
-      </section>
     </div>
   </Teleport>
 
@@ -174,15 +153,54 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, Boxes, Command, Cpu, FileCode2, FileText, X, type LucideIcon } from 'lucide-vue-next'
+import { X } from 'lucide-vue-next'
 import type { CoreAppEvent } from '../../../../../../ui/src/appServer'
 import type { ProjectGroup, SessionItem } from '../../../../../../ui/src/components/SessionSidebar.vue'
 import type { PluginModeSurface } from '../../../../../../ui/src/plugins/context'
+import type { RightSidebarPluginContribution } from '../../../../../../ui/src/right-sidebar/types'
 import { useCorePluginModeContext, usePluginModeRuntime } from '../../../../../../ui/src/plugins/context'
-import type { NodeStateStatus, WorkflowDef, WorkflowNode } from './types'
-import { createWorkflowApi, type WorkflowApi } from './api'
+import {
+  normalizeNodeStateStatus,
+  normalizeWorkflowRunStatus,
+  type NodeStateStatus,
+  type WorkflowDef,
+  type WorkflowNode,
+  type WorkflowNodeSchema,
+  type WorkflowNodeState,
+  type WorkflowQueueItem,
+  type WorkflowActivation,
+  type WorkflowRunResult,
+  type WorkflowHumanTask,
+} from './types'
+import {
+  createWorkflowApi,
+  isWorkflowRevisionConflict,
+  normalizeWorkflowNodeState,
+  type WorkflowApi,
+  type WorkflowContinuationState,
+} from './api'
+import {
+  createWorkflowDocument,
+  type WorkflowDocumentController,
+  type WorkflowDocumentSnapshot,
+} from './document'
+import { createWorkflowNodeFromSchema } from './catalog'
+import {
+  downloadJson,
+  downloadWorkflowJson,
+  normalizeImportedWorkflow,
+  WORKFLOW_TEMPLATES,
+  type WorkflowExportFormat,
+  type WorkflowImportSource,
+  type WorkflowTemplate,
+} from './resources'
+import {
+  mergeWorkflowCanvasSidecar,
+  writeWorkflowCanvasSidecar,
+} from './canvas'
 import WorkflowCanvas from './WorkflowCanvas.vue'
 import WorkflowControlBar from './WorkflowControlBar.vue'
+import WorkflowInspector from './WorkflowInspector.vue'
 import ChatThread from '../../../../../../ui/src/components/ChatThread.vue'
 import CoreSessionTitleEditor from '../../../../../../ui/src/components/CoreSessionTitleEditor.vue'
 
@@ -220,12 +238,29 @@ const workflows = ref<WorkflowDef[]>([])
 const workflowGroups = ref<Record<string, WorkflowDef[]>>({})
 const activeWorkflowId = ref('')
 const workflowDefinition = ref<WorkflowDef | null>(null)
+const openWorkflowIds = ref<string[]>([])
 const workflowNodeStates = ref<Record<string, NodeStateStatus>>({})
+const workflowRun = ref<WorkflowRunResult | null>(null)
+const workflowContinuation = ref<WorkflowContinuationState | undefined>(undefined)
+const workflowDocumentState = ref<WorkflowDocumentSnapshot | null>(null)
 const selectedNodeId = ref<string | null>(null)
 const selectedNode = computed<WorkflowNode | null>(() => (
   workflowDefinition.value?.nodes.find((node) => node.id === selectedNodeId.value) || null
 ))
 const availableTools = ref<Array<{ name: string; description: string }>>([])
+const nodeSchemas = ref<Record<string, WorkflowNodeSchema>>({})
+const queueItems = ref<WorkflowQueueItem[]>([])
+const historyItems = ref<WorkflowQueueItem[]>([])
+const selectedQueueItem = ref<WorkflowQueueItem | null>(null)
+const humanTasks = ref<WorkflowHumanTask[]>([])
+const selectedHumanTask = ref<WorkflowHumanTask | null>(null)
+const humanTaskLoading = ref(false)
+const humanTaskBusy = ref(false)
+const humanTaskError = ref('')
+const activations = ref<WorkflowActivation[]>([])
+const activationsLoading = ref(false)
+const activationBusy = ref(false)
+const queueLoading = ref(false)
 const workflowRunning = ref(false)
 const workflowStatusText = ref('')
 const activeRunId = ref('')
@@ -235,9 +270,28 @@ const showWorkflowCreate = ref(false)
 const workflowCreateLoading = ref(false)
 const workflowCreateError = ref('')
 const workflowNameDraft = ref('')
+let workflowDocument: WorkflowDocumentController | null = null
+let unsubscribeWorkflowDocument: (() => void) | null = null
+const workflowDocuments = new Map<string, WorkflowDocumentController>()
+let workflowDocumentKey = ''
+const workflowSwitchGuard = ref<{ targetId: string } | null>(null)
+let workflowSwitchResolver: ((choice: 'save' | 'discard' | 'cancel') => void) | null = null
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null
 let graphReloadTimer: ReturnType<typeof setTimeout> | null = null
+let queueRefreshTimer: ReturnType<typeof setInterval> | null = null
 let lastSelfSaveAt = 0
+
+const workflowDirty = computed(() => workflowDocumentState.value?.dirty === true)
+const workflowSaveErrorMessage = computed(() => workflowDocumentState.value?.saveError?.message || '')
+const workflowConflictMessage = computed(() => workflowDocumentState.value?.conflict?.message || '')
+const workflowNodeStateEntries = computed<WorkflowNodeState[]>(() => Object.values(workflowRun.value?.node_states || {}))
+const workflowTabs = computed(() => openWorkflowIds.value.flatMap((id) => {
+  const definition = workflows.value.find((item) => item.id === id)
+    || (id === activeWorkflowId.value ? workflowDefinition.value : null)
+  if (!definition) return []
+  const document = workflowDocuments.get(id)
+  return [{ id, name: document?.snapshot().definition.name || definition.name, dirty: document?.snapshot().dirty === true }]
+}))
 
 const emptyWorkflow: WorkflowDef = {
   id: '',
@@ -259,22 +313,83 @@ const workflowModeInstructions = computed(() => {
   const name = workflowDefinition.value?.name || ''
   return [
     '你是 LamTools 工作流模式的助手。用户说的"workflow/工作流/建工作流"一律指画布上的工作流节点图（WorkflowDef），不是 GitHub Actions、CI 或其它外部工作流。',
-    '节点类型有五种：ai、command、script、content、subgraph。',
-    '- ai：AI 处理。config.mode 区分 single（单次生成）/ loop（自判断反复迭代）/ agent（多轮自主+工具）。有命名输出端口→强制 JSON 输出，端口名=字段名。指令支持 {{端口名}} 插值。',
-    '- command：跑 shell 命令调用 CLI 工具（curl/git/ffmpeg 等）。config.command 是 shell 命令，用与 run_command 相同的 shell（Windows 下 Git Bash）。stdin 收 {"inputs":{端口名:值}} JSON，同时设 INPUT_<端口名> 环境变量。stdout 是 JSON 对象则按 key 拆到同名输出端口，否则整段放默认端口。command 图灵完备，http/file-data 一律用 command（curl/cat/jq）。',
-    '- script：写 Python 代码。config.script 是纯 Python，输入端口名直接当变量用（节点 IN a、IN b → 代码里用 a、b），给输出端口名赋值即输出（OUT y → 代码里 y=...）。不要 print、不要解析 stdin（运行时把输入绑成局部变量、从局部变量读输出）。新建 script 节点会自动生成带端口变量注释的脚手架。',
-    '- content：仅有输出端口，每个配常量值，不执行任何操作。用来注入常量。',
-    '- subgraph：引用外部工作流。config.iterate 区分 none（调用一次）/ loop（循环到 condition 满足）/ map（遍历数组）。config.workflow_name 指定目标工作流。',
-    '修饰符：condition（边级 Python 表达式，不满足该边传哨兵→下游跳过）/ transform（边上 $.field 提取子值）/ on_error（节点级 abort/fallback/skip）。',
+    '节点类型由后端 object_info 注册表动态提供，目录按 category 分组并支持搜索；常用类型包括 model、agent、command、python、constant、input、output、template、condition、merge、join、subgraph。',
+    '- model：独立的模型推理节点，config.instruction 是指令，config.model_id 选择模型；不再用旧 ai 的 mode 复用 Agent。',
+    '- agent：独立的 Agent 执行节点，config.instruction 是目标，config.model_id 选择模型，config.tools/allowed_tools 选择工具。',
+    '- command：跑 shell 命令调用 CLI 工具（curl/git/ffmpeg 等）。config.command 是 shell 命令，用与 run_command 相同的 shell（Windows 下 Git Bash）。stdin 收 {"inputs":{端口名:值}} JSON，同时设 INPUT_<端口名> 环境变量。stdout 是 JSON 对象则按 key 拆到同名输出端口，否则整段放默认端口。',
+    '- python：写 Python 代码。config.script 是纯 Python，输入端口名直接当变量用，给输出端口名赋值即输出；旧 script 节点继续兼容。',
+    '- constant：仅有输出端口，每个端口保存常量值；旧 content 节点继续兼容。',
+    '- subgraph：引用外部工作流；config.workflow_name 指定目标工作流，iterate 可为 none/loop/map。',
+    '- ai：仅作为旧工作流兼容类型保留，不作为新建节点的默认选择；旧节点仍可渲染、编辑和运行。',
+    '其它节点由注册表 schema 定义输入/输出与配置。边级 condition/transform 和节点级 on_error 是可选执行修饰符。',
     '每个节点有输入/输出端口，节点间通过 out→in 端口连线。一个输入端口可接多条边→聚合成数组。端口类型校验：同类型/any 通配/number→string 兼容。',
     '你可用以下工具操作当前工作流图：',
-    '- workflow_graph：查看当前图的完整 JSON（含节点 id、端口、连线）。',
+    '- workflow_graph：查看当前图的语义化 JSON（含节点参数、位置、稳定端口 id 和连线修饰符）。',
     '- workflow_add_node：加节点（kind/title/config/ports/position）。',
-    '- workflow_connect：连线（source/source_port/target/target_port）。',
+    '- workflow_connect：连线（优先 source_port_id/target_port_id，端口名仅作兼容回退）。',
     '- workflow_delete_node：按 node_id 删节点（连带删相关连线）。',
     '- workflow_update_node：按 node_id 改节点的 title/config/ports/position。',
-    '改图前先 workflow_graph 看现状，确认节点 id 和端口名后再加/连/删，避免引用不存在的 id。当前工作流名：' + (name || '（未选中）'),
+    '改图前先 workflow_graph 看现状，确认节点与稳定端口 id 后再加/连/删，避免引用不存在的 id。当前工作流名：' + (name || '（未选中）'),
   ].join('\n')
+})
+
+const workflowRightSidebar = computed<RightSidebarPluginContribution[]>(() => {
+  const definition = workflowDefinition.value
+  if (!definition) return []
+  return [{
+    id: 'workflow-inspector',
+    title: '工作流检查器',
+    order: 5,
+    defaultVisible: true,
+    defaultCollapsed: false,
+    component: WorkflowInspector,
+    componentProps: {
+      workflowDefinition: definition,
+      selectedNodeId: selectedNodeId.value,
+      selectedNode: selectedNode.value,
+      workflowRun: workflowRun.value,
+      workflowNodeStateEntries: workflowNodeStateEntries.value,
+      nodeSchemas: nodeSchemas.value,
+      workflowRunning: workflowRunning.value,
+      queueItems: queueItems.value,
+      historyItems: historyItems.value,
+      selectedQueueItem: selectedQueueItem.value,
+      queueLoading: queueLoading.value,
+      activations: activations.value,
+      activationsLoading: activationsLoading.value,
+      activationBusy: activationBusy.value,
+      templates: WORKFLOW_TEMPLATES,
+      chat,
+      transport,
+      projectId: activeProjectId.value ?? selectedProjectId.value,
+      workRoot: activeProject.value?.workRoot || workflowRoot(definition) || null,
+      onSelectNode,
+      onExpandConversation: () => { conversationExpanded.value = true },
+      onAddNode: addNodeFromCatalog,
+      onRunWithInputs: runWorkflowWithInputs,
+      onRefreshQueue: refreshQueue,
+      onEnqueueWorkflow: enqueueWorkflow,
+      onCancelQueuedRun: cancelQueuedRun,
+      onInspectQueuedRun: inspectQueuedRun,
+      onClearQueue: clearWorkflowQueue,
+      onImportWorkflow: importWorkflowDefinition,
+      onExportWorkflow: exportWorkflowDefinition,
+      onUseTemplate: useWorkflowTemplate,
+      onToggleExpose: toggleExpose,
+      onUpdateDefinition: onWorkflowUpdate,
+      onRefreshActivations: refreshWorkflowActivations,
+      onActivateTrigger: activateWorkflowTrigger,
+      onDeactivateTrigger: deactivateWorkflowTrigger,
+      humanTasks: humanTasks.value,
+      selectedHumanTask: selectedHumanTask.value,
+      humanTaskLoading: humanTaskLoading.value,
+      humanTaskBusy: humanTaskBusy.value,
+      humanTaskError: humanTaskError.value,
+      onRefreshHumanTasks: refreshHumanTasks,
+      onSelectHumanTask: selectHumanTask,
+      onCompleteHumanTask: completeHumanTask,
+    },
+  }]
 })
 
 const workflowProjectGroups = computed<ProjectGroup[]>(() => {
@@ -305,11 +420,14 @@ const activeWorkflow = computed(() => (
 
 const workflowSurface: PluginModeSurface = {
   composerPlaceholder: '用自然语言编辑工作流图…',
-  composerDisabled: computed(() => workflowRunning.value || !composerText.value.trim() || !activeWorkflowId.value),
+  // Empty input disables only submission; the composer itself remains
+  // editable so the Workflow pill can expand on focus and accept a prompt.
+  composerDisabled: computed(() => workflowRunning.value || !activeWorkflowId.value),
   turnOptions: () => ({
     active_mode: 'workflow:workflow',
     instructions: workflowModeInstructions.value,
   }),
+  rightSidebar: workflowRightSidebar,
   sidebar: {
     groups: workflowProjectGroups,
     hasProjects: computed(() => workflowProjectGroups.value.length > 0),
@@ -360,15 +478,132 @@ function workflowSessionId(definition: WorkflowDef): string {
   return `workflow:${definition.id}`
 }
 
+function attachWorkflowDocument(definition: WorkflowDef): void {
+  unsubscribeWorkflowDocument?.()
+  const hydrated = hydrateWorkflowDefinition(definition)
+  const key = hydrated.id || definition.id
+  workflowDocument = (key && workflowDocuments.get(key)) || createWorkflowDocument(hydrated)
+  if (key) workflowDocuments.set(key, workflowDocument)
+  workflowDocumentKey = key
+  unsubscribeWorkflowDocument = workflowDocument.subscribe((snapshot) => {
+    if (workflowDocumentKey !== key || activeWorkflowId.value !== key) return
+    workflowDocumentState.value = snapshot
+    workflowDefinition.value = snapshot.definition
+    if (snapshot.definition.id) writeWorkflowCanvasSidecar(snapshot.definition.id, snapshot.definition.canvas_elements ?? [])
+  })
+}
+
+function hydrateWorkflowDefinition(definition: WorkflowDef): WorkflowDef {
+  // Canonical V2 already contains canvas data. The local sidecar exists only
+  // for legacy hosts and must not override an intentionally empty V2 canvas.
+  return definition.document ? definition : mergeWorkflowCanvasSidecar(definition)
+}
+
+function rememberOpenWorkflow(workflowId: string): void {
+  if (!workflowId || openWorkflowIds.value.includes(workflowId)) return
+  openWorkflowIds.value = [...openWorkflowIds.value, workflowId]
+}
+
+function requestWorkflowSwitch(targetId: string): Promise<'save' | 'discard' | 'cancel'> {
+  if (!workflowDirty.value || !activeWorkflowId.value || activeWorkflowId.value === targetId) return Promise.resolve('save')
+  workflowSwitchGuard.value = { targetId }
+  return new Promise((resolve) => { workflowSwitchResolver = resolve })
+}
+
+function resolveWorkflowSwitch(choice: 'save' | 'discard' | 'cancel'): void {
+  const resolver = workflowSwitchResolver
+  workflowSwitchResolver = null
+  workflowSwitchGuard.value = null
+  resolver?.(choice)
+}
+
+function discardActiveWorkflowDraft(): void {
+  if (!activeWorkflowId.value) return
+  workflowDocuments.delete(activeWorkflowId.value)
+}
+
+async function closeWorkflowTab(workflowId: string): Promise<void> {
+  if (!workflowId) return
+  if (workflowId === activeWorkflowId.value && workflowDirty.value) {
+    const choice = await requestWorkflowSwitch('')
+    if (choice === 'cancel') return
+    cancelAutosave()
+    if (choice === 'save') {
+      await saveWorkflow(true)
+      if (workflowDirty.value) return
+    } else discardActiveWorkflowDraft()
+  }
+  openWorkflowIds.value = openWorkflowIds.value.filter((id) => id !== workflowId)
+  if (workflowId === activeWorkflowId.value) {
+    const nextId = openWorkflowIds.value.at(-1) || ''
+    await selectWorkflow(nextId)
+  }
+}
+
+function applyWorkflowDocumentUpdate(definition: WorkflowDef, label = '编辑工作流'): void {
+  if (!workflowDocument) {
+    attachWorkflowDocument(definition)
+    return
+  }
+  workflowDocument.update(definition, { label, origin: 'user' })
+}
+
+function workflowNodeTitle(nodeId: string): string {
+  const node = workflowDefinition.value?.nodes.find((item) => item.id === nodeId)
+  return node?.title || nodeId
+}
+
+function nodeStateLabel(status: NodeStateStatus): string {
+  if (status === 'running') return '运行中'
+  if (status === 'waiting') return '等待中'
+  if (status === 'done') return '已完成'
+  if (status === 'error') return '失败'
+  if (status === 'skipped') return '已跳过'
+  if (status === 'cancelled') return '已取消'
+  return '未运行'
+}
+
+function workflowRunStatusLabel(status: WorkflowRunResult['status']): string {
+  if (status === 'running') return '运行中'
+  if (status === 'completed') return '完成'
+  if (status === 'failed') return '失败'
+  if (status === 'paused') return '已暂停'
+  if (status === 'cancelled') return '已取消'
+  return String(status)
+}
+
+function formatRuntimeValue(value: unknown): string {
+  if (value === undefined) return '—'
+  if (typeof value === 'string') return value || '—'
+  try { return JSON.stringify(value, null, 2) || '—' } catch { return String(value) }
+}
+
+function formatTimestamp(value: string | null | undefined): string {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleString()
+}
+
 async function refreshWorkflows(): Promise<void> {
   try {
     const roots = projects.value.map((project) => project.workRoot).filter(Boolean)
-    workflowGroups.value = await workflowApi.listGrouped(roots)
+    const grouped = await workflowApi.listGrouped(roots)
+    workflowGroups.value = Object.fromEntries(Object.entries(grouped).map(([root, definitions]) => [
+      root,
+      definitions.map((definition) => hydrateWorkflowDefinition(definition)),
+    ]))
     workflows.value = Object.values(workflowGroups.value).flat()
     if (activeWorkflowId.value) {
       const current = workflows.value.find((item) => item.id === activeWorkflowId.value)
       if (current && workflowDefinition.value?.updated_at !== current.updated_at) {
-        workflowDefinition.value = current
+        const remote = await workflowApi.getDocumentById(current.id, workflowRoot(current))
+        if (workflowDocumentState.value?.dirty) {
+          workflowDocument?.markConflict(remote)
+          workflowStatusText.value = '远端工作流有更新，请处理冲突'
+        } else {
+          workflowDocument?.acceptRemote(remote)
+        }
       }
     }
     if (!activeWorkflowId.value && workflows.value.length) {
@@ -390,27 +625,383 @@ async function loadAvailableTools(): Promise<void> {
   }
 }
 
-async function selectWorkflow(workflowId: string): Promise<void> {
-  if (!workflowId) {
-    activeWorkflowId.value = ''
-    workflowDefinition.value = null
-    selectedNodeId.value = null
+async function loadNodeSchemas(): Promise<void> {
+  try {
+    nodeSchemas.value = await workflowApi.objectInfo()
+  } catch (error) {
+    // Catalog failure is non-fatal; the canvas remains usable for editing and
+    // running existing nodes, while the registry picker reports no choices.
+    console.error('[workflow] object info failed', error)
+    nodeSchemas.value = {}
+  }
+}
+
+async function refreshQueue(): Promise<void> {
+  const definition = workflowDefinition.value
+  if (!definition) {
+    queueItems.value = []
+    historyItems.value = []
+    selectedQueueItem.value = null
+    activations.value = []
     return
   }
+  queueLoading.value = true
+  try {
+    const scope = { workRoot: workflowRoot(definition), workflowId: definition.id, name: definition.name, limit: 50 }
+    const [active, history] = await Promise.all([
+      workflowApi.listQueue({ ...scope, includeHistory: false }),
+      workflowApi.historyQueue({ ...scope, includeActive: false }),
+    ])
+    queueItems.value = active
+    historyItems.value = history
+    if (selectedQueueItem.value) {
+      const current = [...active, ...history].find((item) => item.queue_id === selectedQueueItem.value?.queue_id)
+      if (current) selectedQueueItem.value = current
+    }
+  } catch (error) {
+    console.error('[workflow] queue refresh failed', error)
+    workflowStatusText.value = `队列刷新失败：${messageFromError(error)}`
+  } finally {
+    queueLoading.value = false
+  }
+}
+
+async function refreshHumanTasks(): Promise<void> {
+  const definition = workflowDefinition.value
+  if (!definition) {
+    humanTasks.value = []
+    selectedHumanTask.value = null
+    humanTaskError.value = ''
+    return
+  }
+  humanTaskLoading.value = true
+  humanTaskError.value = ''
+  try {
+    const tasks = await workflowApi.listHumanTasks({
+      workRoot: workflowRoot(definition) || activeProject.value?.workRoot || undefined,
+      status: 'pending',
+      limit: 50,
+    })
+    humanTasks.value = tasks
+    if (selectedHumanTask.value) {
+      const current = tasks.find((task) => task.task_id === selectedHumanTask.value?.task_id)
+      if (!current) selectedHumanTask.value = null
+    }
+  } catch (error) {
+    humanTaskError.value = messageFromError(error)
+  } finally {
+    humanTaskLoading.value = false
+  }
+}
+
+async function selectHumanTask(taskId: string): Promise<void> {
+  if (!taskId) {
+    selectedHumanTask.value = null
+    return
+  }
+  const definition = workflowDefinition.value
+  try {
+    selectedHumanTask.value = await workflowApi.getHumanTask(taskId, {
+      workRoot: definition ? workflowRoot(definition) || activeProject.value?.workRoot || undefined : undefined,
+    })
+    humanTaskError.value = ''
+  } catch (error) {
+    humanTaskError.value = messageFromError(error)
+  }
+}
+
+async function completeHumanTask(
+  task: WorkflowHumanTask,
+  decision: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  if (humanTaskBusy.value) return
+  const definition = workflowDefinition.value
+  humanTaskBusy.value = true
+  humanTaskError.value = ''
+  try {
+    const completed = await workflowApi.completeHumanTask(task.task_id, decision, payload, {
+      workRoot: definition ? workflowRoot(definition) || activeProject.value?.workRoot || undefined : undefined,
+    })
+    await refreshHumanTasks()
+    selectedHumanTask.value = completed.task
+    setRuntimeStatus(completed.idempotent ? '任务已处理' : '人工任务已提交', 2500)
+  } catch (error) {
+    humanTaskError.value = messageFromError(error)
+  } finally {
+    humanTaskBusy.value = false
+  }
+}
+
+async function refreshWorkflowActivations(): Promise<void> {
+  const definition = workflowDefinition.value
+  if (!definition || !definition.name) {
+    activations.value = []
+    return
+  }
+  activationsLoading.value = true
+  try {
+    activations.value = await workflowApi.listActivations(definition.name, workflowRoot(definition))
+  } catch (error) {
+    // Activation inspection is best effort: a host without Arrange support
+    // must not make the workflow editor unusable. Keep the last known list so
+    // an intermittent read failure does not hide a still-running activation.
+    console.error('[workflow] activation refresh failed', error)
+    workflowStatusText.value = `激活状态刷新失败：${messageFromError(error)}`
+  } finally {
+    activationsLoading.value = false
+  }
+}
+
+async function activateWorkflowTrigger(triggerId: string, replace = false): Promise<void> {
+  const definition = workflowDefinition.value
+  if (!definition || !definition.name || !triggerId || activationBusy.value) return
+  activationBusy.value = true
+  try {
+    // Trigger edits live in the same canonical document as the graph. Save a
+    // dirty draft before activation so Arrange never receives an older
+    // trigger list/revision when the user clicks activate immediately.
+    if (workflowDirty.value) {
+      await saveWorkflow(true)
+      if (workflowDirty.value) throw new Error('请先保存工作流并解决冲突，再激活触发器')
+    }
+    const current = workflowDefinition.value
+    if (!current || !current.name) throw new Error('工作流不存在')
+    await workflowApi.activate(current.name, {
+      workRoot: workflowRoot(current),
+      triggerId,
+      // Keep replacement an explicit user choice. The normal activation path
+      // sends the false intent as well, while the separate UI action passes
+      // true only after the user clicks “替换并激活”.
+      replace,
+    })
+    await refreshWorkflowActivations()
+    setRuntimeStatus(replace ? '已替换并激活触发器' : '已激活触发器', 2500)
+  } catch (error) {
+    setRuntimeStatus(`激活失败：${messageFromError(error)}`, 4000)
+    throw error
+  } finally {
+    activationBusy.value = false
+  }
+}
+
+async function deactivateWorkflowTrigger(triggerId: string): Promise<void> {
+  const definition = workflowDefinition.value
+  if (!definition || !definition.name || !triggerId || activationBusy.value) return
+  activationBusy.value = true
+  try {
+    await workflowApi.deactivate(definition.name, {
+      workRoot: workflowRoot(definition),
+      triggerId,
+    })
+    await refreshWorkflowActivations()
+    setRuntimeStatus('已停用触发器', 2500)
+  } catch (error) {
+    setRuntimeStatus(`停用失败：${messageFromError(error)}`, 4000)
+    throw error
+  } finally {
+    activationBusy.value = false
+  }
+}
+
+function addNodeFromCatalog(schema: WorkflowNodeSchema): void {
+  const definition = workflowDefinition.value
+  if (!definition) return
+  const base = String(schema.type_id ?? schema.name ?? 'node').replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() || 'node'
+  let id = `${base}-${definition.nodes.length + 1}`
+  let serial = definition.nodes.length + 1
+  while (definition.nodes.some((node) => node.id === id)) id = `${base}-${++serial}`
+  const lastX = definition.nodes.reduce((max, node) => Math.max(max, Number(node.position?.x) || 0), 0)
+  const node = createWorkflowNodeFromSchema(schema, id, { x: lastX + 260, y: 120 + (definition.nodes.length % 4) * 110 })
+  applyWorkflowDocumentUpdate({ ...definition, nodes: [...definition.nodes, node] }, `添加节点：${node.title}`)
+  selectedNodeId.value = node.id
+  scheduleAutosave()
+}
+
+async function enqueueWorkflow(): Promise<void> {
+  const definition = workflowDefinition.value
+  if (!definition || !definition.name) {
+    setRuntimeStatus('先保存工作流再排队', 3000)
+    return
+  }
+  try {
+    const item = await workflowApi.enqueue(definition.name, {
+      workRoot: workflowRoot(definition),
+      threadId: workflowSessionId(definition),
+      inputs: {},
+    })
+    selectedQueueItem.value = item
+    setRuntimeStatus(`已加入队列：${item.queue_id || item.run_id}`, 2500)
+    await refreshQueue()
+  } catch (error) {
+    setRuntimeStatus(`排队失败：${messageFromError(error)}`, 4000)
+  }
+}
+
+async function cancelQueuedRun(item: WorkflowQueueItem): Promise<void> {
+  try {
+    const cancelled = await workflowApi.cancelQueue(item.queue_id, item.run_id)
+    selectedQueueItem.value = cancelled
+    setRuntimeStatus('已取消队列运行', 2500)
+    await refreshQueue()
+  } catch (error) {
+    setRuntimeStatus(`取消失败：${messageFromError(error)}`, 4000)
+  }
+}
+
+async function inspectQueuedRun(item: WorkflowQueueItem): Promise<void> {
+  try {
+    selectedQueueItem.value = await workflowApi.getQueue(item.queue_id, item.run_id)
+  } catch (error) {
+    selectedQueueItem.value = item
+    setRuntimeStatus(`读取运行详情失败：${messageFromError(error)}`, 3500)
+  }
+}
+
+async function clearWorkflowQueue(all: boolean): Promise<void> {
+  const definition = workflowDefinition.value
+  if (!definition) return
+  try {
+    const count = await workflowApi.clearQueue({
+      confirm: true,
+      all,
+      workRoot: workflowRoot(definition),
+      workflowId: definition.id,
+      name: definition.name,
+    })
+    selectedQueueItem.value = null
+    setRuntimeStatus(`已清理 ${count} 个队列/历史项`, 2500)
+    await refreshQueue()
+  } catch (error) {
+    setRuntimeStatus(`清理失败：${messageFromError(error)}`, 4000)
+  }
+}
+
+async function importWorkflowDefinition(imported: WorkflowImportSource): Promise<void> {
+  const current = workflowDefinition.value
+  // Imported JSON is untrusted input.  Bind the new resource to the active
+  // project (or the current scoped document), never to a path supplied by the
+  // file itself.
+  const scopedRoot = workflowRoot(current) || selectedProject.value?.workRoot || ''
+  let saved: WorkflowDef
+  if (imported.kind === 'native-v2') {
+    const document = {
+      ...imported.document,
+      resource: { ...imported.document.resource, work_root: scopedRoot, revision: 0 },
+    }
+    saved = await workflowApi.saveDocument(document, scopedRoot || undefined, 0)
+  } else if (imported.kind === 'comfyui') {
+    saved = await workflowApi.importComfyUi(imported.workflow, imported.name, scopedRoot || undefined, 0)
+  } else {
+    const normalized = normalizeImportedWorkflow(imported.definition, imported.name || '导入工作流')
+    const savedRaw = await workflowApi.create({ ...normalized, work_root: scopedRoot })
+    saved = hydrateWorkflowDefinition({ ...savedRaw, canvas_elements: normalized.canvas_elements })
+    if (saved.id) writeWorkflowCanvasSidecar(saved.id, saved.canvas_elements ?? [])
+  }
+  await refreshWorkflows()
+  await selectWorkflow(saved.id)
+  setRuntimeStatus(`已导入：${saved.name}`, 2500)
+}
+
+async function exportWorkflowDefinition(format: WorkflowExportFormat): Promise<boolean> {
+  const definition = workflowDefinition.value
+  if (!definition) return false
+  if (format === 'native-v2') return downloadWorkflowJson(definition, `${definition.name}.workflow.json`)
+  const version = format === 'comfyui-v0.4' ? '0.4' : '1'
+  const exported = await workflowApi.exportComfyUi(definition.name, version, workflowRoot(definition))
+  return downloadJson(exported, `${definition.name}.comfyui-${version}.json`)
+}
+
+async function useWorkflowTemplate(template: WorkflowTemplate): Promise<void> {
+  const current = workflowDefinition.value
+  const root = workflowRoot(current) || selectedProject.value?.workRoot || ''
+  const imported = normalizeImportedWorkflow({
+    ...template.definition,
+    name: `${template.name} ${new Date().toLocaleTimeString().slice(0, 5)}`,
+    work_root: root,
+  }, template.name)
+  const savedRaw = await workflowApi.create(imported)
+  const saved = mergeWorkflowCanvasSidecar({ ...savedRaw, canvas_elements: imported.canvas_elements })
+  if (saved.id) writeWorkflowCanvasSidecar(saved.id, saved.canvas_elements ?? [])
+  await refreshWorkflows()
+  await selectWorkflow(saved.id)
+  setRuntimeStatus(`已从模板创建：${saved.name}`, 2500)
+}
+
+async function selectWorkflow(workflowId: string): Promise<void> {
+  if (workflowId === activeWorkflowId.value) return
+  const switchChoice = await requestWorkflowSwitch(workflowId)
+  if (switchChoice === 'cancel') return
+  cancelAutosave()
+  if (switchChoice === 'save') {
+    if (workflowDirty.value) {
+      await saveWorkflow(true)
+      if (workflowDirty.value) return
+    }
+  } else if (switchChoice === 'discard') {
+    discardActiveWorkflowDraft()
+  }
+  if (!workflowId) {
+    activeWorkflowId.value = ''
+    unsubscribeWorkflowDocument?.()
+    unsubscribeWorkflowDocument = null
+    workflowDocument = null
+    workflowDocumentKey = ''
+    workflowDocumentState.value = null
+    workflowDefinition.value = null
+    selectedNodeId.value = null
+    workflowRun.value = null
+    workflowContinuation.value = undefined
+    queueItems.value = []
+    historyItems.value = []
+    selectedQueueItem.value = null
+    humanTasks.value = []
+    selectedHumanTask.value = null
+    return
+  }
+  const draft = workflowDocuments.get(workflowId)
   const listed = workflows.value.find((item) => item.id === workflowId)
   const workRoot = workflowRoot(listed)
   try {
-    const definition = listed && listed.updated_at ? await workflowApi.getById(workflowId, workRoot) : listed
+    const definition = draft?.snapshot().definition
+      || (listed ? await workflowApi.getDocumentById(workflowId, workRoot) : null)
     if (!definition) throw new Error('工作流不存在')
-    activeWorkflowId.value = definition.id
-    workflowDefinition.value = definition
+    const hydrated = hydrateWorkflowDefinition(definition)
+    activeWorkflowId.value = hydrated.id
+    rememberOpenWorkflow(hydrated.id)
+    attachWorkflowDocument(hydrated)
     workflowNodeStates.value = {}
+    workflowRun.value = null
+    workflowContinuation.value = undefined
     selectedNodeId.value = null
-    const sessionId = workflowSessionId(definition)
-    await selectSession(sessionId)
+    const sessionId = workflowSessionId(hydrated)
+    await selectWorkflowSession(hydrated, sessionId)
+    await refreshQueue()
+    await refreshWorkflowActivations()
+    await refreshHumanTasks()
   } catch (error) {
     console.error('[workflow] get failed', error)
     workflowStatusText.value = `加载失败：${messageFromError(error)}`
+  }
+}
+
+async function selectWorkflowSession(definition: WorkflowDef, sessionId: string): Promise<void> {
+  try {
+    await selectSession(sessionId)
+    return
+  } catch (error) {
+    if (!isMissingWorkflowThread(error)) throw error
+  }
+  // document.get repairs the plugin-owned session on current hosts. Retry
+  // once after refreshing the host index; old hosts remain a valid empty chat.
+  try {
+    await workflowApi.getDocumentById(definition.id, workflowRoot(definition))
+    await refreshSessions()
+    await selectSession(sessionId)
+  } catch (error) {
+    if (!isMissingWorkflowThread(error)) throw error
+    workflowStatusText.value = ''
+    setRuntimeStatus('', 0)
   }
 }
 
@@ -455,16 +1046,38 @@ async function createWorkflowFromCard(): Promise<void> {
 }
 
 function onWorkflowUpdate(definition: WorkflowDef): void {
-  workflowDefinition.value = definition
-  scheduleAutosave()
+  applyWorkflowDocumentUpdate(definition)
+  if (definition.id) writeWorkflowCanvasSidecar(definition.id, definition.canvas_elements ?? [])
+  // Definition changes generated while a run is active are not expected, but
+  // even if a canvas event races the run transition they must not autosave.
+  if (!workflowRunning.value) scheduleAutosave()
 }
 
 function scheduleAutosave(): void {
-  if (autosaveTimer) clearTimeout(autosaveTimer)
+  if (workflowRunning.value) return
+  cancelAutosave()
   autosaveTimer = setTimeout(() => {
+    autosaveTimer = null
+    if (workflowRunning.value) return
     lastSelfSaveAt = Date.now()
     void saveWorkflow(true)
   }, 800)
+}
+
+function cancelAutosave(): void {
+  if (!autosaveTimer) return
+  clearTimeout(autosaveTimer)
+  autosaveTimer = null
+}
+
+function undoWorkflow(): void {
+  if (workflowRunning.value || !workflowDocument) return
+  if (workflowDocument.undo()) scheduleAutosave()
+}
+
+function redoWorkflow(): void {
+  if (workflowRunning.value || !workflowDocument) return
+  if (workflowDocument.redo()) scheduleAutosave()
 }
 
 async function renameWorkflow(title: string): Promise<void> {
@@ -472,8 +1085,11 @@ async function renameWorkflow(title: string): Promise<void> {
   const newName = title.trim()
   if (!definition || !newName || newName === definition.name) return
   try {
-    const renamed = await workflowApi.rename(definition.name, newName, workflowRoot(definition))
-    workflowDefinition.value = renamed
+    const renamedRaw = await workflowApi.rename(definition.name, newName, workflowRoot(definition))
+    const renamed = mergeWorkflowCanvasSidecar({ ...renamedRaw, canvas_elements: definition.canvas_elements })
+    if (renamed.id) writeWorkflowCanvasSidecar(renamed.id, renamed.canvas_elements ?? [])
+    workflowDocument?.markSaved(renamed, { value: renamed.revision, updatedAt: renamed.updated_at })
+    if (!workflowDocument) attachWorkflowDocument(renamed)
     activeWorkflowId.value = renamed.id
     await refreshWorkflows()
     await refreshSessions()
@@ -499,24 +1115,68 @@ async function runSingleNode(nodeId: string): Promise<void> {
 async function saveWorkflow(silent = false): Promise<void> {
   const definition = workflowDefinition.value
   if (!definition) return
+  if (workflowRunning.value) return
   try {
-    const saved = await workflowApi.save(definition, workflowRoot(definition))
-    workflowDefinition.value = saved
+    const saved = await workflowApi.saveDocument(definition, workflowRoot(definition))
+    if (workflowDocument) workflowDocument.markSaved(saved, { value: saved.revision, updatedAt: saved.updated_at })
+    else attachWorkflowDocument(saved)
     activeWorkflowId.value = saved.id
     if (!silent) setRuntimeStatus(`已保存：${saved.name}`, 2500)
     if (!silent) await refreshWorkflows()
   } catch (error) {
     console.error('[workflow] save failed', error)
+    if (await loadWorkflowConflict(error, definition)) return
+    workflowDocument?.markSaveError(error)
     if (!silent) setRuntimeStatus(`保存失败：${messageFromError(error)}`, 4000)
   }
 }
 
+async function loadWorkflowConflict(error: unknown, local: WorkflowDef): Promise<boolean> {
+  if (!isWorkflowRevisionConflict(error)) return false
+  try {
+    const remote = await workflowApi.getDocumentById(local.id, workflowRoot(local))
+    workflowDocument?.markConflict(remote, '保存冲突：远端版本已更新。请选择采用远端，或保留本地后重试。')
+    workflowStatusText.value = '保存冲突，请选择处理方式'
+  } catch (refreshError) {
+    // Keep the conflict signal visible even when a transient read failure
+    // prevents loading the canonical remote document.
+    workflowDocument?.markSaveError(new Error(`检测到版本冲突，但无法读取远端版本：${messageFromError(refreshError)}`), false)
+    workflowStatusText.value = '检测到版本冲突，远端版本暂不可读取'
+  }
+  return true
+}
+
+function acceptRemoteWorkflow(): void {
+  const remote = workflowDocumentState.value?.conflict?.remote
+  if (!remote || !workflowDocument) return
+  workflowDocument.acceptRemote(remote)
+  workflowStatusText.value = '已采用远端版本'
+}
+
+function keepLocalAndRetryWorkflow(): void {
+  if (!workflowDocument?.keepLocalAfterConflict()) return
+  workflowStatusText.value = '已保留本地修改，正在重试保存…'
+  void saveWorkflow()
+}
+
 async function runWorkflow(): Promise<void> {
-  await executeWorkflowRun(undefined)
+  const previous = workflowRun.value
+  const continuation = previous?.status === 'paused' ? workflowContinuation.value : undefined
+  await executeWorkflowRun(undefined, continuation ? { continuation } : {})
+}
+
+async function runWorkflowWithInputs(inputs: Record<string, unknown>): Promise<void> {
+  const previous = workflowRun.value
+  const continuation = previous?.status === 'paused' ? workflowContinuation.value : undefined
+  await executeWorkflowRun(undefined, { ...(continuation ? { continuation } : {}), inputs })
 }
 
 async function stepWorkflow(): Promise<void> {
-  await executeWorkflowRun(1)
+  const previous = workflowRun.value
+  const continuation = previous?.status === 'paused'
+    ? (workflowContinuation.value || { runId: previous.run_id })
+    : undefined
+  await executeWorkflowRun(1, continuation ? { continuation } : {})
 }
 
 async function cancelWorkflowRun(): Promise<void> {
@@ -526,9 +1186,34 @@ async function cancelWorkflowRun(): Promise<void> {
   workflowStatusText.value = '正在停止…'
   try {
     await workflowApi.cancel(threadId, activeRunId.value || undefined)
-    workflowNodeStates.value = Object.fromEntries(
-      definition.nodes.map((node) => [node.id, workflowNodeStates.value[node.id] === 'done' ? 'done' : 'cancelled']),
-    ) as Record<string, NodeStateStatus>
+    const previousStates = workflowRun.value?.node_states || {}
+    const states = Object.fromEntries(definition.nodes.map((node) => {
+      const previous = previousStates[node.id] || {
+        node_id: node.id,
+        status: workflowNodeStates.value[node.id] || 'idle',
+        attempts: 0,
+      }
+      const status = previous.status === 'done' || previous.status === 'skipped' || previous.status === 'error'
+        ? previous.status
+        : 'cancelled'
+      return [node.id, { ...previous, node_id: node.id, status }]
+    })) as Record<string, WorkflowNodeState>
+    workflowNodeStates.value = Object.fromEntries(Object.entries(states).map(([nodeId, state]) => [nodeId, state.status])) as Record<string, NodeStateStatus>
+    workflowRun.value = {
+      ...(workflowRun.value || {
+        output: null,
+        cache: {},
+        values: {},
+        run_id: activeRunId.value,
+        steps_remaining: 0,
+        started_at: null,
+      }),
+      status: 'cancelled',
+      error: 'cancelled',
+      node_states: states,
+      finished_at: new Date().toISOString(),
+    }
+    workflowContinuation.value = undefined
     workflowRunning.value = false
     workflowStatusText.value = '已取消'
   } catch (error) {
@@ -538,7 +1223,7 @@ async function cancelWorkflowRun(): Promise<void> {
 
 async function executeWorkflowRun(
   maxSteps: number | undefined,
-  options: { startNode?: string; singleNode?: string } = {},
+  options: { startNode?: string; singleNode?: string; continuation?: WorkflowContinuationState; inputs?: Record<string, unknown> } = {},
 ): Promise<void> {
   const definition = workflowDefinition.value
   if (!definition || !definition.name) {
@@ -546,16 +1231,46 @@ async function executeWorkflowRun(
     return
   }
   if (workflowRunning.value) return
-  const runId = newRunId()
+  const previous = !options.startNode && !options.singleNode && workflowRun.value?.status === 'paused'
+    ? workflowRun.value
+    : null
+  const continuation = options.continuation
+  const resume = Boolean(continuation || previous)
+  const runId = resume ? (continuation?.runId || previous?.run_id || newRunId()) : newRunId()
   const threadId = workflowSessionId(definition)
   activeRunId.value = runId
   workflowRunning.value = true
-  workflowStatusText.value = options.singleNode ? '运行节点…' : options.startNode ? '从此节点运行…' : '运行中…'
-  workflowNodeStates.value = Object.fromEntries(definition.nodes.map((node) => [node.id, 'idle'])) as Record<string, NodeStateStatus>
+  workflowStatusText.value = options.singleNode ? '运行节点…' : options.startNode ? '从此节点运行…' : maxSteps !== undefined ? '单步运行中…' : '运行中…'
+  const initialStates = resume && previous
+    ? Object.fromEntries(Object.entries(previous.node_states).map(([nodeId, state]) => [nodeId, { ...state }])) as Record<string, WorkflowNodeState>
+    : Object.fromEntries(definition.nodes.map((node) => [node.id, {
+      node_id: node.id,
+      status: 'idle' as const,
+      attempts: 0,
+      started_at: null,
+      finished_at: null,
+    }])) as Record<string, WorkflowNodeState>
+  workflowNodeStates.value = Object.fromEntries(definition.nodes.map((node) => [node.id, initialStates[node.id]?.status || 'idle'])) as Record<string, NodeStateStatus>
+  workflowRun.value = {
+    status: 'running',
+    output: resume && previous ? previous.output : null,
+      node_states: initialStates,
+      cache: resume && previous ? { ...previous.cache } : {},
+      values: resume && previous ? { ...previous.values } : {},
+    error: '',
+    run_id: runId,
+    steps_remaining: resume && previous ? previous.steps_remaining : definition.nodes.length,
+    started_at: resume && previous ? previous.started_at : new Date().toISOString(),
+    finished_at: null,
+  }
   try {
     const result = await workflowApi.run(definition.name, {
       workRoot: workflowRoot(definition),
       maxSteps,
+      priorValues: resume && previous ? previous.values : undefined,
+      priorNodeStates: resume && previous ? previous.node_states : undefined,
+      continuation,
+      inputs: options.inputs,
       startNode: options.startNode,
       singleNode: options.singleNode,
       threadId,
@@ -563,15 +1278,34 @@ async function executeWorkflowRun(
     })
     if (activeRunId.value !== result.run_id && result.run_id) return
     activeRunId.value = result.run_id || runId
+    workflowRun.value = result.run
+    workflowContinuation.value = result.continuation
     workflowNodeStates.value = Object.fromEntries(
-      Object.entries(result.run.node_states || {}).map(([nodeId, state]) => [nodeId, state.status || 'idle']),
+      Object.entries(result.run.node_states || {}).map(([nodeId, state]) => [nodeId, normalizeNodeStateStatus(state.status)]),
     ) as Record<string, NodeStateStatus>
     if (result.run.status === 'paused') workflowStatusText.value = '已暂停（单步）'
     else if (result.run.status === 'completed') workflowStatusText.value = '完成'
     else if (result.run.status === 'cancelled') workflowStatusText.value = '已取消'
     else workflowStatusText.value = result.run.status
   } catch (error) {
-    if (activeRunId.value === runId) workflowStatusText.value = `运行失败：${messageFromError(error)}`
+    if (activeRunId.value === runId) {
+      workflowStatusText.value = `运行失败：${messageFromError(error)}`
+      workflowRun.value = {
+        ...(workflowRun.value || {
+          output: null,
+          node_states: {},
+          cache: {},
+          values: {},
+          run_id: runId,
+          steps_remaining: 0,
+          started_at: new Date().toISOString(),
+        }),
+        status: 'failed',
+        error: messageFromError(error),
+        finished_at: new Date().toISOString(),
+      }
+      workflowContinuation.value = undefined
+    }
   } finally {
     if (activeRunId.value === runId || !activeRunId.value) workflowRunning.value = false
   }
@@ -581,22 +1315,16 @@ async function toggleExpose(): Promise<void> {
   const definition = workflowDefinition.value
   if (!definition) return
   try {
-    const updated = await workflowApi.setExposed(definition.name, !definition.exposed, workflowRoot(definition))
-    workflowDefinition.value = updated
+    const updatedRaw = await workflowApi.setExposed(definition.name, !definition.exposed, workflowRoot(definition))
+    const updated = mergeWorkflowCanvasSidecar({ ...updatedRaw, canvas_elements: definition.canvas_elements })
+    if (updated.id) writeWorkflowCanvasSidecar(updated.id, updated.canvas_elements ?? [])
+    workflowDocument?.markSaved(updated, { value: updated.revision, updatedAt: updated.updated_at })
+    if (!workflowDocument) attachWorkflowDocument(updated)
     await refreshWorkflows()
     setRuntimeStatus(updated.exposed ? `已暴露：${updated.tool_name || `workflow_${updated.name}`}` : '已取消暴露', 2500)
   } catch (error) {
     setRuntimeStatus(`操作失败：${messageFromError(error)}`, 4000)
   }
-}
-
-function nodeKindIcon(kind: string): LucideIcon {
-  if (kind === 'ai') return Cpu
-  if (kind === 'command') return Command
-  if (kind === 'script') return FileCode2
-  if (kind === 'content') return FileText
-  if (kind === 'subgraph') return Boxes
-  return Command
 }
 
 function newRunId(): string {
@@ -606,6 +1334,10 @@ function newRunId(): string {
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function isMissingWorkflowThread(error: unknown): boolean {
+  return /(?:thread|session)\s+not\s+found/i.test(messageFromError(error))
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -630,9 +1362,26 @@ function handleRuntimeEvent(event: CoreAppEvent | null): void {
   const runId = String(nested.run_id || payload.run_id || event.turn_id || '')
   if (!workflowId || workflowId !== activeWorkflowId.value || !activeRunId.value || runId !== activeRunId.value) return
   const nodeId = String(nested.node_id || payload.node_id || event.item_id || '')
-  const status = String(nested.status || payload.status || '') as NodeStateStatus
+  const status = String(nested.status || payload.status || '')
+  const runStatus = nested.run_status || payload.run_status
+  if (runStatus) {
+    const normalizedRunStatus = normalizeWorkflowRunStatus(runStatus)
+    if (workflowRun.value) workflowRun.value = { ...workflowRun.value, status: normalizedRunStatus }
+  }
   if (!nodeId || !status) return
-  workflowNodeStates.value = { ...workflowNodeStates.value, [nodeId]: status }
+  const detail = normalizeWorkflowNodeState({
+    ...nested,
+    ...(nested.output !== undefined ? { output: nested.output } : {}),
+    ...(nested.attempts !== undefined ? { attempts: nested.attempts } : {}),
+  }, nodeId)
+  workflowNodeStates.value = { ...workflowNodeStates.value, [nodeId]: detail.status }
+  if (workflowRun.value) {
+    workflowRun.value = {
+      ...workflowRun.value,
+      node_states: { ...workflowRun.value.node_states, [nodeId]: detail },
+      error: String(nested.error || payload.error || workflowRun.value.error || ''),
+    }
+  }
 }
 
 function scheduleGraphReload(): void {
@@ -642,8 +1391,15 @@ function scheduleGraphReload(): void {
   graphReloadTimer = setTimeout(() => {
     const definition = workflowDefinition.value
     if (!definition) return
-    void workflowApi.getById(definition.id, workflowRoot(definition))
-      .then((fresh) => { workflowDefinition.value = fresh })
+    void workflowApi.getDocumentById(definition.id, workflowRoot(definition))
+      .then((fresh) => {
+        if (workflowDocumentState.value?.dirty) {
+          workflowDocument?.markConflict(fresh)
+          workflowStatusText.value = '远端工作流有更新，请处理冲突'
+        } else {
+          workflowDocument?.acceptRemote(fresh)
+        }
+      })
       .catch((error) => console.error('[workflow] live graph reload failed', error))
   }, 400)
 }
@@ -660,12 +1416,23 @@ onMounted(() => {
   ensureRightPanelOpen()
   void refreshWorkflows()
   void loadAvailableTools()
+  void loadNodeSchemas()
+  void refreshHumanTasks()
+  queueRefreshTimer = setInterval(() => {
+    if (workflowDefinition.value && !queueLoading.value) void refreshQueue()
+    if (workflowDefinition.value && !activationsLoading.value) void refreshWorkflowActivations()
+    if (workflowDefinition.value && !humanTaskLoading.value) void refreshHumanTasks()
+  }, 4000)
 })
 
 onBeforeUnmount(() => {
   unregisterSurface()
-  if (autosaveTimer) clearTimeout(autosaveTimer)
+  unsubscribeWorkflowDocument?.()
+  unsubscribeWorkflowDocument = null
+  workflowDocument = null
+  cancelAutosave()
   if (graphReloadTimer) clearTimeout(graphReloadTimer)
+  if (queueRefreshTimer) clearInterval(queueRefreshTimer)
 })
 </script>
 
@@ -676,6 +1443,50 @@ onBeforeUnmount(() => {
   height: 100%;
   min-height: 0;
 }
+.wf-workflow-tabs {
+  position: absolute;
+  /* The title editor owns the first overlay row. Tabs only exist when there
+     is something to switch to and occupy their own row below it. */
+  top: calc(var(--space-6) * 2);
+  left: var(--space-3);
+  z-index: 22;
+  display: flex;
+  gap: 2px;
+  max-width: min(52vw, 620px);
+  overflow-x: auto;
+  padding: 2px;
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-main-background) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.wf-workflow-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 28px;
+  max-width: 220px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--theme-main-text);
+  padding: 0 var(--space-2);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.wf-workflow-tab:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
+.wf-workflow-tab.active { background: color-mix(in srgb, var(--blue) 14%, transparent); color: var(--blue); }
+.wf-workflow-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.wf-workflow-tab-title { overflow: hidden; text-overflow: ellipsis; }
+.wf-workflow-tab-dirty { color: var(--orange); font-size: 9px; }
+.wf-workflow-tab-close { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: color-mix(in srgb, var(--theme-main-text) 55%, transparent); font-size: 15px; line-height: 1; }
+.wf-workflow-tab-close:hover, .wf-workflow-tab-close:focus-visible { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); outline: 0; }
+.wf-switch-guard { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; background: color-mix(in srgb, var(--theme-main-background) 66%, transparent); backdrop-filter: blur(2px); }
+.wf-switch-guard-card { width: 360px; max-width: calc(100vw - 32px); padding: var(--space-4); border: 1px solid var(--theme-main-border); border-radius: var(--radius-md, 12px); background: var(--theme-main-background); color: var(--theme-main-text); box-shadow: var(--shadow-lg, var(--shadow-md)); }
+.wf-switch-guard-card h2 { margin: 0 0 var(--space-2); font-size: 14px; }
+.wf-switch-guard-card p { margin: 0; color: color-mix(in srgb, var(--theme-main-text) 68%, transparent); font-size: 12px; }
+.wf-switch-guard-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-4); }
 
 .wf-create-backdrop {
   position: fixed;
@@ -696,6 +1507,13 @@ onBeforeUnmount(() => {
   box-shadow: var(--shadow-md);
   display: grid;
   gap: var(--space-2);
+}
+@media (max-width: 1100px) {
+  .wf-workflow-tabs { top: calc(var(--space-6) * 3 + var(--space-3)); }
+}
+@media (max-width: 680px) {
+  .wf-workflow-tabs { left: var(--space-1); right: var(--space-1); max-width: none; }
+  .wf-workflow-tab { max-width: 170px; }
 }
 .wf-create-head h2 { margin: 0; font-size: 15px; font-weight: 700; color: var(--theme-main-text); }
 .wf-create-input {
@@ -745,31 +1563,13 @@ onBeforeUnmount(() => {
 .stage-toggle-btn:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
 .stage-toggle-btn.active { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent); }
 
-.wf-right-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.wf-right-panel > section { display: flex; flex-direction: column; min-height: 0; }
-.wf-right-panel h3 { margin: 0 0 var(--space-2); font-size: 12px; font-weight: 700; color: color-mix(in srgb, var(--theme-main-text) 50%, transparent); }
-.wf-right-nodes { flex: 0 0 auto; max-height: 45%; padding: var(--space-3); border-bottom: 1px solid var(--theme-main-border); overflow: auto; }
-.wf-node-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.wf-node-list-item { display: flex; align-items: center; gap: var(--space-2); padding: 5px var(--space-2); border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; color: var(--theme-main-text); }
-.wf-node-list-item:hover { background: var(--theme-main-soft-background); }
-.wf-node-list-item.active { background: color-mix(in srgb, var(--blue) 22%, transparent); }
-.wf-node-list-kind { opacity: .7; font-size: 12px; }
-.wf-node-list-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wf-right-info { flex: 1 1 auto; padding: var(--space-3); overflow: auto; }
-.wf-right-info-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
-.wf-right-info-head h3 { margin: 0; color: var(--theme-main-text); }
-.wf-right-empty { margin: 0; font-size: 12px; color: color-mix(in srgb, var(--theme-main-text) 40%, transparent); }
-.wf-node-info-body { display: grid; gap: var(--space-2); font-size: 12px; }
-.wf-node-info-row { display: flex; justify-content: space-between; gap: var(--space-2); margin: 0; }
-.wf-node-info-row > span, .wf-node-info-block > span { color: color-mix(in srgb, var(--theme-main-text) 50%, transparent); }
-.wf-node-info-block { margin: 0; display: grid; gap: var(--space-1); }
-.wf-node-info-block pre { margin: 0; padding: var(--space-2); border-radius: var(--radius-sm); background: var(--theme-main-subtle-background); font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; }
-.wf-node-info-block code { font-size: 11px; word-break: break-all; }
-.wf-convo-card { display: flex; flex-direction: column; height: 100%; min-height: 0; border: 1px solid var(--theme-main-border); border-radius: var(--radius); background: var(--theme-main-background); overflow: hidden; }
-.wf-convo-head, .wf-convo-float-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--theme-main-border); }
-.wf-convo-head h3, .wf-convo-float-head h3 { margin: 0; color: var(--theme-main-text); }
-.wf-convo-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--space-2); }
+.wf-convo-float-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--theme-main-border); }
+.wf-convo-float-head h3 { margin: 0; color: var(--theme-main-text); }
 .wf-convo-float { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: var(--z-modal); width: min(640px, 70vw); height: min(560px, 76vh); display: flex; flex-direction: column; background: var(--theme-main-background); border: 1px solid var(--theme-main-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); pointer-events: auto; }
 .wf-convo-float-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--space-3); }
 @media (max-width: 640px) { .wf-convo-float { width: calc(100vw - var(--space-4)); height: calc(100vh - 96px); } }
+@media (prefers-reduced-motion: reduce) {
+  .wf-convo-float,
+  .wf-convo-float * { transition: none; animation: none; }
+}
 </style>

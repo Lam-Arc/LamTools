@@ -127,14 +127,14 @@ describe('useCoreWorkbenchProjectionController', () => {
     })
   })
 
-  it('automatically expands active processes while preserving manual expansion', async () => {
+  it('keeps active process cards compact while preserving manual expansion', async () => {
     const fixture = createController()
     fixture.controller.toggleProcess('manual')
     fixture.status.value = 'running'
     fixture.currentSnapshot.value = snapshot('thread-a', 'running', { includeTool: true })
     await nextTick()
 
-    expect([...fixture.controller.processExpandedIds.value].sort()).toEqual(['assistant:turn-1', 'manual'])
+    expect([...fixture.controller.processExpandedIds.value].sort()).toEqual(['manual'])
 
     fixture.status.value = 'completed'
     fixture.currentSnapshot.value = snapshot('thread-a', 'completed', { includeTool: true, snapshotSeq: 2 })
@@ -147,7 +147,7 @@ describe('useCoreWorkbenchProjectionController', () => {
     const fixture = createController(snapshot('thread-a', 'running', { includeTool: true }))
     fixture.status.value = 'running'
     await nextTick()
-    expect(fixture.controller.processExpandedIds.value).toEqual(new Set(['assistant:turn-1']))
+    expect(fixture.controller.processExpandedIds.value).toEqual(new Set())
 
     fixture.activeThreadId.value = 'thread-b'
     await nextTick()

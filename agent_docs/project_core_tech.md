@@ -21,6 +21,15 @@ dependency inventories belong to the package manifests and module documents.
 - Core UI exposes a connection-neutral `LamToolsTransport` and shared
   Workbench. Desktop uses DirectTransport; Capacitor mobile uses RemoteTransport
   over a Noise-secured tunnel selected by ConnectionManager.
+- The bundled Workflow backend provides a versioned document/adapter boundary,
+  durable run engine, SQLite-backed queue, append-only event journal and
+  snapshot projector, expression AST evaluator, DataPacket/Attachment
+  contracts, credential references, capability gates, and Arrange-backed
+  activations.
+- The shared UI's `RightSidebarHost` renders built-in and plugin modules through
+  a trusted loader registry. Declarative plugin widgets use bounded JSON
+  snapshots and schema-driven actions; trusted Vue contributions are loaded
+  in-process only from registered modules.
 - Tauri `2.x` provides the desktop shell and native bridge; the configured
   Windows bundle target is NSIS. The website uses anime.js `4.x` for motion.
 
@@ -52,6 +61,20 @@ dependency inventories belong to the package manifests and module documents.
   in provider config files; list RPCs mask them.
 - Core runtime data is local SQLite. Do not introduce the retired config DB
   tables or `LAMTOOLS_LLM_CONFIG_DB` configuration path.
+- Workflow runs pin an immutable definition revision. Durable execution records
+  distinguish Workflow, Version, Run, NodeRun, and Attempt; retries, timeouts,
+  cancellation, wait/signal, idempotency, and cache policy are engine contracts.
+  The current single-flight guard is process-local, so cross-process execution
+  still requires a transactional claim/lock layer.
+- Workflow data is item-oriented and reference-based: large binary values travel
+  through Attachment/Artifact references, and resolved credential secrets remain
+  attempt-local and are excluded from event history, snapshots, logs, metadata,
+  and results. Built-in nodes retain legacy raw-value compatibility while
+  trusted plugin executors use the packet boundary.
+- Workflow activation reuses Core Arrange for once, interval, calendar, and
+  event triggers; no second scheduler is introduced. Durable wait/human-task
+  support currently has no complete HumanTask center, and HTTP/MCP/external
+  connector nodes remain deferred until their host permission boundary exists.
 - Tauri development is a separate frontend/backend lifecycle from the
   repository `dev.ps1` flow; UI verification is performed in the Tauri window.
 - The website showcase must keep Vue as a single instance and reuse the real
@@ -61,3 +84,9 @@ dependency inventories belong to the package manifests and module documents.
   identity verification, version negotiation, per-connection sequence/replay
   guards, and separate secret/metadata storage. The Gateway bridges to
   loopback Core; Relay never sees tunnel plaintext.
+- Plugin widget operations are exposed through `plugin.widget.list`,
+  `plugin.widget.get`, and `plugin.widget.invoke`, with manifest validation,
+  scoped context, ownership/schema checks, dangerous-action confirmation, and
+  idempotency for mutations. Web Search provides snapshot and real health
+  operations. The bundled RAG widget reports unavailable when no RAG provider
+  is installed; it does not synthesize index statistics.

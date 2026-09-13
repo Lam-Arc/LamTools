@@ -3,94 +3,133 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LamTools Core</title>
+  <title>Sunday</title>
+  <script id="sunday-theme-bootstrap">
+    (() => {
+      const light = {
+        angle: 112,
+        stops: [['#fff0df', 0], ['#f7efff', 58], ['#edf2ff', 100]],
+        text: '#17265a',
+        surface: '#fffdf8',
+      }
+      const dark = {
+        angle: 112,
+        stops: [['#171926', 0], ['#241c31', 56], ['#182438', 100]],
+        text: '#f4efff',
+        surface: '#11131d',
+      }
+      const isColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
+      const clamp = (value, min, max, fallback) => {
+        const number = Number(value)
+        return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback
+      }
+      const readPreferences = () => {
+        for (const key of ['lamtools.core.ui.preferences', 'lamtools.core.ui']) {
+          try {
+            const raw = window.localStorage.getItem(key)
+            if (!raw) continue
+            const value = JSON.parse(raw)
+            if (value && typeof value === 'object' && !Array.isArray(value)) return value
+          } catch (_) {}
+        }
+        return null
+      }
+      const preferences = readPreferences()
+      const storedMode = preferences && preferences.themeMode
+      const mode = storedMode === 'light' || storedMode === 'dark' || storedMode === 'system'
+        ? storedMode
+        : 'system'
+      const systemDark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      const effectiveMode = mode === 'system' ? (systemDark ? 'dark' : 'light') : mode
+      const fallback = effectiveMode === 'dark' ? dark : light
+      const saved = preferences && (preferences[effectiveMode + 'Theme'] || preferences.theme) || {}
+      const rawStops = Array.isArray(saved.backdropStops) ? saved.backdropStops : []
+      const stops = rawStops.slice(0, 8).map(stop => [
+        isColor(stop && stop.color) ? stop.color : fallback.stops[0][0],
+        clamp(stop && stop.position, 0, 100, 0),
+      ]).sort((a, b) => a[1] - b[1])
+      if (!stops.length) stops.push(...fallback.stops)
+      if (stops.length > 1) {
+        stops[0][1] = 0
+        stops[stops.length - 1][1] = 100
+      }
+      const solid = stops.every(stop => stop[0].toLowerCase() === stops[0][0].toLowerCase())
+      const angle = clamp(saved.backdropAngle, 0, 360, fallback.angle)
+      const backdrop = solid ? stops[0][0] : `linear-gradient(${angle}deg, ${stops.map(stop => `${stop[0]} ${stop[1]}%`).join(', ')})`
+      const text = isColor(saved.backdropText) ? saved.backdropText : fallback.text
+      const rawSurface = Array.isArray(saved.mainStops) && saved.mainStops[0] && saved.mainStops[0].color
+      const surface = isColor(rawSurface) ? rawSurface : fallback.surface
+      const hex = surface.slice(1)
+      const alpha = effectiveMode === 'dark' ? 0.68 : 0.64
+      const splash = `rgba(${parseInt(hex.slice(0, 2), 16)}, ${parseInt(hex.slice(2, 4), 16)}, ${parseInt(hex.slice(4, 6), 16)}, ${alpha})`
+      const startupTheme = { effectiveMode, backdropBackground: backdrop, backdropText: text, splashBackground: splash }
+      window.__SUNDAY_STARTUP_THEME__ = startupTheme
+      const style = document.documentElement.style
+      style.setProperty('--startup-body-background', backdrop)
+      style.setProperty('--startup-body-text', text)
+      style.setProperty('--startup-splash-background', splash)
+      style.setProperty('--startup-reveal-background', backdrop)
+      style.setProperty('--startup-mark-shadow', effectiveMode === 'dark'
+        ? 'drop-shadow(0 14px 26px rgba(0, 0, 0, 0.24))'
+        : 'drop-shadow(0 12px 22px rgba(23, 36, 81, 0.12))')
+    })()
+  </script>
   <style>
-    :root { --titlebar-offset: 36px; }
+    :root {
+      --titlebar-offset: 36px;
+      --startup-body-background: linear-gradient(112deg, #fff0df 0%, #f7efff 58%, #edf2ff 100%);
+      --startup-body-text: #17265a;
+      --startup-splash-background: rgba(255, 253, 248, 0.64);
+      --startup-reveal-background: linear-gradient(112deg, #fff0df 0%, #f7efff 58%, #edf2ff 100%);
+      --startup-mark-shadow: drop-shadow(0 12px 22px rgba(23, 36, 81, 0.12));
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    /* 挂载前静态底色：对齐 helpers/theme.ts DEFAULT_THEME（backdrop #202020 / text #f2efeb）。
-       浅色主题下启动瞬间仍会闪一帧深色 —— 主题变量要等 JS 注入 :root 后才生效，属固有帧。 */
     html, body { width: 100%; min-height: 100%; }
-    body { overflow: hidden; background: #202020; color: #f2efeb; font-family: system-ui, sans-serif; }
+    body { overflow: hidden; background: var(--startup-body-background); color: var(--startup-body-text); font-family: system-ui, sans-serif; }
 
-    /* A native Tauri window can paint before Vue has mounted. Keep that first
-       frame intentional: the splash is deliberately restrained and reuses
-       Core's dark neutral instead of introducing a second visual language. */
+    /* Native first paint: a translucent Sunday veil and the bare mark. */
     #startup-splash {
-      --startup-text: #f2efeb;
-      --startup-muted: rgba(242, 239, 235, 0.56);
       position: fixed;
-      z-index: 20;
+      z-index: 100;
       inset: 0;
       display: grid;
       place-items: center;
       overflow: hidden;
-      color: var(--startup-text);
-      background: rgba(72, 72, 72, 0.72);
-      -webkit-backdrop-filter: blur(10px);
-      backdrop-filter: blur(10px);
-    }
-    #startup-splash::before {
-      position: absolute;
-      width: 180px;
-      height: 180px;
-      border: 1px solid rgba(242, 239, 235, 0.07);
-      border-radius: 50%;
-      content: '';
+      background: var(--startup-splash-background);
+      -webkit-backdrop-filter: blur(18px) saturate(1.04);
+      backdrop-filter: blur(18px) saturate(1.04);
       pointer-events: none;
     }
-    .startup-splash__panel {
-      position: relative;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      min-width: 228px;
-      padding: 14px 16px;
-      border: 1px solid rgba(242, 239, 235, 0.12);
-      border-radius: 12px;
-      background: rgba(242, 239, 235, 0.055);
+    .startup-splash__reveal {
+      position: absolute;
+      inset: 0;
+      background: var(--startup-reveal-background);
+      clip-path: circle(0 at 50% 50%);
+      will-change: clip-path, opacity;
     }
     .startup-splash__mark {
       position: relative;
+      z-index: 1;
       display: grid;
-      flex: 0 0 auto;
-      width: 28px;
-      height: 28px;
+      width: 112px;
+      height: 112px;
       place-items: center;
-      border: 1px solid rgba(242, 239, 235, 0.18);
-      border-radius: 50%;
-      background: rgba(242, 239, 235, 0.04);
+      filter: var(--startup-mark-shadow);
+      will-change: transform, opacity;
     }
-    .startup-splash__halo {
-      position: absolute;
-      width: 44px;
-      height: 44px;
-      border: 1px solid rgba(242, 239, 235, 0.13);
-      border-radius: 50%;
-      pointer-events: none;
-    }
-    .startup-splash__dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: #f2efeb;
-    }
-    .startup-splash__copy {
-      display: grid;
-      gap: 3px;
-      min-width: 0;
-    }
-    .startup-splash__name {
-      font-size: 13px;
-      font-weight: 650;
-      letter-spacing: 0.01em;
-    }
-    .startup-splash__status {
-      color: var(--startup-muted);
-      font-size: 11px;
-      line-height: 1.3;
-    }
+    .startup-splash__mark svg { width: 100%; height: 100%; display: block; }
     @media (prefers-reduced-motion: reduce) {
-      #startup-splash::before { opacity: 0.7; }
+      .startup-splash__reveal { clip-path: none; }
+      .startup-splash__mark { will-change: auto; }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --startup-body-background: linear-gradient(112deg, #171926 0%, #241c31 56%, #182438 100%);
+        --startup-body-text: #f4efff;
+        --startup-splash-background: rgba(17, 19, 29, 0.68);
+        --startup-reveal-background: linear-gradient(112deg, #171926 0%, #241c31 56%, #182438 100%);
+        --startup-mark-shadow: drop-shadow(0 14px 26px rgba(0, 0, 0, 0.24));
+      }
     }
   </style>
   <script>
@@ -100,17 +139,20 @@
   </script>
 </head>
 <body>
-  <div id="startup-splash" data-startup-splash role="status" aria-live="polite">
-    <div class="startup-splash__panel" data-startup-panel>
-      <span class="startup-splash__mark" data-startup-mark aria-hidden="true">
-        <span class="startup-splash__halo" data-startup-halo></span>
-        <span class="startup-splash__dot"></span>
-      </span>
-      <span class="startup-splash__copy">
-        <strong class="startup-splash__name">LamTools Core</strong>
-        <span class="startup-splash__status">正在启动工作台…</span>
-      </span>
-    </div>
+  <div id="startup-splash" data-startup-splash role="status" aria-label="Sunday 正在启动">
+    <div class="startup-splash__reveal" data-startup-reveal aria-hidden="true"></div>
+    <span class="startup-splash__mark" data-startup-mark aria-hidden="true">
+        <svg viewBox="0 0 1254 1254" fill="none" focusable="false">
+          <defs>
+            <linearGradient id="startup-warm" x1="240" y1="608" x2="445" y2="243" gradientUnits="userSpaceOnUse"><stop stop-color="#FD4754"/><stop offset="1" stop-color="#FECA30"/></linearGradient>
+            <linearGradient id="startup-sweep" x1="80" y1="645" x2="971" y2="1160" gradientUnits="userSpaceOnUse"><stop stop-color="#10AEFD"/><stop offset="1" stop-color="#823CFC"/></linearGradient>
+            <linearGradient id="startup-arch" x1="717" y1="492" x2="1078" y2="266" gradientUnits="userSpaceOnUse"><stop stop-color="#0453FD"/><stop offset="1" stop-color="#C745FD"/></linearGradient>
+          </defs>
+          <ellipse cx="380.5" cy="447" rx="215.5" ry="212.5" fill="url(#startup-warm)"/>
+          <path fill="url(#startup-arch)" d="M1172 440c-4-20-13-37-25-50-28-32-74-56-128-69-57-14-114-4-151 13-34 15-62 33-89 58-25 23-46 50-58 78-11 26-1 51 19 65 18 13 42 13 60 3 17-9 27-25 43-41 29-28 68-37 107-36 47 0 84 21 119 59 17 17 43 15 60 6 30-16 50-47 43-86Z"/>
+          <path fill="url(#startup-sweep)" d="M1209 700c-3-22-12-38-26-47-19-13-41-10-61-3-32 12-53 34-75 56-34 37-62 67-96 97-49 43-112 73-183 95-58 18-114 22-172 17-48-4-95-16-139-31-58-20-102-47-144-85-43-38-80-83-117-120-19-19-44-30-67-33-27-4-51 7-65 28-16 24-13 54-3 84 15 45 40 90 69 127 46 58 90 99 141 135 55 38 115 63 179 82 96 28 200 30 303 11 77-14 143-43 195-72 57-32 102-70 144-116 38-42 61-79 80-112 24-42 42-84 37-113Z"/>
+        </svg>
+    </span>
   </div>
   <div id="app"></div>
   <script type="module" src="/src/main.ts"></script>

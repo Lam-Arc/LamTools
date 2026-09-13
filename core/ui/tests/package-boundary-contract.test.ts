@@ -83,4 +83,13 @@ describe('Core UI package boundary', () => {
     expect(shellSource).toContain('@pointerdown="onSwipePointerDown"')
     expect(shellSource).toContain('SWIPE_TRIGGER_DISTANCE')
   })
+
+  it('keeps the mobile right rail liquid glass while retaining the left drawer surface', () => {
+    const mobileCss = workspaceShellCss.match(/@media \(max-width: 640px\) \{([\s\S]*)/)?.[1] || ''
+
+    const genericDrawerRule = mobileCss.match(/\.workspace-drawer\s*\{([^}]*)\}/)?.[1] || ''
+    expect(genericDrawerRule).not.toMatch(/background:/)
+    expect(mobileCss).toMatch(/\.drawer-left\s*\{[\s\S]*?background: var\(--theme-backdrop-background\);[\s\S]*?box-shadow: 0 4px 12px rgba\(0, 0, 0, \.22\);/)
+    expect(workspaceShellCss).toMatch(/\.drawer-right::before\s*\{[\s\S]*?border-radius: inherit;[\s\S]*?background: color-mix\(in srgb, var\(--theme-backdrop-text\) 4%, transparent\);[\s\S]*?-webkit-backdrop-filter: blur\(var\(--space-4\)\)/)
+  })
 })

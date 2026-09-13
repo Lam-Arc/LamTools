@@ -1,6 +1,7 @@
 import {
   computed,
   getCurrentScope,
+  nextTick,
   onScopeDispose,
   reactive,
   ref,
@@ -253,28 +254,66 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   const hasMoreHistory = computed(() => (
     projectionController.hasMoreHistory.value || snapshot.value?.history_page?.has_more === true
   ))
+  const historyBuffered = computed(() => projectionController.hasMoreHistory.value)
   const totalMessages = computed(() => Math.max(
     projectionController.totalMessages.value,
     Number(snapshot.value?.history_page?.total_items || 0),
   ))
 
+  let pendingHistoryPrefetch: {
+    key: string
+    promise: Promise<boolean>
+  } | null = null
+
+  async function prefetchHistoryBuffer(threadId = activeSessionId.value || ''): Promise<boolean> {
+    if (!threadId || activeSessionId.value !== threadId || projectionController.hasMoreHistory.value) return false
+    const historyPage = snapshot.value?.history_page
+    if (!historyPage?.has_more) return false
+    const beforeItemId = String(historyPage.next_before_item_id || '')
+    const beforeSeq = Number(historyPage.next_before_seq || 0)
+    if (!beforeItemId && beforeSeq <= 0) return false
+    const key = `${threadId}:${beforeItemId}:${beforeSeq}`
+    if (pendingHistoryPrefetch?.key === key) return await pendingHistoryPrefetch.promise
+
+    const promise = (async () => {
+      const response = await requestRpc('thread.history', {
+        thread_id: threadId,
+        ...(beforeItemId ? { before_item_id: beforeItemId } : {}),
+        before_seq: beforeSeq,
+        turn_limit: 10,
+        char_limit: 200_000,
+      }, 60_000)
+      const page = response.snapshot_page
+      return isCoreSnapshot(page) && runtimeController.mergeSnapshotPage(page)
+    })()
+    pendingHistoryPrefetch = { key, promise }
+    try {
+      return await promise
+    } finally {
+      if (pendingHistoryPrefetch?.promise === promise) pendingHistoryPrefetch = null
+    }
+  }
+
+  function scheduleHistoryPrefetch(threadId = activeSessionId.value || ''): void {
+    void nextTick()
+      .then(() => prefetchHistoryBuffer(threadId))
+      .catch(() => { /* Background history prefetch is best-effort; foreground loading can retry. */ })
+  }
+
   async function loadMoreHistory(): Promise<void> {
+    const threadId = activeSessionId.value
+    if (!threadId) return
     if (projectionController.hasMoreHistory.value) {
       projectionController.loadMoreHistory()
+      scheduleHistoryPrefetch(threadId)
       return
     }
-    const threadId = activeSessionId.value
-    const beforeItemId = String(snapshot.value?.history_page?.next_before_item_id || '')
-    const beforeSeq = Number(snapshot.value?.history_page?.next_before_seq || 0)
-    if (!threadId || (!beforeItemId && beforeSeq <= 0)) return
-    const response = await requestRpc('thread.history', {
-      thread_id: threadId,
-      ...(beforeItemId ? { before_item_id: beforeItemId } : {}),
-      before_seq: beforeSeq,
-      char_limit: 200_000,
-    }, 60_000)
-    const page = response.snapshot_page
-    if (isCoreSnapshot(page)) runtimeController.mergeSnapshotPage(page)
+    if (await prefetchHistoryBuffer(threadId)) {
+      await nextTick()
+      if (activeSessionId.value !== threadId) return
+      projectionController.loadMoreHistory()
+      scheduleHistoryPrefetch(threadId)
+    }
   }
 
   const liveComposerController = useCoreLiveComposerController({
@@ -370,6 +409,9 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       preserveState: false,
     })
     if (generation !== sessionSelectionGeneration) return
+    // Keep one complete ten-turn page ahead of the rendered window. Normal
+    // upward paging then performs no RPC and only reveals already-local data.
+    scheduleHistoryPrefetch(id)
     await liveComposerController.loadCommandCatalog(id)
   }
 
@@ -443,6 +485,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     processExpandedIds: projectionController.processExpandedIds,
     toggleProcess: projectionController.toggleProcess,
     hasMoreHistory,
+    historyBuffered,
     totalMessages,
     loadMoreHistory,
     lastEvent,

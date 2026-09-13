@@ -7,7 +7,7 @@ from lamtools_core.app import AppEventInput, open_core_app_db
 from lamtools_core.app.core_db import CoreSyncChange
 from lamtools_core.app.operation_catalog import OperationCatalog
 from lamtools_core.app.sync_store import SYNC_CURSOR_EXPIRED
-from lamtools_core.app.live_operations import _character_page_snapshot
+from lamtools_core.app.live_operations import _character_page_snapshot, _history_turn_limit
 from lamtools_core.checkpoint import register_checkpoint_operations
 from lamtools_core.event import RunItemEvent
 
@@ -98,6 +98,168 @@ def test_thread_snapshot_pages_by_character_budget_and_excludes_artifact_bodies(
     )
     assert older["core"]["item_order"]
     assert set(older["core"]["item_order"]).isdisjoint(latest_order)
+
+
+def test_thread_history_defaults_to_ten_turns_per_page() -> None:
+    assert _history_turn_limit({}) == 10
+    assert _history_turn_limit({"turn_limit": 20}) == 20
+
+
+def test_thread_snapshot_page_keeps_user_message_for_selected_assistant_turn() -> None:
+    turn_id = "thread-1:turn:large"
+    user_id = f"{turn_id}:user"
+    snapshot = {
+        "thread_id": "thread-1",
+        "snapshot_seq": 20,
+        "items": {
+            user_id: {
+                "item_id": user_id,
+                "turn_id": turn_id,
+                "seq": 1,
+                "type": "userMessage",
+                "content": [{"type": "text", "text": "Create the report"}],
+            },
+        },
+        "item_order": [user_id],
+        "turns": {
+            turn_id: {
+                "turn_id": turn_id,
+                "status": "completed",
+                "items": [user_id],
+            },
+        },
+        "core": {
+            "thread_id": "thread-1",
+            "snapshot_seq": 20,
+            "status": "completed",
+            "items": {
+                f"assistant-{index}": {
+                    "item_id": f"assistant-{index}",
+                    "turn_id": turn_id,
+                    "seq": index + 1,
+                    "type": "agentMessage",
+                    "content": str(index) * 900,
+                }
+                for index in range(1, 6)
+            },
+            "item_order": [f"assistant-{index}" for index in range(1, 6)],
+            "turns": {
+                turn_id: {
+                    "turn_id": turn_id,
+                    "status": "completed",
+                    "items": [f"assistant-{index}" for index in range(1, 6)],
+                },
+            },
+        },
+    }
+
+    latest = _character_page_snapshot(
+        snapshot,
+        before_item_id=None,
+        before_seq=None,
+        char_limit=1_500,
+    )
+
+    assert latest["history_page"]["has_more"] is True
+    assert latest["item_order"] == [user_id]
+    assert latest["items"][user_id]["type"] == "userMessage"
+    assert latest["turns"][turn_id]["items"] == [user_id]
+    assert latest["core"]["item_order"] == ["assistant-5"]
+
+
+def test_thread_snapshot_page_never_splits_a_turn() -> None:
+    snapshot = {
+        "thread_id": "thread-complete-turn",
+        "snapshot_seq": 20,
+        "items": {
+            "user-1": {
+                "item_id": "user-1",
+                "turn_id": "turn-1",
+                "seq": 1,
+                "type": "userMessage",
+                "content": [{"type": "text", "text": "first"}],
+            },
+            "user-2": {
+                "item_id": "user-2",
+                "turn_id": "turn-2",
+                "seq": 10,
+                "type": "userMessage",
+                "content": [{"type": "text", "text": "second"}],
+            },
+        },
+        "item_order": ["user-1", "user-2"],
+        "turns": {
+            "turn-1": {"turn_id": "turn-1", "status": "completed", "items": ["user-1"]},
+            "turn-2": {"turn_id": "turn-2", "status": "completed", "items": ["user-2"]},
+        },
+        "core": {
+            "thread_id": "thread-complete-turn",
+            "snapshot_seq": 20,
+            "status": "completed",
+            "items": {
+                **{
+                    f"turn-1-item-{index}": {
+                        "item_id": f"turn-1-item-{index}",
+                        "turn_id": "turn-1",
+                        "seq": index + 1,
+                        "type": "reasoning" if index % 2 else "toolCall",
+                        "content": "x" * 2_000,
+                    }
+                    for index in range(1, 6)
+                },
+                **{
+                    f"turn-2-item-{index}": {
+                        "item_id": f"turn-2-item-{index}",
+                        "turn_id": "turn-2",
+                        "seq": index + 10,
+                        "type": "reasoning" if index % 2 else "toolCall",
+                        "content": "y" * 2_000,
+                    }
+                    for index in range(1, 6)
+                },
+            },
+            "item_order": [
+                *[f"turn-1-item-{index}" for index in range(1, 6)],
+                *[f"turn-2-item-{index}" for index in range(1, 6)],
+            ],
+            "turns": {
+                "turn-1": {
+                    "turn_id": "turn-1",
+                    "status": "completed",
+                    "items": [f"turn-1-item-{index}" for index in range(1, 6)],
+                },
+                "turn-2": {
+                    "turn_id": "turn-2",
+                    "status": "completed",
+                    "items": [f"turn-2-item-{index}" for index in range(1, 6)],
+                },
+            },
+        },
+    }
+
+    latest = _character_page_snapshot(
+        snapshot,
+        before_item_id=None,
+        before_seq=None,
+        char_limit=1_000,
+        turn_limit=1,
+    )
+    assert latest["history_page"]["turn_count"] == 1
+    assert latest["history_page"]["character_count"] > latest["history_page"]["char_limit"]
+    assert latest["item_order"] == ["user-2"]
+    assert latest["core"]["item_order"] == [f"turn-2-item-{index}" for index in range(1, 6)]
+    assert latest["history_page"]["has_more"] is True
+
+    older = _character_page_snapshot(
+        snapshot,
+        before_item_id=latest["history_page"]["next_before_item_id"],
+        before_seq=latest["history_page"]["next_before_seq"],
+        char_limit=1_000,
+        turn_limit=1,
+    )
+    assert older["item_order"] == ["user-1"]
+    assert older["core"]["item_order"] == [f"turn-1-item-{index}" for index in range(1, 6)]
+    assert older["history_page"]["has_more"] is False
 
 
 @pytest.mark.asyncio

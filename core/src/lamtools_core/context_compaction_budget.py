@@ -86,6 +86,33 @@ class TokenBudget:
         )
 
 
+def resolve_compaction_budget(
+    *,
+    context_window: int,
+    trigger_ratio: float = 0.8,
+    target_ratio: float = 0.6,
+    trigger_tokens: int | None = None,
+    target_tokens: int | None = None,
+) -> TokenBudget:
+    """Resolve the shared automatic/manual compaction policy."""
+    window = max(1, int(context_window))
+    resolved_trigger_ratio = min(max(float(trigger_ratio), 0.01), 1.0)
+    resolved_target_ratio = min(
+        max(float(target_ratio), 0.01), resolved_trigger_ratio
+    )
+    resolved_trigger = int(
+        trigger_tokens or int(window * resolved_trigger_ratio)
+    )
+    resolved_target = int(target_tokens or int(window * resolved_target_ratio))
+    resolved_trigger = min(max(1, resolved_trigger), window)
+    resolved_target = min(max(1, resolved_target), resolved_trigger)
+    return TokenBudget(
+        context_window=window,
+        trigger_tokens=resolved_trigger,
+        target_tokens=resolved_target,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SummaryTokenBudget:
     """Input/output budget for one model-backed summary request."""
@@ -194,4 +221,5 @@ __all__ = [
     "TokenBudget",
     "TokenMeasurement",
     "measure_for_compaction_trigger",
+    "resolve_compaction_budget",
 ]

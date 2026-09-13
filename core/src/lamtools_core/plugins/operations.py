@@ -211,7 +211,114 @@ def _ui_payload(plugin: Any) -> dict[str, Any] | None:
     return {
         "views": [serialize(item) for item in contribution.views],
         "modes": [serialize(item) for item in contribution.modes],
+        "sidebar": {
+            "widgets": [_widget_descriptor(plugin, item) for item in contribution.sidebar_widgets]
+        },
     }
+
+
+def _widget_descriptor(plugin: Any, widget: Any) -> dict[str, Any]:
+    """Serialize only declarative widget metadata; never executable markup."""
+    return {
+        "pluginId": str(plugin.id or plugin.name),
+        "id": str(widget.id),
+        "title": str(widget.title),
+        "icon": str(widget.icon or ""),
+        "order": int(widget.order),
+        "scope": str(widget.scope),
+        "renderer": str(widget.renderer),
+        "entry": str(widget.entry) if widget.entry is not None else "",
+        "hasSnapshot": bool(widget.snapshot_operation),
+        "actions": [
+            {
+                "id": str(action.id),
+                "title": str(action.title),
+                "inputSchema": dict(action.input_schema),
+                "dangerous": bool(action.dangerous),
+                "mutates": bool(action.mutates),
+            }
+            for action in widget.actions
+        ],
+    }
+
+
+def _validate_widget_inputs(value: Any, schema: dict[str, Any], path: str = "input") -> list[str]:
+    """Validate the bounded JSON-Schema subset used by widget actions."""
+    errors: list[str] = []
+    kind = str(schema.get("type") or "object")
+    if kind == "object":
+        if not isinstance(value, dict):
+            return [f"{path} must be an object"]
+        required = schema.get("required", [])
+        if isinstance(required, list):
+            for key in required:
+                if isinstance(key, str) and key not in value:
+                    errors.append(f"{path}.{key} is required")
+        properties = schema.get("properties", {})
+        properties = properties if isinstance(properties, dict) else {}
+        if schema.get("additionalProperties") is False:
+            for key in value:
+                if key not in properties:
+                    errors.append(f"{path}.{key} is not allowed")
+        for key, child in properties.items():
+            if key in value and isinstance(child, dict):
+                errors.extend(_validate_widget_inputs(value[key], child, f"{path}.{key}"))
+        return errors
+    valid = True
+    if kind == "string":
+        valid = isinstance(value, str)
+    elif kind == "boolean":
+        valid = isinstance(value, bool)
+    elif kind == "integer":
+        valid = isinstance(value, int) and not isinstance(value, bool)
+    elif kind == "number":
+        valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+    elif kind == "array":
+        valid = isinstance(value, list)
+    if not valid:
+        return [f"{path} must be {kind}"]
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value not in enum:
+        errors.append(f"{path} must be one of {enum}")
+    if isinstance(value, str):
+        if isinstance(schema.get("minLength"), int) and len(value) < schema["minLength"]:
+            errors.append(f"{path} is too short")
+        if isinstance(schema.get("maxLength"), int) and len(value) > schema["maxLength"]:
+            errors.append(f"{path} is too long")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(schema.get("minimum"), (int, float)) and value < schema["minimum"]:
+            errors.append(f"{path} is below minimum")
+        if isinstance(schema.get("maximum"), (int, float)) and value > schema["maximum"]:
+            errors.append(f"{path} is above maximum")
+    if isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for index, child in enumerate(value):
+            errors.extend(_validate_widget_inputs(child, schema["items"], f"{path}[{index}]"))
+    return errors
+
+
+def _validate_widget_snapshot(payload: Any, declared_actions: set[str]) -> tuple[dict[str, Any] | None, str]:
+    snapshot = payload.get("snapshot") if isinstance(payload, dict) and "snapshot" in payload else payload
+    if not isinstance(snapshot, dict):
+        return None, "widget snapshot must be an object"
+    if snapshot.get("schema_version") != 1:
+        return None, "widget snapshot schema_version must be 1"
+    if str(snapshot.get("state") or "") not in {"ok", "warning", "error", "busy", "disabled"}:
+        return None, "widget snapshot has invalid state"
+    blocks = snapshot.get("blocks", [])
+    if not isinstance(blocks, list):
+        return None, "widget snapshot blocks must be an array"
+    allowed_blocks = {"status", "metric", "list", "text", "progress"}
+    for index, block in enumerate(blocks):
+        if not isinstance(block, dict) or str(block.get("type") or "") not in allowed_blocks:
+            return None, f"widget snapshot block {index} has invalid type"
+    raw_actions = snapshot.get("actions", [])
+    if not isinstance(raw_actions, list):
+        return None, "widget snapshot actions must be an array"
+    for action in raw_actions:
+        action_id = str(action.get("id") or "") if isinstance(action, dict) else ""
+        if action_id not in declared_actions:
+            return None, f"widget snapshot exposes undeclared action '{action_id}'"
+    return dict(snapshot), ""
 
 
 def _cli_payload(plugin: Any) -> dict[str, Any] | None:
@@ -425,13 +532,14 @@ def build_plugin_operation_catalog(
         del request
         modes: list[dict[str, Any]] = []
         views: list[dict[str, Any]] = []
+        widgets: list[dict[str, Any]] = []
         for item in plugin_registry.discover():
             if not item.enabled or item.ui is None:
                 continue
             for mode in item.ui.modes:
                 modes.append(
                     {
-                        "pluginId": item.name,
+                        "pluginId": item.id or item.name,
                         "id": mode.id,
                         "title": mode.title,
                         "entry": str(mode.entry),
@@ -443,7 +551,7 @@ def build_plugin_operation_catalog(
             for view in item.ui.views:
                 views.append(
                     {
-                        "pluginId": item.name,
+                        "pluginId": item.id or item.name,
                         "id": view.id,
                         "title": view.title,
                         "entry": str(view.entry),
@@ -453,7 +561,169 @@ def build_plugin_operation_catalog(
                 )
         modes.sort(key=lambda item: (str(item["pluginId"]), str(item["id"])))
         views.sort(key=lambda item: (str(item["pluginId"]), str(item["id"])))
-        return OperationResult(name="plugin.ui.list", payload={"modes": modes, "views": views})
+        widget_items, widget_errors = widget_index()
+        widgets = [_widget_descriptor(plugin, widget) for plugin, widget in widget_items.values()]
+        widgets.sort(key=lambda item: (int(item["order"]), str(item["pluginId"]), str(item["id"])))
+        return OperationResult(
+            name="plugin.ui.list",
+            payload={"modes": modes, "views": views, "widgets": widgets, "errors": widget_errors},
+        )
+
+    def widget_index() -> tuple[dict[str, tuple[Any, Any]], list[dict[str, Any]]]:
+        candidates: dict[str, list[tuple[Any, Any]]] = {}
+        plugin_ids: dict[str, list[str]] = {}
+        for plugin in plugin_registry.discover():
+            if not plugin.enabled or plugin.ui is None:
+                continue
+            canonical_id = plugin.id or plugin.name
+            plugin_ids.setdefault(canonical_id, []).append(plugin.name)
+            for widget in plugin.ui.sidebar_widgets:
+                candidates.setdefault(widget.id, []).append((plugin, widget))
+        duplicate_plugins = {key for key, names in plugin_ids.items() if len(names) > 1}
+        errors: list[dict[str, Any]] = []
+        resolved: dict[str, tuple[Any, Any]] = {}
+        for widget_id, owners in candidates.items():
+            canonical_owners = [owner.id or owner.name for owner, _widget in owners]
+            if len(owners) != 1 or canonical_owners[0] in duplicate_plugins:
+                errors.append(
+                    {
+                        "id": widget_id,
+                        "error": "widget id or plugin id is not globally unique",
+                        "pluginIds": canonical_owners,
+                    }
+                )
+                continue
+            resolved[widget_id] = owners[0]
+        return resolved, errors
+
+    def widget_scope(request: OperationRequest, widget: Any) -> tuple[dict[str, Any] | None, str]:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        session_metadata = metadata.get("_runtime_session_metadata")
+        session_metadata = session_metadata if isinstance(session_metadata, dict) else {}
+
+        def first(*keys: str) -> str:
+            for source in (metadata, session_metadata, payload):
+                for key in keys:
+                    value = str(source.get(key) or "").strip()
+                    if value:
+                        return value
+            return ""
+
+        scope: dict[str, Any] = {"scope": widget.scope}
+        if widget.scope in {"workspace", "session"}:
+            raw_root = first("work_root", "workRoot") or (str(work_root) if work_root else "")
+            if not raw_root:
+                return None, "work_root is required for this widget"
+            scope["work_root"] = str(Path(raw_root).expanduser().resolve())
+        if widget.scope == "session":
+            thread_id = first("thread_id", "threadId", "session_id", "sessionId")
+            if not thread_id:
+                return None, "thread_id is required for a session widget"
+            scope["thread_id"] = thread_id
+        return scope, ""
+
+    async def plugin_widget_list(request: OperationRequest) -> OperationResult:
+        del request
+        index, errors = widget_index()
+        widgets = [_widget_descriptor(plugin, widget) for plugin, widget in index.values()]
+        widgets.sort(key=lambda item: (int(item["order"]), str(item["pluginId"]), str(item["id"])))
+        return OperationResult(name="plugin.widget.list", payload={"widgets": widgets, "errors": errors})
+
+    async def plugin_widget_get(request: OperationRequest) -> OperationResult:
+        widget_id = str(request.payload.get("id") or "").strip()
+        index, errors = widget_index()
+        target = index.get(widget_id)
+        if target is None:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"widget '{widget_id}' not found or ambiguous", "errors": errors},
+            )
+        plugin, widget = target
+        descriptor = _widget_descriptor(plugin, widget)
+        if not widget.snapshot_operation:
+            return OperationResult(name=request.name, payload={"widget": descriptor, "snapshot": None})
+        canonical_id = plugin.id or plugin.name
+        if catalog.owner_of(widget.snapshot_operation) != canonical_id:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "widget snapshot operation is missing or owned by another plugin"},
+            )
+        scope, error = widget_scope(request, widget)
+        if scope is None:
+            return OperationResult(name=request.name, status="error", payload={"error": error})
+        try:
+            result = await catalog.execute(widget.snapshot_operation, scope, metadata=request.metadata)
+        except Exception as exc:  # noqa: BLE001 - plugin code is an untrusted boundary
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        if result.status != "ok":
+            return OperationResult(name=request.name, status="error", payload=dict(result.payload))
+        snapshot, error = _validate_widget_snapshot(
+            result.payload, {action.id for action in widget.actions}
+        )
+        if snapshot is None:
+            return OperationResult(name=request.name, status="error", payload={"error": error})
+        return OperationResult(name=request.name, payload={"widget": descriptor, "snapshot": snapshot})
+
+    async def plugin_widget_invoke(request: OperationRequest) -> OperationResult:
+        widget_id = str(request.payload.get("id") or "").strip()
+        action_id = str(request.payload.get("action") or "").strip()
+        index, errors = widget_index()
+        target = index.get(widget_id)
+        if target is None:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"widget '{widget_id}' not found or ambiguous", "errors": errors},
+            )
+        plugin, widget = target
+        action = next((item for item in widget.actions if item.id == action_id), None)
+        if action is None:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": f"action '{action_id}' is not declared"}
+            )
+        canonical_id = plugin.id or plugin.name
+        if catalog.owner_of(action.operation) != canonical_id:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "widget action operation is missing or owned by another plugin"},
+            )
+        inputs = request.payload.get("input", {})
+        errors = _validate_widget_inputs(inputs, action.input_schema)
+        if errors:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": "invalid action input", "errors": errors}
+            )
+        if action.dangerous and request.payload.get("confirmed") is not True:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": "dangerous action requires confirmation"}
+            )
+        idempotency_key = str(
+            request.payload.get("idempotency_key") or request.payload.get("idempotencyKey") or ""
+        ).strip()
+        if action.mutates and not idempotency_key:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": "mutating action requires idempotency_key"}
+            )
+        scope, error = widget_scope(request, widget)
+        if scope is None:
+            return OperationResult(name=request.name, status="error", payload={"error": error})
+        action_payload = {**dict(inputs), **scope}
+        if idempotency_key:
+            action_payload["idempotency_key"] = idempotency_key
+        try:
+            result = await catalog.execute(action.operation, action_payload, metadata=request.metadata)
+        except Exception as exc:  # noqa: BLE001 - plugin code is an untrusted boundary
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(
+            name=request.name,
+            status=result.status,
+            payload={"widgetId": widget_id, "action": action_id, "result": dict(result.payload)},
+            metadata=dict(result.metadata),
+        )
 
     async def plugin_enable(request: OperationRequest) -> OperationResult:
         name = str(request.payload.get("name") or "").strip()
@@ -1267,6 +1537,9 @@ def build_plugin_operation_catalog(
 
     catalog.register("plugin.list", plugin_list)
     catalog.register("plugin.ui.list", plugin_ui_list)
+    catalog.register("plugin.widget.list", plugin_widget_list)
+    catalog.register("plugin.widget.get", plugin_widget_get)
+    catalog.register("plugin.widget.invoke", plugin_widget_invoke)
     catalog.register("plugin.install", plugin_install)
     catalog.register("plugin.uninstall", plugin_uninstall)
     catalog.register("plugin.deps-status", plugin_deps_status)
@@ -1333,7 +1606,7 @@ def build_plugin_operation_catalog(
             register_plugin_operations(
                 catalog,
                 declared,
-                plugin_name=item.name,
+                plugin_name=item.id or item.name,
                 work_root=_work_root,
                 data_dir=_data_dir,
                 context=context,

@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from lamtools_core.agent import SUB_AGENT_TOOL_NAME, SubAgentRunResult
 from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
@@ -30,6 +30,86 @@ from lamtools_core.tool.mcp_tools import MCPToolCaller
 
 # Type alias for the attachment-lookup protocol (duck-typed AttachmentService.get).
 AttachmentServiceLike = Any
+
+
+_WORKFLOW_CONTEXT_KEYS = (
+    "parent_session_id",
+    "parent_run_id",
+    "parent_turn_id",
+    "parent_call_id",
+    "cwd",
+    "pause_on_cancel",
+    "permissions",
+    "runtime_permissions",
+    "event_metadata",
+    "attachments",
+    "runtime_snapshot",
+    "snapshot",
+    "environment",
+    "capabilities",
+    "trace_id",
+    "traceId",
+    "correlation_id",
+    "actor_id",
+    "actor_kind",
+    "lineage",
+    "parent_lineage",
+    "workflow_stack",
+    "active_workflows",
+    "depth",
+    "nesting_depth",
+    "max_depth",
+    "max_nesting_depth",
+)
+
+
+def _workflow_context_metadata(
+    execution_context: Any | None,
+    *,
+    attachments: list[str] | None = None,
+) -> dict[str, Any]:
+    """Normalize a workflow context for the RuntimeTurnInput envelope.
+
+    The production path supplies :class:`WorkflowExecutionContext`, while
+    adapters and tests may pass a serialized mapping or a small duck-typed
+    object.  Supporting all three here keeps the runner boundary independent
+    of the workflow plugin's concrete class and preserves aliases used by
+    older hosts.
+    """
+    if execution_context is None:
+        result: dict[str, Any] = {}
+    else:
+        metadata_method = getattr(execution_context, "metadata", None)
+        if callable(metadata_method):
+            try:
+                raw = metadata_method()
+            except Exception:  # noqa: BLE001 - optional context cannot break delegation
+                raw = {}
+        elif isinstance(execution_context, Mapping):
+            raw = execution_context
+        else:
+            raw = {
+                key: getattr(execution_context, key)
+                for key in _WORKFLOW_CONTEXT_KEYS
+                if hasattr(execution_context, key)
+            }
+        source = dict(raw) if isinstance(raw, Mapping) else {}
+        nested = source.get("workflow_execution", source.get("execution_context"))
+        if callable(getattr(nested, "metadata", None)):
+            try:
+                nested = nested.metadata()
+            except Exception:  # noqa: BLE001
+                nested = None
+        result = deepcopy(dict(nested)) if isinstance(nested, Mapping) else {}
+        for key in _WORKFLOW_CONTEXT_KEYS:
+            if key in source:
+                result[key] = deepcopy(source[key])
+
+    # A direct runner caller can provide attachments as the normal sub-agent
+    # argument rather than embedding them in a WorkflowExecutionContext.
+    if attachments and not result.get("attachments"):
+        result["attachments"] = deepcopy(list(attachments))
+    return result
 
 
 def _resolve_model_id_for_capability(model_ref: str) -> str:
@@ -96,6 +176,7 @@ class KernelSubAgentRunner:
         attachment_service: AttachmentServiceLike = None,
         imagegen_config: dict | None = None,
         allow_access_outside_workdir: bool = False,
+        runtime_permissions_provider: Callable[[], Mapping[str, Any] | None] | None = None,
         model_context_sink: Any | None = None,
     ) -> None:
         self.work_root = Path(work_root)
@@ -139,6 +220,7 @@ class KernelSubAgentRunner:
         self.attachment_service = attachment_service
         self.imagegen_config = imagegen_config
         self.allow_access_outside_workdir = allow_access_outside_workdir
+        self.runtime_permissions_provider = runtime_permissions_provider
         self.model_context_sink = model_context_sink
         # Per-session serialization: parallel sub_agent calls with the same
         # agent name share one child session id, so concurrent runs would
@@ -170,6 +252,7 @@ class KernelSubAgentRunner:
             load_tools=self.load_tools,
             active_mode=active_mode,
             allow_access_outside_workdir=self.allow_access_outside_workdir,
+            runtime_permissions_provider=self.runtime_permissions_provider,
         )
 
     def _resolve_mode(self, mode: str) -> str | None:
@@ -236,6 +319,7 @@ class KernelSubAgentRunner:
         parent_run_id: str = "",
         parent_turn_id: str = "",
         allowed_tools: list[str] | None = None,
+        execution_context: Any | None = None,
     ) -> SubAgentRunResult:
         agent_name = normalize_sub_session_agent_name(agent)
         lock = self._session_locks.setdefault(
@@ -252,6 +336,7 @@ class KernelSubAgentRunner:
                 parent_run_id=parent_run_id,
                 parent_turn_id=parent_turn_id,
                 allowed_tools=allowed_tools,
+                execution_context=execution_context,
             )
 
     async def _run_locked(
@@ -266,6 +351,7 @@ class KernelSubAgentRunner:
         parent_run_id: str = "",
         parent_turn_id: str = "",
         allowed_tools: list[str] | None = None,
+        execution_context: Any | None = None,
     ) -> SubAgentRunResult:
         # Resolve model early: the LLM may pass a display_name (e.g. "Kimi-K2.6")
         # instead of a model_id (e.g. "xopkimik26"). Translate to canonical
@@ -304,24 +390,30 @@ class KernelSubAgentRunner:
             model_id=effective_model,
             active_mode=effective_mode,
         )
+        workflow_metadata = _workflow_context_metadata(
+            execution_context,
+            attachments=list(attachments or []),
+        )
         result = await kernel.run(
             RuntimeTurnInput(
                 user_message=task,
                 user_content=user_content if user_content is not task else None,
                 metadata={
+                    **deepcopy(workflow_metadata),
                     "session_id": f"{self.session_prefix}:sub:{agent_name}",
                     "model_id": effective_model,
                     "active_mode": effective_mode,
                     "reasoning_level": self.reasoning_level,
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
+                    **({"workflow_execution": workflow_metadata} if workflow_metadata else {}),
                     "actor_kind": "sub_agent",
                     **(
                         {
                             "runtime_snapshot": deepcopy(self.runtime_snapshot),
                             "runtime_snapshot_fresh": True,
                         }
-                        if self.runtime_snapshot is not None
+                        if self.runtime_snapshot is not None and "runtime_snapshot" not in workflow_metadata
                         else {}
                     ),
                 },
@@ -496,6 +588,7 @@ class KernelSubAgentRunner:
         model: str = "",
         mode: str = "",
         attachments: list[str] | None = None,
+        execution_context: Any | None = None,
     ) -> SubAgentRunResult:
         state = await self.state_store.get(session_id)
         if state is None:
@@ -555,6 +648,7 @@ class KernelSubAgentRunner:
             load_tools=self.load_tools,
             active_mode=self.active_mode,
             allow_access_outside_workdir=self.allow_access_outside_workdir,
+            runtime_permissions_provider=self.runtime_permissions_provider,
         )
         call = approval_toolbox.prepare_approved_call(call)
         tool_result = await approval_toolbox.execute(call)
@@ -614,6 +708,7 @@ class KernelSubAgentRunner:
             model=model,
             mode=mode,
             attachments=attachments,
+            execution_context=execution_context,
         )
         return replace(resumed, tool_call_count=resumed.tool_call_count + 1)
 
@@ -630,6 +725,7 @@ class KernelSubAgentRunner:
         model: str = "",
         mode: str = "",
         attachments: list[str] | None = None,
+        execution_context: Any | None = None,
     ) -> SubAgentRunResult:
         # Same early resolution as run() — translate display_name to model_id.
         effective_model = _resolve_model_id_for_capability(
@@ -653,6 +749,7 @@ class KernelSubAgentRunner:
             load_tools=self.load_tools,
             active_mode=effective_mode,
             allow_access_outside_workdir=self.allow_access_outside_workdir,
+            runtime_permissions_provider=self.runtime_permissions_provider,
         )
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
@@ -670,6 +767,10 @@ class KernelSubAgentRunner:
             model_id=effective_model,
             active_mode=effective_mode,
         )
+        workflow_metadata = _workflow_context_metadata(
+            execution_context,
+            attachments=list(attachments or []),
+        )
         result = await kernel.run(
             RuntimeTurnInput(
                 user_message=task,
@@ -677,15 +778,17 @@ class KernelSubAgentRunner:
                 state=state,
                 run_id=state.run_id,
                 metadata={
+                    **deepcopy(workflow_metadata),
                     "session_id": session_id,
                     "model_id": effective_model,
                     "active_mode": effective_mode,
                     "reasoning_level": self.reasoning_level,
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
+                    **({"workflow_execution": workflow_metadata} if workflow_metadata else {}),
                     **(
                         {"runtime_snapshot": deepcopy(self.runtime_snapshot)}
-                        if self.runtime_snapshot is not None
+                        if self.runtime_snapshot is not None and "runtime_snapshot" not in workflow_metadata
                         else {}
                     ),
                 },

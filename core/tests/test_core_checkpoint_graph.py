@@ -103,6 +103,20 @@ async def test_turn_fork_keeps_selected_turn_and_rollback_removes_it_without_che
         assert forked.payload["mode"] == "conversation_only"
         assert forked.payload["restored"]["workspace"] is False
 
+        fork_session = await sessions.get("turn-fork")
+        assert fork_session is not None
+        assert fork_session.title == "Source（1）"
+        assert fork_session.metadata["work_root"] == str(work_root)
+
+        second_fork = await catalog.execute("session.fork", {
+            "session_id": "turn-source", "turn_id": "turn-1", "new_session_id": "turn-fork-2",
+        })
+        assert second_fork.status == "ok", second_fork.payload
+        second_fork_session = await sessions.get("turn-fork-2")
+        assert second_fork_session is not None
+        assert second_fork_session.title == "Source（2）"
+        assert second_fork_session.metadata["work_root"] == str(work_root)
+
         async with db.session_factory() as session:
             source_events = await db.event_store.list_thread(session, thread_id="turn-source")
             fork_events = await db.event_store.list_thread(session, thread_id="turn-fork")

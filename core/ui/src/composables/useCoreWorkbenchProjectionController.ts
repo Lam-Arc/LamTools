@@ -38,24 +38,24 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
   let previousTurnWasActive = false
   let previousLiveProcessMessageIds = new Set<string>()
 
-  // History windowing: only the most recent N messages are projected/rendered
-  // initially; `loadMoreHistory` widens the window toward older messages. This
+  // History windowing: only the most recent N complete turns are projected/rendered
+  // initially; `loadMoreHistory` widens the window by another complete turn page. This
   // keeps first render of very large threads fast (DOM creation is the
   // dominant cost) while the projection cache keeps identities stable.
-  const historyTail = ref(150)
+  const historyTurnTail = ref(10)
   const hasMoreHistory = ref(false)
   const totalMessages = ref(0)
-  const HISTORY_WINDOW_STEP = 150
+  const HISTORY_TURN_PAGE_SIZE = 10
 
   function resetHistoryWindow(): void {
-    historyTail.value = 150
+    historyTurnTail.value = HISTORY_TURN_PAGE_SIZE
     hasMoreHistory.value = false
     totalMessages.value = 0
   }
 
   function loadMoreHistory(): void {
     if (!hasMoreHistory.value) return
-    historyTail.value += HISTORY_WINDOW_STEP
+    historyTurnTail.value += HISTORY_TURN_PAGE_SIZE
   }
 
   function toggleProcess(id: string): void {
@@ -104,7 +104,7 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
         active: isCoreGuidableTurnStatus(rawStatus),
         shallowThinkingPending: options.shallowThinkingPending.value,
         submittingApprovalRequestIds: options.submittingApprovalRequestIds.value,
-        tailWindow: historyTail.value,
+        tailTurns: historyTurnTail.value,
       }, projectionCache)
       messages.value = [
         ...systemMessages,
@@ -114,9 +114,9 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
       totalMessages.value = projected.total
 
       if (finished) {
-        // The active message was expanded automatically while streaming.
-        // Remove only those ids on completion so unrelated user-expanded
-        // historical messages remain open.
+        // A process summary opened while its turn was live returns to the
+        // normal completed-message summary. Unrelated historical expansions
+        // remain untouched.
         const next = new Set(processExpandedIds.value)
         for (const id of previousLiveProcessMessageIds) next.delete(id)
         processExpandedIds.value = next
@@ -141,6 +141,7 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
       options.status,
       options.submittingApprovalRequestIds,
       options.shallowThinkingPending,
+      historyTurnTail,
     ],
     syncProjection,
     { immediate: true },

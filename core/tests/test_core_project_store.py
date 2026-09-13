@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -15,6 +16,7 @@ from lamtools_core.app.project_store import (
     read_workspace_agents_md,
     write_workspace_agents_md,
 )
+from lamtools_core.app.project_visuals import PROJECT_COLOR_KEYS, PROJECT_ICON_KEYS
 from lamtools_core.session import SessionRecord
 
 
@@ -41,6 +43,8 @@ async def test_create_makes_normalized_workspace_without_initializing_git(tmp_pa
         assert created is True
         assert project.work_root == str(requested_root.resolve())
         assert project.name == "workspace"
+        assert project.icon_key == "folder"
+        assert project.color_key == "gray"
         assert requested_root.resolve().is_dir()
         assert not (requested_root.resolve() / ".git").exists()
         assert [session.metadata for session in await db.project_store.list_sessions(project.id)] == [
@@ -70,6 +74,90 @@ async def test_create_same_normalized_workspace_keeps_original_project_name(tmp_
         assert duplicate.id == first.id
         assert duplicate.name == "First name"
         assert await db.project_store.list() == [first]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_project_visual_metadata_is_controlled_updated_and_synced(tmp_path: Path) -> None:
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        project, _, created = await db.project_store.create_with_initial_session(
+            tmp_path / "workspace",
+            name="Brand",
+            icon_key="idea",
+            color_key="aurora",
+        )
+        assert created is True
+        assert project.to_dict()["icon_key"] == "idea"
+        assert project.to_dict()["color_key"] == "aurora"
+
+        snapshot = await db.sync_journal.sync(cursor=None)
+        assert snapshot["projects"][0]["icon_key"] == "idea"
+        assert snapshot["projects"][0]["color_key"] == "aurora"
+        cursor = await db.sync_journal.current_cursor()
+        updated = await db.project_store.update(
+            project.id,
+            name="Sunday",
+            icon_key="sparkles",
+            color_key="prism",
+        )
+        assert updated is not None
+        assert (updated.name, updated.icon_key, updated.color_key) == ("Sunday", "sparkles", "prism")
+
+        delta = await db.sync_journal.sync(cursor=cursor)
+        assert {
+            "icon_key": "sparkles",
+            "color_key": "prism",
+        }.items() <= delta["changes"][0]["entity"].items()
+
+        with pytest.raises(ValueError, match="Unsupported project icon_key"):
+            await db.project_store.update(project.id, icon_key="terminal")
+        with pytest.raises(ValueError, match="Unsupported project color_key"):
+            await db.project_store.update(project.id, color_key="rainbow")
+        with pytest.raises(ValueError, match="At least one project field"):
+            await db.project_store.update(project.id)
+
+        assert set(PROJECT_ICON_KEYS) == {
+            "folder", "code", "idea", "design", "docs", "work", "rocket", "sparkles",
+        }
+        assert set(PROJECT_COLOR_KEYS) == {
+            "gray", "blue", "violet", "pink", "red", "orange", "green", "cyan",
+            "sunrise", "aurora", "ocean", "violet-sky", "berry", "ember", "forest", "prism",
+        }
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_project_schema_migration_backfills_visual_defaults(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy-project.db"
+    work_root = tmp_path / "legacy-workspace"
+    work_root.mkdir()
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE core_projects (
+                id VARCHAR(64) PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                work_root VARCHAR(2048) NOT NULL UNIQUE,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO core_projects (id, name, work_root, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("legacy", "Legacy", str(work_root), "2026-09-12 00:00:00", "2026-09-12 00:00:00"),
+        )
+
+    db = await open_core_app_db(db_path)
+    try:
+        project = await db.project_store.get("legacy")
+        assert project is not None
+        assert project.icon_key == "folder"
+        assert project.color_key == "gray"
     finally:
         await db.close()
 
@@ -129,6 +217,22 @@ async def test_configured_session_store_routes_direct_creates_to_fallback_projec
             ("MyProject", str(fallback_root.resolve())),
         ]
         assert (await store.get(created.id)).metadata["work_root"] == str(fallback_root.resolve())
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_configured_project_roots_do_not_restrict_project_creation(tmp_path: Path) -> None:
+    fallback_root = tmp_path / "MyProject"
+    arbitrary_root = tmp_path / "anywhere" / "project"
+    db = await open_core_app_db(tmp_path / "core.db", project_roots=[fallback_root])
+    try:
+        project, created = await db.project_store.create(arbitrary_root, name="Anywhere")
+
+        assert created is True
+        assert project.name == "Anywhere"
+        assert project.work_root == str(arbitrary_root.resolve())
+        assert arbitrary_root.is_dir()
     finally:
         await db.close()
 

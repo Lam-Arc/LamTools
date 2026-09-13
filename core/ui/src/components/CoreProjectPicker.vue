@@ -1,7 +1,8 @@
 <template>
   <Teleport :to="teleportTarget">
-    <div class="core-project-picker-backdrop" data-project-picker-backdrop @mousedown.self="emit('cancel')">
+    <div ref="pickerBackdropEl" class="core-project-picker-backdrop" data-project-picker-backdrop>
       <section
+        ref="pickerEl"
         class="core-project-picker"
         role="dialog"
         aria-modal="true"
@@ -38,7 +39,9 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { CoreProject } from '../projects/types'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 withDefaults(defineProps<{
   projects?: CoreProject[]
@@ -52,6 +55,15 @@ const emit = defineEmits<{
   select: [projectId: string]
   cancel: []
 }>()
+
+const pickerBackdropEl = ref<HTMLElement | null>(null)
+const pickerEl = ref<HTMLElement | null>(null)
+
+useOutsidePointerDismiss({
+  overlay: pickerBackdropEl,
+  card: pickerEl,
+  onDismiss: () => emit('cancel'),
+})
 </script>
 
 <style scoped>

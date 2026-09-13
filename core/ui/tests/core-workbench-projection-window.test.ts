@@ -3,7 +3,9 @@ import {
   createCoreWorkbenchProjectionCache,
   hydrateSnapshot,
   selectCoreWorkbenchMessagesWindow,
+  type CoreAppItem,
   type CoreAppSnapshot,
+  type CoreAppTurn,
   type CoreRuntimeItem,
   type CoreRuntimeTurn,
 } from '../src/appServer'
@@ -35,6 +37,54 @@ function snapshotWithTurns(count: number): CoreAppSnapshot {
       item_order: itemOrder,
       turns,
       items,
+    },
+  })
+}
+
+function snapshotWithUserAssistantTurns(count: number): CoreAppSnapshot {
+  const itemOrder: string[] = []
+  const topItems: Record<string, CoreAppItem> = {}
+  const coreOrder: string[] = []
+  const coreItems: Record<string, CoreRuntimeItem> = {}
+  const turns: Record<string, CoreAppTurn> = {}
+  for (let i = 1; i <= count; i += 1) {
+    const turnId = `turn-${i}`
+    const userId = `user-${i}`
+    const assistantId = `assistant-${i}`
+    itemOrder.push(userId)
+    coreOrder.push(assistantId)
+    topItems[userId] = {
+      item_id: userId,
+      turn_id: turnId,
+      seq: i * 2 - 1,
+      type: 'userMessage',
+      content: [{ type: 'text', text: `question ${i}` }],
+    }
+    coreItems[assistantId] = {
+      item_id: assistantId,
+      turn_id: turnId,
+      seq: i * 2,
+      kind: 'message',
+      type: 'agentMessage',
+      status: 'completed',
+      content: `answer ${i}`,
+      payload: { type: 'agentMessage' },
+    }
+    turns[turnId] = { turn_id: turnId, status: 'completed', items: [assistantId] }
+  }
+  return hydrateSnapshot({
+    thread_id: 'thread-window-pairs',
+    snapshot_seq: count * 2,
+    items: topItems,
+    item_order: itemOrder,
+    turns,
+    core: {
+      thread_id: 'thread-window-pairs',
+      snapshot_seq: count * 2,
+      status: 'completed',
+      item_order: coreOrder,
+      turns,
+      items: coreItems,
     },
   })
 }
@@ -75,6 +125,37 @@ describe('workbench projection history window', () => {
     )
     expect(startIndex).toBe(0)
     expect(messages).toHaveLength(3)
+  })
+
+  it('widens an assistant boundary to retain its preceding user message', () => {
+    const { messages, total, startIndex } = selectCoreWorkbenchMessagesWindow(
+      snapshotWithUserAssistantTurns(3),
+      { active: false, tailWindow: 3 },
+    )
+
+    expect(total).toBe(6)
+    expect(startIndex).toBe(2)
+    expect(messages.map(message => [message.role, message.content])).toEqual([
+      ['user', 'question 2'],
+      ['assistant', 'answer 2'],
+      ['user', 'question 3'],
+      ['assistant', 'answer 3'],
+    ])
+  })
+
+  it('projects complete turns and pages them ten turns at a time', () => {
+    const { messages, total, startIndex } = selectCoreWorkbenchMessagesWindow(
+      snapshotWithUserAssistantTurns(12),
+      { active: false, tailTurns: 10 },
+    )
+
+    expect(total).toBe(24)
+    expect(startIndex).toBe(4)
+    expect(messages).toHaveLength(20)
+    expect(messages[0]?.content).toBe('question 3')
+    expect(messages[1]?.content).toBe('answer 3')
+    expect(messages.at(-2)?.content).toBe('question 12')
+    expect(messages.at(-1)?.content).toBe('answer 12')
   })
 
   it('keeps windowed message identity stable and only builds newly revealed ones', () => {

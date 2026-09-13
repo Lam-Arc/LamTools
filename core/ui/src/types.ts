@@ -383,6 +383,9 @@ export interface ProjectGroup {
   id: string;
   name: string;
   workRoot?: string;
+  /** Optional host-provided visual metadata for project navigation. */
+  iconKey?: string;
+  colorKey?: string;
   /** False marks compatibility/read-only groups that cannot be mutated. */
   canManage?: boolean;
   sessions: SessionItem[];

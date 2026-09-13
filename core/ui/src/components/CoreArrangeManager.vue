@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import type { CoreArrangeJob } from '../durable/types'
 import { createDurableApi, type CoreDurableRequest } from '../durable/api'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{
@@ -11,6 +12,8 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ back: [] }>()
 const durable = createDurableApi(props.requestRpc)
+const arrangeOverlayEl = ref<HTMLElement | null>(null)
+const arrangeDialogEl = ref<HTMLElement | null>(null)
 
 const jobs = ref<CoreArrangeJob[]>([])
 const loading = ref(false)
@@ -440,12 +443,18 @@ function onKeydown(e: KeyboardEvent) {
 }
 onMounted(() => document.addEventListener('keydown', onKeydown))
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
+
+useOutsidePointerDismiss({
+  overlay: arrangeOverlayEl,
+  card: arrangeDialogEl,
+  onDismiss: () => emit('back'),
+})
 </script>
 
 <template>
   <Teleport defer to=".workspace-shell">
-    <div class="arrange-overlay" @click.self="$emit('back')">
-      <div class="arrange-dialog">
+    <div ref="arrangeOverlayEl" class="arrange-overlay">
+      <div ref="arrangeDialogEl" class="arrange-dialog">
         <button class="arrange-card-close" type="button" aria-label="关闭安排" title="关闭安排" @click="$emit('back')">
           <X :size="15" :stroke-width="1.8" aria-hidden="true" />
         </button>

@@ -88,6 +88,24 @@
     padding-bottom var(--dur-slow) ease;
 }
 
+/* Workflow owns the central surface (the canvas is not a content-column
+   document). Keep the main header as an overlay and let the plugin root take
+   the complete main card, including the horizontal gutters. */
+.workspace-shell--full-bleed .workspace-main {
+  padding: 0;
+}
+.workspace-shell--full-bleed .workspace-main > .workspace-plugin-header {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: var(--z-popover);
+  pointer-events: none;
+}
+.workspace-shell--full-bleed .workspace-main > :not(.workspace-runtime-overlay):not(.workspace-plugin-header) {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
 @supports (height: 100dvh) {
   .workspace-main {
     height: calc(100dvh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px));
@@ -98,8 +116,8 @@
    Thread — scrollable message/content area
    ========================================================================= */
 .thread {
-  width: min(var(--content-width), 100%);
-  margin: 0 auto;
+  width: calc(100% + var(--main-x-padding) + var(--main-x-padding));
+  margin-inline: calc(-1 * var(--main-x-padding));
   display: grid;
   grid-auto-rows: max-content;
   align-content: start;
@@ -107,6 +125,8 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+  box-sizing: border-box;
+  padding-inline: var(--main-x-padding);
   padding-top: 18px;
   padding-bottom: calc(
     var(--composer-bottom-offset, 0px) +
@@ -115,6 +135,19 @@
   );
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0,0,0,.45) 18px, #000 44px);
   mask-image: linear-gradient(to bottom, transparent 0, rgba(0,0,0,.45) 18px, #000 44px);
+  scrollbar-color: color-mix(in srgb, var(--theme-main-text) 5%, transparent) transparent;
+}
+
+.thread::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--theme-main-text) 5%, transparent);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+.thread::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent);
+  background-clip: content-box;
 }
 
 /* ── Core main-thread empty session ──
@@ -131,32 +164,34 @@
 }
 
 .empty-session-hero {
-  position: absolute;
-  top: 32%;
-  left: 50%;
-  width: min(860px, 100%);
+  position: fixed;
+  top: calc(var(--empty-session-composer-top, 50vh) - var(--space-3));
+  left: calc(var(--main-left) + (100vw - var(--main-left) - var(--main-right)) / 2);
+  z-index: var(--z-stage);
+  width: min(var(--content-width), calc(100vw - var(--main-left) - var(--main-right) - var(--main-x-padding) - var(--main-x-padding)));
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
   isolation: isolate;
   text-align: center;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+}
+
+.empty-session-logo {
+  margin-bottom: var(--space-1);
+  pointer-events: auto;
 }
 
 .empty-session-title {
   position: relative;
   margin: 0;
   color: var(--theme-main-text);
-  font-size: 32px;
-  font-weight: 600;
+  font-size: clamp(20px, 2.2vw, 26px);
+  font-weight: 650;
   letter-spacing: -0.025em;
   line-height: 1.2;
   text-wrap: balance;
-}
-
-.empty-session-description {
-  position: relative;
-  margin: var(--space-3) 0 0;
-  color: color-mix(in srgb, var(--theme-main-text) 62%, transparent);
-  font-size: 14px;
-  line-height: 1.5;
 }
 
 /* ComposerBar is owned by WorkspaceShell, so the host state moves the same
@@ -181,6 +216,22 @@
 }
 .thread-header h1 { font-size: 17px; line-height: 1.2; }
 .thread-header span { color: var(--muted); font-size: 12px; margin-right: 10px; }
+
+/* The Core app's ordinary session header occupies the band immediately below
+   the native titlebar. Pull it through the shared main-surface inset and give
+   it the compact post-first-fix height so its existing divider stays put.
+   Specialized workflow headers intentionally have no marker. */
+@media (min-width: 641px) {
+  .thread-header[data-session-header] {
+    height: calc(var(--space-6) * 2 + var(--space-4) - var(--space-1) - 1px);
+    min-height: 0;
+    margin-top: calc(-1 * var(--space-6) - var(--space-4) + var(--space-1));
+    margin-right: auto;
+    margin-bottom: 0;
+    margin-left: auto;
+    padding: 0;
+  }
+}
 
 /* =========================================================================
    Floating composer — bottom input bar
@@ -240,24 +291,28 @@
 }
 
 /* Treat the empty-session copy and composer as one visual group. The
-   composer remains centered for regular shells, while a small lower offset
-   keeps the new-session copy visible at the minimum desktop window height. */
+   composer remains centered for regular shells, while the empty-session
+   group sits one step lower so its combined visual mass is truly centered. */
 .workspace-shell--empty-session.workspace-shell--composer-center .floating-composer {
-  top: calc(
+  top: var(--empty-session-composer-top);
+}
+
+.workspace-shell--empty-session.workspace-shell--composer-center {
+  --empty-session-composer-top: calc(
     var(--titlebar-offset, 0px) +
     var(--stage-reveal, 0px) +
     (100vh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px) - var(--composer-height, 120px)) / 2 +
-    var(--space-6)
+    calc(var(--space-6) * 2)
   );
 }
 
 @supports (height: 100dvh) {
-  .workspace-shell--empty-session.workspace-shell--composer-center .floating-composer {
-    top: calc(
+  .workspace-shell--empty-session.workspace-shell--composer-center {
+    --empty-session-composer-top: calc(
       var(--titlebar-offset, 0px) +
       var(--stage-reveal, 0px) +
       (100dvh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px) - var(--composer-height, 120px)) / 2 +
-      var(--space-6)
+      calc(var(--space-6) * 2)
     );
   }
 }
@@ -458,6 +513,69 @@
   font-size: 15px; pointer-events: none;
 }
 .floating-composer.dragover .drop-hint { display: grid; }
+
+/* -------------------------------------------------------------------------
+   Workflow composer — compact ComfyUI-style command surface
+   -------------------------------------------------------------------------
+   The shared composer remains one implementation. Workflow mode only
+   changes its presentation: a short one-line pill is the resting state and
+   interaction widens it without replacing the textarea/send affordance.
+   WorkspaceShell supplies the value/stop classes and data attributes so this
+   state is observable to tests and assistive tooling as well as CSS.
+   */
+.workspace-shell--workflow .floating-composer {
+  width: min(420px, var(--composer-full-width));
+  max-width: var(--composer-full-width);
+  border-radius: 999px;
+  transition:
+    left var(--dur-morph) var(--ease-inout),
+    width var(--dur-morph) var(--ease-inout),
+    top var(--dur-morph) var(--ease-inout),
+    bottom var(--dur-morph) var(--ease-inout),
+    border-radius var(--dur-morph) var(--ease-inout);
+}
+.workspace-shell--workflow .floating-composer:hover,
+.workspace-shell--workflow .floating-composer:focus-within,
+.workspace-shell--workflow .composer-root--workflow-has-value .floating-composer,
+.workspace-shell--workflow .composer-root--workflow-stop .floating-composer,
+.workspace-shell--workflow .composer-root[data-workflow-composer-has-value='true'] .floating-composer {
+  width: var(--composer-full-width);
+}
+.workspace-shell--workflow .composer-main-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.workspace-shell--workflow .composer-main-card > .composer-input-wrap,
+.workspace-shell--workflow .composer-main-card > textarea {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
+.workspace-shell--workflow .composer-main-card > .composer-bottom {
+  grid-column: 2;
+  grid-row: 1;
+  padding: var(--space-1) var(--space-2);
+}
+.workspace-shell--workflow .tool-row,
+.workspace-shell--workflow .attachment-tray {
+  display: none;
+}
+.workspace-shell--workflow .floating-composer textarea {
+  min-height: 38px;
+  max-height: 190px;
+  padding: 8px 14px;
+  line-height: 1.4;
+}
+.workspace-shell--workflow .floating-composer .core-send-stop-button {
+  flex: 0 0 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-shell--workflow .floating-composer {
+    transition: none;
+  }
+}
 
 /* =========================================================================
    Density overrides
@@ -2086,13 +2204,19 @@
   /* Drawers become bottom-sheet-style slide-overs with a dimmed backdrop
      (restored from the dropped mobile block — audit 19). */
   .workspace-main {
-    inset: 0;
+    top: var(--titlebar-offset, 0px);
+    right: 0;
+    bottom: 0;
+    left: 0;
     width: auto;
-    height: 100vh;
-    height: 100dvh;
+    height: calc(100vh - var(--titlebar-offset, 0px));
+    height: calc(100dvh - var(--titlebar-offset, 0px));
     min-height: 0;
-    padding-top: calc(58px + env(safe-area-inset-top, 0px));
+    padding-top: calc(var(--space-5) + env(safe-area-inset-top, 0px));
     border-radius: 0;
+  }
+  .workspace-shell--full-bleed .workspace-main {
+    padding: 0;
   }
   .send {
     min-width: 44px;
@@ -2107,12 +2231,28 @@
     transform: none;
   }
   .floating-composer textarea { font-size: 14px; }
-  .empty-session-hero {
-    top: 30%;
-    width: calc(100% - var(--space-4));
+  .workspace-shell--workflow .floating-composer,
+  .workspace-shell--workflow .floating-composer:hover,
+  .workspace-shell--workflow .floating-composer:focus-within,
+  .workspace-shell--workflow .composer-root--workflow-has-value .floating-composer,
+  .workspace-shell--workflow .composer-root--workflow-stop .floating-composer {
+    width: auto;
+    max-width: none;
   }
-  .empty-session-title { font-size: 26px; }
-  .empty-session-description { font-size: 13px; }
+  .empty-session-hero {
+    top: auto;
+    bottom: calc(
+      var(--composer-bottom-offset, 0px) +
+      var(--composer-rest-bottom, var(--space-3)) +
+      var(--composer-height, 120px) +
+      var(--space-3)
+    );
+    left: 50%;
+    width: calc(100% - var(--space-4));
+    transform: translateX(-50%);
+  }
+  .empty-session-logo { --sunday-logo-size: 104px !important; }
+  .empty-session-title { font-size: clamp(18px, 5.4vw, 21px); }
   .workspace-shell--empty-session .floating-composer {
     --composer-rest-bottom: var(--space-3);
   }
@@ -2247,43 +2387,6 @@
 .user-stack .user-bubble {
   max-width: 100%;
 }
-.message-attachment-list {
-  display: flex;
-  max-width: 100%;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-.message-attachment-pill {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 280px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 6%, transparent);
-  color: var(--theme-main-text, #f2efeb);
-  padding: 5px 7px;
-  font-size: 12px;
-  line-height: 1.35;
-}
-.message-attachment-kind {
-  flex: 0 0 auto;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
-  padding: 1px 5px;
-  font-size: 10px;
-  font-weight: 800;
-}
-.message-attachment-name {
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .assistant-row {
   display: flex;
   justify-content: flex-start;
@@ -2650,15 +2753,15 @@
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, transparent);
+  background: color-mix(in srgb, var(--theme-process-icon-color, var(--theme-main-text, #fff)) 44%, transparent);
   flex: 0 0 auto;
 }
 .process-summary-icon.part-dot--running {
-  background: var(--theme-main-text, #fff);
+  background: var(--theme-process-icon-color, var(--theme-main-text, #fff));
   animation: part-pulse 1s ease-in-out infinite;
 }
 .process-summary-icon.part-dot--completed {
-  background: var(--theme-main-text, #fff);
+  background: var(--theme-process-icon-color, var(--theme-main-text, #fff));
 }
 .process-summary-icon.part-dot--error {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%);
@@ -2689,7 +2792,7 @@
   height: 9px;
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
-  border-top-color: var(--green);
+  border-top-color: var(--theme-process-icon-color, var(--theme-main-text, #fff));
   animation: stream-spin .9s linear infinite;
   flex: 0 0 auto;
 }
@@ -2704,16 +2807,16 @@
   color: inherit;
 }
 /* part-dot 状态点 — 以 main area 文字为底，靠动画/混合区分 */
-.part-dot--pending { background: color-mix(in srgb, var(--theme-main-text, #fff) 40%, transparent); }
+.part-dot--pending { background: color-mix(in srgb, var(--orange) 70%, var(--theme-main-text, #fff) 30%); }
 .part-dot--running {
   width: 9px; height: 9px;
   border: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
-  border-top-color: var(--theme-main-text, #fff);
+  border-top-color: var(--theme-process-icon-color, var(--theme-main-text, #fff));
   background: transparent;
   border-radius: 50%;
   animation: stream-spin .9s linear infinite;
 }
-.part-dot--completed { background: var(--theme-main-text, #fff); }
+.part-dot--completed { background: var(--theme-process-icon-color, var(--theme-main-text, #fff)); }
 .part-dot--error { background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%); }
 
 .global-stats-bar {

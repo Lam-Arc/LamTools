@@ -12,7 +12,7 @@ from lamtools_core.app.default_agent import (
 )
 from lamtools_core.app.operation_catalog import OperationResult
 from lamtools_core.app import command_execution
-from lamtools_core.context_compaction import ContextCompactionResult
+from lamtools_core.context_compaction import CompactionExecution, ContextCompactionResult
 from lamtools_core.app.live_hub import CoreAppEventHub
 from lamtools_core.app.base_agent import build_core_plugin_operation_catalog, core_events_to_run_items
 from lamtools_core.event import CoreEvent
@@ -562,7 +562,10 @@ async def test_core_agent_command_execute_compacts_runtime_history(tmp_path):
         encoding="utf-8",
     )
     state_store = InMemoryRuntimeStateStore()
-    state = RuntimeState(session_id="thread-compact")
+    state = RuntimeState(
+        session_id="thread-compact",
+        metadata={"context_window_tokens": 8_000},
+    )
     history = [
         {"role": "user" if index % 2 == 0 else "assistant", "content": f"message-{index}"}
         for index in range(8)
@@ -589,12 +592,33 @@ async def test_core_agent_command_execute_compacts_runtime_history(tmp_path):
 
 @pytest.mark.asyncio
 async def test_manual_compaction_uses_session_model_and_safe_segment_input_limit(monkeypatch):
+    class RuntimeProvider:
+        def __init__(self):
+            self.options = None
+
+        def with_runtime_options(self, **options):
+            self.options = options
+            return self
+
+    provider = RuntimeProvider()
     state_store = InMemoryRuntimeStateStore()
     state = RuntimeState(
         session_id="thread-large-compact",
         metadata={
             "model_id": "session-model",
             "context_window_tokens": 256_000,
+            "max_tokens": 25_565,
+            "runtime_snapshot": {
+                "model_id": "session-model",
+                "reasoning_level": "light",
+                "thinking_enabled": True,
+                "thinking_budget": 10_000,
+            },
+            "runtime_context_metrics": {
+                "context_window_tokens": 230_435,
+                "total_context_window_tokens": 256_000,
+                "reserved_output_tokens": 25_565,
+            },
             "context_compaction": {"summary": "previous compacted summary"},
         },
     )
@@ -604,26 +628,43 @@ async def test_manual_compaction_uses_session_model_and_safe_segment_input_limit
     )
     captured = {}
 
-    async def capture(request):
-        captured["request"] = request
-        return ContextCompactionResult(
-            status="not_needed",
-            trigger="manual",
-            display_payload={"status": "not_needed", "reason": "no_gain"},
+    async def capture(self, messages, **kwargs):
+        captured["controller"] = self
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return CompactionExecution(
+            result=ContextCompactionResult(
+                status="not_needed",
+                trigger="manual",
+                display_payload={"status": "not_needed", "reason": "no_gain"},
+            ),
+            measurement=kwargs["measurement"],
         )
 
-    monkeypatch.setattr(command_execution, "compact_context", capture)
+    monkeypatch.setattr(command_execution.ContextCompactionController, "compact", capture)
 
     await command_execution.compact_runtime_history(
         runtime_state_store=state_store,
         thread_id=state.session_id,
+        llm_client=provider,
         model="default-model",
     )
 
-    request = captured["request"]
-    assert request.model == "session-model"
-    assert request.input_limit_tokens == 256_000
-    assert request.existing_summary == "previous compacted summary"
+    kwargs = captured["kwargs"]
+    assert kwargs["current_model"] == "session-model"
+    assert kwargs["force"] is True
+    assert kwargs["budget"].context_window == 230_435
+    assert kwargs["budget"].trigger_tokens == 184_348
+    assert kwargs["budget"].target_tokens == 138_261
+    assert captured["controller"]._summary_output_tokens is None
+    assert captured["messages"][0].metadata["key"] == "context_compaction_summary"
+    assert captured["messages"][0].content == "previous compacted summary"
+    assert provider.options == {
+        "model_id": "session-model",
+        "reasoning_level": "light",
+        "thinking_enabled": True,
+        "thinking_budget": 10_000,
+    }
 
 
 class _ManualCompactionLLM:
@@ -677,18 +718,85 @@ async def test_manual_compaction_anchors_boundary_at_first_retained_message():
     saved = await store.get("thread-manual-anchor")
     compaction = saved.metadata["context_compaction"]
     boundary = compaction["summary_seq"]
-    # The boundary points at the first retained row (not the history tail),
-    # and the resume marker travels with that row through future rewrites.
+    # The boundary points immediately before the first retained row while the
+    # original durable transcript remains untouched, like auto compaction.
     stored_history = await store.get_history("thread-manual-anchor")
     assert boundary < len(stored_history)
-    assert stored_history[boundary]["metadata"]["lam_compaction_resume"] is True
-    assert "old message 0" not in str(stored_history[boundary]["content"])
-    assert "old message 5" in "\n".join(str(item["content"]) for item in stored_history)
+    assert boundary > 0
+    assert stored_history == history
     # Summary rows never leak into persisted history.
     assert all(
         item.get("metadata", {}).get("key") != "context_compaction_summary"
         for item in stored_history
     )
+
+
+@pytest.mark.asyncio
+async def test_manual_compaction_applies_summary_seq_to_legacy_history_fallback(monkeypatch):
+    class LegacyBlobStore:
+        def __init__(self):
+            self.state = RuntimeState(
+                session_id="thread-legacy-history",
+                metadata={
+                    "context_window_tokens": 8_000,
+                    "context_compaction": {
+                        "summary": "prior summary",
+                        "summary_seq": 2,
+                    },
+                },
+            )
+            self.history = [
+                {"role": "user", "content": f"message-{index}"}
+                for index in range(5)
+            ]
+            self.requested_after_seq: list[int] = []
+
+        async def get(self, _session_id):
+            return self.state
+
+        async def save(self, state):
+            self.state = state
+
+        async def get_history(self, _session_id, *, after_seq=0):
+            # This is the SqlAlchemy store's legacy history_json fallback:
+            # it has no incremental rows and currently returns the whole blob.
+            self.requested_after_seq.append(after_seq)
+            return list(self.history)
+
+        async def history_max_seq(self, _session_id):
+            return len(self.history)
+
+        async def save_checkpoint(self, state, history):
+            self.state = state
+            self.history = list(history)
+
+        async def append_history(self, _session_id, messages):
+            self.history.extend(messages)
+
+        async def replace_history(self, _session_id, messages):
+            self.history = list(messages)
+
+    store = LegacyBlobStore()
+    captured: list[str] = []
+
+    async def capture(self, messages, **kwargs):
+        captured.extend(message.content for message in messages)
+        return CompactionExecution(
+            result=ContextCompactionResult(status="not_needed", trigger="manual"),
+            measurement=kwargs["measurement"],
+        )
+
+    monkeypatch.setattr(command_execution.ContextCompactionController, "compact", capture)
+
+    await command_execution.compact_runtime_history(
+        runtime_state_store=store,
+        thread_id="thread-legacy-history",
+        llm_client=object(),
+        model="mock-model",
+    )
+
+    assert store.requested_after_seq == [2]
+    assert captured == ["prior summary", "message-2", "message-3", "message-4"]
 
 
 def test_core_agent_spec_accepts_member_paths_without_product_names(tmp_path):
@@ -828,7 +936,9 @@ async def test_core_agent_operation_applies_per_turn_model_and_shallow_thinking(
     assert llm.requests[0].model == "turn-model"
     assert llm.requests[0].metadata["thinking_enabled"] is False
     assert llm.requests[0].metadata["thinking_budget"] == 1234
-    assert llm.requests[0].metadata["context_window_tokens"] == 128_000
+    assert llm.requests[0].metadata["context_window_tokens"] == 127_223
+    assert llm.requests[0].metadata["total_context_window_tokens"] == 128_000
+    assert llm.requests[0].metadata["reserved_output_tokens"] == 777
     assert llm.requests[0].max_tokens == 777
     assert llm.requests[0].temperature == 0.4
     state = await state_store.get("thread-runtime-options")
@@ -837,7 +947,7 @@ async def test_core_agent_operation_applies_per_turn_model_and_shallow_thinking(
     assert policy["compact_trigger_tokens"] == 100_000
     assert policy["compact_limit_tokens"] == 75_000
     terminal = next(item for item in result.payload["run_items"] if item["kind"] == "status")
-    assert terminal["usage"]["context_window_tokens"] == 128_000
+    assert terminal["usage"]["context_window_tokens"] == 127_223
     assert terminal["usage"]["estimated_prompt_tokens"] > 0
     assert any(message.content == SHALLOW_THINKING_PROMPT for message in llm.requests[0].messages)
 

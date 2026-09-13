@@ -7,6 +7,7 @@ import type {
   CoreProjectAgents,
   CoreProjectCreatePayload,
   CoreProjectCreateResult,
+  CoreProjectUpdatePayload,
 } from './types'
 
 export interface CoreProjectWorkspaceOptions {
@@ -51,6 +52,11 @@ export function createCoreProjectWorkspaceActions(options: CoreProjectWorkspaceO
     },
     renameProject: async (projectId: string, name: string): Promise<CoreProject> => {
       const updated = await options.client.rename(projectId, name)
+      options.projects.value = upsertById(options.projects.value, updated)
+      return updated
+    },
+    updateProject: async (projectId: string, payload: CoreProjectUpdatePayload): Promise<CoreProject> => {
+      const updated = await options.client.update(projectId, payload)
       options.projects.value = upsertById(options.projects.value, updated)
       return updated
     },

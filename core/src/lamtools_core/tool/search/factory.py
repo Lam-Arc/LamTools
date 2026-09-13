@@ -19,6 +19,7 @@ from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult, ToolResultSta
 from lamtools_core.tool.search.protocol import SearchProvider, SearchResult
 
 DEFAULT_PROVIDER = "baidu"
+DEFAULT_FALLBACK_PROVIDERS = ("ddg", "bing")
 
 _MAX_RESULT_COUNT = 20
 _MAX_CONTENT_LEN = 8000
@@ -71,6 +72,8 @@ def _default_config(work_root: str | None = None, data_dir: str | Path | None = 
         "command": cfg.get("command"),
         "url": cfg.get("url"),
         "transport": cfg.get("transport"),
+        "fallback_providers": cfg.get("fallback_providers", list(DEFAULT_FALLBACK_PROVIDERS)),
+        "proxy_port": cfg.get("proxy_port"),
     }
     provider_cfg = cfg.get(provider)
     if isinstance(provider_cfg, dict):
@@ -83,6 +86,11 @@ def list_providers() -> list[str]:
     return ["baidu", "bing", "ddg"]
 
 
+def _normalize_provider_name(name: str | None) -> str:
+    provider = (name or DEFAULT_PROVIDER).strip().lower()
+    return "ddg" if provider == "duckduckgo" else provider
+
+
 def get_provider(name: str | None = None, config: dict | None = None) -> SearchProvider:
     """按名字构造内核；配置可覆盖（如 websearch.jsonc 中的 baidu={...}）。"""
     from .baidu import BaiduSearchProvider
@@ -90,7 +98,7 @@ def get_provider(name: str | None = None, config: dict | None = None) -> SearchP
     from .duckduckgo import DuckDuckGoSearchProvider
     from .external import ExternalSearchProvider
 
-    provider = (name or DEFAULT_PROVIDER).strip().lower()
+    provider = _normalize_provider_name(name)
     cfg = dict(config or {})
 
     if provider == "baidu":
@@ -131,6 +139,13 @@ def build_web_search_handler(
     cfg = _default_config(work_root, data_dir=data_dir)
     default_provider = get_provider(cfg.get("provider"), cfg)
 
+    raw_fallbacks = cfg.get("fallback_providers", DEFAULT_FALLBACK_PROVIDERS)
+    fallback_names = (
+        [_normalize_provider_name(str(item)) for item in raw_fallbacks]
+        if isinstance(raw_fallbacks, list)
+        else list(DEFAULT_FALLBACK_PROVIDERS)
+    )
+
     async def web_search(call: ToolCall) -> ToolResult:
         args = call.arguments if isinstance(call.arguments, dict) else {}
         query = args.get("query", "")
@@ -150,31 +165,70 @@ def build_web_search_handler(
             if isinstance(raw_domains, list)
             else []
         )
-        provider_name = str(args.get("provider") or "").strip().lower() or None
-        provider = default_provider
-        if provider_name:
+        requested_provider = str(args.get("provider") or "").strip() or None
+        providers: list[SearchProvider] = [default_provider]
+        if requested_provider:
             try:
-                provider = get_provider(provider_name, cfg)
+                providers = [get_provider(requested_provider, cfg)]
             except ValueError:
                 return ToolResult(
                     call_id=call.id, name=call.name, status="failed",
-                    error=f"未知搜索内核: {provider_name}（可选: baidu/bing/ddg 或 subprocess/http）",
+                    error=f"未知搜索内核: {requested_provider}（可选: baidu/bing/ddg 或 subprocess/http）",
                 )
+        else:
+            seen = {default_provider.name}
+            for fallback_name in fallback_names:
+                if fallback_name in seen:
+                    continue
+                try:
+                    fallback = get_provider(fallback_name, cfg)
+                except ValueError:
+                    continue
+                providers.append(fallback)
+                seen.add(fallback.name)
 
-        try:
-            results = await provider.search(query, limit=limit, domains=domains)
-        except Exception as exc:
+        results: list[SearchResult] = []
+        provider = providers[0]
+        response_provider: SearchProvider | None = None
+        provider_errors: dict[str, str] = {}
+        attempted_providers: list[str] = []
+        for candidate in providers:
+            provider = candidate
+            attempted_providers.append(candidate.name)
+            try:
+                results = await candidate.search(query, limit=limit, domains=domains)
+            except Exception as exc:
+                provider_errors[candidate.name] = str(exc)
+                continue
+            response_provider = candidate
+            if results:
+                break
+
+        if not results and len(provider_errors) == len(attempted_providers):
+            errors = "; ".join(f"{name}: {message}" for name, message in provider_errors.items())
             return ToolResult(
                 call_id=call.id, name=call.name, status="failed",
-                error=f"web_search {provider.name} error: {exc}",
-                metadata={"query": query, "provider": provider.name, "result_count": 0, "results": []},
+                error=f"web_search failed ({errors})",
+                metadata={
+                    "query": query,
+                    "provider": provider.name,
+                    "attempted_providers": attempted_providers,
+                    "provider_errors": provider_errors,
+                    "result_count": 0,
+                    "results": [],
+                },
             )
+
+        if not results and response_provider is not None:
+            provider = response_provider
 
         if not results:
             return ToolResult(
                 call_id=call.id, name=call.name, status="ok",
                 content=f"[web_search] No results found for query: {query}",
                 metadata={"query": query, "domains": domains, "provider": provider.name,
+                          "attempted_providers": attempted_providers,
+                          "provider_errors": provider_errors,
                           "result_count": 0, "results": []},
             )
 
@@ -193,6 +247,8 @@ def build_web_search_handler(
                 "query": query,
                 "domains": domains,
                 "provider": provider.name,
+                "attempted_providers": attempted_providers,
+                "provider_errors": provider_errors,
                 "result_count": len(results),
                 "results": results,
             },

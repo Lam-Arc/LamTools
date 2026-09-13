@@ -13,6 +13,11 @@ export {
 export { usePendingAttachments } from './usePendingAttachments'
 
 export {
+  useOutsidePointerDismiss,
+  type OutsidePointerDismissOptions,
+} from './useOutsidePointerDismiss'
+
+export {
   calculateKeyboardInset,
   useComposerLayout,
   type ComposerLayoutOptions,
@@ -81,10 +86,15 @@ export {
 } from './useCoreUiPreferences'
 
 export {
+  CORE_HISTORY_AUTO_LOAD_THRESHOLD_PX,
   CORE_SCROLL_BOTTOM_THRESHOLD_PX,
+  coreApplyHistoryScrollCeiling,
+  coreHistoryAutoLoadThreshold,
   coreIsScrollNearBottom,
+  coreShouldAutoLoadHistory,
   useCoreAutoFollowScroll,
   type CoreAutoFollowScrollController,
+  type CoreScrollSentinel,
   type CoreScrollableElement,
   type UseCoreAutoFollowScrollOptions,
 } from './useCoreAutoFollowScroll'
@@ -93,6 +103,12 @@ export {
   useCoreGoals,
   type UseCoreGoalsOptions,
 } from './useCoreGoals'
+
+export {
+  useRightSidebarLayout,
+  type RightSidebarLayoutOptions,
+  type RightSidebarModuleDefaults,
+} from './useRightSidebarLayout'
 
 export {
   useCoreToast,

@@ -161,6 +161,7 @@ describe('useComposerLayout', () => {
     wrapper.vm.sessionReady = false
     wrapper.vm.sessionKey = 'session-a'
     await nextTick()
+    expect(wrapper.vm.layout.placement.value).toBe('bottom')
     wrapper.vm.sessionReady = true
     await nextTick()
     expect(wrapper.vm.layout.placement.value).toBe('bottom')

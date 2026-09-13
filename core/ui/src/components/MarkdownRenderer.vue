@@ -45,6 +45,7 @@ const props = withDefaults(
 )
 
 const contentRoot = ref<HTMLElement | null>(null)
+let tableCleanup: Array<() => void> = []
 
 // ── Mermaid init ──
 let mermaidApi: typeof import('mermaid').default | null = null
@@ -385,7 +386,78 @@ const renderedHtml = computed(() => {
 function renderStaticHtml(html: string): void {
   if (!contentRoot.value) return
   clearStreamedSegments()
+  clearTableEnhancements()
   contentRoot.value.innerHTML = html
+  enhanceTables()
+}
+
+// Keep a real <table> intact so the browser calculates one shared column grid.
+// The surrounding card owns vertical scrolling, while the dedicated scrollbar
+// above the header translates wide tables horizontally.
+function clearTableEnhancements(): void {
+  for (const cleanup of tableCleanup) cleanup()
+  tableCleanup = []
+}
+
+function enhanceTables(): void {
+  const root = contentRoot.value
+  if (!root) return
+
+  for (const table of root.querySelectorAll<HTMLTableElement>('table')) {
+    if (table.closest('.markdown-table-shell')) continue
+
+    const shell = document.createElement('div')
+    shell.className = 'markdown-table-shell'
+
+    const scrollbar = document.createElement('div')
+    scrollbar.className = 'markdown-table-scrollbar'
+    scrollbar.tabIndex = 0
+    scrollbar.setAttribute('role', 'region')
+    scrollbar.setAttribute('aria-label', '横向滚动表格')
+
+    const scrollTrack = document.createElement('div')
+    scrollTrack.className = 'markdown-table-scroll-track'
+    scrollTrack.setAttribute('aria-hidden', 'true')
+    scrollbar.appendChild(scrollTrack)
+
+    const viewport = document.createElement('div')
+    viewport.className = 'markdown-table-viewport'
+
+    table.before(shell)
+    shell.append(scrollbar, viewport)
+    viewport.appendChild(table)
+
+    const syncTablePosition = () => {
+      table.style.transform = `translate3d(${-scrollbar.scrollLeft}px, 0, 0)`
+    }
+    const updateOverflow = () => {
+      const viewportWidth = viewport.clientWidth
+      const tableWidth = Math.ceil(table.scrollWidth)
+      const overflowing = tableWidth > viewportWidth + 1
+      shell.classList.toggle('markdown-table-shell--overflowing', overflowing)
+      scrollbar.hidden = !overflowing
+      scrollTrack.style.width = `${Math.max(tableWidth, viewportWidth)}px`
+      if (!overflowing && scrollbar.scrollLeft !== 0) scrollbar.scrollLeft = 0
+      syncTablePosition()
+    }
+
+    scrollbar.addEventListener('scroll', syncTablePosition, { passive: true })
+    let resizeObserver: ResizeObserver | null = null
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(updateOverflow)
+      resizeObserver.observe(viewport)
+      resizeObserver.observe(table)
+    } else {
+      window.addEventListener('resize', updateOverflow)
+    }
+    updateOverflow()
+
+    tableCleanup.push(() => {
+      scrollbar.removeEventListener('scroll', syncTablePosition)
+      resizeObserver?.disconnect()
+      if (!resizeObserver) window.removeEventListener('resize', updateOverflow)
+    })
+  }
 }
 
 // ── Render mermaid diagrams after DOM update ──
@@ -495,6 +567,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   contentRoot.value?.removeEventListener('click', onRootClick, true)
+  clearTableEnhancements()
   clearStreamedSegments()
 })
 
@@ -507,6 +580,18 @@ defineExpose({ renderStreaming })
   line-height: 1.5;
   color: var(--theme-main-text, #eee);
   word-break: break-word;
+}
+
+/* Keep prose at a comfortable reading measure while allowing code, tables,
+   diagrams, and other structured output to use the full response width. */
+.markdown-body :deep(p),
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3),
+.markdown-body :deep(h4),
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  max-width: 72ch;
 }
 
 /* Headings */
@@ -583,7 +668,7 @@ defineExpose({ renderStreaming })
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 150ms ease-out, background-color 150ms ease-out, color 150ms ease-out;
+  transition: opacity var(--dur-base) var(--ease-out), background-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 .markdown-body :deep(.code-block:hover .code-copy),
 .markdown-body :deep(.code-block:focus-within .code-copy) {
@@ -635,6 +720,7 @@ defineExpose({ renderStreaming })
 /* Blockquotes */
 .markdown-body :deep(blockquote) {
   margin: 6px 0;
+  max-width: 72ch;
   padding: 6px 14px;
   border-left: 3px solid color-mix(in srgb, var(--theme-main-text, var(--text, currentColor)) 22%, transparent);
   color: color-mix(in srgb, var(--theme-main-text, var(--text, currentColor)) 76%, transparent);
@@ -649,18 +735,62 @@ defineExpose({ renderStreaming })
   text-decoration: underline;
 }
 
-/* Tables — like code blocks, wide tables scroll horizontally inside their
-   own box instead of stretching the message column (which pushes
-   right-aligned user bubbles past the viewport). display:block makes the
-   table box a block scroll container; the internal auto-laid-out table keeps
-   its natural column widths and scrolls when it doesn't fit. */
-.markdown-body :deep(table) {
-  border-collapse: collapse;
-  margin: 8px 0;
+/* Tables render as self-contained cards. The card viewport owns vertical
+   scrolling, so its header can stick without interacting with the thread's
+   top fade mask. */
+.markdown-body :deep(.markdown-table-shell) {
+  position: relative;
   width: 100%;
   max-width: 100%;
-  display: block;
+  min-width: 0;
+  margin: var(--space-2) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius);
+  background: var(--theme-main-background);
+}
+.markdown-body :deep(.code-copy:active) {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-active), transparent);
+  transform: scale(.96);
+}
+.markdown-body :deep(.markdown-table-scrollbar) {
+  position: relative;
+  height: var(--space-3);
   overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--theme-main-solid, var(--theme-main-background));
+}
+.markdown-body :deep(.markdown-table-scrollbar[hidden]) {
+  display: none;
+}
+.markdown-body :deep(.markdown-table-scroll-track) {
+  height: 1px;
+}
+.markdown-body :deep(.markdown-table-viewport) {
+  width: 100%;
+  max-width: 100%;
+  max-height: min(60vh, 480px);
+  min-width: 0;
+  overflow-x: clip;
+  overflow-y: auto;
+}
+.markdown-body :deep(table) {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  margin: 0;
+  table-layout: auto;
+  transform-origin: left top;
+}
+.markdown-body :deep(thead) {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-background-info);
+  background: var(--theme-main-solid, var(--theme-main-background));
+}
+.markdown-body :deep(.markdown-table-shell--overflowing thead) {
+  top: 0;
 }
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
@@ -670,7 +800,7 @@ defineExpose({ renderStreaming })
   font-size: 13px;
 }
 .markdown-body :deep(th) {
-  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 5%, transparent);
+  background: var(--theme-main-soft-background);
   font-weight: 600;
 }
 

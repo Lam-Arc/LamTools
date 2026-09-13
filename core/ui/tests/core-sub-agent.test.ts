@@ -254,7 +254,8 @@ describe('CoreSubAgentDialog and composer reuse', () => {
 
     expect(wrapper.get('dialog').attributes('open')).toBeDefined()
     expect(wrapper.text()).toContain('检查界面')
-    expect(wrapper.text()).toContain('已读取 CoreSubAgentPanel.vue')
+    expect(wrapper.find('.process-card-state-icon--completed').exists()).toBe(true)
+    expect(wrapper.text()).toContain('读取 CoreSubAgentPanel.vue')
     expect(wrapper.find('.composer-bar--embedded').exists()).toBe(true)
 
     await wrapper.get('.composer-bar--embedded textarea').setValue('继续检查')

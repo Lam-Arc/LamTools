@@ -9,6 +9,7 @@ import pytest
 from lamtools_core.app.operation_catalog import OperationResult
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.plugins.bundled.workflow.backend.build_tools import workflow_build_tool_handlers, workflow_build_tool_specs
+from lamtools_core.plugins.bundled.workflow.backend.registry import WorkflowNodeRegistry
 
 
 def _call(arguments: dict, *, session_id: str = "wf_news") -> ToolCall:
@@ -73,6 +74,19 @@ class TestWorkflowBuildSpecs:
         config = specs["workflow_add_node"].input_schema["properties"]["config"]
         assert {"command", "script", "instruction", "workflow_name"} <= set(config["properties"])
 
+    def test_node_kind_catalog_comes_from_supplied_registry(self):
+        registry = WorkflowNodeRegistry()
+        registry.register_schema(
+            {"name": "trusted_custom", "input": {}, "output": {}},
+            plugin_id="trusted-plugin",
+            trusted=True,
+        )
+        specs = {spec.name: spec for spec in workflow_build_tool_specs(registry)}
+        kinds = specs["workflow_add_node"].input_schema["properties"]["kind"]["enum"]
+        assert "model" in kinds
+        assert "trusted_custom" in kinds
+        assert {"ai", "script", "content", "transform", "branch"}.isdisjoint(kinds)
+
 
 class TestWorkflowGraph:
     async def test_empty_graph_when_missing(self, handlers):
@@ -83,10 +97,22 @@ class TestWorkflowGraph:
 
     async def test_reads_existing_graph(self, handlers):
         tool, ops = handlers
-        ops.workflows["news"] = {"name": "news", "nodes": [{"id": "n1", "kind": "command"}], "edges": []}
+        ops.workflows["news"] = {
+            "name": "news",
+            "nodes": [{
+                "id": "n1",
+                "kind": "command",
+                "config": {"command": "echo ok"},
+                "position": {"x": 12, "y": 34},
+            }],
+            "edges": [],
+        }
         result = await tool["workflow_graph"](_call({}))
         assert result.status == "ok"
-        assert result.metadata["operation_payload"]["nodes"][0]["id"] == "n1"
+        node = result.metadata["operation_payload"]["nodes"][0]
+        assert node["id"] == "n1"
+        assert node["params"] == {"command": "echo ok"}
+        assert node["position"] == {"x": 12, "y": 34}
 
     async def test_fails_without_workflow_session(self, handlers):
         tool, ops = handlers

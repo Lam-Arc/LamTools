@@ -63,6 +63,7 @@ from .turn_acceptance import (
     build_turn_acceptance_plan,
 )
 from .runtime_permissions import (
+    RUNTIME_PERMISSION_KEYS,
     load_global_runtime_controls,
     normalize_permission_preset,
     normalize_permission_mode,
@@ -77,6 +78,8 @@ from .runtime_permissions import (
 TERMINAL_TURN_STATUSES = {"completed", "failed", "cancelled", "skipped"}
 DEFAULT_THREAD_HISTORY_CHAR_LIMIT = 200_000
 MAX_THREAD_HISTORY_CHAR_LIMIT = 1_000_000
+DEFAULT_THREAD_HISTORY_TURN_LIMIT = 10
+MAX_THREAD_HISTORY_TURN_LIMIT = 100
 
 SERIALIZED_SESSION_OPERATIONS = frozenset({
     "thread.start",
@@ -530,6 +533,7 @@ async def handle_thread_resume_operation(
             before_item_id=None,
             before_seq=None,
             char_limit=_history_char_limit(params),
+            turn_limit=_history_turn_limit(params),
         )
     return CoreLiveOperationOutcome(
         response=rpc_result(request_id, result)
@@ -606,6 +610,7 @@ async def handle_thread_read_operation(
                     before_item_id=None,
                     before_seq=None,
                     char_limit=_history_char_limit(params),
+                    turn_limit=_history_turn_limit(params),
                 ),
                 **member_payload,
             },
@@ -619,7 +624,7 @@ async def handle_thread_history_operation(
     params: dict[str, Any],
     context: CoreLiveContext,
 ) -> CoreLiveOperationOutcome:
-    """Return one older character-bounded page for an already opened thread."""
+    """Return one older complete-turn page for an already opened thread."""
     thread_id = str(params.get("thread_id") or params.get("threadId") or "").strip()
     before_item_id = str(params.get("before_item_id") or params.get("beforeItemId") or "").strip()
     before_seq = _int_param(params.get("before_seq") or params.get("beforeSeq"), default=0)
@@ -648,6 +653,7 @@ async def handle_thread_history_operation(
                     before_item_id=before_item_id or None,
                     before_seq=before_seq,
                     char_limit=_history_char_limit(params),
+                    turn_limit=_history_turn_limit(params),
                 ),
             },
         )
@@ -659,54 +665,145 @@ def _history_char_limit(params: dict[str, Any]) -> int:
     return max(1_000, min(_int_param(raw, default=DEFAULT_THREAD_HISTORY_CHAR_LIMIT), MAX_THREAD_HISTORY_CHAR_LIMIT))
 
 
+def _history_turn_limit(params: dict[str, Any]) -> int:
+    raw = params.get("turn_limit") or params.get("turnLimit")
+    return max(1, min(_int_param(raw, default=DEFAULT_THREAD_HISTORY_TURN_LIMIT), MAX_THREAD_HISTORY_TURN_LIMIT))
+
+
 def _character_page_snapshot(
     snapshot: dict[str, Any],
     *,
     before_item_id: str | None,
     before_seq: int | None,
     char_limit: int,
+    turn_limit: int | None = None,
 ) -> dict[str, Any]:
     """Keep snapshot metadata but include only one newest-first item page.
 
-    The budget is measured over compact UTF-8 JSON for each item. One item is
-    always returned even when that item alone exceeds the requested budget.
+    When ``turn_limit`` is provided, complete turns are the atomic page unit;
+    the character budget becomes informational and never splits a turn. The
+    legacy character-only mode remains for direct compatibility callers.
     Artifact bodies are available through artifact operations and never ride
     with conversation pages.
     """
     page = deepcopy(snapshot)
     core = page.get("core") if isinstance(page.get("core"), dict) else {}
-    raw_items = core.get("items") if isinstance(core.get("items"), dict) else {}
-    raw_order = core.get("item_order") if isinstance(core.get("item_order"), list) else list(raw_items)
-    ordered: list[tuple[int, str, dict[str, Any]]] = []
+    raw_core_items = core.get("items") if isinstance(core.get("items"), dict) else {}
+    raw_core_order = (
+        core.get("item_order")
+        if isinstance(core.get("item_order"), list)
+        else list(raw_core_items)
+    )
+    raw_top_items = page.get("items") if isinstance(page.get("items"), dict) else {}
+    raw_top_order = (
+        page.get("item_order")
+        if isinstance(page.get("item_order"), list)
+        else list(raw_top_items)
+    )
+    turn_id_by_item: dict[str, str] = {}
+    for raw_turns in (page.get("turns"), core.get("turns")):
+        if not isinstance(raw_turns, dict):
+            continue
+        for raw_turn_id, raw_turn in raw_turns.items():
+            if not isinstance(raw_turn, dict):
+                continue
+            turn_id = str(raw_turn.get("turn_id") or raw_turn_id)
+            for raw_item_id in raw_turn.get("items") or []:
+                turn_id_by_item.setdefault(str(raw_item_id), turn_id)
+
+    # User messages live in the top-level item map while assistant process
+    # items live in ``core``. Paging only the latter made the user side of a
+    # large turn unreachable: its id could never become a history cursor.
+    # Build one thread-global timeline, matching the UI's seq-based merge.
+    ordered_by_id: dict[str, tuple[int, int, int, str, int, str]] = {}
+    for source_rank, (raw_order, raw_items) in enumerate(
+        ((raw_top_order, raw_top_items), (raw_core_order, raw_core_items))
+    ):
+        for index, raw_id in enumerate(raw_order, 1):
+            item_id = str(raw_id)
+            item = raw_items.get(item_id)
+            if not isinstance(item, dict):
+                continue
+            seq = _int_param(item.get("seq") or item.get("last_seq"), default=index)
+            item_chars = len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+            turn_id = str(item.get("turn_id") or turn_id_by_item.get(item_id) or "")
+            previous = ordered_by_id.get(item_id)
+            if previous is None:
+                ordered_by_id[item_id] = (seq, source_rank, index, item_id, item_chars, turn_id)
+            else:
+                ordered_by_id[item_id] = (
+                    *previous[:4],
+                    previous[4] + item_chars,
+                    previous[5] or turn_id,
+                )
+    full_order = sorted(ordered_by_id.values(), key=lambda entry: entry[:4])
+
     before_index = None
     if before_item_id:
-        try:
-            before_index = [str(value) for value in raw_order].index(before_item_id)
-        except ValueError:
-            before_index = None
-    for index, raw_id in enumerate(raw_order, 1):
-        if before_index is not None and index > before_index:
-            break
-        item_id = str(raw_id)
-        item = raw_items.get(item_id)
-        if not isinstance(item, dict):
-            continue
-        seq = _int_param(item.get("seq") or item.get("last_seq"), default=index)
-        if before_index is not None or before_seq is None or seq < before_seq:
-            ordered.append((seq, item_id, item))
+        before_index = next(
+            (index for index, entry in enumerate(full_order) if entry[3] == before_item_id),
+            None,
+        )
+    if before_index is not None:
+        ordered = full_order[:before_index]
+    elif before_seq is not None:
+        ordered = [entry for entry in full_order if entry[0] < before_seq]
+    else:
+        ordered = full_order
 
-    selected: list[tuple[int, str, dict[str, Any]]] = []
-    character_count = 0
-    for seq, item_id, item in reversed(ordered):
-        item_chars = len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
-        if selected and character_count + item_chars > char_limit:
-            break
-        selected.append((seq, item_id, item))
-        character_count += item_chars
-    selected.reverse()
-    selected_ids = {item_id for _, item_id, _ in selected}
-    earliest_seq = min((seq for seq, _, _ in selected), default=None)
+    selected: list[tuple[int, int, int, str, int, str]] = []
+    if turn_limit is not None:
+        selected_turns: set[str] = set()
+        for entry in reversed(ordered):
+            turn_key = entry[5] or f"item:{entry[3]}"
+            if turn_key not in selected_turns and len(selected_turns) >= turn_limit:
+                continue
+            selected_turns.add(turn_key)
+        selected = [
+            entry
+            for entry in ordered
+            if (entry[5] or f"item:{entry[3]}") in selected_turns
+        ]
+    else:
+        character_count = 0
+        for entry in reversed(ordered):
+            item_chars = entry[4]
+            if selected and character_count + item_chars > char_limit:
+                break
+            selected.append(entry)
+            character_count += item_chars
+        selected.reverse()
+    character_count = sum(entry[4] for entry in selected)
+    selected_ids = {entry[3] for entry in selected}
+    earliest_seq = min((entry[0] for entry in selected), default=None)
     has_more = len(selected) < len(ordered)
+
+    # If a page begins inside an assistant turn, retain the user inputs that
+    # causally precede the visible assistant items. They are lightweight turn
+    # anchors, do not affect the contiguous history cursor, and prevent an
+    # assistant-only first render for a large single-turn thread.
+    selected_turn_max_seq: dict[str, int] = {}
+    for seq, _, _, item_id, _, _turn_id in selected:
+        item = raw_core_items.get(item_id)
+        turn_id = str(item.get("turn_id") or "") if isinstance(item, dict) else ""
+        if turn_id:
+            selected_turn_max_seq[turn_id] = max(selected_turn_max_seq.get(turn_id, seq), seq)
+    context_user_ids: set[str] = set()
+    for index, raw_id in enumerate(raw_top_order, 1):
+        item_id = str(raw_id)
+        item = raw_top_items.get(item_id)
+        if not isinstance(item, dict) or str(item.get("type") or "") != "userMessage":
+            continue
+        turn_id = str(item.get("turn_id") or "")
+        max_seq = selected_turn_max_seq.get(turn_id)
+        seq = _int_param(item.get("seq") or item.get("last_seq"), default=index)
+        if max_seq is not None and seq <= max_seq:
+            context_user_ids.add(item_id)
+    visible_ids = selected_ids | context_user_ids
+    character_count += sum(
+        len(json.dumps(raw_top_items[item_id], ensure_ascii=False, separators=(",", ":")))
+        for item_id in context_user_ids - selected_ids
+    )
 
     def filtered_turns(value: Any) -> dict[str, Any]:
         if not isinstance(value, dict):
@@ -716,31 +813,39 @@ def _character_page_snapshot(
             if not isinstance(raw_turn, dict):
                 continue
             turn_items = [str(item_id) for item_id in raw_turn.get("items") or []]
-            kept = [item_id for item_id in turn_items if item_id in selected_ids]
+            kept = [item_id for item_id in turn_items if item_id in visible_ids]
             if kept or str(raw_turn.get("status") or "") in ACTIVE_TURN_STATUSES:
                 result[str(turn_id)] = {**raw_turn, "items": kept}
         return result
 
-    selected_items = {item_id: item for _, item_id, item in selected}
-    selected_order = [item_id for _, item_id, _ in selected]
-    core["items"] = selected_items
-    core["item_order"] = selected_order
+    core["items"] = {
+        item_id: item for item_id, item in raw_core_items.items() if item_id in selected_ids
+    }
+    core["item_order"] = [
+        str(item_id) for item_id in raw_core_order if str(item_id) in selected_ids
+    ]
     core["turns"] = filtered_turns(core.get("turns"))
     core["artifacts"] = {}
     core["seen_event_ids"] = []
     page["core"] = core
-    page["items"] = {item_id: item for item_id, item in (page.get("items") or {}).items() if item_id in selected_ids} if isinstance(page.get("items"), dict) else {}
-    page["item_order"] = [item_id for item_id in page.get("item_order") or [] if str(item_id) in selected_ids]
+    page["items"] = {
+        item_id: item for item_id, item in raw_top_items.items() if item_id in visible_ids
+    }
+    page["item_order"] = [
+        str(item_id) for item_id in raw_top_order if str(item_id) in visible_ids
+    ]
     page["turns"] = filtered_turns(page.get("turns"))
     page["artifacts"] = {}
     page["seen_event_ids"] = []
     page["history_page"] = {
         "char_limit": char_limit,
         "character_count": character_count,
-        "item_count": len(selected),
-        "total_items": len(raw_order),
+        "turn_limit": turn_limit,
+        "turn_count": len({entry[5] or f"item:{entry[3]}" for entry in selected}),
+        "item_count": len(visible_ids),
+        "total_items": len(full_order),
         "has_more": has_more,
-        "next_before_item_id": selected[0][1] if has_more and selected else None,
+        "next_before_item_id": selected[0][3] if has_more and selected else None,
         "next_before_seq": earliest_seq if has_more else None,
     }
     return page
@@ -823,8 +928,9 @@ async def handle_turn_start_operation(
     user_item_id = str(params.get("user_item_id") or params.get("userItemId") or f"{turn_id}:user")
     run_claimed = False
 
-    # Resolve once, before acceptance.  The result is copied into the
-    # acceptance event and is the only permission source for this turn.
+    # Capture the session's initial permission state in the acceptance event.
+    # Running toolboxes refresh these fields from the session before each tool
+    # boundary, while the remaining runtime options stay turn-scoped.
     try:
         resolved = await _resolve_turn_approval_policy(context=context, params={**params, "thread_id": thread_id})
     except ValueError as exc:
@@ -1218,12 +1324,12 @@ def _runtime_snapshot_with_turn_options(
 
 
 def _queue_runtime_snapshot(item: dict[str, Any]) -> dict[str, Any]:
-    """Return the queue item's frozen runtime snapshot.
+    """Return the queue item's persisted runtime snapshot.
 
     New queue records always contain the canonical snapshot written by
     ``queue/create``.  Older records may not have one; their compatibility
-    fallback is deliberately conservative and does not consult the current
-    Composer or global settings during dispatch.
+    fallback is deliberately conservative. Dispatch overlays the current
+    session permission fields before starting the queued turn.
     """
     raw = item.get("runtime_snapshot") if isinstance(item, dict) else None
     if isinstance(raw, dict):
@@ -1693,10 +1799,8 @@ async def handle_approval_respond_operation(
         thread_id = ""
         run_id = ""
         try:
-            # Approval continuation must use the snapshot persisted by the
-            # paused runtime state.  Never resolve against current Composer or
-            # global settings here; those may have changed since the request
-            # was presented.
+            # Keep the paused turn's model/runtime options, but overlay the
+            # session's current permission state before continuing.
             approval_params = dict(params)
             approval_thread_id = _thread_id_from_params(approval_params)
             approval_params.setdefault("approval_policy", "require")
@@ -1717,18 +1821,29 @@ async def handle_approval_respond_operation(
                     finder = getattr(state_store, "find_pending_approval", None)
                     if approval_request_id and callable(finder):
                         approval_state = await finder(approval_request_id)
+                if approval_state is not None and not approval_thread_id:
+                    approval_thread_id = str(approval_state.session_id or "").strip()
                 raw_snapshot = (
                     approval_state.metadata.get("runtime_snapshot")
                     if approval_state is not None and isinstance(approval_state.metadata, dict)
                     else None
                 )
-                if isinstance(raw_snapshot, dict):
-                    approval_params["runtime_snapshot"] = deepcopy(raw_snapshot)
-                    parsed_permissions = permissions_from_snapshot(raw_snapshot)
-                    if parsed_permissions is not None:
-                        approval_params.update(parsed_permissions.to_dict())
-                if approval_state is not None and not approval_thread_id:
-                    approval_thread_id = str(approval_state.session_id or "").strip()
+                if approval_thread_id:
+                    current_permissions = await _resolve_turn_approval_policy(
+                        context=context,
+                        params={"thread_id": approval_thread_id},
+                    )
+                    current_snapshot = current_permissions["runtime_snapshot"]
+                    merged_snapshot = deepcopy(raw_snapshot) if isinstance(raw_snapshot, dict) else {}
+                    for key in RUNTIME_PERMISSION_KEYS:
+                        if key in current_snapshot:
+                            merged_snapshot[key] = deepcopy(current_snapshot[key])
+                    approval_params["runtime_snapshot"] = merged_snapshot
+                    approval_params.update({
+                        key: deepcopy(current_snapshot[key])
+                        for key in RUNTIME_PERMISSION_KEYS
+                        if key in current_snapshot
+                    })
             if approval_thread_id and expected_revision is not None:
                 await context.persistence.write(
                     lambda db: context.persistence.assert_revision(
@@ -1803,6 +1918,125 @@ async def handle_approval_respond_operation(
         if thread_id and run_id:
             context.host.runtime_task_registry.release_run(thread_id, run_id=run_id)
     return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
+
+
+async def handle_session_permissions_set_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    """Persist a live session preset and release an existing approval."""
+    thread_id = _thread_id_from_params(params)
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+    try:
+        preset = normalize_permission_preset(
+            params.get("permission_preset", params.get("permissionPreset"))
+        )
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
+        )
+
+    session_store = context.host.session_store
+    if session_store is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="session store is unavailable")
+        )
+    record = await session_store.get(thread_id)
+    if record is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="session not found")
+        )
+    metadata = with_session_runtime_preferences(
+        record.metadata,
+        permission_preset=preset,
+    )
+    patch = getattr(session_store, "patch", None)
+    if not callable(patch):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="session update is unavailable")
+        )
+    updated = await patch(
+        thread_id,
+        metadata=metadata,
+        expected_revision=expected_revision,
+    )
+    if updated is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="session not found")
+        )
+
+    session_event = {
+        "method": "session/updated",
+        "thread_id": thread_id,
+        "payload": {
+            "session": {
+                "id": updated.id,
+                "metadata": updated.metadata,
+            }
+        },
+    }
+    await context.hub.publish(session_event)
+
+    approval_status = "not_pending"
+    if preset in {"auto", "full_access"} and context.host.runtime_state_store is not None:
+        state = await context.host.runtime_state_store.get(thread_id)
+        pending = (
+            state.metadata.get("pending_approval")
+            if state is not None and isinstance(state.metadata, dict)
+            else None
+        )
+        pending_call = pending.get("tool_call") if isinstance(pending, dict) else None
+        pending_status = str(pending.get("status") or "waiting") if isinstance(pending, dict) else ""
+        approval_request_id = str(
+            (
+                pending.get("request_id")
+                or (pending_call.get("id") if isinstance(pending_call, dict) else "")
+            )
+            if isinstance(pending, dict)
+            else ""
+        ).strip()
+        if isinstance(pending_call, dict) and str(pending_call.get("name") or "") == "question":
+            approval_status = "user_input_required"
+        if (
+            isinstance(pending_call, dict)
+            and str(pending_call.get("name") or "") != "question"
+            and pending_status == "waiting"
+            and approval_request_id
+        ):
+            approval_outcome = await handle_approval_respond_operation(
+                request_id=None,
+                params={
+                    "thread_id": thread_id,
+                    "request_id": approval_request_id,
+                    "decision": "approve_once",
+                    "guidance": "",
+                },
+                context=context,
+            )
+            approval_status = (
+                "accepted"
+                if isinstance(approval_outcome.response, dict)
+                and "result" in approval_outcome.response
+                else "failed"
+            )
+
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {
+                "thread_id": thread_id,
+                "permission_preset": preset,
+                "approval_status": approval_status,
+                "session": updated.to_dict(),
+            },
+        )
+    )
 
 
 async def handle_queue_create_operation(
@@ -2533,6 +2767,11 @@ async def _dispatch_next_queue_item(
     queued_candidate = next_dispatchable_queue_item(current_snapshot)
     if queued_candidate is None:
         return
+    live_permissions = await _resolve_turn_approval_policy(
+        context=context,
+        params={"thread_id": thread_id},
+    )
+    live_permission_snapshot = live_permissions["runtime_snapshot"]
     context.host.runtime_task_registry.release_run(thread_id, run_id=completed_turn_id)
     claimed_turn_id = ""
 
@@ -2552,6 +2791,9 @@ async def _dispatch_next_queue_item(
         try:
             queued_work_root = str(queued.get("work_root") or work_root)
             runtime_snapshot = _queue_runtime_snapshot(queued)
+            for key in RUNTIME_PERMISSION_KEYS:
+                if key in live_permission_snapshot:
+                    runtime_snapshot[key] = deepcopy(live_permission_snapshot[key])
             prepared = PreparedLiveInput(
                 visible_input=visible_input,
                 runtime_input=runtime_input,
@@ -2816,7 +3058,12 @@ async def recover_stale_active_turns(*, context: "CoreLiveContext") -> int:
     """
     try:
         async with context.session_factory() as db:
-            thread_ids = await context.persistence.list_thread_ids(db)
+            list_active = getattr(context.persistence, "list_active_thread_ids", None)
+            thread_ids = (
+                await list_active(db)
+                if callable(list_active)
+                else await context.persistence.list_thread_ids(db)
+            )
     except BaseException:
         _logger.exception("[live:recover] failed to enumerate threads")
         return 0
@@ -3410,6 +3657,7 @@ _CORE_LIVE_OPERATION_EXECUTORS = {
     "turn.force_reset": handle_turn_force_reset_operation,
     "turn.steer": handle_turn_steer_operation,
     "approval.respond": handle_approval_respond_operation,
+    "session.permissions.set": handle_session_permissions_set_operation,
     "command.catalog": handle_command_catalog_operation,
     "command.execute": handle_command_execute_operation,
     "attachment.list": handle_attachment_list_operation,
@@ -3432,6 +3680,7 @@ __all__ = [
     "handle_queue_guidance_operation",
     "handle_queue_update_operation",
     "handle_approval_respond_operation",
+    "handle_session_permissions_set_operation",
     "handle_thread_read_operation",
     "handle_thread_history_operation",
     "handle_thread_start_operation",

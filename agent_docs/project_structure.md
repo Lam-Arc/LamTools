@@ -9,6 +9,9 @@ feature-level inventories belong in their module documentation.
 - `core/`: active Core product. Python backend is under
   `core/src/lamtools_core/`; shared Vue/TypeScript UI is under `core/ui/`;
   the Tauri desktop shell is under `core/desktop/`.
+- `core/ui/src/right-sidebar/` contains the right-rail module contracts and
+  `core/ui/src/components/RightSidebar*.vue` contains the host, module frame,
+  layout editor, widget renderer, and built-in Runtime/Web Search/RAG surfaces.
 - `core/mobile/` is the mobile client surface; `core/remote/relay/` contains
   the opaque relay surface. `core/tests/`, `core/ui/tests/`, `core/config/`,
   `core/docs/`, `core/skills/`, and `core/templates/` support Core.
@@ -28,6 +31,16 @@ feature-level inventories belong in their module documentation.
   `mcp`, `mem`, `attachment`, `artifact`, `export`, and `update` provide the
   Core execution, model, tool, durable-runtime, configuration, extension,
   content, export, and update domains.
+- `core/src/lamtools_core/plugins/bundled/workflow/backend/` owns the Workflow
+  registry and schemas, V2 document/compiler/adapters, durable runtime, queue,
+  event history, snapshots, cache, activations, expression evaluator, and
+  DataPacket/credential/capability contracts. Its UI sibling owns the dynamic
+  node catalog, schema editor, canvas, run/queue/resource panels, and trigger
+  surface.
+- `lamtools_core.plugins` owns widget manifests, validation, scoped operation
+  dispatch, and the `plugin.widget.*` RPCs; the bundled Web Search plugin owns
+  its snapshot/health operations. The CLI mirrors widget list/show/action
+  access.
 - `core/ui/src` exposes the shared `LamToolsApp`, Workbench, workspace shell,
   session/chat/composer components, runtime/settings/project/plugin surfaces,
   transport helpers, and shared types through `core/ui/src/index.ts`.
@@ -48,6 +61,13 @@ feature-level inventories belong in their module documentation.
   `/api/core/app-server` using the `core.app_server.v1` JSON-RPC/event
   protocol. REST endpoints cover health, sessions, configuration, projects,
   attachments, plugins, and related operations.
+- Plugin widget operations are available through the app-server's
+  `plugin.widget.list/get/invoke` methods. The sidebar host consumes those
+  descriptors and snapshots while preserving a mobile right rail.
+- Workflow RPC and CLI operations expose document validation, execution,
+  history/queue inspection, activation/deactivation, and durable resume/signal
+  behavior. Workflow invokes Agent/Model/plugin nodes through explicit
+  `WorkflowExecutionContext` adapters rather than shared runtime state.
 - In Tauri, Rust publishes a dynamically selected loopback backend URL through
   `get_api_base`; the desktop bootstrap constructs DirectTransport and passes
   the resulting runtime to the shared UI.
@@ -61,5 +81,7 @@ feature-level inventories belong in their module documentation.
 
 - Python tests live in `core/tests/` and are configured by `core/pyproject.toml`.
 - UI contract/unit tests live in `core/ui/tests/` and run through Vitest.
+- Workflow backend coverage is under `core/tests/test_workflow_*.py`; Workflow
+  UI contracts are under `core/ui/tests/workflow-*.test.ts`.
 - Desktop pet logic has a Node test script; native Rust tests are colocated
   with the Tauri source. End-to-end material is under `e2e/`.

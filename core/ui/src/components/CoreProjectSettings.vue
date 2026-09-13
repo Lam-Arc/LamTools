@@ -1,10 +1,10 @@
 <template>
   <Teleport to="body">
     <div
+      ref="settingsOverlayEl"
       class="settings-overlay"
-      @click.self="$emit('close')"
     >
-      <div class="settings-card">
+      <div ref="settingsCardEl" class="settings-card">
         <SettingsShell
           :sections="sections"
           :title="`${project.name} · 项目设置`"
@@ -12,7 +12,7 @@
           @close="$emit('close')"
         >
           <template #default="{ activeSection }">
-            <!-- 项目分区：重命名 + work root + AGENTS.md -->
+            <!-- 项目分区：即时保存的名称/外观 + work root + AGENTS.md -->
             <section v-if="activeSection === 'project'" class="settings-panel">
               <header class="settings-title">
                 <h1>项目</h1>
@@ -20,7 +20,7 @@
               </header>
 
               <article class="setting-card">
-                <form @submit.prevent="emit('rename-project', projectNameInput)" class="core-project-rename">
+                <form class="core-project-rename" @submit.prevent="commitProjectName">
                   <label>
                     <span>项目名称</span>
                     <input
@@ -28,15 +28,50 @@
                       class="field-input"
                       data-project-name-input
                       :disabled="projectActionLoading"
+                      @change="commitProjectName"
+                      @blur="commitProjectName"
+                      @keydown.enter.prevent="commitProjectName"
                     />
                   </label>
-                  <div class="core-project-management-actions">
-                    <button type="submit" class="small-btn primary" :disabled="projectActionLoading || !projectNameInput.trim()">
-                      {{ projectActionLoading ? '保存中' : '重命名' }}
-                    </button>
-                  </div>
                 </form>
+                <div class="core-project-visual-settings">
+                  <div class="core-project-visual-heading">
+                    <span>项目外观</span>
+                    <small>用于侧边栏中的项目辨识。</small>
+                  </div>
+                  <ProjectVisualPicker
+                    :icon-key="projectIconKey"
+                    :color-key="projectColorKey"
+                    :disabled="projectActionLoading"
+                    @update:icon-key="selectProjectIcon"
+                    @update:color-key="selectProjectColor"
+                  />
+                </div>
+                <p v-if="projectActionLoading" class="project-save-status" role="status">正在保存项目更改…</p>
                 <p v-if="project.workRoot" class="hook-meta">工作根目录：<code>{{ project.workRoot }}</code></p>
+              </article>
+
+              <article v-if="sessionId" class="setting-card project-session-card" data-project-session>
+                <div class="project-session-heading">
+                  <div class="project-session-details">
+                    <span>当前会话</span>
+                    <code data-project-session-id>#{{ sessionId.slice(0, 8) }}</code>
+                  </div>
+                  <button
+                    class="text-btn project-session-copy"
+                    :class="{ 'is-copied': copiedSessionId }"
+                    type="button"
+                    data-project-session-copy
+                    :data-copied="copiedSessionId ? '' : undefined"
+                    :aria-label="copiedSessionId ? '已复制完整会话 ID' : '复制完整会话 ID'"
+                    :title="copiedSessionId ? '已复制完整会话 ID' : '复制完整会话 ID'"
+                    @click="copySessionId"
+                  >
+                    <Check v-if="copiedSessionId" :size="14" :stroke-width="1.8" aria-hidden="true" />
+                    <Copy v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+                    <span>{{ copiedSessionId ? '已复制' : '复制完整 ID' }}</span>
+                  </button>
+                </div>
               </article>
 
               <article class="setting-card">
@@ -88,6 +123,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { Check, Copy } from 'lucide-vue-next'
 import {
   gradientFromStops,
   relativeLuminance,
@@ -95,16 +131,23 @@ import {
 } from '../helpers/theme'
 import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
+import ProjectVisualPicker from './ProjectVisualPicker.vue'
 import type { CoreSettingsModel } from './CoreSettings.vue'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
+import { copyText } from '../helpers/clipboard'
+import type { CoreProjectColorKey, CoreProjectIconKey } from '../projects/types'
 
 export interface CoreProjectSettingsProject {
   id: string
   name: string
   workRoot?: string
+  iconKey: CoreProjectIconKey
+  colorKey: CoreProjectColorKey
 }
 
 const props = defineProps<{
   project: CoreProjectSettingsProject
+  sessionId?: string | null
   theme: ThemeData
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   models?: CoreSettingsModel[]
@@ -120,6 +163,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   'rename-project': [name: string]
+  'update-project-visual': [iconKey: CoreProjectIconKey, colorKey: CoreProjectColorKey]
   'save-agents': [content: string]
   'refresh-agents': []
 }>()
@@ -131,15 +175,86 @@ const sections: SettingsSection[] = [
 
 // Local mirrors of draft inputs so editing doesn't mutate parent state per keystroke.
 const projectNameInput = ref(props.projectNameDraft)
+const projectIconKey = ref<CoreProjectIconKey>(props.project.iconKey)
+const projectColorKey = ref<CoreProjectColorKey>(props.project.colorKey)
+const pendingName = ref<string | null>(null)
+const pendingVisual = ref<string | null>(null)
 const agentsDraft = ref(props.agentsContent)
+const copiedSessionId = ref(false)
+let copiedSessionIdTimer: ReturnType<typeof setTimeout> | null = null
+const settingsOverlayEl = ref<HTMLElement | null>(null)
+const settingsCardEl = ref<HTMLElement | null>(null)
 
 watch(() => props.projectNameDraft, (value) => { projectNameInput.value = value })
+watch(() => props.project.iconKey, (value) => { projectIconKey.value = value })
+watch(() => props.project.colorKey, (value) => { projectColorKey.value = value })
 watch(() => props.agentsContent, (value) => { agentsDraft.value = value })
+watch(() => props.sessionId, () => {
+  copiedSessionId.value = false
+  if (copiedSessionIdTimer) clearTimeout(copiedSessionIdTimer)
+  copiedSessionIdTimer = null
+})
+watch(() => props.projectActionLoading, (loading) => {
+  if (loading) return
+  pendingName.value = null
+  pendingVisual.value = null
+})
 // When switching projects (id changes), resync drafts.
 watch(() => props.project.id, () => {
   projectNameInput.value = props.projectNameDraft
+  projectIconKey.value = props.project.iconKey
+  projectColorKey.value = props.project.colorKey
+  pendingName.value = null
+  pendingVisual.value = null
   agentsDraft.value = props.agentsContent
 })
+
+function commitProjectName(): void {
+  const name = projectNameInput.value.trim()
+  if (!name) {
+    projectNameInput.value = props.project.name
+    return
+  }
+  if (name === props.project.name || name === pendingName.value || props.projectActionLoading) return
+  projectNameInput.value = name
+  pendingName.value = name
+  emit('rename-project', name)
+}
+
+function commitProjectVisual(iconKey: CoreProjectIconKey, colorKey: CoreProjectColorKey): void {
+  const next = `${iconKey}:${colorKey}`
+  const current = `${props.project.iconKey}:${props.project.colorKey}`
+  if (next === current || next === pendingVisual.value || props.projectActionLoading) return
+  pendingVisual.value = next
+  emit('update-project-visual', iconKey, colorKey)
+}
+
+function selectProjectIcon(iconKey: CoreProjectIconKey): void {
+  projectIconKey.value = iconKey
+  commitProjectVisual(iconKey, projectColorKey.value)
+}
+
+function selectProjectColor(colorKey: CoreProjectColorKey): void {
+  projectColorKey.value = colorKey
+  commitProjectVisual(projectIconKey.value, colorKey)
+}
+
+async function copySessionId(): Promise<void> {
+  const sessionId = props.sessionId
+  if (!sessionId) return
+  try {
+    await copyText(sessionId)
+  } catch {
+    // Clipboard access can be unavailable in an embedded desktop context.
+    return
+  }
+  copiedSessionId.value = true
+  if (copiedSessionIdTimer) clearTimeout(copiedSessionIdTimer)
+  copiedSessionIdTimer = setTimeout(() => {
+    copiedSessionId.value = false
+    copiedSessionIdTimer = null
+  }, 1400)
+}
 
 const settingsThemeStyle = computed(() => {
   const lightMain = relativeLuminance(props.theme.mainText) < 0.45
@@ -182,8 +297,17 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
 }
 
+useOutsidePointerDismiss({
+  overlay: settingsOverlayEl,
+  card: settingsCardEl,
+  onDismiss: () => emit('close'),
+})
+
 onMounted(() => document.addEventListener('keydown', onKeydown))
-onUnmounted(() => document.removeEventListener('keydown', onKeydown))
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeydown)
+  if (copiedSessionIdTimer) clearTimeout(copiedSessionIdTimer)
+})
 </script>
 
 <style scoped>
@@ -243,16 +367,70 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   padding: 0 9px;
 }
 
-.core-project-management-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
+.core-project-visual-settings {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text) 10%, transparent);
 }
 
-.small-btn.primary {
-  background: var(--settings-control-background, #343331);
-  color: var(--settings-control-text, var(--text));
+.core-project-visual-heading {
+  display: grid;
+  gap: var(--space-1);
+  color: color-mix(in srgb, var(--settings-main-text) 72%, transparent);
+  font-size: 12px;
+}
+
+.core-project-visual-heading small {
+  color: color-mix(in srgb, var(--settings-main-text) 52%, transparent);
+  font-size: 11px;
+}
+
+.project-save-status {
+  margin: var(--space-3) 0 0;
+  color: color-mix(in srgb, var(--settings-main-text) 62%, transparent);
+  font-size: 12px;
+}
+
+.project-session-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.project-session-details {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: color-mix(in srgb, var(--settings-main-text) 65%, transparent);
+  font-size: 12px;
+}
+
+.project-session-details code {
+  color: var(--settings-main-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.project-session-copy {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  padding-inline: var(--space-2);
+  color: color-mix(in srgb, var(--settings-main-text) 65%, transparent);
+}
+
+.project-session-copy:hover {
+  background: color-mix(in srgb, var(--settings-main-text) var(--alpha-hover), transparent);
+  color: var(--settings-main-text);
+}
+
+.project-session-copy.is-copied {
+  color: var(--green);
 }
 
 .guide-editor {

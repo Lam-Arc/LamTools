@@ -9,6 +9,7 @@ from lamtools_core.config.defaults import (
     ensure_default_config_files,
 )
 from lamtools_core.config.root import core_config_dir
+from lamtools_core.tool.loadtools import load_loadtools
 
 
 def test_ensure_default_config_files_creates_every_default(tmp_path, isolated_config_root):
@@ -57,6 +58,12 @@ def test_ensure_default_config_files_is_idempotent(tmp_path, isolated_config_roo
     agents.write_text("# My custom global instructions\n", encoding="utf-8")
     assert ensure_default_config_files() == []
     assert agents.read_text(encoding="utf-8") == "# My custom global instructions\n"
+
+
+def test_bundled_consider_mode_includes_web_search():
+    modes = load_loadtools(bundled_resources_dir() / "loadtools.jsonc")
+
+    assert "web_search" in modes["consider"].tool_set
 
 
 def test_ensure_default_config_files_never_overwrites_existing(tmp_path, isolated_config_root):

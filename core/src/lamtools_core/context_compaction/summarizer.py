@@ -6,7 +6,7 @@ import inspect
 from typing import Any
 
 from lamtools_core.context_compaction_budget import SummaryTokenBudget
-from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest
+from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, normalize_finish_reason
 from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.llm.retry import (
     ModelRetryExhausted,
@@ -274,6 +274,12 @@ async def _summarize_compaction_chunk(
                     retry_policy=retry_policy,
                     on_retry=on_model_retry,
                 )
+                finish_reason = normalize_finish_reason(response.finish_reason)
+                if finish_reason != "stop":
+                    raise ContextCompactionError(
+                        "Context compaction failed: model completion ended with "
+                        f"finish_reason={finish_reason}"
+                    )
                 content = (response.content or "").strip()
             except ModelRetryExhausted as exc:
                 detail = exc.last_error if exc.attempts <= 1 else exc
@@ -336,6 +342,7 @@ async def stream_compaction_content(
 ) -> tuple[str, bool]:
     parts: list[str] = []
     emitted_delta = False
+    completed = False
     async for event in stream_with_retry(
         llm_client,
         request,
@@ -344,11 +351,28 @@ async def stream_compaction_content(
         retry_policy=retry_policy,
         on_retry=on_model_retry,
     ):
+        raw_finish_reason = event.finish_reason or (
+            event.metadata.get("finish_reason") if event.metadata else None
+        )
+        if raw_finish_reason:
+            finish_reason = normalize_finish_reason(str(raw_finish_reason))
+            if finish_reason != "stop":
+                raise ContextCompactionError(
+                    "Context compaction failed: model stream ended with "
+                    f"finish_reason={finish_reason}"
+                )
+            completed = True
+        if event.kind in {"finish", "done"}:
+            completed = True
         if event.kind == "content_delta" and event.content:
             parts.append(event.content)
             if on_delta is not None:
                 await emit_compaction_delta(on_delta, event.content)
                 emitted_delta = True
+    if not completed:
+        raise ContextCompactionError(
+            "Context compaction failed: model stream ended before a completion signal"
+        )
     return "".join(parts).strip(), emitted_delta
 
 

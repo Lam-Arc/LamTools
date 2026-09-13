@@ -13,8 +13,18 @@
       </label>
       <label class="field">
         <span class="field-label">类型</span>
-        <UiSelect :model-value="node.kind" :options="kindOptions" :hide-arrow="true" @update:model-value="onKind" />
+        <span class="field-value wf-node-type-label">{{ node.type_id || node.kind }}</span>
       </label>
+
+      <SchemaNodeEditor
+        v-if="schema"
+        :schema="schema"
+        :model-value="schemaValues"
+        :ports="node.ports"
+        :exclude-keys="schemaExcludedKeys"
+        @update:model-value="schemaValues = $event"
+        @update:ports="useSchemaPorts"
+      />
 
       <!-- Port editor (common to all kinds) -->
       <div class="port-editor">
@@ -47,7 +57,7 @@
               aria-label="输出端口类型"
               @update:model-value="p.type = $event"
             />
-            <AutoTextarea v-if="node.kind === 'content'" v-model="p.value" :min-rows="2" :max-rows="4" placeholder="常量值" />
+            <AutoTextarea v-if="node.kind === 'content' || node.kind === 'constant'" v-model="p.value" :min-rows="2" :max-rows="4" placeholder="常量值" />
             <button class="port-del" type="button" @click="outputPorts.splice(i, 1)">
               <X :size="11" :stroke-width="2" aria-hidden="true" />
             </button>
@@ -56,26 +66,27 @@
         </div>
       </div>
 
-      <!-- AI (merges llm + agent, mode selects strategy) -->
-      <template v-if="node.kind === 'ai'">
+      <!-- AI remains a compatibility editor. Canonical Model and Agent share
+           the stable instruction/model fields but do not use AI's mode switch. -->
+      <template v-if="['ai', 'model', 'agent'].includes(node.kind)">
         <p v-if="outputPorts.length" class="hint">输出端口 = JSON 字段（强制 JSON 输出）</p>
-        <label class="field">
+        <label v-if="node.kind === 'ai'" class="field">
           <span class="field-label">模式</span>
           <UiSelect :model-value="mode" :options="modeOptions" @update:model-value="mode = $event" />
         </label>
-        <label v-if="mode === 'loop'" class="field">
+        <label v-if="node.kind === 'ai' && mode === 'loop'" class="field">
           <span class="field-label">最大迭代</span>
           <input v-model.number="loopMax" type="number" min="1" />
         </label>
         <label class="field field-wide">
-          <span class="field-label">指令（支持 {{ interpHint }} 插值）</span>
-          <AutoTextarea v-model="instruction" :min-rows="2" :max-rows="4" :placeholder="mode === 'agent' ? '让 agent 完成的目标…' : '系统提示词…'" />
+          <span class="field-label">{{ node.kind === 'agent' ? '目标' : '指令' }}（支持 {{ interpHint }} 插值）</span>
+          <AutoTextarea v-model="instruction" :min-rows="2" :max-rows="4" :placeholder="node.kind === 'agent' ? '让 agent 完成的目标…' : '系统提示词…'" />
         </label>
-        <label class="field field-wide">
+        <label v-if="node.kind === 'ai'" class="field field-wide">
           <span class="field-label">输出格式（文本说明，可选）</span>
           <AutoTextarea v-model="outputFormatText" :min-rows="2" :max-rows="4" placeholder="可选：自然语言格式说明" />
         </label>
-        <label v-if="mode === 'agent'" class="field field-wide">
+        <label v-if="node.kind === 'agent'" class="field field-wide">
           <span class="field-label">工具集</span>
           <div class="wf-tool-checklist">
             <label v-for="t in toolList" :key="t.name" class="wf-tool-check">
@@ -111,7 +122,7 @@
       </template>
 
       <!-- Script: Python binder -->
-      <template v-else-if="node.kind === 'script'">
+      <template v-else-if="node.kind === 'script' || node.kind === 'python'">
         <p v-if="outputPorts.length" class="hint">输出端口 = 给同名变量赋值</p>
         <label class="field field-wide"><span class="field-label">Python 脚本</span><AutoTextarea v-model="command" :min-rows="2" :max-rows="4" placeholder="y = x * 2" /></label>
         <p class="field-hint">{{ scriptContractHint }}</p>
@@ -144,7 +155,7 @@
       </template>
 
       <!-- Error handling (common, collapsible) -->
-      <details v-if="['ai','command','script','subgraph'].includes(node.kind)" class="settings-advanced">
+      <details v-if="canConfigureExecution" class="settings-advanced">
         <summary>错误处理</summary>
         <label class="field">
           <span class="field-label">策略</span>
@@ -169,7 +180,8 @@ import { computed, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import UiSelect from '../../../../../../ui/src/components/UiSelect.vue'
 import AutoTextarea from '../../../../../../ui/src/components/AutoTextarea.vue'
-import type { WorkflowNode, WorkflowNodeKind, WorkflowPort } from './types'
+import SchemaNodeEditor from './SchemaNodeEditor.vue'
+import type { WorkflowNode, WorkflowNodeSchema, WorkflowPort } from './types'
 
 interface SelectOption {
   value: string
@@ -180,6 +192,7 @@ const props = defineProps<{
   node: WorkflowNode
   anchor: { x: number; y: number }
   availableTools?: Array<{ name: string; description: string }>
+  schema?: WorkflowNodeSchema | null
 }>()
 const emit = defineEmits<{
   close: []
@@ -194,13 +207,6 @@ const cardStyle = computed(() => {
   return { left: `${left}px`, top: `${top}px` }
 })
 
-const kindOptions: SelectOption[] = [
-  { value: 'ai', label: 'AI' },
-  { value: 'command', label: 'Command' },
-  { value: 'script', label: 'Script' },
-  { value: 'content', label: 'Content' },
-  { value: 'subgraph', label: 'Subgraph' },
-]
 const modeOptions: SelectOption[] = [
   { value: 'single', label: '单次 (single)' },
   { value: 'loop', label: '自迭代 (loop)' },
@@ -236,13 +242,25 @@ const scriptContractHint = '输入端口名直接当变量用（节点 IN a → 
 const title = ref(props.node.title)
 
 // Port editor: split into inputs/outputs refs for easy add/remove.
-interface PortEdit { name: string; type: string; value?: unknown }
+interface PortEdit {
+  id?: string
+  name: string
+  type: string
+  description?: string
+  required?: boolean
+  lazy?: boolean
+  value?: unknown
+}
+function toPortEdit(port: WorkflowPort): PortEdit {
+  return { ...port }
+}
 const inputPorts = ref<PortEdit[]>(
-  props.node.ports.filter((p) => p.direction === 'in').map((p) => ({ name: p.name, type: p.type })),
+  props.node.ports.filter((p) => p.direction === 'in').map(toPortEdit),
 )
 const outputPorts = ref<PortEdit[]>(
-  props.node.ports.filter((p) => p.direction === 'out').map((p) => ({ name: p.name, type: p.type, value: p.value ?? '' })),
+  props.node.ports.filter((p) => p.direction === 'out').map(toPortEdit),
 )
+const schemaValues = ref<Record<string, unknown>>({ ...props.node.config })
 
 // LLM / Agent
 const instruction = ref(String(props.node.config.instruction ?? props.node.config.system_prompt ?? ''))
@@ -291,38 +309,53 @@ watch(
   () => props.node.id,
   () => {
     title.value = props.node.title
-    inputPorts.value = props.node.ports.filter((p) => p.direction === 'in').map((p) => ({ name: p.name, type: p.type }))
-    outputPorts.value = props.node.ports.filter((p) => p.direction === 'out').map((p) => ({ name: p.name, type: p.type, value: p.value ?? '' }))
+    inputPorts.value = props.node.ports.filter((p) => p.direction === 'in').map(toPortEdit)
+    outputPorts.value = props.node.ports.filter((p) => p.direction === 'out').map(toPortEdit)
+    schemaValues.value = { ...props.node.config }
     instruction.value = String(props.node.config.instruction ?? props.node.config.system_prompt ?? '')
     command.value = String(props.node.config.command ?? props.node.config.script ?? '')
   },
 )
 
-function onKind(v: string) {
-  emit('update', { ...props.node, kind: v as WorkflowNodeKind })
+const schemaExcludedKeys = computed(() => {
+  if (['ai', 'model', 'agent'].includes(props.node.kind)) return ['instruction', 'system_prompt', 'output_format_text', 'mode', 'loop_max_iterations', 'model_id', 'temperature', 'reasoning_effort', 'max_tokens', 'top_p', 'retries', 'tools', 'allowed_tools', 'allow_tools']
+  if (props.node.kind === 'command') return ['command', 'cwd', 'timeout', 'retries']
+  if (props.node.kind === 'script' || props.node.kind === 'python') return ['script', 'timeout', 'retries']
+  if (props.node.kind === 'subgraph') return ['workflow_name', 'iterate', 'max_iterations', 'condition', 'retries']
+  return []
+})
+
+const canConfigureExecution = computed(() => !['content', 'constant', 'input', 'output'].includes(props.node.kind))
+
+function useSchemaPorts(next: WorkflowPort[]): void {
+  inputPorts.value = next.filter((port) => port.direction === 'in').map(toPortEdit)
+  outputPorts.value = next.filter((port) => port.direction === 'out').map(toPortEdit)
 }
 
 function apply() {
   // Rebuild ports from the editor refs.
   const ports: WorkflowPort[] = [
-    ...inputPorts.value.filter((p) => p.name).map((p) => ({ name: p.name, type: p.type, direction: 'in' as const })),
+    ...inputPorts.value.filter((p) => p.name).map((p) => ({ ...p, name: p.name, type: p.type, direction: 'in' as const })),
     ...outputPorts.value.filter((p) => p.name).map((p) => ({
+      ...p,
       name: p.name,
       type: p.type,
       direction: 'out' as const,
-      ...(props.node.kind === 'content' && p.value !== undefined ? { value: p.value } : {}),
     })),
   ]
 
   const cfg: Record<string, unknown> = { ...props.node.config }
-  if (props.node.kind === 'ai') {
+  Object.assign(cfg, schemaValues.value)
+  if (['ai', 'model', 'agent'].includes(props.node.kind)) {
     cfg.instruction = instruction.value
-    cfg.output_format_text = outputFormatText.value
-    cfg.mode = mode.value
-    if (mode.value === 'loop') cfg.loop_max_iterations = loopMax.value
-    if (mode.value === 'agent') {
+    if (props.node.kind === 'ai') {
+      cfg.output_format_text = outputFormatText.value
+      cfg.mode = mode.value
+      if (mode.value === 'loop') cfg.loop_max_iterations = loopMax.value
+    }
+    if (props.node.kind === 'agent' || (props.node.kind === 'ai' && mode.value === 'agent')) {
       cfg.tools = [...selectedTools.value]
-    } else {
+    } else if (props.node.kind === 'ai') {
       cfg.allow_tools = allowTools.value
       if (allowTools.value) cfg.allowed_tools = [...selectedTools.value]
     }
@@ -337,7 +370,7 @@ function apply() {
     if (cwd.value) cfg.cwd = cwd.value
     if (timeout.value !== '') cfg.timeout = timeout.value
     cfg.retries = retries.value
-  } else if (props.node.kind === 'script') {
+  } else if (props.node.kind === 'script' || props.node.kind === 'python') {
     // Auto-extend the scaffold when ports were added/renamed: for each output
     // port whose assignment line (`name =`) is missing from the script, append
     // a `name = None  # TODO` placeholder; for each input port whose name
@@ -371,7 +404,7 @@ function apply() {
     cfg.retries = retries.value
   }
   // Error handling config (common to executable kinds).
-  if (['ai','command','script','subgraph'].includes(props.node.kind) && onErrorStrategy.value !== 'abort') {
+  if (canConfigureExecution.value && onErrorStrategy.value !== 'abort') {
     const onErr: Record<string, unknown> = { strategy: onErrorStrategy.value }
     if (onErrorStrategy.value === 'fallback') {
       onErr.fallback_port = onErrorFallbackPort.value
@@ -382,7 +415,6 @@ function apply() {
   // content: no config needed — values are in ports.
 
   emit('update', { ...props.node, title: title.value, config: cfg, ports })
-  emit('close')
 }
 </script>
 
@@ -425,6 +457,17 @@ function apply() {
 .wf-edit-card :deep(.field) { display: flex; flex-direction: column; gap: 4px; }
 .wf-edit-card :deep(.field-wide) { grid-column: 1 / -1; }
 .wf-edit-card :deep(.field-label) { font-size: 11px; opacity: 0.65; }
+.wf-node-type-label {
+  display: block;
+  min-height: 30px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-subtle-background);
+  color: color-mix(in srgb, var(--theme-main-text) 68%, transparent);
+  font: 11px var(--font-mono, monospace);
+}
 .wf-edit-card :deep(.field-hint) { font-size: 10.5px; opacity: 0.5; line-height: 1.4; margin: 0; }
 .wf-edit-card :deep(.field input),
 .wf-edit-card :deep(.field textarea) {

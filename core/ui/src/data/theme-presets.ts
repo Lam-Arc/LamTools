@@ -1,5 +1,10 @@
 /** Shared, low-saturation theme presets. */
-import type { ThemeData, ThemePreset } from '../helpers/theme'
+import {
+  SUNDAY_DARK_THEME,
+  SUNDAY_LIGHT_THEME,
+  type ThemeData,
+  type ThemePreset,
+} from '../helpers/theme'
 
 const theme = (overrides: Partial<ThemeData>): Partial<ThemeData> => overrides
 const solid = (color: string) => [{ color, position: 0 }]
@@ -8,6 +13,7 @@ const neutralDark = theme({
   mainStops: solid('#151515'), mainAngle: 180, mainText: '#f2efeb', mainOpacity: 1,
   composerStops: solid('#303030'), composerAngle: 180, composerText: '#f2efeb', composerOpacity: 1,
   controlStops: solid('#3d3d3d'), controlAngle: 180, controlText: '#f3eee8', controlOpacity: 1,
+  processIconColor: '#a493ff',
 })
 
 const neutralLight = theme({
@@ -15,6 +21,7 @@ const neutralLight = theme({
   mainStops: solid('#f8f8ef'), mainAngle: 180, mainText: '#1f1f1f', mainOpacity: 1,
   composerStops: solid('#efefef'), composerAngle: 180, composerText: '#1f1f1f', composerOpacity: 1,
   controlStops: solid('#d8d8d8'), controlAngle: 180, controlText: '#1f1f1f', controlOpacity: 1,
+  processIconColor: '#6554d9',
 })
 const berryTealBackdrop = {
   backdropStops: [
@@ -87,6 +94,11 @@ const morningMistLightTheme = {
 }
 
 export const THEME_PRESETS: ThemePreset[] = [
+  {
+    id: 'sunday', group: 'theme', name: 'Sunday', note: '暖白底色与粉紫蓝光感。',
+    method: '以暖白工作区承载内容，粉紫蓝只出现在背景、控件和过程图标。', rationale: '在长时间使用的克制界面中保留 Sunday 的亲和与生命力。',
+    theme: SUNDAY_DARK_THEME, lightTheme: SUNDAY_LIGHT_THEME, darkTheme: SUNDAY_DARK_THEME,
+  },
   {
     id: 'default', group: 'theme', name: '默认', note: '克制的中性灰阶。',
     method: '工作区域保持纯色，颜色只用于控件层级。', rationale: '适合长时间处理任务与配置。',

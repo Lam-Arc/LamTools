@@ -111,8 +111,8 @@
     </p>
 
     <!-- 插件配置卡片（浮层，非行内展开） -->
-    <div v-if="configPlugin" class="editor-overlay" @click.self="closeConfig">
-      <div class="editor-popover plugin-config-popover">
+    <div v-if="configPlugin" ref="editorOverlayEl" class="editor-overlay">
+      <div ref="editorPopoverEl" class="editor-popover plugin-config-popover">
         <p v-if="error" class="skill-error editor-error" role="alert">{{ error }}</p>
         <div class="editor-popover-head">
           <h3>{{ configPlugin.name }} <span class="plugin-version">{{ configPlugin.version }}</span></h3>
@@ -290,6 +290,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Settings, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
 import FolderBrowserDialog from './FolderBrowserDialog.vue'
 import type { LamToolsTransport } from '../transport'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 interface PluginToolDecl {
   name: string
@@ -409,6 +410,8 @@ async function onDrop(e: DragEvent) {
 
 // 配置卡片（浮层）：当前打开的插件
 const configPlugin = ref<PluginItem | null>(null)
+const editorOverlayEl = ref<HTMLElement | null>(null)
+const editorPopoverEl = ref<HTMLElement | null>(null)
 const configDraft = ref<Record<string, unknown>>({})
 const arrayDraft = ref<Record<string, string[]>>({})
 const schemaProps = ref<SchemaProp[]>([])
@@ -557,6 +560,13 @@ function closeConfig() {
   browseDialogOpen.value = false
   pendingBrowseResolve = null
 }
+
+useOutsidePointerDismiss({
+  overlay: editorOverlayEl,
+  card: editorPopoverEl,
+  isActive: () => Boolean(configPlugin.value),
+  onDismiss: closeConfig,
+})
 
 async function loadConfig(plugin: PluginItem) {
   schemaLoading.value = true

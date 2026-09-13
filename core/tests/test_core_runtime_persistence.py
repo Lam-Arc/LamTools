@@ -8,12 +8,34 @@ import pytest
 from sqlalchemy import text
 
 import lamtools_core.app.default_agent as default_agent
+import lamtools_core.app.core_db as core_db_module
 from lamtools_core.app import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from lamtools_core.app.core_db import RuntimeStateConflictError, open_core_app_db
 from lamtools_core.app.event_store import AppEventInput
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.runtime import RuntimeState
 from lamtools_core.tool import ToolResult
+
+
+@pytest.mark.asyncio
+async def test_open_core_app_db_skips_completed_schema_migrations(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "versioned.db"
+    first = await open_core_app_db(db_path)
+    await first.close()
+
+    async def fail_if_repeated(*_args, **_kwargs) -> None:
+        raise AssertionError("completed schema migration ran again")
+
+    monkeypatch.setattr(core_db_module, "_migrate_core_app_schema", fail_if_repeated)
+    second = await open_core_app_db(db_path)
+    try:
+        async with second.session_factory() as connection:
+            version = await connection.scalar(
+                text("SELECT value FROM core_db_metadata WHERE key = 'schema_version'")
+            )
+        assert version == str(core_db_module.CORE_SCHEMA_VERSION)
+    finally:
+        await second.close()
 
 
 class FinalReplyLLM:

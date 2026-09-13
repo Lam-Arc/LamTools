@@ -168,50 +168,54 @@ jobs:
             exit 1
           }
 
-      # ---------- 3. 后端资源复制进 Tauri ----------
-      - name: Copy backend into src-tauri resources
-        shell: pwsh
-        run: |
-          $ResourceDir = "core/desktop/src-tauri/lamcore-backend"
-          if (Test-Path $ResourceDir) { Remove-Item -Recurse -Force $ResourceDir }
-          Copy-Item -Recurse "core/dist/LamCore" $ResourceDir
-          Write-Host "Backend copied to $ResourceDir"
-
-      # ---------- 4. Tauri 打包 NSIS 安装包 ----------
-      - name: Build Tauri installer
+      # ---------- 3. Tauri 只构建应用，不调用官方 NSIS bundler ----------
+      - name: Build Tauri application executable
         run: |
           cd core/desktop
-          npx tauri build
+          npx tauri build --no-bundle
 
-      - name: Verify installer produced
+      # ---------- 4. 项目自有 Inno Setup 安装器 ----------
+      - name: Install Inno Setup compiler
+        shell: pwsh
+        run: choco install innosetup --version=6.6.1 --allow-downgrade --no-progress --yes
+
+      - name: Stage app payload and build Sunday installer
         shell: pwsh
         run: |
-          $installer = Get-ChildItem "core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe" -ErrorAction SilentlyContinue
-          if (-not $installer) {
-            Write-Error "NSIS installer was not produced — tauri build failed silently?"
+          $version = (Get-Content "core/desktop/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $releaseDir = [System.IO.Path]::GetFullPath("core/desktop/src-tauri/target/release")
+          $stageDir = Join-Path $releaseDir "sunday-installer/stage"
+          if (Test-Path -LiteralPath $stageDir) {
+            Remove-Item -LiteralPath $stageDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+          Copy-Item -LiteralPath (Join-Path $releaseDir "lamcore.exe") -Destination (Join-Path $stageDir "lamcore.exe")
+          Copy-Item -LiteralPath "core/dist/LamCore" -Destination (Join-Path $stageDir "lamcore-backend") -Recurse
+
+          $outputDir = Join-Path $releaseDir "bundle/inno"
+          & "core/desktop/installer/build-installer.ps1" -Version $version -SourceRoot $stageDir -OutputDir $outputDir
+          $installer = Join-Path $outputDir "Sunday_${version}_x64-setup.exe"
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+            Write-Error "Sunday installer was not produced at $installer"
             exit 1
           }
-          Write-Host "Installer: $($installer.FullName) ($([math]::Round($installer.Length / 1MB, 1)) MB)"
+          Write-Host "Installer: $installer ($([math]::Round((Get-Item $installer).Length / 1MB, 1)) MB)"
 
-      # ---------- 4.5 真·安装冒烟 ----------
-      # CI 盲区（2026-08-17 补）：此前只冒烟了裸后端 binary（core/dist/LamCore/
-      # LamCore.exe），从未验证「Tauri 壳 → 找到打包后端 → 拉起 → health」闭环。
-      # find_backend_exe 路径约定 / bundle.resources 打包配置若漂移，CI 依然全绿
-      # 而安装包残废。此步真实安装安装包 → 启动安装出的 lamcore.exe → 从
-      # .lam/backend.log 抓随机端口 → 轮询 /api/health（>=90s）。
-      # 注意：安装器参数必须经 PowerShell Start-Process 传递
-      # （Git Bash / cmd 直传会被 MSYS/引号规则吞掉 /S /D=）。
-      - name: Install installer & smoke installed app
+      # ---------- 4.5 安装 / 运行 / 升级 / 卸载真冒烟 ----------
+      - name: Smoke Sunday installer lifecycle and data preservation
         shell: pwsh
         run: |
-          $installDir = Join-Path $env:RUNNER_TEMP "lamcore-installed"
-          if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
-          New-Item -ItemType Directory -Path $installDir | Out-Null
-          $installer = Get-ChildItem "core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe" -ErrorAction Stop | Select-Object -First 1
-          $p = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
+          $installDir = Join-Path $env:RUNNER_TEMP "sunday-installed"
+          $installer = Get-ChildItem "core/desktop/src-tauri/target/release/bundle/inno/Sunday_*_x64-setup.exe" -ErrorAction Stop | Select-Object -First 1
+          $installArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir")
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList $installArgs -Wait -PassThru
           if ($p.ExitCode -ne 0) { Write-Error "Installer exited nonzero ($($p.ExitCode))"; exit 1 }
           if (-not (Test-Path (Join-Path $installDir "lamcore.exe"))) {
-            Write-Error "lamcore.exe missing after install (NSIS payload incomplete?)"
+            Write-Error "lamcore.exe missing after install"
+            exit 1
+          }
+          if (-not (Test-Path (Join-Path $installDir "lamcore-backend/LamCore.exe"))) {
+            Write-Error "Bundled backend missing after install"
             exit 1
           }
           Write-Host "Installed to $installDir"
@@ -238,16 +242,49 @@ jobs:
               }
             }
             if (-not $ok) {
-              Write-Error "Installed app health failed — Tauri shell cannot boot bundled backend (resource path drift?)"
+              Write-Error "Installed app health failed — Sunday cannot boot its bundled backend"
               exit 1
             }
-            Write-Host "Installed LamCore health OK on port $port after $($i + 1)s"
+            Write-Host "Installed Sunday health OK on port $port after $($i + 1)s"
           } finally {
             if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
-            # 壳被杀后后端子进程可能残留，统一清理
-            Get-Process -Name "LamCore" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+            $installPrefix = $installDir.TrimEnd('\') + '\'
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+              Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase) } |
+              ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
           }
+
+          # A same-AppId upgrade must never erase green-mode user data.
+          New-Item -ItemType Directory -Path (Join-Path $installDir ".lam") -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $installDir "lam_projects") -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $installDir ".lam/upgrade-marker.txt") -Value "keep"
+          Set-Content -LiteralPath (Join-Path $installDir "lam_projects/upgrade-marker.txt") -Value "keep"
+          $upgrade = Start-Process -FilePath $installer.FullName -ArgumentList $installArgs -Wait -PassThru
+          if ($upgrade.ExitCode -ne 0) { Write-Error "Upgrade exited nonzero ($($upgrade.ExitCode))"; exit 1 }
+          foreach ($marker in @(".lam/upgrade-marker.txt", "lam_projects/upgrade-marker.txt")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $installDir $marker))) {
+              Write-Error "Upgrade removed user data: $marker"
+              exit 1
+            }
+          }
+
+          # Default uninstall removes program files/shortcuts but keeps user data.
+          $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "unins*.exe" -File | Select-Object -First 1
+          if (-not $uninstaller) { Write-Error "Inno uninstaller was not registered"; exit 1 }
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { Write-Error "Uninstaller exited nonzero ($($uninstall.ExitCode))"; exit 1 }
+          if (Test-Path -LiteralPath (Join-Path $installDir "lamcore.exe")) {
+            Write-Error "Uninstaller left the Sunday executable behind"
+            exit 1
+          }
+          foreach ($marker in @(".lam/upgrade-marker.txt", "lam_projects/upgrade-marker.txt")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $installDir $marker))) {
+              Write-Error "Uninstaller removed preserved user data: $marker"
+              exit 1
+            }
+          }
+          Remove-Item -LiteralPath $installDir -Recurse -Force
+          Write-Host "Install, launch, in-place upgrade, uninstall, and data-preservation checks passed"
 
       # ---------- 5. 上传 ----------
       # tag 触发 → 发布到 GitHub Releases；手动触发 → 仅作为构建产物保留
@@ -255,7 +292,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+          files: core/desktop/src-tauri/target/release/bundle/inno/Sunday_*_x64-setup.exe
           generate_release_notes: true
           # 同一 tag 重复构建时更新资产但不重复追加 notes
           update_release_body: false
@@ -265,5 +302,5 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
-          name: lamcore-installer
-          path: core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+          name: sunday-installer
+          path: core/desktop/src-tauri/target/release/bundle/inno/Sunday_*_x64-setup.exe

@@ -61,7 +61,7 @@
             <section class="theme-editor-section theme-editor-preview-section">
               <div class="theme-section-copy">
                 <strong>实时预览</strong>
-                <span>主题会即时同步到当前 Core 界面。</span>
+                <span>主题会即时同步到当前 Sunday 界面。</span>
               </div>
               <ThemePreview
                 ref="previewEl"
@@ -111,6 +111,31 @@
                     />
                   </label>
                 </section>
+                <section class="theme-process-icon-section">
+                  <div class="theme-section-copy">
+                    <strong>图标色彩</strong>
+                    <span>控制过程行前的常规、运行与完成图标；等待和错误仍使用状态色。</span>
+                  </div>
+                  <label class="field color-field theme-process-icon-field">
+                    <span class="theme-process-icon-sample" :style="{ color: processIconColor }" aria-hidden="true">
+                      <i></i>
+                    </span>
+                    <span>
+                      <input
+                        :value="processIconColor"
+                        type="color"
+                        aria-label="过程图标颜色"
+                        data-theme-process-icon-color
+                        @change="$emit('update:process-icon-color', ($event.target as HTMLInputElement).value)"
+                      />
+                      <input
+                        :value="processIconColor"
+                        aria-label="过程图标颜色十六进制值"
+                        @change="$emit('update:process-icon-color', ($event.target as HTMLInputElement).value)"
+                      />
+                    </span>
+                  </label>
+                </section>
                 <div class="theme-area-list">
                   <section v-for="area in areas" :key="area.key" class="theme-area-row">
                     <button
@@ -137,7 +162,7 @@
     </section>
     <Teleport to="body">
       <Transition @enter="animateAreaPopoverEnter" @leave="animateAreaPopoverLeave">
-        <div v-if="activeArea && activeAreaConfig" class="theme-area-popover-overlay" @click.self="closeAreaPopover">
+        <div v-if="activeArea && activeAreaConfig" ref="areaPopoverOverlayEl" class="theme-area-popover-overlay">
           <section ref="areaPopoverEl" class="theme-area-popover" role="dialog" aria-modal="true" :aria-labelledby="`theme-area-popover-${activeArea}`">
             <header class="theme-area-popover-head">
               <div>
@@ -174,6 +199,7 @@ import { gsap } from 'gsap'
 import ThemeAreaEditor from './ThemeAreaEditor.vue'
 import ThemePreview from './ThemePreview.vue'
 import { gradientFromStops, themeForMode, type ThemeArea, type ThemeMode, type ThemePreset, type ThemeStop } from '../helpers/theme'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 const props = withDefaults(defineProps<{
   productName?: string
@@ -187,16 +213,18 @@ const props = withDefaults(defineProps<{
   getAngle: (area: ThemeArea) => number
   getOpacity: (area: ThemeArea) => number
   getTextColor: (area: ThemeArea) => string
+  processIconColor?: string
   presets: ThemePreset[]
   themePreviewStyle: Record<string, string>
   themePreviewMainStyle: Record<string, string>
   themePreviewComposerStyle: Record<string, string>
   themePreviewControlStyle: Record<string, string>
 }>(), {
-  productName: 'LamTools Core',
-  contentDescription: 'Core 工作区',
+  productName: 'Sunday',
+  contentDescription: 'Sunday 工作区',
   themeMode: 'system',
   effectiveThemeMode: 'dark',
+  processIconColor: '#a693ff',
 })
 
 const emit = defineEmits<{
@@ -209,6 +237,7 @@ const emit = defineEmits<{
   'update:angle': [area: ThemeArea, angle: number]
   'update:opacity': [area: ThemeArea, value: number]
   'update:text-color': [area: ThemeArea, color: string]
+  'update:process-icon-color': [color: string]
   'add-stop': [area: ThemeArea]
   'remove-stop': [area: ThemeArea, index: number]
   'sort-stops': [area: ThemeArea]
@@ -230,6 +259,7 @@ const activeArea = ref<ThemeArea | null>(null)
 const themeRootEl = ref<HTMLElement | null>(null)
 const dialogEl = ref<HTMLElement | null>(null)
 const previewEl = ref<InstanceType<typeof ThemePreview> | null>(null)
+const areaPopoverOverlayEl = ref<HTMLElement | null>(null)
 const areaPopoverEl = ref<HTMLElement | null>(null)
 let motionContext: gsap.Context | null = null
 let motionMedia: gsap.MatchMedia | null = null
@@ -262,7 +292,7 @@ function presetControlStyle(preset: ThemePreset) {
 
 function isPresetActive(preset: ThemePreset) {
   const candidate = presetTheme(preset)
-  return areas.every(({ key }) => {
+  return candidate.processIconColor === props.processIconColor && areas.every(({ key }) => {
     const stops = candidate[`${key}Stops` as keyof typeof candidate]
     const angle = candidate[`${key}Angle` as keyof typeof candidate]
     const text = candidate[`${key}Text` as keyof typeof candidate]
@@ -285,6 +315,13 @@ function openAreaPopover(area: ThemeArea) {
 function closeAreaPopover() {
   activeArea.value = null
 }
+
+useOutsidePointerDismiss({
+  overlay: areaPopoverOverlayEl,
+  card: areaPopoverEl,
+  isActive: () => Boolean(activeArea.value && activeAreaConfig.value),
+  onDismiss: closeAreaPopover,
+})
 
 function animateAreaPopoverEnter(element: Element, done: () => void) {
   const target = element as HTMLElement

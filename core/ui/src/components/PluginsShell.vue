@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
-    <div class="settings-overlay" @click.self="$emit('close')">
-      <div class="settings-card" :style="settingsThemeStyle">
+    <div ref="settingsOverlayEl" class="settings-overlay">
+      <div ref="settingsCardEl" class="settings-card" :style="settingsThemeStyle">
         <SettingsShell
           :sections="sections"
           title="插件"
@@ -44,13 +44,14 @@
  * - 钩子：系统级 Hook 管理（CoreHooksEditor，逐条信任）
  * 复用 SettingsShell 骨架（同一 overlay/侧边栏布局 + --settings-* token）。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import CorePluginsEditor from './CorePluginsEditor.vue'
 import CoreSkillsEditor from './CoreSkillsEditor.vue'
 import CoreHooksEditor from './CoreHooksEditor.vue'
 import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'
 import type { LamToolsTransport } from '../transport'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -58,10 +59,13 @@ const props = defineProps<{
   theme?: ThemeData | null
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   close: []
   'capabilities-changed': [refreshDesktop: boolean]
 }>()
+
+const settingsOverlayEl = ref<HTMLElement | null>(null)
+const settingsCardEl = ref<HTMLElement | null>(null)
 
 const sections: SettingsSection[] = [
   { id: 'plugins', label: '插件', icon: 'puzzle' },
@@ -102,5 +106,11 @@ const settingsThemeStyle = computed(() => {
       '--settings-muted': '#8a8580',
     } : {}),
   } as Record<string, string>
+})
+
+useOutsidePointerDismiss({
+  overlay: settingsOverlayEl,
+  card: settingsCardEl,
+  onDismiss: () => emit('close'),
 })
 </script>

@@ -95,10 +95,13 @@ export function useComposerLayout(options: ComposerLayoutOptions) {
   const placement = ref<ComposerPlacement>('bottom')
 
   function syncPlacementForSession(): void {
-    // During history loading the host has not established whether this is an
-    // empty or populated session yet. Keep the current visual state and settle
-    // it once sessionReady becomes true.
-    if (!sessionReady.value) return
+    // History loading already occupies the message viewport. Dock immediately
+    // so a centered composer never overlays that skeleton while sessions are
+    // switching; settle empty/populated placement once the snapshot is ready.
+    if (!sessionReady.value) {
+      placement.value = 'bottom'
+      return
+    }
 
     if (viewportOpen.value || !options.emptySession.value) {
       placement.value = 'bottom'

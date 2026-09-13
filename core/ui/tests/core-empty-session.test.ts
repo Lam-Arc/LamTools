@@ -26,7 +26,7 @@ describe('Core empty-session host wiring', () => {
     expect(appSource).toContain(':empty-session="isEmptySession"')
     expect(appSource).toContain('data-empty-session-hero')
     expect(appSource).toMatch(/<ChatThread\s+v-else/)
-    expect(appSource).toContain('v-if="!isEmptySession && !threadScroll.atBottom.value"')
+    expect(appSource).toContain('v-if="!isEmptySession && !threadScroll.autoFollow.value"')
     expect(appSource).toContain(':hide-composer="shouldHideComposer"')
   })
 
@@ -35,11 +35,16 @@ describe('Core empty-session host wiring', () => {
     expect(workspaceSource).toContain("'composer-root--empty-session': emptySession")
     expect(layoutSource).toContain('.thread.thread--empty-session')
     expect(layoutSource).toContain('.workspace-shell--empty-session .floating-composer')
-    expect(layoutSource).toMatch(/\.empty-session-hero\s*\{[\s\S]*?top:\s*32%/)
+    expect(layoutSource).toMatch(/\.empty-session-hero\s*\{[\s\S]*?top:\s*calc\(var\(--empty-session-composer-top/)
     expect(layoutSource).toContain(
       '.workspace-shell--empty-session.workspace-shell--composer-center .floating-composer',
     )
-    expect(layoutSource).toContain('var(--space-6)')
+    expect(layoutSource).toContain('calc(var(--space-6) * 2)')
+    expect(appSource).toContain('<SundayLogo class="empty-session-logo" :size="136" animated')
+    expect(layoutSource).toContain('font-size: clamp(20px, 2.2vw, 26px)')
+    expect(appSource).toContain('就当给自己放个假')
+    expect(appSource).toContain('芜湖，我来帮忙咯!')
+    expect(appSource).not.toContain('描述你想完成的事情')
   })
 })
 

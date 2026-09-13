@@ -273,6 +273,7 @@ function exitCleanup(): void {
 
 async function deleteSelected(): Promise<void> {
   if (!selected.value.length || !props.projectId) return
+  if (!window.confirm(`确定删除选中的 ${selected.value.length} 个 Artifact？`)) return
   error.value = ''
   try {
     await props.requestRpc('artifact.delete', {

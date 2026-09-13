@@ -30,6 +30,12 @@ DEFAULT_MAX_LIST_ITEMS = 100
 DEFAULT_MAX_TEXT_LENGTH = 50_000
 DEFAULT_MAX_SEARCH_RESULTS = 50
 
+AccessOutsideWorkdir = bool | Callable[[], bool]
+
+
+def _access_outside_enabled(value: AccessOutsideWorkdir) -> bool:
+    return bool(value() if callable(value) else value)
+
 # read_file 对图片文件以 base64 data URL 返回（不设体积上限），
 # 多模态模型可直接查看；文本模型由 base_agent 丢弃图片块、仅保留说明文字。
 IMAGE_MIME_TYPES: dict[str, str] = {
@@ -283,7 +289,7 @@ class WorkspaceReadOnlyTools:
         max_list_items: int = DEFAULT_MAX_LIST_ITEMS,
         max_text_length: int = DEFAULT_MAX_TEXT_LENGTH,
         max_search_results: int = DEFAULT_MAX_SEARCH_RESULTS,
-        allow_access_outside_workdir: bool = False,
+        allow_access_outside_workdir: AccessOutsideWorkdir = False,
     ) -> None:
         self._work_root = Path(work_root).resolve()
         self._max_list_items = max_list_items
@@ -318,7 +324,8 @@ class WorkspaceReadOnlyTools:
 
         try:
             resolved, access_root = resolve_read_resource_path(
-                path_str, self._work_root, self.resource_roots(), allow_outside=self._allow_access_outside_workdir
+                path_str, self._work_root, self.resource_roots(),
+                allow_outside=_access_outside_enabled(self._allow_access_outside_workdir)
             )
         except ValueError as exc:
             return _failed_result(call, "path_outside_root", str(exc))
@@ -449,7 +456,8 @@ class WorkspaceReadOnlyTools:
         path_str = raw_path if isinstance(raw_path, str) and raw_path.strip() else "."
         try:
             resolved, _access_root = resolve_read_resource_path(
-                path_str, self._work_root, self.resource_roots(), allow_outside=self._allow_access_outside_workdir
+                path_str, self._work_root, self.resource_roots(),
+                allow_outside=_access_outside_enabled(self._allow_access_outside_workdir)
             )
         except ValueError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
@@ -490,7 +498,8 @@ class WorkspaceReadOnlyTools:
         path_str = raw_path if isinstance(raw_path, str) and raw_path.strip() else "."
         try:
             search_root, access_root = resolve_read_resource_path(
-                path_str, self._work_root, self.resource_roots(), allow_outside=self._allow_access_outside_workdir
+                path_str, self._work_root, self.resource_roots(),
+                allow_outside=_access_outside_enabled(self._allow_access_outside_workdir)
             )
         except ValueError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
@@ -537,7 +546,8 @@ class WorkspaceReadOnlyTools:
         path_str = raw_path if isinstance(raw_path, str) and raw_path.strip() else "."
         try:
             search_root, access_root = resolve_read_resource_path(
-                path_str, self._work_root, self.resource_roots(), allow_outside=self._allow_access_outside_workdir
+                path_str, self._work_root, self.resource_roots(),
+                allow_outside=_access_outside_enabled(self._allow_access_outside_workdir)
             )
         except ValueError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
@@ -594,13 +604,13 @@ class WorkspaceReadOnlyTools:
 def make_write_file_handler(
     work_root: Path,
     *,
-    allow_access_outside_workdir: bool = False,
+    allow_access_outside_workdir: AccessOutsideWorkdir = False,
 ) -> Callable[[ToolCall], Awaitable[ToolResult]]:
     async def write_file(call: ToolCall) -> ToolResult:
         return await write_file_tool(
             call,
             work_root=work_root,
-            allow_access_outside_workdir=allow_access_outside_workdir,
+            allow_access_outside_workdir=_access_outside_enabled(allow_access_outside_workdir),
         )
 
     return write_file
@@ -609,13 +619,13 @@ def make_write_file_handler(
 def make_edit_file_handler(
     work_root: Path,
     *,
-    allow_access_outside_workdir: bool = False,
+    allow_access_outside_workdir: AccessOutsideWorkdir = False,
 ) -> Callable[[ToolCall], Awaitable[ToolResult]]:
     async def edit_file(call: ToolCall) -> ToolResult:
         return await edit_file_tool(
             call,
             work_root=work_root,
-            allow_access_outside_workdir=allow_access_outside_workdir,
+            allow_access_outside_workdir=_access_outside_enabled(allow_access_outside_workdir),
         )
 
     return edit_file

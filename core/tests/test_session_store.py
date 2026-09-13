@@ -265,3 +265,82 @@ class TestCoreDbSessionStoreConditionalTitlePatch:
             return result
 
         assert asyncio.run(scenario()) is None
+
+
+def test_core_db_session_store_refreshes_runtime_permission_cache(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        db = await open_core_app_db(tmp_path / "core-permissions.db")
+        store = CoreDbSessionStore(lambda: db)
+        try:
+            session = SessionRecord(
+                id="permission-cache",
+                member_id="core",
+                title="Permissions",
+                status="idle",
+                metadata={
+                    "runtime_preferences": {
+                        "base_tier": "full_edit",
+                        "base_allow_access_outside_workdir": False,
+                        "permission_preset": "ask",
+                    }
+                },
+            )
+            await store.create(session)
+            assert store.runtime_preferences(session.id)["permission_preset"] == "ask"
+
+            await store.patch(
+                session.id,
+                metadata={
+                    **session.metadata,
+                    "runtime_preferences": {
+                        **session.metadata["runtime_preferences"],
+                        "permission_preset": "full_access",
+                    },
+                },
+            )
+            cached = store.runtime_preferences(session.id)
+            assert cached is not None
+            assert cached["permission_preset"] == "full_access"
+            cached["permission_preset"] = "ask"
+            assert store.runtime_preferences(session.id)["permission_preset"] == "full_access"
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_core_db_session_store_repairs_legacy_fork_project_ownership(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        db = await open_core_app_db(tmp_path / "core-fork-project.db")
+        store = CoreDbSessionStore(lambda: db)
+        try:
+            await store.create(SessionRecord(
+                id="source",
+                member_id="core",
+                title="Source",
+                status="idle",
+                metadata={"work_root": str(tmp_path / "workspace"), "project_id": "project-1"},
+            ))
+            await store.create(SessionRecord(
+                id="legacy-fork",
+                member_id="core",
+                title="Source fork",
+                status="idle",
+                metadata={"forked_from_session_id": "source"},
+            ))
+
+            listed = {record.id: record for record in await store.list()}
+            assert listed["legacy-fork"].title == "Source（1）"
+            assert listed["legacy-fork"].metadata["work_root"] == str(tmp_path / "workspace")
+            assert listed["legacy-fork"].metadata["project_id"] == "project-1"
+            assert listed["legacy-fork"].metadata["fork_title_base"] == "Source"
+
+            persisted = await store.get("legacy-fork")
+            assert persisted is not None
+            assert persisted.title == "Source（1）"
+            assert persisted.metadata["work_root"] == str(tmp_path / "workspace")
+            assert persisted.metadata["project_id"] == "project-1"
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())

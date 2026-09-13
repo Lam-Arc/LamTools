@@ -629,6 +629,9 @@ def runtime_fact_to_run_item_events(
         runtime_metrics = payload.get("runtime_metrics") if isinstance(payload.get("runtime_metrics"), dict) else None
         if runtime_metrics is not None:
             completed_payload["runtime_metrics"] = runtime_metrics
+        duration_ms = payload.get("duration_ms")
+        if isinstance(duration_ms, (int, float)) and not isinstance(duration_ms, bool):
+            completed_payload["duration_ms"] = max(0, round(duration_ms))
         return [
             RunItemEvent(
                 kind="status",

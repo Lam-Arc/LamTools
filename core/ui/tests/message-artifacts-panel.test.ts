@@ -21,8 +21,7 @@ afterEach(() => {
  * 「本轮产出」面板（message-artifacts）契约：
  * 1. 产出一旦到达就显示——live/history 使用同一位置；子代理 sub-line 段仍经
  *    suppressArtifactsPanel 显式抑制，避免嵌套面板重复；
- * 2. 面板内部去重：同一张图跨多个 part 只留一张（artifact_id → uri →
- *    image_data_url 归一化键），同一 uri 优先保留带 artifact_id 的条目。
+ * 2. 面板接纳生成图片与 file_change，排除 file_read；同一产物跨多个 part 去重。
  */
 
 function artifact(uri?: string, extra?: { artifact_id?: string; dataUrl?: string }): ToolArtifact & { artifact_id?: string } {
@@ -107,7 +106,7 @@ describe('「本轮产出」面板：内部去重', () => {
         }),
       },
     })
-    expect(wrapper.findAll('.message-artifacts figure')).toHaveLength(1)
+    expect(wrapper.findAll('.message-artifacts .message-attachment-deck__card')).toHaveLength(1)
     // 保留的是带 id 的条目：src 走 artifact 端点而非 files/raw
     await vi.waitFor(() => {
       expect(createObjectURL).toHaveBeenCalled()
@@ -121,7 +120,7 @@ describe('「本轮产出」面板：内部去重', () => {
       part('p2', [artifact(undefined, { dataUrl: 'data:image/png;base64,AAAA' })]),
     ])
     const wrapper = mountMessageView( { props: { msg: m } })
-    expect(wrapper.findAll('.message-artifacts figure')).toHaveLength(1)
+    expect(wrapper.findAll('.message-artifacts .message-attachment-deck__card')).toHaveLength(1)
   })
 
   it('不同图正常保留', () => {
@@ -130,7 +129,27 @@ describe('「本轮产出」面板：内部去重', () => {
       part('p2', [artifact('workspace://.lam/artifacts/b.png')]),
     ])
     const wrapper = mountMessageView( { props: { msg: m } })
-    expect(wrapper.findAll('.message-artifacts figure')).toHaveLength(2)
+    expect(wrapper.findAll('.message-artifacts .message-attachment-deck__card')).toHaveLength(2)
+  })
+
+  it('展示代码/配置/文档 file_change，兼容历史 file_read 图片并排除普通读取', () => {
+    const m = msg('assistant:t5', [part('p1', [
+      { kind: 'file_change', uri: 'src/app.ts', content: '+export const ready = true' },
+      { kind: 'file_change', uri: 'settings.jsonc', content: '+{"ready": true}' },
+      { kind: 'file_change', uri: 'README.md', content: '+# Ready' },
+      {
+        kind: 'file_read',
+        uri: '.lam/preview/legacy.png',
+        metadata: { image_data_url: 'data:image/png;base64,AAAA' },
+      },
+      { kind: 'file_read', uri: 'notes.txt', content: 'read only' },
+    ])])
+    const wrapper = mountMessageView({ props: { msg: m } })
+    const cards = wrapper.findAll('.message-artifacts .message-attachment-deck__card')
+    expect(cards).toHaveLength(4)
+    expect(wrapper.text()).toContain('本轮产出')
+    expect(wrapper.text()).toContain('legacy.png')
+    expect(wrapper.text()).not.toContain('notes.txt')
   })
 })
 

@@ -1,16 +1,21 @@
 <template>
   <div v-if="isTauri" class="titlebar" data-tauri-drag-region>
     <div class="titlebar-left">
-      <span class="brand">Core</span>
+      <SundayLogo :size="24" decorative />
+      <span class="brand">
+        <strong class="brand-name">Sunday</strong>
+        <span class="brand-tagline">AI software</span>
+      </span>
 
       <!-- mode toggle: shows the current application mode -->
       <button
+        v-if="props.canToggleMode"
         class="mode-toggle"
         :title="props.modeTitle"
         :disabled="!props.canToggleMode"
         @click="$emit('cycleMode')"
       >
-        <span class="mode-word mode-current">{{ props.modeLabel }}</span>
+        <span class="mode-word mode-current">· {{ props.modeLabel }}</span>
       </button>
     </div>
 
@@ -99,7 +104,13 @@
         <button class="ctrl-btn" title="最小化" @click="onMinimize">
           <svg viewBox="0 0 14 14"><rect x="2" y="6" width="10" height="1.5" rx="0.75" /></svg>
         </button>
-        <button class="ctrl-btn" title="最大化" @click="onMaximize">
+        <button
+          ref="maximizeButton"
+          class="ctrl-btn"
+          :class="{ 'native-hover': maximizeNativeHover, 'native-active': maximizeNativeActive }"
+          title="最大化"
+          @click="onMaximize"
+        >
           <svg viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5" /></svg>
         </button>
         <button class="ctrl-btn close" title="关闭" @click="onClose">
@@ -114,6 +125,7 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { Smartphone } from 'lucide-vue-next'
 import type { MobileControlAccountDevice, MobileControlAccountStatus } from './MobileControlPanel.vue'
+import SundayLogo from './SundayLogo.vue'
 
 const props = defineProps<{
   leftPinned?: boolean
@@ -136,7 +148,7 @@ const emit = defineEmits<{
 }>()
 
 type TauriInternals = {
-  invoke?: (command: string) => Promise<unknown>
+  invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown>
 }
 
 const tauriWindow = typeof window === 'undefined'
@@ -145,8 +157,12 @@ const tauriWindow = typeof window === 'undefined'
 const isTauri = ref(Boolean(tauriWindow?.__TAURI_INTERNALS__?.invoke))
 const mobilePairingOpen = ref(false)
 const mobilePairingAnchor = ref<HTMLElement | null>(null)
+const maximizeButton = ref<HTMLButtonElement | null>(null)
+const maximizeNativeHover = ref(false)
+const maximizeNativeActive = ref(false)
 const copyLabel = ref('复制数字码')
-let tauriInvoke: ((cmd: string) => Promise<any>) | null = null
+let tauriInvoke: ((cmd: string, args?: Record<string, unknown>) => Promise<any>) | null = null
+let maximizeBoundsFrame: number | null = null
 
 const mobilePairingExpiresLabel = computed(() => {
   const expiresAt = props.mobilePairingExpiresAtMs
@@ -180,16 +196,47 @@ function handleDocumentKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') mobilePairingOpen.value = false
 }
 
+function syncMaximizeButtonBounds(): void {
+  if (!tauriInvoke || !maximizeButton.value) return
+  const bounds = maximizeButton.value.getBoundingClientRect()
+  void tauriInvoke('set_maximize_button_bounds', {
+    x: bounds.x,
+    top: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+  }).catch(() => undefined)
+}
+
+function scheduleMaximizeButtonBoundsSync(): void {
+  if (maximizeBoundsFrame !== null) cancelAnimationFrame(maximizeBoundsFrame)
+  maximizeBoundsFrame = requestAnimationFrame(() => {
+    maximizeBoundsFrame = null
+    syncMaximizeButtonBounds()
+  })
+}
+
+function handleMaximizeNativeHover(event: Event): void {
+  maximizeNativeHover.value = Boolean((event as CustomEvent<boolean>).detail)
+}
+
+function handleMaximizeNativePress(event: Event): void {
+  maximizeNativeActive.value = Boolean((event as CustomEvent<boolean>).detail)
+}
+
 onMounted(() => {
   const tauri = tauriWindow?.__TAURI_INTERNALS__
   if (tauri && tauri.invoke) {
     isTauri.value = true
     const invoke = tauri.invoke
-    tauriInvoke = (cmd: string) => invoke(cmd)
+    tauriInvoke = (cmd: string, args?: Record<string, unknown>) => invoke(cmd, args)
     document.documentElement.style.setProperty('--titlebar-offset', '36px')
+    scheduleMaximizeButtonBoundsSync()
   }
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   document.addEventListener('keydown', handleDocumentKeydown)
+  window.addEventListener('resize', scheduleMaximizeButtonBoundsSync)
+  window.addEventListener('lamtools:maximize-hover', handleMaximizeNativeHover)
+  window.addEventListener('lamtools:maximize-press', handleMaximizeNativePress)
 })
 
 function onMinimize() { tauriInvoke?.('minimize_window') }
@@ -197,9 +244,13 @@ function onMaximize() { tauriInvoke?.('toggle_maximize_window') }
 function onClose() { tauriInvoke?.('close_window') }
 
 onUnmounted(() => {
+  if (maximizeBoundsFrame !== null) cancelAnimationFrame(maximizeBoundsFrame)
   document.documentElement.style.removeProperty('--titlebar-offset')
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   document.removeEventListener('keydown', handleDocumentKeydown)
+  window.removeEventListener('resize', scheduleMaximizeButtonBoundsSync)
+  window.removeEventListener('lamtools:maximize-hover', handleMaximizeNativeHover)
+  window.removeEventListener('lamtools:maximize-press', handleMaximizeNativePress)
 })
 </script>
 
@@ -218,18 +269,32 @@ onUnmounted(() => {
 }
 
 .brand {
-  font-size: 15px;
-  font-weight: 600;
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent);
-  letter-spacing: 0.3px;
-  padding-left: 4px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 76%, transparent);
   line-height: 22px;   /* match .mode-toggle height → shared vertical center */
+  white-space: nowrap;
+}
+
+.brand-name {
+  color: var(--theme-backdrop-text, #f2efeb);
+  font-size: 13px;
+  font-weight: 680;
+  letter-spacing: .01em;
+}
+
+.brand-tagline {
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 46%, transparent);
+  font-size: 11px;
+  font-weight: 520;
+  letter-spacing: .025em;
 }
 
 .titlebar-left {
   display: flex;
   align-items: center;
-  gap: 0;   /* spacing lives in .mode-toggle's left padding → ~one space */
+  gap: var(--space-2);
 }
 
 /* ── Generic application mode toggle ── */
@@ -237,7 +302,7 @@ onUnmounted(() => {
   display: inline-grid;
   align-items: center;
   justify-items: start;
-  padding: 0 2px;
+  padding: 0;
   height: 22px;
   border: none;
   background: transparent;
@@ -245,7 +310,7 @@ onUnmounted(() => {
   -webkit-app-region: no-drag;
   app-region: no-drag;
   font-family: inherit;
-  font-size: 15px;
+  font-size: 12px;
   color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent);
 }
 
@@ -262,8 +327,8 @@ onUnmounted(() => {
   grid-area: 1 / 1;
   white-space: nowrap;
   line-height: 22px;        /* match .brand → shared baseline */
-  font-weight: 700;         /* 加粗 */
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 78%, transparent);
+  font-weight: 560;
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 58%, transparent);
 }
 
 .titlebar-right {
@@ -517,8 +582,14 @@ onUnmounted(() => {
   color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 42%, transparent);
 }
 
-.ctrl-btn:hover {
+.ctrl-btn:hover,
+.ctrl-btn.native-hover {
   background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 92%, transparent);
+}
+
+.ctrl-btn.native-active {
+  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-active), transparent);
   color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 92%, transparent);
 }
 

@@ -16,6 +16,7 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "turn.cancel",
     "turn.force_reset",
     "approval.respond",
+    "session.permissions.set",
     "queue.create",
     "queue.update",
     "queue.delete",

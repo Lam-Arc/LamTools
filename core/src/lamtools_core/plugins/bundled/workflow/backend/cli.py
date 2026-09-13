@@ -78,6 +78,133 @@ async def workflow_list(args: Any) -> int:
     return 0
 
 
+async def workflow_list_grouped(args: Any) -> int:
+    raw_roots = getattr(args, "work_root", []) or []
+    roots = list(raw_roots) if isinstance(raw_roots, (list, tuple)) else [raw_roots]
+    payload = {"work_roots": [str(root) for root in roots if str(root)]}
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.list_grouped", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    groups = result.get("groups") or {}
+    if isinstance(groups, dict):
+        for group, workflows in groups.items():
+            print(f"[{group}]")
+            if isinstance(workflows, list):
+                for workflow in workflows:
+                    if isinstance(workflow, dict):
+                        print(f"  {workflow.get('name') or '?'}")
+    return 0
+
+
+def _read_workflow_json(path: str) -> dict[str, Any]:
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("workflow JSON must contain an object")
+    return value
+
+
+def _workflow_result_code(args: Any, result: dict[str, Any], *, label: str = "workflow") -> int:
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    workflow = result.get("workflow") or {}
+    if isinstance(workflow, dict):
+        print(f"[{label}] {workflow.get('name') or '?'}")
+    return 0
+
+
+async def workflow_save(args: Any) -> int:
+    try:
+        payload = _read_workflow_json(args.from_file)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if args.name:
+        payload["name"] = args.name
+    if args.work_root:
+        payload["work_root"] = args.work_root
+    if args.expected_revision is not None:
+        payload["expected_revision"] = args.expected_revision
+    if args.exposed:
+        payload["exposed"] = True
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.save", payload)
+
+    return _workflow_result_code(args, await _invoke_live(args, operation), label="workflow saved")
+
+
+async def workflow_update(args: Any) -> int:
+    payload: dict[str, Any] = {"name": args.name}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+    if args.from_file:
+        try:
+            patch = _read_workflow_json(args.from_file)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        payload.update(patch)
+        payload["name"] = args.name
+    for key in ("description", "output_port", "tool_name"):
+        value = getattr(args, key, None)
+        if value is not None:
+            payload[key] = value
+    for key in ("nodes", "edges", "input_params"):
+        value = getattr(args, key, None)
+        if value is not None:
+            payload[key] = value
+    if args.exposed:
+        payload["exposed"] = True
+    elif args.unexposed:
+        payload["exposed"] = False
+    if args.expected_revision is not None:
+        payload["expected_revision"] = args.expected_revision
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.update", payload)
+
+    return _workflow_result_code(args, await _invoke_live(args, operation), label="workflow updated")
+
+
+async def workflow_rename(args: Any) -> int:
+    payload: dict[str, Any] = {"name": args.name, "new_name": args.new_name}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.rename", payload)
+
+    return _workflow_result_code(args, await _invoke_live(args, operation), label="workflow renamed")
+
+
+async def workflow_delete(args: Any) -> int:
+    payload: dict[str, Any] = {"name": args.name}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.delete", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if result.get("deleted") and not result.get("error") else 1
+    if result.get("error") or not result.get("deleted"):
+        print(f"error: {result.get('error') or 'workflow was not deleted'}", file=sys.stderr)
+        return 1
+    print(f"[workflow] deleted {args.name}")
+    return 0
+
+
 async def workflow_describe(args: Any) -> int:
     params: dict[str, Any] = {"name": args.name}
     if args.work_root:
@@ -102,6 +229,84 @@ async def workflow_describe(args: Any) -> int:
         print(f"  exposed: {workflow.get('exposed', False)}")
         if workflow.get("exposed"):
             print(f"  tool_name: {workflow.get('tool_name', '')}")
+    return 0
+
+
+async def workflow_document(args: Any) -> int:
+    payload: dict[str, Any] = {"name": args.name}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.document.get", payload)
+    result = await _invoke_live(args, operation)
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(json.dumps(result.get("document") or {}, ensure_ascii=False, indent=2))
+    return 0
+
+
+async def workflow_compile(args: Any) -> int:
+    payload: dict[str, Any] = {"name": args.name}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.compile", payload)
+    result = await _invoke_live(args, operation)
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(json.dumps(result.get("prompt") or {}, ensure_ascii=False, indent=2))
+    return 0
+
+
+async def workflow_semantic(args: Any) -> int:
+    payload: dict[str, Any] = {"name": args.name, "offset": args.offset, "limit": args.limit}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+    if args.node_id:
+        payload["node_ids"] = args.node_id
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.semantic", payload)
+    result = await _invoke_live(args, operation)
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(json.dumps(result.get("semantic") or {}, ensure_ascii=False, indent=2))
+    return 0
+
+
+async def workflow_import_comfyui(args: Any) -> int:
+    try:
+        source = _read_workflow_json(args.from_file)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    payload: dict[str, Any] = {"name": args.name, "workflow": source}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+    if args.expected_revision is not None:
+        payload["expected_revision"] = args.expected_revision
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.import.comfyui", payload)
+    return _workflow_result_code(args, await _invoke_live(args, operation), label="ComfyUI imported")
+
+
+async def workflow_export_comfyui(args: Any) -> int:
+    payload: dict[str, Any] = {"name": args.name, "version": args.version}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.export.comfyui", payload)
+    result = await _invoke_live(args, operation)
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    rendered = json.dumps(result.get("workflow") or {}, ensure_ascii=False, indent=2)
+    if args.to_file:
+        Path(args.to_file).write_text(rendered + "\n", encoding="utf-8")
+    else:
+        print(rendered)
     return 0
 
 
@@ -146,6 +351,336 @@ async def workflow_run(args: Any) -> int:
     return 0 if status in {"completed", "paused"} else 1
 
 
+async def workflow_cancel(args: Any) -> int:
+    payload: dict[str, Any] = {"thread_id": args.thread_id}
+    if args.run_id:
+        payload["run_id"] = args.run_id
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.cancel", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if result.get("cancelled") else 1
+    if result.get("cancelled"):
+        print(f"[workflow] cancelled thread={args.thread_id} run_id={args.run_id or '*'}")
+        return 0
+    print(f"error: {result.get('error') or 'workflow run was not cancelled'}", file=sys.stderr)
+    return 1
+
+
+async def workflow_signal(args: Any) -> int:
+    payload: dict[str, Any] = {
+        "thread_id": args.thread_id,
+        "run_id": args.run_id,
+        "resume_token": args.resume_token,
+        "event_type": args.event_type,
+    }
+    if args.decision:
+        payload["decision"] = args.decision
+    if isinstance(args.payload, dict):
+        payload["payload"] = args.payload
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.signal", payload)
+
+    result = await _invoke_live(args, operation)
+    run = result.get("run") if isinstance(result.get("run"), dict) else {}
+    status = str(run.get("status") or "")
+    if _print_raw(args, result):
+        return 0 if status in {"completed", "paused"} else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(f"[workflow] signal status={status} run_id={args.run_id}")
+    return 0 if status in {"completed", "paused"} else 1
+
+
+def _human_task_payload(args: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for option, wire in (
+        ("work_root", "work_root"),
+        ("status", "status"),
+        ("workflow_id", "workflow_id"),
+        ("workflow_name", "workflow_name"),
+        ("thread_id", "thread_id"),
+    ):
+        value = str(getattr(args, option, "") or "").strip()
+        if value:
+            payload[wire] = value
+    limit = getattr(args, "limit", None)
+    if limit is not None:
+        payload["limit"] = limit
+    if bool(getattr(args, "all_scopes", False)) or bool(getattr(args, "all", False)):
+        payload["all"] = True
+    return payload
+
+
+async def workflow_human_task_list(args: Any) -> int:
+    payload = _human_task_payload(args)
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.human_task.list", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    tasks = result.get("tasks") or []
+    if isinstance(tasks, list):
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            print(
+                f"{str(task.get('task_id') or task.get('id') or '')[:44]:44s} "
+                f"{str(task.get('status') or ''):10s} "
+                f"{str(task.get('kind') or ''):10s} "
+                f"{task.get('title') or task.get('node') or ''}"
+            )
+    return 0
+
+
+async def workflow_human_task_get(args: Any) -> int:
+    payload = _human_task_payload(args)
+    payload["task_id"] = str(args.task_id)
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.human_task.get", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(json.dumps(result.get("task") or {}, ensure_ascii=False, indent=2))
+    return 0
+
+
+async def workflow_human_task_complete(args: Any) -> int:
+    payload = _human_task_payload(args)
+    payload["task_id"] = str(args.task_id)
+    decision = str(getattr(args, "decision", "") or "").strip()
+    if decision:
+        payload["decision"] = decision
+    raw_payload = getattr(args, "payload", {})
+    payload["payload"] = raw_payload if isinstance(raw_payload, dict) else {}
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.human_task.complete", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    task = result.get("task") or {}
+    print(f"[workflow] human task {task.get('task_id') or args.task_id} status={task.get('status', '?')}")
+    return 0
+
+
+def _queue_payload(args: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    work_root = str(getattr(args, "work_root", "") or "")
+    if work_root:
+        payload["work_root"] = work_root
+    name = str(getattr(args, "name", "") or "")
+    if name:
+        payload["name"] = name
+    queue_id = str(getattr(args, "queue_id", "") or "")
+    if queue_id:
+        payload["queue_id"] = queue_id
+    run_id = str(getattr(args, "run_id", "") or "")
+    if run_id:
+        payload["run_id"] = run_id
+    status = str(getattr(args, "status", "") or "")
+    if status:
+        payload["status"] = status
+    limit = getattr(args, "limit", None)
+    if limit is not None:
+        payload["limit"] = limit
+    return payload
+
+
+async def workflow_queue_enqueue(args: Any) -> int:
+    payload = _queue_payload(args)
+    inputs = _parse_workflow_inputs(getattr(args, "input", []) or [])
+    if inputs:
+        payload["inputs"] = inputs
+    for option in ("max_steps", "start_node", "single_node", "thread_id", "run_id"):
+        value = getattr(args, option, None)
+        if value not in (None, ""):
+            payload[option] = value
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.queue.enqueue", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    item = result.get("queue") or result.get("item") or result.get("queue_item") or {}
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(f"[workflow] queued queue_id={item.get('queue_id', '')} run_id={item.get('run_id', '')}")
+    return 0
+
+
+async def workflow_queue_list(args: Any) -> int:
+    payload = _queue_payload(args)
+    payload["include_history"] = bool(getattr(args, "include_history", False))
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.queue.list", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    _print_queue_items(result.get("queue") or result.get("items") or result.get("queue_items") or [])
+    return 0
+
+
+async def workflow_queue_history(args: Any) -> int:
+    payload = _queue_payload(args)
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.queue.history", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    _print_queue_items(result.get("history") or result.get("items") or result.get("queue_items") or [])
+    return 0
+
+
+async def workflow_queue_get(args: Any) -> int:
+    payload = _queue_payload(args)
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.queue.get", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    item = result.get("queue") or result.get("item") or result.get("queue_item") or {}
+    print(json.dumps(item, ensure_ascii=False, indent=2))
+    return 0
+
+
+async def workflow_queue_clear(args: Any) -> int:
+    payload = _queue_payload(args)
+    payload["confirm"] = bool(getattr(args, "confirm", False))
+    payload["all"] = bool(getattr(args, "all_items", False))
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.queue.clear", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(f"[workflow] cleared {result.get('count', result.get('cleared', 0))} queue/history item(s)")
+    return 0
+
+
+async def workflow_queue_cancel(args: Any) -> int:
+    payload = _queue_payload(args)
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.queue.cancel", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if result.get("cancelled") else 1
+    if result.get("cancelled"):
+        print(f"[workflow] cancelled queue item {payload.get('queue_id') or payload.get('run_id')}")
+        return 0
+    print(f"error: {result.get('error') or 'queue item was not cancelled'}", file=sys.stderr)
+    return 1
+
+
+async def workflow_node_types(args: Any) -> int:
+    payload: dict[str, Any] = {}
+    requested = str(getattr(args, "name", "") or "")
+    if requested:
+        payload["node_type"] = requested
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.node_types", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(json.dumps(result.get("node_types") or result.get("object_info") or {}, ensure_ascii=False, indent=2))
+    return 0
+
+
+async def workflow_object_info(args: Any) -> int:
+    payload: dict[str, Any] = {}
+    requested = str(getattr(args, "name", "") or "")
+    if requested:
+        payload["name"] = requested
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.object_info", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(json.dumps(result.get("object_info") or result.get("node_types") or {}, ensure_ascii=False, indent=2))
+    return 0
+
+
+async def workflow_tools_list(args: Any) -> int:
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.tools.list", {})
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    tools = result.get("tools") or []
+    if isinstance(tools, list):
+        for item in tools:
+            if isinstance(item, dict):
+                print(f"{item.get('name') or '?'}\t{item.get('description') or ''}")
+    return 0
+
+
+def _print_queue_items(items: Any) -> None:
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if isinstance(item, dict):
+            print(
+                f"{str(item.get('queue_id') or item.get('id') or '')[:28]:28s} "
+                f"{str(item.get('status') or ''):10s} "
+                f"{str(item.get('workflow_name') or item.get('name') or '')}"
+            )
+
+
 async def workflow_expose(args: Any) -> int:
     payload: dict[str, Any] = {"name": args.name}
     if args.work_root:
@@ -175,6 +710,76 @@ async def workflow_unexpose(args: Any) -> int:
         return 0
     workflow = result.get("workflow", {})
     print(f"[workflow] {workflow.get('name', args.name)} unexposed")
+    return 0
+
+
+def _activation_payload(args: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"name": str(getattr(args, "name", "") or "")}
+    work_root = str(getattr(args, "work_root", "") or "")
+    trigger_id = str(getattr(args, "trigger_id", "") or "")
+    if work_root:
+        payload["work_root"] = work_root
+    if trigger_id:
+        payload["trigger_id"] = trigger_id
+    if bool(getattr(args, "replace", False)):
+        payload["replace"] = True
+    return payload
+
+
+async def workflow_activate(args: Any) -> int:
+    payload = _activation_payload(args)
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.activate", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(
+        f"[workflow] activated={len(result.get('activated') or [])} "
+        f"reused={len(result.get('reused') or [])}"
+    )
+    return 0
+
+
+async def workflow_deactivate(args: Any) -> int:
+    payload = _activation_payload(args)
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.deactivate", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(f"[workflow] deactivated={len(result.get('cancelled') or [])}")
+    return 0
+
+
+async def workflow_activation_list(args: Any) -> int:
+    payload = _activation_payload(args)
+
+    async def operation(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.activation.list", payload)
+
+    result = await _invoke_live(args, operation)
+    if _print_raw(args, result):
+        return 0 if not result.get("error") else 1
+    if result.get("error"):
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    for item in result.get("activations") or []:
+        if isinstance(item, dict):
+            print(
+                f"{str(item.get('trigger_id') or ''):24s} "
+                f"{str(item.get('status') or ''):10s} "
+                f"revision={int(item.get('workflow_revision') or 0)}"
+            )
     return 0
 
 
@@ -209,10 +814,37 @@ def _parse_workflow_inputs(items: list[str]) -> dict[str, Any]:
 
 
 __all__ = [
+    "workflow_activate",
+    "workflow_activation_list",
     "workflow_describe",
+    "workflow_document",
+    "workflow_compile",
+    "workflow_semantic",
+    "workflow_import_comfyui",
+    "workflow_export_comfyui",
+    "workflow_cancel",
+    "workflow_node_types",
+    "workflow_object_info",
+    "workflow_tools_list",
     "workflow_expose",
     "workflow_list",
+    "workflow_list_grouped",
     "workflow_new",
+    "workflow_save",
+    "workflow_update",
+    "workflow_rename",
+    "workflow_delete",
+    "workflow_deactivate",
+    "workflow_queue_cancel",
+    "workflow_queue_clear",
+    "workflow_queue_enqueue",
+    "workflow_queue_get",
+    "workflow_queue_history",
+    "workflow_queue_list",
     "workflow_run",
+    "workflow_signal",
+    "workflow_human_task_list",
+    "workflow_human_task_get",
+    "workflow_human_task_complete",
     "workflow_unexpose",
 ]

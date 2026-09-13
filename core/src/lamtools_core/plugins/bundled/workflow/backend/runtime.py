@@ -16,26 +16,271 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import hashlib
+import inspect
 import json
+import math
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
 import tempfile
 import uuid
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from collections import OrderedDict
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 from lamtools_core.event.run_item import RunItemEvent, RunItemStatus
 
+from .cache import WorkflowContentCache, WorkflowCacheLookup, content_signature
+from .adapters import (
+    AgentInvoker,
+    AgentInvokerAdapter,
+    LLMInvoker,
+    LegacyLLMAdapter,
+    LegacyAgentInvokerAdapter,
+    LegacyModelInvokerAdapter,
+    LegacySubAgentAdapter,
+    LegacyNodeExecutorAdapter,
+    ModelInvokerAdapter,
+    ModelInvoker,
+    NodeExecutor,
+    NodeExecutorAdapter,
+    SubAgentInvoker,
+    SubAgentInvokerAdapter,
+    adapt_agent_invoker,
+    adapt_data_packet,
+    adapt_model_invoker,
+    adapt_node_executor,
+)
+from .executors import (
+    DynamicNodeExpansion,
+    Expansion,
+    NodeExecutionResult,
+    WorkflowExpansion,
+    WorkflowDynamicExpansion,
+    WorkflowExpansionError,
+    WorkflowExecutorError,
+    WorkflowExecutorRegistry,
+    WorkflowNodeExecutionResult,
+    normalize_execution_result,
+    normalize_node_result,
+    normalize_node_execution_result,
+)
+from .registry import WorkflowNodeRegistry
+from .credentials import CredentialError, CredentialRef, is_credential_ref
+from .data_packet import WorkflowDataPacket, is_data_packet, packet_to_legacy
+from .snapshots import WorkflowSnapshotStore
+from .durable import (
+    NodeExecutionPolicy,
+    WorkflowRunEvent,
+    WorkflowRunEventStore,
+    attempt_identity,
+    definition_digest,
+)
+from .claims import WorkflowClaimStore, claim_store_for_runtime
+from .flow_control import (
+    FlowControlDecision,
+    FlowControlLease,
+    FlowControlPolicy,
+    FlowControlStore,
+    stable_scope_key,
+)
+from .expressions import (
+    Expression,
+    ExpressionContext,
+    ExpressionError,
+    evaluate as evaluate_expression,
+)
 
-WorkflowNodeKind = Literal["ai", "command", "script", "content", "subgraph"]
+
+# Node kinds are registry identifiers, not a closed enum.  Keeping this alias
+# open is what lets a saved graph retain trusted plugin types without a runtime
+# release for every new node (the historical five names remain registered).
+WorkflowNodeKind = str
+_BUILTIN_EXECUTORS = {
+    "ai", "model", "agent", "command", "script", "content", "subgraph",
+    "passthrough", "template", "condition", "merge", "join", "wait_event", "approval",
+}
 PortDirection = Literal["in", "out"]
-NodeStateStatus = Literal["idle", "running", "done", "error", "skipped", "cancelled"]
+NodeStateStatus = Literal["idle", "running", "waiting", "done", "error", "skipped", "cancelled"]
+
+# Coordination is process-local by design.  Keys include durable-store
+# identity so distinct WorkflowRunner instances serving the same local store
+# share one signal claim without serializing unrelated projects/runs.
+_PROCESS_SIGNAL_LOCKS: dict[tuple[str, str, str], asyncio.Lock] = {}
+_PROCESS_SIGNAL_LOCK_USERS: dict[tuple[str, str, str], int] = {}
+_PROCESS_RUN_LOCKS: dict[tuple[str, str, str], asyncio.Lock] = {}
+_PROCESS_RUN_LOCK_USERS: dict[tuple[str, str, str], int] = {}
+
+
+@dataclass(frozen=True)
+class WorkflowExecutionContext:
+    """Host correlation and authority carried across every workflow boundary.
+
+    The context is the one propagation object shared by AI/Agent nodes,
+    nested workflows, and workflow-as-tool calls.  New fields are optional so
+    existing direct Runner callers keep their historical construction shape.
+    """
+
+    parent_session_id: str = ""
+    parent_run_id: str = ""
+    parent_turn_id: str = ""
+    parent_call_id: str = ""
+    cwd: str = ""
+    cancellation: Any = None
+    # Queue shutdowns use a separate, dynamically-set token so an interrupted
+    # run can be persisted and resumed.  A bool is also accepted for direct
+    # callers; normal cancellation keeps the historical cancelled contract.
+    pause_on_cancel: Any = False
+    permissions: dict[str, Any] = field(default_factory=dict)
+    event_metadata: dict[str, Any] = field(default_factory=dict)
+    attachments: list[Any] = field(default_factory=list)
+    runtime_snapshot: Any = None
+    environment: dict[str, Any] = field(default_factory=dict)
+    capabilities: dict[str, Any] = field(default_factory=dict)
+    # Resolved credential material is an execution-only child-context value.
+    # It is deliberately excluded from repr/compare and from ``metadata``;
+    # ``child()`` constructs a fresh context and therefore clears it.
+    runtime_credentials: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    trace_id: str = ""
+    # ``lineage`` contains parent call identifiers in order.  ``workflow_stack``
+    # is separate because it is used for cycle detection, not presentation.
+    lineage: tuple[str, ...] = ()
+    workflow_stack: tuple[str, ...] = ()
+    depth: int = 0
+    max_depth: int = 16
+    # Set only by the runner's own child/enter helpers.  A serialized context
+    # intentionally omits this marker, so a caller cannot smuggle a stack
+    # containing the workflow being invoked past the root cycle guard.
+    _workflow_stack_internal: bool = field(default=False, repr=False, compare=False)
+    # ``snapshot`` is the short spelling used by a few host adapters.  Keep
+    # ``runtime_snapshot`` as the canonical wire key for Core compatibility.
+    snapshot: Any = None
+
+    def __post_init__(self) -> None:
+        # Older callers put trace information exclusively in
+        # ``event_metadata``.  Surface it on the explicit field too so all
+        # adapters observe one canonical value while preserving object
+        # identity for legacy integration tests.
+        if not self.trace_id and isinstance(self.event_metadata, dict):
+            trace = self.event_metadata.get("trace_id") or self.event_metadata.get("traceId")
+            if trace:
+                object.__setattr__(self, "trace_id", str(trace))
+        if self.runtime_snapshot is None and self.snapshot is not None:
+            object.__setattr__(self, "runtime_snapshot", self.snapshot)
+        elif self.snapshot is None and self.runtime_snapshot is not None:
+            object.__setattr__(self, "snapshot", self.runtime_snapshot)
+
+    def child(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        call_id: str = "",
+        workflow_id: str = "",
+    ) -> "WorkflowExecutionContext":
+        """Create a nested context while inheriting authority and cancel.
+
+        Child permissions/capabilities are copies, never a fresh unrestricted
+        mapping.  ``workflow_id`` is appended only for cycle detection; a
+        repeated workflow therefore fails before it can execute a node.
+        """
+        parent_call = call_id or self.parent_call_id
+        lineage = tuple(self.lineage)
+        if self.parent_call_id:
+            lineage = (*lineage, self.parent_call_id)
+        if call_id and (not lineage or lineage[-1] != call_id):
+            lineage = (*lineage, call_id)
+        stack = tuple(self.workflow_stack)
+        if workflow_id:
+            stack = (*stack, str(workflow_id))
+        return WorkflowExecutionContext(
+            parent_session_id=session_id,
+            parent_run_id=run_id,
+            parent_turn_id=self.parent_turn_id,
+            parent_call_id=parent_call,
+            cwd=self.cwd,
+            cancellation=self.cancellation,
+            pause_on_cancel=self.pause_on_cancel,
+            permissions=dict(self.permissions),
+            event_metadata=dict(self.event_metadata),
+            attachments=list(self.attachments),
+            runtime_snapshot=_json_copy(self.runtime_snapshot),
+            environment=_json_copy(self.environment),
+            capabilities=_json_copy(self.capabilities),
+            trace_id=self.trace_id,
+            lineage=lineage,
+            workflow_stack=stack,
+            depth=max(0, int(self.depth)) + 1,
+            max_depth=max(0, int(self.max_depth)),
+            snapshot=_json_copy(self.snapshot),
+            _workflow_stack_internal=True,
+        )
+
+    def enter_workflow(self, workflow_id: str) -> "WorkflowExecutionContext":
+        """Mark a workflow active, rejecting recursive/cyclic invocation."""
+        identity = str(workflow_id or "").strip()
+        if not identity:
+            return self
+        if identity in self.workflow_stack:
+            raise WorkflowRecursionError(
+                f"workflow invocation cycle detected: {' -> '.join((*self.workflow_stack, identity))}"
+            )
+        # ``depth`` is the number of nested workflow boundaries below the
+        # root.  A max depth of zero therefore still permits the root run and
+        # rejects its first child; the boundary is exceeded only at ``>``.
+        if self.depth > max(0, int(self.max_depth)):
+            raise WorkflowNestingError(
+                f"workflow nesting depth limit exceeded ({self.max_depth})"
+            )
+        return replace(
+            self,
+            workflow_stack=(*self.workflow_stack, identity),
+            runtime_credentials={},
+            _workflow_stack_internal=True,
+        )
+
+    def metadata(self) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "parent_session_id": self.parent_session_id,
+            "parent_run_id": self.parent_run_id,
+            "parent_turn_id": self.parent_turn_id,
+            "parent_call_id": self.parent_call_id,
+            "cwd": self.cwd,
+            "pause_on_cancel": _json_copy(self.pause_on_cancel)
+            if isinstance(self.pause_on_cancel, (bool, int, float, str, type(None)))
+            else False,
+            "permissions": _json_copy(self.permissions),
+            "runtime_permissions": _json_copy(self.permissions),
+            **_json_copy(self.event_metadata),
+        }
+        if self.attachments:
+            metadata["attachments"] = _json_copy(self.attachments)
+        if self.runtime_snapshot is not None:
+            metadata["runtime_snapshot"] = _json_copy(self.runtime_snapshot)
+            if self.snapshot is None:
+                metadata["snapshot"] = _json_copy(self.runtime_snapshot)
+        elif self.snapshot is not None:
+            metadata["snapshot"] = _json_copy(self.snapshot)
+        if self.environment:
+            metadata["environment"] = _json_copy(self.environment)
+        if self.capabilities:
+            metadata["capabilities"] = _json_copy(self.capabilities)
+        if self.trace_id:
+            metadata["trace_id"] = self.trace_id
+        if self.lineage:
+            metadata["lineage"] = list(self.lineage)
+        if self.workflow_stack:
+            metadata["workflow_stack"] = list(self.workflow_stack)
+        metadata["depth"] = int(self.depth)
+        metadata["max_depth"] = int(self.max_depth)
+        return metadata
 
 # Sentinel emitted when a node's condition is not met. Downstream nodes whose
 # every input is this sentinel are skipped (cascade); mixed inputs run with
@@ -73,8 +318,92 @@ class WorkflowValidationError(ValueError):
     """Raised when a workflow graph cannot be executed safely."""
 
 
+class WorkflowExpressionError(WorkflowExecutorError):
+    """A safe expression failure preserved as machine-readable node error."""
+
+    def __init__(self, error: ExpressionError) -> None:
+        self.expression_error = error
+        super().__init__(error.to_json())
+
+
 class WorkflowPermissionError(PermissionError):
     """Raised when a command/script node is not allowed by the host gate."""
+
+
+class WorkflowCapabilityError(PermissionError):
+    """Raised when a node declaration is not authorized by its host context."""
+
+
+class WorkflowRecursionError(WorkflowValidationError):
+    """Raised when a nested workflow calls itself through the active chain."""
+
+
+class WorkflowNestingError(WorkflowValidationError):
+    """Raised when the configured nested workflow depth is exceeded."""
+
+
+class LazyInput:
+    """A lazily-resolved workflow input supplied to trusted node executors.
+
+    Lazy inputs are declared on a port (``lazy: true``) or through a node's
+    ``config.lazy_inputs`` data.  The resolver is created by the runner from
+    the value table; it is never loaded from the workflow document.  Built-in
+    executors materialize this object before invoking their host service,
+    while a trusted plugin executor may defer or omit the value as needed.
+    """
+
+    __slots__ = ("name", "_resolver", "_resolved", "_value")
+
+    def __init__(self, name: str, resolver: Callable[[], Any]) -> None:
+        self.name = str(name or "")
+        self._resolver = resolver
+        self._resolved = False
+        self._value: Any = None
+
+    def resolve(self) -> Any:
+        if not self._resolved:
+            self._value = self._resolver()
+            self._resolved = True
+        return self._value
+
+    async def aresolve(self) -> Any:
+        value = self.resolve()
+        if inspect.isawaitable(value):
+            try:
+                value = await value
+            except BaseException:
+                # A failed deferred read must remain retryable.  In
+                # particular, cancellation should not permanently cache the
+                # coroutine object that was interrupted.
+                self._resolved = False
+                self._value = None
+                raise
+            self._value = value
+        return value
+
+    def __await__(self):
+        """Allow trusted executors to use ``await inputs["port"]`` directly."""
+
+        return self.aresolve().__await__()
+
+    @property
+    def value(self) -> Any:
+        return self.resolve()
+
+    @property
+    def resolved(self) -> bool:
+        return self._resolved
+
+    def __repr__(self) -> str:
+        return f"LazyInput({self.name!r}, resolved={self._resolved})"
+
+
+# Alias for plugin authors that use the shorter value terminology.
+LazyValue = LazyInput
+
+
+class WorkflowConflictError(RuntimeError):
+    """Raised when a compare-and-swap revision no longer matches."""
 
 
 def ensure_workflow_id(definition: "WorkflowDef", *, seed: str = "") -> str:
@@ -107,13 +436,20 @@ class WorkflowPort:
     """
 
     name: str
+    # Stable identity is separate from the display/binding name.  Legacy
+    # definitions receive a deterministic id in WorkflowNode.from_dict.
+    id: str = ""
     type: str = "any"  # free-form type name; "any" matches anything
     direction: PortDirection = "in"
     description: str = ""
     value: Any = None
+    # A lazy input is handed to trusted plugin executors as ``LazyInput``.
+    # Built-in executors resolve it at their service boundary.
+    lazy: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
+            "id": self.id,
             "name": self.name,
             "type": self.type,
             "direction": self.direction,
@@ -121,16 +457,20 @@ class WorkflowPort:
         }
         if self.value is not None:
             data["value"] = self.value
+        if self.lazy:
+            data["lazy"] = True
         return data
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "WorkflowPort":
         return cls(
             name=str(value.get("name") or ""),
+            id=str(value.get("id") or value.get("port_id") or value.get("portId") or ""),
             type=str(value.get("type") or "any"),
             direction="out" if str(value.get("direction") or "in") == "out" else "in",
             description=str(value.get("description") or ""),
             value=value.get("value"),
+            lazy=bool(value.get("lazy", value.get("is_lazy", value.get("isLazy", False)))),
         )
 
 
@@ -144,16 +484,27 @@ class WorkflowNode:
     config: dict[str, Any] = field(default_factory=dict)
     ports: list[WorkflowPort] = field(default_factory=list)
     position: dict[str, float] = field(default_factory=dict)
+    type_id: str = ""
+    type_version: int = 1
+    # Canvas-only container relationship.  It is intentionally kept out of
+    # the executable node config/prompt; V2 documents persist it under
+    # ``canvas.node_views[node_id].parent_id``.
+    parent_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "id": self.id,
             "kind": self.kind,
             "title": self.title,
             "config": _json_copy(self.config),
             "ports": [p.to_dict() for p in self.ports],
             "position": dict(self.position),
+            "type_id": self.type_id or self.kind,
+            "type_version": self.type_version,
         }
+        if self.parent_id:
+            data["parent_id"] = self.parent_id
+        return data
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "WorkflowNode":
@@ -166,13 +517,23 @@ class WorkflowNode:
         if raw_kind == "action":
             cfg = value.get("config") if isinstance(value.get("config"), dict) else {}
             raw_kind = "script" if str(cfg.get("action_type") or "").lower() == "script" else "command"
+        node_id = str(value.get("id") or "")
+        ports = [WorkflowPort.from_dict(p) for p in ports_raw if isinstance(p, dict)]
+        for port in ports:
+            if not port.id:
+                port.id = f"port_{uuid.uuid5(uuid.NAMESPACE_URL, f'{node_id}\x1f{port.direction}\x1f{port.name}').hex[:16]}"
+        raw_parent_id = value["parent_id"] if "parent_id" in value else value.get("parentId")
+        parent_id = str(raw_parent_id).strip() if raw_parent_id is not None and str(raw_parent_id).strip() else None
         return cls(
-            id=str(value.get("id") or ""),
+            id=node_id,
             kind=raw_kind,  # type: ignore[arg-type]
             title=str(value.get("title") or ""),
             config=dict(value.get("config") or {}),
-            ports=[WorkflowPort.from_dict(p) for p in ports_raw if isinstance(p, dict)],
+            ports=ports,
             position={k: float(v) for k, v in (value.get("position") or {}).items()} if isinstance(value.get("position"), dict) else {},
+            parent_id=parent_id,
+            type_id=str(value.get("type_id") or value.get("typeId") or raw_kind),
+            type_version=max(1, _as_int(value.get("type_version", value.get("typeVersion")), default=1)),
         )
 
     def input_ports(self) -> list[WorkflowPort]:
@@ -187,11 +548,12 @@ class WorkflowEdge:
     """A connection from a source output port to a target input port.
 
     ``transform`` is an optional JSONPath-style field path (``$.field`` or
-    ``$.a.b``) applied to the upstream value before it reaches the target.
-    ``condition`` is an optional Python expression evaluated against the
-    upstream node's bound inputs (port names as locals); when it evaluates
-    False the edge transmits ``SKIP_SENTINEL`` so downstream nodes on that
-    path are skipped (cascade). Both default to empty (pass-through / always).
+    ``$.a.b``), or a versioned expression AST, applied to the upstream value
+    before it reaches the target. ``condition`` may likewise be a safe AST;
+    legacy strings remain Python conditions evaluated against the upstream
+    node's bound inputs (port names as locals). When false, the edge transmits
+    ``SKIP_SENTINEL`` so downstream nodes on that path are skipped (cascade).
+    Both default to empty (pass-through / always).
     """
 
     id: str
@@ -199,8 +561,13 @@ class WorkflowEdge:
     source_port: str
     target: str  # node id
     target_port: str
-    transform: str = ""
-    condition: str = ""
+    source_port_id: str = ""
+    target_port_id: str = ""
+    # Structured expression ASTs are accepted alongside legacy strings.  The
+    # wire model must retain dictionaries rather than coercing them to text so
+    # runtime can route them through the safe evaluator.
+    transform: Any = ""
+    condition: Any = ""
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -210,6 +577,10 @@ class WorkflowEdge:
             "target": self.target,
             "target_port": self.target_port,
         }
+        if self.source_port_id:
+            data["source_port_id"] = self.source_port_id
+        if self.target_port_id:
+            data["target_port_id"] = self.target_port_id
         if self.transform:
             data["transform"] = self.transform
         if self.condition:
@@ -224,8 +595,10 @@ class WorkflowEdge:
             source_port=str(value.get("source_port") or ""),
             target=str(value.get("target") or ""),
             target_port=str(value.get("target_port") or ""),
-            transform=str(value.get("transform") or ""),
-            condition=str(value.get("condition") or ""),
+            source_port_id=str(value.get("source_port_id") or value.get("sourcePortId") or ""),
+            target_port_id=str(value.get("target_port_id") or value.get("targetPortId") or ""),
+            transform=value.get("transform") or "",
+            condition=value.get("condition") or "",
         )
 
 
@@ -280,6 +653,10 @@ class WorkflowDef:
     map: str = ""
     created_at: datetime = field(default_factory=_utcnow)
     updated_at: datetime = field(default_factory=_utcnow)
+    revision: int = 0
+    # Canonical editable V2 document.  It is deliberately excluded from the
+    # legacy to_dict payload; document APIs expose it explicitly.
+    document: dict[str, Any] | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -296,6 +673,7 @@ class WorkflowDef:
             "map": self.map,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            "revision": self.revision,
         }
 
     @classmethod
@@ -314,6 +692,7 @@ class WorkflowDef:
             map=str(value.get("map") or ""),
             created_at=_parse_dt(value.get("created_at")) or _utcnow(),
             updated_at=_parse_dt(value.get("updated_at")) or _utcnow(),
+            revision=max(0, _as_int(value.get("revision"), default=0)),
         )
 
     def effective_tool_name(self) -> str:
@@ -335,6 +714,16 @@ class WorkflowNodeState:
     output: Any = None
     error: str = ""
     attempts: int = 0
+    # The in-flight attempt identity survives interruption.  Recovery reuses
+    # its idempotency key instead of inventing a second side-effect identity.
+    attempt_id: str = ""
+    idempotency_key: str = ""
+    wait_descriptor: dict[str, Any] = field(default_factory=dict)
+    # Cache facts are part of the durable node state so a UI/CLI can explain
+    # whether a result was reused.  ``bypass`` means the node did not declare
+    # both pure and deterministic semantics.
+    cache_status: str = "bypass"
+    cache_key: str = ""
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
@@ -345,9 +734,37 @@ class WorkflowNodeState:
             "output": self.output,
             "error": self.error,
             "attempts": self.attempts,
+            "attempt_id": self.attempt_id,
+            "idempotency_key": self.idempotency_key,
+            "wait_descriptor": _json_copy(self.wait_descriptor),
+            "cache_status": self.cache_status,
+            "cache_key": self.cache_key,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any], *, node_id: str = "") -> "WorkflowNodeState":
+        status = str(value.get("status") or "idle")
+        if status == "completed":
+            status = "done"
+        if status == "failed":
+            status = "error"
+        if status not in {"idle", "running", "waiting", "done", "error", "skipped", "cancelled"}:
+            status = "idle"
+        return cls(
+            node_id=str(value.get("node_id") or value.get("nodeId") or node_id),
+            status=status,  # type: ignore[arg-type]
+            output=value.get("output"), error=str(value.get("error") or ""),
+            attempts=max(0, _as_int(value.get("attempts"), default=0)),
+            attempt_id=str(value.get("attempt_id") or value.get("attemptId") or ""),
+            idempotency_key=str(value.get("idempotency_key") or value.get("idempotencyKey") or ""),
+            wait_descriptor=dict(value.get("wait_descriptor") or value.get("waitDescriptor") or {}),
+            cache_status=str(value.get("cache_status") or value.get("cache") or "bypass"),
+            cache_key=str(value.get("cache_key") or value.get("cacheKey") or ""),
+            started_at=_parse_dt(value.get("started_at") or value.get("startedAt")),
+            finished_at=_parse_dt(value.get("finished_at") or value.get("finishedAt")),
+        )
 
 
 @dataclass
@@ -361,7 +778,16 @@ class WorkflowRunResult:
     values: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     run_id: str = ""
+    workflow_id: str = ""
+    workflow_revision: int = 0
+    definition_digest: str = ""
+    wait_descriptor: dict[str, Any] = field(default_factory=dict)
     steps_remaining: int = 0
+    # Per-node cache facts.  Values mirror ``WorkflowNodeState`` for callers
+    # that need run-level aggregation without walking node states.
+    cache: dict[str, dict[str, Any]] = field(default_factory=dict)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -371,8 +797,37 @@ class WorkflowRunResult:
             "values": _json_copy(self.values),
             "error": self.error,
             "run_id": self.run_id,
+            "workflow_id": self.workflow_id,
+            "workflow_revision": self.workflow_revision,
+            "definition_digest": self.definition_digest,
+            "wait_descriptor": _json_copy(self.wait_descriptor),
             "steps_remaining": self.steps_remaining,
+            "cache": _json_copy(self.cache),
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "WorkflowRunResult":
+        states = {
+            str(node_id): WorkflowNodeState.from_dict(raw, node_id=str(node_id))
+            for node_id, raw in (value.get("node_states") or {}).items()
+            if isinstance(raw, dict)
+        }
+        return cls(
+            status=str(value.get("status") or "completed"),  # type: ignore[arg-type]
+            output=value.get("output"), node_states=states,
+            values=dict(value.get("values") or {}), error=str(value.get("error") or ""),
+            run_id=str(value.get("run_id") or ""),
+            workflow_id=str(value.get("workflow_id") or value.get("workflowId") or ""),
+            workflow_revision=max(0, _as_int(value.get("workflow_revision", value.get("workflowRevision")), default=0)),
+            definition_digest=str(value.get("definition_digest") or value.get("definitionDigest") or ""),
+            wait_descriptor=dict(value.get("wait_descriptor") or value.get("waitDescriptor") or {}),
+            steps_remaining=_as_int(value.get("steps_remaining"), default=0),
+            cache={str(key): dict(raw) for key, raw in (value.get("cache") or {}).items() if isinstance(raw, dict)},
+            started_at=_parse_dt(value.get("started_at")),
+            finished_at=_parse_dt(value.get("finished_at")),
+        )
 
 
 @dataclass
@@ -383,8 +838,10 @@ class _ActiveWorkflowRun:
     order: list[str]
     node_states: dict[str, WorkflowNodeState]
     values: dict[str, Any]
+    inputs: dict[str, Any] = field(default_factory=dict)
     current_node_id: str = ""
     steps_taken: int = 0
+    execution_context: WorkflowExecutionContext | None = None
 
 
 def _json_copy(value: Any) -> Any:
@@ -392,6 +849,30 @@ def _json_copy(value: Any) -> Any:
         return json.loads(json.dumps(value, default=str, ensure_ascii=False))
     except (TypeError, ValueError):
         return value
+
+
+def _claim_request_fingerprint(identity: Mapping[str, Any]) -> str:
+    """Hash claim identity so durable coordination never stores resume secrets."""
+    canonical = json.dumps(
+        dict(identity), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _coordination_store_key(event_store: Any, snapshot_store: Any) -> str:
+    parts: list[str] = []
+    for store in (event_store, snapshot_store):
+        if store is None:
+            continue
+        candidate = getattr(store, "directory", None) or getattr(store, "path", None)
+        if candidate is not None:
+            try:
+                parts.append(str(Path(candidate).expanduser().resolve()))
+            except OSError:
+                parts.append(str(candidate))
+        else:
+            parts.append(f"object:{id(store)}")
+    return "|".join(parts) or "unconfigured"
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -411,6 +892,7 @@ def validate_workflow(
     *,
     start_node: str | None = None,
     single_node: str | None = None,
+    node_registry: Any = None,
 ) -> None:
     """Validate graph structure and typed connections before execution.
 
@@ -430,8 +912,11 @@ def validate_workflow(
             raise WorkflowValidationError("node id is required")
         if node_id in nodes_by_id:
             raise WorkflowValidationError(f"duplicate node id: {node_id}")
-        if node.kind not in {"ai", "command", "script", "content", "subgraph"}:
-            raise WorkflowValidationError(f"unsupported node kind: {node.kind}")
+        if node.kind not in _BUILTIN_EXECUTORS:
+            schema = node_registry.get(node.kind) if node_registry is not None else None
+            execution = node.config.get("execution") if isinstance(node.config.get("execution"), dict) else {}
+            if schema is None and not bool(execution.get("schema_only", False)):
+                raise WorkflowValidationError(f"unsupported node kind: {node.kind}")
         ports: set[str] = set()
         for port in node.ports:
             port_name = str(port.name or "").strip()
@@ -541,6 +1026,7 @@ def _validate_run_inputs(
 
 
 WorkflowEventCallback = Callable[[RunItemEvent], Awaitable[None] | None]
+_WORKFLOW_MUTATION_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 
 
 class WorkflowManager:
@@ -551,16 +1037,78 @@ class WorkflowManager:
     :mod:`lamtools_core.plugins.bundled.workflow.backend.store`.
     """
 
-    def __init__(self, store: Any) -> None:
+    def __init__(self, store: Any, node_registry: Any = None) -> None:
         self.store = store
+        self.node_registry = node_registry
+
+    def _mutation_lock(self, work_root: str | None) -> asyncio.Lock:
+        provider = getattr(self.store, "mutation_lock", None)
+        if callable(provider):
+            return provider(work_root)
+        # Store-compatible test/embedding implementations may not expose a
+        # lock provider.  Still serialize all managers sharing that store and
+        # scope so expected_revision remains a real compare-and-swap.
+        try:
+            scope = str(Path(work_root).expanduser().resolve()) if work_root else ""
+        except (OSError, TypeError, ValueError):
+            scope = str(work_root or "")
+        key = (id(self.store), scope.casefold())
+        lock = _WORKFLOW_MUTATION_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _WORKFLOW_MUTATION_LOCKS[key] = lock
+        return lock
 
     async def create(self, definition: WorkflowDef) -> WorkflowDef:
-        ensure_workflow_id(definition)
-        validate_workflow(definition)
-        return await self.store.save(definition)
+        async with self._mutation_lock(definition.work_root):
+            ensure_workflow_id(definition)
+            definition.revision = max(1, definition.revision)
+            validate_workflow(definition, node_registry=self.node_registry)
+            return await self.store.save(definition)
 
     async def get(self, name: str, *, work_root: str | None = None) -> WorkflowDef | None:
         return await self.store.get(name, work_root=work_root)
+
+    async def get_document(self, name: str, *, work_root: str | None = None) -> dict[str, Any] | None:
+        from .document import document_from_workflow_def
+
+        definition = await self.get(name, work_root=work_root)
+        return document_from_workflow_def(definition) if definition is not None else None
+
+    async def save_document(
+        self,
+        document: dict[str, Any],
+        *,
+        work_root: str | None = None,
+        expected_revision: int | None = None,
+    ) -> WorkflowDef:
+        """CAS-save one canonical V2 document through the runtime seam."""
+        from .document import canonicalize_document, workflow_def_from_document
+
+        doc = canonicalize_document(document)
+        resource = doc["resource"]
+        active_root = str(work_root if work_root is not None else resource["work_root"])
+        async with self._mutation_lock(active_root):
+            current = await self.store.get(resource["name"], work_root=active_root or None)
+            if current is not None:
+                if expected_revision is not None and current.revision != expected_revision:
+                    raise WorkflowConflictError(
+                        f"workflow revision conflict: expected {expected_revision}, current {current.revision}"
+                    )
+                resource["id"] = current.id
+                resource["created_at"] = current.created_at.isoformat()
+                resource["revision"] = max(1, current.revision + 1)
+            else:
+                if expected_revision not in (None, 0):
+                    raise WorkflowConflictError(
+                        f"workflow revision conflict: expected {expected_revision}, current 0"
+                    )
+                resource["revision"] = max(1, int(resource.get("revision") or 0))
+            resource["work_root"] = active_root
+            resource["updated_at"] = _utcnow().isoformat()
+            definition = workflow_def_from_document(doc)
+            validate_workflow(definition, node_registry=self.node_registry)
+            return await self.store.save(definition)
 
     async def list(self, *, work_root: str | None = None) -> list[WorkflowDef]:
         return await self.store.list(work_root=work_root)
@@ -584,27 +1132,34 @@ class WorkflowManager:
         output_port: str | None = None,
         exposed: bool | None = None,
         tool_name: str | None = None,
+        expected_revision: int | None = None,
     ) -> WorkflowDef:
-        current = await self.store.get(name, work_root=work_root)
-        if current is None:
-            raise LookupError(f"Workflow not found: {name}")
-        if description is not None:
-            current.description = description
-        if nodes is not None:
-            current.nodes = [WorkflowNode.from_dict(n) for n in nodes]
-        if edges is not None:
-            current.edges = [WorkflowEdge.from_dict(e) for e in edges]
-        if input_params is not None:
-            current.input_params = [WorkflowInputParam.from_dict(p) for p in input_params]
-        if output_port is not None:
-            current.output_port = output_port
-        if exposed is not None:
-            current.exposed = exposed
-        if tool_name is not None:
-            current.tool_name = tool_name
-        current.updated_at = _utcnow()
-        validate_workflow(current)
-        return await self.store.save(current)
+        async with self._mutation_lock(work_root):
+            current = await self.store.get(name, work_root=work_root)
+            if current is None:
+                raise LookupError(f"Workflow not found: {name}")
+            if expected_revision is not None and current.revision != expected_revision:
+                raise WorkflowConflictError(
+                    f"workflow revision conflict: expected {expected_revision}, current {current.revision}"
+                )
+            if description is not None:
+                current.description = description
+            if nodes is not None:
+                current.nodes = [WorkflowNode.from_dict(n) for n in nodes]
+            if edges is not None:
+                current.edges = [WorkflowEdge.from_dict(e) for e in edges]
+            if input_params is not None:
+                current.input_params = [WorkflowInputParam.from_dict(p) for p in input_params]
+            if output_port is not None:
+                current.output_port = output_port
+            if exposed is not None:
+                current.exposed = exposed
+            if tool_name is not None:
+                current.tool_name = tool_name
+            current.updated_at = _utcnow()
+            current.revision = max(1, current.revision + 1)
+            validate_workflow(current, node_registry=self.node_registry)
+            return await self.store.save(current)
 
     async def rename(
         self,
@@ -617,21 +1172,23 @@ class WorkflowManager:
         clean_name = str(new_name or "").strip()
         if not clean_name:
             raise ValueError("new workflow name is required")
-        current = await self.store.get(name, work_root=work_root)
-        if current is None:
-            raise LookupError(f"Workflow not found: {name}")
-        if clean_name == current.name:
-            return current
-        collision = await self.store.get(clean_name, work_root=work_root)
-        if collision is not None and collision.id != current.id:
-            raise ValueError(f"Workflow already exists: {clean_name}")
-        current.name = clean_name
-        current.updated_at = _utcnow()
-        validate_workflow(current)
-        return await self.store.save(current)
+        async with self._mutation_lock(work_root):
+            current = await self.store.get(name, work_root=work_root)
+            if current is None:
+                raise LookupError(f"Workflow not found: {name}")
+            if clean_name == current.name:
+                return current
+            collision = await self.store.get(clean_name, work_root=work_root)
+            if collision is not None and collision.id != current.id:
+                raise ValueError(f"Workflow already exists: {clean_name}")
+            current.name = clean_name
+            current.updated_at = _utcnow()
+            validate_workflow(current, node_registry=self.node_registry)
+            return await self.store.save(current)
 
     async def delete(self, name: str, *, work_root: str | None = None) -> bool:
-        return await self.store.delete(name, work_root=work_root)
+        async with self._mutation_lock(work_root):
+            return await self.store.delete(name, work_root=work_root)
 
     async def set_exposed(self, name: str, exposed: bool, *, work_root: str | None = None) -> WorkflowDef:
         return await self.update_fields(name, work_root=work_root, exposed=exposed)
@@ -662,23 +1219,582 @@ class WorkflowRunner:
         *,
         llm_client: Any = None,
         sub_agent_runner: Any = None,
+        model_invoker: ModelInvoker | Any = None,
+        agent_invoker: AgentInvoker | Any = None,
         emit: WorkflowEventCallback | None = None,
         runtime_task_registry: Any = None,
         workflow_store: Any = None,
         permission_service: Any = None,
+        snapshot_store: WorkflowSnapshotStore | None = None,
+        event_store: WorkflowRunEventStore | None = None,
+        claim_store: WorkflowClaimStore | None = None,
+        flow_control_store: FlowControlStore | Any = None,
+        flow_store: FlowControlStore | Any = None,
+        cache_store: WorkflowContentCache | None = None,
+        credential_resolver: Any = None,
+        node_registry: WorkflowNodeRegistry | None = None,
+        executor_registry: WorkflowExecutorRegistry | Any = None,
+        node_executors: dict[str, Any] | None = None,
+        node_executor: Any = None,
+        max_nesting_depth: int = 16,
+        max_depth: int | None = None,
+        max_expansion_nodes: int = 128,
+        max_expansion_edges: int = 512,
+        emit_lifecycle_events: bool = False,
         clock: Callable[[], datetime] = _utcnow,
     ) -> None:
+        # Keep the legacy attributes public for embedders that inspect them,
+        # but make all actual service calls through the explicit adapters.
         self.llm_client = llm_client
         self.sub_agent_runner = sub_agent_runner
+        self.model_invoker = adapt_model_invoker(model_invoker if model_invoker is not None else llm_client)
+        self.agent_invoker = adapt_agent_invoker(agent_invoker if agent_invoker is not None else sub_agent_runner)
         self.emit = emit
         self.runtime_task_registry = runtime_task_registry
         # ``workflow_store`` enables subworkflow nodes to resolve and run other
         # workflow definitions by name.
         self.workflow_store = workflow_store
         self.permission_service = permission_service
+        self.snapshot_store = snapshot_store
+        self.event_store = event_store
+        self.claim_store = claim_store or claim_store_for_runtime(event_store, snapshot_store)
+        # Flow-control is opt-in at the document boundary.  Keep an explicitly
+        # supplied store for hosts/tests; otherwise run-scoped stores are
+        # lazily created from the workflow root so separate projects do not
+        # share a coordinator file accidentally.
+        self.flow_control_store = flow_control_store if flow_control_store is not None else flow_store
+        self._flow_control_stores: dict[str, FlowControlStore] = {}
+        self.cache_store = cache_store or WorkflowContentCache()
+        self.credential_resolver = credential_resolver
+        supplied_schema_registry = getattr(executor_registry, "schema_registry", None)
+        # Older embedders passed the schema registry itself through the
+        # ``executor_registry`` slot.  It already exposes ``get_executor``
+        # and ``register_executor``; preserve that shape instead of silently
+        # constructing a second schema registry that cannot see its custom
+        # node types.
+        executor_is_schema_registry = (
+            supplied_schema_registry is None
+            and callable(getattr(executor_registry, "get_executor", None))
+            and callable(getattr(executor_registry, "register_executor", None))
+        )
+        self.node_registry = (
+            node_registry
+            if node_registry is not None
+            else supplied_schema_registry
+            if supplied_schema_registry is not None
+            else executor_registry
+            if executor_is_schema_registry
+            else WorkflowNodeRegistry()
+        )
+        self.executor_registry = (
+            executor_registry
+            if executor_registry is not None
+            else WorkflowExecutorRegistry(self.node_registry)
+        )
+        self.max_nesting_depth = max(
+            0,
+            int(max_depth if max_depth is not None else max_nesting_depth),
+        )
+        # Zero is useful as a host policy to disable dynamic expansion while
+        # retaining ordinary registered nodes.  Keep that explicit setting
+        # instead of silently widening it to one node.
+        self.max_expansion_nodes = max(0, int(max_expansion_nodes))
+        self.max_expansion_edges = max(0, int(max_expansion_edges))
+        # A singular host executor is a convenience for embedding and is still
+        # subject to the same schema/trust checks when a node has a custom kind.
+        self.node_executor = adapt_node_executor(node_executor) if node_executor is not None else None
+        if node_executors:
+            for type_id, executor in node_executors.items():
+                self._register_node_executor_compat(type_id, executor)
+        # Existing direct Runner consumers receive the historical per-node
+        # event stream. Queue-backed runs opt into lifecycle events (queued is
+        # emitted by the queue itself; Runner emits progress/paused).
+        self.emit_lifecycle_events = emit_lifecycle_events
         self.clock = clock
         self._active_runs: dict[tuple[str, str], _ActiveWorkflowRun] = {}
         self._active_tasks: dict[tuple[str, str], asyncio.Task[Any]] = {}
+        self._run_snapshots: dict[tuple[str, str], WorkflowRunResult] = {}
+        self._run_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._signal_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._run_lock_users: dict[tuple[str, str], int] = {}
+        self._signal_lock_users: dict[tuple[str, str], int] = {}
+        self._terminal_results: OrderedDict[tuple[str, str], WorkflowRunResult] = OrderedDict()
+        self._max_terminal_results = 1024
+
+    def _register_node_executor_compat(self, type_id: str, executor: Any) -> None:
+        """Install a host-supplied executor while preserving old registries."""
+        # ``WorkflowNodeRegistry`` calls this operation ``register_executor``;
+        # ``WorkflowExecutorRegistry`` uses ``register`` for the same action.
+        # Prefer the explicit name so a schema registry passed for legacy
+        # compatibility is not mistaken for its schema-only ``register``
+        # alias.
+        register = getattr(self.executor_registry, "register_executor", None)
+        if not callable(register):
+            register = getattr(self.executor_registry, "register", None)
+        if not callable(register):
+            raise TypeError("workflow executor registry must expose register()")
+        clean_type = str(type_id or "").strip()
+        # ``node_executors`` is an explicit host-owned surface, so it is
+        # trusted by definition.  The registry still requires a matching
+        # schema, preventing an unregistered node from reaching execution.
+        register(clean_type, executor, plugin_id="workflow", trusted=True)
+
+    def _remember_terminal(
+        self, key: tuple[str, str], result: WorkflowRunResult
+    ) -> None:
+        self._terminal_results[key] = WorkflowRunResult.from_dict(result.to_dict())
+        self._terminal_results.move_to_end(key)
+        while len(self._terminal_results) > self._max_terminal_results:
+            self._terminal_results.popitem(last=False)
+
+    def _flow_control_policy(self, workflow: WorkflowDef) -> FlowControlPolicy:
+        """Read the canonical V2 scheduling policy, if this is a V2 run."""
+        if not isinstance(workflow.document, Mapping):
+            return FlowControlPolicy.empty()
+        # Import lazily: document.py uses runtime data-model classes at its
+        # conversion boundary, so importing it at module load would create a
+        # cycle for embedders importing WorkflowRunner directly.
+        from .document import workflow_flow_control_policy
+
+        return workflow_flow_control_policy(workflow)
+
+    def _flow_control_store_for_run(
+        self,
+        workflow: WorkflowDef,
+        work_root: str,
+    ) -> Any:
+        if self.flow_control_store is not None:
+            return self.flow_control_store
+        effective_root = str(work_root or workflow.work_root or "").strip()
+        if effective_root:
+            try:
+                cache_key = str(Path(effective_root).expanduser().resolve())
+            except OSError:
+                cache_key = effective_root
+        else:
+            cache_key = "<default>"
+        store = self._flow_control_stores.get(cache_key)
+        if store is None:
+            store = FlowControlStore(root=effective_root or None)
+            self._flow_control_stores[cache_key] = store
+        return store
+
+    @staticmethod
+    def _flow_control_scope_key(
+        workflow: WorkflowDef,
+        workflow_identity: str,
+        work_root: str,
+    ) -> str:
+        try:
+            root = str(Path(work_root or workflow.work_root or "").expanduser().resolve())
+        except OSError:
+            root = str(work_root or workflow.work_root or "")
+        return stable_scope_key({"workflow_id": workflow_identity, "work_root": root})
+
+    @staticmethod
+    def _flow_control_lease_id(
+        workflow_identity: str,
+        thread_id: str,
+        run_id: str,
+    ) -> str:
+        return stable_scope_key(
+            {"workflow_id": workflow_identity, "thread_id": thread_id, "run_id": run_id},
+            key="run",
+        )
+
+    @staticmethod
+    def _normalize_flow_control_decision(value: Any) -> FlowControlDecision:
+        if isinstance(value, FlowControlDecision):
+            return value
+        if isinstance(value, FlowControlLease):
+            return FlowControlDecision("acquired", lease=value)
+        if isinstance(value, Mapping):
+            lease_value = value.get("lease")
+            lease = (
+                lease_value
+                if isinstance(lease_value, FlowControlLease)
+                else FlowControlLease.from_dict(lease_value)
+                if isinstance(lease_value, Mapping)
+                else None
+            )
+            allowed = bool(value.get("acquired", value.get("allowed", value.get("state") == "acquired")))
+            if allowed:
+                return FlowControlDecision("acquired", lease=lease)
+            return FlowControlDecision(
+                "blocked",
+                reason=str(value.get("reason") or "flow_control"),
+                retry_at=float(value["retry_at"]) if value.get("retry_at") is not None else None,
+                reserved=bool(value.get("reserved", False)),
+            )
+        if isinstance(value, bool):
+            return FlowControlDecision("acquired" if value else "blocked", reason="flow_control" if not value else "")
+        allowed = bool(getattr(value, "acquired", getattr(value, "allowed", False)))
+        if allowed:
+            lease_value = getattr(value, "lease", None)
+            return FlowControlDecision("acquired", lease=lease_value if isinstance(lease_value, FlowControlLease) else None)
+        retry_value = getattr(value, "retry_at", None)
+        try:
+            retry_at = float(retry_value) if retry_value is not None else None
+        except (TypeError, ValueError):
+            retry_at = None
+        return FlowControlDecision(
+            "blocked",
+            reason=str(getattr(value, "reason", "") or "flow_control"),
+            retry_at=retry_at,
+            reserved=bool(getattr(value, "reserved", False)),
+        )
+
+    async def _flow_control_admit(
+        self,
+        workflow: WorkflowDef,
+        *,
+        workflow_identity: str,
+        work_root: str,
+        thread_id: str,
+        run_id: str,
+        workflow_revision: int,
+        workflow_digest: str,
+        previous: WorkflowRunResult | None,
+        prior_values: dict[str, Any] | None,
+        prior_node_states: dict[str, WorkflowNodeState] | None,
+        started_at: datetime,
+        inputs: dict[str, Any] | None,
+    ) -> tuple[FlowControlPolicy, Any, FlowControlLease | Mapping[str, Any] | None, asyncio.Task[Any] | None, asyncio.Event | None, WorkflowRunResult | None]:
+        """Admit one actual run, returning a paused result when blocked."""
+        policy = self._flow_control_policy(workflow)
+        if not policy.enabled:
+            return policy, None, None, None, None, None
+        store = self._flow_control_store_for_run(workflow, work_root)
+        scope_key = self._flow_control_scope_key(workflow, workflow_identity, work_root)
+        lease_id = self._flow_control_lease_id(workflow_identity, thread_id, run_id)
+        decision_raw = await _call_with_supported_kwargs(
+            store.acquire,
+            {
+                "policy": policy,
+                "scope_key": scope_key,
+                "lease_id": lease_id,
+            },
+        )
+        decision = self._normalize_flow_control_decision(decision_raw)
+        if not decision.acquired:
+            retry_at = decision.retry_at
+            descriptor: dict[str, Any] = {
+                "kind": "flow_control",
+                "type": "flow_control",
+                "reason": decision.reason or "flow_control",
+                "blocked_by": decision.reason or "flow_control",
+                "scope_key": scope_key,
+                "lease_id": lease_id,
+                "workflow_id": workflow_identity,
+                "workflow_revision": workflow_revision,
+                "definition_digest": workflow_digest,
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "retry_at": retry_at,
+                "policy": policy.to_dict(),
+            }
+            if decision.reserved:
+                descriptor["reserved"] = True
+            preserved_values = (
+                dict(previous.values)
+                if previous is not None
+                else dict(prior_values or {})
+            )
+            preserved_states = (
+                previous.node_states
+                if previous is not None
+                else (prior_node_states or {})
+            )
+            result = WorkflowRunResult(
+                status="paused",
+                run_id=run_id,
+                workflow_id=workflow_identity,
+                workflow_revision=workflow_revision,
+                definition_digest=workflow_digest,
+                wait_descriptor=descriptor,
+                output=previous.output if previous is not None else None,
+                values=preserved_values,
+                node_states={
+                    node_id: WorkflowNodeState.from_dict(state.to_dict(), node_id=node_id)
+                    for node_id, state in preserved_states.items()
+                },
+                steps_remaining=previous.steps_remaining if previous is not None else 0,
+                started_at=previous.started_at if previous is not None and previous.started_at else started_at,
+                finished_at=None,
+            )
+            await self._append_durable_event(
+                WorkflowRunEvent(
+                    event_id=f"{run_id}:flow-control:{descriptor['reason']}:{retry_at}",
+                    run_id=run_id,
+                    kind="run.flow_control_blocked",
+                    workflow_id=workflow_identity,
+                    workflow_revision=workflow_revision,
+                    payload={"wait_descriptor": _json_copy(descriptor)},
+                )
+            )
+            await self._persist_snapshot(
+                thread_id,
+                run_id,
+                result,
+                workflow=workflow,
+                inputs=inputs,
+            )
+            return policy, store, None, None, None, result
+        lease = decision.lease
+        if lease is None:
+            # A host may provide a boolean admission adapter.  It can grant
+            # admission, but without a lease there is nothing to heartbeat or
+            # release; preserve that adapter contract.
+            return policy, store, None, None, None, None
+        lost = asyncio.Event()
+        heartbeat = asyncio.create_task(
+            self._flow_control_heartbeat(store, lease, lost),
+            name=f"workflow:flow-control:{run_id}",
+        )
+        return policy, store, lease, heartbeat, lost, None
+
+    async def _flow_control_heartbeat(
+        self,
+        store: Any,
+        lease: FlowControlLease | Mapping[str, Any],
+        lost: asyncio.Event,
+    ) -> None:
+        current = lease
+        try:
+            try:
+                lease_seconds = float(getattr(store, "lease_seconds", 30.0))
+            except (TypeError, ValueError):
+                lease_seconds = 30.0
+            interval = max(0.01, min(5.0, lease_seconds / 3.0))
+            while True:
+                await asyncio.sleep(interval)
+                renewed = await _call_with_supported_kwargs(store.renew, {"lease": current})
+                if renewed is None or renewed is False:
+                    lost.set()
+                    return
+                # Some host adapters return a boolean acknowledgement instead
+                # of a refreshed lease.  Keep the original fencing token in
+                # that case; the built-in store returns a new lease object.
+                if renewed is not True:
+                    current = renewed
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            lost.set()
+
+    async def _flow_control_release(
+        self,
+        store: Any,
+        lease: FlowControlLease | Mapping[str, Any] | None,
+        heartbeat: asyncio.Task[Any] | None,
+    ) -> None:
+        if heartbeat is not None and not heartbeat.done():
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+        if store is not None and lease is not None:
+            try:
+                await _call_with_supported_kwargs(store.release, {"lease": lease})
+            except Exception:
+                # Lease release is best effort during cancellation/shutdown;
+                # expiry cleanup/fencing prevents a stale lease from granting
+                # indefinite capacity.
+                pass
+
+    async def _execute_durable_claim(
+        self,
+        kind: Literal["run", "signal"],
+        thread_id: str,
+        run_id: str,
+        operation: Callable[[], Awaitable[WorkflowRunResult]],
+        *,
+        request_fingerprint: str,
+        mismatch_result: Callable[[], WorkflowRunResult] | None = None,
+    ) -> WorkflowRunResult:
+        """Execute under a SQLite lease and fence; waiters observe its result."""
+        if self.claim_store is None:
+            return await operation()
+        while True:
+            acquired = await _call_with_supported_kwargs(
+                self.claim_store.acquire,
+                {
+                    "kind": kind,
+                    "thread_id": thread_id,
+                    "run_id": run_id,
+                    "request_fingerprint": request_fingerprint,
+                },
+            )
+            if acquired.state == "completed" and isinstance(acquired.result, dict):
+                return WorkflowRunResult.from_dict(acquired.result)
+            if acquired.state == "mismatch":
+                if mismatch_result is not None:
+                    return mismatch_result()
+                raise ValueError("workflow signal request does not match the completed claim")
+            if acquired.state == "busy":
+                delay = max(0.01, min(0.2, acquired.retry_at - datetime.now(timezone.utc).timestamp()))
+                await asyncio.sleep(delay)
+                continue
+            lease = acquired.lease
+            if lease is None:
+                raise RuntimeError("workflow durable claim acquisition failed")
+            operation_task = asyncio.create_task(operation())
+
+            async def _heartbeat() -> bool:
+                current_lease = lease
+                interval = max(0.25, self.claim_store.lease_seconds / 3)
+                while not operation_task.done():
+                    await asyncio.sleep(interval)
+                    if operation_task.done():
+                        return True
+                    renewed = await self.claim_store.renew(current_lease)
+                    if renewed is None:
+                        return False
+                    current_lease = renewed
+                return True
+
+            heartbeat_task = asyncio.create_task(_heartbeat())
+            try:
+                done, _ = await asyncio.wait(
+                    {operation_task, heartbeat_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if heartbeat_task in done and heartbeat_task.result() is False:
+                    operation_task.cancel()
+                    await asyncio.gather(operation_task, return_exceptions=True)
+                    raise RuntimeError("workflow durable claim lease was lost")
+                result = await operation_task
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
+                if result.status in {"completed", "failed", "cancelled"}:
+                    if not await self.claim_store.complete(lease, result.to_dict()):
+                        raise RuntimeError("workflow durable claim fence was lost before commit")
+                elif not await self.claim_store.release(lease):
+                    raise RuntimeError("workflow durable claim fence was lost before release")
+                return result
+            except BaseException:
+                if not heartbeat_task.done():
+                    heartbeat_task.cancel()
+                    await asyncio.gather(heartbeat_task, return_exceptions=True)
+                if not operation_task.done():
+                    operation_task.cancel()
+                    await asyncio.gather(operation_task, return_exceptions=True)
+                try:
+                    await self.claim_store.release(lease)
+                except Exception:
+                    pass
+                raise
+
+    def _executor_for_node(self, node: WorkflowNode) -> NodeExecutor | None:
+        """Resolve a plugin executor from the schema/execution registry."""
+        getter = getattr(self.executor_registry, "get", None)
+        executor = getter(node.kind) if callable(getter) else None
+        # ``WorkflowNodeRegistry.get`` returns a schema, not an executor.  A
+        # host may intentionally pass that schema registry in the executor
+        # slot for backwards compatibility, so never adapt a descriptive
+        # schema object into a callable bridge.
+        if executor is not None and not _is_executor_surface(executor):
+            executor = None
+        if executor is None:
+            getter = getattr(self.node_registry, "get_executor", None)
+            executor = getter(node.kind) if callable(getter) else None
+        if executor is None and self.node_executor is not None:
+            # A singular executor may only handle a declared custom type.  It
+            # is never used to bypass schema validation for arbitrary kinds.
+            spec = self.node_registry.get(node.kind) if self.node_registry is not None else None
+            if spec is not None and self._builtin_executor_name(node) is None:
+                executor = self.node_executor
+        return adapt_node_executor(executor) if executor is not None else None
+
+    def _validate_executable_nodes(self, workflow: WorkflowDef) -> None:
+        """Reject schema-only or unknown custom nodes before any side effect."""
+        for node in workflow.nodes:
+            if self._builtin_executor_name(node) is not None:
+                continue
+            spec = self.node_registry.get(node.kind) if self.node_registry is not None else None
+            if spec is None:
+                raise WorkflowExecutorError(
+                    f"workflow node type is not registered: {node.kind}"
+                )
+            if self._executor_for_node(node) is None:
+                raise WorkflowExecutorError(
+                    f"workflow node executor is not registered: {node.kind}"
+                )
+
+    def _check_node_authority(
+        self,
+        node: WorkflowNode,
+        execution_context: WorkflowExecutionContext | None,
+    ) -> None:
+        """Enforce registry declarations against host grants, fail closed.
+
+        A registry declaration describes requirements; it is never itself a
+        grant.  Empty declarations retain the historical compatibility path.
+        """
+
+        spec = self.node_registry.get(node.kind) if self.node_registry is not None else None
+        if spec is None:
+            return
+        required_capabilities = tuple(
+            str(value).strip()
+            for value in (getattr(spec, "capabilities", ()) or ())
+            if str(value).strip()
+        )
+        resource_class = str(getattr(spec, "resource_class", "default") or "default").strip()
+        requirements = getattr(spec, "resource_requirements", {}) or {}
+        if not required_capabilities and resource_class in {"", "default"} and not requirements:
+            return
+        if execution_context is None:
+            raise WorkflowCapabilityError(
+                f"workflow node '{node.kind}' requires an authorized execution context"
+            )
+        grants = _workflow_authorization_grants(execution_context)
+        missing = [name for name in required_capabilities if name not in grants.capabilities]
+        if missing:
+            raise WorkflowCapabilityError(
+                f"workflow node '{node.kind}' requires capabilities: {', '.join(missing)}"
+            )
+        if resource_class not in {"", "default"} or requirements:
+            if not _workflow_resource_authorized(
+                resource_class or "default", requirements, grants.resources
+            ):
+                detail = resource_class or "default"
+                raise WorkflowCapabilityError(
+                    f"workflow node '{node.kind}' requires authorized resource class: {detail}"
+                )
+
+    def _builtin_executor_name(self, node: WorkflowNode) -> str | None:
+        """Resolve only host-owned built-in executor aliases from node schema."""
+        spec = self.node_registry.get(node.kind) if self.node_registry is not None else None
+        if spec is None or not bool(getattr(spec, "builtin", False)):
+            return None
+        name = str(getattr(spec, "executor", "") or "")
+        return name if name in _BUILTIN_EXECUTORS else None
+
+    @staticmethod
+    def _child_context(
+        context: WorkflowExecutionContext | None,
+        *,
+        session_id: str,
+        run_id: str,
+        call_id: str,
+        child_workflow_id: str,
+        parent_workflow_id: str,
+    ) -> WorkflowExecutionContext | None:
+        """Build a nested context and seed the root workflow stack lazily.
+
+        Explicit root contexts are passed unchanged to the first Agent/Model
+        invocation for legacy identity compatibility.  The stack is seeded at
+        the first nested boundary, where it is needed for cycle detection.
+        """
+        if context is None:
+            return None
+        base = context
+        if not base.workflow_stack and parent_workflow_id:
+            base = replace(base, workflow_stack=(str(parent_workflow_id),))
+        return base.child(
+            session_id=session_id,
+            run_id=run_id,
+            call_id=call_id,
+            workflow_id=child_workflow_id,
+        )
 
     async def run(
         self,
@@ -693,6 +1809,10 @@ class WorkflowRunner:
         max_steps: int | None = None,
         start_node: str | None = None,
         single_node: str | None = None,
+        execution_context: WorkflowExecutionContext | None = None,
+        _run_lock_held: bool = False,
+        _process_run_lock_held: bool = False,
+        _durable_run_claim_held: bool = False,
     ) -> WorkflowRunResult:
         """Run a workflow and convert caller cancellation to a stable result.
 
@@ -705,11 +1825,317 @@ class WorkflowRunner:
         effective_run_id = run_id or _new_id("wfrun")
         effective_thread_id = thread_id or f"workflow_thread_{uuid.uuid4().hex}"
         key = (effective_thread_id, effective_run_id)
-        current_task = asyncio.current_task()
-        if current_task is not None:
-            self._active_tasks[key] = current_task
+        if not _run_lock_held:
+            run_lock = self._run_locks.setdefault(key, asyncio.Lock())
+            self._run_lock_users[key] = self._run_lock_users.get(key, 0) + 1
+            try:
+                async with run_lock:
+                    return await self.run(
+                        workflow,
+                        inputs=inputs,
+                        work_root=work_root,
+                        thread_id=effective_thread_id,
+                        run_id=effective_run_id,
+                        prior_values=prior_values,
+                        prior_node_states=prior_node_states,
+                        max_steps=max_steps,
+                        start_node=start_node,
+                        single_node=single_node,
+                        execution_context=execution_context,
+                        _run_lock_held=True,
+                        _process_run_lock_held=_process_run_lock_held,
+                        _durable_run_claim_held=_durable_run_claim_held,
+                    )
+            finally:
+                remaining_users = self._run_lock_users.get(key, 1) - 1
+                if remaining_users <= 0:
+                    self._run_lock_users.pop(key, None)
+                    if self._run_locks.get(key) is run_lock:
+                        self._run_locks.pop(key, None)
+                else:
+                    self._run_lock_users[key] = remaining_users
+        started_at = self.clock()
+        workflow_identity = ensure_workflow_id(workflow)
+        for identity_node in workflow.nodes:
+            for identity_port in identity_node.ports:
+                if not identity_port.id:
+                    identity_port.id = (
+                        "port_"
+                        + uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"{identity_node.id}\x1f{identity_port.direction}\x1f{identity_port.name}",
+                        ).hex[:16]
+                    )
+        workflow_revision = max(0, int(workflow.revision))
+        workflow_digest = definition_digest(workflow.to_dict())
+        cached_terminal = self._terminal_results.get(key)
+        if cached_terminal is not None and (
+            cached_terminal.workflow_id == workflow_identity
+            and cached_terminal.workflow_revision == workflow_revision
+            and cached_terminal.definition_digest == workflow_digest
+        ):
+            self._terminal_results.move_to_end(key)
+            return WorkflowRunResult.from_dict(cached_terminal.to_dict())
+        previous = self._run_snapshots.get(key)
+        snapshot_envelope: dict[str, Any] | None = None
+        if previous is None and self.snapshot_store is not None:
+            try:
+                snapshot_envelope = await self.snapshot_store.get_dict(effective_thread_id, effective_run_id)
+                previous = await self.snapshot_store.get(effective_thread_id, effective_run_id)
+            except Exception:  # noqa: BLE001 - damaged snapshots are disposable
+                previous = None
+        if snapshot_envelope:
+            pinned_id = str(snapshot_envelope.get("workflow_id") or (previous.workflow_id if previous else ""))
+            has_revision = "workflow_revision" in snapshot_envelope or bool(previous and previous.workflow_revision)
+            pinned_revision = _as_int(snapshot_envelope.get("workflow_revision"), default=previous.workflow_revision if previous else 0)
+            pinned_digest = str(snapshot_envelope.get("definition_digest") or (previous.definition_digest if previous else ""))
+            if (
+                (pinned_id and pinned_id != workflow_identity)
+                or (has_revision and pinned_revision != workflow_revision)
+                or (pinned_digest and pinned_digest != workflow_digest)
+            ):
+                return WorkflowRunResult(
+                    status="failed",
+                    error="workflow definition changed since this run started",
+                    run_id=effective_run_id,
+                    workflow_id=pinned_id or workflow_identity,
+                    workflow_revision=pinned_revision,
+                    definition_digest=pinned_digest or workflow_digest,
+                )
+        if self.event_store is not None:
+            journal_events = await self.event_store.list(effective_run_id)
+            if not _process_run_lock_held:
+                process_key = (
+                    _coordination_store_key(self.event_store, self.snapshot_store),
+                    effective_thread_id,
+                    effective_run_id,
+                )
+                process_lock = _PROCESS_RUN_LOCKS.setdefault(process_key, asyncio.Lock())
+                _PROCESS_RUN_LOCK_USERS[process_key] = _PROCESS_RUN_LOCK_USERS.get(process_key, 0) + 1
+                try:
+                    async with process_lock:
+                        return await self.run(
+                            workflow,
+                            inputs=inputs,
+                            work_root=work_root,
+                            thread_id=effective_thread_id,
+                            run_id=effective_run_id,
+                            prior_values=prior_values,
+                            prior_node_states=prior_node_states,
+                            max_steps=max_steps,
+                            start_node=start_node,
+                            single_node=single_node,
+                            execution_context=execution_context,
+                            _run_lock_held=True,
+                            _process_run_lock_held=True,
+                            _durable_run_claim_held=_durable_run_claim_held,
+                        )
+                finally:
+                    remaining_users = _PROCESS_RUN_LOCK_USERS.get(process_key, 1) - 1
+                    if remaining_users <= 0:
+                        _PROCESS_RUN_LOCK_USERS.pop(process_key, None)
+                        if _PROCESS_RUN_LOCKS.get(process_key) is process_lock:
+                            _PROCESS_RUN_LOCKS.pop(process_key, None)
+                    else:
+                        _PROCESS_RUN_LOCK_USERS[process_key] = remaining_users
+            if self.claim_store is not None and not _durable_run_claim_held:
+                return await self._execute_durable_claim(
+                    "run",
+                    effective_thread_id,
+                    effective_run_id,
+                    lambda: self.run(
+                        workflow,
+                        inputs=inputs,
+                        work_root=work_root,
+                        thread_id=effective_thread_id,
+                        run_id=effective_run_id,
+                        prior_values=prior_values,
+                        prior_node_states=prior_node_states,
+                        max_steps=max_steps,
+                        start_node=start_node,
+                        single_node=single_node,
+                        execution_context=execution_context,
+                        _run_lock_held=True,
+                        _process_run_lock_held=True,
+                        _durable_run_claim_held=True,
+                    ),
+                    request_fingerprint=_claim_request_fingerprint(
+                        {
+                            "workflow_id": workflow_identity,
+                            "workflow_revision": workflow_revision,
+                            "definition_digest": workflow_digest,
+                        }
+                    ),
+                    mismatch_result=lambda: WorkflowRunResult(
+                        status="failed",
+                        error="workflow definition changed since this run completed",
+                        run_id=effective_run_id,
+                        workflow_id=workflow_identity,
+                        workflow_revision=workflow_revision,
+                        definition_digest=workflow_digest,
+                    ),
+                )
+            if journal_events:
+                started = next((event for event in journal_events if event.kind == "run.started"), None)
+                if started is not None and (
+                    (started.workflow_id and started.workflow_id != workflow_identity)
+                    or started.workflow_revision != workflow_revision
+                    or (
+                        started.payload.get("definition_digest")
+                        and started.payload.get("definition_digest") != workflow_digest
+                    )
+                ):
+                    return WorkflowRunResult(
+                        status="failed",
+                        error="workflow definition changed since this run started",
+                        run_id=effective_run_id,
+                        workflow_id=started.workflow_id or workflow_identity,
+                        workflow_revision=started.workflow_revision,
+                        definition_digest=str(started.payload.get("definition_digest") or ""),
+                    )
+                terminal = next(
+                    (
+                        event for event in reversed(journal_events)
+                        if event.kind in {"run.completed", "run.failed", "run.cancelled"}
+                    ),
+                    None,
+                )
+                if terminal is not None and isinstance(terminal.payload.get("result"), dict):
+                    # Retrying the same RPC/run id is an idempotent read, not a
+                    # second execution of already-completed side effects.
+                    terminal_result = WorkflowRunResult.from_dict(terminal.payload["result"])
+                    self._remember_terminal(key, terminal_result)
+                    return terminal_result
+                crossed_effect_boundary = any(
+                    event.kind.startswith(("attempt.", "node.")) for event in journal_events
+                )
+                if previous is None and crossed_effect_boundary:
+                    return WorkflowRunResult(
+                        status="failed",
+                        error="durable run snapshot is unavailable; refusing to replay an uncertain side effect",
+                        run_id=effective_run_id,
+                        workflow_id=workflow_identity,
+                        workflow_revision=workflow_revision,
+                        definition_digest=workflow_digest,
+                    )
+        if previous is not None and previous.status == "paused":
+            if prior_values is None:
+                prior_values = dict(previous.values)
+            if prior_node_states is None:
+                prior_node_states = {
+                    node_id: WorkflowNodeState.from_dict(state.to_dict(), node_id=node_id)
+                    for node_id, state in previous.node_states.items()
+                }
+                for state in prior_node_states.values():
+                    if state.status == "running":
+                        state.status = "idle"
+                        state.error = "interrupted"
+                        state.finished_at = None
+        execution_context = execution_context or WorkflowExecutionContext(
+            parent_session_id=effective_thread_id,
+            parent_run_id=effective_run_id,
+            cwd=work_root or workflow.work_root,
+            cancellation=self._cancel_event(effective_thread_id),
+            max_depth=self.max_nesting_depth,
+        )
+        # A caller-created context may carry a larger limit than this runner;
+        # an embedded runner must not be able to widen the host's bound.
+        context_max_depth = max(0, int(execution_context.max_depth))
+        effective_max_depth = min(self.max_nesting_depth, context_max_depth)
+        if context_max_depth != effective_max_depth:
+            execution_context = replace(execution_context, max_depth=effective_max_depth)
+        identity = str(workflow.id or workflow.name or "").strip()
+        workflow_identities = {
+            value
+            for value in (str(workflow.id or "").strip(), str(workflow.name or "").strip())
+            if value
+        }
         try:
-            return await self._run_impl(
+            # Canonical V2 documents are compiled at the execution boundary.
+            # The current runtime consumes WorkflowDef through a compatibility
+            # seam, while compilation enforces editor-only/disabled/schema-only
+            # policy and validates the canvas-free prompt first.
+            if workflow.document is not None:
+                from .document import compile_document, document_from_workflow_def
+
+                compile_document(document_from_workflow_def(workflow))
+            # ``_execute_subgraph`` records the target identity while creating
+            # the child context.  Do not append it twice when that internal
+            # child Runner starts.  A root/operation context, however, is an
+            # external boundary: even a stack ending in the current workflow
+            # must be rejected rather than treated as an already-entered child.
+            if execution_context.workflow_stack:
+                stack = execution_context.workflow_stack
+                matching_entries = [entry for entry in stack if entry in workflow_identities]
+                if matching_entries:
+                    if not (
+                        execution_context._workflow_stack_internal
+                        and stack[-1] in workflow_identities
+                        and len(matching_entries) == 1
+                    ):
+                        raise WorkflowRecursionError(
+                            f"workflow invocation cycle detected: {' -> '.join((*stack, identity))}"
+                        )
+                elif stack[-1] not in workflow_identities:
+                    execution_context = execution_context.enter_workflow(identity)
+            if execution_context.depth > execution_context.max_depth:
+                raise WorkflowNestingError(
+                    f"workflow nesting depth limit exceeded ({execution_context.max_depth})"
+                )
+        except (WorkflowRecursionError, WorkflowNestingError, ValueError) as exc:
+            return WorkflowRunResult(
+                status="failed",
+                error=str(exc),
+                run_id=effective_run_id,
+            )
+        flow_control_store: Any = None
+        flow_control_lease: FlowControlLease | Mapping[str, Any] | None = None
+        flow_control_heartbeat: asyncio.Task[Any] | None = None
+        flow_control_lost: asyncio.Event | None = None
+        current_task = asyncio.current_task()
+        try:
+            (
+                _flow_policy,
+                flow_control_store,
+                flow_control_lease,
+                flow_control_heartbeat,
+                flow_control_lost,
+                blocked_result,
+            ) = await self._flow_control_admit(
+                workflow,
+                workflow_identity=workflow_identity,
+                work_root=work_root,
+                thread_id=effective_thread_id,
+                run_id=effective_run_id,
+                workflow_revision=workflow_revision,
+                workflow_digest=workflow_digest,
+                previous=previous,
+                prior_values=prior_values,
+                prior_node_states=prior_node_states,
+                started_at=started_at,
+                inputs=inputs,
+            )
+            if blocked_result is not None:
+                # Admission pauses before the run enters the active map or
+                # emits run.started.  Keep an in-memory copy as well as the
+                # durable snapshot so a same-run retry can resume without
+                # rebuilding the caller's prior state.
+                blocked_result.cache = _cache_facts(blocked_result.node_states)
+                self._run_snapshots[key] = WorkflowRunResult.from_dict(blocked_result.to_dict())
+                return blocked_result
+            if current_task is not None:
+                self._active_tasks[key] = current_task
+            await self._append_durable_event(
+                WorkflowRunEvent(
+                    event_id=f"{effective_run_id}:run:started",
+                    run_id=effective_run_id,
+                    kind="run.started",
+                    workflow_id=workflow_identity,
+                    workflow_revision=workflow_revision,
+                    payload={"definition_digest": workflow_digest, "thread_id": effective_thread_id},
+                )
+            )
+            result = await self._run_impl(
                 workflow,
                 inputs=inputs,
                 work_root=work_root,
@@ -720,12 +2146,173 @@ class WorkflowRunner:
                 max_steps=max_steps,
                 start_node=start_node,
                 single_node=single_node,
+                execution_context=execution_context,
             )
+            if flow_control_lost is not None and flow_control_lost.is_set():
+                # A lost lease means admission can no longer be proven for
+                # the side effects just attempted.  Do not expose a terminal
+                # success (or a resumable wait) to the caller.
+                result = WorkflowRunResult(
+                    status="failed",
+                    output=None,
+                    node_states=result.node_states,
+                    values=result.values,
+                    error="workflow flow-control lease was lost",
+                    run_id=effective_run_id,
+                    steps_remaining=result.steps_remaining,
+                    cache=result.cache,
+                )
+            result.cache = _cache_facts(result.node_states)
+            result.workflow_id = workflow_identity
+            result.workflow_revision = workflow_revision
+            result.definition_digest = workflow_digest
+            if self.emit_lifecycle_events and result.status in {"completed", "failed", "cancelled"}:
+                await self._emit_run_status(
+                    result.status,
+                    effective_thread_id,
+                    effective_run_id,
+                    workflow_id=workflow.id,
+                    node_id="",
+                    error=result.error,
+                )
+            result.started_at = previous.started_at if previous and previous.started_at else started_at
+            result.finished_at = None if result.status == "paused" else self.clock()
+            await self._append_durable_event(
+                WorkflowRunEvent(
+                    event_id=f"{effective_run_id}:run:{result.status}",
+                    run_id=effective_run_id,
+                    kind=f"run.{result.status}",
+                    workflow_id=workflow_identity,
+                    workflow_revision=workflow_revision,
+                    payload={"error": result.error, "result": result.to_dict()},
+                )
+            )
+            if result.status == "paused":
+                self._run_snapshots[key] = WorkflowRunResult.from_dict(result.to_dict())
+                await self._persist_snapshot(
+                    effective_thread_id,
+                    effective_run_id,
+                    result,
+                    workflow=workflow,
+                    inputs=inputs,
+                )
+            else:
+                self._remember_terminal(key, result)
+                self._run_snapshots.pop(key, None)
+                if self.snapshot_store is not None:
+                    try:
+                        await self.snapshot_store.delete(effective_thread_id, effective_run_id)
+                    except Exception:  # noqa: BLE001 - cleanup is best effort
+                        pass
+            return result
         except asyncio.CancelledError:
-            return self._cancelled_result(key)
+            if _pause_requested(execution_context):
+                result = self._paused_result(key)
+                result.started_at = previous.started_at if previous and previous.started_at else started_at
+                result.finished_at = None
+                self._run_snapshots[key] = WorkflowRunResult.from_dict(result.to_dict())
+                active = self._active_runs.get(key)
+                if active is not None:
+                    await self._persist_snapshot(
+                        effective_thread_id,
+                        effective_run_id,
+                        result,
+                        workflow=active.workflow,
+                        inputs=active.inputs,
+                    )
+                return result
+            result = self._cancelled_result(key)
+            result.started_at = previous.started_at if previous and previous.started_at else started_at
+            result.finished_at = self.clock()
+            self._run_snapshots.pop(key, None)
+            self._remember_terminal(key, result)
+            return result
         finally:
+            await self._flow_control_release(
+                flow_control_store,
+                flow_control_lease,
+                flow_control_heartbeat,
+            )
             self._active_tasks.pop(key, None)
             self._active_runs.pop(key, None)
+
+    async def _persist_snapshot(
+        self,
+        thread_id: str,
+        run_id: str,
+        result: WorkflowRunResult,
+        *,
+        workflow: WorkflowDef,
+        inputs: dict[str, Any] | None,
+    ) -> None:
+        """Persist the latest resumable state when a store is configured."""
+        if self.snapshot_store is None:
+            return
+        try:
+            await self.snapshot_store.save(
+                thread_id,
+                run_id,
+                result,
+                workflow_id=workflow.id,
+                workflow_name=workflow.name,
+                workflow_revision=max(0, int(workflow.revision)),
+                definition_digest=definition_digest(workflow.to_dict()),
+                workflow_definition={
+                    **workflow.to_dict(),
+                    **({"document": _json_copy(workflow.document)} if workflow.document is not None else {}),
+                },
+                inputs=inputs,
+            )
+        except Exception:  # noqa: BLE001 - snapshot persistence is non-fatal
+            pass
+
+    async def _append_durable_event(self, event: WorkflowRunEvent) -> None:
+        """Append before/after side effects when durable journaling is enabled.
+
+        Unlike GUI emission, journal failure is not swallowed: executing a
+        side effect without a durable attempt identity would make recovery
+        unsafe and must fail closed.
+        """
+        if self.event_store is not None:
+            await self.event_store.append(event)
+
+    async def _persist_active_snapshot(
+        self,
+        *,
+        workflow: WorkflowDef,
+        thread_id: str,
+        run_id: str,
+        inputs: dict[str, Any],
+        node_states: dict[str, WorkflowNodeState],
+        values: dict[str, Any],
+        steps_remaining: int,
+    ) -> None:
+        """Write a resumable snapshot after each observable node transition."""
+        await self._persist_snapshot(
+            thread_id,
+            run_id,
+            WorkflowRunResult(
+                status="paused",
+                node_states={
+                    node_id: WorkflowNodeState.from_dict(state.to_dict(), node_id=node_id)
+                    for node_id, state in node_states.items()
+                },
+                values=_json_copy(values),
+                run_id=run_id,
+                steps_remaining=max(0, steps_remaining),
+                cache={
+                    node_id: {
+                        "status": state.cache_status,
+                        "key": state.cache_key,
+                        "hit": state.cache_status == "hit",
+                    }
+                    for node_id, state in node_states.items()
+                    if state.cache_status != "bypass" or state.cache_key
+                },
+            ),
+            workflow=workflow,
+            inputs=inputs,
+        )
 
     async def _run_impl(
         self,
@@ -740,6 +2327,7 @@ class WorkflowRunner:
         max_steps: int | None = None,
         start_node: str | None = None,
         single_node: str | None = None,
+        execution_context: WorkflowExecutionContext | None = None,
     ) -> WorkflowRunResult:
         """Run the workflow.
 
@@ -751,6 +2339,28 @@ class WorkflowRunner:
         ``single_node`` runs exactly one node in isolation.
         """
         inputs = dict(inputs or {})
+        if workflow.document is not None:
+            # V2 workflow-interface names are independent of internal node and
+            # port display names. Bind declared targets into the legacy value
+            # namespace consumed by this runtime seam.
+            document = workflow.document
+            port_names = {
+                (node.get("id"), port.get("id")): port.get("name")
+                for node in document.get("graph", {}).get("nodes", [])
+                if isinstance(node, dict)
+                for port in node.get("ports", [])
+                if isinstance(port, dict)
+            }
+            for item in document.get("interface", {}).get("inputs", []):
+                if not isinstance(item, dict) or item.get("name") not in inputs:
+                    continue
+                target = item.get("target")
+                if not isinstance(target, dict):
+                    continue
+                node_id = str(target.get("node_id") or "")
+                port_name = str(port_names.get((node_id, target.get("port_id"))) or "")
+                if node_id and port_name:
+                    inputs.setdefault(f"{node_id}.{port_name}", inputs[item["name"]])
         work_root = work_root or workflow.work_root
         run_id = run_id or _new_id("wfrun")
         thread_id = thread_id or f"workflow_thread_{uuid.uuid4().hex}"
@@ -761,9 +2371,11 @@ class WorkflowRunner:
                 workflow,
                 start_node=start_node,
                 single_node=single_node,
+                node_registry=self.node_registry,
             )
             _validate_run_inputs(workflow, inputs, dict(prior_values or {}))
-        except WorkflowValidationError as exc:
+            self._validate_executable_nodes(workflow)
+        except (WorkflowValidationError, WorkflowExecutorError) as exc:
             return WorkflowRunResult(
                 status="failed",
                 error=str(exc),
@@ -777,6 +2389,22 @@ class WorkflowRunner:
             order = [single_node]
         elif start_node:
             idx = order.index(start_node)
+            # From-node execution is a deliberate subgraph boundary. Mark the
+            # prefix skipped so a resumed/partial result never presents those
+            # nodes as idle or accidentally tries to execute them later.
+            for skipped_id in order[:idx]:
+                state = (prior_node_states or {}).get(skipped_id) or None
+                if state is None:
+                    # ``node_states`` is initialized below; retain a marker in
+                    # a temporary map by seeding ``prior_node_states``.
+                    if prior_node_states is None:
+                        prior_node_states = {}
+                    prior_node_states.setdefault(
+                        skipped_id,
+                        WorkflowNodeState(node_id=skipped_id, status="skipped", finished_at=self.clock()),
+                    )
+                elif state.status == "idle":
+                    state.status = "skipped"
             order = order[idx:]
 
         values: dict[str, Any] = dict(prior_values or {})
@@ -789,6 +2417,11 @@ class WorkflowRunner:
             key = f"__input__.{name}"
             if name in inputs:
                 values[key] = inputs[name]
+            elif "." in name and name.rsplit(".", 1)[-1] in inputs:
+                # Convenience for partial execution: callers may provide a
+                # single unambiguous port name (``value``) instead of the
+                # canonical ``node.value`` input key.
+                values[key] = inputs[name.rsplit(".", 1)[-1]]
             elif key not in values:
                 values[key] = _workflow_input_default(workflow, name)
 
@@ -801,17 +2434,30 @@ class WorkflowRunner:
             order=order,
             node_states=node_states,
             values=values,
+            inputs=dict(inputs),
+            execution_context=execution_context,
         )
         active_key = (thread_id, run_id)
         self._active_runs[active_key] = active
-        cancel_event = self._cancel_event(thread_id)
+        if self.emit_lifecycle_events:
+            await self._emit_run_status(
+                "running",
+                thread_id,
+                run_id,
+                workflow_id=workflow_id,
+            )
+        cancel_event = (
+            execution_context.cancellation
+            if execution_context is not None and execution_context.cancellation is not None
+            else self._cancel_event(thread_id)
+        )
         steps_taken = 0
 
         for node_id in order:
             active.current_node_id = node_id
             active.steps_taken = steps_taken
-            if cancel_event is not None and cancel_event.is_set():
-                _mark_cancelled(node_states, workflow, order, node_id)
+            if _cancellation_requested(cancel_event):
+                _mark_cancelled(node_states, workflow, order, order.index(node_id))
                 return WorkflowRunResult(
                     status="cancelled",
                     node_states=node_states,
@@ -829,6 +2475,24 @@ class WorkflowRunner:
                 continue  # not yet satisfiable; skip (shouldn't happen in topo order unless input gaps)
 
             if max_steps is not None and steps_taken >= max_steps:
+                await self._persist_active_snapshot(
+                    workflow=workflow,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    inputs=inputs,
+                    node_states=node_states,
+                    values=values,
+                    steps_remaining=len(order) - steps_taken,
+                )
+                if self.emit_lifecycle_events:
+                    await self._emit_run_status(
+                        "paused",
+                        thread_id,
+                        run_id,
+                        workflow_id=workflow_id,
+                        node_id=node.id,
+                        steps_remaining=len(order) - steps_taken,
+                    )
                 return WorkflowRunResult(
                     status="paused",
                     node_states=node_states,
@@ -837,7 +2501,47 @@ class WorkflowRunner:
                     steps_remaining=len(order) - steps_taken,
                 )
 
-            bound_inputs = _bind_inputs(node, workflow, values)
+            try:
+                bound_inputs = _bind_inputs(
+                    node,
+                    workflow,
+                    values,
+                    execution_context=execution_context,
+                )
+            except WorkflowExpressionError as exc:
+                # Edge expressions run while inputs are bound, before the
+                # normal node retry boundary.  Preserve the same failed-node
+                # shape used by builtin executor errors instead of leaking an
+                # exception out of the public Runner API.
+                error_msg = str(exc)
+                state.status = "error"
+                state.error = error_msg
+                state.finished_at = self.clock()
+                await self._emit_state(
+                    node,
+                    "failed",
+                    thread_id,
+                    run_id,
+                    workflow_id=workflow_id,
+                    error=error_msg,
+                )
+                await self._persist_active_snapshot(
+                    workflow=workflow,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    inputs=inputs,
+                    node_states=node_states,
+                    values=values,
+                    steps_remaining=max(0, len(order) - steps_taken - 1),
+                )
+                return WorkflowRunResult(
+                    status="failed",
+                    node_states=node_states,
+                    values=values,
+                    run_id=run_id,
+                    error=error_msg,
+                    steps_remaining=max(0, len(order) - steps_taken - 1),
+                )
 
             # Skip cascade: when every bound input is the sentinel, this node
             # sits on a skipped path — skip it and propagate the sentinel.
@@ -847,7 +2551,68 @@ class WorkflowRunner:
                 for port in node.output_ports():
                     values[f"{node.id}.{port.name}"] = SKIP_SENTINEL
                 await self._emit_state(node, "skipped", thread_id, run_id, workflow_id=workflow_id)
+                await self._persist_active_snapshot(
+                    workflow=workflow,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    inputs=inputs,
+                    node_states=node_states,
+                    values=values,
+                    steps_remaining=len(order) - steps_taken - 1,
+                )
                 continue
+
+            builtin_executor = self._builtin_executor_name(node)
+            if builtin_executor in {"wait_event", "approval"}:
+                if state.status == "waiting" and state.wait_descriptor:
+                    return WorkflowRunResult(
+                        status="paused",
+                        node_states=node_states,
+                        values=values,
+                        run_id=run_id,
+                        steps_remaining=max(0, len(order) - steps_taken),
+                        wait_descriptor=dict(state.wait_descriptor),
+                    )
+                descriptor = self._wait_descriptor(
+                    node,
+                    workflow=workflow,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    kind=builtin_executor,
+                )
+                state.status = "waiting"
+                state.started_at = state.started_at or self.clock()
+                state.finished_at = None
+                state.wait_descriptor = descriptor
+                await self._emit_state(node, "waiting", thread_id, run_id, workflow_id=workflow_id)
+                await self._append_durable_event(
+                    WorkflowRunEvent(
+                        event_id=f"{run_id}:wait:{node.id}:created",
+                        run_id=run_id,
+                        kind="wait.created",
+                        workflow_id=workflow_id,
+                        workflow_revision=workflow.revision,
+                        node_id=node.id,
+                        payload=_json_copy(descriptor),
+                    )
+                )
+                await self._persist_active_snapshot(
+                    workflow=workflow,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    inputs=inputs,
+                    node_states=node_states,
+                    values=values,
+                    steps_remaining=max(0, len(order) - steps_taken),
+                )
+                return WorkflowRunResult(
+                    status="paused",
+                    node_states=node_states,
+                    values=values,
+                    run_id=run_id,
+                    steps_remaining=max(0, len(order) - steps_taken),
+                    wait_descriptor=descriptor,
+                )
 
             await self._emit_state(node, "running", thread_id, run_id, workflow_id=workflow_id)
             state.status = "running"
@@ -857,8 +2622,39 @@ class WorkflowRunner:
                 outputs = await self._execute_with_retries(
                     node, bound_inputs, work_root, state, values,
                     thread_id=thread_id, run_id=run_id,
+                    execution_context=execution_context,
                 )
             except asyncio.CancelledError:
+                if _pause_requested(execution_context):
+                    state.status = "idle"
+                    state.error = state.error or "interrupted"
+                    state.finished_at = None
+                    steps_remaining = max(0, len(order) - steps_taken)
+                    await self._persist_active_snapshot(
+                        workflow=workflow,
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        inputs=inputs,
+                        node_states=node_states,
+                        values=values,
+                        steps_remaining=steps_remaining,
+                    )
+                    if self.emit_lifecycle_events:
+                        await self._emit_run_status(
+                            "paused",
+                            thread_id,
+                            run_id,
+                            workflow_id=workflow_id,
+                            node_id=node.id,
+                            steps_remaining=steps_remaining,
+                        )
+                    return WorkflowRunResult(
+                        status="paused",
+                        node_states=node_states,
+                        values=values,
+                        run_id=run_id,
+                        steps_remaining=steps_remaining,
+                    )
                 state.status = "cancelled"
                 state.finished_at = self.clock()
                 _mark_cancelled(node_states, workflow, order, order.index(node_id) + 1)
@@ -894,6 +2690,15 @@ class WorkflowRunner:
                     for port_name, value in outputs.items():
                         values[f"{node.id}.{port_name}"] = value
                     steps_taken += 1
+                    await self._persist_active_snapshot(
+                        workflow=workflow,
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        inputs=inputs,
+                        node_states=node_states,
+                        values=values,
+                        steps_remaining=len(order) - steps_taken,
+                    )
                     continue
                 if strategy == "skip":
                     state.status = "skipped"
@@ -904,6 +2709,15 @@ class WorkflowRunner:
                     await self._emit_state(
                         node, "skipped", thread_id, run_id,
                         workflow_id=workflow_id, error=error_msg,
+                    )
+                    await self._persist_active_snapshot(
+                        workflow=workflow,
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        inputs=inputs,
+                        node_states=node_states,
+                        values=values,
+                        steps_remaining=len(order) - steps_taken,
                     )
                     continue
                 # Default: abort the whole run.
@@ -927,13 +2741,60 @@ class WorkflowRunner:
             for port_name, value in outputs.items():
                 values[f"{node.id}.{port_name}"] = value
             state.status = "done"
-            state.output = outputs.get(_default_output_port(node)) or (
-                outputs[next(iter(outputs))] if outputs else None
-            )
+            default_port = _default_output_port(node)
+            if default_port in outputs:
+                state.output = outputs[default_port]
+            else:
+                state.output = outputs[next(iter(outputs))] if outputs else None
             state.finished_at = self.clock()
-            await self._emit_state(node, "completed", thread_id, run_id, workflow_id=workflow_id)
+            await self._emit_state(
+                node,
+                "completed",
+                thread_id,
+                run_id,
+                workflow_id=workflow_id,
+                cache_status=state.cache_status,
+                cache_key=state.cache_key,
+            )
             steps_taken += 1
+            await self._persist_active_snapshot(
+                workflow=workflow,
+                thread_id=thread_id,
+                run_id=run_id,
+                inputs=inputs,
+                node_states=node_states,
+                values=values,
+                steps_remaining=len(order) - steps_taken,
+            )
+            if self.emit_lifecycle_events:
+                await self._emit_run_status(
+                    "progress",
+                    thread_id,
+                    run_id,
+                    workflow_id=workflow_id,
+                    node_id=node.id,
+                    steps_completed=steps_taken,
+                    steps_remaining=len(order) - steps_taken,
+                    cache_status=state.cache_status,
+                    cache_key=state.cache_key,
+                )
 
+        unresolved = [
+            node_id
+            for node_id in order
+            if node_states.get(node_id) is not None
+            and node_states[node_id].status == "idle"
+        ]
+        if unresolved:
+            missing = unresolved[0]
+            return WorkflowRunResult(
+                status="failed",
+                node_states=node_states,
+                values=values,
+                error=f"inputs are not ready for node '{missing}'",
+                run_id=run_id,
+                steps_remaining=len(unresolved),
+            )
         output = _resolve_output(workflow, values)
         return WorkflowRunResult(
             status="completed",
@@ -980,6 +2841,315 @@ class WorkflowRunner:
             steps_remaining=remaining,
         )
 
+    def _paused_result(self, key: tuple[str, str]) -> WorkflowRunResult:
+        """Build a resumable result from an in-flight run after shutdown."""
+        active = self._active_runs.get(key)
+        if active is None:
+            return WorkflowRunResult(status="paused", run_id=key[1])
+        current = active.node_states.get(active.current_node_id)
+        # The interrupted node may have performed a partial side effect.  Keep
+        # its attempt count but make it runnable again on the next invocation;
+        # completed/skipped nodes remain durable and are not re-executed.
+        if current is not None and current.status == "running":
+            current.status = "idle"
+            current.error = current.error or "interrupted"
+            current.finished_at = None
+        return WorkflowRunResult(
+            status="paused",
+            node_states=active.node_states,
+            values=active.values,
+            run_id=key[1],
+            steps_remaining=max(0, len(active.order) - active.steps_taken),
+        )
+
+    async def interrupt(self, thread_id: str, run_id: str) -> WorkflowRunResult | None:
+        """Persist a resumable snapshot for a queue/process shutdown.
+
+        This is intentionally separate from user cancellation: queue shutdown
+        asks the runner to preserve progress, while an explicit cancel keeps
+        the terminal ``cancelled`` result.
+        """
+        key = (str(thread_id or ""), str(run_id or ""))
+        active = self._active_runs.get(key)
+        if active is None:
+            return None
+        result = self._paused_result(key)
+        self._run_snapshots[key] = WorkflowRunResult.from_dict(result.to_dict())
+        await self._persist_snapshot(
+            key[0],
+            key[1],
+            result,
+            workflow=active.workflow,
+            inputs=active.inputs,
+        )
+        return result
+
+    def _wait_descriptor(
+        self,
+        node: WorkflowNode,
+        *,
+        workflow: WorkflowDef,
+        thread_id: str,
+        run_id: str,
+        kind: str,
+    ) -> dict[str, Any]:
+        created_at = self.clock()
+        raw_timeout = node.config.get("timeout_seconds", node.config.get("timeout"))
+        try:
+            timeout_seconds = float(raw_timeout) if raw_timeout not in (None, "") else None
+        except (TypeError, ValueError):
+            timeout_seconds = None
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            timeout_seconds = None
+        event_type = str(
+            node.config.get("event_type")
+            or node.config.get("eventType")
+            or ("approval" if kind == "approval" else "event")
+        ).strip()
+        return {
+            "kind": kind,
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "workflow_id": workflow.id,
+            "workflow_revision": workflow.revision,
+            "definition_digest": definition_digest(workflow.to_dict()),
+            "node_id": node.id,
+            "event_type": event_type,
+            "resume_token": secrets.token_urlsafe(24),
+            "created_at": created_at.isoformat(),
+            "deadline": (
+                (created_at + timedelta(seconds=timeout_seconds)).isoformat()
+                if timeout_seconds is not None
+                else None
+            ),
+        }
+
+    async def signal(
+        self,
+        *,
+        thread_id: str,
+        run_id: str,
+        resume_token: str,
+        event_type: str,
+        payload: Mapping[str, Any] | None = None,
+        decision: str = "",
+        _signal_lock_held: bool = False,
+        _process_signal_lock_held: bool = False,
+        _durable_signal_claim_held: bool = False,
+    ) -> WorkflowRunResult:
+        """Resume a persisted wait without polling or occupying a worker."""
+        thread_id = str(thread_id or "").strip()
+        run_id = str(run_id or "").strip()
+        resume_token = str(resume_token or "")
+        event_type = str(event_type or "").strip()
+        if not thread_id or not run_id or not resume_token or not event_type:
+            raise ValueError("thread_id, run_id, resume_token and event_type are required")
+        if not _signal_lock_held:
+            signal_key = (thread_id, run_id)
+            signal_lock = self._signal_locks.setdefault(signal_key, asyncio.Lock())
+            self._signal_lock_users[signal_key] = self._signal_lock_users.get(signal_key, 0) + 1
+            try:
+                async with signal_lock:
+                    return await self.signal(
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        resume_token=resume_token,
+                        event_type=event_type,
+                        payload=payload,
+                        decision=decision,
+                        _signal_lock_held=True,
+                        _process_signal_lock_held=_process_signal_lock_held,
+                        _durable_signal_claim_held=_durable_signal_claim_held,
+                    )
+            finally:
+                remaining_users = self._signal_lock_users.get(signal_key, 1) - 1
+                if remaining_users <= 0:
+                    self._signal_lock_users.pop(signal_key, None)
+                    if self._signal_locks.get(signal_key) is signal_lock:
+                        self._signal_locks.pop(signal_key, None)
+                else:
+                    self._signal_lock_users[signal_key] = remaining_users
+
+        journal_events = await self.event_store.list(run_id) if self.event_store is not None else []
+        if not _process_signal_lock_held:
+            process_key = (
+                _coordination_store_key(self.event_store, self.snapshot_store),
+                thread_id,
+                run_id,
+            )
+            process_lock = _PROCESS_SIGNAL_LOCKS.setdefault(process_key, asyncio.Lock())
+            _PROCESS_SIGNAL_LOCK_USERS[process_key] = _PROCESS_SIGNAL_LOCK_USERS.get(process_key, 0) + 1
+            try:
+                async with process_lock:
+                    # Re-enter and refresh journal/snapshot visibility after
+                    # acquiring the shared claim; the pre-claim read is only
+                    # advisory and may race another Runner instance.
+                    return await self.signal(
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        resume_token=resume_token,
+                        event_type=event_type,
+                        payload=payload,
+                        decision=decision,
+                        _signal_lock_held=True,
+                        _process_signal_lock_held=True,
+                        _durable_signal_claim_held=_durable_signal_claim_held,
+                    )
+            finally:
+                remaining_users = _PROCESS_SIGNAL_LOCK_USERS.get(process_key, 1) - 1
+                if remaining_users <= 0:
+                    _PROCESS_SIGNAL_LOCK_USERS.pop(process_key, None)
+                    if _PROCESS_SIGNAL_LOCKS.get(process_key) is process_lock:
+                        _PROCESS_SIGNAL_LOCKS.pop(process_key, None)
+                else:
+                    _PROCESS_SIGNAL_LOCK_USERS[process_key] = remaining_users
+        if self.claim_store is not None and not _durable_signal_claim_held:
+            return await self._execute_durable_claim(
+                "signal",
+                thread_id,
+                run_id,
+                lambda: self.signal(
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    resume_token=resume_token,
+                    event_type=event_type,
+                    payload=payload,
+                    decision=decision,
+                    _signal_lock_held=True,
+                    _process_signal_lock_held=True,
+                    _durable_signal_claim_held=True,
+                ),
+                request_fingerprint=_claim_request_fingerprint(
+                    {"resume_token": resume_token, "event_type": event_type}
+                ),
+            )
+        accepted = next(
+            (
+                event for event in reversed(journal_events)
+                if event.kind == "wait.signalled"
+                and secrets.compare_digest(
+                    str(event.payload.get("resume_token") or ""), resume_token
+                )
+            ),
+            None,
+        )
+        if accepted is not None:
+            if str(accepted.payload.get("event_type") or "") != event_type:
+                raise ValueError("workflow signal event type mismatch")
+            terminal = next(
+                (
+                    event for event in reversed(journal_events)
+                    if event.kind in {"run.completed", "run.failed", "run.cancelled"}
+                    and isinstance(event.payload.get("result"), dict)
+                ),
+                None,
+            )
+            if terminal is not None:
+                return WorkflowRunResult.from_dict(terminal.payload["result"])
+
+        if self.snapshot_store is None:
+            raise LookupError("workflow durable snapshot store is not configured")
+        envelope = await self.snapshot_store.get_dict(thread_id, run_id)
+        if not envelope:
+            if any(event.kind == "wait.signalled" for event in journal_events):
+                raise ValueError("invalid workflow resume token")
+            raise LookupError(f"waiting workflow run not found: {run_id}")
+        previous = WorkflowRunResult.from_dict(envelope.get("result", envelope))
+        descriptor = dict(previous.wait_descriptor or {})
+        if not descriptor:
+            waiting_state = next(
+                (state for state in previous.node_states.values() if state.status == "waiting"),
+                None,
+            )
+            descriptor = dict(waiting_state.wait_descriptor) if waiting_state is not None else {}
+        if not descriptor or descriptor.get("run_id") != run_id or descriptor.get("thread_id") != thread_id:
+            raise ValueError("workflow run is not waiting for a signal")
+        if accepted is not None and accepted.node_id != str(descriptor.get("node_id") or ""):
+            # This signal was already consumed and the run has advanced to a
+            # later wait. Return the current projection without replaying it.
+            return previous
+        if not secrets.compare_digest(str(descriptor.get("resume_token") or ""), resume_token):
+            raise ValueError("invalid workflow resume token")
+        if str(descriptor.get("event_type") or "") != event_type:
+            raise ValueError("workflow signal event type mismatch")
+
+        raw_definition = envelope.get("workflow_definition")
+        if not isinstance(raw_definition, Mapping) or not raw_definition:
+            raise LookupError("pinned workflow definition is unavailable for this waiting run")
+        workflow = WorkflowDef.from_dict(dict(raw_definition))
+        if isinstance(raw_definition.get("document"), Mapping):
+            workflow.document = _json_copy(raw_definition["document"])
+        pinned_revision = _as_int(envelope.get("workflow_revision"), default=workflow.revision)
+        pinned_digest = str(envelope.get("definition_digest") or "")
+        pinned_payload = {key: value for key, value in raw_definition.items() if key != "document"}
+        if workflow.revision != pinned_revision or (
+            pinned_digest and definition_digest(pinned_payload) != pinned_digest
+        ):
+            raise ValueError("pinned workflow definition identity is invalid")
+
+        node_id = str(descriptor.get("node_id") or "")
+        node = workflow.node(node_id)
+        state = previous.node_states.get(node_id)
+        if node is None or state is None or state.status != "waiting":
+            raise ValueError("workflow waiting node is unavailable")
+        deadline = _parse_dt(descriptor.get("deadline"))
+        signal_payload = dict(payload or {})
+        if deadline is not None and self.clock() >= deadline:
+            wait_result: dict[str, Any] = {
+                "status": "timed_out",
+                "event_type": event_type,
+                "payload": None,
+            }
+        elif descriptor.get("kind") == "approval":
+            normalized = str(decision or signal_payload.get("decision") or "").strip().lower()
+            aliases = {"approved": "approve", "accepted": "approve", "rejected": "reject", "denied": "reject"}
+            normalized = aliases.get(normalized, normalized)
+            if normalized not in {"approve", "reject"}:
+                raise ValueError("approval decision must be approve or reject")
+            wait_result = {
+                "status": "approved" if normalized == "approve" else "rejected",
+                "decision": normalized,
+                "event_type": event_type,
+                "payload": signal_payload,
+            }
+        else:
+            wait_result = {"status": "received", "event_type": event_type, "payload": signal_payload}
+
+        if accepted is None:
+            await self._append_durable_event(
+                WorkflowRunEvent(
+                    event_id=f"{run_id}:wait:{node_id}:signalled",
+                    run_id=run_id,
+                    kind="wait.signalled",
+                    workflow_id=workflow.id,
+                    workflow_revision=workflow.revision,
+                    node_id=node_id,
+                    payload={
+                        "resume_token": resume_token,
+                        "event_type": event_type,
+                        "result": _json_copy(wait_result),
+                    },
+                )
+            )
+        else:
+            wait_result = dict(accepted.payload.get("result") or wait_result)
+
+        output_port = _default_output_port(node) or "output"
+        previous.values[f"{node.id}.{output_port}"] = _json_copy(wait_result)
+        state.status = "done"
+        state.output = _json_copy(wait_result)
+        state.error = ""
+        state.finished_at = self.clock()
+        return await self.run(
+            workflow,
+            inputs=dict(envelope.get("inputs") or {}),
+            work_root=workflow.work_root,
+            thread_id=thread_id,
+            run_id=run_id,
+            prior_values=previous.values,
+            prior_node_states=previous.node_states,
+        )
+
     async def shutdown(self) -> None:
         """Cancel and join Runner-owned workflow tasks during plugin unload."""
         current = asyncio.current_task()
@@ -994,6 +3164,13 @@ class WorkflowRunner:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._active_tasks.clear()
         self._active_runs.clear()
+        self._terminal_results.clear()
+        for key in [key for key, users in self._run_lock_users.items() if users <= 0]:
+            self._run_lock_users.pop(key, None)
+            self._run_locks.pop(key, None)
+        for key in [key for key, users in self._signal_lock_users.items() if users <= 0]:
+            self._signal_lock_users.pop(key, None)
+            self._signal_locks.pop(key, None)
 
     # -- node execution ----------------------------------------------------
 
@@ -1007,33 +3184,477 @@ class WorkflowRunner:
         *,
         thread_id: str = "",
         run_id: str = "",
+        execution_context: WorkflowExecutionContext | None = None,
     ) -> dict[str, Any]:
-        retries = _as_int(node.config.get("retries"), default=0)
+        policy = NodeExecutionPolicy.from_config(node.config)
+        cache_key = ""
+        # A lazy value has deliberately not been observed yet.  Including the
+        # resolver object in a cache key would be unstable and, more
+        # importantly, would turn a declared lazy input into an eager read.
+        cache_enabled = (
+            self._cache_enabled(node)
+            and not _contains_lazy_input(bound_inputs)
+            and not _contains_credential_ref(node.config)
+            and not _contains_credential_ref(bound_inputs)
+        )
+        # Capability/resource declarations are checked before the first
+        # durable attempt event or executor side effect.
+        self._check_node_authority(node, execution_context)
+        if cache_enabled:
+            workflow_id = ""
+            workflow_revision = 0
+            active = self._active_runs.get((thread_id, run_id))
+            if active is not None:
+                workflow_id = active.workflow.id
+                workflow_revision = active.workflow.revision
+            cache_key = content_signature(
+                workflow_id=workflow_id,
+                workflow_revision=workflow_revision,
+                node_id=node.id,
+                node_kind=node.kind,
+                node_config=node.config,
+                bound_inputs=bound_inputs,
+            )
+            state.cache_key = cache_key
+            lookup = await self.cache_store.lookup(cache_key)
+            if lookup.hit:
+                state.cache_status = "hit"
+                state.attempts = max(1, state.attempts)
+                return dict(lookup.value) if isinstance(lookup.value, dict) else {"output": lookup.value}
+            state.cache_status = "miss"
+        else:
+            state.cache_status = "bypass"
+            state.cache_key = ""
         last_exc: Exception | None = None
-        for attempt in range(retries + 1):
-            state.attempts = attempt + 1
+        resuming_attempt = bool(state.attempt_id and state.idempotency_key and state.error == "interrupted")
+        first_number = max(1, state.attempts if resuming_attempt else state.attempts + 1)
+        # A persisted in-flight attempt is always allowed to finish once with
+        # the same idempotency key, even when its configured retry budget is 0.
+        final_number = max(first_number, policy.max_attempts)
+        for number in range(first_number, final_number + 1):
+            if resuming_attempt and number == first_number:
+                attempt_id, idempotency_key = state.attempt_id, state.idempotency_key
+            else:
+                attempt_id, idempotency_key = attempt_identity(run_id, node.id, number)
+            state.attempts = number
+            state.attempt_id = attempt_id
+            state.idempotency_key = idempotency_key
+            state.error = ""
+            attempt_context = execution_context
+            builtin_name = self._builtin_executor_name(node)
+            engine_timeout = None if builtin_name in {"command", "script"} else policy.timeout_seconds
+            # Preserve the legacy adapter's execution-context object identity
+            # for direct, non-durable callers. Durable/plugin runs receive the
+            # explicit attempt/idempotency boundary.
+            if execution_context is not None and (self.event_store is not None or "execution" in node.config):
+                attempt_context = replace(
+                    execution_context,
+                    event_metadata={
+                        **execution_context.event_metadata,
+                        "workflow_attempt_id": attempt_id,
+                        "idempotency_key": idempotency_key,
+                    },
+                    environment={
+                        **execution_context.environment,
+                        "__workflow_timeout_seconds": engine_timeout,
+                    },
+                )
+            if attempt_context is not None and attempt_context.runtime_credentials:
+                attempt_context = replace(attempt_context, runtime_credentials={})
+            await self._append_durable_event(
+                WorkflowRunEvent(
+                    event_id=f"{attempt_id}:started",
+                    run_id=run_id,
+                    kind="attempt.started",
+                    workflow_id=self._active_runs.get((thread_id, run_id)).workflow.id if self._active_runs.get((thread_id, run_id)) else "",
+                    workflow_revision=self._active_runs.get((thread_id, run_id)).workflow.revision if self._active_runs.get((thread_id, run_id)) else 0,
+                    node_id=node.id,
+                    attempt_id=attempt_id,
+                    payload={"number": number, "idempotency_key": idempotency_key},
+                )
+            )
+            active_run = self._active_runs.get((thread_id, run_id))
+            if active_run is not None:
+                await self._persist_active_snapshot(
+                    workflow=active_run.workflow,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    inputs=active_run.inputs,
+                    node_states=active_run.node_states,
+                    values=active_run.values,
+                    steps_remaining=max(0, len(active_run.order) - active_run.steps_taken),
+                )
             try:
-                if node.kind == "ai":
-                    return await self._execute_ai(node, bound_inputs, work_root)
-                if node.kind == "content":
-                    return await self._execute_content(node, bound_inputs, work_root)
-                if node.kind == "subgraph":
-                    return await self._execute_subgraph(node, bound_inputs, work_root, thread_id, run_id)
-                if node.kind == "command":
-                    return await self._execute_command(node, bound_inputs, work_root)
-                if node.kind == "script":
-                    return await self._execute_script(node, bound_inputs, work_root)
-                raise ValueError(f"unsupported node kind: {node.kind}")
+                # Resolve each attempt into a fresh node/context pair.  The
+                # caller's node/context are shared graph inputs and remain
+                # reference-only, while a retry receives a new short-lived
+                # credential scope.
+                attempt_execution_context = attempt_context
+                execution_node = node
+                execution_inputs = bound_inputs
+                resolved_credentials: dict[str, Any] = {}
+                resolved_secrets: list[Any] = []
+                if _contains_credential_ref(node.config) or _contains_credential_ref(bound_inputs):
+                    base_context = attempt_context or WorkflowExecutionContext()
+                    resolved_config = await _resolve_workflow_credentials(
+                        node.config,
+                        self.credential_resolver,
+                        execution_context,
+                        resolved_credentials,
+                        resolved_secrets,
+                        path=f"node[{node.id}].config",
+                    )
+                    resolved_inputs = await _resolve_workflow_credentials(
+                        bound_inputs,
+                        self.credential_resolver,
+                        execution_context,
+                        resolved_credentials,
+                        resolved_secrets,
+                        path=f"node[{node.id}].inputs",
+                    )
+                    execution_node = replace(node, config=resolved_config)
+                    attempt_execution_context = replace(
+                        base_context,
+                        runtime_credentials=dict(resolved_credentials),
+                    )
+                    execution_inputs = resolved_inputs
+                executor = self._executor_for_node(execution_node)
+                builtin_executor = self._builtin_executor_name(execution_node)
+                if executor is not None and builtin_executor is None:
+                    # LazyInput objects are intentionally preserved for trusted
+                    # plugin executors; they decide whether/when to resolve.
+                    raw_result = await _await_with_context_cancel(
+                        self._invoke_node_executor(
+                            executor, execution_node, execution_inputs, attempt_execution_context
+                        ),
+                        attempt_execution_context,
+                    )
+                    normalized = normalize_node_execution_result(
+                        _executor_result_to_legacy(raw_result, node=execution_node)
+                    )
+                    outputs = dict(normalized.outputs)
+                    expansion = normalized.normalized_expansion()
+                    if expansion is not None:
+                        expanded_outputs = await _await_with_context_cancel(
+                            self._execute_expansion(
+                                execution_node,
+                                expansion,
+                                execution_inputs,
+                                work_root,
+                                thread_id,
+                                run_id,
+                                attempt_execution_context,
+                            ),
+                            attempt_execution_context,
+                        )
+                        outputs = {**outputs, **expanded_outputs}
+                elif builtin_executor == "ai":
+                    outputs = await _await_with_context_cancel(
+                        self._execute_ai(
+                            execution_node,
+                            await _materialize_inputs(execution_inputs),
+                            work_root,
+                            attempt_execution_context,
+                        ),
+                        attempt_execution_context,
+                    )
+                elif builtin_executor == "model":
+                    outputs = await _await_with_context_cancel(
+                        self._execute_ai_llm(
+                            execution_node, await _materialize_inputs(execution_inputs), work_root,
+                            str(execution_node.config.get("mode") or "single") == "loop", attempt_execution_context,
+                        ), attempt_execution_context,
+                    )
+                elif builtin_executor == "agent":
+                    outputs = await _await_with_context_cancel(
+                        self._execute_ai_agent(
+                            execution_node, await _materialize_inputs(execution_inputs), work_root, attempt_execution_context,
+                        ), attempt_execution_context,
+                    )
+                elif builtin_executor == "content":
+                    outputs = await _await_with_context_cancel(
+                        self._execute_content(
+                            execution_node,
+                            await _materialize_inputs(execution_inputs),
+                            work_root,
+                        ),
+                        attempt_execution_context,
+                    )
+                elif builtin_executor == "subgraph":
+                    outputs = await _await_with_context_cancel(
+                        self._execute_subgraph(
+                            execution_node,
+                            await _materialize_inputs(execution_inputs),
+                            work_root,
+                            thread_id,
+                            run_id,
+                            attempt_execution_context,
+                        ),
+                        attempt_execution_context,
+                    )
+                elif builtin_executor == "command":
+                    outputs = await _await_with_context_cancel(
+                        self._execute_command(
+                            execution_node,
+                            await _materialize_inputs(execution_inputs),
+                            work_root,
+                            attempt_execution_context,
+                        ),
+                        attempt_execution_context,
+                    )
+                elif builtin_executor == "script":
+                    outputs = await _await_with_context_cancel(
+                        self._execute_script(
+                            execution_node,
+                            await _materialize_inputs(execution_inputs),
+                            work_root,
+                            attempt_execution_context,
+                        ),
+                        attempt_execution_context,
+                    )
+                elif builtin_executor == "passthrough":
+                    outputs = self._execute_passthrough(execution_node, await _materialize_inputs(execution_inputs))
+                elif builtin_executor == "template":
+                    outputs = self._execute_template(
+                        execution_node,
+                        await _materialize_inputs(execution_inputs),
+                        execution_context=attempt_execution_context,
+                    )
+                elif builtin_executor == "condition":
+                    outputs = self._execute_condition(
+                        execution_node,
+                        await _materialize_inputs(execution_inputs),
+                        execution_context=attempt_execution_context,
+                    )
+                elif builtin_executor == "merge":
+                    outputs = self._execute_merge(execution_node, await _materialize_inputs(execution_inputs))
+                elif builtin_executor == "join":
+                    outputs = self._execute_join(execution_node, await _materialize_inputs(execution_inputs))
+                else:
+                    raise WorkflowExecutorError(
+                        f"workflow node executor is not registered: {node.kind}"
+                    )
+                safe_outputs = _redact_runtime_secrets(outputs, resolved_secrets)
+                outputs = (
+                    dict(safe_outputs)
+                    if isinstance(safe_outputs, Mapping)
+                    else {"output": safe_outputs}
+                )
+                if cache_enabled:
+                    await self.cache_store.set(cache_key, outputs)
+                await self._append_durable_event(
+                    WorkflowRunEvent(
+                        event_id=f"{attempt_id}:completed",
+                        run_id=run_id,
+                        kind="attempt.completed",
+                        node_id=node.id,
+                        attempt_id=attempt_id,
+                        payload={"number": number, "idempotency_key": idempotency_key},
+                    )
+                )
+                return outputs
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — retry boundary
-                last_exc = exc
-                if attempt < retries:
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                timed_out = isinstance(exc, TimeoutError)
+                error_text = _redact_exception_text(exc, locals().get("resolved_secrets", []))
+                last_exc = (
+                    RuntimeError(f"node execution timed out after {policy.timeout_seconds}s")
+                    if timed_out and policy.timeout_seconds is not None
+                    else RuntimeError(error_text)
+                )
+                await self._append_durable_event(
+                    WorkflowRunEvent(
+                        event_id=f"{attempt_id}:{'timed_out' if timed_out else 'failed'}",
+                        run_id=run_id,
+                        kind=f"attempt.{'timed_out' if timed_out else 'failed'}",
+                        node_id=node.id,
+                        attempt_id=attempt_id,
+                        payload={
+                            "number": number,
+                            "idempotency_key": idempotency_key,
+                            "error": _redact_exception_text(last_exc, locals().get("resolved_secrets", [])),
+                        },
+                    )
+                )
+                if number < final_number:
+                    await asyncio.sleep(policy.delay_after(number - first_number))
         raise last_exc if last_exc is not None else RuntimeError("node execution failed")
 
+    def _cache_enabled(self, node: WorkflowNode) -> bool:
+        """Return true only for an explicit pure + deterministic declaration."""
+        if node.config.get("cache") is False or node.config.get("cache_enabled") is False:
+            return False
+        spec = self.node_registry.get(node.kind) if self.node_registry is not None else None
+        pure = node.config.get("pure") if "pure" in node.config else (spec.pure if spec else False)
+        deterministic = (
+            node.config.get("deterministic")
+            if "deterministic" in node.config
+            else (spec.deterministic if spec else False)
+        )
+        return pure is True and deterministic is True
+
+    async def _invoke_node_executor(
+        self,
+        executor: NodeExecutor,
+        node: WorkflowNode,
+        bound_inputs: dict[str, Any],
+        execution_context: WorkflowExecutionContext | None,
+    ) -> Any:
+        """Call a registered executor through the explicit adapter boundary."""
+        # ``LegacyNodeExecutorAdapter`` accepts both modern ``context`` and
+        # legacy ``execution_context`` call signatures.  Adapters supplied by
+        # a host may expose the protocol directly, so keep a small fallback
+        # for objects that implement the method but are not wrapped.
+        call = getattr(executor, "execute", None)
+        if not callable(call):
+            raise WorkflowExecutorError("workflow node executor has no execute()")
+        packet = _packet_view_for_inputs(bound_inputs)
+        return await _call_with_supported_kwargs(
+            call,
+            {
+                "node": node,
+                "inputs": bound_inputs,
+                "bound_inputs": bound_inputs,
+                "packet": packet,
+                "data_packet": packet,
+                "context": execution_context,
+                "execution_context": execution_context,
+            },
+        )
+
+    async def _execute_expansion(
+        self,
+        node: WorkflowNode,
+        expansion: WorkflowExpansion,
+        bound_inputs: dict[str, Any],
+        work_root: str,
+        thread_id: str,
+        run_id: str,
+        execution_context: WorkflowExecutionContext | None,
+    ) -> dict[str, Any]:
+        """Run a trusted executor's bounded declarative expansion.
+
+        Expansion data is converted to the normal workflow model and then
+        passes through the same validation, cycle, depth, permission, and
+        cancellation gates as a saved subgraph.  There is no import/eval path
+        from the expansion payload.
+        """
+        try:
+            _assert_json_value(expansion.to_dict())
+        except (TypeError, ValueError) as exc:
+            raise WorkflowExpansionError(
+                "workflow expansion must contain JSON-compatible data only"
+            ) from exc
+        sub_def = self._expansion_definition(node, expansion)
+        if len(sub_def.nodes) > self.max_expansion_nodes:
+            raise WorkflowExpansionError(
+                f"workflow expansion exceeds node limit ({self.max_expansion_nodes})"
+            )
+        if len(sub_def.edges) > self.max_expansion_edges:
+            raise WorkflowExpansionError(
+                f"workflow expansion exceeds edge limit ({self.max_expansion_edges})"
+            )
+        _assert_json_workflow_data(sub_def)
+        try:
+            validate_workflow(sub_def, node_registry=self.node_registry)
+            self._validate_executable_nodes(sub_def)
+        except (WorkflowValidationError, WorkflowExecutorError) as exc:
+            raise WorkflowExpansionError(str(exc)) from exc
+        inputs = dict(expansion.inputs or {})
+        if not inputs:
+            inputs = self._map_entry_inputs(sub_def, bound_inputs)
+        active_parent = self._active_runs.get((thread_id, run_id))
+        parent_workflow_id = str(
+            active_parent.workflow.id or active_parent.workflow.name
+            if active_parent is not None
+            else ""
+        )
+        child_context = self._child_context(
+            execution_context,
+            session_id=thread_id,
+            run_id=run_id,
+            call_id=node.id,
+            child_workflow_id=str(sub_def.id or sub_def.name),
+            parent_workflow_id=parent_workflow_id,
+        )
+        result = await self.run(
+            sub_def,
+            inputs=inputs,
+            work_root=work_root,
+            thread_id=f"{thread_id}.expand",
+            run_id=f"{run_id}.expand",
+            execution_context=child_context,
+        )
+        if result.status == "cancelled":
+            raise asyncio.CancelledError()
+        if result.status != "completed":
+            raise WorkflowExpansionError(
+                f"workflow expansion failed: {result.error or result.status}"
+            )
+        value: Any = result.output
+        if expansion.output_port:
+            value = result.values.get(expansion.output_port, value)
+        out_ports = node.output_ports()
+        if out_ports and isinstance(value, dict):
+            return {port.name: value.get(port.name) for port in out_ports}
+        return {_default_output_port(node) or "output": value}
+
+    def _expansion_definition(
+        self,
+        node: WorkflowNode,
+        expansion: WorkflowExpansion,
+    ) -> WorkflowDef:
+        """Convert a ``WorkflowExpansion`` wire object to a WorkflowDef."""
+        raw_subgraph = expansion.subgraph
+        if raw_subgraph is not None:
+            if isinstance(raw_subgraph, WorkflowDef):
+                # Copy the definition so an executor cannot mutate the host's
+                # saved object while the ephemeral graph runs.
+                return WorkflowDef.from_dict(raw_subgraph.to_dict())
+            if not isinstance(raw_subgraph, Mapping):
+                raise WorkflowExpansionError("workflow expansion subgraph must be an object")
+            try:
+                return WorkflowDef.from_dict(dict(raw_subgraph))
+            except (TypeError, ValueError) as exc:
+                raise WorkflowExpansionError("workflow expansion subgraph is invalid") from exc
+        raw_nodes = list(expansion.nodes or ())
+        raw_edges = list(expansion.edges or ())
+        if not raw_nodes:
+            raise WorkflowExpansionError("workflow expansion requires nodes or subgraph")
+        nodes: list[WorkflowNode] = []
+        for raw in raw_nodes:
+            if isinstance(raw, WorkflowNode):
+                nodes.append(WorkflowNode.from_dict(raw.to_dict()))
+            elif isinstance(raw, dict):
+                nodes.append(WorkflowNode.from_dict(raw))
+            else:
+                raise WorkflowExpansionError("workflow expansion node must be an object")
+        edges: list[WorkflowEdge] = []
+        for raw in raw_edges:
+            if isinstance(raw, WorkflowEdge):
+                edges.append(WorkflowEdge.from_dict(raw.to_dict()))
+            elif isinstance(raw, dict):
+                edges.append(WorkflowEdge.from_dict(raw))
+            else:
+                raise WorkflowExpansionError("workflow expansion edge must be an object")
+        name = str(expansion.name or f"{node.id}:expansion").strip()
+        definition = WorkflowDef(
+            name=name,
+            nodes=nodes,
+            edges=edges,
+            input_params=[
+                _coerce_expansion_input_param(item)
+                for item in expansion.input_params
+            ],
+            output_port=expansion.output_port,
+        )
+        ensure_workflow_id(definition, seed=f"workflow-expansion:{name}:{node.id}")
+        return definition
+
     async def _execute_ai(
-        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
+        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str,
+        execution_context: WorkflowExecutionContext | None = None,
     ) -> dict[str, Any]:
         """Unified AI node. ``config.mode`` selects the execution strategy:
 
@@ -1045,11 +3666,12 @@ class WorkflowRunner:
         cfg = node.config
         mode = str(cfg.get("mode") or "single")
         if mode == "agent":
-            return await self._execute_ai_agent(node, bound_inputs, work_root)
-        return await self._execute_ai_llm(node, bound_inputs, work_root, mode == "loop")
+            return await self._execute_ai_agent(node, bound_inputs, work_root, execution_context)
+        return await self._execute_ai_llm(node, bound_inputs, work_root, mode == "loop", execution_context)
 
     async def _execute_ai_llm(
-        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str, is_loop: bool
+        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str, is_loop: bool,
+        execution_context: WorkflowExecutionContext | None = None,
     ) -> dict[str, Any]:
         cfg = node.config
         instruction = str(cfg.get("instruction") or cfg.get("system_prompt") or "")
@@ -1060,8 +3682,8 @@ class WorkflowRunner:
         max_tokens = cfg.get("max_tokens")
         top_p = cfg.get("top_p")
 
-        if self.llm_client is None:
-            raise RuntimeError("AI node requires an LLM client (none configured)")
+        if self.model_invoker is None:
+            raise RuntimeError("AI node requires a model invoker (none configured)")
         from lamtools_core.llm import ChatMessage, LLMRequest
 
         out_ports = node.output_ports()
@@ -1117,10 +3739,23 @@ class WorkflowRunner:
                 max_tokens=int(max_tokens) if max_tokens is not None else None,
                 top_p=float(top_p) if top_p is not None else None,
                 response_format=response_format,
-                metadata={"reasoning_effort": reasoning_effort} if reasoning_effort else {},
+                metadata={
+                    **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
+                    **(execution_context.metadata() if execution_context else {}),
+                },
             )
-            response = await self.llm_client.complete(request)
-            last_content = response.content or ""
+            response = await self.model_invoker.invoke(
+                request,
+                context=execution_context,
+                attachments=list(execution_context.attachments) if execution_context else [],
+                runtime_snapshot=execution_context.runtime_snapshot if execution_context else None,
+                snapshot=execution_context.snapshot if execution_context else None,
+                environment=dict(execution_context.environment) if execution_context else {},
+                capabilities=dict(execution_context.capabilities) if execution_context else {},
+                trace_id=execution_context.trace_id if execution_context else "",
+                lineage=list(execution_context.lineage) if execution_context else [],
+            )
+            last_content = _response_content(response)
             if is_loop and "[DONE]" in last_content:
                 last_content = last_content.replace("[DONE]", "").strip()
                 break
@@ -1132,7 +3767,8 @@ class WorkflowRunner:
         return self._split_or_fallback(node, last_content)
 
     async def _execute_ai_agent(
-        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
+        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str,
+        execution_context: WorkflowExecutionContext | None = None,
     ) -> dict[str, Any]:
         cfg = node.config
         goal = str(cfg.get("instruction") or cfg.get("goal") or "")
@@ -1156,22 +3792,59 @@ class WorkflowRunner:
                 f"\n\nYou MUST finish with a single JSON object containing these fields: {field_desc}. "
                 "Output only the JSON."
             )
-        if self.sub_agent_runner is None:
-            raise RuntimeError("AI agent mode requires a sub_agent_runner (none configured)")
         raw_allowed = cfg.get("tools") or cfg.get("allowed_tools")
         allowed_tools = (
             [str(item) for item in raw_allowed if str(item).strip()]
             if isinstance(raw_allowed, list)
             else None
         )
-        result = await self.sub_agent_runner.run(
-            task=task,
-            agent=str(cfg.get("agent") or ""),
-            model=str(cfg.get("model_id") or ""),
-            mode=str(cfg.get("mode") or ""),
-            allowed_tools=allowed_tools,
-        )
-        content = getattr(result, "message", None) or ""
+        # Child agents inherit the parent's authority.  A node may narrow an
+        # allow-list, but it cannot request tools outside a parent capability
+        # declaration.
+        inherited_allowed = _inherited_allowed_tools(execution_context)
+        if inherited_allowed is not None:
+            if allowed_tools is None:
+                allowed_tools = list(inherited_allowed)
+            else:
+                allowed_tools = [name for name in allowed_tools if name in inherited_allowed]
+        if self.agent_invoker is None:
+            raise RuntimeError("AI agent mode requires an agent invoker (none configured)")
+        kwargs: dict[str, Any] = {
+            "task": task, "agent": str(cfg.get("agent") or ""),
+            "model": str(cfg.get("model_id") or ""), "mode": str(cfg.get("mode") or ""),
+            "attachments": list(execution_context.attachments) if execution_context else [],
+            "allowed_tools": allowed_tools,
+            "context": execution_context,
+            "runtime_snapshot": execution_context.runtime_snapshot if execution_context else None,
+            "snapshot": execution_context.snapshot if execution_context else None,
+            "environment": dict(execution_context.environment) if execution_context else {},
+            "capabilities": dict(execution_context.capabilities) if execution_context else {},
+            "permissions": dict(execution_context.permissions) if execution_context else {},
+            "trace_id": execution_context.trace_id if execution_context else "",
+            "lineage": list(execution_context.lineage) if execution_context else [],
+        }
+        if execution_context is not None:
+            kwargs.update({
+                "parent_call_id": execution_context.parent_call_id or node.id,
+                "parent_run_id": execution_context.parent_run_id,
+                "parent_turn_id": execution_context.parent_turn_id,
+                "execution_context": execution_context,
+            })
+        result = await _call_with_supported_kwargs(self.agent_invoker.invoke, kwargs)
+        if isinstance(result, str):
+            content = result
+        elif isinstance(result, dict):
+            content = result.get(
+                "message",
+                result.get(
+                    "content",
+                    result.get("text", result.get("output", result.get("result", ""))),
+                ),
+            )
+        else:
+            content = getattr(result, "message", None) or getattr(result, "content", None) or ""
+        if not isinstance(content, str):
+            content = _summarize(content)
         return self._split_or_fallback(node, content)
 
     def _split_or_fallback(self, node: WorkflowNode, raw: str) -> dict[str, Any]:
@@ -1207,6 +3880,92 @@ class WorkflowRunner:
             result[port.name] = port.value
         return result
 
+    def _execute_passthrough(self, node: WorkflowNode, bound_inputs: dict[str, Any]) -> dict[str, Any]:
+        """Map same-name inputs to outputs, with a predictable single-value fallback."""
+        active = {key: value for key, value in bound_inputs.items() if value != SKIP_SENTINEL}
+        fallback = next(iter(active.values()), node.config.get("value"))
+        outputs = node.output_ports()
+        if not outputs:
+            return {_default_output_port(node) or "output": fallback}
+        return {port.name: active.get(port.name, fallback) for port in outputs}
+
+    def _execute_template(
+        self,
+        node: WorkflowNode,
+        bound_inputs: dict[str, Any],
+        *,
+        execution_context: WorkflowExecutionContext | None = None,
+    ) -> dict[str, Any]:
+        raw_template = node.config.get("template", node.config.get("text", node.config.get("content", "")))
+        if _is_structured_expression(raw_template):
+            rendered_value = _evaluate_workflow_expression(
+                raw_template,
+                node=node,
+                bound_inputs=bound_inputs,
+                execution_context=execution_context,
+            )
+            rendered = rendered_value if isinstance(rendered_value, str) else _summarize(rendered_value)
+            return {port.name: rendered for port in node.output_ports()} or {
+                _default_output_port(node) or "output": rendered
+            }
+
+        template = str(raw_template)
+
+        def replace(match: re.Match[str]) -> str:
+            value = bound_inputs.get(match.group(1).strip(), "")
+            if value in (None, SKIP_SENTINEL):
+                return ""
+            return value if isinstance(value, str) else _summarize(value)
+
+        rendered = re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", replace, template)
+        return {port.name: rendered for port in node.output_ports()} or {
+            _default_output_port(node) or "output": rendered
+        }
+
+    def _execute_condition(
+        self,
+        node: WorkflowNode,
+        bound_inputs: dict[str, Any],
+        *,
+        execution_context: WorkflowExecutionContext | None = None,
+    ) -> dict[str, Any]:
+        raw_expression = node.config.get("condition") or node.config.get("expression") or "value"
+        matched = _eval_condition(
+            raw_expression,
+            bound_inputs,
+            node=node,
+            execution_context=execution_context,
+        )
+        value = bound_inputs.get("value", next(iter(bound_inputs.values()), None))
+        result: dict[str, Any] = {}
+        for port in node.output_ports():
+            lowered = port.name.strip().lower()
+            if lowered in {"true", "yes", "then", "matched"}:
+                result[port.name] = value if matched else SKIP_SENTINEL
+            elif lowered in {"false", "no", "else", "unmatched"}:
+                result[port.name] = value if not matched else SKIP_SENTINEL
+            elif lowered in {"result", "condition", "matched_bool"}:
+                result[port.name] = matched
+            else:
+                result[port.name] = value if matched else SKIP_SENTINEL
+        return result or {"true": value if matched else SKIP_SENTINEL, "false": value if not matched else SKIP_SENTINEL}
+
+    def _execute_merge(self, node: WorkflowNode, bound_inputs: dict[str, Any]) -> dict[str, Any]:
+        active: list[Any] = []
+        for value in bound_inputs.values():
+            items = value if isinstance(value, list) else [value]
+            active.extend(item for item in items if item != SKIP_SENTINEL)
+        selected = active[0] if active else SKIP_SENTINEL
+        return {port.name: selected for port in node.output_ports()} or {
+            _default_output_port(node) or "output": selected
+        }
+
+    def _execute_join(self, node: WorkflowNode, bound_inputs: dict[str, Any]) -> dict[str, Any]:
+        joined = {key: value for key, value in bound_inputs.items() if value != SKIP_SENTINEL}
+        return {port.name: joined for port in node.output_ports()} or {
+            _default_output_port(node) or "output": joined
+        }
+
     async def _execute_subgraph(
         self,
         node: WorkflowNode,
@@ -1214,6 +3973,7 @@ class WorkflowRunner:
         work_root: str,
         thread_id: str,
         run_id: str,
+        execution_context: WorkflowExecutionContext | None = None,
     ) -> dict[str, Any]:
         """Execute a referenced workflow with an optional iteration mode.
 
@@ -1242,6 +4002,12 @@ class WorkflowRunner:
 
         iterate = str(cfg.get("iterate") or "none")
         out_port = _default_output_port(node) or "result"
+        active_parent = self._active_runs.get((thread_id, run_id))
+        parent_workflow_id = str(
+            active_parent.workflow.id or active_parent.workflow.name
+            if active_parent is not None
+            else ""
+        )
 
         if iterate == "map":
             # Collect the iterable from the first non-sentinel bound input.
@@ -1253,8 +4019,18 @@ class WorkflowRunner:
             results: list[Any] = []
             for i, item in enumerate(items):
                 sub_inputs = self._map_entry_inputs(sub_def, {"__item__": item})
+                child_thread = f"{thread_id}.map{i}"
+                child_run = f"{run_id}.map{i}"
+                child_context = self._child_context(
+                    execution_context,
+                    session_id=thread_id,
+                    run_id=run_id,
+                    call_id=node.id,
+                    child_workflow_id=str(sub_def.id or sub_def.name),
+                    parent_workflow_id=parent_workflow_id,
+                )
                 sub = await self.run(sub_def, inputs=sub_inputs, work_root=work_root,
-                                      thread_id=f"{thread_id}.map{i}", run_id=f"{run_id}.map{i}")
+                                      thread_id=child_thread, run_id=child_run, execution_context=child_context)
                 if sub.status == "cancelled":
                     raise asyncio.CancelledError()
                 if sub.status != "completed":
@@ -1267,13 +4043,21 @@ class WorkflowRunner:
 
         if iterate == "loop":
             max_iter = max(1, _as_int(cfg.get("max_iterations"), default=5))
-            condition_expr = str(cfg.get("condition") or "")
+            condition_expr = cfg.get("condition") or ""
             # Seed entry inputs from bound_inputs.
             sub_inputs = self._map_entry_inputs(sub_def, bound_inputs)
             output: Any = None
             for i in range(max_iter):
+                child_context = self._child_context(
+                    execution_context,
+                    session_id=thread_id,
+                    run_id=run_id,
+                    call_id=node.id,
+                    child_workflow_id=str(sub_def.id or sub_def.name),
+                    parent_workflow_id=parent_workflow_id,
+                )
                 sub = await self.run(sub_def, inputs=sub_inputs, work_root=work_root,
-                                      thread_id=f"{thread_id}.loop{i}", run_id=f"{run_id}.loop{i}")
+                                      thread_id=f"{thread_id}.loop{i}", run_id=f"{run_id}.loop{i}", execution_context=child_context)
                 output = sub.output
                 if sub.status == "cancelled":
                     raise asyncio.CancelledError()
@@ -1285,7 +4069,13 @@ class WorkflowRunner:
                 # Exit condition: evaluate against the output wrapped as locals.
                 if condition_expr:
                     cond_locals = output if isinstance(output, dict) else {"value": output}
-                    if _eval_condition(condition_expr, cond_locals):
+                    if _eval_condition(
+                        condition_expr,
+                        cond_locals,
+                        node=node,
+                        execution_context=execution_context,
+                        item=output,
+                    ):
                         break
                 # Feed output back for next iteration.
                 if isinstance(output, dict):
@@ -1301,8 +4091,17 @@ class WorkflowRunner:
 
         # iterate == "none": run once.
         sub_inputs = self._map_entry_inputs(sub_def, bound_inputs)
+        child_context = self._child_context(
+            execution_context,
+            session_id=thread_id,
+            run_id=run_id,
+            call_id=node.id,
+            child_workflow_id=str(sub_def.id or sub_def.name),
+            parent_workflow_id=parent_workflow_id,
+        )
         result = await self.run(sub_def, inputs=sub_inputs, work_root=work_root,
-                                thread_id=f"{thread_id}.sub", run_id=f"{run_id}.sub")
+                                thread_id=f"{thread_id}.sub", run_id=f"{run_id}.sub",
+                                execution_context=child_context)
         if result.status == "cancelled":
             raise asyncio.CancelledError()
         if result.status != "completed":
@@ -1346,7 +4145,8 @@ class WorkflowRunner:
         return result
 
     async def _execute_command(
-        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
+        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str,
+        execution_context: WorkflowExecutionContext | None = None,
     ) -> dict[str, Any]:
         """command node: run a shell command (invoke CLI tools).
 
@@ -1358,6 +4158,7 @@ class WorkflowRunner:
             str(node.config.get("command") or ""),
             work_root=work_root,
             node=node,
+            execution_context=execution_context,
         )
         raw = await self._run_command(node.config, bound_inputs, work_root)
         return self._split_or_fallback(node, raw)
@@ -1432,7 +4233,8 @@ class WorkflowRunner:
         return text_out.strip()
 
     async def _execute_script(
-        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
+        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str,
+        execution_context: WorkflowExecutionContext | None = None,
     ) -> dict[str, Any]:
         """script node: Python binder. Runs the script via a generated runner
         that binds input-port names as locals and reads output-port names back;
@@ -1442,6 +4244,7 @@ class WorkflowRunner:
             str(node.config.get("script") or ""),
             work_root=work_root,
             node=node,
+            execution_context=execution_context,
         )
         raw = await self._run_script(node, node.config, bound_inputs, work_root)
         return self._split_or_fallback(node, raw)
@@ -1530,9 +4333,22 @@ class WorkflowRunner:
         *,
         work_root: str,
         node: WorkflowNode,
+        execution_context: WorkflowExecutionContext | None = None,
     ) -> None:
+        permissions = execution_context.permissions if execution_context is not None else {}
+        explicit = permissions.get("run_command")
+        if explicit is None:
+            allowed_operations = permissions.get("allowed_operations")
+            if isinstance(allowed_operations, (list, tuple, set)):
+                explicit = "run_command" in allowed_operations
+        if explicit is not None:
+            if not bool(explicit):
+                raise WorkflowPermissionError("workflow command blocked by execution context")
+            return
         service = self.permission_service
         if service is None:
+            if execution_context is not None and execution_context.event_metadata.get("permission_policy_required"):
+                raise WorkflowPermissionError("workflow command requires an explicit permission policy")
             return
         payload = {
             "command": command,
@@ -1540,6 +4356,7 @@ class WorkflowRunner:
             "source": "workflow",
             "node_id": node.id,
             "node_kind": node.kind,
+            "execution_context": execution_context.metadata() if execution_context else {},
         }
         checker = getattr(service, "check", None)
         if callable(checker):
@@ -1587,9 +4404,64 @@ class WorkflowRunner:
         *,
         workflow_id: str = "",
         error: str = "",
+        cache_status: str = "",
+        cache_key: str = "",
     ) -> None:
+        active = self._active_runs.get((thread_id, run_id))
+        workflow_revision = active.workflow.revision if active is not None else 0
+        event_kind = {
+            "running": "started",
+            "completed": "completed",
+            "failed": "failed",
+            "skipped": "skipped",
+            "cancelled": "cancelled",
+        }.get(str(status), str(status))
+        await self._append_durable_event(
+            WorkflowRunEvent(
+                event_id=f"{run_id}:node:{node.id}:{event_kind}",
+                run_id=run_id,
+                kind=f"node.{event_kind}",
+                workflow_id=workflow_id,
+                workflow_revision=workflow_revision,
+                node_id=node.id,
+                payload={"error": error, "cache_status": cache_status, "cache_key": cache_key},
+            )
+        )
         if self.emit is None:
             return
+        payload: dict[str, Any] = {
+            "plugin_id": "workflow",
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "node_id": node.id,
+            "status": status,
+            "title": node.title,
+            "kind": node.kind,
+            **({"error": error} if error else {}),
+        }
+        if cache_status:
+            payload["cache_status"] = cache_status
+        if cache_key:
+            payload["cache_key"] = cache_key
+        event_metadata: dict[str, Any] = {
+            "plugin_id": "workflow",
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "node_id": node.id,
+        }
+        execution_context = getattr(self._active_runs.get((thread_id, run_id)), "execution_context", None)
+        # Preserve the old event envelope when no explicit parent/correlation
+        # lineage was supplied.  Nested/host-integrated runs include the
+        # lineage IDs so event consumers can follow the call tree.
+        if execution_context is not None and (
+            execution_context.parent_call_id or execution_context.event_metadata
+        ):
+            context_metadata = execution_context.metadata()
+            event_metadata.update({
+                key: context_metadata[key]
+                for key in ("parent_session_id", "parent_run_id", "parent_turn_id", "parent_call_id", "trace_id", "correlation_id")
+                if context_metadata.get(key)
+            })
         event = RunItemEvent(
             kind="status",
             thread_id=thread_id,
@@ -1597,29 +4469,81 @@ class WorkflowRunner:
             turn_id=run_id,
             item_id=node.id,
             status=status,
-            payload={
-                "plugin_id": "workflow",
-                "workflow_id": workflow_id,
-                "run_id": run_id,
-                "node_id": node.id,
-                "status": status,
-                "title": node.title,
-                "kind": node.kind,
-                **({"error": error} if error else {}),
-            },
+            payload=payload,
             source="plugin:workflow",
-            metadata={
-                "plugin_id": "workflow",
-                "workflow_id": workflow_id,
-                "run_id": run_id,
-                "node_id": node.id,
-            },
+            metadata=event_metadata,
         )
         try:
             result = self.emit(event)
             if asyncio.iscoroutine(result):
                 await result
         except Exception:  # noqa: BLE001 — streaming must never break execution
+            pass
+
+    async def _emit_run_status(
+        self,
+        status: str,
+        thread_id: str,
+        run_id: str,
+        *,
+        workflow_id: str = "",
+        node_id: str = "",
+        **details: Any,
+    ) -> None:
+        """Emit lifecycle progress without changing legacy node events."""
+        if self.emit is None:
+            return
+        event_status = status
+        payload: dict[str, Any] = {
+            "plugin_id": "workflow",
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "node_id": node_id,
+            "status": status,
+            **details,
+        }
+        metadata = {
+            "plugin_id": "workflow",
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "node_id": node_id,
+        }
+        execution_context = getattr(
+            self._active_runs.get((thread_id, run_id)),
+            "execution_context",
+            None,
+        )
+        if execution_context is not None and (
+            execution_context.parent_call_id
+            or execution_context.event_metadata
+            or execution_context.trace_id
+            or execution_context.lineage
+        ):
+            context_metadata = execution_context.metadata()
+            for key in (
+                "parent_session_id", "parent_run_id", "parent_turn_id",
+                "parent_call_id", "trace_id", "correlation_id", "lineage",
+                "depth", "workflow_stack",
+            ):
+                if context_metadata.get(key):
+                    metadata[key] = context_metadata[key]
+        try:
+            result = self.emit(
+                RunItemEvent(
+                    kind="status",
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    turn_id=run_id,
+                    item_id=node_id or run_id,
+                    status=event_status,  # type: ignore[arg-type]
+                    payload=payload,
+                    source="plugin:workflow",
+                    metadata=metadata,
+                )
+            )
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:  # noqa: BLE001 - events are observational
             pass
 
 
@@ -1670,11 +4594,48 @@ def _inputs_ready(node: WorkflowNode, workflow: WorkflowDef, values: dict[str, A
     return True
 
 
-def _bind_inputs(node: WorkflowNode, workflow: WorkflowDef, values: dict[str, Any]) -> dict[str, Any]:
+def _is_lazy_port(node: WorkflowNode, port: WorkflowPort) -> bool:
+    """Read the declarative lazy-input flag from a port or node config."""
+    if port.lazy:
+        return True
+    declaration = node.config.get("lazy_inputs", node.config.get("lazyInputs"))
+    if declaration is True:
+        return True
+    if isinstance(declaration, (list, tuple, set)):
+        return port.name in declaration
+    if isinstance(declaration, dict) and port.name in declaration:
+        value = declaration[port.name]
+        if isinstance(value, dict):
+            return bool(value.get("lazy", value.get("enabled", True)))
+        return bool(value)
+    # A node may expose an input schema with per-field lazy declarations.
+    schema = node.config.get("input_schema", node.config.get("inputSchema"))
+    if isinstance(schema, dict):
+        field = schema.get(port.name)
+        if isinstance(field, dict):
+            return bool(field.get("lazy", field.get("deferred", False)))
+    return False
+
+
+def _lazy_input(
+    name: str,
+    resolver: Callable[[], Any],
+) -> LazyInput:
+    return LazyInput(name, resolver)
+
+
+def _bind_inputs(
+    node: WorkflowNode,
+    workflow: WorkflowDef,
+    values: dict[str, Any],
+    *,
+    execution_context: WorkflowExecutionContext | None = None,
+) -> dict[str, Any]:
     """Bind input values from the value table.
 
-    For each edge: if the edge has a ``condition`` (Python expression), it is
-    evaluated against the *source node's* bound inputs (port names as locals).
+    For each edge: if the edge has a structured ``condition`` AST, it is
+    evaluated through the safe evaluator against the *source node's* bound
+    inputs. Legacy string conditions continue through the Python fallback.
     When False, the edge transmits ``SKIP_SENTINEL`` instead of the value, so
     downstream nodes on that path are skipped (cascade). ``transform`` and type
     coercion are applied as before. Multiple edges → values aggregated into a
@@ -1686,7 +4647,11 @@ def _bind_inputs(node: WorkflowNode, workflow: WorkflowDef, values: dict[str, An
     def _get_source_bound(src_id: str) -> dict[str, Any]:
         if src_id not in source_bound:
             src_node = workflow.node(src_id)
-            source_bound[src_id] = _bind_inputs(src_node, workflow, values) if src_node else {}
+            source_bound[src_id] = (
+                _bind_inputs(src_node, workflow, values, execution_context=execution_context)
+                if src_node
+                else {}
+            )
         return source_bound[src_id]
 
     bound: dict[str, Any] = {}
@@ -1695,37 +4660,159 @@ def _bind_inputs(node: WorkflowNode, workflow: WorkflowDef, values: dict[str, An
         if not edges:
             # Orphaned input port → workflow input slot.
             key = f"__input__.{node.id}.{port.name}"
-            if key in values:
+            if _is_lazy_port(node, port):
+                bound[port.name] = _lazy_input(
+                    key,
+                    lambda key=key, port=port: _coerce_value(values.get(key), port.type),
+                )
+            elif key in values:
                 bound[port.name] = _coerce_value(values[key], port.type)
         elif len(edges) == 1:
             edge = edges[0]
             key = f"{edge.source}.{edge.source_port}"
             if key in values:
                 raw = values[key]
-                # Edge condition: evaluate against source node's bound inputs.
-                if edge.condition and not _eval_condition(edge.condition, _get_source_bound(edge.source)):
-                    bound[port.name] = SKIP_SENTINEL
+                if _is_lazy_port(node, port):
+                    def resolve_edge(
+                        edge: WorkflowEdge = edge,
+                        key: str = key,
+                        port: WorkflowPort = port,
+                    ) -> Any:
+                        raw_value = values.get(key)
+                        # Edge condition is part of the deferred read.  This
+                        # prevents a lazy declaration from evaluating a
+                        # source object merely to decide whether it is used.
+                        if edge.condition and not _eval_condition(
+                            edge.condition,
+                            _get_source_bound(edge.source),
+                            node=_source_node(edge.source, workflow),
+                            execution_context=execution_context,
+                        ):
+                            return SKIP_SENTINEL
+                        return _coerce_value(
+                            _apply_transform(
+                                raw_value,
+                                edge.transform,
+                                node=node,
+                                bound_inputs=_get_source_bound(edge.source),
+                                execution_context=execution_context,
+                            ),
+                            port.type,
+                        )
+
+                    bound[port.name] = _lazy_input(key, resolve_edge)
                 else:
-                    val = _apply_transform(raw, edge.transform)
-                    bound[port.name] = _coerce_value(val, port.type)
+                    # Edge condition: evaluate against source node's bound inputs.
+                    if edge.condition and not _eval_condition(
+                        edge.condition,
+                        _get_source_bound(edge.source),
+                        node=_source_node(edge.source, workflow),
+                        execution_context=execution_context,
+                    ):
+                        bound[port.name] = SKIP_SENTINEL
+                    else:
+                        val = _apply_transform(
+                            raw,
+                            edge.transform,
+                            node=node,
+                            bound_inputs=_get_source_bound(edge.source),
+                            execution_context=execution_context,
+                        )
+                        bound[port.name] = _coerce_value(val, port.type)
         else:
             # Multiple edges → aggregate into a list (sentinels filtered).
-            vals: list[Any] = []
-            for edge in edges:
-                key = f"{edge.source}.{edge.source_port}"
-                if key in values:
-                    raw = values[key]
-                    if edge.condition and not _eval_condition(edge.condition, _get_source_bound(edge.source)):
-                        continue  # edge blocked → skip this value
-                    if raw is not None and raw != SKIP_SENTINEL:
-                        vals.append(_coerce_value(_apply_transform(raw, edge.transform), port.type))
-            bound[port.name] = vals
+            if _is_lazy_port(node, port):
+                def resolve_edges(
+                    edges: list[WorkflowEdge] = edges,
+                    port: WorkflowPort = port,
+                ) -> list[Any]:
+                    vals: list[Any] = []
+                    for edge in edges:
+                        key = f"{edge.source}.{edge.source_port}"
+                        if key not in values:
+                            continue
+                        raw = values[key]
+                        if edge.condition and not _eval_condition(
+                            edge.condition,
+                            _get_source_bound(edge.source),
+                            node=_source_node(edge.source, workflow),
+                            execution_context=execution_context,
+                        ):
+                            continue
+                        if raw is not None and raw != SKIP_SENTINEL:
+                            vals.append(
+                                _coerce_value(
+                                    _apply_transform(
+                                        raw,
+                                        edge.transform,
+                                        node=node,
+                                        bound_inputs=_get_source_bound(edge.source),
+                                        execution_context=execution_context,
+                                    ),
+                                    port.type,
+                                )
+                            )
+                    return vals
+
+                bound[port.name] = _lazy_input(
+                    f"{node.id}.{port.name}",
+                    resolve_edges,
+                )
+            else:
+                vals = []
+                for edge in edges:
+                    key = f"{edge.source}.{edge.source_port}"
+                    if key in values:
+                        raw = values[key]
+                        if edge.condition and not _eval_condition(
+                            edge.condition,
+                            _get_source_bound(edge.source),
+                            node=_source_node(edge.source, workflow),
+                            execution_context=execution_context,
+                        ):
+                            continue  # edge blocked → skip this value
+                        if raw is not None and raw != SKIP_SENTINEL:
+                            vals.append(
+                                _coerce_value(
+                                    _apply_transform(
+                                        raw,
+                                        edge.transform,
+                                        node=node,
+                                        bound_inputs=_get_source_bound(edge.source),
+                                        execution_context=execution_context,
+                                    ),
+                                    port.type,
+                                )
+                            )
+                bound[port.name] = vals
     return bound
 
 
-def _apply_transform(value: Any, transform: str) -> Any:
-    """Apply a JSONPath-style field path (``$.field`` or ``$.a.b``) to extract
-    a sub-value. Empty or non-``$.`` transforms pass through unchanged."""
+def _apply_transform(
+    value: Any,
+    transform: Any,
+    *,
+    node: WorkflowNode | None = None,
+    bound_inputs: dict[str, Any] | None = None,
+    execution_context: WorkflowExecutionContext | None = None,
+) -> Any:
+    """Apply a legacy JSONPath or a versioned expression AST.
+
+    Legacy strings retain their pass-through behaviour for empty/non-``$.``
+    values.  Structured ASTs are evaluated with ``item`` bound to the raw
+    upstream value, ``input`` to source-node bound inputs, and a sanitized
+    ``env`` snapshot.
+    """
+    if _is_structured_expression(transform):
+        return _evaluate_workflow_expression(
+            transform,
+            node=node,
+            bound_inputs=bound_inputs or {},
+            execution_context=execution_context,
+            item=value,
+        )
+    if type(transform) is not str:
+        return value
     if not transform or not transform.startswith("$."):
         return value
     path = transform[2:]
@@ -1769,6 +4856,30 @@ def _resolve_output(workflow: WorkflowDef, values: dict[str, Any]) -> Any:
     """Workflow output = the values on terminal output ports (out-ports with no
     outgoing edge). One terminal port → its value; several → a dict keyed by
     ``{nodeId}.{portName}``. Falls back to the legacy ``output_port`` spec."""
+    if workflow.document is not None:
+        outputs = workflow.document.get("interface", {}).get("outputs", [])
+        if outputs:
+            port_names = {
+                (node.get("id"), port.get("id")): port.get("name")
+                for node in workflow.document.get("graph", {}).get("nodes", [])
+                if isinstance(node, dict)
+                for port in node.get("ports", [])
+                if isinstance(port, dict)
+            }
+            resolved: dict[str, Any] = {}
+            for item in outputs:
+                if not isinstance(item, dict) or not isinstance(item.get("source"), dict):
+                    continue
+                source = item["source"]
+                node_id = str(source.get("node_id") or "")
+                port_name = str(port_names.get((node_id, source.get("port_id"))) or "")
+                resolved[str(item.get("name") or item.get("id") or port_name)] = values.get(
+                    f"{node_id}.{port_name}"
+                )
+            if len(resolved) == 1:
+                return next(iter(resolved.values()))
+            if resolved:
+                return resolved
     outgoing = {f"{e.source}.{e.source_port}" for e in workflow.edges}
     terminal: dict[str, Any] = {}
     for node in workflow.nodes:
@@ -1906,6 +5017,8 @@ def _as_float(value: Any, *, default: float) -> float:
 
 
 def _summarize(value: Any) -> str:
+    if isinstance(value, LazyInput):
+        return repr(value)
     if isinstance(value, str):
         return value if len(value) <= 500 else value[:500] + "…"
     try:
@@ -1913,6 +5026,400 @@ def _summarize(value: Any) -> str:
     except (TypeError, ValueError):
         text = str(value)
     return text if len(text) <= 500 else text[:500] + "…"
+
+
+async def _materialize_inputs(values: dict[str, Any]) -> dict[str, Any]:
+    """Resolve lazy values at a built-in service boundary."""
+    result: dict[str, Any] = {}
+    for key, value in values.items():
+        if isinstance(value, LazyInput):
+            result[key] = await value.aresolve()
+        else:
+            result[key] = value
+    return result
+
+
+def _contains_lazy_input(value: Any) -> bool:
+    if isinstance(value, LazyInput):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_lazy_input(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_lazy_input(item) for item in value)
+    return False
+
+
+def _is_executor_surface(value: Any) -> bool:
+    """Return whether a value can be adapted as a trusted node executor."""
+
+    return (
+        callable(value)
+        or callable(getattr(value, "execute", None))
+        or callable(getattr(value, "run", None))
+    )
+
+
+def _inherited_allowed_tools(
+    context: WorkflowExecutionContext | None,
+) -> set[str] | None:
+    if context is None:
+        return None
+    candidates: list[Any] = [
+        context.permissions.get("allowed_tools"),
+        context.capabilities.get("allowed_tools"),
+        context.capabilities.get("tools"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, (list, tuple, set, frozenset)):
+            result = {str(item).strip() for item in candidate if str(item).strip()}
+            return result
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkflowAuthorizationGrants:
+    capabilities: frozenset[str] = frozenset()
+    resources: dict[str, Any] = field(default_factory=dict, compare=False)
+
+
+def _grant_names(value: Any) -> set[str]:
+    """Collect explicit names from a host grant value."""
+
+    result: set[str] = set()
+    if isinstance(value, str):
+        name = value.strip()
+        if name:
+            result.add(name)
+    elif isinstance(value, Mapping):
+        for key, nested in value.items():
+            name = str(key).strip()
+            if isinstance(nested, bool):
+                if nested and name:
+                    result.add(name)
+            elif isinstance(nested, (list, tuple, set, frozenset)):
+                result.update(_grant_names(nested))
+            elif isinstance(nested, Mapping):
+                # ``{"network": {"allowed": true}}`` is a common host shape.
+                enabled = nested.get("allowed", nested.get("granted", nested.get("enabled")))
+                if enabled is True and name:
+                    result.add(name)
+        # A mapping may itself be one compact declaration, e.g.
+        # ``{"allowed": ["network"]}``.
+        for key in ("allowed", "granted", "capabilities", "requires", "names"):
+            if key in value:
+                result.update(_grant_names(value[key]))
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            result.update(_grant_names(item))
+    return result
+
+
+def _workflow_authorization_grants(
+    context: WorkflowExecutionContext,
+) -> _WorkflowAuthorizationGrants:
+    """Read only explicit capability/resource grants from host context."""
+
+    capability_names: set[str] = set()
+    resource_names: set[str] = set()
+    resource_specs: dict[str, Any] = {}
+    containers = (
+        context.capabilities if isinstance(context.capabilities, Mapping) else {},
+        context.permissions if isinstance(context.permissions, Mapping) else {},
+    )
+    capability_keys = {
+        "capabilities", "allowed_capabilities", "allow_capabilities", "grants",
+        "allowed", "enabled_capabilities", "requires",
+    }
+    resource_keys = {
+        "resources", "resource", "resource_classes", "allowed_resources",
+        "allowed_resource_classes", "resource_class", "allowed_resource_class",
+    }
+    for container in containers:
+        # Direct boolean maps (``{"network": true}``) are explicit grants.
+        capability_names.update(
+            name for name, value in container.items()
+            if isinstance(value, bool) and value and str(name).strip()
+        )
+        for key, value in container.items():
+            normalized = str(key).strip().lower().replace("-", "_")
+            if normalized in capability_keys:
+                capability_names.update(_grant_names(value))
+            if normalized in resource_keys:
+                if normalized in {"resource_class", "allowed_resource_class"} and isinstance(value, str):
+                    resource_names.add(value.strip())
+                elif isinstance(value, Mapping):
+                    for resource_name, resource_value in value.items():
+                        clean_name = str(resource_name).strip()
+                        if not clean_name:
+                            continue
+                        resource_names.add(clean_name)
+                        resource_specs[clean_name] = resource_value
+                else:
+                    resource_names.update(_grant_names(value))
+        # Some hosts expose the resource grant as a nested capability map.
+        nested_resources = container.get("resource_capabilities")
+        if isinstance(nested_resources, Mapping):
+            for resource_name, resource_value in nested_resources.items():
+                clean_name = str(resource_name).strip()
+                if clean_name:
+                    resource_names.add(clean_name)
+                    resource_specs[clean_name] = resource_value
+    return _WorkflowAuthorizationGrants(
+        capabilities=frozenset(capability_names),
+        resources={name: resource_specs.get(name, True) for name in resource_names},
+    )
+
+
+def _workflow_resource_authorized(
+    resource_class: str,
+    requirements: Any,
+    resources: Mapping[str, Any],
+) -> bool:
+    """Check class and declared data-only limits against host grants."""
+
+    available = resources.get(resource_class)
+    if available is None:
+        return False
+    if not requirements:
+        return True
+    if not isinstance(requirements, Mapping) or not isinstance(available, Mapping):
+        return False
+    for key, required in requirements.items():
+        if key not in available:
+            return False
+        actual = available[key]
+        if isinstance(required, (int, float)) and not isinstance(required, bool):
+            if not isinstance(actual, (int, float)) or isinstance(actual, bool) or actual < required:
+                return False
+        elif actual != required:
+            return False
+    return True
+
+
+def _credential_ref(value: Any) -> CredentialRef | None:
+    if isinstance(value, CredentialRef):
+        return value
+    if isinstance(value, Mapping) and is_credential_ref(value):
+        return CredentialRef.from_dict(value)
+    return None
+
+
+async def _resolve_workflow_credentials(
+    value: Any,
+    resolver: Any,
+    context: WorkflowExecutionContext | None,
+    resolved: dict[str, Any],
+    secrets: list[Any],
+    *,
+    path: str = "workflow",
+) -> Any:
+    """Resolve explicit credential references without mutating source data."""
+
+    ref = _credential_ref(value)
+    if ref is not None:
+        # The transient context is intentionally keyed by the public
+        # credential identifier; provider/scope remain part of the ref sent to
+        # the resolver, but are never exposed as a persistence key.
+        cache_key = ref.credential_id
+        if cache_key not in resolved:
+            if resolver is None:
+                raise CredentialError(
+                    f"credential reference at {path} requires a credential resolver"
+                )
+            if isinstance(resolver, Mapping):
+                if ref.credential_id not in resolver:
+                    raise CredentialError(f"credential not found: {ref.credential_id}")
+                result = resolver[ref.credential_id]
+            else:
+                result = await ref.aresolve(resolver, context=context)
+            resolved[cache_key] = result
+            secrets.append(result)
+        return resolved[cache_key]
+    if isinstance(value, Mapping):
+        return {
+            key: await _resolve_workflow_credentials(
+                nested, resolver, context, resolved, secrets, path=f"{path}.{key}"
+            )
+            for key, nested in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            await _resolve_workflow_credentials(
+                nested, resolver, context, resolved, secrets, path=f"{path}[{index}]"
+            )
+            for index, nested in enumerate(value)
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            [
+                await _resolve_workflow_credentials(
+                    nested, resolver, context, resolved, secrets, path=f"{path}[{index}]"
+                )
+                for index, nested in enumerate(value)
+            ]
+        )
+    return value
+
+
+def _contains_credential_ref(value: Any) -> bool:
+    if _credential_ref(value) is not None:
+        return True
+    if isinstance(value, Mapping):
+        return any(_contains_credential_ref(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_credential_ref(item) for item in value)
+    return False
+
+
+def _redact_runtime_secrets(value: Any, secrets: list[Any]) -> Any:
+    """Prevent resolved values from crossing result/event/snapshot boundaries."""
+
+    if not secrets:
+        return value
+    for secret in secrets:
+        if secret is None:
+            continue
+        try:
+            if type(value) is type(secret) and value == secret:
+                return "[REDACTED]"
+        except Exception:  # noqa: BLE001 - hostile host value comparison
+            pass
+        if isinstance(value, str) and isinstance(secret, str) and secret:
+            if secret in value:
+                return value.replace(secret, "[REDACTED]")
+    if isinstance(value, Mapping):
+        return {
+            key: _redact_runtime_secrets(nested, secrets)
+            for key, nested in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_runtime_secrets(item, secrets) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_runtime_secrets(item, secrets) for item in value)
+    return value
+
+
+def _redact_exception_text(exc: BaseException, secrets: list[Any]) -> str:
+    return str(_redact_runtime_secrets(str(exc), secrets)) or type(exc).__name__
+
+
+def _executor_result_to_legacy(
+    value: Any,
+    *,
+    node: WorkflowNode | None = None,
+) -> Any:
+    """Accept an explicit packet result while retaining the old result shape."""
+
+    if isinstance(value, WorkflowDataPacket) or is_data_packet(value):
+        legacy = packet_to_legacy(value)
+        output_ports = node.output_ports() if node is not None else []
+        if len(output_ports) == 1:
+            return {output_ports[0].name: legacy}
+        if isinstance(legacy, Mapping) and output_ports:
+            names = {port.name for port in output_ports}
+            if set(legacy).issubset(names):
+                return dict(legacy)
+        # A scalar/object/array legacy result maps to the conventional output
+        # port; existing mapping results are otherwise left untouched.
+        return {"output": legacy}
+    return value
+
+
+def _packet_view_for_inputs(value: Mapping[str, Any]) -> WorkflowDataPacket:
+    """Preserve an already-canonical single input packet's item metadata."""
+
+    if len(value) == 1:
+        candidate = next(iter(value.values()))
+        if isinstance(candidate, WorkflowDataPacket) or is_data_packet(candidate):
+            return WorkflowDataPacket.coerce(candidate)
+    candidate = value.get("packet") if isinstance(value, Mapping) else None
+    if isinstance(candidate, WorkflowDataPacket) or is_data_packet(candidate):
+        return WorkflowDataPacket.coerce(candidate)
+    return adapt_data_packet(value)
+
+
+def _assert_json_workflow_data(workflow: WorkflowDef) -> None:
+    """Reject callable/non-JSON values in a dynamic expansion contract."""
+    try:
+        _assert_json_value(workflow.to_dict())
+    except (TypeError, ValueError) as exc:
+        raise WorkflowExpansionError(
+            "workflow expansion must contain JSON-compatible data only"
+        ) from exc
+    # ``to_dict`` intentionally uses ``default=str`` for durable legacy data;
+    # inspect the live model as well so a callable cannot be stringified past
+    # this security boundary.
+    for node in workflow.nodes:
+        try:
+            _assert_json_value(node.config)
+            _assert_json_value(node.position)
+        except (TypeError, ValueError) as exc:
+            raise WorkflowExpansionError(
+                "workflow expansion node config must contain JSON values only"
+            ) from exc
+        for port in node.ports:
+            try:
+                _assert_json_value(port.value)
+            except (TypeError, ValueError) as exc:
+                raise WorkflowExpansionError(
+                    "workflow expansion port values must contain JSON values only"
+                ) from exc
+    for param in workflow.input_params:
+        try:
+            _assert_json_value(param.name)
+            _assert_json_value(param.type)
+            _assert_json_value(param.description)
+            _assert_json_value(param.required)
+            _assert_json_value(param.default)
+        except (TypeError, ValueError) as exc:
+            raise WorkflowExpansionError(
+                "workflow expansion input defaults must contain JSON values only"
+            ) from exc
+
+
+def _coerce_expansion_input_param(value: Any) -> WorkflowInputParam:
+    """Normalize one ephemeral input declaration or raise a clear error."""
+
+    if isinstance(value, WorkflowInputParam):
+        return value
+    if isinstance(value, dict):
+        return WorkflowInputParam.from_dict(value)
+    raise WorkflowExpansionError(
+        f"workflow expansion input parameter must be an object: {type(value).__name__}"
+    )
+
+
+def _assert_json_value(value: Any) -> None:
+    """Strictly validate JSON data without ``default=str`` coercion."""
+    if value is None or isinstance(value, (str, int, bool)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("JSON numbers must be finite")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("JSON object keys must be strings")
+            _assert_json_value(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _assert_json_value(item)
+        return
+    raise TypeError(f"non-JSON value: {type(value).__name__}")
+
+
+def _cache_facts(node_states: dict[str, WorkflowNodeState]) -> dict[str, dict[str, Any]]:
+    return {
+        node_id: {
+            "status": state.cache_status,
+            "key": state.cache_key,
+            "hit": state.cache_status == "hit",
+        }
+        for node_id, state in node_states.items()
+        if state.cache_status != "bypass" or state.cache_key
+    }
 
 
 def _substitute_env_vars(command: str, substitutions: dict[str, str]) -> str:
@@ -2110,7 +5617,10 @@ def _ports_to_io(node: WorkflowNode) -> tuple[list[dict[str, Any]], list[dict[st
     """Split a node's ports into ``inputs[]``/``outputs[]`` dicts for storage."""
     inputs: list[dict[str, Any]] = []
     for p in node.input_ports():
-        inputs.append({"name": p.name, "type": p.type, "description": p.description})
+        entry: dict[str, Any] = {"name": p.name, "type": p.type, "description": p.description}
+        if p.lazy:
+            entry["lazy"] = True
+        inputs.append(entry)
     outputs: list[dict[str, Any]] = []
     for p in node.output_ports():
         entry: dict[str, Any] = {"name": p.name, "type": p.type, "description": p.description}
@@ -2187,8 +5697,171 @@ def _json_object(content: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _eval_condition(expr: str, bound_inputs: dict[str, Any]) -> bool:
-    """Evaluate a Python expression condition.
+def _response_content(response: Any) -> str:
+    """Extract provider-neutral text from modern and legacy model responses."""
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        value = response.get("content", response.get("text", ""))
+        return value if isinstance(value, str) else _summarize(value)
+    value = getattr(response, "content", None)
+    if value is None:
+        value = getattr(response, "text", "")
+    return value if isinstance(value, str) else _summarize(value)
+
+
+_EXPRESSION_NO_ITEM = object()
+_EXPRESSION_SECRET_FIELDS = {
+    "password",
+    "passwd",
+    "secret",
+    "secrets",
+    "token",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "api_key",
+    "apikey",
+    "access_key",
+    "private_key",
+    "client_secret",
+    "authorization",
+    "cookie",
+    "credential_secret",
+}
+_EXPRESSION_CREDENTIAL_FIELDS = {
+    "id",
+    "name",
+    "label",
+    "display_name",
+    "provider",
+    "provider_id",
+    "type",
+    "kind",
+    "ref",
+    "reference",
+    "credential_ref",
+    "credential_id",
+    "masked",
+    "redacted",
+    "status",
+}
+
+
+def _is_structured_expression(value: Any) -> bool:
+    return type(value) is dict or type(value) is Expression
+
+
+def _expression_secret_field(name: str) -> bool:
+    lowered = name.casefold()
+    return lowered in _EXPRESSION_SECRET_FIELDS or lowered.endswith(("_password", "_secret", "_token", "_api_key"))
+
+
+def _expression_safe_value(value: Any, *, credential_metadata: bool = False) -> Any:
+    """Copy only plain JSON data, removing secret-bearing fields.
+
+    Runtime node configs and upstream values are host-owned objects, so the
+    safe expression context is built as a fresh tree.  Unsupported values
+    (including ``LazyInput``) become ``None`` and are never exposed through a
+    Python object attribute or protocol method.
+    """
+    if value is None or type(value) in {bool, int, str}:
+        return value
+    if type(value) is float:
+        return value if math.isfinite(value) else None
+    if type(value) is list:
+        return [_expression_safe_value(item) for item in value]
+    if type(value) is not dict:
+        return None
+    copied: dict[str, Any] = {}
+    for key, item in value.items():
+        if type(key) is not str or not key or key.startswith("__") or key.endswith("__"):
+            continue
+        lowered = key.casefold()
+        if _expression_secret_field(key):
+            continue
+        if lowered in {"credential", "credentials"}:
+            if type(item) is not dict:
+                continue
+            metadata: dict[str, Any] = {}
+            for metadata_key, metadata_value in item.items():
+                if (
+                    type(metadata_key) is str
+                    and metadata_key.casefold() in _EXPRESSION_CREDENTIAL_FIELDS
+                ):
+                    metadata[metadata_key] = _expression_safe_value(metadata_value, credential_metadata=True)
+            copied[key] = metadata
+            continue
+        if credential_metadata and lowered not in _EXPRESSION_CREDENTIAL_FIELDS:
+            continue
+        copied[key] = _expression_safe_value(item, credential_metadata=credential_metadata)
+    return copied
+
+
+def _expression_item(bound_inputs: dict[str, Any], item: Any = _EXPRESSION_NO_ITEM) -> Any:
+    if item is not _EXPRESSION_NO_ITEM:
+        return item
+    if "item" in bound_inputs:
+        return bound_inputs["item"]
+    if "value" in bound_inputs:
+        return bound_inputs["value"]
+    if len(bound_inputs) == 1:
+        return next(iter(bound_inputs.values()))
+    return bound_inputs
+
+
+def _evaluate_workflow_expression(
+    expression: dict[str, Any] | Expression,
+    *,
+    node: WorkflowNode | None,
+    bound_inputs: dict[str, Any],
+    execution_context: WorkflowExecutionContext | None = None,
+    item: Any = _EXPRESSION_NO_ITEM,
+) -> Any:
+    """Evaluate an AST with the documented runtime roots.
+
+    ``input`` is the current node/source bound-input map, ``item`` is the
+    current singular value (or raw transform value), ``node`` is non-secret
+    node metadata, and ``env`` is a redacted execution environment.
+    """
+    raw_environment = execution_context.environment if execution_context is not None else {}
+    context_node = (
+        {
+            "id": node.id,
+            "kind": node.kind,
+            "type_id": node.type_id or node.kind,
+            "title": node.title,
+        }
+        if node is not None
+        else None
+    )
+    context = ExpressionContext(
+        input=_expression_safe_value(bound_inputs),
+        item=_expression_safe_value(_expression_item(bound_inputs, item)),
+        node=_expression_safe_value(context_node),
+        env=_expression_safe_value(raw_environment),
+    )
+    try:
+        return evaluate_expression(expression, context)
+    except ExpressionError as exc:
+        # The JSON payload becomes the node-state error and can be parsed by
+        # API/CLI consumers without scraping a human-formatted message.
+        raise WorkflowExpressionError(exc) from exc
+
+
+def _source_node(source_id: str, workflow: WorkflowDef) -> WorkflowNode | None:
+    return workflow.node(source_id)
+
+
+def _eval_condition(
+    expr: Any,
+    bound_inputs: dict[str, Any],
+    *,
+    node: WorkflowNode | None = None,
+    execution_context: WorkflowExecutionContext | None = None,
+    item: Any = _EXPRESSION_NO_ITEM,
+) -> bool:
+    """Evaluate an AST safely or retain the explicit Python legacy fallback.
 
     ``bound_inputs`` (port name → value) are injected as local variables so
     expressions like ``len(text) > 100`` or ``quality >= 0.8 and source in
@@ -2204,6 +5877,16 @@ def _eval_condition(expr: str, bound_inputs: dict[str, Any]) -> bool:
     ``x.__class__.__mro__...`` sandbox-escape chain while allowing benign
     method calls like ``text.strip()``.
     """
+    if _is_structured_expression(expr):
+        return bool(
+            _evaluate_workflow_expression(
+                expr,
+                node=node,
+                bound_inputs=bound_inputs,
+                execution_context=execution_context,
+                item=item,
+            )
+        )
     if not expr or not str(expr).strip():
         return True
     source = str(expr).strip()
@@ -2217,11 +5900,136 @@ def _eval_condition(expr: str, bound_inputs: dict[str, Any]) -> bool:
         return False
 
 
+async def _call_with_supported_kwargs(call: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
+    """Invoke old and new agent adapters without hiding exceptions from the call."""
+    try:
+        signature = inspect.signature(call)
+    except (TypeError, ValueError):
+        selected = kwargs
+    else:
+        accepts_extra = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())
+        selected = kwargs if accepts_extra else {key: value for key, value in kwargs.items() if key in signature.parameters}
+    result = call(**selected)
+    return await result if inspect.isawaitable(result) else result
+
+
+def _cancellation_requested(token: Any) -> bool:
+    if token is None:
+        return False
+    if isinstance(token, bool):
+        return token
+    is_set = getattr(token, "is_set", None)
+    if callable(is_set):
+        try:
+            return bool(is_set())
+        except Exception:  # noqa: BLE001 — optional host token
+            return False
+    if callable(token):
+        try:
+            return bool(token())
+        except Exception:  # noqa: BLE001 — optional host token
+            return False
+    return False
+
+
+async def _await_with_context_cancel(
+    awaitable: Awaitable[dict[str, Any]],
+    context: WorkflowExecutionContext | None,
+) -> dict[str, Any]:
+    timeout_seconds: float | None = None
+    if context is not None and isinstance(context.environment, dict):
+        raw_timeout = context.environment.get("__workflow_timeout_seconds")
+        try:
+            timeout_seconds = float(raw_timeout) if raw_timeout not in (None, "") else None
+        except (TypeError, ValueError):
+            timeout_seconds = None
+    if timeout_seconds is not None and timeout_seconds > 0:
+        awaitable = asyncio.wait_for(awaitable, timeout=timeout_seconds)
+    token = context.cancellation if context is not None else None
+    if token is None:
+        return await awaitable
+    if _cancellation_requested(token):
+        if inspect.iscoroutine(awaitable):
+            awaitable.close()
+        raise asyncio.CancelledError()
+    is_set = getattr(token, "is_set", None)
+    if callable(is_set) and is_set():
+        if inspect.iscoroutine(awaitable):
+            awaitable.close()
+        raise asyncio.CancelledError()
+    wait = getattr(token, "wait", None)
+    if not callable(wait):
+        return await awaitable
+    cancellation_wait = wait()
+    if not inspect.isawaitable(cancellation_wait):
+        return await awaitable
+    node_task = asyncio.ensure_future(awaitable)
+    cancel_task = asyncio.ensure_future(cancellation_wait)
+    done, _ = await asyncio.wait({node_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED)
+    if cancel_task in done and not node_task.done():
+        node_task.cancel()
+        await asyncio.gather(node_task, return_exceptions=True)
+        raise asyncio.CancelledError()
+    cancel_task.cancel()
+    await asyncio.gather(cancel_task, return_exceptions=True)
+    return await node_task
+
+
+def _pause_requested(context: WorkflowExecutionContext | None) -> bool:
+    """Read a static or dynamically-set pause-on-cancel token."""
+    if context is None:
+        return False
+    token = context.pause_on_cancel
+    if isinstance(token, bool):
+        return token
+    is_set = getattr(token, "is_set", None)
+    if callable(is_set):
+        try:
+            return bool(is_set())
+        except Exception:  # noqa: BLE001 - optional host token
+            return False
+    if callable(token):
+        try:
+            return bool(token())
+        except Exception:  # noqa: BLE001 - optional host token
+            return False
+    return bool(token)
+
+
 __all__ = [
+    "AgentInvoker",
+    "AgentInvokerAdapter",
+    "LLMInvoker",
+    "LegacyLLMAdapter",
+    "LegacyAgentInvokerAdapter",
+    "LegacyModelInvokerAdapter",
+    "LegacySubAgentAdapter",
+    "LegacyNodeExecutorAdapter",
+    "ModelInvoker",
+    "ModelInvokerAdapter",
+    "NodeExecutionResult",
+    "WorkflowNodeExecutionResult",
+    "Expansion",
+    "DynamicNodeExpansion",
+    "NodeExecutor",
+    "NodeExecutorAdapter",
+    "SubAgentInvoker",
+    "SubAgentInvokerAdapter",
+    "LazyInput",
+    "LazyValue",
     "NodeStateStatus",
     "PortDirection",
     "SKIP_SENTINEL",
     "WorkflowDef",
+    "WorkflowConflictError",
+    "WorkflowCapabilityError",
+    "WorkflowExpansion",
+    "WorkflowDynamicExpansion",
+    "WorkflowExpansionError",
+    "WorkflowExecutorError",
+    "WorkflowExpressionError",
+    "WorkflowExecutorRegistry",
+    "WorkflowExecutionContext",
     "WorkflowEdge",
     "WorkflowInputParam",
     "WorkflowManager",
@@ -2231,4 +6039,9 @@ __all__ = [
     "WorkflowPort",
     "WorkflowRunResult",
     "WorkflowRunner",
+    "normalize_execution_result",
+    "normalize_node_result",
+    "WorkflowNestingError",
+    "WorkflowPermissionError",
+    "WorkflowRecursionError",
 ]

@@ -44,6 +44,8 @@ from lamtools_core.app.snapshot_store import SqlAlchemyThreadSnapshotStore
 import lamtools_core.app.live_operations as live_operations_module
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeTaskRegistry
+from lamtools_core.runtime import RuntimeState
+from lamtools_core.session import build_session_record
 
 
 class Base(DeclarativeBase):
@@ -301,6 +303,94 @@ async def test_core_live_command_action_receives_arguments_without_reparsing(tmp
             "arguments": "创建发布计划",
             "work_root": str(tmp_path / "workspace"),
         }
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "expected_status", "expected_approval_calls"),
+    [
+        ("write_file", "accepted", 1),
+        ("question", "user_input_required", 0),
+    ],
+)
+async def test_session_permission_switch_persists_and_releases_only_tool_approvals(
+    tmp_path,
+    tool_name,
+    expected_status,
+    expected_approval_calls,
+):
+    engine, context = await _context(tmp_path)
+    record = build_session_record(
+        session_id="thread-live-permission",
+        member_id="core",
+        title="Live permission",
+        status="waiting",
+        metadata={
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            }
+        },
+    )
+
+    class SessionStore:
+        async def get(self, session_id):
+            return record if session_id == record.id else None
+
+        async def patch(self, session_id, *, metadata=None, **_kwargs):
+            assert session_id == record.id
+            record.metadata = dict(metadata or {})
+            return record
+
+    approval_calls = []
+
+    async def respond(request):
+        approval_calls.append(request.payload)
+        return OperationResult(
+            name=request.name,
+            payload={
+                "thread_id": record.id,
+                "run_id": "turn-live-permission",
+                "decision": "approve",
+            },
+        )
+
+    state_store = InMemoryRuntimeStateStore()
+    await state_store.save(RuntimeState(
+        session_id=record.id,
+        run_id="turn-live-permission",
+        status="waiting",
+        loop_state="wait",
+        metadata={
+            "pending_approval": {
+                "request_id": "approval-live",
+                "status": "waiting",
+                "tool_call": {"id": "approval-live", "name": tool_name, "arguments": {}},
+            }
+        },
+    ))
+    context.host.session_store = SessionStore()
+    context.host.runtime_state_store = state_store
+    object.__setattr__(context, "runtime_state_store", state_store)
+    context.operations.register("approval.respond", respond)
+    try:
+        outcome = await context.host.execute(
+            "session.permissions.set",
+            request_id=1,
+            params={"thread_id": record.id, "permission_preset": "auto"},
+            context=context,
+        )
+
+        assert outcome.response["result"]["permission_preset"] == "auto"
+        assert outcome.response["result"]["approval_status"] == expected_status
+        assert record.metadata["runtime_preferences"]["permission_preset"] == "auto"
+        assert len(approval_calls) == expected_approval_calls
+        if approval_calls:
+            assert approval_calls[0]["request_id"] == "approval-live"
+            assert approval_calls[0]["approval_policy"] == "auto_approve"
     finally:
         await engine.dispose()
 

@@ -32,6 +32,8 @@ export interface ThemeData {
   controlAngle: number
   controlText: string
   controlOpacity: number
+  /** Accent used by non-semantic process-row state icons. */
+  processIconColor: string
 }
 
 export interface ThemePreset {
@@ -51,36 +53,75 @@ export function themeForMode(preset: ThemePreset, mode: Exclude<ThemeMode, 'syst
 }
 
 // ---------------------------------------------------------------------------
-// Default theme (neutral dark)
+// Sunday defaults. DEFAULT_THEME stays the dark-compatible legacy alias used
+// by callers that only understand a single theme object.
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_THEME: ThemeData = {
-  backdropAngle: 180,
+export const SUNDAY_DARK_THEME: ThemeData = {
+  backdropAngle: 112,
   backdropStops: [
-    { color: '#202020', position: 0 },
+    { color: '#171926', position: 0 },
+    { color: '#241c31', position: 56 },
+    { color: '#182438', position: 100 },
   ],
-  backdropText: '#f2efeb',
-  mainAngle: 180,
+  backdropText: '#f4efff',
+  mainAngle: 145,
   mainStops: [
-    { color: '#111111', position: 0 },
+    { color: '#11131d', position: 0 },
+    { color: '#181521', position: 100 },
   ],
-  mainText: '#f2efeb',
+  mainText: '#f5f2fb',
   mainOpacity: 1,
-  composerAngle: 180,
+  composerAngle: 105,
   composerStops: [
-    { color: '#2c2b29', position: 0 },
-    { color: '#222525', position: 100 },
+    { color: '#252538', position: 0 },
+    { color: '#2b2137', position: 100 },
   ],
-  composerText: '#f2eee8',
+  composerText: '#f7f3fc',
   composerOpacity: 1,
-  controlAngle: 180,
+  controlAngle: 105,
   controlStops: [
-    { color: '#3a3834', position: 0 },
-    { color: '#2d302f', position: 100 },
+    { color: '#29416d', position: 0 },
+    { color: '#503269', position: 100 },
   ],
-  controlText: '#f3efe8',
+  controlText: '#fbf7ff',
   controlOpacity: 1,
+  processIconColor: '#a693ff',
 }
+
+export const SUNDAY_LIGHT_THEME: ThemeData = {
+  backdropStops: [
+    { color: '#fff0df', position: 0 },
+    { color: '#f7efff', position: 58 },
+    { color: '#edf2ff', position: 100 },
+  ],
+  backdropAngle: 112,
+  backdropText: '#17265a',
+  mainStops: [
+    { color: '#fffdf8', position: 0 },
+    { color: '#f9f9f4', position: 100 },
+  ],
+  mainAngle: 145,
+  mainText: '#162451',
+  mainOpacity: 1,
+  composerStops: [
+    { color: '#f8f6ff', position: 0 },
+    { color: '#edf3ff', position: 100 },
+  ],
+  composerAngle: 105,
+  composerText: '#17275a',
+  composerOpacity: 1,
+  controlStops: [
+    { color: '#dcecff', position: 0 },
+    { color: '#ecdfff', position: 100 },
+  ],
+  controlAngle: 105,
+  controlText: '#183b83',
+  controlOpacity: 1,
+  processIconColor: '#6755e8',
+}
+
+export const DEFAULT_THEME: ThemeData = SUNDAY_DARK_THEME
 
 // ---------------------------------------------------------------------------
 // Utility helpers
@@ -214,6 +255,7 @@ export function normalizeTheme(raw: Partial<ThemeData>): ThemeData {
   t.controlText = normalizeColor(t.controlText, DEFAULT_THEME.controlText)
   t.controlAngle = clampNumber(t.controlAngle, 0, 360, DEFAULT_THEME.controlAngle)
   t.controlOpacity = clampNumber(t.controlOpacity, 0.1, 1, DEFAULT_THEME.controlOpacity)
+  t.processIconColor = normalizeColor(t.processIconColor, DEFAULT_THEME.processIconColor)
 
   return t
 }
@@ -262,6 +304,7 @@ export interface ThemeCSSVars {
   '--theme-control-solid': string
   '--theme-control-text': string
   '--theme-control-soft-background': string
+  '--theme-process-icon-color': string
 }
 
 export function relativeLuminance(hex: string): number {
@@ -300,6 +343,7 @@ export function themeToCSSVars(theme: ThemeData): ThemeCSSVars {
     '--theme-control-solid': theme.controlStops[0]?.color || '#3a3834',
     '--theme-control-text': theme.controlText,
     '--theme-control-soft-background': lightControl ? 'rgba(255, 255, 252, 0.82)' : 'rgba(255, 255, 255, 0.055)',
+    '--theme-process-icon-color': theme.processIconColor,
   }
 }
 

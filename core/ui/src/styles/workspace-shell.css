@@ -35,6 +35,7 @@
   --right-drawer-width: 292px;
   --right-overlap: 0px;
   --right-peek: 18px;
+  --right-panel-gap: 2px;
   --main-right: var(--right-peek);
   --right-reveal: calc(var(--right-drawer-width) - var(--right-overlap));
   --main-x-padding: max(22px, 5vw);
@@ -161,15 +162,49 @@
 }
 
 .drawer-right {
-  top: var(--titlebar-offset, 0px); bottom: 0; right: 0;
-  width: var(--right-drawer-width);
+  top: calc(var(--titlebar-offset, 0px) + var(--space-2));
+  bottom: var(--space-2);
+  right: 0;
+  width: calc(var(--right-drawer-width) - var(--right-panel-gap));
   max-height: none;
-  border-radius: 0;
+  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 18%, transparent);
+  /* The rail meets the viewport on the right; only the exposed left edge is
+     rounded. Keep the 2px main-panel gap intact via its width calculation. */
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  background: transparent;
+  isolation: isolate;
   opacity: 1;
   pointer-events: auto;
   transform: none;
+  transition: transform 240ms var(--ease-out), opacity 240ms var(--ease-out);
 }
-.drawer-right:not(.open) { opacity: 0; pointer-events: none; transform: translateX(10px); }
+.drawer-right::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  /* Keep text and controls crisp while the single glass substrate feathers
+     independently to zero opacity along all four edges. */
+  background: color-mix(in srgb, var(--theme-backdrop-text) 4%, transparent);
+  -webkit-backdrop-filter: blur(var(--space-4)) saturate(1.08);
+  backdrop-filter: blur(var(--space-4)) saturate(1.08);
+  -webkit-mask-image:
+    linear-gradient(to right, transparent 0, #000 var(--space-5), #000 calc(100% - var(--space-5)), transparent 100%),
+    linear-gradient(to bottom, transparent 0, #000 var(--space-5), #000 calc(100% - var(--space-5)), transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, transparent 0, #000 var(--space-5), #000 calc(100% - var(--space-5)), transparent 100%),
+    linear-gradient(to bottom, transparent 0, #000 var(--space-5), #000 calc(100% - var(--space-5)), transparent 100%);
+  mask-composite: intersect;
+  pointer-events: none;
+}
+.drawer-right:not(.open) {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(10px);
+  transition-duration: var(--dur-base), var(--dur-base);
+}
 .drawer-right.open { transform: none; }
 
 /* Force drawers visible when stage is open */
@@ -236,11 +271,11 @@
   display: flex;
   align-items: center;
   gap: var(--sidebar-item-gap);
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: var(--sidebar-row-radius);
-  background: transparent;
-  color: var(--sidebar-text-secondary);
+  padding: 0 var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border-radius: var(--radius);
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
   font: inherit;
   font-size: var(--sidebar-font);
   font-weight: 400;
@@ -248,9 +283,9 @@
   cursor: pointer;
 }
 .sidebar-create-project:hover {
-  background: var(--sidebar-hover);
-  color: var(--sidebar-text-primary);
+  filter: brightness(.97);
 }
+.sidebar-create-project:active { filter: brightness(.93); }
 .sidebar-create-project:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
   outline-offset: 1px;
@@ -365,7 +400,7 @@
   -ms-overflow-style: none;
 }
 .drawer-right > .drawer-body::-webkit-scrollbar { width: 0; height: 0; display: none; }
-.right-body { max-height: none; padding: 12px 12px 14px; }
+.right-body { max-height: none; padding: 0; }
 
 .drawer-footer {
   flex: 0 0 auto;
@@ -472,10 +507,13 @@
   .workspace-drawer {
     z-index: var(--z-popover, 60);
     max-width: var(--sidebar-width);
-    background: var(--theme-backdrop-background);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
     opacity: 0;
     pointer-events: none;
+  }
+  /* Keep the project rail's established mobile surface treatment. */
+  .drawer-left {
+    background: var(--theme-backdrop-background);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
   }
   .drawer-left:not(.open) { transform: translateX(-102%); }
   .drawer-right:not(.open) { transform: translateX(102%); }
@@ -484,6 +522,14 @@
     transform: translateX(0);
     opacity: 1;
     pointer-events: auto;
+  }
+  /* The right rail is a full-width mobile drawer; keep the left project rail
+     constrained to its comfortable reading width. */
+  .drawer-right {
+    left: var(--space-2);
+    right: var(--space-2);
+    width: auto;
+    max-width: none;
   }
   .workspace-shell {
     touch-action: pan-y;
@@ -511,5 +557,14 @@
   .sidebar-root .sidebar-pin-button {
     width: 44px;
     height: 44px;
+  }
+}
+
+/* Reduced motion must win over the legacy global duration override in
+   layout.css. The drawer state remains fully operable, but changes instantly. */
+@media (prefers-reduced-motion: reduce) {
+  .workspace-shell .workspace-drawer,
+  .workspace-shell .drawer-right {
+    transition: none !important;
   }
 }

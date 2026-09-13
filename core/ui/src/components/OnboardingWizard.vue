@@ -14,7 +14,7 @@
           <div class="welcome-art" aria-hidden="true">
             <span class="welcome-art-mark" aria-hidden="true"><Sparkles :size="36" :stroke-width="1.2" /></span>
           </div>
-          <h1 class="onboarding-title">欢迎使用 LamTools Core</h1>
+          <h1 class="onboarding-title">欢迎使用 Sunday</h1>
           <p class="onboarding-subtitle">
             一个本地优先的 Agent 工作台：管理会话、记忆与自动化任务，
             你的数据与配置都留在本机。
@@ -98,7 +98,7 @@
             <li><span>模型数量</span><strong>{{ models.length }} 个</strong></li>
             <li><span>默认模型</span><strong>{{ defaultModelName || '未设置（可在设置中调整）' }}</strong></li>
           </ul>
-          <p class="onboarding-hint">之后可在 Core 设置中继续添加供应商、模型或调整权限模式。</p>
+          <p class="onboarding-hint">之后可在 Sunday 设置中继续添加供应商、模型或调整权限模式。</p>
           <div class="onboarding-actions">
             <button class="btn primary" type="button" data-onboarding-finish @click="emit('finish')">开始使用 <ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
           </div>

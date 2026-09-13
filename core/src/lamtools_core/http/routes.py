@@ -19,6 +19,7 @@ from lamtools_core.export.serializers import full_to_zip, handoff_to_json, trans
 
 from ..app.operation_catalog import OperationCatalog
 from ..app.project_store import ActiveProjectSessionsError, CoreProjectStore
+from ..app.project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
 from ..provider import ProviderConfig, ProviderRegistry
 from ..run_event import (
     InMemoryRuntimeEventStore,
@@ -61,10 +62,14 @@ class SessionUpdateRequest(BaseModel):
 class ProjectCreateRequest(BaseModel):
     work_root: str = Field(min_length=1)
     name: str | None = None
+    icon_key: str = DEFAULT_PROJECT_ICON_KEY
+    color_key: str = DEFAULT_PROJECT_COLOR_KEY
 
 
 class ProjectUpdateRequest(BaseModel):
-    name: str = Field(min_length=1)
+    name: str | None = None
+    icon_key: str | None = None
+    color_key: str | None = None
 
 
 class ProjectSessionCreateRequest(BaseModel):
@@ -440,7 +445,12 @@ def create_core_router(
     async def create_project(body: ProjectCreateRequest, response: Response) -> dict[str, Any]:
         store = require_project_store()
         try:
-            project, session, created = await store.create_with_initial_session(body.work_root, name=body.name)
+            project, session, created = await store.create_with_initial_session(
+                body.work_root,
+                name=body.name,
+                icon_key=body.icon_key,
+                color_key=body.color_key,
+            )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not created:
@@ -457,7 +467,12 @@ def create_core_router(
     @router.patch("/projects/{project_id}")
     async def update_project(project_id: str, body: ProjectUpdateRequest) -> dict[str, Any]:
         try:
-            project = await require_project_store().rename(project_id, body.name)
+            project = await require_project_store().update(
+                project_id,
+                name=body.name,
+                icon_key=body.icon_key,
+                color_key=body.color_key,
+            )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if project is None:

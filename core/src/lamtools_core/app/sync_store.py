@@ -13,6 +13,7 @@ from .core_db import (
     CoreSyncChange,
     CoreThreadSnapshot,
 )
+from .project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
 
 
 SYNC_CURSOR_EXPIRED = "SYNC_CURSOR_EXPIRED"
@@ -137,6 +138,8 @@ class CoreSyncJournal:
                     "name": row.name,
                     "path": row.work_root,
                     "work_root": row.work_root,
+                    "icon_key": str(getattr(row, "icon_key", DEFAULT_PROJECT_ICON_KEY) or DEFAULT_PROJECT_ICON_KEY),
+                    "color_key": str(getattr(row, "color_key", DEFAULT_PROJECT_COLOR_KEY) or DEFAULT_PROJECT_COLOR_KEY),
                     "created_at": row.created_at.isoformat() if row.created_at else "",
                     "updated_at": row.updated_at.isoformat() if row.updated_at else "",
                     "revision": max(1, int(row.revision or 1)),

@@ -6,7 +6,13 @@ import type { CoreProjectClient } from '../src/projects/client'
 import type { CoreSessionListItem } from '../src/types'
 import { buildCoreProjectGroups, type CoreProject } from '../src/projects/types'
 
-const project: CoreProject = { id: 'project-1', name: 'Docs', workRoot: 'E:\\docs' }
+const project: CoreProject = {
+  id: 'project-1',
+  name: 'Docs',
+  workRoot: 'E:\\docs',
+  iconKey: 'folder',
+  colorKey: 'gray',
+}
 const initialSession: CoreSessionListItem = {
   id: 'session-1',
   title: 'Docs',
@@ -19,6 +25,7 @@ function createWorkspace() {
     list: vi.fn(),
     create: vi.fn().mockResolvedValue({ project, session: initialSession }),
     get: vi.fn(),
+    update: vi.fn().mockResolvedValue({ ...project, iconKey: 'rocket', colorKey: 'prism' }),
     rename: vi.fn().mockResolvedValue({ ...project, name: 'Documentation' }),
     delete: vi.fn().mockResolvedValue(undefined),
     createSession: vi.fn().mockResolvedValue({

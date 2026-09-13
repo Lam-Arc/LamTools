@@ -261,6 +261,7 @@ describe('core appServer selectors', () => {
           'turn-1': {
             turn_id: 'turn-1',
             status: 'completed',
+            duration_ms: 12_300,
             items: ['answer-1'],
             usage: {
               input_tokens: 100,
@@ -288,6 +289,7 @@ describe('core appServer selectors', () => {
     } satisfies CoreAppSnapshot)
 
     expect(selectChatMessages(snapshot)[0]?.metadata).toMatchObject({
+      duration_ms: 12_300,
       processMetrics: {
         estimated_prompt_tokens: 6_925,
         context_window_tokens: 50_000,

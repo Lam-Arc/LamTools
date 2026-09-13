@@ -634,7 +634,7 @@ def test_core_http_session_delete_removes_persisted_thread(tmp_path: Path, isola
 def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: Path, isolated_config_root: Path) -> None:
     core_db = tmp_path / "core.db"
     root = tmp_path / "workspace"
-    docs_root = root / "docs"
+    docs_root = tmp_path / "outside" / "docs"
     _write_jsonc_config(isolated_config_root)
 
     app = create_core_agent_http_app(
@@ -650,10 +650,31 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         )
         assert unnamed.status_code == 201
         assert unnamed.json()["project"]["name"] == "invalid-name"
-        created = client.post("/api/core/projects", json={"name": "Docs", "work_root": str(docs_root)})
+        created = client.post(
+            "/api/core/projects",
+            json={
+                "name": "Docs",
+                "work_root": str(docs_root),
+                "icon_key": "idea",
+                "color_key": "aurora",
+            },
+        )
         assert created.status_code == 201
         result = created.json()
         project_id = result["project"]["id"]
+        assert result["project"]["icon_key"] == "idea"
+        assert result["project"]["color_key"] == "aurora"
+        updated = client.patch(
+            f"/api/core/projects/{project_id}",
+            json={"icon_key": "rocket", "color_key": "prism"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["icon_key"] == "rocket"
+        assert updated.json()["color_key"] == "prism"
+        assert client.patch(
+            f"/api/core/projects/{project_id}",
+            json={"icon_key": "terminal"},
+        ).status_code == 422
         assert result["session"]["metadata"] == {
             "work_root": str(docs_root.resolve()),
             "runtime_preferences": {
@@ -704,11 +725,15 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         work_root=root,
     )
     with TestClient(restarted_app) as client:
-        assert client.get(f"/api/core/projects/{project_id}").json()["name"] == "Docs"
+        restored = client.get(f"/api/core/projects/{project_id}").json()
+        assert restored["name"] == "Docs"
+        assert restored["icon_key"] == "rocket"
+        assert restored["color_key"] == "prism"
 
 
 def test_project_http_delete_rejects_active_session_and_app_server_uses_project_operations(tmp_path: Path, isolated_config_root: Path) -> None:
     _write_jsonc_config(isolated_config_root)
+    project_root = tmp_path / "workspace" / "docs"
     app = create_core_agent_http_app(
         model_id="model-record",
         core_db=tmp_path / "core.db",
@@ -722,7 +747,12 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
                 {
                     "id": 3,
                     "method": "project.create",
-                    "params": {"name": "Docs", "work_root": str(tmp_path / "workspace")},
+                    "params": {
+                        "name": "Docs",
+                        "work_root": str(project_root),
+                        "iconKey": "design",
+                        "colorKey": "ocean",
+                    },
                 }
             )
             created = _receive_rpc_response(websocket, 3)["result"]
@@ -739,12 +769,27 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
             assert _receive_rpc_response(websocket, 31)["result"]["project"]["name"] == "invalid"
 
             websocket.send_json({"id": 4, "method": "project.get", "params": {"project_id": project_id}})
-            assert _receive_rpc_response(websocket, 4)["result"]["project"]["id"] == project_id
+            fetched = _receive_rpc_response(websocket, 4)["result"]["project"]
+            assert fetched["id"] == project_id
+            assert fetched["icon_key"] == "design"
+            assert fetched["color_key"] == "ocean"
 
             websocket.send_json(
-                {"id": 5, "method": "project.update", "params": {"project_id": project_id, "name": "Renamed"}}
+                {
+                    "id": 5,
+                    "method": "project.update",
+                    "params": {
+                        "project_id": project_id,
+                        "name": "Renamed",
+                        "icon_key": "docs",
+                        "color_key": "ember",
+                    },
+                }
             )
-            assert _receive_rpc_response(websocket, 5)["result"]["project"]["name"] == "Renamed"
+            updated = _receive_rpc_response(websocket, 5)["result"]["project"]
+            assert updated["name"] == "Renamed"
+            assert updated["icon_key"] == "docs"
+            assert updated["color_key"] == "ember"
 
             websocket.send_json(
                 {"id": 51, "method": "project.update", "params": {"project_id": project_id, "name": "   "}}
@@ -756,7 +801,7 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
 
             websocket.send_json({"id": 61, "method": "project.sessions.create", "params": {"project_id": project_id}})
             project_session = _receive_rpc_response(websocket, 61)["result"]["session"]
-            assert project_session["metadata"]["work_root"] == str(tmp_path / "workspace")
+            assert project_session["metadata"]["work_root"] == str(project_root)
 
             websocket.send_json(
                 {"id": 7, "method": "project.agents_md.update", "params": {"project_id": project_id, "content": "# Rules\n"}}
@@ -771,7 +816,7 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
         )
         assert protected.status_code == 200
         assert protected.json()["metadata"] == {
-            "work_root": str((tmp_path / "workspace").resolve()),
+            "work_root": str(project_root.resolve()),
             "note": "kept",
             "runtime_preferences": {
                 "base_tier": "full_edit",
@@ -788,6 +833,51 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
             websocket.send_json({"id": 9, "method": "project.delete", "params": {"project_id": project_id}})
             assert _receive_rpc_response(websocket, 9)["result"] == {"deleted": True}
         assert client.get(f"/api/core/sessions/{session_id}").status_code == 404
+
+
+def test_artifact_open_falls_back_to_a_safe_project_path(
+    tmp_path: Path,
+    isolated_config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_jsonc_config(isolated_config_root)
+    workspace = tmp_path / "workspace"
+    output = workspace / "gui-run-01" / "p22.png"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"png")
+    opened: list[Path] = []
+    monkeypatch.setattr("lamtools_core.attachment.open_with_default_app", lambda path: opened.append(path))
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=workspace,
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            _initialize_websocket(websocket)
+            websocket.send_json({
+                "id": 3,
+                "method": "project.create",
+                "params": {"name": "Docs", "work_root": str(workspace)},
+            })
+            project_id = _receive_rpc_response(websocket, 3)["result"]["project"]["id"]
+            websocket.send_json({
+                "id": 4,
+                "method": "artifact.open",
+                "params": {
+                    "project_id": project_id,
+                    "artifact_id": "missing-historical-id",
+                    "path": "gui-run-01/p22.png",
+                },
+            })
+            assert _receive_rpc_response(websocket, 4)["result"] == {
+                "status": "opened",
+                "path": "gui-run-01/p22.png",
+            }
+
+    assert opened == [output.resolve()]
 
 
 def _receive_rpc_response(websocket, request_id: int) -> dict:

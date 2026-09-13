@@ -88,6 +88,7 @@ describe('AttachmentTray', () => {
 
     expect(wrapper.text()).toContain('看附件');
     expect(wrapper.text()).toContain('note.md');
+    expect(wrapper.get('.message-attachment-deck').classes()).toContain('message-attachment-deck--right');
   });
 
   it('renders image attachments as thumbnail-only cards', async () => {

@@ -90,15 +90,14 @@
         </button>
         <button
           type="button"
-          class="project-name project-main"
-          :class="{ clickable: allowProjectClick && group.canManage !== false }"
+          class="project-name project-main clickable"
           :data-project-entry="group.id"
-          :disabled="group.canManage === false"
-          @click="selectProject(group.id, group.canManage !== false)"
-          @keydown.enter.prevent="selectProject(group.id, group.canManage !== false)"
-          @keydown.space.prevent="selectProject(group.id, group.canManage !== false)"
+          :title="isCollapsed(group.id) ? `展开 ${group.name}` : `收起 ${group.name}`"
+          :aria-expanded="!isCollapsed(group.id)"
+          @click="toggleProjectCollapse(group.id)"
           @contextmenu="handleProjectContextMenu(section.id, group, $event)"
         >
+          <ProjectVisualIcon :icon-key="group.iconKey" :color-key="group.colorKey" :size="22" :icon-size="14" />
           <strong>{{ group.name }}</strong>
         </button>
         <div class="project-btns">
@@ -238,6 +237,7 @@ import {
 import { motionEnterDirective } from '../directives/motionEnter'
 import { closeContextMenu, contextMenuState, isContextMenuOpen, openContextMenu } from './context-menu/context-menu'
 import type { ContextMenuEntry } from './context-menu/types'
+import ProjectVisualIcon from './ProjectVisualIcon.vue'
 import type {
   CoreSessionExportFormat,
   ProjectGroup as CoreProjectGroup,
@@ -869,10 +869,6 @@ function toggleGroupExpand(groupId: string) {
 
 function isProjectBusy(projectId: string): boolean {
   return props.busyProjectIds.includes(projectId)
-}
-
-function selectProject(projectId: string, canManage: boolean) {
-  if (props.allowProjectClick && canManage) emit('select-project', projectId)
 }
 
 function setTransparentDragImage(dataTransfer: DataTransfer): void {

@@ -34,6 +34,11 @@ class DuckDuckGoSearchProvider:
         cfg = {**DEFAULT_CONFIG, **(config or {})}
         self.endpoint = str(cfg["endpoint"])
         self.timeout = float(cfg.get("timeout") or 30)
+        try:
+            proxy_port = int(cfg.get("proxy_port") or 0)
+        except (TypeError, ValueError):
+            proxy_port = 0
+        self.proxy = f"http://127.0.0.1:{proxy_port}" if 1 <= proxy_port <= 65535 else None
         self._client: httpx.AsyncClient | None = None
 
     async def _session(self) -> httpx.AsyncClient:
@@ -42,6 +47,7 @@ class DuckDuckGoSearchProvider:
                 timeout=httpx.Timeout(self.timeout),
                 follow_redirects=True,
                 headers={"User-Agent": DEFAULT_UA},
+                proxy=self.proxy,
             )
         return self._client
 

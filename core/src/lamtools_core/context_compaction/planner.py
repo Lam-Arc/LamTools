@@ -43,6 +43,7 @@ class CompactionPlanner:
         return _select_layout(
             messages,
             preserve_latest_user=preserve_latest_user,
+            compact_all=False,
             limit_tokens=budget.target_tokens,
             estimate_tokens=estimate_tokens or self._estimate_tokens,
         )
@@ -52,6 +53,7 @@ def select_context_compaction_layout(
     messages: list[ChatMessage],
     *,
     preserve_latest_user: bool = True,
+    compact_all: bool = False,
     limit_tokens: int = 0,
     estimate_tokens: CompactionTokenEstimator | None = None,
 ) -> CompactionPlan | None:
@@ -59,6 +61,7 @@ def select_context_compaction_layout(
     return _select_layout(
         messages,
         preserve_latest_user=preserve_latest_user,
+        compact_all=compact_all,
         limit_tokens=limit_tokens,
         estimate_tokens=estimate_tokens,
     )
@@ -68,6 +71,7 @@ def _select_layout(
     messages: list[ChatMessage],
     *,
     preserve_latest_user: bool,
+    compact_all: bool,
     limit_tokens: int,
     estimate_tokens: CompactionTokenEstimator | None,
 ) -> CompactionPlan | None:
@@ -87,6 +91,22 @@ def _select_layout(
         lambda values: estimate_message_tokens([message.to_dict() for message in values])
     )
     prefix_messages = list(messages[:prefix_end])
+    if compact_all:
+        latest_user = (
+            next((message for message in reversed(body) if message.role == "user"), None)
+            if preserve_latest_user
+            else None
+        )
+        retained_messages = [latest_user] if latest_user is not None else []
+        compacted_messages = [message for message in body if message is not latest_user]
+        if not compacted_messages:
+            return None
+        return CompactionPlan(
+            system_prefix=prefix_messages,
+            messages_to_summarize=compacted_messages,
+            recent_messages=retained_messages,
+        )
+
     fixed_tokens = estimator(prefix_messages)
     retained_budget = max(0, limit_tokens - fixed_tokens - _summary_output_limit(limit_tokens))
     groups = _semantic_message_groups(body)

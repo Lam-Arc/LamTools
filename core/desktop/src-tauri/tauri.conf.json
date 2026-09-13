@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LamCore",
+  "productName": "Sunday",
   "version": "0.3.2",
   "identifier": "com.lamtools.lamcore",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "LamCore",
+        "title": "Sunday",
         "width": 1440,
         "height": 900,
         "minWidth": 800,
@@ -26,7 +26,7 @@
         "label": "desktop-plugin-host",
         "create": true,
         "url": "desktop-plugin-host.html",
-        "title": "LamTools Desktop Plugin",
+        "title": "Sunday Desktop Plugin",
         "width": 256,
         "height": 288,
         "minWidth": 96,
@@ -61,7 +61,7 @@
         },
         {
           "identifier": "desktop-plugins",
-          "description": "Allows the local desktop plugin host to call LamCore host commands.",
+          "description": "Allows the local desktop plugin host to call Sunday host commands.",
           "local": true,
           "windows": ["desktop-plugin-*"],
           "permissions": [
@@ -72,20 +72,7 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico"],
-    "resources": ["lamcore-backend"],
-    "windows": {
-      "nsis": {
-        "template": "installer.nsi",
-        "languages": ["SimpChinese"],
-        "displayLanguageSelector": false,
-        "installMode": "currentUser"
-      },
-      "webviewInstallMode": {
-        "type": "downloadBootstrapper"
-      }
-    }
+    "active": false,
+    "icon": ["icons/icon.ico"]
   }
 }

@@ -9,6 +9,7 @@ import {
   type SubmitCoreComposerTaskResult,
 } from '../appServer/workbenchActions'
 import type { CoreCommandCatalogItem, CoreInputItem } from '../types'
+import { parseComposerInput } from '../composer/syntax'
 import { useComposerCommandPalette } from './useComposerCommandPalette'
 import {
   useCoreLiveTurnController,
@@ -191,7 +192,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   async function runCommand(command: string, argumentsText = ''): Promise<boolean> {
     const threadId = options.activeThreadId.value || ''
     if (!threadId) {
-      reportError(options.messages?.noActiveThread || 'An active thread is required')
+      reportCommandError(options.messages?.noActiveThread || 'An active thread is required')
       return false
     }
     const workRoot = options.getWorkRoot()
@@ -199,7 +200,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     const expectedCommandText = `/${command}${argumentsText ? ` ${argumentsText}` : ''}`
     const clearRunningCommand = submittedCommand === expectedCommandText || submittedCommand === `/${command}`
     if (options.canExecuteCommand && !options.canExecuteCommand()) {
-      reportError(options.commandUnavailableMessage || 'Command is unavailable while the turn is active')
+      reportCommandError(options.commandUnavailableMessage || 'Command is unavailable while the turn is active')
       return false
     }
     try {
@@ -214,7 +215,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       return ok
     } catch (error) {
       if (clearRunningCommand && !options.text.value) options.text.value = submittedCommand
-      reportError(errorMessage(error))
+      reportCommandError(errorMessage(error))
       return false
     } finally {
       commandRunning.value = false
@@ -276,12 +277,15 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     const submittedText = options.text.value.trim()
     const workRoot = options.getWorkRoot()
     const turnOptions = options.turnOptions?.() || {}
+    const parsedCommand = (options.attachments.value || []).length === 0
+      ? parseComposerInput(submittedText, commandCatalog.value)
+      : null
     // Show a placeholder bubble before the async round-trip so the user sees
     // immediate feedback even when turn/start takes hundreds of ms. Only
     // fire when there is actual content to send — an empty submit would
     // return { status: 'ignored' } and the placeholder would never be
     // cleared by an incoming user message.
-    if (submittedText || (options.attachments.value || []).length > 0) {
+    if (parsedCommand?.kind !== 'action' && (submittedText || (options.attachments.value || []).length > 0)) {
       options.onSubmitStart?.()
     }
     try {
@@ -390,6 +394,13 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   function reportError(message: string): void {
     options.onError?.(message)
     options.setStatusText?.(message)
+  }
+
+  function reportCommandError(message: string): void {
+    // Command failures already have the dedicated error toast.  Clear the
+    // transient status banner instead of showing the same error twice.
+    options.setStatusText?.('')
+    options.onError?.(message)
   }
 
   function notifyTurnStarted(): void {

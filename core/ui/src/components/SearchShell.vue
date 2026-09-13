@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
-    <div class="settings-overlay" @click.self="$emit('close')">
-      <div class="settings-card" :style="settingsThemeStyle">
+    <div ref="settingsOverlayEl" class="settings-overlay">
+      <div ref="settingsCardEl" class="settings-card" :style="settingsThemeStyle">
         <header class="search-head">
           <div class="search-input-row">
             <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -131,6 +131,7 @@ import {
 import type { Component } from 'vue'
 import type { CoreSessionListItem } from '../types'
 import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -140,6 +141,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ close: [] }>()
+const settingsOverlayEl = ref<HTMLElement | null>(null)
+const settingsCardEl = ref<HTMLElement | null>(null)
 
 type SearchTabId = 'files' | 'content' | 'sessions' | 'docs'
 interface SearchHit {
@@ -248,6 +251,12 @@ const settingsThemeStyle = computed(() => {
         }
       : {}),
   } as Record<string, string>
+})
+
+useOutsidePointerDismiss({
+  overlay: settingsOverlayEl,
+  card: settingsCardEl,
+  onDismiss: () => emit('close'),
 })
 
 function onInput(event: Event): void {

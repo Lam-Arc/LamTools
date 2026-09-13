@@ -16,7 +16,7 @@ describe('useCoreUpdateState', () => {
       current_version: '0.2.2',
       latest_version: '9.9.9',
       release_notes: '## 新功能',
-      download_url: 'https://example.com/LamCore_9.9.9_x64-setup.exe',
+      download_url: 'https://example.com/Sunday_9.9.9_x64-setup.exe',
       release_url: 'https://example.com/releases/latest',
     })
     const state = useCoreUpdateState(rpc as never)
@@ -26,7 +26,7 @@ describe('useCoreUpdateState', () => {
     expect(rpc).toHaveBeenCalledWith('update.check', {})
     expect(state.status.value).toBe('update_available')
     expect(state.latestVersion.value).toBe('9.9.9')
-    expect(state.downloadUrl.value).toContain('LamCore_9.9.9')
+    expect(state.downloadUrl.value).toContain('Sunday_9.9.9')
     expect(state.releaseNotes.value).toContain('新功能')
   })
 

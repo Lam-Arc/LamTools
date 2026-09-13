@@ -40,6 +40,8 @@ export interface CoreAppSnapshot {
 export interface CoreHistoryPage {
   char_limit: number
   character_count: number
+  turn_limit?: number
+  turn_count?: number
   item_count: number
   total_items: number
   has_more: boolean
@@ -72,10 +74,10 @@ export interface CoreSkillInputItem {
 export type CoreAppInputItem = CoreTextInputItem | CoreAttachmentInputItem | CoreSkillInputItem
 
 /**
- * Immutable runtime configuration captured when a turn or queue item is
- * accepted. Permission fields are intentionally explicit so consumers do not
- * fall back to the current Composer/global settings while dispatching or
- * continuing work.
+ * Runtime configuration captured when a turn or queue item is accepted.
+ * Model and thinking options remain turn-scoped; permission fields record the
+ * initial/compatibility state and are overlaid from the live session before
+ * dispatching or continuing work.
  */
 export interface CoreAppRuntimeSnapshot {
   permission_preset?: 'ask' | 'auto' | 'full_access'

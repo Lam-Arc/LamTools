@@ -13,9 +13,11 @@ from .models import (
     PluginCLIContribution,
     PluginComposerCommand,
     PluginManifest,
+    PluginSidebarWidget,
     PluginUIContribution,
     PluginUIMode,
     PluginUIView,
+    PluginWidgetAction,
 )
 
 _logger = logging.getLogger(__name__)
@@ -624,9 +626,102 @@ class PluginRegistry:
                 parsed.append(cls(**values))
             return parsed
 
+        sidebar = value.get("sidebar", {})
+        if sidebar is None:
+            sidebar = {}
+        if not isinstance(sidebar, dict):
+            raise ValueError(f"plugin ui.sidebar must be an object: {manifest_path}")
+        raw_widgets = sidebar.get("widgets", [])
+        if raw_widgets is None:
+            raw_widgets = []
+        if not isinstance(raw_widgets, list):
+            raise ValueError(f"plugin ui.sidebar.widgets must be an array: {manifest_path}")
+        widgets: list[PluginSidebarWidget] = []
+        widget_ids: set[str] = set()
+        for index, raw_widget in enumerate(raw_widgets):
+            prefix = f"plugin ui.sidebar.widgets[{index}]"
+            if not isinstance(raw_widget, dict):
+                raise ValueError(f"{prefix} must be an object: {manifest_path}")
+            widget_id = str(raw_widget.get("id") or "").strip()
+            if not widget_id:
+                raise ValueError(f"{prefix} is missing 'id': {manifest_path}")
+            if widget_id in widget_ids:
+                raise ValueError(f"duplicate plugin sidebar widget id '{widget_id}': {manifest_path}")
+            widget_ids.add(widget_id)
+            renderer = str(raw_widget.get("renderer") or raw_widget.get("kind") or "blocks").strip().lower()
+            if renderer not in {"blocks", "component"}:
+                raise ValueError(f"{prefix}.renderer must be blocks or component: {manifest_path}")
+            scope = str(raw_widget.get("scope") or "workspace").strip().lower()
+            if scope not in {"global", "workspace", "session"}:
+                raise ValueError(f"{prefix}.scope must be global, workspace, or session: {manifest_path}")
+            raw_order = raw_widget.get("order", 0)
+            if isinstance(raw_order, bool) or not isinstance(raw_order, int):
+                raise ValueError(f"{prefix}.order must be an integer: {manifest_path}")
+            snapshot_operation = str(
+                raw_widget.get("snapshotOperation") or raw_widget.get("snapshot_operation") or ""
+            ).strip()
+            if renderer == "blocks" and not snapshot_operation:
+                raise ValueError(f"{prefix}.snapshotOperation is required for blocks: {manifest_path}")
+            entry: Path | None = None
+            if renderer == "component":
+                entries = self._paths(root, raw_widget.get("entry"))
+                if len(entries) != 1 or not entries[0].is_file():
+                    raise ValueError(
+                        f"{prefix}.entry must name one existing './'-relative file: {manifest_path}"
+                    )
+                entry = entries[0]
+            raw_actions = raw_widget.get("actions", [])
+            if raw_actions is None:
+                raw_actions = []
+            if not isinstance(raw_actions, list):
+                raise ValueError(f"{prefix}.actions must be an array: {manifest_path}")
+            actions: list[PluginWidgetAction] = []
+            action_ids: set[str] = set()
+            for action_index, raw_action in enumerate(raw_actions):
+                action_prefix = f"{prefix}.actions[{action_index}]"
+                if not isinstance(raw_action, dict):
+                    raise ValueError(f"{action_prefix} must be an object: {manifest_path}")
+                action_id = str(raw_action.get("id") or "").strip()
+                operation = str(raw_action.get("operation") or "").strip()
+                if not action_id or not operation:
+                    raise ValueError(f"{action_prefix} requires id and operation: {manifest_path}")
+                if action_id in action_ids:
+                    raise ValueError(f"duplicate widget action id '{action_id}': {manifest_path}")
+                action_ids.add(action_id)
+                input_schema = raw_action.get("inputSchema", raw_action.get("input_schema", {}))
+                if not isinstance(input_schema, dict):
+                    raise ValueError(f"{action_prefix}.inputSchema must be an object: {manifest_path}")
+                for boolean_key in ("dangerous", "mutates"):
+                    if boolean_key in raw_action and not isinstance(raw_action[boolean_key], bool):
+                        raise ValueError(f"{action_prefix}.{boolean_key} must be a boolean: {manifest_path}")
+                actions.append(
+                    PluginWidgetAction(
+                        id=action_id,
+                        title=str(raw_action.get("title") or action_id).strip() or action_id,
+                        operation=operation,
+                        input_schema=dict(input_schema),
+                        dangerous=bool(raw_action.get("dangerous", False)),
+                        mutates=bool(raw_action.get("mutates", False)),
+                    )
+                )
+            widgets.append(
+                PluginSidebarWidget(
+                    id=widget_id,
+                    title=str(raw_widget.get("title") or widget_id).strip() or widget_id,
+                    renderer=renderer,
+                    scope=scope,
+                    icon=str(raw_widget.get("icon") or "").strip(),
+                    order=raw_order,
+                    snapshot_operation=snapshot_operation,
+                    entry=entry,
+                    actions=actions,
+                )
+            )
+
         return PluginUIContribution(
             views=parse_items("views", PluginUIView),
             modes=parse_items("modes", PluginUIMode),
+            sidebar_widgets=widgets,
         )
 
     def _paths(self, root: Path, value: object) -> list[Path]:

@@ -13,21 +13,30 @@ describe('theme gradient normalization', () => {
     ])
   })
 
-  it('preserves multi-color gradients and normalizes defaults to single-color nodes', () => {
+  it('preserves multi-color gradients and the Sunday default composition', () => {
     expect(normalizeGradientStops([
       { color: '#111111', position: 0 },
       { color: '#222222', position: 100 },
     ], '#000000', '#ffffff')).toHaveLength(2)
-    expect(normalizeTheme(DEFAULT_THEME).backdropStops).toHaveLength(1)
-    expect(normalizeTheme(DEFAULT_THEME).mainStops).toHaveLength(1)
+    expect(normalizeTheme(DEFAULT_THEME).backdropStops).toHaveLength(3)
+    expect(normalizeTheme(DEFAULT_THEME).mainStops).toHaveLength(2)
+    expect(normalizeTheme(DEFAULT_THEME).processIconColor).toBe('#a693ff')
   })
 
   it('keeps the default pure-color preset as a single node', () => {
     expect(THEME_PRESETS.map((preset) => preset.id)).not.toContain('solid-paper')
-    expect(THEME_PRESETS.map((preset) => preset.id)).toEqual(['default', 'berry-teal', 'morning-mist'])
+    expect(THEME_PRESETS.map((preset) => preset.id)).toEqual(['sunday', 'default', 'berry-teal', 'morning-mist'])
     const defaultPreset = THEME_PRESETS.find((preset) => preset.id === 'default')!
     expect(defaultPreset.lightTheme?.mainStops).toHaveLength(1)
     expect(defaultPreset.darkTheme?.mainStops).toHaveLength(1)
+  })
+
+  it('ships matched Sunday light and dark variants', () => {
+    const sunday = THEME_PRESETS.find((preset) => preset.id === 'sunday')!
+    expect(sunday.lightTheme?.mainText).toBe('#162451')
+    expect(sunday.lightTheme?.processIconColor).toBe('#6755e8')
+    expect(sunday.darkTheme?.mainText).toBe('#f5f2fb')
+    expect(sunday.darkTheme?.processIconColor).toBe('#a693ff')
   })
 
   it('uses the requested gradient for the berry-teal preset background', () => {

@@ -7,6 +7,7 @@ import os
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 import logging
 from urllib.parse import quote
@@ -338,12 +339,16 @@ def create_core_agent_http_app(
     operations.register("project.sessions.list", _project_sessions_list)
 
     async def startup_core_agent() -> None:
+        startup_started = perf_counter()
+        phase_started = startup_started
         core_db_handle = await open_core_app_db(
             core_db_path,
             member_defaults={"session": {"member_id": runtime_spec.member_id}},
             project_roots=[resolved_work_root],
             project_roots_file=resolved_data_dir / "project-roots.json",
         )
+        _logger.info("[startup] database ready in %.3fs", perf_counter() - phase_started)
+        phase_started = perf_counter()
         existing_project_roots = core_db_handle.project_store.project_roots()
         if str(resolved_work_root) not in existing_project_roots:
             core_db_handle.project_store.set_project_roots([
@@ -353,7 +358,10 @@ def create_core_agent_http_app(
         await core_db_handle.project_store.ensure_fallback_project(
             resolved_work_root,
             name="MyProject",
+            reconcile_once=True,
         )
+        _logger.info("[startup] project reconciliation ready in %.3fs", perf_counter() - phase_started)
+        phase_started = perf_counter()
         app_state["core_db"] = core_db_handle
         session_store.set_sync_journal(core_db_handle.sync_journal)
         session_store.set_sync_publisher(lambda change: live_hub.broadcast(change))
@@ -409,6 +417,8 @@ def create_core_agent_http_app(
             memory_store=core_db_handle.memory_store,
             model_context_sink=capture_model_context,
         )
+        _logger.info("[startup] operation catalog ready in %.3fs", perf_counter() - phase_started)
+        phase_started = perf_counter()
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_artifact_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_session_operations(agent_operations, session_store=session_store)
@@ -540,8 +550,10 @@ def create_core_agent_http_app(
             await recover_stale_active_turns(context=live_context())
         except BaseException:
             _logger.exception("[startup] stale active turn recovery failed (non-fatal)")
+        _logger.info("[startup] stale-turn recovery ready in %.3fs", perf_counter() - phase_started)
         await arrange_runner.start()
         await observer_supervisor.start()
+        _logger.info("[startup] backend ready in %.3fs", perf_counter() - startup_started)
 
         # Optional plugin backends are loaded and started by
         # create_core_agent_operations via the generic plugin lifecycle. Keep
@@ -884,10 +896,16 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         work_root = str(payload.get("work_root") or payload.get("workRoot") or "").strip()
         if not work_root:
             return OperationResult(name=request.name, status="error", payload={"error": "work_root is required"})
+        visual: dict[str, Any] = {}
+        if "icon_key" in payload or "iconKey" in payload:
+            visual["icon_key"] = payload.get("icon_key", payload.get("iconKey"))
+        if "color_key" in payload or "colorKey" in payload:
+            visual["color_key"] = payload.get("color_key", payload.get("colorKey"))
         try:
             project, session, _ = await project_store.create_with_initial_session(
                 work_root,
                 name=payload.get("name") if "name" in payload else None,
+                **visual,
             )
         except (OSError, ValueError) as exc:
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
@@ -903,8 +921,22 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         return OperationResult(name=request.name, payload={"project": project.to_dict()})
 
     async def project_update(request: OperationRequest) -> OperationResult:
+        payload = request.payload
         try:
-            project = await project_store.rename(_project_id(request), str(request.payload.get("name") or ""))
+            project = await project_store.update(
+                _project_id(request),
+                name=payload.get("name") if "name" in payload else None,
+                icon_key=(
+                    payload.get("icon_key", payload.get("iconKey"))
+                    if "icon_key" in payload or "iconKey" in payload
+                    else None
+                ),
+                color_key=(
+                    payload.get("color_key", payload.get("colorKey"))
+                    if "color_key" in payload or "colorKey" in payload
+                    else None
+                ),
+            )
         except (OSError, ValueError) as exc:
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         if project is None:
@@ -1053,10 +1085,31 @@ def _register_core_artifact_operations(catalog: OperationCatalog, *, project_sto
         if registry is None:
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
         artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
-        record = registry.get(artifact_id)
-        if record is None:
-            return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
-        return OperationResult(name=request.name, payload={"path": record.path})
+        record = registry.get(artifact_id) if artifact_id else None
+        artifact_path = record.path if record is not None else str(request.payload.get("path") or "").strip()
+        if not artifact_path:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact path not found"})
+        if artifact_path.startswith("attachment://"):
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "Attachment-backed artifacts must use attachment.open"},
+            )
+        relative_path = artifact_path.removeprefix("workspace://")
+        candidate = (registry.work_root / relative_path).resolve()
+        try:
+            candidate.relative_to(registry.work_root)
+        except ValueError:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact path escapes project"})
+        try:
+            from lamtools_core.attachment import open_with_default_app
+
+            if not candidate.is_file():
+                raise FileNotFoundError(candidate)
+            open_with_default_app(candidate)
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"status": "opened", "path": artifact_path})
 
     handlers = {
         "artifact.list": artifact_list,

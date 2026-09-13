@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Sunday</title>
+  <desc id="desc">Sunday 的暖色圆点与蓝紫色微笑标志。</desc>
+  <defs>
+    <linearGradient id="warm" x1="240" y1="608" x2="445" y2="243" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FD4754"/><stop offset=".25" stop-color="#FC614A"/><stop offset=".5" stop-color="#FD843E"/><stop offset=".75" stop-color="#FDAB36"/><stop offset="1" stop-color="#FECA30"/>
+    </linearGradient>
+    <linearGradient id="sweep" x1="80" y1="645" x2="971" y2="1160" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#10AEFD"/><stop offset=".25" stop-color="#1690FC"/><stop offset=".5" stop-color="#1C6BFC"/><stop offset=".75" stop-color="#3B53FB"/><stop offset="1" stop-color="#823CFC"/>
+    </linearGradient>
+    <linearGradient id="arch" x1="717" y1="492" x2="1078" y2="266" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0453FD"/><stop offset=".25" stop-color="#3055FC"/><stop offset=".5" stop-color="#695BFB"/><stop offset=".75" stop-color="#9F55FB"/><stop offset="1" stop-color="#C745FD"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="380.5" cy="447" rx="215.5" ry="212.5" fill="url(#warm)"/>
+  <path fill="url(#arch)" d="M1172 440c-4-20-13-37-25-50-28-32-74-56-128-69-57-14-114-4-151 13-34 15-62 33-89 58-25 23-46 50-58 78-11 26-1 51 19 65 18 13 42 13 60 3 17-9 27-25 43-41 29-28 68-37 107-36 47 0 84 21 119 59 17 17 43 15 60 6 30-16 50-47 43-86Z"/>
+  <path fill="url(#sweep)" d="M1209 700c-3-22-12-38-26-47-19-13-41-10-61-3-32 12-53 34-75 56-34 37-62 67-96 97-49 43-112 73-183 95-58 18-114 22-172 17-48-4-95-16-139-31-58-20-102-47-144-85-43-38-80-83-117-120-19-19-44-30-67-33-27-4-51 7-65 28-16 24-13 54-3 84 15 45 40 90 69 127 46 58 90 99 141 135 55 38 115 63 179 82 96 28 200 30 303 11 77-14 143-43 195-72 57-32 102-70 144-116 38-42 61-79 80-112 24-42 42-84 37-113Z"/>
+</svg>

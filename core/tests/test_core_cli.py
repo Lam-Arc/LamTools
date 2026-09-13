@@ -255,6 +255,9 @@ def test_core_cli_parser_exposes_session_query_commands(tmp_path: Path) -> None:
     turn_fork_args = parser.parse_args([
         "session", "fork", "thread-cli", "--turn-id", "turn-1", "--base-url", "http://core.test", "--raw",
     ])
+    permissions_args = parser.parse_args([
+        "session", "permissions", "thread-cli", "--approval", "full_access", "--base-url", "http://core.test", "--raw",
+    ])
 
     assert list_args.command == "session"
     assert list_args.session_command == "list"
@@ -285,6 +288,9 @@ def test_core_cli_parser_exposes_session_query_commands(tmp_path: Path) -> None:
     assert turn_rollback_args.checkpoint_id == ""
     assert turn_fork_args.turn_id == "turn-1"
     assert turn_fork_args.checkpoint_id == ""
+    assert permissions_args.session_command == "permissions"
+    assert permissions_args.thread_id == "thread-cli"
+    assert permissions_args.approval == "full_access"
 
 
 def test_core_cli_session_export_writes_transcript_and_full_zip(tmp_path: Path, capsys) -> None:
@@ -379,11 +385,16 @@ def test_core_project_cli_creates_workspace_and_round_trips_agents(monkeypatch, 
     rules.write_text("# Core rules\n", encoding="utf-8")
     monkeypatch.setenv("LAMTOOLS_CORE_DB", str(core_db))
 
-    assert main(["project", "create", str(workspace), "--name", "Docs"]) == 0
+    assert main([
+        "project", "create", str(workspace), "--name", "Docs",
+        "--icon", "idea", "--color", "aurora",
+    ]) == 0
     created = json.loads(capsys.readouterr().out)
     project_id = created["project"]["id"]
     assert created["project"]["name"] == "Docs"
     assert created["project"]["work_root"] == str(workspace.resolve())
+    assert created["project"]["icon_key"] == "idea"
+    assert created["project"]["color_key"] == "aurora"
     assert created["session"]["metadata"] == {
         "work_root": str(workspace.resolve()),
         "runtime_preferences": {
@@ -407,9 +418,20 @@ def test_core_project_cli_lists_shows_renames_and_deletes(monkeypatch, tmp_path:
     project_id = json.loads(capsys.readouterr().out)["project"]["id"]
 
     assert main(["project", "list"]) == 0
-    assert [project["id"] for project in json.loads(capsys.readouterr().out)["projects"]] == [project_id]
+    listed = json.loads(capsys.readouterr().out)["projects"]
+    assert [project["id"] for project in listed] == [project_id]
+    assert listed[0]["icon_key"] == "folder"
+    assert listed[0]["color_key"] == "gray"
     assert main(["project", "show", project_id]) == 0
     assert json.loads(capsys.readouterr().out)["project"]["name"] == "Docs"
+    assert main([
+        "project", "update", project_id,
+        "--name", "Sunday", "--icon-key", "sparkles", "--color-key", "prism",
+    ]) == 0
+    updated = json.loads(capsys.readouterr().out)["project"]
+    assert updated["name"] == "Sunday"
+    assert updated["icon_key"] == "sparkles"
+    assert updated["color_key"] == "prism"
     assert main(["project", "rename", project_id, "Renamed"]) == 0
     assert json.loads(capsys.readouterr().out)["project"]["name"] == "Renamed"
     assert main(["project", "delete", project_id]) == 0
@@ -427,6 +449,7 @@ def test_core_project_cli_defaults_blank_create_name_and_rejects_blank_rename(mo
 
 def test_core_cli_parser_exposes_live_control_commands(tmp_path: Path) -> None:
     parser = build_parser()
+    assert "Sunday AI software CLI" in parser.format_help()
 
     serve = parser.parse_args([
         "serve", "--host", "0.0.0.0", "--port", "7123", "--model-id", "core-model",
@@ -481,8 +504,8 @@ async def test_core_cli_live_commands_call_core_app_server_operations(monkeypatc
         def __init__(self, base_url: str, *, path: str, token: str) -> None:
             calls.append(("client", {"base_url": base_url, "path": path, "token": token}))
 
-        async def connect(self) -> None:
-            calls.append(("connect", {}))
+        async def connect(self, *, thread_id=None) -> None:
+            calls.append(("connect", {"thread_id": thread_id}))
 
         async def close(self) -> None:
             calls.append(("close", {}))
@@ -531,6 +554,7 @@ async def test_core_cli_live_commands_call_core_app_server_operations(monkeypatc
         ["queue", "guide", "thread-1", "turn-1", "queue-1", "guide", "--raw"],
         ["approval", "respond", "thread-1", "approve", "yes", "--raw"],
         ["command", "execute", "thread-1", "help", "--raw"],
+        ["session", "permissions", "thread-1", "--approval", "auto", "--raw"],
     ]:
         args = parser.parse_args(argv)
         assert await args.func(args) == 0
@@ -548,6 +572,7 @@ async def test_core_cli_live_commands_call_core_app_server_operations(monkeypatc
     assert ("queue.delete", {"thread_id": "thread-1", "queue_item_id": "queue-1"}) in calls
     assert ("queue.guide", {"thread_id": "thread-1", "turn_id": "turn-1", "queue_item_id": "queue-1", "text": "guide"}) in calls
     assert ("approval.respond", {"thread_id": "thread-1", "action": "approve", "response": "yes"}) in calls
+    assert ("session.permissions.set", {"thread_id": "thread-1", "permission_preset": "auto"}) in calls
     assert '"thread_id": "thread-1"' in capsys.readouterr().out
 
 

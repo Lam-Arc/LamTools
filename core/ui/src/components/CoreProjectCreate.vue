@@ -2,8 +2,9 @@
   <!-- Default mount point is document.body; hosts without a workspace shell
        still render the dialog (audit 19 S3). -->
   <Teleport :to="teleportTarget">
-    <div class="core-project-dialog-backdrop" data-project-backdrop @mousedown.self="cancel">
+    <div ref="dialogBackdropEl" class="core-project-dialog-backdrop" data-project-backdrop>
       <section
+        ref="dialogEl"
         class="core-project-dialog"
         role="dialog"
         aria-modal="true"
@@ -58,6 +59,15 @@
             />
           </label>
 
+          <fieldset class="core-project-visual-field">
+            <legend>项目外观 <em>选填</em></legend>
+            <ProjectVisualPicker
+              v-model:icon-key="iconKey"
+              v-model:color-key="colorKey"
+              :disabled="loading"
+            />
+          </fieldset>
+
           <p v-if="error" class="core-project-error" role="alert">{{ error }}</p>
 
           <footer class="core-project-actions">
@@ -82,7 +92,15 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue'
 import FolderBrowserDialog from './FolderBrowserDialog.vue'
+import ProjectVisualPicker from './ProjectVisualPicker.vue'
 import type { LamToolsTransport } from '../transport'
+import {
+  DEFAULT_CORE_PROJECT_COLOR_KEY,
+  DEFAULT_CORE_PROJECT_ICON_KEY,
+  type CoreProjectColorKey,
+  type CoreProjectIconKey,
+} from '../projects/types'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 const props = withDefaults(defineProps<{
   loading?: boolean
@@ -96,26 +114,46 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
-  submit: [payload: { name: string; work_root: string }]
+  submit: [payload: {
+    name: string
+    work_root: string
+    icon_key: CoreProjectIconKey
+    color_key: CoreProjectColorKey
+  }]
   cancel: []
 }>()
 
 const name = ref('')
 const workRoot = ref('')
+const iconKey = ref<CoreProjectIconKey>(DEFAULT_CORE_PROJECT_ICON_KEY)
+const colorKey = ref<CoreProjectColorKey>(DEFAULT_CORE_PROJECT_COLOR_KEY)
 const workRootInput = ref<HTMLInputElement | null>(null)
 const showBrowser = ref(false)
+const dialogBackdropEl = ref<HTMLElement | null>(null)
+const dialogEl = ref<HTMLElement | null>(null)
 
 onMounted(() => nextTick(() => workRootInput.value?.focus()))
 
 function submit() {
   const root = workRoot.value.trim()
   if (!root || props.loading) return
-  emit('submit', { name: name.value.trim(), work_root: root })
+  emit('submit', {
+    name: name.value.trim(),
+    work_root: root,
+    icon_key: iconKey.value,
+    color_key: colorKey.value,
+  })
 }
 
 function cancel() {
   if (!props.loading) emit('cancel')
 }
+
+useOutsidePointerDismiss({
+  overlay: dialogBackdropEl,
+  card: dialogEl,
+  onDismiss: cancel,
+})
 
 async function openBrowser() {
   if (props.loading) return
@@ -197,6 +235,27 @@ function onDirectorySelected(path: string) {
 
 .core-project-field em {
   color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 48%, transparent);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 520;
+}
+
+.core-project-visual-field {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.core-project-visual-field legend {
+  margin-bottom: var(--space-3);
+  color: color-mix(in srgb, var(--theme-main-text) 82%, transparent);
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.core-project-visual-field legend em {
+  color: color-mix(in srgb, var(--theme-main-text) 48%, transparent);
   font-size: 12px;
   font-style: normal;
   font-weight: 520;

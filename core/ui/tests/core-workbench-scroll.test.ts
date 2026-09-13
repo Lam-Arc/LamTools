@@ -1,18 +1,36 @@
 import { describe, expect, it } from 'vitest'
 import { ref } from 'vue'
-import { coreIsScrollNearBottom, useCoreAutoFollowScroll, type CoreScrollableElement } from '../src'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import {
+  coreApplyHistoryScrollCeiling,
+  coreIsScrollNearBottom,
+  coreHistoryAutoLoadThreshold,
+  coreShouldAutoLoadHistory,
+  useCoreAutoFollowScroll,
+  type CoreScrollSentinel,
+  type CoreScrollableElement,
+} from '../src'
 
 /**
  * 容器级滚动控制器（useCoreAutoFollowScroll）契约测试。
  * 覆盖易错点清单中的：A1/A2/A3、B4/B5/B6/B7/B8、D16、E17/E18/E20。
  */
 
-function fakeScrollElement(): CoreScrollableElement & { calls: Array<{ top: number; behavior?: ScrollBehavior }> } {
-  return {
+function fakeScrollElement(): CoreScrollableElement & {
+  calls: Array<{ top: number; behavior?: ScrollBehavior }>
+  writes: number[]
+} {
+  let top = 0
+  const element: CoreScrollableElement & {
+    calls: Array<{ top: number; behavior?: ScrollBehavior }>
+    writes: number[]
+  } = {
     scrollHeight: 1000,
     scrollTop: 0,
     clientHeight: 300,
-    calls: [],
+    calls: [] as Array<{ top: number; behavior?: ScrollBehavior }>,
+    writes: [] as number[],
     scrollTo(options: ScrollToOptions) {
       this.calls.push({
         top: Number(options.top || 0),
@@ -21,6 +39,15 @@ function fakeScrollElement(): CoreScrollableElement & { calls: Array<{ top: numb
       this.scrollTop = Number(options.top || 0)
     },
   }
+  Object.defineProperty(element, 'scrollTop', {
+    configurable: true,
+    get: () => top,
+    set(value: number) {
+      top = value
+      element.writes.push(value)
+    },
+  })
+  return element
 }
 
 /** 直接驱动 scrollTop 时会触发 scroll 事件的仿真：模拟真实浏览器行为 */
@@ -42,11 +69,96 @@ function makeRealisticElement() {
 }
 
 describe('core workbench auto-follow scroll', () => {
+  it('prefetches older history before the loading boundary and only while idle', () => {
+    expect(coreHistoryAutoLoadThreshold(300)).toBe(1280)
+    expect(coreHistoryAutoLoadThreshold(500)).toBe(2000)
+    expect(coreShouldAutoLoadHistory(1280, true, false, 1280)).toBe(true)
+    expect(coreShouldAutoLoadHistory(1281, true, false, 1280)).toBe(false)
+    expect(coreShouldAutoLoadHistory(0, false, false)).toBe(false)
+    expect(coreShouldAutoLoadHistory(0, true, true)).toBe(false)
+  })
+
+  it('caps upward movement while older history is loading', () => {
+    expect(coreApplyHistoryScrollCeiling(480, 600, true)).toBe(600)
+    expect(coreApplyHistoryScrollCeiling(720, 600, true)).toBe(720)
+    expect(coreApplyHistoryScrollCeiling(480, 600, false)).toBe(480)
+    expect(coreApplyHistoryScrollCeiling(480, null, true)).toBe(480)
+    expect(coreApplyHistoryScrollCeiling(-20, -5, true)).toBe(0)
+  })
+
+  it('only shows a compact paging cap when the local prefetch buffer is missed and preserves the first visible message anchor', () => {
+    const source = readFileSync(resolve(__dirname, '../src/app/LamToolsApp.vue'), 'utf8')
+    expect(source).toContain('<HistoryLoadingIndicator :active="historyLoading" />')
+    expect(source).not.toContain('historyLoading || historyPageLoading')
+    expect(source).toContain('class="thread-history-cap"')
+    expect(source).toContain('v-if="historyPageNetworkLoading"')
+    expect(source).toContain('historyPageNetworkLoading.value = !historyBuffered.value')
+    expect(source).not.toContain('HISTORY_PAGE_INDICATOR_DELAY_MS')
+    expect(source).toContain('historyScrollCeiling')
+    expect(source).toContain('restoringHistoryAnchor')
+    expect(source).toContain('coreApplyHistoryScrollCeiling')
+    expect(source).toContain('@wheel="handleThreadWheel"')
+    expect(source).not.toContain('@wheel.passive="threadScroll.handleWheel"')
+    expect(source).toContain('event.preventDefault()')
+    expect(source).toContain('new IntersectionObserver')
+    expect(source).toContain('ref="threadBottomSentinel"')
+    expect(source).not.toContain('new ResizeObserver')
+    expect(source).toContain('captureThreadHistoryAnchor')
+    expect(source).toContain('restoreThreadHistoryAnchor')
+  })
+
   it('detects whether the thread is near the bottom', () => {
     // scrollHeight 1000, clientHeight 300 → bottom at 700, threshold 80 → near when scrollTop >= 620
     expect(coreIsScrollNearBottom({ scrollHeight: 1000, scrollTop: 620, clientHeight: 300 })).toBe(true)
     expect(coreIsScrollNearBottom({ scrollHeight: 1000, scrollTop: 500, clientHeight: 300 })).toBe(false)
     expect(coreIsScrollNearBottom(null)).toBe(true)
+  })
+
+  it('uses the bottom sentinel as the follow source and scroll target', async () => {
+    const el = fakeScrollElement()
+    el.scrollTop = 700
+    const calls: ScrollIntoViewOptions[] = []
+    const sentinel: CoreScrollSentinel = {
+      scrollIntoView(options) {
+        calls.push(options || {})
+      },
+    }
+    const controller = useCoreAutoFollowScroll(ref(el), {
+      sentinelRef: ref(sentinel),
+      afterDomUpdate: async () => {},
+      afterFrame: async () => {},
+    })
+
+    controller.handleSentinelVisibility(false)
+    expect(controller.atBottom.value).toBe(false)
+    expect(controller.autoFollow.value).toBe(true)
+
+    await controller.scrollToBottom()
+    expect(calls).toEqual([{ block: 'end', inline: 'nearest', behavior: 'auto' }])
+    expect(controller.atBottom.value).toBe(true)
+
+    controller.handleSentinelVisibility(true)
+    el.scrollTop = 600
+    controller.handleWheel({ deltaY: -1 })
+    controller.handleScroll()
+    expect(controller.autoFollow.value).toBe(false)
+    controller.handleSentinelVisibility(true)
+    expect(controller.autoFollow.value).toBe(true)
+    expect(controller.atBottom.value).toBe(true)
+  })
+
+  it('does not abandon sentinel follow when content growth moves the bottom', () => {
+    const el = fakeScrollElement()
+    el.scrollTop = 700
+    const sentinel: CoreScrollSentinel = { scrollIntoView() {} }
+    const controller = useCoreAutoFollowScroll(ref(el), { sentinelRef: ref(sentinel) })
+
+    controller.handleSentinelVisibility(false)
+    expect(controller.autoFollow.value).toBe(true)
+
+    el.scrollTop = 500
+    controller.handleScroll()
+    expect(controller.autoFollow.value).toBe(false)
   })
 
   it('lets upward wheel input seize control and restores follow when user reaches bottom', () => {
@@ -105,7 +217,7 @@ describe('core workbench auto-follow scroll', () => {
     // force: 直接写 scrollTop（不走 smooth 分支、不做 scrollTo 调用），立即到位
     await controller.scrollToBottom(true, 'smooth')
     expect(el.calls).toEqual([]) // 未走 smooth 分支
-    expect(el.scrollTop).toBe(1000)
+    expect(el.scrollTop).toBe(700)
     expect(controller.autoFollow.value).toBe(true)
   })
 
@@ -119,7 +231,7 @@ describe('core workbench auto-follow scroll', () => {
 
     await controller.scrollToBottom(true, 'smooth')
     expect(el.calls).toEqual([])
-    expect(el.scrollTop).toBe(1000)
+    expect(el.scrollTop).toBe(700)
   })
 
   it('force scroll always lands instantly even when smooth requested', async () => {
@@ -133,7 +245,7 @@ describe('core workbench auto-follow scroll', () => {
 
     await controller.scrollToBottom(true, 'smooth')
     expect(el.calls).toEqual([]) // 未走 smooth 分支
-    expect(el.scrollTop).toBe(1000)
+    expect(el.scrollTop).toBe(700)
   })
 
   it('does not scroll when element is missing', async () => {
@@ -154,13 +266,21 @@ describe('core workbench auto-follow scroll', () => {
     })
 
     await controller.scrollToBottom()
-    // 第一次写推进 scrollTop
-    expect(el.scrollTop).toBe(1000)
-    el.scrollTop = 700
-    // 帧后校正：内容没有继续长（scrollHeight 不变），不应重复写 —— 但实现里
-    // scrollTop(700) !== scrollHeight(1000) 会再写一次；这是"内容变长才补"的
-    // 保守行为，等价于多写一次相同目标，不改变可见状态
-    expect(el.calls.length).toBeLessThanOrEqual(2)
+    expect(el.scrollTop).toBe(700)
+    expect(el.writes).toEqual([700, 700])
+  })
+
+  it('performs one frame correction only when content grows', async () => {
+    const el = fakeScrollElement()
+    const controller = useCoreAutoFollowScroll(ref(el), {
+      afterDomUpdate: async () => {},
+      afterFrame: async () => { el.scrollHeight = 1200 },
+    })
+
+    await controller.scrollToBottom()
+
+    expect(el.writes).toEqual([700, 900])
+    expect(el.scrollTop).toBe(900)
   })
 
   it('token race: an in-flight scroll is superseded by a newer call', async () => {
@@ -180,7 +300,7 @@ describe('core workbench auto-follow scroll', () => {
     resolvers[1]?.()
     await Promise.all([p1, p2])
     // 两次都写了同样的目标，语义等价；关键是没有异常/挂起
-    expect(el.scrollTop).toBe(1000)
+    expect(el.scrollTop).toBe(700)
   })
 
   it('programmatic scroll does not disable follow mid-flight (易错点 16)', async () => {

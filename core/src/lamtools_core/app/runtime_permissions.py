@@ -1,10 +1,11 @@
-"""Runtime permission presets and immutable turn/queue snapshots.
+"""Runtime permission presets and turn/queue runtime snapshots.
 
-The Composer only chooses a small, user-facing preset.  Core expands that
-preset against the session's frozen base capability and keeps the expanded
-values with the accepted turn or queue item.  This module is deliberately
-independent from ``ApprovalGate`` so HTTP, CLI, session persistence, and
-sub-agent setup all use the same normalization rules.
+The Composer chooses a small, user-facing session preset. Core expands that
+preset against the session's base capability. Turn and queue snapshots retain
+model/runtime options plus compatibility permission fields, while active
+toolboxes refresh permissions from the live session state. This module is
+deliberately independent from ``ApprovalGate`` so HTTP, CLI, session
+persistence, and sub-agent setup all use the same normalization rules.
 """
 
 from __future__ import annotations
@@ -320,15 +321,14 @@ def runtime_snapshot(
 
 
 def permissions_from_snapshot(raw: object) -> ResolvedRuntimePermissions | None:
-    """Parse a persisted snapshot; return ``None`` when it is absent/invalid."""
+    """Parse persisted permission fields for compatibility and fallback use."""
     if not isinstance(raw, Mapping):
         return None
     try:
         raw_preset = raw.get("permission_preset")
         # Snapshots written before the preset field used the expanded
-        # approval_policy directly.  Preserve that frozen decision when a
-        # queue item/paused turn is resumed; never reinterpret it from the
-        # current Composer or global settings.
+        # approval_policy directly. Recover the corresponding preset; callers
+        # may then overlay the current session permission state.
         if raw_preset is None or (isinstance(raw_preset, str) and not raw_preset.strip()):
             raw_preset = (
                 "auto"

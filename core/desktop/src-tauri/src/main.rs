@@ -18,6 +18,18 @@ use std::{
 use base64::Engine;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, HANDLE},
+    System::{
+        JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        },
+        Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE},
+    },
+};
 
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -27,6 +39,8 @@ use tauri::{
 };
 
 mod remote;
+#[cfg(windows)]
+mod windows_snap_layout;
 use remote::{
     start_local_control_server, ControlServer, DesktopAccountSession, DesktopAccountStatus,
     GatewayStartOptions, GatewayStatus, NodeIdentityStatus, PairingCodePayload,
@@ -64,6 +78,8 @@ static NEXT_DESKTOP_DROP_ID: AtomicU64 = AtomicU64::new(1);
 struct BackendState {
     api_base: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
+    #[cfg(windows)]
+    backend_job: Mutex<Option<usize>>,
     remote_gateway: RemoteGatewayManager,
     control_server: Mutex<Option<ControlServer>>,
     desktop_windows: Mutex<HashMap<String, DesktopWindowRegistration>>,
@@ -343,6 +359,31 @@ fn toggle_maximize_window(window: tauri::WebviewWindow) {
     } else {
         window.maximize()
     };
+}
+
+#[tauri::command]
+fn set_maximize_button_bounds(
+    window: tauri::WebviewWindow,
+    x: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        if window.label() != "main" {
+            return Err(
+                "maximize button bounds are only supported for the main window".to_string(),
+            );
+        }
+        windows_snap_layout::set_button_bounds(&window, x, top, width, height)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (window, x, top, width, height);
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -1212,6 +1253,8 @@ fn main() {
     let state = BackendState {
         api_base: Mutex::new(None),
         child: Mutex::new(None),
+        #[cfg(windows)]
+        backend_job: Mutex::new(None),
         remote_gateway: RemoteGatewayManager::default(),
         control_server: Mutex::new(None),
         desktop_windows: Mutex::new(HashMap::new()),
@@ -1230,6 +1273,12 @@ fn main() {
         }))
         .manage(state)
         .setup(|app| {
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                windows_snap_layout::install(&window)
+                    .map_err(|error| format!("snap layout setup failed: {error}"))?;
+            }
+
             let state = app.state::<BackendState>();
             match start_backend(app, state.inner()) {
                 Ok(api_base) => {
@@ -1266,7 +1315,7 @@ fn main() {
                     Ok(())
                 }
                 Err(e) => {
-                    let msg = format!("LamCore 后端启动失败：\n\n{}", e);
+                    let msg = format!("Sunday 后端启动失败：\n\n{}", e);
                     eprintln!("{}", msg);
                     #[cfg(windows)]
                     {
@@ -1280,7 +1329,7 @@ fn main() {
                                 utype: u32,
                             ) -> i32;
                         }
-                        let caption: Vec<u16> = "LamCore 启动错误"
+                        let caption: Vec<u16> = "Sunday 启动错误"
                             .encode_utf16()
                             .chain(std::iter::once(0))
                             .collect();
@@ -1294,6 +1343,7 @@ fn main() {
             get_api_base,
             minimize_window,
             toggle_maximize_window,
+            set_maximize_button_bounds,
             close_window,
             start_window_dragging,
             save_desktop_plugin_position,
@@ -1352,7 +1402,7 @@ fn main() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("failed to build LamCore")
+        .expect("failed to build Sunday")
         .run(|app_handle, event| {
             if matches!(event, tauri::RunEvent::Ready) {
                 if let Some(window) = app_handle.get_webview_window(DESKTOP_PLUGIN_WINDOW_LABEL) {
@@ -1384,6 +1434,7 @@ fn start_backend(
     app: &tauri::App,
     state: &BackendState,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    let started_at = Instant::now();
     let port = pick_free_port()?;
     let api_base = format!("http://127.0.0.1:{port}");
 
@@ -1394,12 +1445,30 @@ fn start_backend(
     };
 
     let child = cmd.spawn()?;
+    #[cfg(windows)]
+    match create_backend_job(child.id()) {
+        Ok(job) => {
+            *state
+                .backend_job
+                .lock()
+                .map_err(|_| "backend job state lock failed")? = Some(job);
+        }
+        Err(error) => {
+            // Starting the backend is still preferable to aborting the app;
+            // stop_backend retains its direct-child fallback below.
+            eprintln!("[lamcore] backend process-tree guard unavailable: {error}");
+        }
+    }
     *state
         .child
         .lock()
         .map_err(|_| "backend state lock failed")? = Some(child);
 
     wait_for_health(port)?;
+    eprintln!(
+        "[lamcore] backend ready in {} ms",
+        started_at.elapsed().as_millis()
+    );
     Ok(api_base)
 }
 
@@ -1411,9 +1480,11 @@ fn dev_backend_command(port: u16) -> Result<Command, Box<dyn std::error::Error>>
         .ok_or("cannot locate core/ directory")?
         .to_path_buf();
 
-    let mut cmd = Command::new("py");
-    cmd.arg("-3.14")
-        .arg("-m")
+    // Resolve the requested interpreter once, then make Python itself the
+    // tracked child. Tracking py.exe leaks its spawned python.exe whenever a
+    // dev rebuild terminates the shell before normal shutdown runs.
+    let mut cmd = Command::new(dev_python_executable()?);
+    cmd.arg("-m")
         .arg("lamtools_core.cli")
         .arg("serve")
         .arg("--port")
@@ -1433,6 +1504,32 @@ fn dev_backend_command(port: u16) -> Result<Command, Box<dyn std::error::Error>>
 
     hide_console(&mut cmd);
     Ok(cmd)
+}
+
+#[cfg(windows)]
+fn dev_python_executable() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let mut command = Command::new("py");
+    command
+        .arg("-3.14")
+        .arg("-c")
+        .arg("import sys; print(sys.executable)")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    hide_console(&mut command);
+    let output = command.output()?;
+    if !output.status.success() {
+        return Err("Python 3.14 interpreter discovery failed".into());
+    }
+    let executable = String::from_utf8(output.stdout)?.trim().to_string();
+    if executable.is_empty() {
+        return Err("Python 3.14 interpreter path is empty".into());
+    }
+    Ok(PathBuf::from(executable))
+}
+
+#[cfg(not(windows))]
+fn dev_python_executable() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(PathBuf::from("python3"))
 }
 
 fn prod_backend_command(
@@ -1504,7 +1601,7 @@ fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Err
     }
 
     Err(format!(
-        "LamCore.exe not found at any of:\n  {}\n  {}\n  {}",
+        "Sunday backend executable (LamCore.exe) not found at any of:\n  {}\n  {}\n  {}",
         resource.display(),
         adjacent.display(),
         project_dist.display(),
@@ -1554,6 +1651,7 @@ fn stop_local_control_server(state: &BackendState) {
 }
 
 fn stop_backend(state: &BackendState) {
+    close_backend_job(state);
     if let Ok(mut guard) = state.child.lock() {
         if let Some(mut child) = guard.take() {
             let _ = child.kill();
@@ -1561,6 +1659,55 @@ fn stop_backend(state: &BackendState) {
         }
     }
 }
+
+#[cfg(windows)]
+fn create_backend_job(process_id: u32) -> Result<usize, Box<dyn std::error::Error>> {
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            std::ptr::addr_of!(info).cast(),
+            std::mem::size_of_val(&info) as u32,
+        ) == 0
+        {
+            let error = std::io::Error::last_os_error();
+            CloseHandle(job);
+            return Err(error.into());
+        }
+        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, process_id);
+        if process.is_null() {
+            let error = std::io::Error::last_os_error();
+            CloseHandle(job);
+            return Err(error.into());
+        }
+        let assigned = AssignProcessToJobObject(job, process);
+        CloseHandle(process);
+        if assigned == 0 {
+            let error = std::io::Error::last_os_error();
+            CloseHandle(job);
+            return Err(error.into());
+        }
+        Ok(job as usize)
+    }
+}
+
+#[cfg(windows)]
+fn close_backend_job(state: &BackendState) {
+    if let Ok(mut guard) = state.backend_job.lock() {
+        if let Some(job) = guard.take() {
+            unsafe { CloseHandle(job as HANDLE) };
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn close_backend_job(_state: &BackendState) {}
 
 /// Poll the backend child process; if it exits outside the normal shutdown
 /// path (child was still registered), emit a `backend-crashed` event so the
@@ -1585,6 +1732,7 @@ fn spawn_backend_watcher(app_handle: tauri::AppHandle) {
         if exited {
             *guard = None;
             drop(guard);
+            close_backend_job(state.inner());
             eprintln!("[lamcore] backend process exited unexpectedly");
             let _ = app_handle.emit("backend-crashed", ());
             return;

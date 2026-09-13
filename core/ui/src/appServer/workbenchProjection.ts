@@ -20,6 +20,8 @@ export interface CoreWorkbenchMessageOptions {
   submittingApprovalRequestIds?: Set<string>
   /** Project only the most recent N messages (history windowing). */
   tailWindow?: number
+  /** Project only the most recent N complete turns. Takes precedence over tailWindow. */
+  tailTurns?: number
 }
 
 export interface CoreQueuedInput {
@@ -107,8 +109,9 @@ export interface CoreWorkbenchMessageProjection {
 /**
  * Project chat messages with an optional history window.
  *
- * With ``options.tailWindow`` only the most recent N messages are built
- * (older ones are skipped entirely — no placeholder, no DOM). This cuts the
+ * With ``options.tailTurns`` only the most recent N complete turns are built
+ * (older ones are skipped entirely — no placeholder, no DOM). ``tailWindow``
+ * remains as a compatibility fallback for message-count callers. This cuts the
  * dominant first-render cost for very large threads without touching the
  * projection cache semantics: windowed messages keep stable identities, so
  * widening the window only builds the newly revealed ones.
@@ -119,14 +122,10 @@ export function selectCoreWorkbenchMessagesWindow(
   cache?: CoreWorkbenchProjectionCache | null,
 ): CoreWorkbenchMessageProjection {
   const sourceMessages = selectChatMessages(snapshot, cache?.itemsApp, cache?.subAgentChildren)
-  const tail = (
-    typeof options.tailWindow === 'number' && options.tailWindow > 0
-      ? Math.min(options.tailWindow, sourceMessages.length)
-      : sourceMessages.length
-  )
-  const startIndex = sourceMessages.length - tail
+  const startIndex = coreHistoryWindowStartIndex(sourceMessages, options)
+  const windowLength = sourceMessages.length - startIndex
   const lastAssistantIndex = sourceMessages.findLastIndex(message => message.role === 'assistant')
-  const messages: CoreMessage[] = new Array(tail)
+  const messages: CoreMessage[] = new Array(windowLength)
   for (let index = startIndex; index < sourceMessages.length; index += 1) {
     const message = sourceMessages[index]
     const activeAssistant = Boolean(options.active && message.role === 'assistant' && index === lastAssistantIndex)
@@ -147,6 +146,38 @@ export function selectCoreWorkbenchMessagesWindow(
     messages[index - startIndex] = buildWorkbenchMessage(message, content, parts, options, activeAssistant)
   }
   return { messages, total: sourceMessages.length, startIndex }
+}
+
+function coreHistoryWindowStartIndex(
+  messages: CoreAppServerChatMessage[],
+  options: CoreWorkbenchMessageOptions,
+): number {
+  if (typeof options.tailTurns === 'number' && options.tailTurns > 0) {
+    const selectedTurns = new Set<string>()
+    let startIndex = messages.length
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      const turnKey = message.turnId || `message:${message.id}`
+      if (!selectedTurns.has(turnKey) && selectedTurns.size >= options.tailTurns) break
+      selectedTurns.add(turnKey)
+      startIndex = index
+    }
+    return startIndex
+  }
+
+  const tail = (
+    typeof options.tailWindow === 'number' && options.tailWindow > 0
+      ? Math.min(options.tailWindow, messages.length)
+      : messages.length
+  )
+  let startIndex = messages.length - tail
+  if (startIndex > 0 && messages[startIndex]?.role === 'assistant') {
+    const precedingUserIndex = messages.findLastIndex(
+      (message, index) => index < startIndex && message.role === 'user',
+    )
+    if (precedingUserIndex >= 0) startIndex = precedingUserIndex
+  }
+  return startIndex
 }
 
 function splitShallowCached(
@@ -217,7 +248,7 @@ function buildWorkbenchMessage(
       ...(message.metadata || {}),
       // The running turn's last assistant message is the live-streaming one:
       // mark it so MessageView takes the incremental streaming render path,
-      // auto-expands tool parts and shows the live status bar (audit 15 S1 —
+      // keeps live process cards visible and shows the live status bar (audit 15 S1 —
       // the main-thread live path was never wired because nothing set
       // metadata.live for main-line messages).
       live: activeAssistant || message.metadata?.live,
@@ -247,6 +278,7 @@ function messageFingerprint(
     meta.live === true,
     meta.initialWaiting === true,
     meta.processMetrics,
+    meta.duration_ms,
     meta.runtime_model_id,
     message.timestamp,
     message.attachments,
@@ -392,25 +424,18 @@ export function coreMessageHasProcessParts(message: CoreMessage): boolean {
 export function nextCoreProcessExpandedIds(
   messages: CoreMessage[],
   currentExpandedIds: Set<string>,
-  active: boolean,
+  _active: boolean,
 ): Set<string> {
   const next = new Set(currentExpandedIds)
   for (const message of messages) {
     const parts = message.parts || []
-    // Only messages with live-streaming parts (running) auto-expand.
-    // Adding EVERY assistant message here at turn start flipped all messages'
-    // v-memo keys at once (full-thread re-render ~1s on large threads);
-    // historical/completed messages stay collapsed (compact groups).
-    const hasLiveRunning = active && message.role === 'assistant'
-      && coreMessageHasProcessParts(message)
-      && parts.some(part => part.status === 'running')
     // 未响应的审批卡必须直接可见：pending decision part（waitingRequest 无
     // response）与 running part 同等待遇。turn 挂起（decision=wait）时
     // active=false，但审批卡仍需展开——否则用户看不到问题、无法回答（死锁）。
     const hasPendingApproval = message.role === 'assistant'
       && parts.some(part => part.partType === 'decision' && part.status === 'pending'
         && !isApprovalResponded(part))
-    if (hasLiveRunning || hasPendingApproval) {
+    if (hasPendingApproval) {
       next.add(message.id)
     }
   }

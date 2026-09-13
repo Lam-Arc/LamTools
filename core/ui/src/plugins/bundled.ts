@@ -1,4 +1,4 @@
-import type { PluginModeLoader } from './types'
+import type { PluginModeLoader, PluginWidgetLoader } from './types'
 
 /**
  * Compile-time loaders for bundled plugin UI.
@@ -17,4 +17,14 @@ export const bundledPluginModeLoaders: Record<string, PluginModeLoader> = {
 
 export function bundledPluginModeLoader(pluginId: string, modeId: string): PluginModeLoader | undefined {
   return bundledPluginModeLoaders[`${pluginId}:${modeId}`] || bundledPluginModeLoaders[pluginId]
+}
+
+/**
+ * Component widget loaders are an explicit allowlist.  Descriptors returned
+ * by the backend never turn an arbitrary entry path into executable code.
+ */
+export const bundledPluginWidgetLoaders: Record<string, PluginWidgetLoader> = {}
+
+export function bundledPluginWidgetLoader(pluginId: string, widgetId: string): PluginWidgetLoader | undefined {
+  return bundledPluginWidgetLoaders[`${pluginId}:${widgetId}`] || bundledPluginWidgetLoaders[pluginId]
 }

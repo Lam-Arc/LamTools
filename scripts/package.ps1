@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Build the LamCore standalone desktop application.
+  Build the Sunday standalone desktop application and Windows setup.
 .DESCRIPTION
   Usage:
     .\scripts\package.ps1 [-SkipTauri]
@@ -8,17 +8,23 @@
   Steps:
     1. Build the Core Desktop UI frontend (Vite SPA)
     2. Bundle Python backend with PyInstaller into dist/LamCore/
-    3. Bundle everything with Tauri into a Windows installer
+    3. Build the Tauri application executable without a Tauri bundle
+    4. Stage the application/backend and compile the repository-owned Inno installer
 #>
 param([switch]$SkipTauri)
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$TauriConfigPath = "$Root\core\desktop\src-tauri\tauri.conf.json"
+$Version = (Get-Content -LiteralPath $TauriConfigPath -Raw | ConvertFrom-Json).version
+if ($Version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
+    throw "Invalid version '$Version' in $TauriConfigPath"
+}
 
 # ------------------------------------------------------------------
 # 1. Build frontend
 # ------------------------------------------------------------------
-Write-Host "=== Step 1/3: Build Core Desktop UI frontend ===" -ForegroundColor Cyan
+Write-Host "=== Step 1/4: Build Sunday Desktop UI frontend ===" -ForegroundColor Cyan
 
 Push-Location "$Root\core\desktop"
 try {
@@ -35,7 +41,7 @@ try {
 # ------------------------------------------------------------------
 # 2. PyInstaller bundle
 # ------------------------------------------------------------------
-Write-Host "`n=== Step 2/3: PyInstaller backend bundle ===" -ForegroundColor Cyan
+Write-Host "`n=== Step 2/4: PyInstaller backend bundle ===" -ForegroundColor Cyan
 
 # 唯一受支持的 spec 是 core/lamtools-core-backend.spec（路径相对 spec 所在目录，
 # 与 CI release.yml 完全一致）。不要用仓库根遗留的旧 spec（已删除）。
@@ -66,20 +72,14 @@ try {
 }
 
 # ------------------------------------------------------------------
-# 3. Tauri bundle
+# 3. Tauri application executable
 # ------------------------------------------------------------------
 if (-not $SkipTauri) {
-    Write-Host "`n=== Step 3/4: Tauri bundle ===" -ForegroundColor Cyan
-
-    # Copy backend into src-tauri as flat resource (avoids _up_ nesting)
-    $ResourceDir = "$Root\core\desktop\src-tauri\lamcore-backend"
-    if (Test-Path $ResourceDir) { Remove-Item -Recurse -Force $ResourceDir }
-    Copy-Item -Recurse "$Root\core\dist\LamCore" $ResourceDir
-    Write-Host "  Backend copied to src-tauri/lamcore-backend/" -ForegroundColor Green
+    Write-Host "`n=== Step 3/4: Tauri application executable ===" -ForegroundColor Cyan
 
     Push-Location "$Root\core\desktop"
     try {
-        & npx tauri build
+        & npx tauri build --no-bundle
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[FAIL] Tauri build failed." -ForegroundColor Red
             exit 1
@@ -89,10 +89,41 @@ if (-not $SkipTauri) {
         Pop-Location
     }
 
-    Write-Host "`n=== Step 4/4: NSIS installer ===" -ForegroundColor Cyan
-    # NSIS 安装器 UI 由自定义模板 src-tauri/installer.nsi 直接产出（tauri build
-    # 内已渲染并调用 makensis），无需再跑 patch-nsis.ps1 做字符串手术。
-    Write-Host "  Installer UI from custom template (src-tauri/installer.nsi)." -ForegroundColor Green
+    Write-Host "`n=== Step 4/4: Sunday Inno Setup installer ===" -ForegroundColor Cyan
+    $ReleaseDir = [System.IO.Path]::GetFullPath("$Root\core\desktop\src-tauri\target\release")
+    $StageDir = [System.IO.Path]::GetFullPath((Join-Path $ReleaseDir "sunday-installer\stage"))
+    $ReleasePrefix = $ReleaseDir.TrimEnd('\') + '\'
+    if (-not $StageDir.StartsWith($ReleasePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing unsafe installer stage path: $StageDir"
+    }
+    if (Test-Path -LiteralPath $StageDir) {
+        Remove-Item -LiteralPath $StageDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
+
+    $TauriBinary = Join-Path $ReleaseDir "lamcore.exe"
+    $BackendBundle = "$Root\core\dist\LamCore"
+    if (-not (Test-Path -LiteralPath $TauriBinary -PathType Leaf)) {
+        throw "Tauri application executable is missing: $TauriBinary"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $BackendBundle "LamCore.exe") -PathType Leaf)) {
+        throw "Backend bundle is missing: $BackendBundle"
+    }
+    Copy-Item -LiteralPath $TauriBinary -Destination (Join-Path $StageDir "lamcore.exe")
+    Copy-Item -LiteralPath $BackendBundle -Destination (Join-Path $StageDir "lamcore-backend") -Recurse
+
+    $InstallerOutput = Join-Path $ReleaseDir "bundle\inno"
+    $InstallerBuildArgs = @{
+        Version = $Version
+        SourceRoot = $StageDir
+        OutputDir = $InstallerOutput
+    }
+    & "$Root\core\desktop\installer\build-installer.ps1" @InstallerBuildArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[FAIL] Sunday installer build failed." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  Installer -> $InstallerOutput\Sunday_${Version}_x64-setup.exe" -ForegroundColor Green
 }
 
 # ------------------------------------------------------------------
@@ -103,7 +134,7 @@ Write-Host ""
 Write-Host "Artifacts:"
 Write-Host "  Backend:      $Root\core\dist\LamCore\LamCore.exe"
 Write-Host "  Tauri binary: $Root\core\desktop\src-tauri\target\release\lamcore.exe"
-Write-Host "  Installer:    $Root\core\desktop\src-tauri\target\release\bundle\nsis\LamCore_*_x64-setup.exe"
+Write-Host "  Installer:    $Root\core\desktop\src-tauri\target\release\bundle\inno\Sunday_${Version}_x64-setup.exe"
 Write-Host ""
 Write-Host "Dev mode (skip PyInstaller, uses source Python):" -ForegroundColor Yellow
 Write-Host "  cd core\desktop && npx tauri dev"

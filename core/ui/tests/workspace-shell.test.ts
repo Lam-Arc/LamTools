@@ -53,6 +53,17 @@ describe('WorkspaceShell responsive drawers', () => {
     vi.unstubAllGlobals()
   })
 
+  it('lets a modular right panel own its header without the legacy title', () => {
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Sunday', showRightPanelHeader: false },
+      slots: { 'right-panel': '<div data-modular-right-panel>模块区</div>' },
+    })
+
+    expect(wrapper.find('.drawer-right .drawer-head').exists()).toBe(false)
+    expect(wrapper.find('[data-modular-right-panel]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('opens the mobile drawers from a horizontal swipe starting anywhere', async () => {
     const wrapper = mount(WorkspaceShell, {
       props: { productName: 'Sage' },
@@ -165,8 +176,19 @@ describe('WorkspaceShell responsive drawers', () => {
   it('keeps the mobile sidebar within the viewport and gives actions touch targets', () => {
     const shellCss = readFileSync(resolve(import.meta.dirname, '../src/styles/workspace-shell.css'), 'utf8')
     const sidebarCss = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
+    const variablesCss = readFileSync(resolve(import.meta.dirname, '../src/styles/variables.css'), 'utf8')
 
+    expect(variablesCss).toContain('--sidebar-width: 232px')
     expect(shellCss).toMatch(/--sidebar-width: min\(86vw, 320px\)/)
+    expect(shellCss).toContain('--right-panel-gap: 2px')
+    expect(shellCss).toMatch(/\.sidebar-create-project\s*\{[\s\S]*?border-radius: var\(--radius\)/)
+    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?right: 0;[\s\S]*?width: calc\(var\(--right-drawer-width\) - var\(--right-panel-gap\)\);/)
+    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?border: 1px solid color-mix\(in srgb, var\(--theme-backdrop-text\) 18%, transparent\);[\s\S]*?border-radius: var\(--radius-lg\) 0 0 var\(--radius-lg\);[\s\S]*?background: transparent;/)
+    expect(shellCss).toMatch(/\.drawer-right::before\s*\{[\s\S]*?border-radius: inherit;[\s\S]*?-webkit-mask-image:[\s\S]*?linear-gradient\(to right,[\s\S]*?linear-gradient\(to bottom,[\s\S]*?mask-composite: intersect;/)
+    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?transition: transform 240ms var\(--ease-out\), opacity 240ms var\(--ease-out\);/)
+    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\)\s*\{[\s\S]*?transition-duration: var\(--dur-base\), var\(--dur-base\);/)
+    expect(shellCss).toMatch(/\.workspace-shell \.workspace-drawer,[\s\S]*?transition: none !important;/)
+    expect(shellCss).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.drawer-right\s*\{[\s\S]*?left: var\(--space-2\);[\s\S]*?right: var\(--space-2\);[\s\S]*?width: auto;/)
     expect(shellCss).toMatch(/\.sidebar-root \.sidebar-pin-button \{[\s\S]*?width: 44px;[\s\S]*?height: 44px;/)
     expect(shellCss).toMatch(/\.drawer-footer \.settings-entry,[\s\S]*?\.drawer-footer \.sidebar-action,[\s\S]*?\.sidebar-create-project \{[\s\S]*?min-height: 44px;/)
     expect(sidebarCss).toMatch(/\.sidebar-search,[\s\S]*?\.sidebar-search-clear,[\s\S]*?\.sidebar-project-empty-action \{[\s\S]*?min-height: 44px;/)
@@ -238,7 +260,7 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(wrapper.find('.floating-composer').exists()).toBe(true)
   })
 
-  it('moves the single composer to bottom on focus and keeps it there after closing the stage', async () => {
+  it('keeps the empty-session composer centered on focus and docks it only after submit', async () => {
     const wrapper = mount(WorkspaceShell, {
       props: { productName: 'Core', emptySession: true },
     })
@@ -246,6 +268,12 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-center')
 
     await wrapper.get('.floating-composer textarea').trigger('focusin')
+    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-center')
+
+    await wrapper.get('.floating-composer').trigger('drop')
+    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-center')
+
+    await wrapper.get('.floating-composer').trigger('submit')
     expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-bottom')
 
     await wrapper.setProps({ stageOpen: true })
@@ -253,6 +281,58 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-bottom')
 
     wrapper.unmount()
+  })
+
+  it('renders workflow composer as a compact, observable textarea/send pill', async () => {
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Core', workflowMode: true },
+      slots: {
+        'composer-preamble': '<div data-workflow-preamble>preamble</div>',
+        'composer-status': '<div data-workflow-status>status</div>',
+        'composer-tools': '<button data-workflow-tool type="button">tool</button>',
+      },
+    })
+
+    const shell = wrapper.get('.workspace-shell')
+    const composer = wrapper.get('.composer-root')
+    expect(shell.classes()).toContain('workspace-shell--workflow')
+    expect(shell.attributes('data-workflow-composer-state')).toBe('send')
+    expect(composer.attributes('data-workflow-composer')).toBe('true')
+    expect(composer.attributes('data-workflow-composer-has-value')).toBe('false')
+    expect(wrapper.find('[data-workflow-preamble]').exists()).toBe(false)
+    expect(wrapper.find('[data-workflow-status]').exists()).toBe(false)
+    expect(wrapper.find('[data-workflow-tool]').exists()).toBe(false)
+    expect(wrapper.find('.floating-composer textarea').exists()).toBe(true)
+    expect(wrapper.find('.core-send-stop-button').exists()).toBe(true)
+
+    await wrapper.get('.floating-composer textarea').setValue('编辑节点')
+    expect(composer.classes()).toContain('composer-root--workflow-has-value')
+    expect(composer.attributes('data-workflow-composer-has-value')).toBe('true')
+    expect(shell.classes()).toContain('workspace-shell--workflow-composer-has-value')
+
+    await wrapper.setProps({ composerActionMode: 'stop' })
+    expect(composer.classes()).toContain('composer-root--workflow-stop')
+    expect(composer.attributes('data-workflow-composer-state')).toBe('stop')
+    expect(shell.classes()).toContain('workspace-shell--workflow-composer-stop')
+
+    wrapper.unmount()
+  })
+
+  it('exposes full-bleed central surface rules for workflow canvas content', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/styles/layout.css'), 'utf8')
+    expect(css).toMatch(/\.workspace-shell--full-bleed \.workspace-main\s*\{[\s\S]*?padding:\s*0;/)
+    expect(css).toMatch(/\.workspace-shell--full-bleed \.workspace-main > :not\(\.workspace-runtime-overlay\):not\(\.workspace-plugin-header\)/)
+  })
+
+  it('animates placement changes with a transform tween and reduced-motion fallback', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/WorkspaceShell.vue'), 'utf8')
+
+    expect(source).toContain("watch(composerLayout.placement")
+    expect(source).toContain("gsap.fromTo(")
+    expect(source).toContain("{ y: offsetY, willChange: 'transform' }")
+    expect(source).toContain("ease: 'power3.inOut'")
+    expect(source).toContain("'(prefers-reduced-motion: reduce)'")
+    expect(source).toContain('composerMotionContext?.revert()')
   })
 
   it('syncs the keyboard inset immediately when the composer receives focus', async () => {
@@ -308,7 +388,7 @@ describe('WorkspaceShell responsive drawers', () => {
       },
     })
 
-    await wrapper.get('.floating-composer textarea').trigger('focusin')
+    await wrapper.get('.floating-composer').trigger('submit')
     expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-bottom')
 
     await wrapper.setProps({ composerSessionKey: 'session-b' })
@@ -326,7 +406,7 @@ describe('WorkspaceShell responsive drawers', () => {
       },
     })
 
-    await wrapper.get('.floating-composer textarea').trigger('focusin')
+    await wrapper.get('.floating-composer').trigger('submit')
     await wrapper.setProps({ composerSessionKey: 'session-b' })
     expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-center')
 

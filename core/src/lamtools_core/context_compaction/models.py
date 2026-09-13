@@ -136,6 +136,7 @@ class CompactionOptions:
 
     force: bool = False
     target_tokens: int | None = None
+    compact_all: bool = False
 
     def __post_init__(self) -> None:
         if self.target_tokens is not None:

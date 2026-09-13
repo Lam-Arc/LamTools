@@ -44,9 +44,145 @@
             ]
           },
           {
+            "name": "list-grouped",
+            "aliases": ["grouped", "groups"],
+            "help": "List workflows grouped by global/project source",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_list_grouped",
+            "arguments": [
+              {"flags": ["--work-root"], "action": "append", "default": [], "help": "Project work root (repeatable)"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
             "name": "describe",
             "help": "Show a workflow definition",
             "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_describe",
+            "arguments": [
+              {"flags": ["name"], "help": "Workflow name"},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "document",
+            "help": "Show the canonical LamTools workflow V2 document",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_document",
+            "arguments": [
+              {"flags": ["name"]}, {"flags": ["--work-root"], "default": ""},
+              {"flags": ["--base-url"], "default": ""}, {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""}, {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "compile",
+            "help": "Compile a workflow to its canvas-free execution prompt",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_compile",
+            "arguments": [
+              {"flags": ["name"]}, {"flags": ["--work-root"], "default": ""},
+              {"flags": ["--base-url"], "default": ""}, {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""}, {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "semantic",
+            "help": "Show the compact model-facing semantic graph",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_semantic",
+            "arguments": [
+              {"flags": ["name"]}, {"flags": ["--work-root"], "default": ""},
+              {"flags": ["--node-id"], "dest": "node_id", "action": "append", "default": []},
+              {"flags": ["--offset"], "type": "int", "default": 0}, {"flags": ["--limit"], "type": "int", "default": 100},
+              {"flags": ["--base-url"], "default": ""}, {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""}, {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "import-comfyui",
+            "help": "Import a ComfyUI v0.4/v1 editor workflow",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_import_comfyui",
+            "arguments": [
+              {"flags": ["--name"], "required": true}, {"flags": ["--from-file"], "required": true},
+              {"flags": ["--work-root"], "default": ""},
+              {"flags": ["--expected-revision"], "dest": "expected_revision", "type": "int", "default": null},
+              {"flags": ["--base-url"], "default": ""}, {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""}, {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "export-comfyui",
+            "help": "Export a workflow in ComfyUI v0.4/v1 editor format",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_export_comfyui",
+            "arguments": [
+              {"flags": ["name"]}, {"flags": ["--work-root"], "default": ""},
+              {"flags": ["--version"], "default": "1", "choices": ["0.4", "1"]},
+              {"flags": ["--to-file"], "dest": "to_file", "default": ""},
+              {"flags": ["--base-url"], "default": ""}, {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""}, {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "save",
+            "help": "Create or replace a workflow from a JSON definition file",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_save",
+            "arguments": [
+              {"flags": ["--from-file"], "required": true, "help": "Path to a JSON workflow definition"},
+              {"flags": ["--name"], "default": "", "help": "Workflow name override"},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--expected-revision"], "dest": "expected_revision", "type": "int", "default": null},
+              {"flags": ["--exposed"], "action": "store_true", "default": false},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "update",
+            "aliases": ["edit"],
+            "help": "Update workflow fields, optionally from a JSON patch",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_update",
+            "arguments": [
+              {"flags": ["name"], "help": "Workflow name"},
+              {"flags": ["--from-file"], "default": "", "help": "Path to a JSON partial definition"},
+              {"flags": ["--description"], "default": null},
+              {"flags": ["--nodes"], "type": "json", "default": null},
+              {"flags": ["--edges"], "type": "json", "default": null},
+              {"flags": ["--input-params"], "dest": "input_params", "type": "json", "default": null},
+              {"flags": ["--output-port"], "dest": "output_port", "default": null},
+              {"flags": ["--tool-name"], "dest": "tool_name", "default": null},
+              {"flags": ["--exposed"], "action": "store_true", "default": false},
+              {"flags": ["--unexposed"], "action": "store_true", "default": false},
+              {"flags": ["--expected-revision"], "dest": "expected_revision", "type": "int", "default": null},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "rename",
+            "help": "Rename a workflow while preserving its identity",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_rename",
+            "arguments": [
+              {"flags": ["name"], "help": "Current workflow name"},
+              {"flags": ["new_name"], "help": "New workflow name"},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "delete",
+            "help": "Delete a workflow definition",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_delete",
             "arguments": [
               {"flags": ["name"], "help": "Workflow name"},
               {"flags": ["--work-root"], "default": "", "help": "Project work root"},
@@ -87,6 +223,257 @@
             ]
           },
           {
+            "name": "signal",
+            "help": "Resume a workflow waiting for an event or approval",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_signal",
+            "arguments": [
+              {"flags": ["thread_id"], "help": "Waiting workflow thread id"},
+              {"flags": ["run_id"], "help": "Waiting workflow run id"},
+              {"flags": ["resume_token"], "help": "Unpredictable token returned by the wait descriptor"},
+              {"flags": ["event_type"], "help": "Expected event type"},
+              {"flags": ["--decision"], "default": "", "choices": ["approve", "reject"], "help": "Approval decision"},
+              {"flags": ["--payload"], "type": "json", "default": {}, "help": "Structured event payload"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "human-task",
+            "aliases": ["human-tasks", "human_task", "tasks"],
+            "help": "Inspect and complete workflow human tasks",
+            "commands": [
+              {
+                "name": "list",
+                "aliases": ["ls"],
+                "help": "List pending or completed human tasks",
+                "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_human_task_list",
+                "arguments": [
+                  {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+                  {"flags": ["--all"], "action": "store_true", "default": false, "help": "Include every project scope"},
+                  {"flags": ["--status"], "default": "pending", "choices": ["pending", "completed", "all"]},
+                  {"flags": ["--workflow-id"], "dest": "workflow_id", "default": ""},
+                  {"flags": ["--workflow-name"], "dest": "workflow_name", "default": ""},
+                  {"flags": ["--thread-id"], "dest": "thread_id", "default": ""},
+                  {"flags": ["--limit"], "type": "int", "default": 100},
+                  {"flags": ["--base-url"], "default": ""},
+                  {"flags": ["--ws-path"], "default": ""},
+                  {"flags": ["--token"], "default": ""},
+                  {"flags": ["--raw"], "action": "store_true", "default": false}
+                ]
+              },
+              {
+                "name": "get",
+                "help": "Inspect one human task and its event audit",
+                "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_human_task_get",
+                "arguments": [
+                  {"flags": ["task_id"], "help": "Human task id"},
+                  {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+                  {"flags": ["--all"], "action": "store_true", "default": false, "help": "Search every project scope"},
+                  {"flags": ["--base-url"], "default": ""},
+                  {"flags": ["--ws-path"], "default": ""},
+                  {"flags": ["--token"], "default": ""},
+                  {"flags": ["--raw"], "action": "store_true", "default": false}
+                ]
+              },
+              {
+                "name": "complete",
+                "help": "Approve, reject, or submit a human task",
+                "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_human_task_complete",
+                "arguments": [
+                  {"flags": ["task_id"], "help": "Human task id"},
+                  {"flags": ["--decision"], "default": "", "choices": ["approve", "reject"]},
+                  {"flags": ["--payload"], "type": "json", "default": {}, "help": "Structured task payload"},
+                  {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+                  {"flags": ["--all"], "action": "store_true", "default": false, "help": "Search every project scope"},
+                  {"flags": ["--base-url"], "default": ""},
+                  {"flags": ["--ws-path"], "default": ""},
+                  {"flags": ["--token"], "default": ""},
+                  {"flags": ["--raw"], "action": "store_true", "default": false}
+                ]
+              }
+            ]
+          },
+          {
+            "name": "cancel",
+            "help": "Cancel an active workflow run",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_cancel",
+            "arguments": [
+              {"flags": ["thread_id"], "help": "Workflow session/thread id"},
+              {"flags": ["--run-id"], "default": "", "help": "Specific run id (defaults to the active run)"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "activate",
+            "help": "Activate declared workflow schedule/event triggers through Core Arrange",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_activate",
+            "arguments": [
+              {"flags": ["name"], "help": "Workflow name"},
+              {"flags": ["--trigger-id"], "dest": "trigger_id", "default": "", "help": "Activate one declared trigger"},
+              {"flags": ["--replace"], "action": "store_true", "default": false, "help": "Replace an active older-revision trigger"},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "deactivate",
+            "help": "Deactivate workflow trigger jobs",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_deactivate",
+            "arguments": [
+              {"flags": ["name"], "help": "Workflow name"},
+              {"flags": ["--trigger-id"], "dest": "trigger_id", "default": "", "help": "Deactivate one declared trigger"},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "activations",
+            "help": "List workflow trigger activations",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_activation_list",
+            "arguments": [
+              {"flags": ["name"], "help": "Workflow name"},
+              {"flags": ["--trigger-id"], "dest": "trigger_id", "default": "", "help": "Filter by trigger id"},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "node-types",
+            "help": "Show schema-driven workflow node types (object-info)",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_node_types",
+            "arguments": [
+              {"flags": ["--name"], "default": "", "help": "Optional node type name"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "object-info",
+            "aliases": ["object_info"],
+            "help": "Show schema-driven workflow node metadata",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_object_info",
+            "arguments": [
+              {"flags": ["--name"], "default": "", "help": "Optional node type name"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "queue",
+            "help": "Manage the durable workflow run queue and history",
+            "commands": [
+              {
+                "name": "enqueue",
+                "help": "Enqueue a workflow run",
+                "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_queue_enqueue",
+                "arguments": [
+                  {"flags": ["name"], "help": "Workflow name"},
+                  {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+                  {"flags": ["--input"], "action": "append", "default": [], "metavar": "KEY=VALUE", "help": "Workflow input (repeatable)"},
+                  {"flags": ["--max-steps"], "dest": "max_steps", "type": "int", "default": null},
+                  {"flags": ["--start-node"], "dest": "start_node", "default": null},
+                  {"flags": ["--single-node"], "dest": "single_node", "default": null},
+                  {"flags": ["--thread-id"], "dest": "thread_id", "default": ""},
+                  {"flags": ["--run-id"], "dest": "run_id", "default": ""},
+                  {"flags": ["--base-url"], "default": ""},
+                  {"flags": ["--ws-path"], "default": ""},
+                  {"flags": ["--token"], "default": ""},
+                  {"flags": ["--raw"], "action": "store_true", "default": false}
+                ]
+              },
+              {
+                "name": "list",
+                "help": "List queued and optionally historical runs",
+                "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_queue_list",
+                "arguments": [
+                  {"flags": ["--work-root"], "default": ""},
+                  {"flags": ["--name"], "default": ""},
+                  {"flags": ["--status"], "default": ""},
+                  {"flags": ["--limit"], "type": "int", "default": null},
+                  {"flags": ["--include-history"], "dest": "include_history", "action": "store_true", "default": false},
+                  {"flags": ["--base-url"], "default": ""},
+                  {"flags": ["--ws-path"], "default": ""},
+                  {"flags": ["--token"], "default": ""},
+                  {"flags": ["--raw"], "action": "store_true", "default": false}
+                ]
+              },
+              {
+                "name": "history",
+                "help": "List persisted workflow run history",
+                "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_queue_history",
+                "arguments": [
+                  {"flags": ["--work-root"], "default": ""},
+                  {"flags": ["--name"], "default": ""},
+                  {"flags": ["--status"], "default": ""},
+                  {"flags": ["--limit"], "type": "int", "default": null},
+                  {"flags": ["--base-url"], "default": ""},
+                  {"flags": ["--ws-path"], "default": ""},
+                  {"flags": ["--token"], "default": ""},
+                  {"flags": ["--raw"], "action": "store_true", "default": false}
+                ]
+              },
+              {
+                "name": "get",
+                "help": "Inspect one queued or historical run",
+                "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_queue_get",
+                "arguments": [
+                  {"flags": ["queue_id"], "help": "Queue item id"},
+                  {"flags": ["--run-id"], "dest": "run_id", "default": ""},
+                  {"flags": ["--base-url"], "default": ""},
+                  {"flags": ["--ws-path"], "default": ""},
+                  {"flags": ["--token"], "default": ""},
+                  {"flags": ["--raw"], "action": "store_true", "default": false}
+                ]
+              },
+              {
+                "name": "cancel",
+                "help": "Cancel one queued or active run",
+                "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_queue_cancel",
+                "arguments": [
+                  {"flags": ["queue_id"], "help": "Queue item id"},
+                  {"flags": ["--run-id"], "dest": "run_id", "default": ""},
+                  {"flags": ["--base-url"], "default": ""},
+                  {"flags": ["--ws-path"], "default": ""},
+                  {"flags": ["--token"], "default": ""},
+                  {"flags": ["--raw"], "action": "store_true", "default": false}
+                ]
+              },
+              {
+                "name": "clear",
+                "help": "Clear terminal history (or all items with --all)",
+                "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_queue_clear",
+                "arguments": [
+                  {"flags": ["--work-root"], "default": ""},
+                  {"flags": ["--name"], "default": ""},
+                  {"flags": ["--confirm"], "action": "store_true", "default": false, "help": "Explicitly confirm destructive cleanup"},
+                  {"flags": ["--all"], "dest": "all_items", "action": "store_true", "default": false, "help": "Also remove queued items"},
+                  {"flags": ["--base-url"], "default": ""},
+                  {"flags": ["--ws-path"], "default": ""},
+                  {"flags": ["--token"], "default": ""},
+                  {"flags": ["--raw"], "action": "store_true", "default": false}
+                ]
+              }
+            ]
+          },
+          {
             "name": "unexpose",
             "help": "Unexpose a workflow (no longer an agent tool)",
             "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_unexpose",
@@ -97,6 +484,23 @@
               {"flags": ["--ws-path"], "default": ""},
               {"flags": ["--token"], "default": ""},
               {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "tools",
+            "help": "Inspect workflow tools",
+            "commands": [
+              {
+                "name": "list",
+                "help": "List workflow tools",
+                "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_tools_list",
+                "arguments": [
+                  {"flags": ["--base-url"], "default": ""},
+                  {"flags": ["--ws-path"], "default": ""},
+                  {"flags": ["--token"], "default": ""},
+                  {"flags": ["--raw"], "action": "store_true", "default": false}
+                ]
+              }
             ]
           }
         ]

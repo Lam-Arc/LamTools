@@ -36,6 +36,8 @@ def build_kernel_audit(*, policy: Any, kernel_module_path: str) -> dict[str, Any
             "parallel_tool_calls": policy.parallel_tool_calls,
             "max_concurrent_tools": policy.max_concurrent_tools,
             "context_window_tokens": policy.context_window_tokens,
+            "compact_trigger_ratio": policy.compact_trigger_ratio,
+            "compact_limit_ratio": policy.compact_limit_ratio,
             "compact_trigger_tokens": policy.compact_trigger_tokens,
             "compact_limit_tokens": policy.compact_limit_tokens,
             "compact_summary_output_tokens": policy.compact_summary_output_tokens,

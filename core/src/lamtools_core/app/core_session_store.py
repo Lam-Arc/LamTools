@@ -21,7 +21,11 @@ from .core_db import (
 )
 from .session_autotitle import is_default_title
 from .snapshot_store import CoreAppSnapshotProjector
-from .runtime_permissions import merge_session_runtime_preferences, with_session_runtime_preferences
+from .runtime_permissions import (
+    merge_session_runtime_preferences,
+    session_runtime_preferences,
+    with_session_runtime_preferences,
+)
 
 
 class CoreDbSessionStore:
@@ -37,6 +41,7 @@ class CoreDbSessionStore:
         self._session_visible = session_visible or (lambda _session_id, _metadata: True)
         self._sync_journal: Any = None
         self._sync_publisher = sync_publisher
+        self._runtime_preferences_by_session: dict[str, dict[str, Any]] = {}
         self._fallback_work_root = (
             str(Path(fallback_work_root).expanduser().resolve())
             if fallback_work_root is not None
@@ -48,6 +53,21 @@ class CoreDbSessionStore:
 
     def set_sync_publisher(self, publisher: Callable[[dict[str, Any]], Awaitable[None]] | None) -> None:
         self._sync_publisher = publisher
+
+    def runtime_preferences(self, session_id: str) -> dict[str, Any] | None:
+        """Return the latest cached session permission state synchronously.
+
+        Running toolboxes use this read path before each tool decision.  The
+        cache is refreshed by every session-store read/write, while the
+        durable session metadata remains the source of truth.
+        """
+        value = self._runtime_preferences_by_session.get(session_id)
+        return dict(value) if value is not None else None
+
+    def _remember_runtime_preferences(self, session: SessionRecord) -> None:
+        self._runtime_preferences_by_session[session.id] = session_runtime_preferences(
+            session.metadata
+        )
 
     async def _publish_sync_changes(self, change_ids: list[str]) -> None:
         if self._sync_journal is None or self._sync_publisher is None:
@@ -118,6 +138,7 @@ class CoreDbSessionStore:
             await connection.flush()
 
         await db.persistence.write(write)
+        self._remember_runtime_preferences(session)
         await self._publish_sync_changes(change_ids)
         return session
 
@@ -131,6 +152,7 @@ class CoreDbSessionStore:
                 return None
             record = session_record_from_snapshot(row)
         if "runtime_preferences" in record.metadata:
+            self._remember_runtime_preferences(record)
             return record
 
         # Keep the common read path read-only. Legacy snapshots are
@@ -138,6 +160,7 @@ class CoreDbSessionStore:
         # not unnecessarily acquire the SQLite write coordinator.
         record.metadata = with_session_runtime_preferences(record.metadata)
         await _persist_legacy_runtime_preferences(db, record)
+        self._remember_runtime_preferences(record)
         return record
 
     async def list(self, member_id: str | None = None) -> list[SessionRecord]:
@@ -153,11 +176,16 @@ class CoreDbSessionStore:
             for row in rows
             if self._row_is_visible(row)
         ]
+        legacy_fork_records = _inherit_legacy_fork_project_metadata(records)
+        if legacy_fork_records:
+            await _persist_legacy_fork_project_metadata(db, *legacy_fork_records)
         legacy_records = [record for record in records if "runtime_preferences" not in record.metadata]
         for record in legacy_records:
             record.metadata = with_session_runtime_preferences(record.metadata)
         if legacy_records:
             await _persist_legacy_runtime_preferences(db, *legacy_records)
+        for record in records:
+            self._remember_runtime_preferences(record)
         return [record for record in records if member_id is None or record.member_id == member_id]
 
     async def update(self, session: SessionRecord, *, expected_revision: int | None = None) -> SessionRecord:
@@ -201,6 +229,7 @@ class CoreDbSessionStore:
             await connection.flush()
 
         await db.persistence.write(write)
+        self._remember_runtime_preferences(session)
         await self._publish_sync_changes(change_ids)
         return session
 
@@ -267,6 +296,8 @@ class CoreDbSessionStore:
             return record
 
         result = await db.persistence.write(write)
+        if result is not None:
+            self._remember_runtime_preferences(result)
         await self._publish_sync_changes(change_ids)
         return result
 
@@ -298,6 +329,8 @@ class CoreDbSessionStore:
             return True
 
         result = bool(await db.persistence.write(write))
+        if result:
+            self._runtime_preferences_by_session.pop(session_id, None)
         await self._publish_sync_changes(change_ids)
         return result
 
@@ -400,6 +433,91 @@ def _session_metadata(snapshot: object) -> dict[str, Any]:
     session = state.get("session") if isinstance(state.get("session"), dict) else {}
     metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
     return dict(metadata)
+
+
+def _inherit_legacy_fork_project_metadata(records: list[SessionRecord]) -> list[SessionRecord]:
+    """Resolve ownership and default titles for pre-inheritance forks."""
+    records_by_id = {record.id: record for record in records}
+    repaired: list[SessionRecord] = []
+    unresolved = [
+        record for record in records
+        if not str(record.metadata.get("work_root") or "")
+        and str(record.metadata.get("forked_from_session_id") or "")
+    ]
+    for _ in range(len(unresolved)):
+        changed = False
+        for record in list(unresolved):
+            parent_id = str(record.metadata.get("forked_from_session_id") or "")
+            parent = records_by_id.get(parent_id)
+            work_root = str(parent.metadata.get("work_root") or "") if parent else ""
+            if not work_root:
+                continue
+            record.metadata = {**record.metadata, "work_root": work_root}
+            project_id = parent.metadata.get("project_id") if parent else None
+            if project_id:
+                record.metadata["project_id"] = project_id
+            legacy_titles = {f"{parent_id} fork", f"{parent.title} fork"}
+            if record.title in legacy_titles:
+                base = str(parent.metadata.get("fork_title_base") or parent.title).strip()
+                used_numbers: set[int] = set()
+                prefix = f"{base}（"
+                for candidate in records:
+                    candidate_root = str(candidate.metadata.get("work_root") or "")
+                    candidate_title = str(candidate.title or "")
+                    if candidate_root != work_root or not candidate_title.startswith(prefix):
+                        continue
+                    suffix = candidate_title[len(prefix):]
+                    if suffix.endswith("）") and suffix[:-1].isdigit():
+                        used_numbers.add(int(suffix[:-1]))
+                record.title = f"{base}（{max(used_numbers, default=0) + 1}）"
+                record.metadata["fork_title_base"] = base
+            repaired.append(record)
+            unresolved.remove(record)
+            changed = True
+        if not changed:
+            break
+    return repaired
+
+
+async def _persist_legacy_fork_project_metadata(
+    db: CoreAppDb,
+    *records: SessionRecord,
+) -> None:
+    """Persist inferred project ownership once for legacy orphan forks."""
+    canonical = {
+        record.id: {
+            "title": record.title,
+            "metadata": {
+                key: record.metadata[key]
+                for key in ("work_root", "project_id", "fork_title_base")
+                if key in record.metadata
+            },
+        }
+        for record in records
+        if str(record.metadata.get("work_root") or "")
+    }
+    if not canonical:
+        return
+
+    async def write(connection):
+        for session_id, inherited in canonical.items():
+            row = await connection.get(CoreThreadSnapshot, session_id)
+            if row is None:
+                continue
+            state = dict(row.snapshot_json or {})
+            session_state = dict(state.get("session") or {})
+            metadata = dict(session_state.get("metadata") or {})
+            if str(metadata.get("work_root") or ""):
+                continue
+            metadata.update(inherited["metadata"])
+            session_state["title"] = inherited["title"]
+            session_state["metadata"] = metadata
+            state["session"] = session_state
+            row.snapshot_json = state
+            row.updated_at = datetime.now()
+        await connection.flush()
+
+    await db.persistence.write(write)
 
 
 async def _persist_legacy_runtime_preferences(db: CoreAppDb, *records: SessionRecord) -> None:

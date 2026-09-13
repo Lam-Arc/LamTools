@@ -1,91 +1,102 @@
-# LamCore 桌面应用打包
+# Sunday 桌面应用打包
 
 ## 前置依赖
 
 - Node.js 24+、npm
 - Python 3.14（与 PyInstaller 兼容）
-- Rust toolchain（`rustup` + stable）+ Tauri CLI（`npm i -D @tauri-apps/cli` 已在 `package.json`）
-- Windows：NSIS（Tauri installer bundler）
+- Rust stable toolchain
+- Inno Setup 6.6.1（命令行编译器 ISCC.exe）
 
-## 打包流程
+scripts/package.ps1 会从 PATH、INNO_SETUP_ISCC、机器级或当前用户的标准
+Inno Setup 6 安装目录中查找编译器。也可直接向
+core/desktop/installer/build-installer.ps1 传入 -IsccPath。
 
-**必须通过 `scripts/package.ps1` 完成**，不要直接执行 `npx tauri build`。
+## 唯一支持的打包流程
 
-```powershell
-.\scripts\package.ps1
-```
+    .\scripts\package.ps1
 
-脚本按顺序执行三步：
+脚本依次执行：
 
-1. **前端构建**：`core/desktop` 下 `npm run build`（Vite SPA → `core/desktop/dist/`）
-2. **Python 后端打包**：`py -3.14 -m PyInstaller lamtools-core-backend.spec --clean --noconfirm`，产物 `dist/LamCore/`
-3. **Tauri 打包**：把后端产物复制到 `core/desktop/src-tauri/lamcore-backend/`，再 `npx tauri build` 生成 Windows 安装包（NSIS 模板已固化中文 UI，`src-tauri/installer.nsi`；旧 `patch-nsis.ps1` 字符串手术已废弃，无需执行）
+1. 在 core/desktop 构建 Vite 前端。
+2. 使用唯一的 core/lamtools-core-backend.spec 生成内部 sidecar
+   core/dist/LamCore/LamCore.exe。
+3. 执行 npx tauri build --no-bundle，只生成
+   src-tauri/target/release/lamcore.exe，不会调用 Tauri 官方 NSIS bundler。
+4. 将应用壳和 sidecar 暂存到
+   src-tauri/target/release/sunday-installer/stage/，再由仓库自有
+   installer/Sunday.iss 生成：
 
-## 为什么不能直接 `tauri build`
+    core/desktop/src-tauri/target/release/bundle/inno/Sunday_<版本>_x64-setup.exe
 
-`tauri.conf.json` 的 `beforeBuildCommand` 只构建前端（`npm run build`），**不跑 PyInstaller**。
-若后端产物 `LamCore.exe` 缺失，桌面应用启动时 `find_backend_exe` 找不到后端，会弹窗报错
-"LamCore 后端启动失败"（见 `src-tauri/src/main.rs` 的 `setup` 错误分支）。
-`tauri.conf.json` 还把 `lamcore-backend` 列为 resource，缺失时 bundling 也会失败。
+Tauri 的 bundle.active 固定为 false；不要把 NSIS target、template 或 resource
+复制重新加回 tauri.conf.json。安装器 payload 的组装由 package.ps1 和
+build-installer.ps1 负责。
 
-`package.ps1` 负责编排完整链路（前端 → PyInstaller → 复制 → Tauri → NSIS），是唯一受支持的打包入口。
+CI 固定使用 Inno Setup 6.6.1，避免编译器版本漂移导致产物或
+授权条款变化；本地发布验证也应传入同版本的 `-IsccPath`。
+
+## 安装行为
+
+- 默认当前用户安装到 %LOCALAPPDATA%\Programs\Sunday，不要求管理员权限。
+- 可选创建桌面快捷方式；开始菜单、Windows“已安装的应用”、卸载入口自动注册。
+- 静默安装：
+
+    Sunday_<版本>_x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+
+- 指定目录：
+
+    Sunday_<版本>_x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="E:\Apps\Sunday"
+
+- Inno AppId 是稳定升级身份，后续版本不得修改。
+- 应用内部兼容边界继续使用 lamcore.exe、
+  lamcore-backend/LamCore.exe 与 identifier com.lamtools.lamcore。
+
+## 旧 NSIS 安装迁移与用户数据
+
+旧版把用户数据保存在安装目录内：
+
+    .lam/
+    lam_projects/
+
+Inno 安装器会检测旧 LamCore / LamTools Core 的卸载注册表项：
+
+- 默认复用旧 InstallLocation。
+- 新旧安装目录相同时，静默移除旧程序文件后原地安装 Sunday。
+- 用户主动选择不同目录时，不自动卸载旧版，避免让旧目录里的本地数据失去入口。
+- 同目录升级仅替换 lamcore.exe 与 lamcore-backend/。
+- 默认卸载只移除程序文件、快捷方式和 ARP 注册，始终保留 .lam/ 与
+  lam_projects/。清理本地数据需要用户显式手动删除。
+
+## WebView2
+
+build-installer.ps1 会下载并缓存微软官方 Evergreen bootstrapper，并把它嵌入
+setup。安装时仅在未检测到 WebView2 Runtime 时运行该 bootstrapper。
+离线或复现构建可用 -WebView2BootstrapperPath 指定已下载的官方文件。
 
 ## 开发模式
 
-开发时无需打包，用：
+开发时不需要安装器：
 
-```powershell
-.\scripts\dev.ps1 core    # Core 前后端 dev server (5172 / 5173)
-```
+    cd core\desktop
+    npm run tauri dev
 
 ## 版本号与发布
 
-**版本号只有 5 处且必须同步**（更新检查 `update.check` 用后端 `__version__` 与
-GitHub Releases 比较，版本不一致会误报/漏报）：
+版本号仍有 5 处且必须同步：
 
-1. `core/desktop/src-tauri/tauri.conf.json`
-2. `core/desktop/src-tauri/Cargo.toml`
-3. `core/desktop/package.json`
-4. `core/pyproject.toml`
-5. `core/src/lamtools_core/__init__.py` 的 `__version__`
+1. core/desktop/src-tauri/tauri.conf.json
+2. core/desktop/src-tauri/Cargo.toml
+3. core/desktop/package.json
+4. core/pyproject.toml
+5. core/src/lamtools_core/__init__.py
 
-统一用脚本改，不要手改：
+统一运行：
 
-```powershell
-.\scripts\bump-version.ps1 0.3.0
-```
+    .\scripts\bump-version.ps1 0.3.3
 
-### 发布流程（自动化）
+推送 vX.Y.Z tag 后，.github/workflows/release.yml 会完成版本一致性校验、
+前端与 sidecar 构建、后端冒烟、Tauri --no-bundle 构建、安装器编译，以及
+真实的静默安装、启动、同目录升级、卸载和数据保留验证。发布资产只匹配
+Sunday_*_x64-setup.exe；应用内更新检查也只选择这一命名。
 
-```powershell
-.\scripts\bump-version.ps1 0.3.0   # 1. 升版本（5 处同步）
-git commit -am "chore: bump version to 0.3.0"   # 2. 提交
-git tag v0.3.0                                    # 3. 打 tag
-git push origin v0.3.0                            # 4. 推送（单独推 tag，不要用 --tags 批量推）
-```
-
-推送 tag 后 `.github/workflows/release.yml` 自动完成：前端构建 → PyInstaller →
-后端二进制冒烟测试 → Tauri 打包 → 产物校验 → 上传 `LamCore_*_x64-setup.exe`
-到 GitHub Releases。应用内「设置 → 关于与更新」即会检测到新版本并引导下载。
-
-**手动触发构建**（不打 tag 验证构建链路）：仓库 Actions 页对 `Build & Release`
-选 `Run workflow`（workflow_dispatch）——产物上传为 Actions artifact 而非 Release。
-
-手动打包发布（不走 CI）时：跑 `.\scripts\package.ps1`，然后手动把
-`core/desktop/src-tauri/target/release/bundle/nsis/LamCore_*_x64-setup.exe`
-上传到 GitHub Releases（tag `vX.Y.Z`，命名与版本一致）。
-
-**spec 单一事实源**：PyInstaller spec 只有一份 `core/lamtools-core-backend.spec`
-（路径相对 spec 所在目录），本地 `package.ps1` 与 CI `release.yml` 都 cd 到
-`core/` 后使用它——不要另建 spec。
-
-## 更新检查机制（检测 + 引导下载）
-
-- 检测链：前端 RPC `update.check` → 后端 `lamtools_core.update.checker`（httpx 调
-  GitHub API `releases/latest`，semver 与 `__version__` 比较）。
-- 下载引导：应用内「下载安装包」通过 `__LAMTOOLS_OPEN_URL__` 在系统浏览器打开
-  安装包直链，由用户手动运行安装（未签名安装包不做静默安装）。
-- CLI 等价能力：`py -3.14 -m lamtools_core.cli update check [--json]`。
-- 不做：tauri-plugin-updater / minisign 签名 / latest.json（如未来升级全自动静默
-  更新，开 `bundle.createUpdaterArtifacts` 并补 `latest.json` 上传即可，release.yml
-  已预留 `.sig` 上传）。
+手动触发 workflow 时不会发布 Release，只上传 sunday-installer 构建产物。

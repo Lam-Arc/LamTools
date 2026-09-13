@@ -659,6 +659,17 @@ class SqlAlchemyThreadSnapshotStore:
         result = await db.execute(select(self.snapshot_model.thread_id))
         return [str(row[0]) for row in result.all() if row[0]]
 
+    async def list_active_thread_ids(self, db: AsyncSession) -> list[str]:
+        """Return only snapshots that can require unexpected-shutdown repair."""
+        if not hasattr(self.snapshot_model, "active_turn_id"):
+            return await self.list_thread_ids(db)
+        result = await db.execute(
+            select(self.snapshot_model.thread_id).where(
+                self.snapshot_model.active_turn_id.isnot(None)
+            )
+        )
+        return [str(row[0]) for row in result.all() if row[0]]
+
     async def rebuild(
         self,
         db: AsyncSession,

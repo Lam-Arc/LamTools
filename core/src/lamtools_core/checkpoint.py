@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import tempfile
@@ -58,6 +59,7 @@ ActorKind = Literal["main", "sub_agent", "tool", "hook", "restore", "fork"]
 CheckpointEdgeKind = Literal["checkpoint", "hook", "rollback", "session_fork"]
 RestoreScope = Literal["conversation", "workspace", "all"]
 _RESTORE_SCOPES = frozenset({"conversation", "workspace", "all"})
+_FORK_TITLE_SUFFIX = re.compile(r"^(?P<base>.+)（(?P<number>[1-9]\d*)）$")
 
 
 @dataclass(frozen=True)
@@ -1302,6 +1304,18 @@ class CoreCheckpointConversationBackend:
         kept_events = events[: boundary + 1] if boundary >= 0 else []
         boundary_seq = int(kept_events[-1].seq or 0) if kept_events else 0
         projection = CoreAppSnapshotProjector().reduce(session_id, kept_events)
+        # Event replay reconstructs conversation items, but project ownership
+        # and the user-facing title live only in the canonical session header.
+        # Carry that header into the bounded projection so a turn-based fork
+        # stays in the source project instead of becoming an orphan session.
+        source_snapshot = await self.snapshot_store.load(db, session_id)
+        source_session = (
+            source_snapshot.get("session")
+            if isinstance(source_snapshot.get("session"), dict)
+            else None
+        )
+        if source_session is not None:
+            projection["session"] = copy.deepcopy(source_session)
         runtime = await db.get(CoreRuntimeSession, session_id)
         history = _conversation_history_from_events(kept_events)
         return {
@@ -1653,6 +1667,17 @@ class CoreCheckpointConversationBackend:
         projection_payload = payload.get("projection")
         events_payload = payload.get("events")
         checkpoint_id = str(options.get("checkpoint_id") or "") if options else ""
+        source_projection = (
+            projection_payload.get("snapshot_json")
+            if isinstance(projection_payload, dict)
+            and isinstance(projection_payload.get("snapshot_json"), dict)
+            else {}
+        )
+        resolved_title, fork_title_base = await _next_fork_title(
+            db,
+            source_projection,
+            explicit_title=title,
+        )
         runtime = _fork_runtime_payload(
             runtime_payload if isinstance(runtime_payload, dict) else None,
             source_session_id=source_session_id,
@@ -1673,7 +1698,8 @@ class CoreCheckpointConversationBackend:
             source_session_id=source_session_id,
             fork_session_id=new_session_id,
             checkpoint_id=checkpoint_id,
-            title=title,
+            title=resolved_title,
+            fork_title_base=fork_title_base,
         )
         # Split the forked full projection into item rows + metadata row.
         await SqlAlchemyThreadSnapshotStore(
@@ -2181,6 +2207,7 @@ def _fork_projection_payload(
     fork_session_id: str,
     checkpoint_id: str,
     title: str,
+    fork_title_base: str,
 ) -> dict[str, Any]:
     source_state = dict((payload or {}).get("snapshot_json") or {})
     if source_state:
@@ -2195,16 +2222,61 @@ def _fork_projection_payload(
     # events have been applied, which causes items to be projected twice
     # and leads to duplicate / misordered messages in the forked session.
     session = dict(state.get("session") or {})
-    source_title = str(session.get("title") or source_session_id)
-    session["title"] = str(title or f"{source_title} fork")
+    session["title"] = str(title)
     metadata = dict(session.get("metadata") or {})
     metadata.update({
         "forked_from_session_id": source_session_id,
         "forked_from_checkpoint_id": checkpoint_id,
+        "fork_title_base": fork_title_base,
     })
     session["metadata"] = metadata
     state["session"] = session
     return {"snapshot_seq": int(payload.get("snapshot_seq") or 0) if payload else 0, "snapshot_json": state}
+
+
+async def _next_fork_title(
+    db: Any,
+    source_state: dict[str, Any],
+    *,
+    explicit_title: str,
+) -> tuple[str, str]:
+    """Return a project-scoped ``原标题（N）`` title and its stable base."""
+    source_session = (
+        source_state.get("session") if isinstance(source_state.get("session"), dict) else {}
+    )
+    source_metadata = (
+        source_session.get("metadata")
+        if isinstance(source_session.get("metadata"), dict)
+        else {}
+    )
+    source_title = str(source_session.get("title") or source_state.get("thread_id") or "新会话").strip()
+    if explicit_title.strip():
+        base = explicit_title.strip()
+        return base, base
+
+    base = str(source_metadata.get("fork_title_base") or "").strip()
+    if not base:
+        match = _FORK_TITLE_SUFFIX.fullmatch(source_title)
+        base = match.group("base").rstrip() if match and source_metadata.get("forked_from_session_id") else source_title
+    if not base:
+        base = "新会话"
+
+    source_work_root = str(source_metadata.get("work_root") or "")
+    rows = (
+        await db.execute(select(CoreThreadSnapshot.snapshot_json))
+    ).scalars().all()
+    used_numbers: set[int] = set()
+    for raw_state in rows:
+        state = raw_state if isinstance(raw_state, dict) else {}
+        session = state.get("session") if isinstance(state.get("session"), dict) else {}
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        if source_work_root and str(metadata.get("work_root") or "") != source_work_root:
+            continue
+        match = _FORK_TITLE_SUFFIX.fullmatch(str(session.get("title") or "").strip())
+        if match and match.group("base").rstrip() == base:
+            used_numbers.add(int(match.group("number")))
+    next_number = max(used_numbers, default=0) + 1
+    return f"{base}（{next_number}）", base
 
 
 def _replace_session_id(value: Any, source_session_id: str, fork_session_id: str) -> Any:

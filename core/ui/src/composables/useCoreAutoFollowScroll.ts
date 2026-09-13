@@ -22,9 +22,9 @@ import { nextTick, ref, type Ref } from 'vue'
  *    旧调用自然作废，不会用旧值覆盖新值。
  *  - reset()：切会话/重开对话框统一重置 intent/位置/自动滚动 token。
  *
- * C. 观察器
- *  - 由消费方负责 ResizeObserver（观察滚动容器 + 直接子元素），回调只调
- *    scrollToBottom()；控制器不重复观察，避免多通道堆叠。
+ * C. 哨兵
+ *  - 消费方用 IntersectionObserver 观察底部哨兵；哨兵离开视口且跟随意图仍在时，
+ *    只需调用 scrollToBottom()。内容高度、虚拟布局和容器 padding 不再参与底部推算。
  *
  * D. 程序化滚动防误伤（易错点 16）
  *  - force/正常滚动写 scrollTop 会同步触发 scroll 事件；若 handleScroll 在"不在底部"
@@ -35,6 +35,29 @@ import { nextTick, ref, type Ref } from 'vue'
  */
 
 export const CORE_SCROLL_BOTTOM_THRESHOLD_PX = 80
+export const CORE_HISTORY_AUTO_LOAD_THRESHOLD_PX = 1280
+
+export function coreHistoryAutoLoadThreshold(clientHeight: number): number {
+  return Math.max(CORE_HISTORY_AUTO_LOAD_THRESHOLD_PX, Math.max(0, clientHeight) * 4)
+}
+
+export function coreShouldAutoLoadHistory(
+  scrollTop: number,
+  hasMoreHistory: boolean,
+  loading: boolean,
+  thresholdPx = CORE_HISTORY_AUTO_LOAD_THRESHOLD_PX,
+): boolean {
+  return hasMoreHistory && !loading && scrollTop <= thresholdPx
+}
+
+export function coreApplyHistoryScrollCeiling(
+  scrollTop: number,
+  ceiling: number | null,
+  active: boolean,
+): number {
+  if (!active || ceiling === null) return scrollTop
+  return Math.max(scrollTop, Math.max(0, ceiling))
+}
 
 export interface CoreScrollableElement {
   scrollHeight: number
@@ -43,8 +66,14 @@ export interface CoreScrollableElement {
   scrollTo?: (options: ScrollToOptions) => void
 }
 
+export interface CoreScrollSentinel {
+  scrollIntoView: (options?: ScrollIntoViewOptions) => void
+}
+
 export interface UseCoreAutoFollowScrollOptions {
   bottomThresholdPx?: number
+  /** 底部哨兵存在时，以它的可见性和 scrollIntoView 作为唯一吸底依据。 */
+  sentinelRef?: Ref<CoreScrollSentinel | null>
   /** DOM 更新完成的钩子（默认 nextTick），通常注入 nextTick 前后都要滚的场景 */
   afterDomUpdate?: () => Promise<void>
   /** 一帧之后的钩子（默认 rAF），用于二次校正前等布局稳定 */
@@ -60,8 +89,10 @@ export interface CoreAutoFollowScrollController {
   atBottom: Ref<boolean>
   /** 滚轮事件（.passive 绑定）；deltaY<0 立即抢占关闭跟随 */
   handleWheel: (event: Pick<WheelEvent, 'deltaY'>) => void
-  /** scroll 事件（.passive 绑定）；双向同步 autoFollow 与 atBottom */
+  /** scroll 事件（.passive 绑定）；哨兵模式下只识别用户向上离开。 */
   handleScroll: () => void
+  /** IntersectionObserver 回传底部哨兵是否进入吸底范围。 */
+  handleSentinelVisibility: (visible: boolean) => void
   /** 判断当前是否在底部（供 ResizeObserver 快速 gating） */
   isNearBottom: () => boolean
   /**
@@ -80,8 +111,12 @@ const reduceMotionDefault = () =>
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /** 归一化：scrollTop 被浏览器钳制在 [0, scrollHeight-clientHeight] 内，超界按端点算 */
+function maxScrollTop(el: Pick<CoreScrollableElement, 'scrollHeight' | 'clientHeight'>): number {
+  return Math.max(0, el.scrollHeight - el.clientHeight)
+}
+
 function normalizedScrollTop(el: CoreScrollableElement): number {
-  const max = Math.max(0, el.scrollHeight - el.clientHeight)
+  const max = maxScrollTop(el)
   if (el.scrollTop <= 0) return 0
   if (el.scrollTop >= max) return max
   return el.scrollTop
@@ -93,7 +128,7 @@ export function coreIsScrollNearBottom(
 ): boolean {
   if (!element) return true
   const top = normalizedScrollTop(element)
-  const max = Math.max(0, element.scrollHeight - element.clientHeight)
+  const max = maxScrollTop(element)
   return max - top <= thresholdPx
 }
 
@@ -104,13 +139,18 @@ export function useCoreAutoFollowScroll(
   const autoFollow = ref(true)
   const atBottom = ref(true)
   const bottomThresholdPx = options.bottomThresholdPx ?? CORE_SCROLL_BOTTOM_THRESHOLD_PX
+  const sentinelRef = options.sentinelRef
 
   /** 程序化滚动进行中：下一次 handleScroll 消费后清除，期间不判定"离开底部" */
   let programmatic = false
   /** 竞态防护 token：每次 scrollToBottom 递增，只有最新的调用允许写 DOM */
   let seq = 0
+  let sentinelVisible = true
+  let lastScrollTop = elementRef.value ? normalizedScrollTop(elementRef.value) : 0
+  let lastScrollHeight = elementRef.value?.scrollHeight ?? 0
 
   function isNearBottom(): boolean {
+    if (sentinelRef?.value) return sentinelVisible
     return coreIsScrollNearBottom(elementRef.value, bottomThresholdPx)
   }
 
@@ -119,6 +159,7 @@ export function useCoreAutoFollowScroll(
     // seize control immediately for a snappier feel. Downward scrolling near
     // the bottom will re-enable via the follow-up scroll event.
     if (event.deltaY < 0) {
+      programmatic = false
       autoFollow.value = false
       atBottom.value = false
     }
@@ -128,21 +169,45 @@ export function useCoreAutoFollowScroll(
     // Scroll is the single source of truth: every input method (wheel,
     // scrollbar drag, trackpad, keyboard, programmatic) lands here.
     // Two-way sync: near bottom => follow; away => stop following.
+    const el = elementRef.value
+    const currentScrollTop = el ? normalizedScrollTop(el) : 0
+    if (sentinelRef?.value) {
+      const movedUp = currentScrollTop < lastScrollTop - 0.5
+      const contentShrank = Boolean(el && el.scrollHeight < lastScrollHeight - 0.5)
+      const wasProgrammatic = programmatic
+      lastScrollTop = currentScrollTop
+      lastScrollHeight = el?.scrollHeight ?? 0
+      if (programmatic) programmatic = false
+      if (movedUp && !contentShrank && !wasProgrammatic) {
+        autoFollow.value = false
+        atBottom.value = false
+      } else if (sentinelVisible) {
+        autoFollow.value = true
+        atBottom.value = true
+      }
+      return
+    }
     if (programmatic) {
-      // This scroll event was produced by our own scrollToBottom; consume the
-      // flag without judging distance (avoids a mid-scroll force incorrectly
-      // disabling follow — 易错点 16).
       programmatic = false
-      // Still sync atBottom with the actual landed position so the
-      // "jump to latest" affordance stays truthful mid-flight.
       const near = isNearBottom()
       atBottom.value = near
-      if (near) autoFollow.value = true
-      return
+      if (near) {
+        autoFollow.value = true
+        return
+      }
+      // A real user scroll can win the race after a scheduled write. Keyboard
+      // and scrollbar input do not emit wheel, so judge the landed position
+      // instead of blindly consuming the first scroll event.
     }
     const near = isNearBottom()
     autoFollow.value = near
     atBottom.value = near
+  }
+
+  function handleSentinelVisibility(visible: boolean) {
+    sentinelVisible = visible
+    atBottom.value = visible
+    if (visible) autoFollow.value = true
   }
 
   async function scrollToBottom(force = false, behavior: ScrollBehavior = 'auto') {
@@ -159,8 +224,28 @@ export function useCoreAutoFollowScroll(
     // "回到最新" must be immediate (易错点 20).
     const effectiveSmooth = wantsSmooth && !force
 
+    const sentinel = sentinelRef?.value
+    if (sentinel) {
+      const initialScrollHeight = el.scrollHeight
+      programmatic = true
+      sentinel.scrollIntoView({
+        block: 'end',
+        inline: 'nearest',
+        behavior: effectiveSmooth ? 'smooth' : 'auto',
+      })
+      autoFollow.value = true
+      atBottom.value = true
+      await (options.afterFrame?.() ?? afterFrame())
+      if (seq !== mySeq) return
+      if (el.scrollHeight !== initialScrollHeight) {
+        programmatic = true
+        sentinel.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'auto' })
+      }
+      return
+    }
+
     if (effectiveSmooth && typeof el.scrollTo === 'function') {
-      const target = el.scrollHeight
+      const target = maxScrollTop(el)
       programmatic = true
       el.scrollTo({ top: target, behavior: 'smooth' })
       autoFollow.value = true
@@ -168,14 +253,17 @@ export function useCoreAutoFollowScroll(
       return
     }
 
+    const initialScrollHeight = el.scrollHeight
     programmatic = true
-    el.scrollTop = el.scrollHeight
-    // Single write per frame (易错点 5/6): only correct when content kept
-    // growing past the first write — the stream tick case.
+    el.scrollTop = maxScrollTop(el)
+    // Correct only when content actually grew after the first write. Comparing
+    // scrollTop with scrollHeight always requested a redundant second write,
+    // because the browser's real bottom is scrollHeight-clientHeight.
     await (options.afterFrame?.() ?? afterFrame())
     if (seq !== mySeq) return
-    if (el.scrollTop !== el.scrollHeight) {
-      el.scrollTop = el.scrollHeight
+    if (el.scrollHeight !== initialScrollHeight) {
+      programmatic = true
+      el.scrollTop = maxScrollTop(el)
     }
     autoFollow.value = true
     atBottom.value = true
@@ -185,11 +273,23 @@ export function useCoreAutoFollowScroll(
     // 易错点 8/18: discard any in-flight scroll, restore intent & position.
     seq++
     programmatic = false
+    sentinelVisible = true
+    lastScrollTop = elementRef.value ? normalizedScrollTop(elementRef.value) : 0
+    lastScrollHeight = elementRef.value?.scrollHeight ?? 0
     autoFollow.value = true
     atBottom.value = true
   }
 
-  return { autoFollow, atBottom, isNearBottom, handleWheel, handleScroll, scrollToBottom, reset }
+  return {
+    autoFollow,
+    atBottom,
+    isNearBottom,
+    handleWheel,
+    handleScroll,
+    handleSentinelVisibility,
+    scrollToBottom,
+    reset,
+  }
 }
 
 function afterFrame(): Promise<void> {

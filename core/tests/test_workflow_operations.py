@@ -8,8 +8,10 @@ from typing import Any
 import pytest
 
 from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
+from lamtools_core.app.operation_catalog import OperationResult
 from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowDef,
+    WorkflowEdge,
     WorkflowInputParam,
     WorkflowNode,
     WorkflowPort,
@@ -180,6 +182,172 @@ async def test_workflow_operations_cover_create_list_get_update_expose_run_delet
     deleted = await catalog.execute("workflow.delete", {"name": "demo"})
     assert deleted.payload["deleted"] is True
     assert (await catalog.execute("workflow.list")).payload["workflows"] == []
+
+
+@pytest.mark.asyncio
+async def test_workflow_activation_reuses_arrange_and_pins_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    store = WorkflowStore()
+    catalog = _catalog(tmp_path, store)
+    jobs: list[dict[str, Any]] = []
+
+    async def arrange_list(request):
+        return OperationResult(name=request.name, payload={"jobs": list(jobs)})
+
+    async def arrange_create(request):
+        job = {
+            **request.payload,
+            "id": f"arrange_{len(jobs) + 1}",
+            "status": "waiting" if request.payload["trigger"]["type"] == "event" else "scheduled",
+            "next_run_at": None,
+            "run_count": 0,
+            "last_error": "",
+            "revision": 1,
+        }
+        jobs.append(job)
+        return OperationResult(name=request.name, payload={"job": job})
+
+    async def arrange_cancel(request):
+        job = next(item for item in jobs if item["id"] == request.payload["job_id"])
+        job["status"] = "cancelled"
+        job["revision"] += 1
+        return OperationResult(name=request.name, payload={"job": job})
+
+    async def arrange_resume(request):
+        job = next(item for item in jobs if item["id"] == request.payload["job_id"])
+        job["status"] = "waiting"
+        job["revision"] += 1
+        return OperationResult(name=request.name, payload={"job": job})
+
+    catalog.register("arrange.list", arrange_list)
+    catalog.register("arrange.create", arrange_create)
+    catalog.register("arrange.cancel", arrange_cancel)
+    catalog.register("arrange.resume", arrange_resume)
+
+    definition = _definition("activated")
+    definition.work_root = str(tmp_path)
+    created = await catalog.execute("workflow.create", definition.to_dict())
+    fetched = await catalog.execute(
+        "workflow.get", {"name": "activated", "work_root": str(tmp_path)}
+    )
+    document = fetched.payload["document"]
+    document["triggers"] = [
+        {"id": "build", "type": "event", "event_type": "build.completed"}
+    ]
+    saved = await catalog.execute(
+        "workflow.document.save",
+        {
+            "document": document,
+            "work_root": str(tmp_path),
+            "expected_revision": created.payload["workflow"]["revision"],
+        },
+    )
+    current_revision = saved.payload["workflow"]["revision"]
+
+    activated = await catalog.execute(
+        "workflow.activate", {"name": "activated", "work_root": str(tmp_path)}
+    )
+    assert activated.status == "ok"
+    assert activated.payload["activated"][0]["workflow_revision"] == current_revision
+    assert jobs[0]["operation"] == "workflow.run"
+    assert jobs[0]["payload"]["workflow_revision"] == current_revision
+
+    reused = await catalog.execute(
+        "workflow.activate", {"name": "activated", "work_root": str(tmp_path)}
+    )
+    assert reused.payload["activated"] == []
+    assert reused.payload["reused"][0]["trigger_id"] == "build"
+
+    listed = await catalog.execute(
+        "workflow.activation.list", {"name": "activated", "work_root": str(tmp_path)}
+    )
+    assert [item["trigger_id"] for item in listed.payload["activations"]] == ["build"]
+
+    deactivated = await catalog.execute(
+        "workflow.deactivate", {"name": "activated", "work_root": str(tmp_path)}
+    )
+    assert deactivated.payload["cancelled"] == ["arrange_1"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_rpc_resumes_durable_snapshot_without_prior_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RPC omission must let Runner hydrate values/state from its snapshot."""
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    store = WorkflowStore()
+    catalog = _catalog(tmp_path, store)
+    definition = WorkflowDef(
+        name="inputs",
+        nodes=[
+            WorkflowNode(
+                id="seed",
+                kind="script",
+                ports=[
+                    WorkflowPort(name="value", type="integer", direction="in"),
+                    WorkflowPort(name="out", type="integer", direction="out"),
+                ],
+                config={"script": "out = value"},
+            ),
+            WorkflowNode(
+                id="sum",
+                kind="script",
+                ports=[
+                    WorkflowPort(name="seed", type="integer", direction="in"),
+                    WorkflowPort(name="required", type="integer", direction="in"),
+                    WorkflowPort(name="out", type="integer", direction="out"),
+                ],
+                config={"script": "out = seed + required"},
+            ),
+        ],
+        edges=[
+            WorkflowEdge(
+                id="seed-to-sum",
+                source="seed",
+                source_port="out",
+                target="sum",
+                target_port="seed",
+            )
+        ],
+        input_params=[
+            WorkflowInputParam(name="seed.value", type="integer", required=False, default=7),
+            WorkflowInputParam(name="sum.required", type="integer", required=True),
+        ],
+    )
+    definition.work_root = str(tmp_path)
+    created = await catalog.execute("workflow.create", definition.to_dict())
+    assert created.status == "ok"
+
+    first = await catalog.execute(
+        "workflow.run",
+        {
+            "name": "inputs",
+            "work_root": str(tmp_path),
+            "inputs": {"sum.required": 5},
+            "thread_id": "workflow:inputs-resume",
+            "run_id": "resume-rpc",
+            "max_steps": 1,
+        },
+        metadata={"permissions": {"run_command": True}},
+    )
+    assert first.payload["run"]["status"] == "paused"
+    # Deliberately omit both prior_values and prior_node_states.  The required
+    # input and the value table must come from the durable paused snapshot.
+    second = await catalog.execute(
+        "workflow.run",
+        {
+            "name": "inputs",
+            "work_root": str(tmp_path),
+            "thread_id": "workflow:inputs-resume",
+            "run_id": "resume-rpc",
+        },
+        metadata={"permissions": {"run_command": True}},
+    )
+    assert second.payload["run"]["status"] == "completed"
+    assert second.payload["run"]["output"] == 12
+    assert second.payload["run"]["node_states"]["seed"]["status"] == "done"
 
 
 @pytest.mark.asyncio

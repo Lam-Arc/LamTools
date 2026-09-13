@@ -6,8 +6,8 @@
     <Transition name="fb-overlay">
       <div
         v-if="visible"
+        ref="backdropEl"
         class="fb-dialog-backdrop"
-        @mousedown.self="cancel"
       >
       <section
         ref="dialogRef"
@@ -88,6 +88,7 @@
 import { ref, computed, watch, defineAsyncComponent } from 'vue'
 import { ArrowUp } from 'lucide-vue-next'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 const FbTreeItem = defineAsyncComponent(() => import('./FbTreeItem.vue'))
 
@@ -117,6 +118,7 @@ const entries = ref<FbEntry[]>([])
 const loading = ref(false)
 const error = ref('')
 const dialogRef = ref<HTMLElement | null>(null)
+const backdropEl = ref<HTMLElement | null>(null)
 // Focus management (audit 19 S3): remember who opened us so we can return
 // focus on close; move focus into the dialog on open.
 let previouslyFocused: HTMLElement | null = null
@@ -153,6 +155,13 @@ const displayPath = computed(() => {
 
 const canGoUp = computed(() => {
   return treePath.value.length > 0
+})
+
+useOutsidePointerDismiss({
+  overlay: backdropEl,
+  card: dialogRef,
+  isActive: () => visible.value,
+  onDismiss: cancel,
 })
 
 function getParentPath(path: string): string {

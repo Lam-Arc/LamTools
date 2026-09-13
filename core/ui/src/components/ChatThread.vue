@@ -179,8 +179,20 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   display: grid;
   grid-auto-rows: max-content;
   align-content: start;
-  gap: 16px;
+  gap: 0;
   min-width: 0;
+}
+
+/* A user message and its assistant response form one visual turn. Keep that
+   hand-off compact, while leaving a clearer pause before the next turn. */
+.message-view + .message-view {
+  margin-top: var(--space-3);
+}
+.message-view:has(.user-row) + .message-view:has(.assistant-row) {
+  margin-top: var(--space-1);
+}
+.message-view:has(.assistant-row) + .message-view:has(.user-row) {
+  margin-top: var(--space-5);
 }
 
 /* Skip layout/paint of off-screen messages: a huge thread (thousands of
@@ -316,9 +328,9 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
 }
 
 /* ── Part dot status colors — 以 main area 文字为底 ── */
-.part-dot--completed { color: var(--theme-main-text, #fff); }
+.part-dot--completed { color: var(--theme-process-icon-color, var(--theme-main-text, #fff)); }
 .part-dot--error { color: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%); }
-.part-dot--running { color: var(--theme-main-text, #fff); }
+.part-dot--running { color: var(--theme-process-icon-color, var(--theme-main-text, #fff)); }
 
 /* ── Expandable tool cards ── */
 .process-stream {
@@ -515,8 +527,8 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   opacity: 1;
 }
 .tool-card-body--row {
-  margin: 2px 0 10px 18px;
-  width: calc(100% - 18px);
+  margin: 2px 0 10px 24px;
+  width: calc(100% - 24px);
 }
 .tool-color--warn + .tool-card-body,
 .tool-color--warn .tool-card-body {
@@ -1131,12 +1143,14 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
    RGB 分量由 JS 从 --theme-main-text 解析后写入 --flow-r/g/b。 */
 .process-step--running .process-step-title,
 .sub-line--running .sub-line-title,
-.process-group-summary--running .process-group-text {
+.process-group-summary--running .process-group-text,
+.compaction-step--running .compaction-token-detail {
   color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 58%, transparent);
 }
 .process-step--running .process-step-title.flow-text,
 .sub-line--running .sub-line-title.flow-text,
-.process-group-summary--running .process-group-text.flow-text {
+.process-group-summary--running .process-group-text.flow-text,
+.compaction-step--running .compaction-token-detail.flow-text {
   background-image: linear-gradient(
     90deg,
     rgba(var(--flow-r, 242), var(--flow-g, 239), var(--flow-b, 235), 0.18) 0%,
@@ -1149,6 +1163,173 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   background-clip: text;
   -webkit-text-fill-color: transparent;
   will-change: background-position;
+}
+
+/* Thinking/tool titles share one compact recipe. Reasoning keeps its sampled
+   semantic tail; tool titles stay as stable action-and-target labels. */
+.thread .process-card-header {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-areas: "state preview meta";
+  align-items: center;
+  column-gap: var(--space-2);
+  row-gap: 0;
+  min-height: 28px;
+  padding: 4px 0;
+  overflow: hidden;
+  position: relative;
+  border-radius: 4px;
+  transition: color var(--dur-base) var(--ease-out);
+}
+.thread .process-card-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: transparent;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), transparent 100%);
+  transition: background-color var(--dur-base) var(--ease-out);
+}
+.thread .process-card-header[aria-expanded]:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+}
+.thread .process-card-header[aria-expanded]:active::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-active), transparent);
+}
+.thread .process-card-header[aria-expanded]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 72%, transparent);
+  outline-offset: 2px;
+}
+.process-card-state-icon {
+  grid-area: state;
+  align-self: center;
+  justify-self: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 0;
+  color: color-mix(in srgb, var(--theme-process-icon-color, var(--theme-main-text, #fff)) 72%, transparent);
+  transform-origin: center;
+  flex: 0 0 auto;
+  transition:
+    color var(--dur-base) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+.process-card-state-icon--running {
+  color: var(--theme-process-icon-color, var(--theme-main-text, #fff));
+  animation: process-card-breathe 1.8s ease-in-out infinite;
+}
+.process-card-state-icon--pending {
+  color: color-mix(in srgb, var(--orange) 70%, var(--theme-main-text, #fff) 30%);
+}
+.process-card-state-icon--error,
+.process-card-state-icon--failed {
+  color: color-mix(in srgb, var(--red) 70%, var(--theme-main-text, #fff) 30%);
+}
+.process-card-state-icon--completed {
+  color: var(--theme-process-icon-color, var(--theme-main-text, #fff));
+  opacity: .72;
+  transform: scale(1);
+}
+.process-card-preview,
+.tool-card-header .process-card-preview,
+.reasoning-toggle .process-card-preview {
+  grid-area: preview;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 70%, transparent);
+}
+.thread .reasoning-body.process-card-body--preview {
+  max-height: calc(3 * 1.65em);
+  overflow: auto;
+  overscroll-behavior: contain;
+  cursor: pointer;
+}
+.thread .reasoning-body.process-card-body--expanded {
+  max-height: calc(5 * 1.65em);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.tool-card-body.process-card-body--preview,
+.tool-card-body.process-card-body--expanded {
+  max-height: 800px;
+  overflow: auto;
+}
+.tool-card-body.process-card-body--preview .diff-lines,
+.tool-card-body.process-card-body--preview .test-result-output,
+.tool-card-body.process-card-body--preview .tool-output-content,
+.tool-card-body.process-card-body--preview .command-output-result,
+.tool-card-body.process-card-body--preview > .tool-output {
+  max-height: calc(3 * 1.5em);
+  overflow: auto;
+  overscroll-behavior: contain;
+  cursor: pointer;
+}
+.tool-card-body.process-card-body--expanded .diff-lines,
+.tool-card-body.process-card-body--expanded .test-result-output,
+.tool-card-body.process-card-body--expanded .tool-output-content,
+.tool-card-body.process-card-body--expanded .command-output-result,
+.tool-card-body.process-card-body--expanded > .tool-output {
+  max-height: calc(5 * 1.5em);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.thread .reasoning-body.process-card-body--expanded,
+.tool-card-body.process-card-body--expanded .diff-lines,
+.tool-card-body.process-card-body--expanded .test-result-output,
+.tool-card-body.process-card-body--expanded .tool-output-content,
+.tool-card-body.process-card-body--expanded .command-output-result,
+.tool-card-body.process-card-body--expanded > .tool-output,
+.compaction-summary-text {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 6px,
+    #000 calc(100% - 6px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 6px,
+    #000 calc(100% - 6px),
+    transparent 100%
+  );
+}
+.process-card-header .reasoning-duration {
+  grid-area: meta;
+  align-self: start;
+  margin-top: 1px;
+}
+.assistant-timestamp,
+.reasoning-duration,
+.compaction-token-detail,
+.tool-output-meta,
+.test-result-meta,
+.sub-line-delivery-meta,
+.model-retry-bar__label,
+.model-retry-bar__detail {
+  font-variant-numeric: tabular-nums;
+}
+.process-caption-enter-active,
+.process-caption-leave-active {
+  transition: opacity .16s ease-out;
+}
+.process-caption-enter-from,
+.process-caption-leave-to {
+  opacity: 0;
+}
+@keyframes process-card-breathe {
+  0%, 100% { transform: scale(.96); opacity: .72; }
+  50% { transform: scale(1.06); opacity: 1; }
 }
 
 .sub-line-status {
@@ -1474,6 +1655,7 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   font-size: 11px;
   color: color-mix(in srgb, var(--theme-main-text, #fff) 60%, transparent);
   font-style: normal;
+  font-variant-numeric: tabular-nums;
 }
 .reasoning-body {
   margin: 3px 0 8px 24px;
@@ -1508,9 +1690,7 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
 }
 .compaction-toggle {
   display: grid;
-  grid-template-columns: 12px minmax(0, max-content) minmax(0, 1fr) minmax(12px, max-content);
   align-items: center;
-  column-gap: 6px;
   width: 100%;
   min-width: 0;
   background: none;
@@ -1536,46 +1716,26 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   outline-offset: 3px;
   border-radius: 4px;
 }
-.compaction-toggle .process-step-title {
-  min-width: 0;
-  white-space: nowrap;
-}
 .compaction-toggle .process-step-detail {
   min-width: 0;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 .compaction-toggle:hover::before {
   background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
 }
-.compaction-toggle:hover .process-step-title {
+.compaction-toggle:hover .compaction-token-detail {
   color: var(--accent, #79bcff);
 }
-.compaction-toggle:disabled:hover .process-step-title {
+.compaction-toggle:disabled:hover .compaction-token-detail {
   color: inherit;
 }
-/* compaction-step marker — 与 conversation status 同规范 */
-.compaction-step--running .process-step-marker {
-  width: 9px; height: 9px;
-  margin: 4px auto 0;
-  border: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
-  border-top-color: var(--theme-main-text, #fff);
-  background: transparent;
-  border-radius: 50%;
-  animation: stream-spin .9s linear infinite;
-}
-.compaction-step--compacted .process-step-marker {
-  background: var(--theme-main-text, #fff);
-}
-.compaction-step--not_needed .process-step-marker {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 34%, transparent);
-}
-.compaction-step--failed .process-step-marker {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%);
+.compaction-step--not_needed .process-card-state-icon {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 45%, transparent);
 }
 .compaction-summary {
   box-sizing: border-box;
   width: min(100%, 720px);
-  margin: 6px 0 0 18px;
+  margin: 6px 0 0 24px;
   padding: 2px 0 6px;
   border: 0;
   background: transparent;
@@ -1603,7 +1763,6 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   animation: stream-caret 900ms steps(2, start) infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .compaction-step--running .process-step-marker,
   .compaction-summary-text--streaming::after {
     animation: none;
   }
@@ -1758,8 +1917,8 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
     padding-inline: 2px;
   }
   .tool-card-body--row {
-    margin-left: 10px;
-    width: calc(100% - 10px);
+    margin-left: 24px;
+    width: calc(100% - 24px);
   }
   .context-tool-list {
     padding-left: 14px;
@@ -1806,12 +1965,16 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   background: transparent;
   color: color-mix(in srgb, var(--theme-main-text, #fff) 46%, transparent);
   cursor: pointer;
-  transition: background-color 150ms ease-out, color 150ms ease-out;
+  transition: background-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 .assistant-action:hover,
 .assistant-action:focus-visible {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 9%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
   color: var(--theme-main-text, #fff);
+}
+.assistant-action:active {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-active), transparent);
+  transform: scale(.96);
 }
 .assistant-action:focus-visible {
   outline: 2px solid var(--blue, #79bcff);
@@ -1825,8 +1988,20 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   color: var(--green, #32d17d);
 }
 @media (prefers-reduced-motion: reduce) {
+  .process-card-state-icon--running {
+    animation: none;
+    transform: none;
+    opacity: 1;
+  }
+  .process-caption-enter-active,
+  .process-caption-leave-active {
+    transition: none;
+  }
   .assistant-actions,
-  .assistant-action {
+  .assistant-action,
+  .process-card-state-icon,
+  .thread .process-card-header,
+  .thread .process-card-header::before {
     transition: none;
   }
 }
@@ -1872,12 +2047,16 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   font-size: 12px;
   font-family: var(--font-sans, inherit);
   cursor: pointer;
-  transition: background-color 150ms ease-out, color 150ms ease-out;
+  transition: background-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 .user-edit-button:hover,
 .user-edit-button:focus-visible {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 9%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
   color: var(--theme-main-text, #fff);
+}
+.user-edit-button:active {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-active), transparent);
+  transform: scale(.98);
 }
 .user-edit-button--primary {
   color: var(--theme-main-text, #fff);

@@ -16,21 +16,30 @@ from typing import Any
 from lamtools_core.tool import ToolCall, ToolResult, ToolSpec
 from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW
 
+from .registry import WorkflowNodeRegistry
+
 
 OperationExecutor = Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[Any]]
 
 
-def workflow_build_tool_specs() -> list[ToolSpec]:
+def workflow_build_tool_specs(
+    node_registry: WorkflowNodeRegistry | None = None,
+) -> list[ToolSpec]:
     """Tool specs for fine-grained workflow-graph editing.
 
-    Node kinds mirror the runtime model (``WorkflowNodeKind``): ai / command /
-    script / content / subgraph. Keep this in sync with the frontend workflow-mode
-    instructions so the model sees one consistent vocabulary.
+    Node kinds come from the same registry as ``workflow.object_info``.  Hosts
+    may pass their trusted-plugin registry so model editing and CLI discovery
+    expose the same vocabulary; the default contains all shipped node types.
     """
-    node_kind = {"type": "string", "enum": ["ai", "command", "script", "content", "subgraph"]}
+    registry = node_registry or WorkflowNodeRegistry()
+    node_kind = {
+        "type": "string",
+        "enum": [item.type_id for item in registry.list() if not bool(item.raw.get("hidden"))],
+    }
     port_schema = {
         "type": "object",
         "properties": {
+            "id": {"type": "string", "description": "Stable port id; keep unchanged when renaming the port"},
             "name": {"type": "string"},
             "type": {"type": "string"},
             "direction": {"type": "string", "enum": ["in", "out"]},
@@ -76,6 +85,12 @@ def workflow_build_tool_specs() -> list[ToolSpec]:
             "env": {"type": "object", "properties": {}},
             "timeout": {"type": "number"},
             "script": {"type": "string"},
+            # Deterministic data/control node settings
+            "template": {"type": "string"},
+            "text": {"type": "string"},
+            "content": {"type": "string"},
+            "expression": {"type": "string"},
+            "value": {"type": "string"},
             # Shared execution/error settings
             "retries": {"type": "integer"},
             "on_error": {
@@ -95,8 +110,8 @@ def workflow_build_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             name="workflow_graph",
             description=(
-                "Read the current workflow graph (nodes + edges) as JSON. Always call "
-                "this before editing to see existing node ids, ports, and connections. "
+                "Read the compact semantic graph (node/link summaries, stable ids and interface). Always call "
+                "this before editing to see existing node and port ids and connections. "
                 "Returns an empty graph {name,nodes:[],edges:[]} when the workflow does "
                 "not exist yet — you can then add the first node."
             ),
@@ -108,23 +123,27 @@ def workflow_build_tool_specs() -> list[ToolSpec]:
             name="workflow_add_node",
             description=(
                 "Add a node to the current workflow. If the workflow does not exist yet "
-                "it is created empty first (lazy bootstrap). kind is one of:\n"
-                "- ai: AI processing. config.mode = single | loop | agent. Named output "
-                "ports force structured JSON output (port name = field). Instruction "
-                "supports {{port_name}} interpolation.\n"
+                "it is created empty first (lazy bootstrap). Query workflow.object_info "
+                "for the current dynamic kind catalog. Core kinds include:\n"
+                "- model: one model completion. Named output ports force structured JSON. "
+                "Instruction supports {{port_name}} interpolation.\n"
+                "- agent: independent tool-capable agent execution; config.allowed_tools can narrow inherited authority.\n"
                 "- command: invoke a CLI tool via shell (curl/git/ffmpeg/...). config.command "
                 "is the shell command, run in the same shell run_command uses (Git Bash on "
                 "Windows). stdin receives {\"inputs\":{port:val}} JSON and INPUT_<PORT> env "
                 "vars are set. stdout that is a JSON object is split by key to same-named "
                 "output ports, else the whole stdout goes to the default out port. Command "
                 "(shell) is Turing-complete — use it for http (curl) and file/data ops too.\n"
-                "- script: write Python. config.script is plain Python where INPUT PORT NAMES "
+                "- python: write Python. config.script is plain Python where INPUT PORT NAMES "
                 "are directly usable variables (node IN a, IN b → use a, b in code) and assigning "
                 "to an OUTPUT PORT NAME produces that output (OUT y → y = ...). Do NOT print, do "
                 "NOT parse stdin — the runtime binds inputs as locals and reads outputs as locals. "
                 "A new script node is auto-scaffolded with its port names + comments as a starter.\n"
-                "- content: only output ports, each carrying a constant value (port.value). "
+                "- constant: only output ports, each carrying a constant value (port.value). "
                 "Injects constants, runs nothing.\n"
+                "- input/output: explicit graph boundary passthroughs.\n"
+                "- template/transform: deterministic {{name}} text interpolation.\n"
+                "- condition/branch: expression routing; merge selects the first active input and join collects named inputs.\n"
                 "- subgraph: references an external workflow by config.workflow_name; "
                 "config.iterate = none | loop | map (call once / loop until condition / "
                 "fan-out over an array).\n"
@@ -148,14 +167,16 @@ def workflow_build_tool_specs() -> list[ToolSpec]:
             name="workflow_connect",
             description=(
                 "Connect a source node's output port to a target node's input port. "
-                "source/source_port/target/target_port must reference real node ids and ports."
+                "Prefer source_port_id/target_port_id from workflow_graph; port names remain a legacy fallback."
             ),
             input_schema=_schema({
                 "source": {"type": "string"},
                 "source_port": {"type": "string"},
+                "source_port_id": {"type": "string", "description": "Preferred stable source port id"},
                 "target": {"type": "string"},
                 "target_port": {"type": "string"},
-            }, required=["source", "source_port", "target", "target_port"]),
+                "target_port_id": {"type": "string", "description": "Preferred stable target port id"},
+            }, required=["source", "target"]),
             permission=ASK_USER,
             metadata={"category": "workflow"},
         ),
@@ -309,7 +330,7 @@ def workflow_build_tool_handlers(
             # Empty graph so the agent can immediately add the first node —
             # the very first edit (add_node) bootstraps the workflow.
             wf = {"name": name, "nodes": [], "edges": []}
-        return _ok(call, wf)
+        return _ok(call, _semantic_view(wf))
 
     async def workflow_add_node(call: ToolCall) -> ToolResult:
         args = _args(call)
@@ -328,10 +349,11 @@ def workflow_build_tool_handlers(
         if any(str(n.get("id")) == node_id for n in nodes if isinstance(n, dict)):
             return _failed(call, f"node id already exists: {node_id}")
         ports = args.get("ports") if isinstance(args.get("ports"), list) else _default_ports(kind)
+        ports = _ensure_port_ids(node_id, ports)
         config = args.get("config") if isinstance(args.get("config"), dict) else {}
         # Auto-scaffold a starter script from the port names + comments, so the
         # model opens a ready-to-fill file with the right variable names.
-        if kind == "script" and not str(config.get("script") or "").strip():
+        if kind in {"script", "python"} and not str(config.get("script") or "").strip():
             config = dict(config)
             config["script"] = _scaffold_script(str(args.get("title") or kind.capitalize()), ports)
         node: dict[str, Any] = {
@@ -358,12 +380,33 @@ def workflow_build_tool_handlers(
             return _failed(call, str(exc))
         source = str(args.get("source") or "")
         source_port = str(args.get("source_port") or "")
+        source_port_id = str(args.get("source_port_id") or "")
         target = str(args.get("target") or "")
         target_port = str(args.get("target_port") or "")
+        target_port_id = str(args.get("target_port_id") or "")
         nodes = wf.get("nodes") or []
         node_ids = {str(n.get("id")) for n in nodes if isinstance(n, dict)}
         if source not in node_ids or target not in node_ids:
             return _failed(call, "source or target node id not found")
+        source_node = next((n for n in nodes if isinstance(n, dict) and str(n.get("id")) == source), {})
+        target_node = next((n for n in nodes if isinstance(n, dict) and str(n.get("id")) == target), {})
+        source_ports = _ensure_port_ids(source, source_node.get("ports") or [])
+        target_ports = _ensure_port_ids(target, target_node.get("ports") or [])
+        source_match = next((p for p in source_ports if str(p.get("id")) == source_port_id), None) if source_port_id else next((p for p in source_ports if str(p.get("name")) == source_port and str(p.get("direction")) == "out"), None)
+        target_match = next((p for p in target_ports if str(p.get("id")) == target_port_id), None) if target_port_id else next((p for p in target_ports if str(p.get("name")) == target_port and str(p.get("direction")) == "in"), None)
+        # Older graph fixtures omitted ports entirely. Preserve that migration
+        # boundary only for name-based connections; canonical V2 callers use
+        # stable ids and receive strict endpoint validation.
+        if source_ports and source_match is None:
+            return _failed(call, "source output port not found")
+        if target_ports and target_match is None:
+            return _failed(call, "target input port not found")
+        if source_match is not None:
+            source_port = str(source_match.get("name") or source_port)
+            source_port_id = str(source_match.get("id") or source_port_id)
+        if target_match is not None:
+            target_port = str(target_match.get("name") or target_port)
+            target_port_id = str(target_match.get("id") or target_port_id)
         import secrets
 
         edges = list(wf.get("edges") or [])
@@ -374,6 +417,8 @@ def workflow_build_tool_handlers(
             "source_port": source_port,
             "target": target,
             "target_port": target_port,
+            "source_port_id": source_port_id,
+            "target_port_id": target_port_id,
         })
         wf["edges"] = edges
         saved = await _save_graph(name, wf, call)
@@ -413,7 +458,16 @@ def workflow_build_tool_handlers(
                 if isinstance(args.get("config"), dict):
                     n["config"] = args.get("config")
                 if isinstance(args.get("ports"), list):
-                    n["ports"] = args.get("ports")
+                    previous = {str(p.get("name")): str(p.get("id") or "") for p in (n.get("ports") or []) if isinstance(p, dict)}
+                    updated = []
+                    for raw in args.get("ports"):
+                        if not isinstance(raw, dict):
+                            continue
+                        item = dict(raw)
+                        if not item.get("id") and previous.get(str(item.get("name") or "")):
+                            item["id"] = previous[str(item.get("name") or "")]
+                        updated.append(item)
+                    n["ports"] = _ensure_port_ids(node_id, updated)
                 if isinstance(args.get("position"), dict):
                     n["position"] = args.get("position")
                 found = True
@@ -437,17 +491,80 @@ def workflow_build_tool_handlers(
 
 def _default_ports(kind: str) -> list[dict[str, Any]]:
     """Sensible default ports per node kind for newly created nodes."""
-    if kind == "content":
+    if kind in {"content", "constant"}:
         return [{"name": "out", "type": "string", "direction": "out", "value": ""}]
     if kind == "subgraph":
         return [
             {"name": "in", "type": "any", "direction": "in"},
             {"name": "result", "type": "any", "direction": "out"},
         ]
+    if kind in {"condition", "branch"}:
+        return [
+            {"name": "value", "type": "any", "direction": "in"},
+            {"name": "true", "type": "any", "direction": "out"},
+            {"name": "false", "type": "any", "direction": "out"},
+        ]
     return [
         {"name": "in", "type": "string", "direction": "in"},
         {"name": "out", "type": "string", "direction": "out"},
     ]
+
+
+def _semantic_view(workflow: dict[str, Any]) -> dict[str, Any]:
+    """Compact read shape used by the model before ID-based patches."""
+    nodes = []
+    for raw in workflow.get("nodes") or []:
+        if not isinstance(raw, dict):
+            continue
+        node_id = str(raw.get("id") or "")
+        ports = _ensure_port_ids(node_id, raw.get("ports") or [])
+        nodes.append({
+            "id": node_id,
+            "type_id": str(raw.get("type_id") or raw.get("kind") or ""),
+            "title": str(raw.get("title") or ""),
+            # Agent graph editing still needs the executable parameters and
+            # placement.  Keep the view compact, but do not make a read-before-
+            # write client guess the values it is about to preserve or patch.
+            "params": dict(raw.get("config") or {}) if isinstance(raw.get("config"), dict) else {},
+            "position": dict(raw.get("position") or {}) if isinstance(raw.get("position"), dict) else {},
+            "ports": [{
+                "id": p.get("id"), "name": p.get("name"),
+                "direction": p.get("direction"), "data_type": p.get("type", "any"),
+            } for p in ports],
+        })
+    edges = [{
+        "id": raw.get("id"),
+        "source": {"node_id": raw.get("source"), "port_id": raw.get("source_port_id"), "port_name": raw.get("source_port")},
+        "target": {"node_id": raw.get("target"), "port_id": raw.get("target_port_id"), "port_name": raw.get("target_port")},
+        **({"transform": raw.get("transform")} if raw.get("transform") else {}),
+        **({"condition": raw.get("condition")} if raw.get("condition") else {}),
+    } for raw in (workflow.get("edges") or []) if isinstance(raw, dict)]
+    return {
+        "format": "lamtools.semantic-graph", "version": 1,
+        "name": workflow.get("name"), "revision": workflow.get("revision", 0),
+        "description": workflow.get("description", ""),
+        "nodes": nodes, "edges": edges,
+        "interface": {
+            "inputs": workflow.get("input_params") or [],
+            "output": workflow.get("output_port") or "",
+        },
+    }
+
+
+def _ensure_port_ids(node_id: str, ports: list[Any]) -> list[dict[str, Any]]:
+    """Assign deterministic ids only at the legacy/model edit boundary."""
+    import uuid
+
+    result: list[dict[str, Any]] = []
+    for index, raw in enumerate(ports):
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        if not str(item.get("id") or "").strip():
+            seed = f"{node_id}\x1f{item.get('direction', 'in')}\x1f{item.get('name', '')}\x1f{index}"
+            item["id"] = f"port_{uuid.uuid5(uuid.NAMESPACE_URL, seed).hex[:16]}"
+        result.append(item)
+    return result
 
 
 def _scaffold_script(title: str, ports: list[Any]) -> str:

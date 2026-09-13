@@ -5,6 +5,7 @@ from lamtools_core.context_compaction_budget import (
     TokenBudget,
     TokenMeasurement,
     measure_for_compaction_trigger,
+    resolve_compaction_budget,
 )
 from .models import (
     COMPACTION_PREFIX,
@@ -70,6 +71,7 @@ __all__ = [
     "fallback_structured_compaction_summary",
     "format_messages_for_compaction",
     "parse_compaction_summary",
+    "resolve_compaction_budget",
     "select_context_compaction_layout",
     "summarize_context_messages",
     "truncate_text_to_tokens",

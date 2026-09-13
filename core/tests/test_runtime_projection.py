@@ -491,6 +491,7 @@ def test_runtime_projection_maps_terminal_status():
             "payload": {
                 "turn_id": "turn-1",
                 "decision": "done",
+                "duration_ms": 12_300,
                 "runtime_metrics": {"total_tokens": 42},
             }
         },
@@ -507,6 +508,7 @@ def test_runtime_projection_maps_terminal_status():
         "status": "completed",
         "raw_end_reason": "done",
         "message": "finished",
+        "duration_ms": 12_300,
         "runtime_metrics": {"total_tokens": 42},
     }
     assert event.usage == {"total_tokens": 42}

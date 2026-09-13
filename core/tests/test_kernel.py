@@ -734,6 +734,8 @@ class TestKernelDone:
         # Verify done event
         done_events = [e for e in sink.events if e.name == "runtime.done"]
         assert len(done_events) == 1
+        assert isinstance(done_events[0].payload["duration_ms"], int)
+        assert done_events[0].payload["duration_ms"] >= 0
 
 
 class TestKernelFailed:
@@ -3513,6 +3515,7 @@ class TestKernelContextCompaction:
                         ChatMessage(role="user", content="current task"),
                     ],
                     model="mock-model",
+                    max_tokens=2_000,
                 )
 
         sink = CollectingEventSink()
@@ -3531,9 +3534,12 @@ class TestKernelContextCompaction:
         assert "context_compacted" not in llm.last_request.metadata
         assert [event for event in sink.events if event.name == "runtime.context_compacted"] == []
         metrics = next(event for event in sink.events if event.name == "runtime.metrics")
-        assert metrics.payload["runtime_metrics"]["context_window_tokens"] == 10_000
+        assert metrics.payload["runtime_metrics"]["context_window_tokens"] == 8_000
+        assert metrics.payload["runtime_metrics"]["total_context_window_tokens"] == 10_000
+        assert metrics.payload["runtime_metrics"]["reserved_output_tokens"] == 2_000
+        assert metrics.payload["runtime_metrics"]["context_compaction_trigger_tokens"] == 6_400
         done = next(event for event in sink.events if event.name == "runtime.done")
-        assert done.payload["runtime_metrics"]["context_window_tokens"] == 10_000
+        assert done.payload["runtime_metrics"]["context_window_tokens"] == 8_000
         assert done.payload["runtime_metrics"]["estimated_prompt_tokens"] > 0
         assert done.payload["runtime_metrics"]["steps_total"] == 1
 

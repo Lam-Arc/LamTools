@@ -135,6 +135,26 @@ class _CharacterStreamingCompactionClient:
         yield LLMStreamEvent(kind="done")
 
 
+class _IncompleteStreamingCompactionClient:
+    async def complete(self, request):
+        raise AssertionError("an incomplete non-empty stream must not fall back or commit")
+
+    async def stream(self, request):
+        yield LLMStreamEvent(
+            kind="content_delta",
+            content="[Compacted Context]\n\nPartial summary `",
+        )
+
+
+class _LengthLimitedStreamingCompactionClient:
+    async def complete(self, request):
+        raise AssertionError("a length-limited stream must not fall back or commit")
+
+    async def stream(self, request):
+        yield LLMStreamEvent(kind="content_delta", content="partial")
+        yield LLMStreamEvent(kind="finish", finish_reason="length")
+
+
 class _LosesPriorUserInstructionsClient:
     async def complete(self, request):
         return LLMResponse(
@@ -356,6 +376,40 @@ async def test_context_controller_skips_small_request_without_calling_pipeline()
     assert execution.result is None
     assert execution.measurement.exact is False
     assert client.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_context_controller_force_only_bypasses_trigger_threshold():
+    client = _CompactionClient()
+    controller = ContextCompactionController(
+        llm_client=client,
+        estimate_request_tokens=lambda messages, fast: estimate_message_tokens(
+            [message.to_dict() for message in messages], fast=fast
+        ),
+    )
+    budget = TokenBudget(context_window=8_000, trigger_tokens=7_000, target_tokens=1_200)
+    messages = [
+        ChatMessage(role="user", content="old request " + ("x" * 3_000)),
+        ChatMessage(role="assistant", content="old result " + ("y" * 3_000)),
+        ChatMessage(role="user", content="latest request"),
+    ]
+
+    execution = await controller.compact(
+        messages,
+        budget=budget,
+        timeout=None,
+        current_model="mock-model",
+        trigger="manual",
+        force=True,
+    )
+
+    assert execution.result is not None
+    assert execution.result.status == "compacted"
+    assert execution.result.limit_tokens == budget.target_tokens
+    assert execution.result.trigger == "manual"
+    assert execution.strategy == "current_model"
+    assert client.last_request is not None
+    assert client.last_request.max_tokens == 400
 
 
 @pytest.mark.asyncio
@@ -881,6 +935,39 @@ async def test_compact_context_emits_failed_then_propagates_cancellation_without
     assert [message.to_dict() for message in messages] == original
     assert progress[-1]["status"] == "failed"
     assert progress[-1]["reason"] == "cancelled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client",
+    [_IncompleteStreamingCompactionClient(), _LengthLimitedStreamingCompactionClient()],
+)
+async def test_incomplete_stream_never_replaces_original_history(client):
+    messages = [
+        ChatMessage(role="user", content="important constraint " + ("x" * 6000)),
+        ChatMessage(role="assistant", content="completed work " + ("y" * 6000)),
+        ChatMessage(role="user", content="continue"),
+    ]
+    original = [message.to_dict() for message in messages]
+    progress = []
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="manual",
+            messages=messages,
+            llm_client=client,
+            model="mock-model",
+            limit_tokens=3600,
+            estimate_tokens=_estimate,
+            on_event=progress.append,
+        )
+    )
+
+    assert result.status == "failed"
+    assert [message.to_dict() for message in result.replacement_messages] == original
+    assert result.before_tokens == result.after_tokens
+    assert progress[-1]["status"] == "failed"
+    assert "Context compaction failed" in progress[-1]["message"]
 
 
 class _UnstructuredCompactionClient:

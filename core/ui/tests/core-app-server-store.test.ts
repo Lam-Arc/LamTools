@@ -102,10 +102,11 @@ describe('core appServer runtime store', () => {
     })
     await controller.connect('thread-1')
 
-    onEvent?.(runStatusEvent('done-1', 'completed'))
+    onEvent?.(runStatusEvent('done-1', 'completed', undefined, 12_300))
     frames[0]()
 
     expect(runtime.state?.core?.turns?.['turn-1']?.status).toBe('completed')
+    expect(runtime.state?.core?.turns?.['turn-1']?.duration_ms).toBe(12_300)
     expect(runtime.state?.core?.status).toBe('completed')
   })
 
@@ -353,9 +354,9 @@ describe('core appServer runtime store', () => {
 
   it('transports text, structured input items, and command operations', async () => {
     const runtime = createCoreAppServerRuntimeState()
-    const calls: Array<{ method: string; params: Record<string, unknown> }> = []
-    runtime.client = fakeClient(async (method, params) => {
-      calls.push({ method, params })
+    const calls: Array<{ method: string; params: Record<string, unknown>; timeoutMs?: number }> = []
+    runtime.client = fakeClient(async (method, params, timeoutMs) => {
+      calls.push({ method, params, timeoutMs })
       if (method === 'command.catalog') return {
         commands: [{ name: 'compact', action: 'run_action', kind: 'action', accepts_args: false }],
       }
@@ -384,6 +385,7 @@ describe('core appServer runtime store', () => {
     expect(result).toEqual({ status: 'compacted' })
     expect(calls[2]).toEqual({
       method: 'command.execute',
+      timeoutMs: 30 * 60_000,
       params: {
         thread_id: 'thread-1',
         command: 'compact',
@@ -763,7 +765,11 @@ describe('core appServer runtime store', () => {
 })
 
 function fakeClient(
-  request: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => ({}),
+  request: (
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs?: number,
+  ) => Promise<Record<string, unknown>> = async () => ({}),
 ): CoreAppServerRuntimeClient {
   return {
     async connect() {},
@@ -876,6 +882,7 @@ function runStatusEvent(
   eventId: string,
   status: string,
   runtimeMetrics?: Record<string, unknown>,
+  durationMs?: number,
 ): CoreAppEvent {
   return {
     event_id: eventId,
@@ -890,7 +897,12 @@ function runStatusEvent(
       turn_id: 'turn-1',
       kind: 'status',
       status,
-      payload: { type: 'turn', status, ...(runtimeMetrics ? { runtime_metrics: runtimeMetrics } : {}) },
+      payload: {
+        type: 'turn',
+        status,
+        ...(runtimeMetrics ? { runtime_metrics: runtimeMetrics } : {}),
+        ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
+      },
     },
   }
 }

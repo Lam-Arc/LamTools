@@ -43,16 +43,15 @@
               {{ msg.content }}
             </div>
           </template>
-          <div v-if="attachmentParts(msg).length" class="message-attachment-list" aria-label="消息附件">
-            <div
-              v-for="part in attachmentParts(msg)"
-              :key="part.id"
-              class="message-attachment-pill"
-            >
-              <span class="message-attachment-kind">{{ attachmentKind(part) }}</span>
-              <span class="message-attachment-name">{{ attachmentName(part) }}</span>
-            </div>
-          </div>
+          <MessageAttachmentDeck
+            v-if="messageAttachments(msg).length"
+            :attachments="messageAttachments(msg)"
+            :transport="transport"
+            :project-id="projectId"
+            :work-root="workRoot"
+            side="right"
+            aria-label="消息附件"
+          />
           <!-- Hover actions: copy / edit (hidden while editing this message) -->
           <div
             v-if="messageActions && editingMessageId !== msg.id && userActionable(msg)"
@@ -165,7 +164,7 @@
 
             <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
             <div
-                  v-if="isProcessExpanded(msg)"
+                  v-if="isProcessExpanded(msg) || isLiveMessage(msg)"
                   class="process-stream"
                   :class="{ 'process-stream--live': isLiveMessage(msg), 'process-stream--complete': !isLiveMessage(msg) }"
                 >
@@ -174,15 +173,34 @@
                 :key="group.kind === 'process-group' ? processGroupId(group) : group.part.id"
               >
                 <template v-if="group.kind === 'process-group'">
-                  <div class="process-group">
+                  <div
+                    class="process-group"
+                    @mouseenter="cancelGroupAutoCollapse(processGroupId(group))"
+                    @mouseleave="scheduleGroupAutoCollapse(processGroupId(group))"
+                  >
                     <button
                       type="button"
-                      class="process-group-summary"
+                      class="process-group-summary process-card-header"
                       :class="{ 'process-group-summary--running': groupHasRunningPart(group) }"
+                      :aria-expanded="isGroupExpanded(processGroupId(group))"
+                      :aria-label="group.summary"
                       @click="toggleGroupExpand(processGroupId(group))"
                     >
-                      <span v-if="groupHasError(group)" class="process-step-marker process-step-marker--error" />
-                      <span v-beam class="process-group-text">{{ group.summary }}</span>
+                      <component
+                        :is="processIcon(processGroupCurrentPart(group))"
+                        class="process-card-state-icon"
+                        :class="processIconStateClass(processGroupCurrentPart(group))"
+                        :size="15"
+                        :stroke-width="1.8"
+                        aria-hidden="true"
+                      />
+                      <Transition name="process-caption" mode="out-in">
+                        <span
+                          :key="processTitleSnapshot(processGroupCurrentPart(group))"
+                          v-beam="groupHasRunningPart(group)"
+                          class="process-group-text process-card-preview"
+                        >{{ processTitleSnapshot(processGroupCurrentPart(group)) }}</span>
+                      </Transition>
                     </button>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
@@ -192,14 +210,32 @@
                         v-memo="partMemo(part, isLiveMessage(msg))"
                         class="part-wrap"
                       >
-                        <div v-if="part.partType === 'reasoning'" :class="['process-step', 'process-step--reasoning', 'process-step--' + part.status]">
-                          <button type="button" class="reasoning-toggle" @click="togglePartExpand(part, isLiveMessage(msg))">
-                            <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                            <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
+                        <div
+                          v-if="part.partType === 'reasoning'"
+                          :class="['process-step', 'process-step--reasoning', 'process-step--' + part.status]"
+                          @mouseenter="cancelPartAutoCollapse(part.id)"
+                          @mouseleave="schedulePartAutoCollapse(part.id)"
+                        >
+                          <button
+                            type="button"
+                            class="reasoning-toggle process-card-header"
+                            :aria-expanded="isPartExpanded(part, isLiveMessage(msg))"
+                            :aria-label="processAccessibleLabel(part)"
+                            @click="togglePartExpand(part, isLiveMessage(msg))"
+                          >
+                            <component :is="processIcon(part)" class="process-card-state-icon" :class="processIconStateClass(part)" :size="15" :stroke-width="1.8" aria-hidden="true" />
+                            <Transition name="process-caption" mode="out-in">
+                              <span :key="processTitleSnapshot(part)" v-beam="part.status === 'running'" class="process-step-title process-card-preview">{{ processTitleSnapshot(part) }}</span>
+                            </Transition>
                             <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
                           </button>
                           <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                          <div v-if="isPartExpanded(part, isLiveMessage(msg))" class="reasoning-body">
+                          <div
+                            v-if="isPartExpanded(part, isLiveMessage(msg))"
+                            class="reasoning-body"
+                            :class="processCardBodyStateClass(part, isLiveMessage(msg))"
+                            @click="promotePartCard(part.id, $event)"
+                          >
                             <slot name="reasoning-content" :content="part.content ?? ''" :live="isLiveMessage(msg)">
                               <MarkdownRenderer class="process-step-detail" :content="part.content ?? ''" />
                             </slot>
@@ -210,26 +246,29 @@
                           v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
                           class="process-step process-step--tool"
                           :class="'process-step--' + part.status"
+                          @mouseenter="cancelPartAutoCollapse(part.id)"
+                          @mouseleave="schedulePartAutoCollapse(part.id)"
                         >
                           <button
                             type="button"
-                            class="tool-card-header"
+                            class="tool-card-header process-card-header"
                             :class="[{ 'has-detail': hasToolDisplay(part), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
+                            :aria-expanded="hasToolDisplay(part) ? shouldShowToolBody(part, isLiveMessage(msg)) : undefined"
+                            :aria-label="processAccessibleLabel(part)"
                             @click="togglePartExpand(part, isLiveMessage(msg))"
                           >
-                            <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                            <template v-if="isCommandTool(part)">
-                              <span v-beam class="process-step-title">{{ processTitleWithState(part) }}</span>
-                              <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
-                            </template>
-                            <template v-else>
-                              <span v-beam class="process-step-title tool-row-summary">{{ processTitleWithState(part) }}</span>
-                              <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
-                              <span v-if="shouldShowToolStatusSuffix(part)" class="tool-row-status">{{ toolStatusLabel(part) }}</span>
-                            </template>
+                            <component :is="processIcon(part)" class="process-card-state-icon" :class="processIconStateClass(part)" :size="15" :stroke-width="1.8" aria-hidden="true" />
+                            <Transition name="process-caption" mode="out-in">
+                              <span :key="processTitleSnapshot(part)" v-beam="part.status === 'running'" class="process-step-title tool-row-summary process-card-preview">{{ processTitleSnapshot(part) }}</span>
+                            </Transition>
                           </button>
                           <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                          <div v-if="shouldShowToolBody(part, isLiveMessage(msg))" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
+                          <div
+                            v-if="shouldShowToolBody(part, isLiveMessage(msg))"
+                            class="tool-card-body"
+                            :class="[{ 'tool-card-body--row': !isCommandTool(part) }, processCardBodyStateClass(part, isLiveMessage(msg))]"
+                            @click="promotePartCard(part.id, $event)"
+                          >
                             <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
                             <div v-else-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
                               <div class="diff-header">
@@ -314,18 +353,29 @@
                   <div
                     v-if="group.part.partType === 'reasoning'"
                     :class="['process-step', 'process-step--reasoning', 'process-step--' + group.part.status]"
+                    @mouseenter="cancelPartAutoCollapse(group.part.id)"
+                    @mouseleave="schedulePartAutoCollapse(group.part.id)"
                   >
                     <button
                       type="button"
-                      class="reasoning-toggle"
+                      class="reasoning-toggle process-card-header"
+                      :aria-expanded="isPartExpanded(group.part, isLiveMessage(msg))"
+                      :aria-label="processAccessibleLabel(group.part)"
                       @click="togglePartExpand(group.part, isLiveMessage(msg))"
                     >
-                      <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                      <span v-beam class="process-step-title">{{ reasoningTitle(group.part.status) }}</span>
+                      <component :is="processIcon(group.part)" class="process-card-state-icon" :class="processIconStateClass(group.part)" :size="15" :stroke-width="1.8" aria-hidden="true" />
+                      <Transition name="process-caption" mode="out-in">
+                        <span :key="processTitleSnapshot(group.part)" v-beam="group.part.status === 'running'" class="process-step-title process-card-preview">{{ processTitleSnapshot(group.part) }}</span>
+                      </Transition>
                       <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
                     </button>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                    <div v-if="isPartExpanded(group.part, isLiveMessage(msg))" class="reasoning-body">
+                    <div
+                      v-if="isPartExpanded(group.part, isLiveMessage(msg))"
+                      class="reasoning-body"
+                      :class="processCardBodyStateClass(group.part, isLiveMessage(msg))"
+                      @click="promotePartCard(group.part.id, $event)"
+                    >
                       <slot name="reasoning-content" :content="group.part.content ?? ''" :live="isLiveMessage(msg)">
                         <MarkdownRenderer class="process-step-detail" :content="group.part.content ?? ''" />
                       </slot>
@@ -337,31 +387,29 @@
                     v-else-if="(group.part.partType === 'tool_call' || group.part.partType === 'tool_result') && !isControlTool(group.part)"
                     class="process-step process-step--tool"
                     :class="'process-step--' + group.part.status"
+                    @mouseenter="cancelPartAutoCollapse(group.part.id)"
+                    @mouseleave="schedulePartAutoCollapse(group.part.id)"
                   >
                     <button
                       type="button"
-                      class="tool-card-header"
+                      class="tool-card-header process-card-header"
                       :class="[{ 'has-detail': hasToolDisplay(group.part), 'process-tool-row': !isCommandTool(group.part), 'tool-card-header--command': isCommandTool(group.part) }, toolColorClass(group.part)]"
                       :aria-expanded="!isCommandTool(group.part) && hasToolDisplay(group.part) ? shouldShowToolBody(group.part, isLiveMessage(msg)) : undefined"
+                      :aria-label="processAccessibleLabel(group.part)"
                       @click="togglePartExpand(group.part, isLiveMessage(msg))"
                     >
-                      <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                      <template v-if="isCommandTool(group.part)">
-                        <span v-beam class="process-step-title">{{ processTitleWithState(group.part) }}</span>
-                        <span v-if="shouldShowToolArgsPreview(group.part)" class="tool-args-preview">{{ toolArgsPreview(group.part.toolArgs || {}) }}</span>
-                      </template>
-                      <template v-else>
-                        <span v-beam class="process-step-title tool-row-summary">{{ processTitleWithState(group.part) }}</span>
-                        <span v-if="shouldShowToolArgsPreview(group.part)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(group.part.toolArgs || {}) }}</span>
-                        <span v-if="shouldShowToolStatusSuffix(group.part)" class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(group.part) }">{{ toolRetryLabel(group.part) || toolStatusLabel(group.part) }}</span>
-                      </template>
+                      <component :is="processIcon(group.part)" class="process-card-state-icon" :class="processIconStateClass(group.part)" :size="15" :stroke-width="1.8" aria-hidden="true" />
+                      <Transition name="process-caption" mode="out-in">
+                        <span :key="processTitleSnapshot(group.part)" v-beam="group.part.status === 'running'" class="process-step-title tool-row-summary process-card-preview">{{ processTitleSnapshot(group.part) }}</span>
+                      </Transition>
                     </button>
                     <span v-if="!displayToolInputPreview(group.part) && !hasToolDisplay(group.part) && !group.part.toolArgs && readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div
                       v-if="shouldShowToolBody(group.part, isLiveMessage(msg))"
                       class="tool-card-body"
-                      :class="{ 'tool-card-body--row': !isCommandTool(group.part) }"
+                      :class="[{ 'tool-card-body--row': !isCommandTool(group.part) }, processCardBodyStateClass(group.part, isLiveMessage(msg))]"
+                      @click="promotePartCard(group.part.id, $event)"
                     >
                       <pre v-if="displayToolError(group.part)" class="tool-output tool-output--error">{{ displayToolError(group.part) }}</pre>
                       <!-- File tools: diff-style block with line numbers -->
@@ -556,7 +604,7 @@
                           @click="togglePartExpand(group.part, isLiveMessage(msg))"
                         >
                           <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                          <span v-beam class="sub-line-title">{{ agentTitle(group.part) }}</span>
+                          <span v-beam="group.part.status === 'running'" class="sub-line-title">{{ agentTitle(group.part) }}</span>
                           <span class="sub-line-status">{{ agentStatusLabel(group.part) }}</span>
                         </button>
                         <div v-if="agentDeliveryMeta(group.part).length > 0" class="sub-line-delivery-meta">
@@ -632,15 +680,28 @@
                   >
                     <button
                       type="button"
-                      class="compaction-toggle"
+                      class="compaction-toggle process-card-header"
                       :disabled="!canToggleCompaction(group.part)"
                       :aria-expanded="isCompactionExpanded(group.part)"
                       :aria-controls="'compaction-summary-' + group.part.id"
+                      :aria-label="compactionAccessibleLabel(group.part)"
                       @click="canToggleCompaction(group.part) && toggleToolExpand(group.part.id)"
                     >
-                      <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" aria-hidden="true" />
-                      <span class="process-step-title">{{ compactionTitle(group.part) }}</span>
-                      <span class="process-step-detail">{{ compactionDetail(group.part) }}</span>
+                      <component
+                        :is="processIcon(group.part)"
+                        class="process-card-state-icon"
+                        :class="compactionIconStateClass(group.part)"
+                        :size="15"
+                        :stroke-width="1.8"
+                        aria-hidden="true"
+                      />
+                      <Transition name="process-caption" mode="out-in">
+                        <span
+                          :key="compactionDetail(group.part)"
+                          v-beam="isRunningCompaction(group.part)"
+                          class="compaction-token-detail process-step-detail process-card-preview"
+                        >{{ compactionDetail(group.part) }}</span>
+                      </Transition>
                     </button>
                     <div
                       v-if="shouldShowCompactionSummary(group.part)"
@@ -669,22 +730,19 @@
             <MarkdownRenderer class="assistant-answer" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" />
           </slot>
 
-          <!-- 本轮 artifact 产出（生图等）统一挂到消息结尾；本轮（turn）运行期间
-               隐藏（活跃轮所有消息含子代理段），轮次结束才出现（GSAP 淡入） -->
+          <!-- 本轮 artifact 产出统一挂到消息结尾；父级抑制避免子代理嵌套重复。 -->
           <Transition :css="false" @enter="artifactsEnter" @leave="fadeSlideLeave">
-          <div v-if="messageImages.length && !artifactsPanelSuppressed" class="message-artifacts" aria-label="本轮产出">
-            <div class="message-artifacts-head">本轮产出</div>
-            <div class="tool-image-row">
-              <figure
-                v-for="(artifact, i) in messageImages"
-                :key="String(artifact.artifact_id || artifact.uri || artifact.metadata?.image_data_url || `no-key-${i}`)"
-                class="tool-image-card"
-                @click="openImagePreview(artifact)"
-              >
-                <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
-              </figure>
-            </div>
-          </div>
+            <MessageAttachmentDeck
+              v-if="messageArtifacts.length && !artifactsPanelSuppressed"
+              class="message-artifacts"
+              :artifacts="messageArtifacts"
+              :transport="transport"
+              :project-id="projectId"
+              :work-root="workRoot"
+              side="left"
+              heading="本轮产出"
+              aria-label="本轮产出"
+            />
           </Transition>
 
           <!-- 输出中（turn 运行中，与 stop 按钮同步）：文字区域最下方三个圆点逐个显现循环 -->
@@ -739,8 +797,8 @@
   </div>
 
   <Teleport to="body">
-    <div v-if="previewImageSrc" class="image-preview-overlay" @click.self="previewImageSrc = ''" @keydown.esc="previewImageSrc = ''">
-      <img :src="previewImageSrc" :alt="previewImageAlt" class="image-preview-full" />
+    <div v-if="previewImageSrc" ref="imagePreviewOverlayEl" class="image-preview-overlay" @keydown.esc="previewImageSrc = ''">
+      <img ref="imagePreviewEl" :src="previewImageSrc" :alt="previewImageAlt" class="image-preview-full" />
       <button type="button" class="image-preview-close" aria-label="关闭预览" @click="previewImageSrc = ''">
         <X :size="18" :stroke-width="2" aria-hidden="true" />
       </button>
@@ -751,13 +809,37 @@
 <script setup lang="ts">
 import type { CoreAttachment, CoreMessage, MessagePart, ToolArtifact } from '../types'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type DirectiveBinding } from 'vue'
 import { gsap } from 'gsap'
-import { Check, Copy, GitFork, Hourglass, Info, Pencil, Undo2, X, type LucideIcon } from 'lucide-vue-next'
+import {
+  Brain,
+  Check,
+  CircleHelp,
+  Copy,
+  FilePenLine,
+  FileText,
+  Folder,
+  GitBranch,
+  GitFork,
+  Globe,
+  Hourglass,
+  Info,
+  Minimize2,
+  Pencil,
+  Search,
+  Terminal,
+  TriangleAlert,
+  Undo2,
+  Wrench,
+  X,
+  type LucideIcon,
+} from 'lucide-vue-next'
 import { assistantSegmentTurnId, projectAssistantMessageParts } from '../appServer'
 import { copyText } from '../helpers/clipboard'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 import AutoTextarea from './AutoTextarea.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import MessageAttachmentDeck from './MessageAttachmentDeck.vue'
 import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu'
 import type { ContextMenuEntry } from './context-menu/types'
 import MessageView from './MessageView.vue'
@@ -802,8 +884,8 @@ function flowTick(ts: number) {
   if (flowPos < 0) flowPos = 200
   for (const el of flowEls) el.style.backgroundPositionX = `${flowPos}%`
 }
-const vBeam = {
-  mounted(el: HTMLElement) {
+function mountFlowText(el: HTMLElement): void {
+    if (flowEls.has(el)) return
     // prefers-reduced-motion：不注入流光，标题保持静态（无动效回退）
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
     // 避免 color-mix（旧版 WebView2/Chromium<111 不支持），用 JS 算出主题文字色的 RGB
@@ -816,8 +898,9 @@ const vBeam = {
     el.style.backgroundPositionX = '200%'
     flowEls.add(el)
     if (flowEls.size === 1) flowRaf = requestAnimationFrame(flowTick)
-  },
-  unmounted(el: HTMLElement) {
+}
+
+function unmountFlowText(el: HTMLElement): void {
     el.classList.remove('flow-text')
     el.style.backgroundPositionX = ''
     el.style.removeProperty('--flow-r')
@@ -828,6 +911,18 @@ const vBeam = {
       cancelAnimationFrame(flowRaf)
       flowRaf = 0
     }
+}
+
+const vBeam = {
+  mounted(el: HTMLElement, binding: DirectiveBinding<boolean | undefined>) {
+    if (binding.value !== false) mountFlowText(el)
+  },
+  updated(el: HTMLElement, binding: DirectiveBinding<boolean | undefined>) {
+    if (binding.value === false) unmountFlowText(el)
+    else mountFlowText(el)
+  },
+  unmounted(el: HTMLElement) {
+    unmountFlowText(el)
   },
 }
 
@@ -997,6 +1092,9 @@ interface ChecklistItem {
 const toolExpandedIds = ref<Set<string>>(new Set())
 const toolWrapIds = ref<Set<string>>(new Set())
 const subLineProcessCollapsedIds = ref<Set<string>>(new Set())
+const fullyExpandedPartIds = ref<Set<string>>(new Set())
+const processTitleSnapshots = ref<Record<string, string>>({})
+let processTitleTimer: ReturnType<typeof setInterval> | null = null
 
 // v-memo dependency for a single part card. A stable part reference + stable
 // derived booleans lets Vue skip rebuilding that part's whole vnode subtree on
@@ -1006,6 +1104,8 @@ function partMemo(part: MessagePart, live: boolean): unknown[] {
   return [
     part,
     isPartExpanded(part, live),
+    fullyExpandedPartIds.value.has(part.id),
+    processTitleSnapshot(part),
     toolExpandedIds.value.has(part.id),
     toolWrapIds.value.has(part.id),
     subLineProcessCollapsedIds.value.has(part.id),
@@ -1029,23 +1129,36 @@ function isToolExpanded(partId: string): boolean {
 
 function togglePartExpand(part: MessagePart, live = false) {
   const partId = part.id
-  
-  // Clear any pending auto-collapse timer
-  const timer = partCompletionTimers.get(partId)
-  if (timer) { clearTimeout(timer); partCompletionTimers.delete(partId) }
+  cancelPartAutoCollapse(partId)
   
   // A click is an explicit user decision. Keep it separate from automatic
   // expansion so a completion timer can never close a manually opened part.
   if (isPartExpanded(part, live)) {
     userExpandedPartIds.value = new Set([...userExpandedPartIds.value].filter(id => id !== partId))
     userCollapsedPartIds.value = new Set([...userCollapsedPartIds.value, partId])
+    fullyExpandedPartIds.value = new Set([...fullyExpandedPartIds.value].filter(id => id !== partId))
   } else {
     userExpandedPartIds.value = new Set([...userExpandedPartIds.value, partId])
     userCollapsedPartIds.value = new Set([...userCollapsedPartIds.value].filter(id => id !== partId))
+    fullyExpandedPartIds.value = new Set([...fullyExpandedPartIds.value].filter(id => id !== partId))
   }
 }
 
+function promotePartCard(partId: string, event: MouseEvent) {
+  const target = event.target instanceof Element ? event.target : null
+  if (target?.closest('button, a, input, textarea, select, [role="button"]')) return
+  if (!userExpandedPartIds.value.has(partId) || fullyExpandedPartIds.value.has(partId)) return
+  fullyExpandedPartIds.value = new Set([...fullyExpandedPartIds.value, partId])
+}
+
+function processCardBodyStateClass(part: MessagePart, live = false): string {
+  return isPartExpanded(part, live) && fullyExpandedPartIds.value.has(part.id)
+    ? 'process-card-body--expanded'
+    : 'process-card-body--preview'
+}
+
 function toggleGroupExpand(groupId: string) {
+  cancelGroupAutoCollapse(groupId)
   const next = new Set(expandedGroupIds.value)
   if (next.has(groupId)) {
     next.delete(groupId)
@@ -1063,15 +1176,10 @@ function processGroupId(group: PartGroupProcessGroup): string {
   return group.parts.map(p => p.id).join('-')
 }
 
-function groupHasError(group: PartGroupProcessGroup): boolean {
-  return group.parts.some(p => p.status === 'error')
-}
-
 function isPartExpanded(part: MessagePart, live = false): boolean {
-  // All parts default collapsed; only expanded when explicitly toggled
   if (userCollapsedPartIds.value.has(part.id)) return false
   if (part.partType === 'error') return true // Errors always expanded
-  if (userExpandedPartIds.value.has(part.id) || autoExpandedPartIds.value.has(part.id)) return true
+  if (userExpandedPartIds.value.has(part.id)) return true
   if (isSubLinePart(part)) return false // Sub-agents collapsed by default
   
   // Reasoning, tool, status: collapsed by default unless toggled
@@ -1086,59 +1194,69 @@ function isPartExpanded(part: MessagePart, live = false): boolean {
   return false
 }
 
-// ── Auto expand/collapse state ──
-const autoExpandedPartIds = ref<Set<string>>(new Set())
+// ── Explicit expansion + pointer-leave auto-collapse ──
 const userExpandedPartIds = ref<Set<string>>(new Set())
 const userCollapsedPartIds = ref<Set<string>>(new Set())
 const expandedGroupIds = ref<Set<string>>(new Set())
 const partCompletionTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const groupCollapseTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function schedulePartAutoCollapse(partId: string) {
+  if (!userExpandedPartIds.value.has(partId)) return
   const existing = partCompletionTimers.get(partId)
   if (existing) clearTimeout(existing)
   const timer = setTimeout(() => {
-    autoExpandedPartIds.value = new Set(
-      [...autoExpandedPartIds.value].filter(id => id !== partId)
-    )
+    userExpandedPartIds.value = new Set([...userExpandedPartIds.value].filter(id => id !== partId))
+    userCollapsedPartIds.value = new Set([...userCollapsedPartIds.value, partId])
+    fullyExpandedPartIds.value = new Set([...fullyExpandedPartIds.value].filter(id => id !== partId))
     partCompletionTimers.delete(partId)
-  }, 1000)
+  }, 5000)
   partCompletionTimers.set(partId, timer)
 }
 
-// Watch parts for status changes to auto-expand/collapse (per message)
-watch(
-  () => {
-    const ids: string[] = []
-    for (const part of (props.msg.parts || [])) {
-      ids.push(`${part.id}:${part.status}`)
-    }
-    return ids.join('|')
-  },
-  () => {
-    // Only auto-expand/collapse for live streaming messages
-    if (!isLiveMessage(props.msg)) return
-    for (const part of (props.msg.parts || [])) {
-      // Sub-agent lines (sub_line/agent_summary) are included so their nested
-      // streaming content is visible while the sub-agent runs; without this
-      // they stay collapsed and the sub-agent output appears all at once.
-      if (part.partType === 'reasoning' || part.partType === 'tool_call' || part.partType === 'tool_result' || isSubLinePart(part)) {
-        if (part.status === 'running') {
-          // Running parts enter the set so they're visible during streaming
-          autoExpandedPartIds.value = new Set([...autoExpandedPartIds.value, part.id])
-          // Clear any collapse timer
-          const timer = partCompletionTimers.get(part.id)
-          if (timer) { clearTimeout(timer); partCompletionTimers.delete(part.id) }
-        } else if (part.status === 'completed') {
-          // Completed parts schedule auto-collapse
-          if (autoExpandedPartIds.value.has(part.id)) {
-            schedulePartAutoCollapse(part.id)
-          }
-        }
-      }
-    }
-  },
-  { immediate: true }
-)
+function cancelPartAutoCollapse(partId: string) {
+  const timer = partCompletionTimers.get(partId)
+  if (!timer) return
+  clearTimeout(timer)
+  partCompletionTimers.delete(partId)
+}
+
+function scheduleGroupAutoCollapse(groupId: string) {
+  if (!expandedGroupIds.value.has(groupId)) return
+  const existing = groupCollapseTimers.get(groupId)
+  if (existing) clearTimeout(existing)
+  const timer = setTimeout(() => {
+    expandedGroupIds.value = new Set([...expandedGroupIds.value].filter(id => id !== groupId))
+    groupCollapseTimers.delete(groupId)
+  }, 5000)
+  groupCollapseTimers.set(groupId, timer)
+}
+
+function cancelGroupAutoCollapse(groupId: string) {
+  const timer = groupCollapseTimers.get(groupId)
+  if (!timer) return
+  clearTimeout(timer)
+  groupCollapseTimers.delete(groupId)
+}
+
+function refreshProcessTitleSnapshots() {
+  const next: Record<string, string> = {}
+  for (const part of processParts(props.msg)) {
+    next[part.id] = buildProcessTitleSnapshot(part)
+  }
+  const current = processTitleSnapshots.value
+  const currentKeys = Object.keys(current)
+  const nextKeys = Object.keys(next)
+  const changed = currentKeys.length !== nextKeys.length
+    || nextKeys.some(key => current[key] !== next[key])
+  if (changed) processTitleSnapshots.value = next
+}
+
+function stopProcessTitleTimer() {
+  if (!processTitleTimer) return
+  clearInterval(processTitleTimer)
+  processTitleTimer = null
+}
 
 // ── Retry label for tool status ──
 function toolRetryLabel(part: MessagePart): string {
@@ -1249,18 +1367,10 @@ function attachmentFromPart(part: MessagePart): CoreAttachment | null {
   return raw as CoreAttachment
 }
 
-function attachmentName(part: MessagePart): string {
-  const attachment = attachmentFromPart(part)
-  return attachment?.label || attachment?.filename || part.label || 'attachment'
-}
-
-function attachmentKind(part: MessagePart): string {
-  const attachment = attachmentFromPart(part)
-  const previewType = String(attachment?.preview_type || '').toLowerCase()
-  if (previewType === 'image') return 'IMG'
-  if (previewType === 'pdf') return 'PDF'
-  if (previewType === 'text') return 'TXT'
-  return 'FILE'
+function messageAttachments(message: CoreMessage): CoreAttachment[] {
+  return attachmentParts(message)
+    .map(part => attachmentFromPart(part))
+    .filter((attachment): attachment is CoreAttachment => attachment !== null)
 }
 
 function toggleToolWrap(partId: string) {
@@ -1355,25 +1465,6 @@ function toolColorClass(part: MessagePart): string {
   if (name.includes('test') || name.includes('verify') || name.includes('check')) return 'tool-color--test'
   if (name.includes('delete') || name.includes('remove')) return 'tool-color--del'
   return 'tool-color--default'
-}
-
-function toolStatusLabel(part: MessagePart): string {
-  if (part.status === 'running') return '运行中'
-  if (part.status === 'error') return '失败'
-  if (part.status === 'pending') return '等待中'
-  return '已完成'
-}
-
-function processTitleWithState(part: MessagePart): string {
-  const title = readableProcessTitle(part)
-  if (part.status === 'running') return `正在${title}`
-  if (part.status === 'completed') return `已${title}`
-  return title
-}
-
-function shouldShowToolStatusSuffix(part: MessagePart): boolean {
-  if (toolRetryLabel(part)) return true
-  return part.status === 'error' || part.status === 'pending'
 }
 
 function processColorClass(part: MessagePart): string {
@@ -1541,6 +1632,16 @@ function assistantPartsProjection(msg: CoreMessage): ReturnType<typeof projectAs
 function processParts(msg: CoreMessage): MessagePart[] {
   return assistantPartsProjection(msg).processParts
 }
+
+watch(
+  () => isLiveMessage(props.msg),
+  (live) => {
+    refreshProcessTitleSnapshots()
+    stopProcessTitleTimer()
+    if (live) processTitleTimer = setInterval(refreshProcessTitleSnapshots, 2000)
+  },
+  { immediate: true },
+)
 
 function systemBubbleClass(msg: CoreMessage): string {
   const meta = (msg.metadata || {}) as Record<string, unknown>
@@ -1754,11 +1855,83 @@ async function copyAssistantMessage(msg: CoreMessage) {
 
 onBeforeUnmount(() => {
   if (copiedActionTimer) clearTimeout(copiedActionTimer)
-  // Pending auto-collapse timers must not fire on an unmounted instance
-  // (audit 21 S2 — module-level timer map had no teardown).
+  stopProcessTitleTimer()
   for (const timer of partCompletionTimers.values()) clearTimeout(timer)
   partCompletionTimers.clear()
+  for (const timer of groupCollapseTimers.values()) clearTimeout(timer)
+  groupCollapseTimers.clear()
 })
+
+function processGroupCurrentPart(group: PartGroupProcessGroup): MessagePart {
+  return [...group.parts].reverse().find(part => part.status === 'running')
+    || group.parts[group.parts.length - 1]
+}
+
+function processIcon(part: MessagePart): LucideIcon {
+  if (part.status === 'error') return TriangleAlert
+  if (part.status === 'pending') return Hourglass
+  if (part.partType === 'reasoning') return Brain
+  if (part.partType === 'compaction') return Minimize2
+  const name = String(part.toolName || part.label || '').toLowerCase()
+  if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return Terminal
+  if (/write|edit|patch|apply|create/.test(name)) return FilePenLine
+  if (/read|cat|get-content|open/.test(name)) return FileText
+  if (/list|ls|dir/.test(name)) return Folder
+  if (/grep|rg|search|find|glob/.test(name)) return Search
+  if (/fetch|browser|http|web/.test(name)) return Globe
+  if (/git|commit|branch/.test(name)) return GitBranch
+  if (/question|ask|decision/.test(name)) return CircleHelp
+  return Wrench
+}
+
+function processIconStateClass(part: MessagePart): string {
+  return `process-card-state-icon--${part.status || 'completed'}`
+}
+
+function processAccessibleLabel(part: MessagePart): string {
+  const state = part.status === 'running'
+    ? '运行中'
+    : part.status === 'error'
+      ? '失败'
+      : part.status === 'pending'
+        ? '等待中'
+        : '已完成'
+  const title = readableProcessTitle(part)
+  const snapshot = processTitleSnapshot(part)
+  return snapshot === title ? `${title}，${state}` : `${title}，${state}，${snapshot}`
+}
+
+function processTitleSnapshot(part: MessagePart): string {
+  return processTitleSnapshots.value[part.id] || buildProcessTitleSnapshot(part)
+}
+
+function buildProcessTitleSnapshot(part: MessagePart): string {
+  if (part.partType !== 'reasoning') return readableProcessTitle(part)
+  return latestSemanticUnit(processDynamicText(part)) || readableProcessTitle(part)
+}
+
+function processDynamicText(part: MessagePart): string {
+  if (part.partType === 'reasoning') return String(part.content || part.detail || '')
+  const input = String(part.inputPreview?.content || '')
+  const result = String(part.toolError || part.toolResult || part.content || part.detail || '')
+  if (isWriteTool(part) && input) return input
+  if (result) return result
+  if (input) return input
+  return processTarget(part) || readableProcessTitle(part)
+}
+
+function latestSemanticUnit(value: string): string {
+  const normalized = value.replace(/\r\n?/g, '\n').trim()
+  if (!normalized) return ''
+  const lines = normalized.split(/\n+/).map(line => line.trim()).filter(Boolean)
+  const lastLine = lines[lines.length - 1] || ''
+  const units = lastLine.match(/[^。！？!?；;…]+(?:[。！？!?；;…]+|$)/g) || [lastLine]
+  const tail = (units[units.length - 1] || lastLine)
+    .replace(/^(?:[-*+]\s+|\d+[.)]\s+)/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return tail || lastLine
+}
 
 function livePartTitle(part: MessagePart): string {
   if (part.label) return part.label
@@ -1825,6 +1998,7 @@ function readableProcessTitle(part: MessagePart): string {
 }
 
 function processActionTitle(name: string, target: string): string {
+  if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return target ? `运行 ${target}` : '运行命令'
   if (/read|cat|get-content|open/.test(name)) return target ? `读取 ${target}` : '读取文件'
   if (/list|ls|dir/.test(name)) return target ? `列出 ${target}` : '列出目录'
   if (/grep|rg|search|find|glob/.test(name)) return target ? `搜索 ${target}` : '搜索内容'
@@ -1839,7 +2013,7 @@ function readableToolTitle(name: string, target: string): string {
   if (/git/.test(name)) return name.includes('diff') ? '查看 git 差异' : '查看 git 状态'
   if (/question|ask/.test(name)) return '提问'
   if (/sub_agent|subagent/.test(name)) return target ? `委派子代理：${target}` : '委派子代理'
-  if (/skill/.test(name)) return target ? `加载技能 ${target}` : '加载技能'
+  if (/skill/.test(name)) return target ? `加载技能 · ${target}` : '加载技能'
   if (/goal/.test(name)) return '管理目标'
   if (/arrange/.test(name)) return '管理定时任务'
   if (/mcp/.test(name)) return '调用 MCP 工具'
@@ -1912,18 +2086,31 @@ function compactionDetail(part: MessagePart): string {
     ).trim()
     return failure ? `原上下文已保留 · ${compactDetail(failure, 180)}` : '原上下文已保留'
   }
-  if (status === 'running') return ''
   const before = rawPart.before_tokens ?? rawPart.beforeTokens ?? metadata.before_tokens ?? metadata.beforeTokens
   const after = rawPart.after_tokens ?? rawPart.afterTokens ?? metadata.after_tokens ?? metadata.afterTokens
+  const segment = rawPart.segment ?? metadata.segment
   const segments = rawPart.segments ?? metadata.segments
   const pieces: string[] = []
-  if (typeof before === 'number' && typeof after === 'number') {
-    pieces.push(`${before} → ${after} tokens`)
+  const beforeText = compactTokenCount(before)
+  const afterText = compactTokenCount(after)
+  if (beforeText && afterText && (status !== 'running' || beforeText !== afterText)) {
+    pieces.push(`${beforeText} 至 ${afterText}`)
   } else if (part.detail) {
     pieces.push(String(part.detail))
   }
-  if (typeof segments === 'number' && segments > 1) pieces.push(`${segments} 段`)
+  if (status === 'running' && typeof segment === 'number' && typeof segments === 'number' && segments > 0) {
+    pieces.push(`第 ${segment}/${segments} 段`)
+  } else if (typeof segments === 'number' && segments > 1) {
+    pieces.push(`${segments} 段`)
+  }
   return pieces.join(' · ')
+}
+
+function compactTokenCount(value: unknown): string {
+  const tokens = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(tokens) || tokens < 0) return ''
+  const compact = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(tokens / 1000)
+  return `${compact}k`
 }
 
 function compactionStatus(part: MessagePart): string {
@@ -2071,19 +2258,31 @@ function fileArtifact(part: MessagePart) {
 
 const IMAGE_URI_RE = /\.(png|jpe?g|webp|gif)$/i
 
+function isImageArtifact(
+  artifact: ToolArtifact,
+): artifact is ToolArtifact & { artifact_id?: string } {
+  return artifact.kind === 'image'
+    || (typeof artifact.uri === 'string' && IMAGE_URI_RE.test(artifact.uri))
+    || typeof artifact.metadata?.image_data_url === 'string'
+}
+
 function imageArtifacts(part: MessagePart): Array<ToolArtifact & { artifact_id?: string }> {
-  return (part.artifacts || []).filter(
-    (artifact): artifact is ToolArtifact & { artifact_id?: string } =>
-      artifact.kind === 'image'
-      || (typeof artifact.uri === 'string' && IMAGE_URI_RE.test(artifact.uri))
-      || typeof artifact.metadata?.image_data_url === 'string', // read_file 图片结果（base64 data URL）
-  )
+  return (part.artifacts || []).filter(isImageArtifact)
 }
 
 const artifactUrls = reactive<Record<string, string>>({})
 
 function artifactKey(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
   return String(artifact.artifact_id || artifact.uri || artifact.metadata?.image_data_url || '')
+}
+
+function compactionIconStateClass(part: MessagePart): string {
+  return `process-card-state-icon--${compactionStatus(part)}`
+}
+
+function compactionAccessibleLabel(part: MessagePart): string {
+  const detail = compactionDetail(part)
+  return detail ? `${compactionTitle(part)}，${detail}` : compactionTitle(part)
 }
 
 function artifactPath(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
@@ -2131,8 +2330,17 @@ function imageAlt(artifact: { name?: string; uri?: string }): string {
 
 const previewImageSrc = ref('')
 const previewImageAlt = ref('')
+const imagePreviewOverlayEl = ref<HTMLElement | null>(null)
+const imagePreviewEl = ref<HTMLElement | null>(null)
 
-/** 本轮（消息）所有 image artifact，含子代理 sub-line 递归收集（去重在 messageImages 内做）。 */
+useOutsidePointerDismiss({
+  overlay: imagePreviewOverlayEl,
+  card: imagePreviewEl,
+  isActive: () => Boolean(previewImageSrc.value),
+  onDismiss: () => { previewImageSrc.value = '' },
+})
+
+/** 本消息及子代理段内的全部图片，用于工具过程内联预览。 */
 function collectImageArtifacts(
   part: MessagePart,
   out: Array<ToolArtifact & { artifact_id?: string }>,
@@ -2151,13 +2359,17 @@ const artifactsPanelSuppressed = computed(() => {
   return props.suppressArtifactsPanel === true
 })
 
-const messageImages = computed<Array<ToolArtifact & { artifact_id?: string }>>(() => {
+const allMessageImages = computed<Array<ToolArtifact & { artifact_id?: string }>>(() => {
   const raw: Array<ToolArtifact & { artifact_id?: string }> = []
   for (const part of props.msg.parts || []) collectImageArtifacts(part, raw)
-  // 归一化键去重：artifact_id → uri → image_data_url（read_file base64）。
-  // 同一张图跨多个 part 只留一张；同一 uri 下优先保留带 artifact_id 的条目
-  // （id 是权威身份，uri 是弱身份，base64 内容兜底——旧实现只在「双方都无 id」
-  //  时按 uri 去重，read_file 图与 id/uri 不一致的同图会重复出现）。
+  return raw
+})
+
+const messageArtifacts = computed<Array<ToolArtifact & { artifact_id?: string }>>(() => {
+  const raw: Array<ToolArtifact & { artifact_id?: string }> = []
+  for (const part of props.msg.parts || []) collectOutputArtifacts(part, raw)
+  // 归一化键去重：artifact_id → uri → image_data_url；同一文件在多个 part
+  // 重复出现时只保留一项，同一 uri 优先保留带 artifact_id 的权威条目。
   const seen = new Map<string, ToolArtifact & { artifact_id?: string }>()
   for (const artifact of raw) {
     const idKey = artifact.artifact_id || ''
@@ -2203,7 +2415,22 @@ async function loadArtifactSource(artifact: { uri?: string; artifact_id?: string
   }
 }
 
-watch(messageImages, (items) => {
+function collectOutputArtifacts(
+  part: MessagePart,
+  out: Array<ToolArtifact & { artifact_id?: string }>,
+): void {
+  for (const artifact of part.artifacts || []) {
+    // 历史图片常以 file_read + image_data_url/图片 URI 持久化；它们仍是可见
+    // 图片产出。普通 file_read 继续排除，避免把上下文读取误算成本轮产出。
+    if (artifact.kind === 'file_change' || isImageArtifact(artifact)) out.push(artifact)
+  }
+  const subLineParts = (part.metadata as { subLineParts?: MessagePart[] } | undefined)?.subLineParts
+  if (Array.isArray(subLineParts)) {
+    for (const sub of subLineParts) collectOutputArtifacts(sub, out)
+  }
+}
+
+watch(allMessageImages, (items) => {
   for (const artifact of items) void loadArtifactSource(artifact)
 }, { immediate: true })
 
@@ -2413,12 +2640,6 @@ function agentStatusLabel(part: MessagePart): string {
   if (part.status === 'error') return '失败'
   if (part.status === 'pending') return '等待'
   return '完成'
-}
-
-function reasoningTitle(status: string): string {
-  if (status === 'running') return '思考中'
-  if (status === 'completed') return '已思考'
-  return '思考'
 }
 
 function agentDeliveryMeta(part: MessagePart): string[] {
@@ -2925,6 +3146,11 @@ function submitDecisionGuide(part: MessagePart): void {
 
 function processTarget(part: MessagePart): string {
   const args = part.toolArgs || {}
+  const toolName = String(part.toolName || part.label || '').toLowerCase()
+  if (/skill/.test(toolName)) {
+    const skillName = args.name || args.skill || args.skill_name
+    if (skillName) return String(skillName).trim()
+  }
   const raw = args.path || args.file || args.file_path || args.cwd || args.query || args.pattern || args.url
   if (raw) return compactPath(String(raw))
   const command = args.command || args.cmd
@@ -3059,13 +3285,7 @@ function compactGroups(groups: PartGroup[]): PartGroup[] {
     if (g.kind === 'process') {
       const pt = g.part.partType
       if (pt === 'reasoning') {
-        // Thinking always renders as its own expandable toggle — never bury it
-        // inside a collapsed process-group. The group merge only happens once
-        // the following tool part arrives (compactGroups runs on the final
-        // parts), so a reloaded snapshot would otherwise show thinking that
-        // was visible while streaming disappear into a "思考了一会" summary.
-        flush()
-        result.push(g)
+        batch.push(g.part)
       } else if (pt === 'tool_call' || pt === 'tool_result') {
         if (isControlTool(g.part)) {
           flush()
@@ -3140,65 +3360,8 @@ function processSummary(msg: CoreMessage): ProcessCounts {
 function processMetricSegments(msg: CoreMessage): string[] {
   const meta = (msg.metadata || {}) as Record<string, unknown>
   const metrics = ((meta.processMetrics || meta.runtime_metrics || {}) as Record<string, unknown>) || {}
-  const durationMs = numberMetric(metrics.duration_ms ?? metrics.durationMs)
-  const inputTokens = numberMetric(metrics.input_tokens ?? metrics.inputTokens ?? metrics.prompt_tokens ?? metrics.promptTokens)
-  const outputTokens = numberMetric(metrics.output_tokens ?? metrics.outputTokens ?? metrics.completion_tokens ?? metrics.completionTokens)
-  const totalTokens = numberMetric(metrics.total_tokens ?? metrics.totalTokens) >= 0
-    ? numberMetric(metrics.total_tokens ?? metrics.totalTokens)
-    : inputTokens >= 0 || outputTokens >= 0
-      ? Math.max(inputTokens, 0) + Math.max(outputTokens, 0)
-      : -1
-  const llmCalls = numberMetric(metrics.llm_calls ?? metrics.llmCalls ?? metrics.model_calls ?? metrics.modelCalls)
-  const cacheHitRate = cacheHitRateMetric(metrics, inputTokens)
-  const segments: string[] = []
-  if (llmCalls >= 0) segments.push(`模型调用 ${formatCount(llmCalls)} 次`)
-  if (durationMs >= 0) segments.push(`耗时 ${formatSeconds(durationMs)} s`)
-  if (totalTokens >= 0) segments.push(`Token ${formatCount(totalTokens)}`)
-  if (cacheHitRate >= 0) segments.push(`命中率 ${formatPercent(cacheHitRate)}`)
-  return segments.length > 0 ? segments : processFallbackSegments(msg)
-}
-
-// Cache-hit rate for the message's token usage. Prefers the backend-computed
-// rate; otherwise derives hit / input from whatever cache count the usage
-// carries (OpenAI cached_tokens, Anthropic cache_read_input_tokens, DeepSeek
-// prompt_cache_hit_tokens, nested prompt_tokens_details, ...). Returns -1
-// when there is NO cache information at all — the caller hides the segment
-// instead of printing a misleading "命中率 0%".
-function cacheHitRateMetric(metrics: Record<string, unknown>, inputTokens: number): number {
-  const direct = numberMetric(metrics.cache_hit_rate ?? metrics.cacheHitRate)
-  if (direct >= 0) return direct
-  const cachedTokens = cacheReadTokens(metrics)
-  if (cachedTokens >= 0 && inputTokens > 0) return cachedTokens / inputTokens
-  return -1
-}
-
-function cacheReadTokens(metrics: Record<string, unknown>): number {
-  const nested = metrics.prompt_tokens_details && typeof metrics.prompt_tokens_details === 'object'
-    && !Array.isArray(metrics.prompt_tokens_details)
-    ? metrics.prompt_tokens_details as Record<string, unknown>
-    : metrics.input_tokens_details && typeof metrics.input_tokens_details === 'object'
-      && !Array.isArray(metrics.input_tokens_details)
-      ? metrics.input_tokens_details as Record<string, unknown>
-      : undefined
-  if (nested) {
-    const nestedCount = firstMetric(nested.cached_tokens, nested.prompt_cache_hit_tokens, nested.cache_read_input_tokens)
-    if (nestedCount >= 0) return nestedCount
-  }
-  return firstMetric(
-    metrics.cached_tokens,
-    metrics.cachedTokens,
-    metrics.prompt_cache_hit_tokens,
-    metrics.cache_read_input_tokens,
-    metrics.cache_read_tokens,
-  )
-}
-
-function firstMetric(...values: unknown[]): number {
-  for (const value of values) {
-    const metric = numberMetric(value)
-    if (metric >= 0) return metric
-  }
-  return -1
+  const durationMs = numberMetric(meta.duration_ms ?? metrics.duration_ms ?? metrics.durationMs)
+  return [durationMs >= 0 ? `耗时 ${formatSeconds(durationMs)} s` : '耗时 —']
 }
 
 function numberMetric(value: unknown): number {
@@ -3214,62 +3377,6 @@ function formatSeconds(ms: number): string {
   if (ms < 0) return 'X'
   if (ms === 0) return '0'
   return String(Math.max(1, Math.round(ms / 1000)))
-}
-
-function formatCount(value: number): string {
-  return value >= 0 ? String(Math.round(value)) : 'X'
-}
-
-function formatPercent(value: number): string {
-  if (value < 0) return 'X'
-  const normalized = value > 1 ? value : value * 100
-  if (!Number.isFinite(normalized)) return 'X'
-  return `${Math.round(normalized)}%`
-}
-
-function processFallbackSegments(msg: CoreMessage): string[] {
-  const counts = processItemCounts(processParts(msg))
-  const segments: string[] = []
-  if (counts.toolCalls > 0) segments.push(`${counts.toolCalls} 个工具`)
-  if (counts.reasoning > 0) segments.push(`${counts.reasoning} 段思考`)
-  if (counts.context > 0) segments.push(`${counts.context} 次上下文`)
-  if (counts.compaction > 0) segments.push(`${counts.compaction} 次压缩`)
-  if (counts.failed > 0) segments.push(`${counts.failed} 个失败`)
-  if (segments.length > 0) return segments
-  return [`${counts.total} 个过程`]
-}
-
-function processItemCounts(parts: MessagePart[]): {
-  total: number
-  toolCalls: number
-  reasoning: number
-  context: number
-  compaction: number
-  failed: number
-} {
-  let total = 0
-  let toolCalls = 0
-  let reasoning = 0
-  let context = 0
-  let compaction = 0
-  let failed = 0
-
-  for (const part of parts) {
-    if (part.partType === 'text' || !part.partType) continue
-    total++
-    if (part.status === 'error') failed++
-    const name = part.toolName || ''
-    if (CONTEXT_TOOLS.has(name)) {
-      context++
-    } else if (part.partType === 'compaction') {
-      compaction++
-    } else if (part.partType === 'reasoning') {
-      reasoning++
-    } else if (part.partType === 'tool_call' || part.partType === 'tool_result') {
-      toolCalls++
-    }
-  }
-  return { total, toolCalls, reasoning, context, compaction, failed }
 }
 
 function processBarStatus(msg: CoreMessage): string {
@@ -3312,24 +3419,7 @@ function formatContextSummary(c: ContextCounts): string {
 </script>
 
 <style>
-/* Generated image artifact cards inside tool outputs + fullscreen preview. */
-.message-artifacts {
-  margin-top: 12px;
-  border-top: 1px dashed color-mix(in srgb, var(--theme-main-text, #f2efeb) 22%, transparent);
-  padding-top: 4px;
-}
-
-.message-artifacts-head {
-  font-size: 11px;
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 56%, transparent);
-  padding: 6px 10px 0;
-  opacity: .8;
-}
-
-.message-artifacts .tool-image-row {
-  padding-bottom: 4px;
-}
-
+/* Generated image cards inside process details + fullscreen preview. */
 .tool-image-row {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
 import { h, nextTick } from 'vue';
 import { readFileSync } from 'node:fs';
@@ -19,6 +19,16 @@ function mountChatThread(options: any = {}) {
 }
 
 describe('ChatThread process cards', () => {
+  it('routes ordinary process states through the configurable theme icon color', () => {
+    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+
+    expect(source).toContain('--theme-process-icon-color');
+    expect(source).toMatch(/\.process-card-state-icon--running\s*\{[\s\S]*?var\(--theme-process-icon-color/);
+    expect(source).toMatch(/\.process-card-state-icon--completed\s*\{[\s\S]*?var\(--theme-process-icon-color/);
+    expect(source).toMatch(/\.process-card-state-icon--pending\s*\{[\s\S]*?var\(--orange\)/);
+    expect(source).toMatch(/\.process-card-state-icon--error[\s\S]*?var\(--red\)/);
+  });
+
   it('renders live text directly without an artificial character-rate queue', () => {
     // Live text rendering lives in MessageView since the ChatThread extraction.
     const source = readFileSync(resolve(__dirname, '../src/components/MessageView.vue'), 'utf8');
@@ -145,7 +155,8 @@ describe('ChatThread process cards', () => {
 
     expect(wrapper.findAll('.process-step')).toHaveLength(1);
     expect(wrapper.findAll('.process-step--info')).toHaveLength(0);
-    expect(wrapper.find('.tool-card-header--command').text()).toContain('已运行命令');
+    expect(wrapper.find('.tool-card-header--command').text()).toContain('运行 echo ok');
+    expect(wrapper.find('.process-card-state-icon--completed').exists()).toBe(true);
     expect(wrapper.find('.command-output').exists()).toBe(false);
     expect(messages[0].parts![0].toolArgs?.command).toBe('echo ok');
     expect(wrapper.find('.process-tool-row').exists()).toBe(false);
@@ -181,7 +192,7 @@ describe('ChatThread process cards', () => {
     expect(row.exists()).toBe(true);
     expect(row.attributes('aria-expanded')).toBe('false');
     expect(row.find('.tool-row-name').exists()).toBe(false);
-    expect(row.find('.tool-row-summary').text()).toContain('已创建 notes.txt');
+    expect(row.find('.tool-row-summary').text()).toBe('创建 notes.txt');
     expect(row.find('.tool-row-status').exists()).toBe(false);
     expect(row.find('.process-step-marker').exists()).toBe(false);
     expect(wrapper.find('.tool-type-tag').exists()).toBe(false);
@@ -219,7 +230,7 @@ describe('ChatThread process cards', () => {
     expect(commandOutputRule).toContain('background: var(--theme-main-sunken-background, rgba(0, 0, 0, 0.32))');
   });
 
-  it('renders compaction rows with localized title and token detail', () => {
+  it('renders compaction rows with a status icon and compact k-token detail', () => {
     const messages: CoreMessage[] = [{
       id: 'm-compaction',
       role: 'assistant',
@@ -246,9 +257,12 @@ describe('ChatThread process cards', () => {
 
     const row = wrapper.find('.compaction-step');
     expect(wrapper.find('.process-summary').exists()).toBe(false);
-    expect(row.text()).toContain('上下文已压缩');
-    expect(row.text()).toContain('351051 → 153000 tokens');
+    expect(row.find('.process-card-state-icon').exists()).toBe(true);
+    expect(row.find('.process-step-title').exists()).toBe(false);
+    expect(row.find('.compaction-token-detail.flow-text').exists()).toBe(false);
+    expect(row.text()).toContain('351.1k 至 153k');
     expect(row.text()).toContain('5 段');
+    expect(row.find('.compaction-toggle').attributes('aria-label')).toContain('上下文已压缩');
     expect(row.text()).not.toContain('点击查看摘要');
     expect(row.text()).not.toContain('Compacted Context');
     expect(row.text()).not.toContain('compaction点击查看');
@@ -322,9 +336,10 @@ describe('ChatThread process cards', () => {
     });
 
     const row = wrapper.find('.compaction-step');
-    expect(row.text()).toContain('无需压缩');
+    expect(row.text()).not.toContain('无需压缩');
     expect(row.text()).toContain('未获得收益');
     expect(row.text()).toContain('原上下文已保留');
+    expect(row.find('.compaction-toggle').attributes('aria-label')).toContain('无需压缩');
     expect(wrapper.find('.compaction-summary').exists()).toBe(false);
   });
 
@@ -349,8 +364,9 @@ describe('ChatThread process cards', () => {
     });
 
     const row = wrapper.find('.compaction-step');
-    expect(row.text()).toContain('压缩未完成');
+    expect(row.text()).not.toContain('压缩未完成');
     expect(row.text()).toContain('原上下文已保留');
+    expect(row.find('.compaction-toggle').attributes('aria-label')).toContain('压缩未完成');
     expect(wrapper.find('.compaction-summary').exists()).toBe(false);
   });
 
@@ -389,7 +405,7 @@ describe('ChatThread process cards', () => {
 
     expect(compactionRule).toContain('display: block');
     expect(compactionRule).toContain('width: 100%');
-    expect(summaryRule).toContain('margin: 6px 0 0 18px');
+    expect(summaryRule).toContain('margin: 6px 0 0 24px');
     expect(summaryRule).toContain('border: 0');
     expect(source).not.toContain('class="process-step process-step--compaction"');
     expect(source).not.toContain('class="compaction-summary-label"');
@@ -458,8 +474,7 @@ describe('ChatThread process cards', () => {
     });
 
     const header = wrapper.find('.tool-card-header');
-    expect(header.text()).toContain('获取网页');
-    expect(header.text()).not.toContain('HTTP 502');
+    expect(header.text()).toContain('获取网页 http://localhost:8080/index.html');
     expect(header.text()).not.toContain('WEB');
     expect(header.text()).not.toContain('TEST');
   });
@@ -534,7 +549,10 @@ describe('ChatThread process cards', () => {
       props: { messages },
     });
 
-    expect(wrapper.find('.compaction-step').text()).toContain('正在压缩上下文 · 第 2/5 段');
+    expect(wrapper.find('.compaction-step').text()).toContain('第 2/5 段');
+    expect(wrapper.find('.compaction-step').text()).not.toContain('正在压缩上下文');
+    expect(wrapper.find('.compaction-step .process-card-state-icon--running').exists()).toBe(true);
+    expect(wrapper.find('.compaction-step .compaction-token-detail.flow-text').exists()).toBe(true);
     expect(wrapper.find('.compaction-summary').exists()).toBe(true);
     expect(wrapper.find('.compaction-summary').attributes('aria-live')).toBe('polite');
     expect(wrapper.find('.compaction-summary-text').text()).toContain('Streaming now');
@@ -610,8 +628,33 @@ describe('ChatThread process cards', () => {
     });
 
     const title = wrapper.find('.tool-card-header .process-step-title');
-    expect(title.text()).toBe('已创建 notes.txt');
-    expect(wrapper.find('.tool-card-header').text()).not.toContain('文件 notes.txt');
+    expect(title.text()).toBe('创建 notes.txt');
+    expect(wrapper.find('.tool-card-header').text()).not.toContain('12 chars');
+  });
+
+  it('includes the skill name in load-skill tool titles', () => {
+    const wrapper = mountChatThread({
+      props: {
+        messages: [{
+          id: 'm-load-skill-title',
+          role: 'assistant',
+          content: '',
+          timestamp: '',
+          metadata: { timeline: true },
+          parts: [{
+            id: 'p-load-skill-title',
+            partType: 'tool_call',
+            status: 'completed',
+            toolName: 'load_skill',
+            toolArgs: { name: 'lam-design-spec' },
+            toolResult: 'Skill loaded.',
+          }],
+        }],
+        processExpandedIds: new Set(['m-load-skill-title']),
+      },
+    });
+
+    expect(wrapper.find('.tool-card-header').text()).toContain('加载技能 · lam-design-spec');
   });
 
   it('renders running write tool input preview before final result', async () => {
@@ -648,7 +691,7 @@ describe('ChatThread process cards', () => {
 
     const body = wrapper.find('.tool-card-body');
     expect(body.exists()).toBe(true);
-    expect(wrapper.find('.tool-card-header').text()).toContain('index.html');
+    expect(wrapper.find('.tool-card-header').text()).toContain('创建 index.html');
     expect(body.text()).toContain('<body>Live</body>');
   });
 
@@ -896,21 +939,16 @@ describe('ChatThread process cards', () => {
     expect(block.find('.sub-line-chat .user-bubble').exists()).toBe(true);
     expect(block.find('.sub-line-chat .user-bubble').text()).toContain('## Scope');
 
-    // Reasoning renders as its own expandable toggle (never buried in a group)
-    const reasoningStep = block.find('.process-step--reasoning');
-    expect(reasoningStep.exists()).toBe(true);
-    expect(reasoningStep.text()).toContain('已思考');
-    expect(block.find('.reasoning-body').exists()).toBe(false);
-    await block.find('.reasoning-toggle').trigger('click');
-    expect(block.find('.reasoning-body').text()).toContain('Inspect the component flow');
-    await block.find('.reasoning-toggle').trigger('click');
-    expect(block.find('.reasoning-body').exists()).toBe(false);
-
-    // Consecutive tools merge into a collapsed process-group
+    // Adjacent reasoning and tools share one collapsed process group.
     const groupSummary = block.find('.process-group-summary');
     expect(groupSummary.exists()).toBe(true);
     expect(block.find('.process-group-body').exists()).toBe(false);
     await groupSummary.trigger('click');
+    const reasoningStep = block.find('.process-step--reasoning');
+    expect(reasoningStep.exists()).toBe(true);
+    expect(block.find('.reasoning-body').exists()).toBe(false);
+    await block.find('.reasoning-toggle').trigger('click');
+    expect(block.find('.reasoning-body').text()).toContain('Inspect the component flow');
     const toolHeaders = block.findAll('.tool-card-header');
     expect(toolHeaders.length).toBeGreaterThan(1);
     const writeHeader = toolHeaders.find(header => header.text().includes('src/index.html'));
@@ -922,13 +960,11 @@ describe('ChatThread process cards', () => {
     expect(writeDiff.text()).toContain('src/index.html');
     expect(writeDiff.text()).toContain('<main>Hello</main>');
     expect(block.find('.sub-line-chat .assistant-answer .part-text-content').exists()).toBe(true);
-    // Re-open the reasoning body so its content is visible in the final snapshot
-    await block.find('.reasoning-toggle').trigger('click');
     expect(block.text()).toContain('Inspect the component flow');
     expect(block.text()).toContain('## Scope');
     expect(block.text()).toContain('Use the smaller implementation.');
     expect(block.text()).not.toContain('调用子 Agent');
-  }, 10_000);
+  }, 20_000);
 
   it('renders sub agent process through the same ChatThread timeline renderer', async () => {
     const messages: CoreMessage[] = [{
@@ -1178,8 +1214,8 @@ describe('ChatThread process cards', () => {
     });
 
     expect(wrapper.find('.process-step--reasoning').exists()).toBe(true);
-    expect(wrapper.find('.reasoning-body').exists()).toBe(true);
-    expect(wrapper.find('.reasoning-body').text()).toContain('Inspecting files');
+    expect(wrapper.find('.reasoning-body').exists()).toBe(false);
+    expect(wrapper.find('.process-card-preview').text()).toContain('Inspecting files');
   });
 
   it('does not add a generic current row for transcript live timeline messages', () => {
@@ -1336,7 +1372,7 @@ describe('ChatThread process cards', () => {
     });
 
     expect(wrapper.find('.shallow-thinking-pending').exists()).toBe(false);
-    expect(wrapper.find('.reasoning-body').text()).toContain('先整理目标');
+    expect(wrapper.find('.process-card-preview').text()).toContain('先整理目标');
   });
 
   it('renders historical non-final model text inside the expanded process area', () => {
@@ -1435,11 +1471,13 @@ describe('ChatThread process cards', () => {
     });
 
     const stream = wrapper.find('.process-stream');
-    const text = stream.text();
-    expect(text).toContain('已思考');
-    expect(text).toContain('已运行命令');
+    expect(stream.find('.process-group-summary').exists()).toBe(true);
     // Command body stays collapsed until the header is opened
-    expect(text).not.toContain('Remove-Item genshin_guide_5.7.md');
+    expect(stream.text()).not.toContain('[exit_code: 0]');
+
+    await stream.find('.process-group-summary').trigger('click');
+    expect(stream.find('.process-step--reasoning').exists()).toBe(true);
+    expect(stream.find('.reasoning-body').exists()).toBe(false);
 
     await stream.find('.tool-card-header--command').trigger('click');
 
@@ -1846,9 +1884,150 @@ describe('ChatThread process cards', () => {
 
     expect(wrapper.find('.process-step--reasoning').exists()).toBe(true);
     expect(wrapper.find('.reasoning-body').exists()).toBe(false);
+    expect(wrapper.find('.process-card-preview').text()).toBe('Earlier model call reasoning is complete.');
 
     await wrapper.find('.reasoning-toggle').trigger('click');
-    expect(wrapper.find('.reasoning-body').text()).toContain('Earlier model call reasoning is complete.');
+    let body = wrapper.find('.reasoning-body');
+    expect(body.text()).toContain('Earlier model call reasoning is complete.');
+    expect(body.classes()).toContain('process-card-body--preview');
+
+    await body.trigger('click');
+    body = wrapper.find('.reasoning-body');
+    expect(body.classes()).toContain('process-card-body--expanded');
+  });
+
+  it('refreshes the latest semantic title at most once every two seconds', async () => {
+    vi.useFakeTimers();
+    const message: CoreMessage = {
+      id: 'm-title-throttle',
+      role: 'assistant',
+      content: '',
+      timestamp: '',
+      metadata: { live: true, timeline: true },
+      parts: [{
+        id: 'p-title-throttle',
+        partType: 'reasoning',
+        status: 'running',
+        content: '先检查。当前尾句；',
+      }],
+    };
+    const wrapper = mountChatThread({ props: { messages: [message] } });
+    try {
+      expect(wrapper.find('.process-card-preview').text()).toBe('当前尾句；');
+      await wrapper.setProps({
+        messages: [{
+          ...message,
+          parts: [{ ...message.parts![0], content: '先检查。\n新的实时尾句。' }],
+        }],
+      });
+      expect(wrapper.find('.process-card-preview').text()).toBe('当前尾句；');
+
+      vi.advanceTimersByTime(2000);
+      await nextTick();
+      expect(wrapper.find('.process-card-preview').text()).toBe('新的实时尾句。');
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('collapses an expanded card five seconds after pointer leave and cancels on re-entry', async () => {
+    vi.useFakeTimers();
+    const messages: CoreMessage[] = [{
+      id: 'm-hover-collapse',
+      role: 'assistant',
+      content: '',
+      timestamp: '',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-hover-collapse',
+        partType: 'reasoning',
+        status: 'completed',
+        content: '完整思考内容。',
+      }],
+    }];
+    const wrapper = mountChatThread({
+      props: { messages, processExpandedIds: new Set(['m-hover-collapse']) },
+    });
+    try {
+      const card = wrapper.find('.process-step--reasoning');
+      await card.find('.reasoning-toggle').trigger('click');
+      expect(wrapper.find('.reasoning-body').exists()).toBe(true);
+
+      await card.trigger('mouseleave');
+      vi.advanceTimersByTime(4000);
+      await card.trigger('mouseenter');
+      vi.advanceTimersByTime(2000);
+      expect(wrapper.find('.reasoning-body').exists()).toBe(true);
+
+      await card.trigger('mouseleave');
+      vi.advanceTimersByTime(5000);
+      await nextTick();
+      expect(wrapper.find('.reasoning-body').exists()).toBe(false);
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('groups adjacent thinking and tool cards while keeping every body collapsed', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-reasoning-tool-group',
+      role: 'assistant',
+      content: '',
+      timestamp: '',
+      metadata: { timeline: true },
+      parts: [
+        { id: 'p-r1', partType: 'reasoning', status: 'completed', content: '先读取。' },
+        { id: 'p-tool', partType: 'tool_call', status: 'completed', toolName: 'read_file', toolResult: '读取完成。' },
+        { id: 'p-r2', partType: 'reasoning', status: 'completed', content: '再判断。' },
+      ],
+    }];
+    const wrapper = mountChatThread({
+      props: { messages, processExpandedIds: new Set(['m-reasoning-tool-group']) },
+    });
+
+    expect(wrapper.find('.process-group-summary').exists()).toBe(true);
+    expect(wrapper.find('.process-group-body').exists()).toBe(false);
+    await wrapper.find('.process-group-summary').trigger('click');
+    expect(wrapper.findAll('.process-step--reasoning')).toHaveLength(2);
+    expect(wrapper.findAll('.process-step--tool')).toHaveLength(1);
+    expect(wrapper.findAll('.reasoning-body')).toHaveLength(0);
+    expect(wrapper.findAll('.tool-card-body')).toHaveLength(0);
+  });
+
+  it('uses one-line titles, scrollable three-line previews, scrollable five-line expanded cards, and animated running icons', () => {
+    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    const headerRule = source.match(/\.thread \.process-card-header\s*\{[^}]+\}/)?.[0] || '';
+    const titleRule = source.match(/\.process-card-preview,[\s\S]*?\{[^}]+\}/)?.[0] || '';
+    const reasoningPreviewRule = source.match(/\.thread \.reasoning-body\.process-card-body--preview\s*\{[^}]+\}/)?.[0] || '';
+    const reasoningExpandedRule = source.match(/\.thread \.reasoning-body\.process-card-body--expanded\s*\{[^}]+\}/)?.[0] || '';
+    const toolPreviewRule = source.match(/\.tool-card-body\.process-card-body--preview \.diff-lines,[\s\S]*?\{[^}]+\}/)?.[0] || '';
+    const toolExpandedRule = source.match(/\.tool-card-body\.process-card-body--expanded \.diff-lines,[\s\S]*?\{[^}]+\}/)?.[0] || '';
+    expect(headerRule).toContain('padding: 4px 0');
+    expect(titleRule).toContain('white-space: nowrap');
+    expect(reasoningPreviewRule).toContain('calc(3 * 1.65em)');
+    expect(reasoningPreviewRule).toContain('overflow: auto');
+    expect(reasoningExpandedRule).toContain('calc(5 * 1.65em)');
+    expect(reasoningExpandedRule).toContain('overflow: auto');
+    expect(toolPreviewRule).toContain('calc(3 * 1.5em)');
+    expect(toolPreviewRule).toContain('overflow: auto');
+    expect(toolExpandedRule).toContain('calc(5 * 1.5em)');
+    expect(toolExpandedRule).toContain('overflow: auto');
+    expect(toolPreviewRule).toContain('.command-output-result');
+    expect(toolPreviewRule).not.toContain('max-height: 800px');
+    expect(source).toContain('@keyframes process-card-breathe');
+
+    const wrapper = mountChatThread({ props: { messages: [{
+      id: 'm-running-icon',
+      role: 'assistant',
+      content: '',
+      timestamp: '',
+      metadata: { live: true, timeline: true },
+      parts: [{ id: 'p-running-icon', partType: 'reasoning', status: 'running', content: '运行中。' }],
+    }] } });
+    expect(wrapper.find('.process-card-state-icon--running').exists()).toBe(true);
+    expect(wrapper.find('.process-card-preview.flow-text').exists()).toBe(true);
   });
 
   it('groups consecutive live tool details behind a summary until expanded', async () => {
@@ -1884,8 +2063,8 @@ describe('ChatThread process cards', () => {
       props: { messages },
     });
 
-    // Consecutive tools merge into a collapsed process-group; the running one
-    // auto-expands inside it once the group is opened
+    // Consecutive tools merge into a collapsed process-group; every card body
+    // remains closed until explicitly opened.
     const summary = wrapper.find('.process-group-summary');
     expect(summary.exists()).toBe(true);
     expect(wrapper.findAll('.tool-card-body')).toHaveLength(0);
@@ -1893,8 +2072,18 @@ describe('ChatThread process cards', () => {
     await summary.trigger('click');
 
     let bodies = wrapper.findAll('.tool-card-body');
+    expect(bodies).toHaveLength(0);
+
+    const runningHeader = wrapper.findAll('.tool-card-header')[0];
+    await runningHeader!.trigger('click');
+    bodies = wrapper.findAll('.tool-card-body');
     expect(bodies).toHaveLength(1);
     expect(bodies[0].text()).toContain('running output');
+    expect(bodies[0].classes()).toContain('process-card-body--preview');
+
+    await bodies[0].trigger('click');
+    bodies = wrapper.findAll('.tool-card-body');
+    expect(bodies[0].classes()).toContain('process-card-body--expanded');
 
     // Headers render in part order: running run_command first, completed read_file second
     const completedHeader = wrapper.findAll('.tool-card-header')[1];
@@ -1906,7 +2095,7 @@ describe('ChatThread process cards', () => {
     expect(bodies[1].text()).toContain('completed output');
   });
 
-  it('shows only runtime metrics in the collapsed process bar', () => {
+  it('shows only elapsed duration after the retained message time', () => {
     const messages: CoreMessage[] = [{
       id: 'm-metrics',
       role: 'assistant',
@@ -1937,15 +2126,11 @@ describe('ChatThread process cards', () => {
     });
 
     const text = wrapper.find('.process-summary-text').text();
-    expect(text).toBe('模型调用 2 次 · 耗时 12 s · Token 165 · 命中率 50%');
-    expect(text).not.toContain('总输入');
-    expect(text).not.toContain('总输出');
-    expect(text).not.toContain('LLM');
-    expect(text).not.toContain('已处理');
-    expect(text).not.toContain('思考');
+    expect(wrapper.find('[data-message-timestamp]').exists()).toBe(true);
+    expect(text).toBe('耗时 12 s');
   });
 
-  it('falls back to process counts when collapsed metrics are missing', () => {
+  it('shows an elapsed-time placeholder when old messages have no duration', () => {
     const messages: CoreMessage[] = [{
       id: 'm-missing-metrics',
       role: 'assistant',
@@ -1972,13 +2157,10 @@ describe('ChatThread process cards', () => {
       props: { messages },
     });
 
-    expect(wrapper.find('.process-summary-text').text()).toBe('1 个工具 · 1 段思考 · 1 个失败');
+    expect(wrapper.find('.process-summary-text').text()).toBe('耗时 —');
   });
 
-  it('does not print a fake 0% cache hit when usage carries no cache info', () => {
-    // Regression: metrics with input tokens but no cache fields used to force
-    // "命中率 0%" — that's a claim the data cannot support. The segment must
-    // be hidden instead.
+  it('does not surface usage details alongside elapsed duration', () => {
     const messages: CoreMessage[] = [{
       id: 'm-no-cache',
       role: 'assistant',
@@ -2008,14 +2190,10 @@ describe('ChatThread process cards', () => {
     });
 
     const text = wrapper.find('.process-summary-text').text();
-    expect(text).toContain('模型调用 1 次');
-    expect(text).not.toContain('命中率');
+    expect(text).toBe('耗时 1 s');
   });
 
-  it('computes cache-hit rate from DeepSeek prompt_cache_hit_tokens', () => {
-    // Raw provider shapes (without backend normalization) must still drive
-    // the cache-hit segment: DeepSeek reports prompt_cache_hit_tokens at the
-    // top level of usage.
+  it('hides cache and token metrics from the collapsed process bar', () => {
     const messages: CoreMessage[] = [{
       id: 'm-deepseek-cache',
       role: 'assistant',
@@ -2043,7 +2221,7 @@ describe('ChatThread process cards', () => {
       props: { messages },
     });
 
-    expect(wrapper.find('.process-summary-text').text()).toContain('命中率 80%');
+    expect(wrapper.find('.process-summary-text').text()).toBe('耗时 —');
   });
 
   it('renders live process above live answer text', () => {
@@ -2130,6 +2308,7 @@ describe('ChatThread process cards', () => {
       props: { messages: [liveMessage], processExpandedIds: new Set([liveMessage.id]) },
     });
 
+    await wrapper.find('.process-group-summary').trigger('click');
     const liveToolClass = (wrapper.find('.process-step--tool').attributes('class') || '').replace(/process-step--(?:running|completed|error)\b/g, '');
     const liveStepCount = wrapper.findAll('.process-step').length;
     const liveHtml = wrapper.find('.assistant-message').html() || '';

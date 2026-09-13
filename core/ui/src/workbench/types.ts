@@ -77,6 +77,8 @@ export interface WorkbenchRuntime {
   processExpandedIds: Ref<Set<string>>
   toggleProcess(id: string): void
   hasMoreHistory: Ref<boolean>
+  /** True while at least one complete history page is already available locally. */
+  historyBuffered: Readonly<Ref<boolean>>
   totalMessages: Ref<number>
   loadMoreHistory(): void | Promise<void>
   lastEvent: Ref<CoreAppEvent | null>

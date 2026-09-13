@@ -242,8 +242,10 @@ export function useCoreExecutionControlsState<
       ...(Number(activeModel.value?.context_window || 0) > 0
         ? { context_window_tokens: Number(activeModel.value?.context_window) }
         : {}),
+      ...(Number(activeModel.value?.max_output_tokens || 0) > 0
+        ? { max_tokens: Number(activeModel.value?.max_output_tokens) }
+        : {}),
       active_mode: activeMode.value,
-      permission_preset: permissionPreset.value,
     }),
   }
 }

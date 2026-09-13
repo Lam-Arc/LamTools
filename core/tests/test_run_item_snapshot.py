@@ -123,6 +123,7 @@ def test_snapshot_persists_terminal_status_usage_on_the_turn():
         status="completed",
         payload={
             "status": "completed",
+            "duration_ms": 12_300,
             "runtime_metrics": {
                 "estimated_prompt_tokens": 120,
                 "context_window_tokens": 128_000,
@@ -134,6 +135,7 @@ def test_snapshot_persists_terminal_status_usage_on_the_turn():
     snapshot = apply_run_item_event(None, event)
 
     assert snapshot["turns"]["turn-1"]["context_metrics"] == event.usage
+    assert snapshot["turns"]["turn-1"]["duration_ms"] == 12_300
     assert "usage" not in snapshot["turns"]["turn-1"]
 
 

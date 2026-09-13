@@ -144,9 +144,11 @@ describe('CoreSettings', () => {
     await wrapper.get('.theme-advanced > summary').trigger('click')
     await wrapper.get('[data-density="loose"]').trigger('click')
     await wrapper.get('[data-theme-mode="dark"]').trigger('click')
+    await wrapper.get('[data-theme-process-icon-color]').setValue('#6755e8')
 
     expect(wrapper.emitted('update:density')).toEqual([['loose']])
     expect(wrapper.emitted('update:theme-mode')).toEqual([['dark']])
+    expect(wrapper.emitted('update-process-icon-color')).toEqual([['#6755e8']])
   })
 
   it('opens the matching floating editor from the theme preview', async () => {

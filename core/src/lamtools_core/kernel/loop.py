@@ -31,7 +31,7 @@ from lamtools_core.context_compaction import (
     ContextCompactionController,
     ContextCompactionError,
 )
-from lamtools_core.context_compaction_budget import TokenBudget
+from lamtools_core.context_compaction_budget import TokenBudget, resolve_compaction_budget
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
@@ -264,6 +264,7 @@ class CoreLoopKernel:
     # observational: failures must never prevent the actual model call.
     model_context_sink: Callable[[RuntimeState, LLMRequest], Awaitable[None] | None] | None = field(default=None, repr=False)
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
+    _run_started_at: float = field(default=0.0, init=False, repr=False)
     # External cancel signal source (e.g. RuntimeTaskRegistry.get_cancel_event).
     # When set by the app layer's turn.cancel path, the kernel can detect it
     # mid-stream and abort the model call cooperatively instead of waiting for
@@ -343,6 +344,8 @@ class CoreLoopKernel:
         7. emit final event
         8. return KernelResult
         """
+        self._run_started_at = time_module.monotonic()
+
         # Reset cancel event for this run
         self._cancel_event.clear()
 
@@ -2872,9 +2875,17 @@ class CoreLoopKernel:
         metrics.pop("llm_calls", None)
         metrics["steps_total"] = int(metrics.get("steps_total") or 0) + 1
         state.metadata["runtime_context_metrics"] = metrics
-        window = self.policy.context_window_tokens
-        if window is None or window <= 0:
+        total_window = self.policy.context_window_tokens
+        if total_window is None or total_window <= 0:
             return
+
+        reserved_output_tokens = max(0, int(request.max_tokens or 0))
+        window = total_window - reserved_output_tokens
+        if window <= 0:
+            raise ValueError(
+                "Model max output tokens must be smaller than its total context window: "
+                f"{reserved_output_tokens} >= {total_window}"
+            )
 
         budget = self._resolve_compaction_budget(window)
         trigger_tokens = budget.trigger_tokens
@@ -2921,11 +2932,15 @@ class CoreLoopKernel:
         before_tokens = measurement.tokens
         request.metadata["estimated_prompt_tokens"] = before_tokens
         request.metadata["context_window_tokens"] = window
+        request.metadata["total_context_window_tokens"] = total_window
+        request.metadata["reserved_output_tokens"] = reserved_output_tokens
         request.metadata["context_compaction_trigger_tokens"] = trigger_tokens
         state.metadata["runtime_context_metrics"] = {
             **metrics,
             "estimated_prompt_tokens": before_tokens,
             "context_window_tokens": window,
+            "total_context_window_tokens": total_window,
+            "reserved_output_tokens": reserved_output_tokens,
             "context_compaction_trigger_tokens": trigger_tokens,
             "context_compacted": False,
             "model_id": current_model,
@@ -3057,6 +3072,8 @@ class CoreLoopKernel:
             **metrics,
             "estimated_prompt_tokens": result.after_tokens,
             "context_window_tokens": window,
+            "total_context_window_tokens": total_window,
+            "reserved_output_tokens": reserved_output_tokens,
             "context_compaction_trigger_tokens": trigger_tokens,
             "context_compacted": True,
             "context_compaction_mode": "structured_summary",
@@ -3087,18 +3104,12 @@ class CoreLoopKernel:
 
     def _resolve_compaction_budget(self, window: int) -> TokenBudget:
         """Resolve user-facing ratio policy into concrete compaction limits."""
-        trigger_ratio = min(max(self.policy.compact_trigger_ratio, 0.01), 1.0)
-        limit_ratio = min(max(self.policy.compact_limit_ratio, 0.01), trigger_ratio)
-        trigger_tokens = int(
-            self.policy.compact_trigger_tokens or int(window * trigger_ratio)
-        )
-        limit_tokens = int(
-            self.policy.compact_limit_tokens or int(window * limit_ratio)
-        )
-        return TokenBudget(
+        return resolve_compaction_budget(
             context_window=window,
-            trigger_tokens=min(max(1, trigger_tokens), window),
-            target_tokens=min(max(1, limit_tokens), min(max(1, trigger_tokens), window)),
+            trigger_ratio=self.policy.compact_trigger_ratio,
+            target_ratio=self.policy.compact_limit_ratio,
+            trigger_tokens=self.policy.compact_trigger_tokens,
+            target_tokens=self.policy.compact_limit_tokens,
         )
 
     async def _emit_compaction_part_event(
@@ -3539,6 +3550,10 @@ class CoreLoopKernel:
         self, state: RuntimeState, result: KernelResult
     ) -> None:
         """Emit the final terminal event based on decision."""
+        duration_ms = max(
+            0,
+            round((time_module.monotonic() - self._run_started_at) * 1000),
+        )
         runtime_metrics = (
             dict(state.metadata.get("runtime_context_metrics"))
             if isinstance(state.metadata.get("runtime_context_metrics"), dict)
@@ -3550,6 +3565,7 @@ class CoreLoopKernel:
                 category="lifecycle",
                 payload={
                     "message": result.message,
+                    "duration_ms": duration_ms,
                     **({"runtime_metrics": runtime_metrics} if runtime_metrics else {}),
                 },
                 session_id=state.session_id,
@@ -3567,6 +3583,7 @@ class CoreLoopKernel:
                 payload={
                     "error": result.error or "cancelled",
                     "message": result.message,
+                    "duration_ms": duration_ms,
                     **({"runtime_metrics": runtime_metrics} if runtime_metrics else {}),
                 },
                 session_id=state.session_id,
@@ -3580,6 +3597,7 @@ class CoreLoopKernel:
                 payload={
                     "error": result.error,
                     "message": result.message,
+                    "duration_ms": duration_ms,
                     **({"runtime_metrics": runtime_metrics} if runtime_metrics else {}),
                 },
                 session_id=state.session_id,

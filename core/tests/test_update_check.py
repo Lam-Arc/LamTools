@@ -25,8 +25,8 @@ def _release(
         if assets is not None
         else [
             {
-                "name": "LamCore_x64-setup.exe",
-                "browser_download_url": f"https://github.com/Lam-Arc/LamTools/releases/download/{tag}/LamCore_x64-setup.exe",
+                "name": "Sunday_9.9.9_x64-setup.exe",
+                "browser_download_url": f"https://github.com/Lam-Arc/LamTools/releases/download/{tag}/Sunday_9.9.9_x64-setup.exe",
             }
         ],
     }
@@ -47,7 +47,7 @@ def test_newer_release_available(monkeypatch) -> None:
     assert result["current_version"] == lamtools_core.__version__
     assert result["latest_version"] == "9.9.9"
     assert "新功能" in result["release_notes"]
-    assert result["download_url"].endswith("LamCore_x64-setup.exe")
+    assert result["download_url"].endswith("Sunday_9.9.9_x64-setup.exe")
     assert result["release_url"] == RELEASES_PAGE_URL
     assert result["published_at"]
 
@@ -67,6 +67,23 @@ def test_older_release_is_up_to_date(monkeypatch) -> None:
 
 def test_release_without_installer_asset_is_not_downloadable(monkeypatch) -> None:
     _stub_http(monkeypatch, _release(tag="v9.9.9", assets=[]))
+    result = check_update()
+    assert result["status"] == "up_to_date"
+
+
+def test_legacy_nsis_asset_is_not_selected(monkeypatch) -> None:
+    _stub_http(
+        monkeypatch,
+        _release(
+            tag="v9.9.9",
+            assets=[
+                {
+                    "name": "LamCore_9.9.9_x64-setup.exe",
+                    "browser_download_url": "https://example.test/legacy.exe",
+                }
+            ],
+        ),
+    )
     result = check_update()
     assert result["status"] == "up_to_date"
 

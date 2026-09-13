@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -15,8 +16,14 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from lamtools_core.session import SessionRecord
 
-from .core_db import CoreProject, CoreThreadSnapshot
+from .core_db import CoreDbMetadata, CoreProject, CoreThreadSnapshot
 from .core_session_store import delete_session_records, session_record_from_snapshot, session_snapshot
+from .project_visuals import (
+    DEFAULT_PROJECT_COLOR_KEY,
+    DEFAULT_PROJECT_ICON_KEY,
+    validate_project_color_key,
+    validate_project_icon_key,
+)
 from .sqlite_write import SQLiteWriteCoordinator
 from .runtime_permissions import with_session_runtime_preferences
 
@@ -28,14 +35,18 @@ class CoreProjectRecord:
     work_root: str
     created_at: datetime
     updated_at: datetime
+    icon_key: str = DEFAULT_PROJECT_ICON_KEY
+    color_key: str = DEFAULT_PROJECT_COLOR_KEY
     workspace_id: str = ""
     revision: int = 1
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "name": self.name,
             "work_root": self.work_root,
+            "icon_key": self.icon_key,
+            "color_key": self.color_key,
             "workspace_id": self.workspace_id,
             "revision": self.revision,
             "created_at": self.created_at.isoformat(),
@@ -142,14 +153,6 @@ class CoreProjectStore:
                 normalized.append(root)
         return normalized
 
-    def _validate_project_root(self, root: Path) -> None:
-        if not self._project_roots:
-            return
-        if any(root == allowed or allowed in root.parents for allowed in self._project_roots):
-            return
-        allowed = ", ".join(self.project_roots())
-        raise ValueError(f"PROJECT_ROOT_NOT_ALLOWED: 项目目录必须位于已配置的 Project Root 下（{allowed}）")
-
     def set_session_visibility(self, session_visible: Callable[[str, dict[str, Any]], bool]) -> None:
         """Attach the host's live plugin-session gate after database startup."""
         self._session_visible = session_visible
@@ -172,10 +175,18 @@ class CoreProjectStore:
         except Exception:  # noqa: BLE001 — keep unavailable plugin resources out of chat UI
             return not bool(str(session.metadata.get("owner_plugin") or "").strip())
 
-    async def create(self, work_root: Path | str, name: str | None = None) -> tuple[CoreProjectRecord, bool]:
+    async def create(
+        self,
+        work_root: Path | str,
+        name: str | None = None,
+        *,
+        icon_key: str = DEFAULT_PROJECT_ICON_KEY,
+        color_key: str = DEFAULT_PROJECT_COLOR_KEY,
+    ) -> tuple[CoreProjectRecord, bool]:
         name = _normalize_project_name(name)
+        icon_key = validate_project_icon_key(icon_key)
+        color_key = validate_project_color_key(color_key)
         root = normalize_workspace_root(work_root)
-        self._validate_project_root(root)
         root = ensure_workspace_root(root)
         normalized_root = str(root)
 
@@ -188,6 +199,8 @@ class CoreProjectStore:
                 root=root,
                 normalized_root=normalized_root,
                 name=name,
+                icon_key=icon_key,
+                color_key=color_key,
                 sync_journal=self._sync_journal,
                 change_ids=change_ids,
             )
@@ -202,13 +215,17 @@ class CoreProjectStore:
         work_root: Path | str,
         *,
         name: str = "MyProject",
+        reconcile_once: bool = False,
     ) -> tuple[CoreProjectRecord, int]:
         """Ensure the fallback project and bind every orphaned session to it."""
         root = normalize_workspace_root(work_root)
-        self._validate_project_root(root)
         root = ensure_workspace_root(root)
         normalized_root = str(root)
         project_name = _normalize_project_name(name) or "MyProject"
+        maintenance_key = (
+            "fallback_project_v1:"
+            + hashlib.sha256(normalized_root.casefold().encode("utf-8")).hexdigest()
+        )
         change_ids: list[str] = []
 
         async def write(db: Any) -> tuple[CoreProjectRecord, int]:
@@ -220,6 +237,8 @@ class CoreProjectStore:
                     workspace_id=self.workspace_id,
                     name=project_name,
                     work_root=normalized_root,
+                    icon_key=DEFAULT_PROJECT_ICON_KEY,
+                    color_key=DEFAULT_PROJECT_COLOR_KEY,
                 )
                 db.add(project)
                 await db.flush()
@@ -234,42 +253,53 @@ class CoreProjectStore:
                     )
                     change_ids.append(change.change_id)
 
-            project_roots = set((await db.execute(select(CoreProject.work_root))).scalars().all())
-            rows = (
-                await db.execute(select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.asc()))
-            ).scalars().all()
             migrated = 0
-            for row in rows:
-                session = session_record_from_snapshot(row)
-                current_root = str(session.metadata.get("work_root") or "").strip()
-                if current_root in project_roots:
-                    continue
-                session.metadata = with_session_runtime_preferences({
-                    **session.metadata,
-                    "work_root": normalized_root,
-                })
-                state = dict(row.snapshot_json or {})
-                session_state = dict(state.get("session") or {})
-                session_state["metadata"] = session.metadata
-                state["session"] = session_state
-                revision = int(getattr(row, "revision", 0) or state.get("revision") or 0) + 1
-                state["revision"] = revision
-                row.snapshot_json = state
-                flag_modified(row, "snapshot_json")
-                if hasattr(row, "revision"):
-                    row.revision = revision
-                migrated += 1
-                if self._sync_journal is not None:
-                    change = self._sync_journal.append(
-                        db,
-                        entity_type="thread",
-                        operation="upsert",
-                        entity_id=session.id,
-                        thread_id=session.id,
-                        revision=revision,
-                        entity=_thread_entity(session, state, project.id),
-                    )
-                    change_ids.append(change.change_id)
+            maintenance_done = (
+                reconcile_once
+                and await db.get(CoreDbMetadata, maintenance_key) is not None
+            )
+            if not maintenance_done:
+                project_roots = set((await db.execute(select(CoreProject.work_root))).scalars().all())
+                rows = (
+                    await db.execute(select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.asc()))
+                ).scalars().all()
+                for row in rows:
+                    session = session_record_from_snapshot(row)
+                    current_root = str(session.metadata.get("work_root") or "").strip()
+                    if current_root in project_roots:
+                        continue
+                    session.metadata = with_session_runtime_preferences({
+                        **session.metadata,
+                        "work_root": normalized_root,
+                    })
+                    state = dict(row.snapshot_json or {})
+                    session_state = dict(state.get("session") or {})
+                    session_state["metadata"] = session.metadata
+                    state["session"] = session_state
+                    revision = int(getattr(row, "revision", 0) or state.get("revision") or 0) + 1
+                    state["revision"] = revision
+                    row.snapshot_json = state
+                    flag_modified(row, "snapshot_json")
+                    if hasattr(row, "revision"):
+                        row.revision = revision
+                    migrated += 1
+                    if self._sync_journal is not None:
+                        change = self._sync_journal.append(
+                            db,
+                            entity_type="thread",
+                            operation="upsert",
+                            entity_id=session.id,
+                            thread_id=session.id,
+                            revision=revision,
+                            entity=_thread_entity(session, state, project.id),
+                        )
+                        change_ids.append(change.change_id)
+                if reconcile_once:
+                    db.add(CoreDbMetadata(
+                        key=maintenance_key,
+                        value="complete",
+                        updated_at=datetime.now(),
+                    ))
             await db.flush()
             return _record(project), migrated
 
@@ -281,10 +311,14 @@ class CoreProjectStore:
         self,
         work_root: Path | str,
         name: str | None = None,
+        *,
+        icon_key: str = DEFAULT_PROJECT_ICON_KEY,
+        color_key: str = DEFAULT_PROJECT_COLOR_KEY,
     ) -> tuple[CoreProjectRecord, SessionRecord, bool]:
         name = _normalize_project_name(name)
+        icon_key = validate_project_icon_key(icon_key)
+        color_key = validate_project_color_key(color_key)
         root = normalize_workspace_root(work_root)
-        self._validate_project_root(root)
         root = ensure_workspace_root(root)
         normalized_root = str(root)
 
@@ -297,6 +331,8 @@ class CoreProjectStore:
                 root=root,
                 normalized_root=normalized_root,
                 name=name,
+                icon_key=icon_key,
+                color_key=color_key,
                 sync_journal=self._sync_journal,
                 change_ids=change_ids,
             )
@@ -324,7 +360,26 @@ class CoreProjectStore:
         *,
         expected_revision: int | None = None,
     ) -> CoreProjectRecord | None:
-        name = _normalize_project_name(name, required=True)
+        return await self.update(
+            project_id,
+            name=name,
+            expected_revision=expected_revision,
+        )
+
+    async def update(
+        self,
+        project_id: str,
+        *,
+        name: str | None = None,
+        icon_key: str | None = None,
+        color_key: str | None = None,
+        expected_revision: int | None = None,
+    ) -> CoreProjectRecord | None:
+        if name is None and icon_key is None and color_key is None:
+            raise ValueError("At least one project field is required")
+        normalized_name = _normalize_project_name(name, required=True) if name is not None else None
+        normalized_icon_key = validate_project_icon_key(icon_key) if icon_key is not None else None
+        normalized_color_key = validate_project_color_key(color_key) if color_key is not None else None
 
         change_ids: list[str] = []
 
@@ -338,7 +393,12 @@ class CoreProjectStore:
                 raise ValueError(
                     f"REVISION_CONFLICT: expected {int(expected_revision)}, current {current_revision}"
                 )
-            project.name = name
+            if normalized_name is not None:
+                project.name = normalized_name
+            if normalized_icon_key is not None:
+                project.icon_key = normalized_icon_key
+            if normalized_color_key is not None:
+                project.color_key = normalized_color_key
             project.revision = current_revision + 1
             await db.flush()
             if self._sync_journal is not None:
@@ -389,7 +449,6 @@ class CoreProjectStore:
     ) -> tuple[CoreProjectRecord, SessionRecord, bool]:
         """Bind a caller-owned session id to its workspace without creating a spare session."""
         root = normalize_workspace_root(work_root)
-        self._validate_project_root(root)
         root = ensure_workspace_root(root)
         normalized_root = str(root)
         session_title = str(title).strip() or session_id
@@ -406,6 +465,8 @@ class CoreProjectStore:
                     workspace_id=self.workspace_id,
                     name=_default_project_name(root),
                     work_root=normalized_root,
+                    icon_key=DEFAULT_PROJECT_ICON_KEY,
+                    color_key=DEFAULT_PROJECT_COLOR_KEY,
                 )
                 db.add(project)
                 await db.flush()
@@ -546,6 +607,12 @@ def _record(project: CoreProject) -> CoreProjectRecord:
         work_root=project.work_root,
         created_at=project.created_at,
         updated_at=project.updated_at,
+        icon_key=validate_project_icon_key(
+            getattr(project, "icon_key", DEFAULT_PROJECT_ICON_KEY) or DEFAULT_PROJECT_ICON_KEY
+        ),
+        color_key=validate_project_color_key(
+            getattr(project, "color_key", DEFAULT_PROJECT_COLOR_KEY) or DEFAULT_PROJECT_COLOR_KEY
+        ),
         workspace_id=str(getattr(project, "workspace_id", "") or ""),
         revision=max(1, int(getattr(project, "revision", 1) or 1)),
     )
@@ -557,6 +624,8 @@ async def _create_project_with_initial_session(
     root: Path,
     normalized_root: str,
     name: str | None,
+    icon_key: str,
+    color_key: str,
     sync_journal: Any | None = None,
     change_ids: list[str] | None = None,
 ) -> tuple[CoreProjectRecord, SessionRecord, bool]:
@@ -568,6 +637,8 @@ async def _create_project_with_initial_session(
             workspace_id=str(getattr(sync_journal, "workspace_id", "") or ""),
             name=name or _default_project_name(root),
             work_root=normalized_root,
+            icon_key=icon_key,
+            color_key=color_key,
         )
         db.add(project)
         await db.flush()
@@ -692,6 +763,12 @@ def _project_entity(project: CoreProject) -> dict[str, Any]:
         "name": project.name,
         "path": project.work_root,
         "work_root": project.work_root,
+        "icon_key": validate_project_icon_key(
+            getattr(project, "icon_key", DEFAULT_PROJECT_ICON_KEY) or DEFAULT_PROJECT_ICON_KEY
+        ),
+        "color_key": validate_project_color_key(
+            getattr(project, "color_key", DEFAULT_PROJECT_COLOR_KEY) or DEFAULT_PROJECT_COLOR_KEY
+        ),
         "created_at": project.created_at.isoformat(),
         "updated_at": project.updated_at.isoformat(),
         "revision": max(1, int(getattr(project, "revision", 1) or 1)),

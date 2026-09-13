@@ -273,7 +273,13 @@ class CoreLiveConnection:
             if self.subscription is None:
                 await self._subscription_ready.wait()
                 continue
-            event = await self.subscription.get()
+            # Capture the queue we are actually waiting on. A connection can
+            # switch threads while this await is blocked; _unsubscribe wakes
+            # the old queue so the reader can move to the new subscription.
+            subscription = self.subscription
+            event = await subscription.get()
+            if subscription is not self.subscription:
+                continue
             if isinstance(event, CoreAppEventGap):
                 logger.warning("core-app-server event stream overflow; closing ws 1013 (thread=%s)", self.thread_id or "-")
                 await self.websocket.close(code=1013, reason="Event stream overflow; reconnect to resume.")
@@ -449,10 +455,18 @@ class CoreLiveConnection:
         self._subscribe(thread_id)
 
     def _unsubscribe(self) -> None:
-        if self.thread_id and self.subscription is not None:
-            self.context.hub.unsubscribe(self.thread_id, self.subscription)
+        subscription = self.subscription
+        if self.thread_id and subscription is not None:
+            self.context.hub.unsubscribe(self.thread_id, subscription)
         self.subscription = None
         self._subscription_ready.clear()
+        if subscription is not None:
+            # _hub_reader may currently be blocked on the old queue. Remove
+            # obsolete events and wake it; otherwise switching threads leaves
+            # the reader parked forever until the old thread happens to emit.
+            while not subscription.empty():
+                subscription.get_nowait()
+            subscription.put_nowait(None)
 
     async def _handle_raw(self, raw: dict[str, Any]) -> None:
         if await self._handle_client_response(raw):
@@ -692,7 +706,7 @@ class CoreLiveConnection:
                 params = {**params}
                 params.pop("approval_policy", None)
                 params.pop("approvalPolicy", None)
-        if method == "approval.respond":
+        if method in {"approval.respond", "session.permissions.set"}:
             # Bind the response to the subscribed thread: a connection may
             # only answer an approval request for the thread it is watching.
             thread_id = _thread_id_from_params(params)
@@ -701,7 +715,7 @@ class CoreLiveConnection:
                     response=rpc_error(
                         request.id,
                         code=INVALID_REQUEST,
-                        message="approval.respond must target the subscribed thread",
+                        message=f"{method} must target the subscribed thread",
                     )
                 )
         if method in self.context.host.operation_handlers() or self.context.operations.has(method):
@@ -730,6 +744,7 @@ def _normalize_method(method: str) -> str:
         "turn.force_reset": "turn.force_reset",
         "turn/steer": "turn.steer",
         "approval/respond": "approval.respond",
+        "session/permissions/set": "session.permissions.set",
         "queue/create": "queue.create",
         "queue/update": "queue.update",
         "queue/delete": "queue.delete",

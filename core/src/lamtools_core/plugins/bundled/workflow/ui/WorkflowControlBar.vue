@@ -1,61 +1,108 @@
 <template>
   <div class="wf-control-bar">
-    <button v-if="!running" class="small-btn primary" type="button" @click="$emit('run')" title="运行整个工作流">
-      <Play :size="12" :stroke-width="2" aria-hidden="true" />
-      运行
+    <button v-if="!running" class="small-btn primary" type="button" aria-label="运行整个工作流" title="运行整个工作流" @click="$emit('run')">
+      <Play :size="15" :stroke-width="1.8" aria-hidden="true" />
     </button>
-    <button v-else class="small-btn danger" type="button" @click="$emit('cancel')" title="停止工作流">
-      停止
+    <button v-else class="small-btn danger" type="button" aria-label="停止工作流" title="停止工作流" @click="$emit('cancel')">
+      <Square :size="14" :stroke-width="1.8" aria-hidden="true" />
     </button>
-    <button class="small-btn" type="button" :disabled="running" @click="$emit('step')" title="单步调试">
-      <StepForward :size="12" :stroke-width="2" aria-hidden="true" /> 步进
+    <button class="small-btn" type="button" :disabled="running" aria-label="单步调试" title="单步调试" @click="$emit('step')">
+      <StepForward :size="15" :stroke-width="1.8" aria-hidden="true" />
     </button>
-    <button class="small-btn" type="button" :disabled="running" @click="$emit('save')" title="保存">
-      <Save :size="12" :stroke-width="2" aria-hidden="true" /> 保存
+    <button class="small-btn quiet" type="button" :disabled="running || !canUndo" title="撤销（Ctrl/Cmd+Z）" aria-label="撤销" @click="$emit('undo')">
+      <Undo2 :size="15" :stroke-width="1.8" aria-hidden="true" />
     </button>
-    <button class="small-btn quiet" type="button" :class="{ 'is-on': exposed }" :disabled="running" @click="$emit('toggle-exposed')" :title="exposed ? '取消暴露为工具' : '暴露为 Agent 工具'">
-      {{ exposed ? '已暴露' : '暴露为工具' }}
+    <button class="small-btn quiet" type="button" :disabled="running || !canRedo" title="重做（Ctrl/Cmd+Shift+Z）" aria-label="重做" @click="$emit('redo')">
+      <Redo2 :size="15" :stroke-width="1.8" aria-hidden="true" />
     </button>
-    <span v-if="statusText" class="wf-control-status">{{ statusText }}</span>
+    <button
+      class="small-btn quiet wf-save-btn"
+      type="button"
+      :class="{ 'is-dirty': dirty }"
+      :disabled="running"
+      :title="dirty ? '保存工作流（有未保存修改）' : '保存工作流'"
+      :aria-label="dirty ? '保存工作流（有未保存修改）' : '保存工作流'"
+      :data-dirty="dirty ? 'true' : 'false'"
+      @click="$emit('save')"
+    >
+      <Save :size="15" :stroke-width="1.8" aria-hidden="true" />
+    </button>
+    <span v-if="dirty" class="wf-control-status wf-control-dirty" title="有未保存修改" aria-label="有未保存修改">●</span>
+    <span v-if="saveError" class="wf-control-status wf-control-error" role="alert" :title="saveError" :aria-label="saveError">
+      <CircleAlert :size="15" :stroke-width="1.8" aria-hidden="true" />
+    </span>
+    <span v-if="conflict" class="wf-control-status wf-control-conflict" role="alert" :title="conflict" :aria-label="conflict">
+      <GitCompareArrows :size="15" :stroke-width="1.8" aria-hidden="true" />
+    </span>
+    <template v-if="conflict">
+      <button class="small-btn quiet wf-conflict-action" type="button" :disabled="running" aria-label="采用远端版本" title="放弃本地修改并采用远端版本" @click="$emit('accept-remote')">
+        <CloudDownload :size="15" :stroke-width="1.8" aria-hidden="true" />
+      </button>
+      <button class="small-btn quiet wf-conflict-action" type="button" :disabled="running" aria-label="保留本地并重试" title="保留本地修改并用远端版本号重试保存" @click="$emit('keep-local')">
+        <CloudUpload :size="15" :stroke-width="1.8" aria-hidden="true" />
+      </button>
+    </template>
+    <span v-if="statusText" class="wf-control-status" role="status" :title="statusText" :aria-label="statusText">
+      <Activity :size="15" :stroke-width="1.8" aria-hidden="true" />
+    </span>
   </div>
 </template>
 
 <script setup lang="ts">
-import { Play, Save, StepForward } from 'lucide-vue-next'
+import { Activity, CircleAlert, CloudDownload, CloudUpload, GitCompareArrows, Play, Redo2, Save, Square, StepForward, Undo2 } from 'lucide-vue-next'
 
 defineProps<{
   running?: boolean
-  exposed?: boolean
   statusText?: string
+  dirty?: boolean
+  saveError?: string
+  conflict?: string
+  canUndo?: boolean
+  canRedo?: boolean
 }>()
 defineEmits<{
   run: []
   cancel: []
   step: []
   save: []
-  'toggle-exposed': []
+  undo: []
+  redo: []
+  'accept-remote': []
+  'keep-local': []
 }>()
 </script>
 
 <style scoped>
 .wf-control-bar {
-  position: absolute;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  z-index: var(--z-composer, 40);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 20px;
-  background: color-mix(in srgb, var(--theme-composer-background, #262625) 92%, transparent);
-  border: 1px solid color-mix(in srgb, var(--theme-composer-text, #fff) 12%, transparent);
-  box-shadow: var(--shadow, 0 8px 32px rgba(0, 0, 0, 0.5));
-  backdrop-filter: blur(8px);
+  display: contents;
 }
-.wf-control-bar .small-btn { font-size: 12px; padding: 6px 12px; }
+.wf-control-bar .small-btn,
+.wf-control-status {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--theme-main-text);
+}
+.wf-control-bar .small-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
+}
+.wf-control-bar .wf-save-btn.is-dirty { color: var(--orange); }
 .wf-control-bar .small-btn.danger { color: var(--red); }
-.wf-control-bar .small-btn.is-on { color: var(--green); }
-.wf-control-status { font-size: 11px; opacity: 0.6; margin-left: 4px; }
+.wf-control-bar .small-btn:disabled { cursor: not-allowed; opacity: .42; }
+.wf-control-status { font-size: 10px; opacity: .6; }
+.wf-control-dirty { color: var(--orange); opacity: 1; }
+.wf-control-error { color: var(--red); opacity: 1; }
+.wf-control-conflict { color: var(--orange); opacity: 1; }
+.wf-conflict-action { color: var(--theme-main-text); }
+@media (prefers-reduced-motion: reduce) {
+  .wf-control-bar,
+  .wf-control-bar * { transition: none; animation: none; }
+}
 </style>

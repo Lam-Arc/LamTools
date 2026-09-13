@@ -161,6 +161,10 @@
   display: grid;
   gap: var(--sidebar-item-gap);
 }
+.project-main {
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+}
 .project-name strong {
   display: block;
   min-width: 0;

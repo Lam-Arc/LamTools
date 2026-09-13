@@ -12,10 +12,11 @@ describe('Core project client', () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ projects: [{ id: 'project-1', name: 'Docs', work_root: 'E:\\docs' }] }))
       .mockResolvedValueOnce(jsonResponse({
-        project: { id: 'project-1', name: 'Docs', work_root: 'E:\\docs' },
+        project: { id: 'project-1', name: 'Docs', work_root: 'E:\\docs', icon_key: 'idea', color_key: 'aurora' },
         session: { id: 'session-1', title: 'Docs', metadata: { project_id: 'project-1' } },
       }))
       .mockResolvedValueOnce(jsonResponse({ id: 'project-1', name: 'Docs', work_root: 'E:\\docs' }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'project-1', name: 'Docs', work_root: 'E:\\docs', icon_key: 'rocket', color_key: 'prism' }))
       .mockResolvedValueOnce(jsonResponse({ id: 'project-1', name: 'Documentation', work_root: 'E:\\docs' }))
       .mockResolvedValueOnce(jsonResponse({ sessions: [{ id: 'session-1', title: 'Docs' }] }))
       .mockResolvedValueOnce(jsonResponse({ content: '# Instructions', exists: true }))
@@ -25,12 +26,25 @@ describe('Core project client', () => {
 
     const client = createCoreProjectClient(createDirectTransport({ apiBase: '/api/core/', fetchImpl: fetch }))
 
-    await expect(client.list()).resolves.toEqual([{ id: 'project-1', name: 'Docs', workRoot: 'E:\\docs' }])
-    await expect(client.create({ name: 'Docs', work_root: 'E:\\docs' })).resolves.toMatchObject({
-      project: { id: 'project-1', workRoot: 'E:\\docs' },
+    await expect(client.list()).resolves.toEqual([{
+      id: 'project-1',
+      name: 'Docs',
+      workRoot: 'E:\\docs',
+      iconKey: 'folder',
+      colorKey: 'gray',
+    }])
+    await expect(client.create({
+      name: 'Docs',
+      work_root: 'E:\\docs',
+      icon_key: 'idea',
+      color_key: 'aurora',
+    })).resolves.toMatchObject({
+      project: { id: 'project-1', workRoot: 'E:\\docs', iconKey: 'idea', colorKey: 'aurora' },
       session: { id: 'session-1' },
     })
     await expect(client.get('project-1')).resolves.toMatchObject({ id: 'project-1', name: 'Docs' })
+    await expect(client.update('project-1', { icon_key: 'rocket', color_key: 'prism' }))
+      .resolves.toMatchObject({ iconKey: 'rocket', colorKey: 'prism' })
     await expect(client.rename('project-1', 'Documentation')).resolves.toMatchObject({ name: 'Documentation' })
     await expect(client.listSessions('project-1')).resolves.toEqual([{ id: 'session-1', title: 'Docs' }])
     await expect(client.readAgents('project-1')).resolves.toEqual({ content: '# Instructions', exists: true })
@@ -39,8 +53,13 @@ describe('Core project client', () => {
 
     expect(fetchCalls(fetch)).toEqual(expect.arrayContaining([
       { url: '/api/core/projects', method: 'GET' },
-      { url: '/api/core/projects', method: 'POST', body: { name: 'Docs', work_root: 'E:\\docs' } },
+      {
+        url: '/api/core/projects',
+        method: 'POST',
+        body: { name: 'Docs', work_root: 'E:\\docs', icon_key: 'idea', color_key: 'aurora' },
+      },
       { url: '/api/core/projects/project-1', method: 'GET' },
+      { url: '/api/core/projects/project-1', method: 'PATCH', body: { icon_key: 'rocket', color_key: 'prism' } },
       { url: '/api/core/projects/project-1', method: 'PATCH', body: { name: 'Documentation' } },
       { url: '/api/core/projects/project-1/sessions', method: 'GET' },
       { url: '/api/core/projects/project-1/agents-md', method: 'GET' },

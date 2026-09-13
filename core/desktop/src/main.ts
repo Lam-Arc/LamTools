@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event'
 import { createApp } from 'vue'
 import { createDirectTransport } from '../../ui/src/transport'
 import { createLamToolsRuntime } from '../../ui/src/app/runtime'
@@ -7,6 +8,11 @@ import {
   completeStartupSplash,
   startStartupSplash,
 } from '../../ui/src/motion/startupSplash'
+
+// The desktop shell owns every right-click interaction. Prevent WebView's
+// native browser menu globally without stopping propagation, so scoped custom
+// menus (workflow canvas, sidebar, etc.) still receive the event.
+document.addEventListener('contextmenu', (event) => event.preventDefault(), { capture: true })
 
 startStartupSplash()
 
@@ -34,7 +40,7 @@ async function resolveBackendApiBase(): Promise<string | null> {
     }
   }
 
-  throw new Error(`LamCore backend API unavailable: ${String(lastError)}`)
+  throw new Error(`Sunday backend API unavailable: ${String(lastError)}`)
 }
 
 async function init() {
@@ -73,6 +79,16 @@ async function init() {
   (window as any).__LAMTOOLS_MINIMIZE = () => invoke('minimize_window');
   (window as any).__LAMTOOLS_TOGGLE_MAXIMIZE = () => invoke('toggle_maximize_window');
   (window as any).__LAMTOOLS_CLOSE = () => invoke('close_window');
+
+  await Promise.all([
+    listen<boolean>('lamtools://window/maximize-hover', ({ payload }) => {
+      window.dispatchEvent(new CustomEvent('lamtools:maximize-hover', { detail: payload }))
+    }),
+    listen<boolean>('lamtools://window/maximize-press', ({ payload }) => {
+      window.dispatchEvent(new CustomEvent('lamtools:maximize-press', { detail: payload }))
+    }),
+    listen('lamtools://window/maximize-click', () => invoke('toggle_maximize_window')),
+  ])
 
   // Native directory picker: returns selected path or null (cancelled)
   ;(window as any).__LAMTOOLS_PICK_DIRECTORY = async (): Promise<string | null> => {
@@ -138,7 +154,7 @@ async function init() {
     console.error('[Main] ping failed:', e);
   }
 
-  if (!apiBase) throw new Error('LamCore backend API unavailable')
+  if (!apiBase) throw new Error('Sunday backend API unavailable')
   const transport = createDirectTransport({ apiBase: `${apiBase}/api/core` })
   const runtime = createLamToolsRuntime({
     transport,

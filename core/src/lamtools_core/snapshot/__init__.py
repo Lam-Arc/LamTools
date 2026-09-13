@@ -70,6 +70,13 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
             turn["status"] = status
         if turn is not None and event.usage and not _is_context_metrics_event(event):
             turn["usage"] = {**dict(turn.get("usage") or {}), **event.usage}
+        duration_ms = event.payload.get("duration_ms")
+        if (
+            turn is not None
+            and isinstance(duration_ms, (int, float))
+            and not isinstance(duration_ms, bool)
+        ):
+            turn["duration_ms"] = max(0, round(duration_ms))
         if status in {"failed", "cancelled", "error"} and (
             event.payload.get("message") or event.payload.get("raw_end_reason")
         ):
