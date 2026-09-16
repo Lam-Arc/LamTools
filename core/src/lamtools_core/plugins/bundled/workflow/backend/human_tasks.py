@@ -557,7 +557,11 @@ class HumanTaskCenter:
                 # deterministic for old journals that omitted it.
                 started = next((e for e in record.events if e.get("kind") == "run.started"), {})
                 record.thread_id = _text(_mapping(started.get("payload")).get("thread_id"))
-        await self._hydrate_definitions(records)
+        # ``records`` is keyed by (source_root, run_id); hydrate the record
+        # values, not the mapping iterator's tuple keys.  Passing the mapping
+        # itself makes ``_hydrate_definitions`` receive tuples and breaks the
+        # live human-task list before any approval can be shown.
+        await self._hydrate_definitions(records.values())
         return sorted(records.values(), key=lambda item: (item.work_root, item.run_id))
 
     async def _hydrate_definitions(self, records: Iterable[_RunRecord]) -> None:

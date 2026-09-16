@@ -209,6 +209,7 @@
                         :key="part.id"
                         v-memo="partMemo(part, isLiveMessage(msg))"
                         class="part-wrap"
+                        :data-part-id="part.id"
                       >
                         <div
                           v-if="part.partType === 'reasoning'"
@@ -597,6 +598,7 @@
                         v-else-if="isSubLinePart(group.part)"
                         class="sub-line-block"
                         :class="'sub-line--' + group.part.status"
+                        :data-part-id="group.part.id"
                       >
                         <button
                           type="button"
@@ -824,12 +826,17 @@ import {
   Globe,
   Hourglass,
   Info,
+  Inbox,
   Minimize2,
   Pencil,
+  Power,
+  PowerOff,
   Search,
+  Send,
   Terminal,
   TriangleAlert,
   Undo2,
+  UserRoundPlus,
   Wrench,
   X,
   type LucideIcon,
@@ -1095,6 +1102,8 @@ const subLineProcessCollapsedIds = ref<Set<string>>(new Set())
 const fullyExpandedPartIds = ref<Set<string>>(new Set())
 const processTitleSnapshots = ref<Record<string, string>>({})
 let processTitleTimer: ReturnType<typeof setInterval> | null = null
+const subAgentTitleNow = ref(Date.now())
+let subAgentTitleTimer: ReturnType<typeof setInterval> | null = null
 
 // v-memo dependency for a single part card. A stable part reference + stable
 // derived booleans lets Vue skip rebuilding that part's whole vnode subtree on
@@ -1643,6 +1652,26 @@ watch(
   { immediate: true },
 )
 
+function syncSubAgentTitleTimer(): void {
+  if (subAgentTitleTimer) {
+    clearInterval(subAgentTitleTimer)
+    subAgentTitleTimer = null
+  }
+  const hasLiveSubAgent = processParts(props.msg).some(part => (
+    isSubLinePart(part) && (part.status === 'running' || part.status === 'pending')
+  ))
+  if (hasLiveSubAgent) {
+    subAgentTitleNow.value = Date.now()
+    subAgentTitleTimer = setInterval(() => { subAgentTitleNow.value = Date.now() }, 1000)
+  }
+}
+
+watch(
+  () => processParts(props.msg).map(part => `${part.id}:${part.status}:${part.completedAt || ''}`).join('|'),
+  syncSubAgentTitleTimer,
+  { immediate: true },
+)
+
 function systemBubbleClass(msg: CoreMessage): string {
   const meta = (msg.metadata || {}) as Record<string, unknown>
   if (meta.systemKind === 'error' || meta.systemKind === 'failed') return 'system-bubble--error'
@@ -1856,6 +1885,8 @@ async function copyAssistantMessage(msg: CoreMessage) {
 onBeforeUnmount(() => {
   if (copiedActionTimer) clearTimeout(copiedActionTimer)
   stopProcessTitleTimer()
+  if (subAgentTitleTimer) clearInterval(subAgentTitleTimer)
+  subAgentTitleTimer = null
   for (const timer of partCompletionTimers.values()) clearTimeout(timer)
   partCompletionTimers.clear()
   for (const timer of groupCollapseTimers.values()) clearTimeout(timer)
@@ -1872,6 +1903,12 @@ function processIcon(part: MessagePart): LucideIcon {
   if (part.status === 'pending') return Hourglass
   if (part.partType === 'reasoning') return Brain
   if (part.partType === 'compaction') return Minimize2
+  const subAgentEvent = subAgentEventKind(part)
+  if (subAgentEvent === 'created') return UserRoundPlus
+  if (subAgentEvent === 'enabled') return Power
+  if (subAgentEvent === 'closed') return PowerOff
+  if (subAgentEvent === 'message_sent') return Send
+  if (subAgentEvent === 'message_received') return Inbox
   const name = String(part.toolName || part.label || '').toLowerCase()
   if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return Terminal
   if (/write|edit|patch|apply|create/.test(name)) return FilePenLine
@@ -1969,6 +2006,8 @@ function readableProcessTitle(part: MessagePart): string {
   const unavailableTool = unavailableToolName(part)
   if (unavailableTool) return `工具不可用：${unavailableTool}`
   if (isUnavailableToolNotice(part)) return '工具不可用'
+  const subAgentTitle = subAgentEventTitle(part)
+  if (subAgentTitle) return subAgentTitle
   if (part.partType === 'decision') return decisionTitle(part)
   if (isSubLinePart(part)) return agentTitle(part)
   if (part.partType === 'compaction') return part.label || '上下文已压缩'
@@ -2104,6 +2143,65 @@ function compactionDetail(part: MessagePart): string {
     pieces.push(`${segments} 段`)
   }
   return pieces.join(' · ')
+}
+
+type SubAgentEventKind = '' | 'created' | 'enabled' | 'closed' | 'message_sent' | 'message_received'
+
+function subAgentEventKind(part: MessagePart): SubAgentEventKind {
+  const toolName = String(part.toolName || part.label || '').trim().toLowerCase()
+  if (toolName === 'sub_agent_receive') return 'message_received'
+  if (toolName === 'sub_agent_message') return 'message_sent'
+  if (toolName !== 'sub_agent' && toolName !== 'subagent') return ''
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const result = metadataRecord(meta.metadata)
+  const action = String(args.action || result.action || meta.action || '').toLowerCase()
+  const lifecycle = String(
+    result.lifecycle_action
+    || result.lifecycleAction
+    || meta.lifecycle_action
+    || meta.lifecycleAction
+    || '',
+  ).toLowerCase()
+  if (action === 'close' || lifecycle === 'closed') return 'closed'
+  if (action !== 'create') return ''
+  return lifecycle === 'enabled' || lifecycle === 'reopened' ? 'enabled' : 'created'
+}
+
+function subAgentEventTitle(part: MessagePart): string {
+  const kind = subAgentEventKind(part)
+  if (!kind) return ''
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const result = metadataRecord(meta.metadata)
+  const name = compactDetail(String(args.name || result.name || meta.name || 'Sub Agent').trim(), 64)
+  const state = part.status
+  const isPending = state === 'pending'
+  const isRunning = state === 'running'
+  const isError = state === 'error'
+  const statePrefix = isRunning ? '正在' : isPending ? '等待' : ''
+  if (kind === 'closed') {
+    if (isError) return `关闭 ${name} 失败`
+    if (isRunning || isPending) return `${statePrefix}关闭 ${name}`
+    return `关闭了 ${name}`
+  }
+  if (kind === 'message_sent') {
+    if (isError) return `向 ${name} 发送消息失败`
+    if (isRunning || isPending) return `${statePrefix}向 ${name} 发送消息`
+    return `向 ${name} 发送了消息`
+  }
+  if (kind === 'message_received') {
+    if (isError) return `接收 ${name} 消息失败`
+    if (isRunning || isPending) return `${statePrefix}接收 ${name} 的消息`
+    return `收到了 ${name} 的消息`
+  }
+  const model = compactDetail(String(result.model_id || result.model || args.model || '').trim(), 40)
+  const reasoning = compactDetail(String(result.reasoning_level || result.reasoningLevel || args.reasoning_level || '').trim(), 24)
+  const config = [model, reasoning].filter(Boolean).join(' ')
+  const verb = kind === 'enabled' ? '启用' : '创建'
+  if (isError) return `${verb} ${name} 失败${config ? ` · ${config}` : ''}`
+  if (isRunning || isPending) return `${statePrefix}${verb} ${name}${config ? ` · ${config}` : ''}`
+  return `${kind === 'enabled' ? '启用了' : '创建了'} ${name}${config ? ` · ${config}` : ''}`
 }
 
 function compactTokenCount(value: unknown): string {
@@ -2420,8 +2518,10 @@ function collectOutputArtifacts(
   out: Array<ToolArtifact & { artifact_id?: string }>,
 ): void {
   for (const artifact of part.artifacts || []) {
-    // 历史图片常以 file_read + image_data_url/图片 URI 持久化；它们仍是可见
-    // 图片产出。普通 file_read 继续排除，避免把上下文读取误算成本轮产出。
+    // The contextual deck is for generated images and file changes only.
+    // Command/file-read evidence belongs to the process timeline, not to the
+    // message-local成果 deck, even when an old snapshot carries an image URI.
+    if (artifact.kind === 'file_read' || artifact.kind === 'command_output') continue
     if (artifact.kind === 'file_change' || isImageArtifact(artifact)) out.push(artifact)
   }
   const subLineParts = (part.metadata as { subLineParts?: MessagePart[] } | undefined)?.subLineParts
@@ -2629,10 +2729,95 @@ function agentTitle(part: MessagePart): string {
   const name = meta.agent || meta.agent_name || args.agent || args.agent_name || args.name || part.label
   const display = agentDisplayName(String(name || ''))
   const index = agentIndexLabel(part)
-  if (display && index) return `${index} · ${display}`
-  if (display) return display
-  if (index) return `${index} · sub`
-  return 'sub'
+  const agentName = display || (index ? `${index} · sub` : 'sub')
+  const type = agentTypeLabel(part)
+  const model = agentModelLabel(part)
+  const reasoning = agentReasoningLabel(part)
+  const elapsed = agentElapsedLabel(part)
+  // Keep this format stable: the right rail and message block use the same
+  // compact lifecycle grammar so users can scan type, identity, model,
+  // reasoning and duration in one pass.
+  return `${type} ${agentName} · ${model} ${reasoning} · ${elapsed}`
+}
+
+function agentTypeLabel(part: MessagePart): 'consider' | 'execute' {
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const raw = String(
+    part.agentType
+    || (part as MessagePart & { type?: unknown }).type
+    || meta.type
+    || meta.agent_type
+    || meta.agentType
+    || meta.mode
+    || meta.active_mode
+    || args.type
+    || args.mode
+    || '',
+  ).toLowerCase()
+  return raw.includes('consider') || raw.includes('think') || raw.includes('reason') ? 'consider' : 'execute'
+}
+
+function agentModelLabel(part: MessagePart): string {
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const value = part.model
+    || (part as MessagePart & { modelId?: unknown }).modelId
+    || meta.model
+    || meta.model_id
+    || meta.modelId
+    || args.model
+    || args.model_id
+    || args.modelId
+  return compactDetail(String(value || '—').trim() || '—', 40)
+}
+
+function agentReasoningLabel(part: MessagePart): string {
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const value = part.reasoningLevel
+    || meta.reasoning_level
+    || meta.reasoningLevel
+    || meta.reasoning_effort
+    || meta.reasoningEffort
+    || args.reasoning_level
+    || args.reasoningLevel
+    || args.reasoning_effort
+  return compactDetail(String(value || '—').trim() || '—', 24)
+}
+
+function agentElapsedLabel(part: MessagePart): string {
+  const meta = part.metadata || {}
+  const explicit = part.elapsedMs
+    ?? numberValue(meta.elapsedMs)
+    ?? numberValue(meta.elapsed_ms)
+    ?? numberValue(meta.durationMs)
+    ?? numberValue(meta.duration_ms)
+  let elapsed = explicit
+  if (elapsed === undefined) {
+    const start = Date.parse(String(part.startedAt || meta.startedAt || meta.started_at || ''))
+    const endValue = part.completedAt || meta.completedAt || meta.completed_at
+    const end = endValue
+      ? Date.parse(String(endValue))
+      : subAgentTitleNow.value
+    elapsed = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0
+  }
+  return formatAgentElapsed(elapsed)
+}
+
+function formatAgentElapsed(value: number): string {
+  const ms = Math.max(0, Number.isFinite(value) ? value : 0)
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainder = Math.floor(seconds % 60)
+  return `${minutes}m ${String(remainder).padStart(2, '0')}s`
+}
+
+function numberValue(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function agentStatusLabel(part: MessagePart): string {

@@ -2,10 +2,10 @@
 name: office-meetings
 description: 把会议文字记录、转写稿或零散笔记整理为纪要，提取议题、决策、分歧、负责人、期限与行动项。用户要求整理会议、跟进讨论或生成会议待办时使用；实时录音、转写和日历安排需要独立能力与授权。
 metadata:
-  version: 0.1.0
+  version: 0.2.0
   language: zh-CN
   target: lamtools-desktop
-  status: instruction-draft
+  status: beta
 ---
 
 # 会议纪要与行动项

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CoreAppServerClient } from '../src/appServer/client'
 import { DirectHttpTransport, DirectTransport } from '../src/transport/directTransport'
+import { TransportDisconnectedError } from '../src/transport/types'
 import type {
   LamToolsTransport,
   TransportConnectionState,
@@ -95,7 +96,7 @@ class FakeSocket {
   onopen: (() => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
   onerror: (() => void) | null = null
-  onclose: (() => void) | null = null
+  onclose: ((event: CloseEvent) => void) | null = null
 
   open(): void {
     this.readyState = 1
@@ -107,7 +108,13 @@ class FakeSocket {
   close(): void {
     if (this.readyState >= 2) return
     this.readyState = 3
-    this.onclose?.()
+    this.onclose?.({ code: 1000, reason: '', wasClean: true } as CloseEvent)
+  }
+
+  disconnect(code: number, reason: string, wasClean = false): void {
+    if (this.readyState >= 2) return
+    this.readyState = 3
+    this.onclose?.({ code, reason, wasClean } as CloseEvent)
   }
 }
 
@@ -211,5 +218,40 @@ describe('Core transport abstraction', () => {
     await expect(secondConnect).resolves.toBeUndefined()
     expect(transport.getState()).toBe('connected')
     await transport.close()
+  })
+
+  it('retains unexpected websocket close diagnostics on pending RPC failures', async () => {
+    const sockets: FakeSocket[] = []
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const transport = new DirectTransport({
+      apiBase: 'http://127.0.0.1:5172/api/core',
+      webSocketFactory: () => {
+        const socket = new FakeSocket()
+        sockets.push(socket)
+        return socket as unknown as WebSocket
+      },
+    })
+    const connected = transport.connect()
+    sockets[0].open()
+    await connected
+
+    const pending = transport.request({ method: 'thread/read' })
+    await vi.waitFor(() => expect(sockets[0].sent).toHaveLength(1))
+    sockets[0].disconnect(1013, 'Event stream overflow; reconnect to resume.')
+
+    const error = await pending.catch((value: unknown) => value)
+    expect(error).toBeInstanceOf(TransportDisconnectedError)
+    expect(error).toMatchObject({
+      name: 'TransportDisconnectedError',
+      code: 1013,
+      reason: 'Event stream overflow; reconnect to resume.',
+      wasClean: false,
+    })
+    expect(error).toHaveProperty('message', expect.stringMatching(/code=1013.*Event stream overflow/))
+    expect(warning).toHaveBeenCalledWith(
+      '[LamTools transport] unexpected WebSocket close',
+      expect.objectContaining({ code: 1013, wasClean: false }),
+    )
+    warning.mockRestore()
   })
 })

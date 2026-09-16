@@ -253,8 +253,10 @@ export type { ProviderPreset, ProviderPresetModel } from './data/provider-preset
 export {
   CORE_HISTORY_AUTO_LOAD_THRESHOLD_PX,
   CORE_SCROLL_BOTTOM_THRESHOLD_PX,
+  CORE_SCROLL_SENTINEL_VISIBLE_RATIO,
   coreApplyHistoryScrollCeiling,
   coreHistoryAutoLoadThreshold,
+  coreIsBottomSentinelVisible,
   coreIsScrollNearBottom,
   coreShouldAutoLoadHistory,
   useCoreAutoFollowScroll,

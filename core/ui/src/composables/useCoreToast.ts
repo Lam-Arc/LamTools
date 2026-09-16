@@ -39,6 +39,7 @@ const DEFAULT_DURATION: Record<CoreToastKind, number> = {
 
 /** De-dupe window: an identical (kind, text) toast within this window is skipped. */
 const DEDUPE_WINDOW_MS = 3000
+export const TRANSIENT_CONNECTION_ERROR_GRACE_MS = 2000
 
 let nextId = 1
 const toasts = ref<CoreToast[]>([]) as Ref<CoreToast[]>
@@ -77,6 +78,76 @@ export function showToast(kind: CoreToastKind, text: string, duration?: number):
     setTimeout(() => _dismiss(id), toast.duration),
   )
   return id
+}
+
+export function isTransientCoreConnectionError(text: string): boolean {
+  const normalized = String(text ?? '').trim().toLowerCase()
+  return normalized.startsWith('lamtools direct transport disconnected')
+    || normalized.startsWith('lamtools direct transport connection failed')
+    || normalized.startsWith('lamtools direct transport closed during connect')
+    || normalized === 'core app server transport closed'
+}
+
+export interface CoreConnectionErrorToastGate {
+  report(text: string, duration?: number): number
+  onConnectionState(state: 'connecting' | 'open' | 'closed' | 'error'): void
+  dispose(): void
+}
+
+/**
+ * Delay only transport-disconnect errors. A reconnect inside the grace window
+ * cancels the toast; business/provider errors remain immediate and unchanged.
+ */
+export function createCoreConnectionErrorToastGate(options: {
+  isConnected: () => boolean
+  graceMs?: number
+  emit?: (kind: CoreToastKind, text: string, duration?: number) => number
+}): CoreConnectionErrorToastGate {
+  const graceMs = options.graceMs ?? TRANSIENT_CONNECTION_ERROR_GRACE_MS
+  const emit = options.emit ?? showToast
+  let pendingTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingText = ''
+  let pendingDuration: number | undefined
+
+  function clearPending(): void {
+    if (pendingTimer !== null) clearTimeout(pendingTimer)
+    pendingTimer = null
+    pendingText = ''
+    pendingDuration = undefined
+  }
+
+  return {
+    report(text: string, duration?: number): number {
+      const normalized = String(text ?? '').trim()
+      if (!normalized) return -1
+      if (!isTransientCoreConnectionError(normalized)) {
+        return emit('error', normalized, duration)
+      }
+      if (options.isConnected()) {
+        clearPending()
+        return -1
+      }
+      pendingText = normalized
+      pendingDuration = duration
+      if (pendingTimer === null) {
+        pendingTimer = setTimeout(() => {
+          pendingTimer = null
+          if (!options.isConnected() && pendingText) {
+            emit('error', pendingText, pendingDuration)
+          }
+          pendingText = ''
+          pendingDuration = undefined
+        }, Math.max(0, graceMs))
+      }
+      return -1
+    },
+    onConnectionState(state): void {
+      if (state === 'open') clearPending()
+    },
+    dispose(): void {
+      clearPending()
+    },
+  }
 }
 
 export function dismissToast(id: number) {

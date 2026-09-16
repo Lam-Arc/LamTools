@@ -833,8 +833,8 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 .form-field em { font-style: normal; color: var(--orange); }
 .form-field input, .form-field textarea {
   box-sizing: border-box; width: 100%; padding: 7px 10px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, var(--text)) 12%, transparent); border-radius: 6px;
-  background: var(--theme-main-subtle-background, var(--bg)); color: var(--theme-main-text, var(--text)); font: inherit; font-size: 14px;
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: 6px;
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); caret-color: var(--theme-composer-text); font: inherit; font-size: 14px;
 }
 .form-field :deep(.ui-select-trigger) {
   min-height: 36px;
@@ -895,7 +895,7 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 .status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 
 /* inline edit */
-.inline-edit { box-sizing: border-box; width: 100%; padding: 4px 6px; border: 1px solid var(--blue); border-radius: 6px; background: var(--theme-main-subtle-background, var(--bg)); color: var(--theme-main-text, var(--text)); font: inherit; }
+.inline-edit { box-sizing: border-box; width: 100%; padding: 4px 6px; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); caret-color: var(--theme-composer-text); font: inherit; }
 .title-edit { font-size: 15px; font-weight: 600; }
 .instruction-edit { resize: vertical; min-height: 48px; font-size: 13px; }
 .edit-hint { display: flex; gap: 4px; margin-top: 4px; }

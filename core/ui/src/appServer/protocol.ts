@@ -87,7 +87,7 @@ export interface CoreAppRuntimeSnapshot {
   allow_access_outside_workdir?: boolean
   active_mode?: string | null
   model_id?: string | null
-  reasoning_level?: 'off' | 'light' | 'high' | 'max'
+  reasoning_level?: 'off' | 'light' | 'medium' | 'high' | 'xhigh' | 'max'
   thinking_enabled?: boolean
   thinking_budget?: number
   reasoning_effort?: string

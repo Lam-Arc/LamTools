@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import lamtools_core.skill_runtime as skill_runtime
@@ -85,3 +86,58 @@ def test_default_core_toolbox_uses_authoritative_skill_runtime(tmp_path: Path):
 
     assert skill is not None
     assert skill.location.parent.name == "office-documents"
+
+
+def test_standard_openai_yaml_can_make_support_skill_explicit_only(tmp_path: Path):
+    root = tmp_path / "skills"
+    skill_path = _write_skill(root, "support-runtime", "support runtime")
+    agents = skill_path.parent / "agents"
+    agents.mkdir()
+    (agents / "openai.yaml").write_text(
+        "policy:\n  allow_implicit_invocation: false\n",
+        encoding="utf-8",
+    )
+    registry = skill_runtime.SkillRegistry(explicit_roots=[root])
+
+    skill = registry.get(tmp_path / "workspace", "support-runtime")
+
+    assert skill is not None
+    assert skill.allow_implicit_invocation is False
+    assert "support-runtime" not in registry.prompt_index(tmp_path / "workspace")
+    assert "support runtime" in registry.load_prompt_content(
+        tmp_path / "workspace", "support-runtime"
+    )
+
+
+def test_openai_yaml_policy_change_invalidates_registry_cache(tmp_path: Path):
+    root = tmp_path / "skills"
+    skill_path = _write_skill(root, "toggle", "toggle support")
+    agents = skill_path.parent / "agents"
+    agents.mkdir()
+    policy = agents / "openai.yaml"
+    policy.write_text("policy:\n  allow_implicit_invocation: false\n", encoding="utf-8")
+    registry = skill_runtime.SkillRegistry(explicit_roots=[root])
+    assert "toggle" not in registry.prompt_index(tmp_path / "workspace")
+
+    policy.write_text("policy:\n  allow_implicit_invocation: true\n# changed\n", encoding="utf-8")
+
+    assert "toggle" in registry.prompt_index(tmp_path / "workspace")
+
+
+def test_builtin_core_skill_roots_uses_frozen_bundle_resources(monkeypatch, tmp_path: Path):
+    bundled = tmp_path / "resources" / "skills"
+    bundled.mkdir(parents=True)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    assert skill_runtime.builtin_core_skill_roots() == (bundled,)
+
+
+def test_builtin_core_skill_roots_falls_back_when_frozen_bundle_root_is_absent(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+
+    roots = skill_runtime.builtin_core_skill_roots()
+
+    assert roots
+    assert roots[0].name == "skills"

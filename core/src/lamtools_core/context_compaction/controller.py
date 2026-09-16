@@ -9,10 +9,13 @@ from typing import Any
 
 from lamtools_core.context_compaction_budget import (
     DEFAULT_SUMMARY_OUTPUT_TOKENS,
+    MAX_RETAINED_USER_MESSAGES,
     SummaryTokenBudget,
     TokenBudget,
     TokenMeasurement,
+    load_retained_steps,
     measure_for_compaction_trigger,
+    resolve_retained_steps,
 )
 from lamtools_core.llm import ChatMessage, LLMClient
 from lamtools_core.llm.policy import RetryPolicy
@@ -20,6 +23,13 @@ from lamtools_core.llm.retry import ModelRetrySink
 from lamtools_core.tokens import estimate_message_tokens
 
 from .fitter import CompactionFitter
+from .formatting import (
+    RECENT_USER_MESSAGES_METADATA_KEY,
+    append_recent_user_messages,
+    extract_recent_user_messages,
+    recent_user_message_text,
+    strip_recent_user_messages,
+)
 from .models import (
     CompactionBudgetExceeded,
     CompactionDeltaSink,
@@ -68,6 +78,7 @@ class ContextCompactor:
         model_timeout_seconds: float | None = None,
         retry_policy: RetryPolicy | None = None,
         on_model_retry: ModelRetrySink | None = None,
+        retained_steps: int | None = None,
         pipeline: Callable[..., Awaitable[ContextCompactionResult]] | None = None,
     ) -> None:
         self._llm_client = llm_client
@@ -84,6 +95,7 @@ class ContextCompactor:
         self._model_timeout_seconds = model_timeout_seconds
         self._retry_policy = retry_policy
         self._on_model_retry = on_model_retry
+        self._retained_steps = retained_steps
         self._pipeline = pipeline
 
     async def compact(
@@ -93,6 +105,7 @@ class ContextCompactor:
         budget: TokenBudget,
         options: CompactionOptions | None = None,
         trigger: str | None = None,
+        retained_steps: int | None = None,
         _skip_trigger_check: bool = False,
     ) -> ContextCompactionResult | None:
         """Run the common compaction pipeline when the invocation warrants it.
@@ -104,6 +117,18 @@ class ContextCompactor:
         does not change the compaction pipeline itself.
         """
         resolved_options = options or CompactionOptions()
+        effective_retained_steps = (
+            retained_steps
+            if retained_steps is not None
+            else self._retained_steps
+            if self._retained_steps is not None
+            else resolved_options.retained_steps
+        )
+        if effective_retained_steps != resolved_options.retained_steps:
+            resolved_options = replace(
+                resolved_options,
+                retained_steps=effective_retained_steps,
+            )
         target_tokens = resolved_options.target_tokens or budget.target_tokens
         if not resolved_options.force and not _skip_trigger_check:
             measurement = measure_for_compaction_trigger(
@@ -136,6 +161,7 @@ class ContextCompactor:
             model_timeout_seconds=self._model_timeout_seconds,
             retry_policy=self._retry_policy or RetryPolicy(),
             on_model_retry=self._on_model_retry,
+            retained_steps=resolved_options.retained_steps,
             options=resolved_options,
         )
         if self._pipeline is not None:
@@ -209,6 +235,7 @@ class ContextCompactionController:
         trigger: str = "auto",
         measurement: TokenMeasurement | None = None,
         force: bool = False,
+        retained_steps: int | None = None,
     ) -> CompactionExecution:
         """Run bounded compaction, retrying once with the current model.
 
@@ -320,6 +347,7 @@ class ContextCompactionController:
                 ),
                 options=CompactionOptions(force=False, target_tokens=limit_tokens),
                 trigger=trigger,
+                retained_steps=retained_steps,
                 _skip_trigger_check=True,
             )
 
@@ -366,6 +394,16 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
     options = request.options
     if options.target_tokens is not None and options.target_tokens != request.limit_tokens:
         request = replace(request, limit_tokens=options.target_tokens)
+    effective_retained_steps = (
+        request.retained_steps
+        if request.retained_steps is not None
+        else request.options.retained_steps
+    )
+    effective_retained_steps = (
+        resolve_retained_steps(effective_retained_steps)
+        if effective_retained_steps is not None
+        else load_retained_steps()
+    )
     await _emit_compaction_event(
         request,
         {
@@ -380,7 +418,18 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         preserve_latest_user=request.preserve_latest_user,
         compact_all=request.options.compact_all,
         limit_tokens=request.limit_tokens,
-        estimate_tokens=lambda messages: _estimate_compaction_tokens(request, messages),
+        retained_steps=(
+            request.retained_steps
+            if request.retained_steps is not None
+            else request.options.retained_steps
+        ),
+        # Planning decides which preferred Step/user units must yield to the
+        # hard target, so use the same exact estimator as the fitter.
+        estimate_tokens=lambda messages: _estimate_compaction_tokens(
+            request,
+            messages,
+            exact=True,
+        ),
     )
     before_tokens = _estimate_compaction_tokens(
         request,
@@ -412,6 +461,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
                 "compacted_messages": 0,
                 "retained_messages": len(request.messages),
                 "removed_messages": 0,
+                "retained_steps": effective_retained_steps,
             },
         )
         await _emit_compaction_event(request, result.display_payload)
@@ -436,21 +486,108 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
                 "compacted_messages": 0,
                 "retained_messages": len(request.messages),
                 "removed_messages": 0,
+                "retained_steps": effective_retained_steps,
             },
         )
         await _emit_compaction_event(request, result.display_payload)
         return result
 
+    # Carry forward the exact entries that a prior compaction fitted. New
+    # summaries keep this list in metadata; legacy summaries are parsed only
+    # when metadata is absent, avoiding accidental heading matches in prose.
+    prior_recent_user_messages: list[str] = []
+    for message in request.messages:
+        if not (
+            message.role == "system"
+            and message.metadata.get("key") == "context_compaction_summary"
+        ):
+            continue
+        raw_recent = message.metadata.get(RECENT_USER_MESSAGES_METADATA_KEY)
+        if isinstance(raw_recent, list) and all(isinstance(item, str) for item in raw_recent):
+            prior_recent_user_messages.extend(raw_recent)
+        else:
+            prior_recent_user_messages.extend(
+                extract_recent_user_messages(str(message.content or ""))
+            )
+
+    existing_recent = extract_recent_user_messages(request.existing_summary)
+    if existing_recent:
+        prior_recent_user_messages = _merge_recent_user_messages(
+            prior_recent_user_messages,
+            existing_recent,
+        )
+    current_recent_user_messages = [
+        recent_user_message_text(message.content)
+        for message in request.messages
+        if message.role == "user"
+        and not message.metadata.get("internal")
+        and message.metadata.get("key") != "request_local_late_context"
+    ]
+    recent_user_messages = _merge_recent_user_messages(
+        prior_recent_user_messages,
+        current_recent_user_messages,
+    )[-MAX_RETAINED_USER_MESSAGES:]
+    # The newest user instruction is the final safety boundary. It is stored
+    # inside the program-owned summary suffix rather than as a raw tail
+    # message, so account for that exact final representation before invoking
+    # the summarizer.
+    required_tail = (
+        [
+            ChatMessage(
+                role="system",
+                content=append_recent_user_messages(
+                    "",
+                    [recent_user_messages[-1]],
+                ),
+            )
+        ]
+        if recent_user_messages
+        else []
+    )
+    protected_tokens = _estimate_compaction_tokens(
+        request,
+        [*layout.prefix_messages, *required_tail],
+        exact=True,
+    )
+    if protected_tokens > request.limit_tokens:
+        result = _failed_compaction_result(
+            request,
+            before_tokens=before_tokens,
+            reason="protected_tail_over_limit",
+            message=(
+                "Context compaction failed to fit within limit: latest user "
+                "message requires "
+                f"{protected_tokens} > {request.limit_tokens} tokens"
+            ),
+        )
+        await _emit_compaction_event(request, result.display_payload)
+        return result
+
     try:
+        messages_for_summary = [
+            replace(
+                message,
+                content=strip_recent_user_messages(
+                    str(message.content or ""),
+                    _message_recent_user_messages(message),
+                ),
+            )
+            if message.metadata.get("key") == "context_compaction_summary"
+            else message
+            for message in layout.compacted_messages
+        ]
         summary, segment_count = await summarize_context_messages(
-            layout.compacted_messages,
+            messages_for_summary,
             llm_client=request.llm_client,
             model=request.model,
             timeout=request.timeout,
             limit_tokens=request.limit_tokens,
             input_limit_tokens=request.input_limit_tokens,
             summary_budget=request.summary_budget,
-            existing_summary=request.existing_summary,
+            existing_summary=strip_recent_user_messages(
+                request.existing_summary,
+                existing_recent if existing_recent else None,
+            ),
             prefix_messages=layout.prefix_messages,
             on_delta=request.on_delta,
             on_event=lambda payload: _emit_compaction_event(request, payload),
@@ -496,6 +633,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
                 summary_message=summary_message,
                 recent_messages=list(layout.retained_messages),
                 target_tokens=request.limit_tokens,
+                recent_user_messages=recent_user_messages,
             )
         )
     except CompactionBudgetExceeded as exc:
@@ -515,6 +653,10 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
     replacement_messages = fit_result.messages
     prefix_count = len(layout.prefix_messages)
     summary_message = replacement_messages[prefix_count]
+    fitted_recent_user_messages = list(fit_result.recent_user_messages)
+    summary_message.metadata[RECENT_USER_MESSAGES_METADATA_KEY] = (
+        fitted_recent_user_messages
+    )
     retained_messages = replacement_messages[prefix_count + 1 :]
     after_tokens = fit_result.estimated_tokens
     if after_tokens >= before_tokens:
@@ -539,6 +681,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
                 "compacted_messages": 0,
                 "retained_messages": len(request.messages),
                 "removed_messages": 0,
+                "retained_steps": effective_retained_steps,
             },
         )
         await _emit_compaction_event(request, result.display_payload)
@@ -572,6 +715,8 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         "removed_messages": len(layout.compacted_messages)
         + len(layout.retained_messages)
         - len(retained_messages),
+        "retained_steps": effective_retained_steps,
+        "recent_user_messages": len(fitted_recent_user_messages),
     }
     result = ContextCompactionResult(
         status="compacted",
@@ -586,6 +731,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         after_tokens=after_tokens,
         limit_tokens=request.limit_tokens,
         segment_count=segment_count,
+        recent_user_messages=fitted_recent_user_messages,
         display_payload=display_payload,
     )
     await _emit_compaction_event(request, display_payload)
@@ -612,6 +758,15 @@ def _failed_compaction_result(
         "compacted_messages": 0,
         "retained_messages": len(request.messages),
         "removed_messages": 0,
+        "retained_steps": (
+            resolve_retained_steps(
+                request.retained_steps
+                if request.retained_steps is not None
+                else request.options.retained_steps
+            )
+            if request.retained_steps is not None or request.options.retained_steps is not None
+            else load_retained_steps()
+        ),
     }
     if reason:
         display_payload["reason"] = reason
@@ -650,6 +805,31 @@ async def _emit_compaction_event(
             **payload,
         },
     )
+
+
+def _message_recent_user_messages(message: ChatMessage) -> list[str] | None:
+    """Return trusted suffix metadata from a summary message, if present."""
+    raw = message.metadata.get(RECENT_USER_MESSAGES_METADATA_KEY)
+    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        return list(raw)
+    return None
+
+
+def _merge_recent_user_messages(
+    prior: list[str], current: list[str]
+) -> list[str]:
+    """Append current entries while removing only a real sequence overlap."""
+    if not prior:
+        return list(current)
+    if not current:
+        return list(prior)
+    max_overlap = min(len(prior), len(current))
+    overlap = 0
+    for size in range(max_overlap, 0, -1):
+        if prior[-size:] == current[:size]:
+            overlap = size
+            break
+    return [*prior, *current[overlap:]]
 
 
 __all__ = [

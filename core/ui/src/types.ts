@@ -131,11 +131,92 @@ export type MessagePartType =
 
 export type MessagePartStatus = 'pending' | 'running' | 'completed' | 'error';
 
+/** Durable sub-agent lifecycle states.  Message parts keep their compact
+ * process status union, while right-rail runs may remain idle/paused/closed
+ * after the parent tool call has completed. */
+export type CoreSubAgentStatus =
+  | MessagePartStatus
+  | 'idle'
+  | 'paused'
+  | 'closed'
+  | 'interrupted';
+
 export interface ToolArtifact {
   kind: string;
   uri?: string;
   content?: unknown;
   metadata?: Record<string, unknown>;
+  /** Registry identity (optional on legacy streamed tool artifacts). */
+  artifact_id?: string;
+  role?: ArtifactRole;
+  latest_revision_id?: string;
+  revision_count?: number;
+  thread_id?: string;
+  turn_id?: string;
+  item_id?: string;
+  missing?: boolean;
+  deleted?: boolean;
+  path?: string;
+  mime_type?: string;
+  availability?: string;
+  revisions?: ArtifactRevision[];
+}
+
+/** The three artifact roles surfaced by the project成果库. */
+export type ArtifactRole = 'input' | 'intermediate' | 'deliverable' | string;
+
+export type ArtifactStatus = 'ready' | 'running' | 'completed' | 'failed' | 'missing' | 'deleted' | string;
+
+export interface ArtifactRevision {
+  revision_id?: string;
+  id?: string;
+  artifact_id?: string;
+  revision?: number;
+  ordinal?: number;
+  created_at?: string;
+  updated_at?: string;
+  status?: ArtifactStatus;
+  path?: string;
+  uri?: string;
+  mime_type?: string;
+  name?: string;
+  size_bytes?: number;
+  size?: number;
+  content?: string;
+  missing?: boolean;
+  deleted?: boolean;
+  provenance?: unknown;
+  [key: string]: unknown;
+}
+
+/** Compatibility envelope for the V2 artifact registry projection. */
+export interface ProjectArtifact {
+  artifact_id: string;
+  name: string;
+  kind: string;
+  mime_type?: string;
+  path?: string;
+  uri?: string;
+  role?: ArtifactRole;
+  status?: ArtifactStatus;
+  source?: string;
+  provenance?: unknown;
+  /** Backend availability: available or metadata_only when no blob exists. */
+  availability?: string;
+  created_at?: string;
+  updated_at?: string;
+  latest_revision_id?: string;
+  revision_count?: number;
+  revisions?: ArtifactRevision[];
+  thread_id?: string;
+  turn_id?: string;
+  item_id?: string;
+  missing?: boolean;
+  deleted?: boolean;
+  prompt?: string;
+  parent_ids?: string[];
+  children_ids?: string[];
+  [key: string]: unknown;
 }
 
 export interface ToolInputPreview {
@@ -186,6 +267,18 @@ export interface MessagePart {
   runId?: string;
   startedAt?: string;
   completedAt?: string;
+  /** Sub-agent lifecycle metadata.  New snapshots may expose these fields
+   * directly; legacy snapshots keep them inside `metadata`. */
+  agentType?: 'consider' | 'execute' | string;
+  agentName?: string;
+  model?: string;
+  reasoningLevel?: string;
+  summary?: string;
+  elapsedMs?: number;
+  sourceMessageId?: string;
+  sourcePartId?: string;
+  subSessionId?: string;
+  sourceCallId?: string;
   /** Arbitrary metadata */
   metadata?: Record<string, unknown>;
 }
@@ -213,13 +306,30 @@ export interface CoreSubAgentRun {
   subSessionId: string;
   name: string;
   task: string;
-  status: MessagePartStatus;
+  status: CoreSubAgentStatus;
   modelId: string;
   startedAt: string;
   updatedAt: string;
   /** ChatThread-ready child conversation and runtime timeline. */
   timeline: CoreMessage[];
   sourcePartIds: string[];
+  /** Current invocation kind (`consider` or `execute`). */
+  type?: 'consider' | 'execute' | string;
+  /** Model and reasoning metadata used by the child invocation. */
+  model?: string;
+  reasoningLevel?: string;
+  /** Current projected summary and frozen elapsed duration. */
+  summary?: string;
+  completedAt?: string;
+  elapsedMs?: number;
+  /** Source evidence for locating the parent message/part. */
+  sourceMessageId?: string;
+  sourcePartId?: string;
+  sourceMessageIds?: string[];
+  /** All observed child session ids when a named agent is resumed. */
+  subSessionIds?: string[];
+  /** Original backend call id, retained for source-part compatibility. */
+  sourceCallId?: string;
 }
 
 export interface CoreRuntimeEvent {

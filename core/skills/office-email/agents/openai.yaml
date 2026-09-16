@@ -1,0 +1,6 @@
+interface:
+  display_name: "Office Email"
+  short_description: "Draft and organize clear professional email communication"
+  default_prompt: "Use $office-email to draft a concise professional email."
+policy:
+  allow_implicit_invocation: true

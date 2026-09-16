@@ -278,11 +278,12 @@ function onDirectorySelected(path: string) {
   min-width: 0;
   height: 46px;
   box-sizing: border-box;
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
   outline: none;
-  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
-  color: var(--theme-control-text);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: 0 var(--space-3);
   font: inherit;
   font-weight: 520;
@@ -294,7 +295,7 @@ function onDirectorySelected(path: string) {
 }
 
 .core-project-input::placeholder {
-  color: color-mix(in srgb, var(--theme-control-text) 52%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 52%, transparent);
 }
 
 .core-project-input:focus {

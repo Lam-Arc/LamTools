@@ -55,6 +55,8 @@ export interface WorkflowApi {
 
 export interface WorkflowRunOptions {
   workRoot?: string
+  modelId?: string
+  permissions?: Record<string, unknown>
   inputs?: Record<string, unknown>
   maxSteps?: number
   priorValues?: Record<string, unknown>
@@ -95,6 +97,8 @@ export interface WorkflowActivationOptions {
 
 export interface WorkflowQueueOptions {
   workRoot?: string
+  modelId?: string
+  permissions?: Record<string, unknown>
   inputs?: Record<string, unknown>
   maxSteps?: number
   startNode?: string
@@ -475,6 +479,8 @@ export function buildWorkflowRunPayload(
   return {
     name,
     ...(options.workRoot ? { work_root: options.workRoot } : {}),
+    ...(options.modelId ? { model_id: options.modelId } : {}),
+    ...(options.permissions ? { permissions: options.permissions } : {}),
     ...(options.inputs ? { inputs: options.inputs } : {}),
     ...(options.maxSteps !== undefined ? { max_steps: options.maxSteps } : {}),
     ...(options.priorValues ? { prior_values: options.priorValues } : {}),
@@ -496,6 +502,7 @@ export function buildWorkflowQueuePayload(
   return {
     name,
     ...(options.workRoot ? { work_root: options.workRoot } : {}),
+    ...(options.modelId ? { model_id: options.modelId } : {}),
     ...(options.inputs ? { inputs: options.inputs } : {}),
     ...(options.maxSteps !== undefined ? { max_steps: options.maxSteps } : {}),
     ...(options.startNode ? { start_node: options.startNode } : {}),
@@ -504,7 +511,12 @@ export function buildWorkflowQueuePayload(
     ...(options.priorNodeStates ? { prior_node_states: serializeNodeStates(options.priorNodeStates) } : {}),
     ...(options.threadId ? { thread_id: options.threadId } : {}),
     ...(options.runId ? { run_id: options.runId } : {}),
-    ...(options.metadata ? { metadata: options.metadata } : {}),
+    ...(options.permissions || options.metadata ? {
+      metadata: {
+        ...(options.permissions ? { runtime_permissions: options.permissions } : {}),
+        ...(options.metadata || {}),
+      },
+    } : {}),
   }
 }
 
@@ -794,12 +806,34 @@ export function normalizeWorkflowNodeState(raw: unknown, nodeId = ''): WorkflowN
   const attempts = Number(value.attempts ?? value.attempt_count ?? 0)
   const cacheStatus = value.cache_status ?? value.cacheStatus ?? (typeof value.cache === 'string' ? value.cache : undefined)
   const cacheKey = value.cache_key ?? value.cacheKey
+  const rawDuration = value.duration_ms ?? value.durationMs ?? value.duration
+  const durationSeconds = Number(value.duration_seconds ?? value.durationSeconds ?? NaN)
+  const duration = rawDuration !== undefined
+    ? Number(rawDuration)
+    : Number.isFinite(durationSeconds) ? durationSeconds * 1000 : NaN
+  const input = value.input ?? value.inputs ?? value.input_values ?? value.inputValues
+  const toolCalls = value.tool_calls ?? value.toolCalls ?? value.tools
+  const logs = value.logs ?? value.log ?? value.messages
+  const audit = value.audit ?? value.audit_events ?? value.auditEvents
   return {
     node_id: String(value.node_id ?? value.nodeId ?? nodeId),
     status: normalizeNodeStateStatus(value.status),
+    ...(Object.prototype.hasOwnProperty.call(value, 'input')
+      || Object.prototype.hasOwnProperty.call(value, 'inputs')
+      || Object.prototype.hasOwnProperty.call(value, 'input_values')
+      || Object.prototype.hasOwnProperty.call(value, 'inputValues')
+      ? { input }
+      : {}),
     ...(Object.prototype.hasOwnProperty.call(value, 'output') ? { output: value.output } : {}),
     ...(value.error ? { error: String(value.error) } : {}),
     attempts: Number.isFinite(attempts) ? Math.max(0, attempts) : 0,
+    ...(typeof value.attempt_id === 'string' || typeof value.attemptId === 'string'
+      ? { attempt_id: String(value.attempt_id ?? value.attemptId) }
+      : {}),
+    ...(Number.isFinite(duration) && duration >= 0 ? { duration_ms: duration } : {}),
+    ...(toolCalls !== undefined && toolCalls !== null ? { tool_calls: toolCalls } : {}),
+    ...(logs !== undefined && logs !== null ? { logs } : {}),
+    ...(audit !== undefined && audit !== null ? { audit } : {}),
     ...(cacheStatus !== undefined ? { cache_status: String(cacheStatus) } : {}),
     ...(cacheKey !== undefined && cacheKey !== null ? { cache_key: String(cacheKey) } : {}),
     started_at: value.started_at === undefined && value.startedAt === undefined

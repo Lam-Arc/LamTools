@@ -156,24 +156,17 @@ class ScriptedCoreCliSubAgentLLM:
                 LLMToolCall(
                     id="call-cli-sub",
                     name="sub_agent",
-                    arguments={"task": "write delegated.txt", "agent": "writer"},
+                    arguments={
+                        "action": "create",
+                        "type": "execute",
+                        "name": "writer",
+                        "model": "fake-model",
+                        "reasoning_level": "high",
+                    },
                 )
             ])
             return
-        if len(self.requests) == 2:
-            yield LLMStreamEvent(kind="done", tool_calls=[
-                LLMToolCall(
-                    id="call-cli-child-write",
-                    name="write_file",
-                    arguments={"path": "delegated.txt", "content": "delegated content"},
-                )
-            ])
-            return
-        if len(self.requests) == 3:
-            yield LLMStreamEvent(kind="content_delta", content="Child saved delegated.txt.")
-            yield LLMStreamEvent(kind="done")
-            return
-        yield LLMStreamEvent(kind="content_delta", content="Main received the delegated result.")
+        yield LLMStreamEvent(kind="content_delta", content="Main created the reusable child without waiting.")
         yield LLMStreamEvent(kind="done")
 
 
@@ -494,6 +487,341 @@ def test_core_cli_parser_exposes_live_control_commands(tmp_path: Path) -> None:
     assert (attachment_upload.command, attachment_upload.attachment_action, attachment_upload.thread_id) == (
         "attachment", "upload", "thread-1",
     )
+
+
+def test_core_cli_parser_exposes_subagent_lifecycle_arguments() -> None:
+    parser = build_parser()
+
+    create = parser.parse_args([
+        "subagent", "create", "thread-1",
+        "--type", "consider", "--name", "reviewer", "--model", "model-a",
+        "--reasoning-level", "xh",
+    ])
+    message = parser.parse_args([
+        "subagent", "message", "thread-1",
+        "--type", "execute", "--name", "reviewer", "continue the next step",
+    ])
+
+    assert (
+        create.subagent_command,
+        create.thread_id,
+        create.type,
+        create.name,
+        create.model,
+        create.reasoning_level,
+    ) == ("create", "thread-1", "consider", "reviewer", "model-a", "xh")
+    assert (
+        message.subagent_command,
+        message.thread_id,
+        message.type,
+        message.name,
+        message.prompt,
+    ) == ("message", "thread-1", "execute", "reviewer", "continue the next step")
+
+
+def test_core_cli_parser_exposes_subagent_role_assignment_arguments(tmp_path: Path) -> None:
+    parser = build_parser()
+
+    show = parser.parse_args(
+        ["subagent", "roles", "show", "--scope", "effective", "--work-root", str(tmp_path)]
+    )
+    set_rule = parser.parse_args(
+        [
+            "subagent",
+            "roles",
+            "set",
+            "Research",
+            "--type",
+            "consider",
+            "--model",
+            "model-a",
+            "--reasoning-min",
+            "off",
+            "--reasoning-max",
+            "xh",
+            "--scope",
+            "project",
+            "--work-root",
+            str(tmp_path),
+        ]
+    )
+    delete = parser.parse_args(
+        ["subagent", "roles", "delete", "Research", "--scope", "global"]
+    )
+
+    assert (show.subagent_roles_command, show.scope, show.work_root) == (
+        "show",
+        "effective",
+        str(tmp_path),
+    )
+    assert (
+        set_rule.subagent_roles_command,
+        set_rule.task_type,
+        set_rule.type,
+        set_rule.model,
+        set_rule.reasoning_min,
+        set_rule.reasoning_max,
+        set_rule.scope,
+    ) == ("set", "Research", "consider", "model-a", "off", "xh", "project")
+    assert (delete.subagent_roles_command, delete.task_type, delete.scope) == (
+        "delete",
+        "Research",
+        "global",
+    )
+
+    strategy_show = parser.parse_args(
+        ["subagent", "strategy", "show", "--scope", "effective", "--work-root", str(tmp_path)]
+    )
+    strategy_set = parser.parse_args(
+        ["subagent", "strategy", "set", "high", "--scope", "project", "--work-root", str(tmp_path)]
+    )
+    strategy_unset = parser.parse_args(
+        ["subagent", "strategy", "unset", "--scope", "project", "--work-root", str(tmp_path)]
+    )
+    assert (strategy_show.subagent_strategy_command, strategy_show.scope) == (
+        "show",
+        "effective",
+    )
+    assert (strategy_set.subagent_strategy_command, strategy_set.strategy) == (
+        "set",
+        "high",
+    )
+    assert strategy_unset.subagent_strategy_command == "unset"
+
+
+def test_core_cli_subagent_roles_set_show_delete_and_validate_range(
+    tmp_path: Path, isolated_config_root, capsys
+) -> None:
+    work = tmp_path / "work"
+
+    assert main(
+        [
+            "subagent",
+            "roles",
+            "set",
+            "Research",
+            "--type",
+            "consider",
+            "--model",
+            "model-a",
+            "--reasoning-min",
+            "off",
+            "--reasoning-max",
+            "xh",
+        ]
+    ) == 0
+    set_result = json.loads(capsys.readouterr().out)
+    assert set_result["role_assignment"]["reasoning_max"] == "xhigh"
+
+    assert main(
+        [
+            "subagent",
+            "roles",
+            "set",
+            " research ",
+            "--type",
+            "execute",
+            "--model",
+            "model-b",
+            "--reasoning-min",
+            "medium",
+            "--reasoning-max",
+            "max",
+            "--scope",
+            "project",
+            "--work-root",
+            str(work),
+        ]
+    ) == 0
+    capsys.readouterr()
+
+    assert main(
+        [
+            "subagent",
+            "roles",
+            "show",
+            "--scope",
+            "effective",
+            "--work-root",
+            str(work),
+        ]
+    ) == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown == {
+        "scope": "effective",
+        "role_assignments": [
+            {
+                "task_type": "research",
+                "type": "execute",
+                "model": "model-b",
+                "reasoning_min": "medium",
+                "reasoning_max": "max",
+            }
+        ],
+    }
+
+    assert main(
+        ["subagent", "roles", "delete", "RESEARCH", "--scope", "global"]
+    ) == 0
+    deleted = json.loads(capsys.readouterr().out)
+    assert deleted["deleted"] is True
+
+    assert main(
+        [
+            "subagent",
+            "roles",
+            "set",
+            "Broken",
+            "--type",
+            "consider",
+            "--model",
+            "model-a",
+            "--reasoning-min",
+            "max",
+            "--reasoning-max",
+            "off",
+        ]
+    ) == 1
+    assert "reasoning_min" in capsys.readouterr().err
+
+
+def test_core_cli_subagent_strategy_set_show_and_unset(
+    tmp_path: Path, isolated_config_root, capsys
+) -> None:
+    work = tmp_path / "work"
+    project_settings = work / ".lam" / "config" / "subagent" / "settings.json"
+    project_settings.parent.mkdir(parents=True)
+    project_settings.write_text(
+        json.dumps({"plugin_setting": "kept"}), encoding="utf-8"
+    )
+
+    assert main(["subagent", "strategy", "set", "low"]) == 0
+    assert json.loads(capsys.readouterr().out)["delegation_strategy"] == "low"
+
+    assert main(
+        [
+            "subagent",
+            "strategy",
+            "show",
+            "--scope",
+            "project",
+            "--work-root",
+            str(work),
+        ]
+    ) == 0
+    inherited = json.loads(capsys.readouterr().out)
+    assert inherited["delegation_strategy"] is None
+    assert inherited["effective_delegation_strategy"] == "low"
+    assert inherited["global_delegation_strategy"] == "low"
+    assert inherited["delegation_strategy_inherited"] is True
+
+    assert main(
+        [
+            "subagent",
+            "strategy",
+            "set",
+            "high",
+            "--scope",
+            "project",
+            "--work-root",
+            str(work),
+        ]
+    ) == 0
+    capsys.readouterr()
+    assert main(
+        [
+            "subagent",
+            "strategy",
+            "show",
+            "--scope",
+            "effective",
+            "--work-root",
+            str(work),
+        ]
+    ) == 0
+    assert json.loads(capsys.readouterr().out)["delegation_strategy"] == "high"
+
+    assert main(
+        [
+            "subagent",
+            "strategy",
+            "unset",
+            "--scope",
+            "project",
+            "--work-root",
+            str(work),
+        ]
+    ) == 0
+    assert json.loads(capsys.readouterr().out)["delegation_strategy"] is None
+    saved = json.loads(project_settings.read_text(encoding="utf-8"))
+    assert "delegation_strategy" not in saved
+    assert saved["plugin_setting"] == "kept"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["subagent", "strategy", "show", "--scope", "project"],
+        ["subagent", "strategy", "set", "high", "--scope", "project"],
+        ["subagent", "strategy", "unset", "--scope", "project"],
+        ["subagent", "roles", "show", "--scope", "project"],
+        [
+            "subagent", "roles", "set", "Research", "--type", "consider",
+            "--model", "model-a", "--reasoning-min", "off",
+            "--reasoning-max", "max", "--scope", "project",
+        ],
+        ["subagent", "roles", "delete", "Research", "--scope", "project"],
+        ["subagent", "guide", "show", "--scope", "project"],
+        ["subagent", "guide", "set", "missing.md", "--scope", "project"],
+        ["subagent", "guide", "edit", "--scope", "project"],
+    ],
+)
+def test_core_cli_subagent_project_commands_reject_blank_work_root(argv, capsys) -> None:
+    assert main([*argv, "--work-root", "   "]) == 1
+    assert "--work-root is required" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_core_cli_subagent_message_dispatches_exact_payload(monkeypatch) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    class FakeClient:
+        async def request(self, method: str, payload: dict):
+            calls.append((method, payload))
+            return {"accepted": True}
+
+    async def fake_invoke_live(args, operation):
+        return await operation(FakeClient())
+
+    monkeypatch.setattr(core_cli, "_invoke_live", fake_invoke_live)
+    args = build_parser().parse_args([
+        "subagent", "message", "thread-1",
+        "--type", "consider", "--name", "reviewer", "continue now",
+    ])
+
+    assert await args.func(args) == 0
+    assert calls == [(
+        "sub_agent.message",
+        {
+            "thread_id": "thread-1",
+            "type": "consider",
+            "name": "reviewer",
+            "prompt": "continue now",
+        },
+    )]
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["serve", "--reasoning-level", "medium"], "medium"),
+        (["run", "task", "--reasoning-level", "xhigh"], "xhigh"),
+        (["run-local", "task", "--reasoning-level", "medium"], "medium"),
+        (["start", "thread-1", "task", "--reasoning-level", "xhigh"], "xhigh"),
+    ],
+)
+def test_core_cli_parser_accepts_medium_and_xhigh_reasoning_levels(argv, expected) -> None:
+    assert build_parser().parse_args(argv).reasoning_level == expected
 
 
 @pytest.mark.asyncio
@@ -985,15 +1313,22 @@ async def test_core_cli_persists_user_message_before_model_execution(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_core_cli_sub_agent_uses_durable_child_session_and_parent_timeline(tmp_path: Path) -> None:
+async def test_core_cli_sub_agent_create_is_durable_and_non_blocking(tmp_path: Path) -> None:
     core_db = tmp_path / "core.db"
     thread_id = "thread-cli-sub-agent"
+    work_root = tmp_path / "workspace"
+    model_dir = work_root / ".lam" / "config" / "models"
+    model_dir.mkdir(parents=True)
+    (model_dir / "fake-model.jsonc").write_text(
+        '{"model_id":"fake-model","display_name":"Fake Model","capability":"text"}',
+        encoding="utf-8",
+    )
 
     summary = await run_core_cli_task(
         CoreCliRunOptions(
             message="delegate",
             model_id="fake-model",
-            work_root=tmp_path / "workspace",
+            work_root=work_root,
             run_dir=tmp_path / "run",
             core_db=core_db,
             thread_id=thread_id,
@@ -1002,26 +1337,18 @@ async def test_core_cli_sub_agent_uses_durable_child_session_and_parent_timeline
         llm_client=ScriptedCoreCliSubAgentLLM(),
     )
 
-    with sqlite3.connect(core_db) as con:
-        child = con.execute(
-            "select runtime_state_json from core_runtime_sessions where thread_id=?",
-            (f"{thread_id}:sub:writer",),
-        ).fetchone()
-        child_history = con.execute(
-            "select message_json from core_history_entries where thread_id=? order by seq asc",
-            (f"{thread_id}:sub:writer",),
-        ).fetchall()
-        write_events = con.execute(
-            "select payload_json from core_app_events where thread_id=? and payload_json like '%write_file%'",
-            (thread_id,),
-        ).fetchall()
-
     assert summary["result"]["decision"] == "done"
-    assert (tmp_path / "workspace" / "delegated.txt").read_text(encoding="utf-8") == "delegated content"
-    assert child is not None
-    assert json.loads(child[0])["status"] == "completed"
-    assert not json.loads(child_history[-1][0]).get("tool_calls")
-    assert write_events
+    assert summary["result"]["final_message"] == "Main created the reusable child without waiting."
+    assert not (work_root / "delegated.txt").exists()
+    with sqlite3.connect(tmp_path / "run" / "sub_agents.sqlite3") as con:
+        payload = con.execute(
+            "select payload from sub_agents where parent_thread_id=? and name=?",
+            (thread_id, "writer"),
+        ).fetchone()
+    assert payload is not None
+    record = json.loads(payload[0])
+    assert record["status"] == "idle"
+    assert record["type"] == "execute"
 
 
 @pytest.mark.asyncio

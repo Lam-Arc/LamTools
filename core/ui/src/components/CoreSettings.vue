@@ -549,6 +549,50 @@
           <p v-if="dreamingError" class="skill-error" role="alert">{{ dreamingError }}</p>
           <p class="hook-meta">内容写入 <code>&lt;workRoot&gt;/MEMORY.md</code>，下个会话自动加载；<code>/dream</code> 命令始终可手动触发；短期记忆存 SQLite（<code>core_memories</code> 表）。CLI：<code>core memory dream show/config</code>。</p>
         </article>
+
+        <article class="setting-card" data-context-compaction-card>
+          <div class="subhead">
+            <span class="muted subhead-title">
+              上下文压缩
+              <span class="subhead-sub">保留最近的 Step</span>
+            </span>
+            <div class="subhead-actions">
+              <button
+                class="text-btn"
+                type="button"
+                data-context-compaction-refresh
+                :disabled="contextCompactionLoading"
+                @click="fetchContextCompactionSettings"
+              >刷新</button>
+            </div>
+          </div>
+          <div class="dream-row">
+            <label class="dream-min-turns" for="context-compaction-retained-steps-input">
+              压缩保留最近 Step 数
+            </label>
+            <input
+              id="context-compaction-retained-steps-input"
+              v-model.number="contextCompactionRetainedSteps"
+              data-context-compaction-retained-steps
+              type="number"
+              class="lc-input lc-priority"
+              min="0"
+              max="100"
+              step="1"
+              :disabled="contextCompactionLoading"
+              @input="markSettingsDirty"
+            />
+            <button
+              class="small-btn quiet"
+              type="button"
+              data-context-compaction-save
+              :disabled="contextCompactionLoading || contextCompactionSaving"
+              @click="saveContextCompactionSettings"
+            >保存</button>
+          </div>
+          <p v-if="contextCompactionError" class="skill-error" role="alert">{{ contextCompactionError }}</p>
+          <p class="hook-meta">一个 Step 是一次模型响应及其后续工具结果；默认保留 0 个 Step，历史会全部汇总；随后程序会将最新 20 条用户指令原文追加为编号的“Recent user messages”段落。令牌预算不足时较早条目会静默丢弃。</p>
+        </article>
         </div>
       </section>
 
@@ -1198,6 +1242,66 @@ async function toggleDreamingSettings() {
   if (!await saveDreamingSettings()) dreamingEnabled.value = previous
 }
 
+// ── Context compaction settings (上下文压缩, core.contextCompaction) ──
+const CONTEXT_COMPACTION_DEFAULT_RETAINED_STEPS = 0
+const CONTEXT_COMPACTION_MIN_RETAINED_STEPS = 0
+const CONTEXT_COMPACTION_MAX_RETAINED_STEPS = 100
+
+const contextCompactionRetainedSteps = ref(CONTEXT_COMPACTION_DEFAULT_RETAINED_STEPS)
+const contextCompactionLoading = ref(false)
+const contextCompactionSaving = ref(false)
+const contextCompactionError = ref('')
+
+function normalizeContextCompactionRetainedSteps(value: unknown): number {
+  if (value === null || value === undefined || (typeof value === 'string' && !value.trim())) {
+    return CONTEXT_COMPACTION_DEFAULT_RETAINED_STEPS
+  }
+  const rawSteps = Number(value)
+  if (!Number.isFinite(rawSteps)) return CONTEXT_COMPACTION_DEFAULT_RETAINED_STEPS
+  return Math.min(
+    CONTEXT_COMPACTION_MAX_RETAINED_STEPS,
+    Math.max(CONTEXT_COMPACTION_MIN_RETAINED_STEPS, Math.floor(rawSteps)),
+  )
+}
+
+async function fetchContextCompactionSettings() {
+  const rpc = props.requestRpc || defaultRequestRpc
+  contextCompactionLoading.value = true
+  contextCompactionError.value = ''
+  try {
+    const result = await rpc('settings.get', { namespace: 'core.contextCompaction' })
+    const value = (result.value ?? {}) as Record<string, unknown>
+    contextCompactionRetainedSteps.value = normalizeContextCompactionRetainedSteps(value.retained_steps)
+  } catch (e) {
+    contextCompactionError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    contextCompactionLoading.value = false
+  }
+}
+
+async function saveContextCompactionSettings() {
+  const rpc = props.requestRpc || defaultRequestRpc
+  contextCompactionSaving.value = true
+  contextCompactionError.value = ''
+  try {
+    // Native min/max validation does not run because this row is not a form;
+    // normalize the value before persisting it (the same guard as Dreaming).
+    const retainedSteps = normalizeContextCompactionRetainedSteps(contextCompactionRetainedSteps.value)
+    contextCompactionRetainedSteps.value = retainedSteps
+    await rpc('settings.update', {
+      namespace: 'core.contextCompaction',
+      value: { retained_steps: retainedSteps },
+    })
+    settingsDirty.value = false
+    return true
+  } catch (e) {
+    contextCompactionError.value = e instanceof Error ? e.message : String(e)
+    return false
+  } finally {
+    contextCompactionSaving.value = false
+  }
+}
+
 function closeEditors() {
   providerEditor.value = null
   modelEditor.value = null
@@ -1554,9 +1658,9 @@ function getTextColor(area: ThemeArea): string {
 const presets = THEME_PRESETS
 
 // ── Unsaved-changes guard (audit 17 S3) ─────────────────────────
-// Any open editor, or a dreaming form that was touched after the last
-// save, makes a close without confirmation risky (Esc / backdrop click /
-// header close all discard silently today).
+// Any open editor, or a settings form (such as Dreaming or context
+// compaction) touched after the last save, makes a close without confirmation
+// risky (Esc / backdrop click / header close all discard silently today).
 const settingsDirty = ref(false)
 const settingsOverlayEl = ref<HTMLElement | null>(null)
 const settingsCardEl = ref<HTMLElement | null>(null)
@@ -1658,6 +1762,7 @@ onMounted(() => {
   void fetchGlobalMemory()
   void fetchLoadContext()
   void fetchDreamingSettings()
+  void fetchContextCompactionSettings()
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
@@ -1694,10 +1799,11 @@ onUnmounted(() => {
 
 .lc-input {
   padding: 4px 8px;
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
-  color: var(--settings-control-text, var(--settings-main-text, #fff));
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font-size: 13px;
 }
 
@@ -1891,10 +1997,11 @@ onUnmounted(() => {
 .config-form textarea {
   min-width: 0;
   min-height: 36px;
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
-  color: var(--settings-control-text, var(--settings-main-text, #fff));
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: 0 9px;
 }
 
@@ -2068,10 +2175,11 @@ onUnmounted(() => {
   width: 100%;
   min-height: 320px;
   margin-top: 10px;
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
-  color: var(--settings-control-text, var(--settings-main-text, #fff));
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: 9px;
   font-family: var(--font-mono);
   font-size: 13px;
@@ -4229,17 +4337,18 @@ onUnmounted(() => {
   min-width: 0;
   min-height: 34px;
   padding: 0 var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
   outline: 0;
-  background: color-mix(in srgb, var(--settings-control-background, var(--theme-control-background)) 70%, transparent);
-  color: var(--settings-control-text, var(--theme-control-text, #fff));
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font: inherit;
   font-size: 11px;
 }
 
 .resource-search input::placeholder {
-  color: color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 48%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 48%, transparent);
 }
 
 .provider-search {

@@ -180,9 +180,9 @@ function pushUpdate(): void {
 }
 .wf-reroute-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--wf-decoration-color, var(--blue)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wf-decoration-color, var(--blue)) 18%, transparent); }
 .wf-decoration-head { display: flex; align-items: center; gap: var(--space-1); min-height: 26px; padding: var(--space-1) var(--space-2); }
-.wf-decoration-title { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: inherit; font-size: 11px; font-weight: 650; }
+.wf-decoration-title { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: inherit; caret-color: inherit; font-size: 11px; font-weight: 650; }
 .wf-decoration-kind { flex: 0 0 auto; color: color-mix(in srgb, var(--theme-main-text) 52%, transparent); font-size: 9px; }
-.wf-decoration-text { display: block; width: calc(100% - var(--space-3)); height: calc(100% - 34px); margin: 0 var(--space-2) var(--space-2); box-sizing: border-box; border: 0; outline: 0; resize: none; background: transparent; color: inherit; font: inherit; font-size: 11px; line-height: 1.45; }
+.wf-decoration-text { display: block; width: calc(100% - var(--space-3)); height: calc(100% - 34px); margin: 0 var(--space-2) var(--space-2); box-sizing: border-box; border: 0; outline: 0; resize: none; background: transparent; color: inherit; caret-color: inherit; font: inherit; font-size: 11px; line-height: 1.45; }
 .wf-decoration-text[readonly] { cursor: text; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (prefers-reduced-motion: reduce) { .wf-canvas-element { transition: none; animation: none; } }

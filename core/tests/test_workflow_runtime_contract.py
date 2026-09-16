@@ -11,11 +11,16 @@ from lamtools_core.plugins.bundled.workflow.backend import cli as workflow_cli
 from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowConflictError,
     WorkflowDef,
+    WorkflowEdge,
     WorkflowExecutionContext,
     WorkflowNode,
     WorkflowPort,
     WorkflowRunner,
     WorkflowManager,
+)
+from lamtools_core.plugins.bundled.workflow.backend.durable import (
+    WorkflowRunEventStore,
+    WorkflowRunProjector,
 )
 from lamtools_core.plugins.bundled.workflow.backend.store import WorkflowStore
 
@@ -26,6 +31,101 @@ def _content(node_id: str, value: object) -> WorkflowNode:
         kind="content",
         ports=[WorkflowPort(name="out", direction="out", value=value)],
     )
+
+
+@pytest.mark.asyncio
+async def test_model_node_receives_complete_structured_input_not_preview(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class Model:
+        async def complete(self, request):
+            captured["content"] = request.messages[-1].content
+            return SimpleNamespace(content="ok", finish_reason="stop", usage={"input_tokens": 42})
+
+    sources = [{"title": f"source-{index}", "url": f"https://example.test/{index}"} for index in range(20)]
+    research = {"summary": "x" * 900, "sources": sources}
+    workflow = WorkflowDef(
+        name="full-input",
+        nodes=[
+            WorkflowNode(
+                id="source", kind="content",
+                ports=[WorkflowPort(name="research", direction="out", value=research)],
+            ),
+            WorkflowNode(
+                id="model", kind="model", config={"instruction": "Synthesize the research"},
+                ports=[
+                    WorkflowPort(name="research", direction="in"),
+                    WorkflowPort(name="output", direction="out"),
+                ],
+            ),
+        ],
+        edges=[WorkflowEdge(id="edge", source="source", source_port="research", target="model", target_port="research")],
+    )
+
+    result = await WorkflowRunner(llm_client=Model()).run(
+        workflow, work_root=str(tmp_path), thread_id="workflow:full", run_id="full"
+    )
+
+    assert result.status == "completed"
+    prompt = str(captured["content"])
+    assert len(prompt) > 500
+    assert sources[-1]["url"] in prompt
+    assert not prompt.endswith("…")
+
+
+@pytest.mark.asyncio
+async def test_node_events_and_result_expose_secret_safe_execution_audit(tmp_path: Path) -> None:
+    emitted = []
+
+    async def emit(event):
+        emitted.append(event)
+
+    class Agent:
+        async def run(self, **kwargs):
+            del kwargs
+            return SimpleNamespace(
+                message='{"answer":{"ok":true,"api_key":"do-not-expose"}}',
+                session_id="agent-session", run_id="agent-run", decision="done",
+                model_id="model-x", tool_call_count=2, model_rounds=3,
+                tool_call_breakdown={"web_search": 2}, ended_with_final_response=True,
+                death_scene="hidden reasoning and raw results",
+            )
+
+    events = WorkflowRunEventStore(root=tmp_path)
+    workflow = WorkflowDef(
+        id="workflow-audit", name="audit", revision=2,
+        nodes=[WorkflowNode(
+            id="agent", kind="agent", config={"instruction": "answer"},
+            ports=[WorkflowPort(name="answer", direction="out", type="object")],
+        )],
+    )
+    result = await WorkflowRunner(
+        sub_agent_runner=Agent(), event_store=events, emit=emit,
+    ).run(workflow, work_root=str(tmp_path), thread_id="workflow:audit", run_id="audit-run")
+
+    public = result.to_public_dict()
+    state = public["node_states"]["agent"]
+    assert state["status"] == "done"
+    assert state["attempt_history"][0]["status"] == "completed"
+    assert state["attempt_history"][0]["started_at"]
+    assert state["attempt_history"][0]["finished_at"]
+    assert state["audit"]["tool_calls"] == [{"name": "web_search", "count": 2}]
+    assert "death_scene" not in state["audit"]
+    assert "api_key" not in json.dumps(public)
+
+    completed = next(event for event in emitted if event.item_id == "agent" and event.status == "completed")
+    assert completed.payload["output"]["ok"] is True
+    assert completed.payload["attempts"] == 1
+    assert completed.payload["started_at"] and completed.payload["finished_at"]
+    assert "do-not-expose" not in json.dumps(completed.payload)
+
+    projected = WorkflowRunProjector().replay(await events.list("audit-run"))
+    assert projected is not None
+    projected_node = projected.to_dict()["nodes"]["agent"]
+    assert projected_node["output"]["ok"] is True
+    assert projected_node["cache_status"] == "bypass"
+    assert projected_node["started_at"] and projected_node["finished_at"]
+    assert projected_node["audit"]["tool_calls"][0]["name"] == "web_search"
 
 
 @pytest.mark.asyncio

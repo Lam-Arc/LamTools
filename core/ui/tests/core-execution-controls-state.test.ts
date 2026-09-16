@@ -147,7 +147,7 @@ describe('useCoreExecutionControlsState', () => {
     selectedProviders.value = [{ id: 'provider-1', name: 'xfyun', base_url: 'https://maas-coding.example.test' }]
     await nextTick()
 
-    expect(state.thinkingModeOptions.value.map((option) => option.value)).toEqual(['max', 'high', 'light', 'off'])
+    expect(state.thinkingModeOptions.value.map((option) => option.value)).toEqual(['max', 'xhigh', 'high', 'medium', 'light', 'off'])
     expect(state.selectedThinkingMode.value).toBe('high')
   })
 

@@ -544,6 +544,59 @@ describe('core appServer selectors', () => {
     expect(messages[1]?.parts.map((part) => part.item_id)).toEqual(['text-1', 'tool-1', 'text-2'])
     expect(messages[1]?.content).toBe('完成')
   })
+
+  it('nests async sub_agent_message children and suppresses them from the main line', () => {
+    const parentId = 'turn-1:call-mailbox:tool'
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-async-agent',
+      snapshot_seq: 8,
+      core: {
+        thread_id: 'thread-async-agent',
+        snapshot_seq: 8,
+        status: 'completed',
+        item_order: [parentId, 'mail-child', 'main-text'],
+        turns: {
+          'turn-1': { turn_id: 'turn-1', status: 'completed', items: [parentId, 'mail-child', 'main-text'] },
+        },
+        items: {
+          [parentId]: {
+            item_id: parentId,
+            turn_id: 'turn-1',
+            kind: 'tool_result',
+            status: 'completed',
+            payload: {
+              type: 'dynamicToolCall',
+              tool_name: 'sub_agent_message',
+              arguments: { type: 'execute', name: 'reviewer', prompt: '继续检查' },
+              tool_result: 'accepted',
+            },
+          },
+          'mail-child': {
+            item_id: 'mail-child',
+            parent_item_id: parentId,
+            turn_id: 'turn-1',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: '异步回复' },
+          },
+          'main-text': {
+            item_id: 'main-text',
+            turn_id: 'turn-1',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: '主线程继续' },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectChatMessages(snapshot)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.parts.map(part => part.item_id)).toEqual([parentId, 'main-text'])
+    expect(messages[0]?.parts[0]).toMatchObject({
+      metadata: { subLineItems: [{ item_id: 'mail-child' }] },
+    })
+  })
 })
 
 // ── 审批请求快照恢复（ask-user 卡不显示修复）──

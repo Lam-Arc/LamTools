@@ -59,12 +59,12 @@ function setVisualMode(mode: ActionMode) {
 
 function buttonColors() {
   const button = buttonElement.value
-  if (!button) return { send: 'var(--theme-control-background)', stop: 'var(--red)' }
+  if (!button) return { send: 'var(--theme-composer-text)', stop: 'var(--theme-composer-text)' }
   const styles = getComputedStyle(button)
-  const neutralButtonColor = styles.getPropertyValue('--theme-control-text').trim() || 'var(--theme-control-text)'
+  const composerTextColor = styles.getPropertyValue('--theme-composer-text').trim() || 'var(--theme-composer-text)'
   return {
-    send: neutralButtonColor,
-    stop: neutralButtonColor,
+    send: composerTextColor,
+    stop: composerTextColor,
   }
 }
 
@@ -301,8 +301,8 @@ onUnmounted(() => {
   display: grid;
   place-items: center;
   flex: 0 0 28px;
-  color: var(--theme-control-solid, var(--panel-2));
-  background: var(--theme-control-text);
+  color: var(--theme-composer-background);
+  background: var(--theme-composer-text);
   box-shadow: var(--shadow-sm);
   font-size: 0;
   line-height: 0;
@@ -348,14 +348,14 @@ onUnmounted(() => {
 }
 
 .core-send-stop-button--stop {
-  color: var(--theme-control-solid, var(--panel-2));
-  background: var(--theme-control-text);
+  color: var(--theme-composer-background);
+  background: var(--theme-composer-text);
   border-radius: var(--radius-sm);
 }
 
 .core-send-stop-button--stop:hover:not(:disabled),
 .core-send-stop-button--stop:active:not(:disabled) {
-  background: var(--theme-control-text);
+  background: var(--theme-composer-text);
 }
 
 .core-send-stop-button--stop::before {

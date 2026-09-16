@@ -11,9 +11,17 @@
       <header class="core-sub-agent-dialog__header">
         <div class="core-sub-agent-dialog__identity">
           <h2 :id="titleId">{{ run.name }}</h2>
-          <span class="core-sub-agent-dialog__status" :class="'is-' + run.status" role="status" aria-live="polite">
-            {{ statusLabel(run.status) }}
-          </span>
+          <Transition name="sub-agent-dialog-status" mode="out-in">
+            <span
+              :key="run.status"
+              class="core-sub-agent-dialog__status"
+              :class="'is-' + run.status"
+              role="status"
+              aria-live="polite"
+            >
+              {{ statusLabel(run.status) }}
+            </span>
+          </Transition>
         </div>
         <button ref="closeButton" type="button" class="core-sub-agent-dialog__close" aria-label="关闭 Sub Agent" @click="requestClose">
           <X :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -82,7 +90,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { X } from 'lucide-vue-next'
-import type { CoreSubAgentRun, MessagePartStatus } from '../types'
+import type { CoreSubAgentRun, CoreSubAgentStatus } from '../types'
 import type { LamToolsTransport } from '../transport'
 import type { CoreSelectOption, CoreThinkingModeOption } from '../composer/execution'
 import { useCoreAutoFollowScroll } from '../composables/useCoreAutoFollowScroll'
@@ -225,9 +233,13 @@ function isVisibleFocusTarget(target: HTMLElement): boolean {
     && style.pointerEvents !== 'none'
 }
 
-function statusLabel(status: MessagePartStatus): string {
+function statusLabel(status: CoreSubAgentStatus): string {
   if (status === 'running') return '运行中'
   if (status === 'pending') return '等待中'
+  if (status === 'paused') return '已暂停'
+  if (status === 'interrupted') return '已中断'
+  if (status === 'closed') return '已关闭'
+  if (status === 'idle') return '空闲'
   if (status === 'error') return '失败'
   return '已完成'
 }
@@ -292,7 +304,7 @@ onBeforeUnmount(() => {
   background: var(--theme-main-background, #111);
   color: var(--theme-main-text, #f2efeb);
   padding: 0;
-  animation: sub-agent-dialog-enter 180ms cubic-bezier(.25, 1, .5, 1);
+  animation: sub-agent-dialog-enter var(--dur-base) var(--ease-out);
 }
 
 .core-sub-agent-dialog[open] {
@@ -301,6 +313,7 @@ onBeforeUnmount(() => {
 
 .core-sub-agent-dialog::backdrop {
   background: rgb(0 0 0 / 55%);
+  animation: sub-agent-dialog-backdrop-enter var(--dur-base) var(--ease-out);
 }
 
 .core-sub-agent-dialog__header {
@@ -341,6 +354,20 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.sub-agent-dialog-status-enter-active,
+.sub-agent-dialog-status-leave-active {
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.sub-agent-dialog-status-enter-from,
+.sub-agent-dialog-status-leave-to {
+  opacity: 0;
+  transform: translateY(2px);
+}
+
 .core-sub-agent-dialog__status.is-running { color: var(--green, #32d17d); }
 .core-sub-agent-dialog__status.is-pending { color: var(--orange, #ff9142); }
 .core-sub-agent-dialog__status.is-error { color: var(--red, #f5555d); }
@@ -358,6 +385,10 @@ onBeforeUnmount(() => {
   font-size: 1.25rem;
   line-height: 1;
   cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
 
 .core-sub-agent-dialog__close::before {
@@ -369,6 +400,7 @@ onBeforeUnmount(() => {
 .core-sub-agent-dialog__close:hover {
   background: color-mix(in srgb, var(--theme-main-text, currentColor) 8%, transparent);
   color: var(--theme-main-text, currentColor);
+  transform: scale(1.04);
 }
 
 .core-sub-agent-dialog__close:focus-visible,
@@ -407,6 +439,11 @@ onBeforeUnmount(() => {
   to { opacity: 1; transform: none; }
 }
 
+@keyframes sub-agent-dialog-backdrop-enter {
+  from { background: transparent; }
+  to { background: rgb(0 0 0 / 55%); }
+}
+
 @media (max-width: 680px) {
   .core-sub-agent-dialog {
     width: 100vw;
@@ -443,8 +480,19 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .core-sub-agent-dialog {
+  .core-sub-agent-dialog,
+  .core-sub-agent-dialog::backdrop {
     animation: none;
+  }
+
+  .core-sub-agent-dialog__close,
+  .sub-agent-dialog-status-enter-active,
+  .sub-agent-dialog-status-leave-active {
+    transition: none;
+  }
+
+  .core-sub-agent-dialog__close:hover {
+    transform: none;
   }
 }
 </style>

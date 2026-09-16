@@ -46,6 +46,17 @@ describe('Core empty-session host wiring', () => {
     expect(appSource).toContain('芜湖，我来帮忙咯!')
     expect(appSource).not.toContain('描述你想完成的事情')
   })
+
+  it('uses the shared glass context menu for composer editing actions', () => {
+    expect(appSource).toContain('@contextmenu="openComposerContextMenu"')
+    expect(appSource).toContain("ownerId: 'composer-input'")
+    expect(appSource).toContain("label: '剪切'")
+    expect(appSource).toContain("label: '复制'")
+    expect(appSource).toContain("label: '粘贴'")
+    expect(appSource).toContain("label: '全选'")
+    expect(appSource).toContain('await navigator.clipboard.readText()')
+    expect(appSource).not.toContain('composer-context-menu-style')
+  })
 })
 
 describe('Reusable ChatThread empty slot', () => {

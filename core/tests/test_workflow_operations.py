@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import uuid
 
 import pytest
 
 from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
-from lamtools_core.app.operation_catalog import OperationResult
+from lamtools_core.app.operation_catalog import OperationRequest, OperationResult
+from lamtools_core.plugins.bundled.workflow.backend.operations import workflow_tools_list
 from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowDef,
     WorkflowEdge,
@@ -17,11 +19,12 @@ from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowPort,
     WorkflowRunner,
 )
+from lamtools_core.plugins.bundled.workflow.backend.build_tools import workflow_build_tool_handlers
 from lamtools_core.plugins.bundled.workflow.backend.tools import workflow_tool_specs
 from lamtools_core.plugins.bundled.workflow.backend.store import WorkflowStore
 from lamtools_core.plugins.context import PluginContext
 from lamtools_core.plugins.registry import bundled_plugins_dir
-from lamtools_core.tool import ToolCall
+from lamtools_core.tool import ToolCall, ToolSpec
 from lamtools_core.tool.default_toolbox import build_core_toolbox
 from lamtools_core.runtime import RuntimeTaskRegistry
 
@@ -37,6 +40,38 @@ def _definition(name: str = "demo") -> WorkflowDef:
             )
         ],
     )
+
+
+@pytest.mark.asyncio
+async def test_workflow_tool_catalog_comes_from_agent_execution_toolbox(tmp_path: Path) -> None:
+    class AgentRunner:
+        def available_tool_specs(self, *, mode: str = "") -> list[ToolSpec]:
+            assert mode == "agent"
+            return [
+                ToolSpec(
+                    name="read_file",
+                    description="Read a file",
+                    input_schema={"type": "object", "properties": {}},
+                ),
+                ToolSpec(
+                    name="web_search",
+                    description="Search the web",
+                    input_schema={"type": "object", "properties": {}},
+                ),
+            ]
+
+    context = PluginContext(
+        work_root=tmp_path,
+        services={"sub_agent_runner": AgentRunner()},
+    )
+
+    result = await workflow_tools_list(
+        OperationRequest(name="workflow.tools.list", payload={}),
+        context=context,
+    )
+
+    assert result.status == "ok"
+    assert [tool["name"] for tool in result.payload["tools"]] == ["read_file", "web_search"]
 
 
 def _input_workflow() -> WorkflowDef:
@@ -697,3 +732,365 @@ async def test_workflow_rename_preserves_stable_id_and_session_metadata(
     assert record.metadata["resource_id"] == original_metadata["resource_id"]
     assert (await store.get("after", work_root=str(project))).id == workflow_before["id"]
     assert await store.get("before", work_root=str(project)) is None
+
+
+@pytest.mark.asyncio
+async def test_workflow_graph_tools_resolve_canonical_session_id_without_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The UI's workflow:<uuid> session remains bound when metadata is absent."""
+
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    store = WorkflowStore()
+    context = PluginContext(
+        work_root=tmp_path,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+    created = await catalog.execute(
+        "workflow.create",
+        {**_definition("canonical").to_dict(), "work_root": str(tmp_path)},
+    )
+    workflow_id = created.payload["workflow"]["id"]
+    session_id = f"workflow:{workflow_id}"
+    handlers = workflow_build_tool_handlers(context.operation_executor(), work_root=tmp_path)
+
+    graph = await handlers["workflow_graph"](
+        ToolCall(
+            id="graph",
+            name="workflow_graph",
+            metadata={"_runtime_session_id": session_id, "work_root": str(tmp_path)},
+        )
+    )
+    assert graph.status == "ok"
+    assert graph.metadata["operation_payload"]["name"] == "canonical"
+
+    added = await handlers["workflow_add_node"](
+        ToolCall(
+            id="add",
+            name="workflow_add_node",
+            arguments={"kind": "constant", "node_id": "first"},
+            metadata={"_runtime_session_id": session_id, "work_root": str(tmp_path)},
+        )
+    )
+    assert added.status == "ok"
+    saved = await catalog.execute(
+        "workflow.get", {"workflow_id": workflow_id, "work_root": str(tmp_path)}
+    )
+    assert any(node["id"] == "first" for node in saved.payload["workflow"]["nodes"])
+
+    global_created = await catalog.execute("workflow.create", _definition("global-canonical").to_dict())
+    global_session_id = f"workflow:{global_created.payload['workflow']['id']}"
+    global_graph = await handlers["workflow_graph"](
+        ToolCall(
+            id="global-graph",
+            name="workflow_graph",
+            metadata={"_runtime_session_id": global_session_id, "work_root": str(tmp_path)},
+        )
+    )
+    assert global_graph.status == "ok"
+    assert global_graph.metadata["operation_payload"]["name"] == "global-canonical"
+
+
+@pytest.mark.asyncio
+async def test_workflow_id_lookup_isolated_when_global_and_project_ids_collide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ID lookup never crosses the requested global/project repository."""
+
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    shared_id = uuid.uuid4().hex
+    store = WorkflowStore()
+    global_definition = WorkflowDef(
+        **{
+            **_definition("global-duplicate").__dict__,
+            "id": shared_id,
+            "description": "global copy",
+        }
+    )
+    project_definition = WorkflowDef(
+        **{
+            **_definition("project-duplicate").__dict__,
+            "id": shared_id,
+            "description": "project copy",
+            "work_root": str(project),
+        }
+    )
+    await store.save(global_definition)
+    await store.save(project_definition)
+
+    context = PluginContext(
+        work_root=tmp_path,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+    project_get = await catalog.execute(
+        "workflow.get", {"workflow_id": shared_id, "work_root": str(project)}
+    )
+    assert project_get.status == "ok"
+    assert project_get.payload["workflow"]["name"] == "project-duplicate"
+    assert project_get.payload["workflow"]["description"] == "project copy"
+
+    project_document = await catalog.execute(
+        "workflow.document.get", {"workflow_id": shared_id, "work_root": str(project)}
+    )
+    assert project_document.status == "ok"
+    assert project_document.payload["document"]["resource"]["name"] == "project-duplicate"
+
+    handlers = workflow_build_tool_handlers(context.operation_executor(), work_root=project)
+    graph = await handlers["workflow_graph"](
+        ToolCall(
+            id="graph",
+            name="workflow_graph",
+            metadata={"_runtime_session_id": f"workflow:{shared_id}", "work_root": str(project)},
+        )
+    )
+    assert graph.status == "ok"
+    assert graph.metadata["operation_payload"]["name"] == "project-duplicate"
+
+    added = await handlers["workflow_add_node"](
+        ToolCall(
+            id="add",
+            name="workflow_add_node",
+            arguments={"kind": "constant", "node_id": "project-only"},
+            metadata={"_runtime_session_id": f"workflow:{shared_id}", "work_root": str(project)},
+        )
+    )
+    assert added.status == "ok"
+
+    global_get = await catalog.execute("workflow.get", {"workflow_id": shared_id})
+    assert global_get.status == "ok"
+    assert global_get.payload["workflow"]["name"] == "global-duplicate"
+    assert global_get.payload["workflow"]["description"] == "global copy"
+    assert not any(
+        node["id"] == "project-only" for node in global_get.payload["workflow"]["nodes"]
+    )
+    project_after = await store.get_by_id(shared_id, work_root=str(project))
+    assert project_after is not None
+    assert any(node.id == "project-only" for node in project_after.nodes)
+
+
+@pytest.mark.asyncio
+async def test_workflow_graph_tools_reject_noncanonical_ordinary_sessions(
+    tmp_path: Path,
+) -> None:
+    store = WorkflowStore()
+    context = PluginContext(
+        work_root=tmp_path,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+    handlers = workflow_build_tool_handlers(context.operation_executor(), work_root=tmp_path)
+    invalid_session = f"workflow:{uuid.uuid4().hex[:-1]}z"
+
+    graph = await handlers["workflow_graph"](
+        ToolCall(id="graph", name="workflow_graph", metadata={"_runtime_session_id": invalid_session})
+    )
+    assert graph.status == "failed"
+    assert graph.error == "no active workflow (session id missing)"
+
+    added = await handlers["workflow_add_node"](
+        ToolCall(
+            id="add",
+            name="workflow_add_node",
+            arguments={"kind": "constant"},
+            metadata={"_runtime_session_id": invalid_session},
+        )
+    )
+    assert added.status == "failed"
+    assert added.error == "no active workflow (session metadata missing)"
+
+
+@pytest.mark.asyncio
+async def test_workflow_graph_tools_reject_uuid_parser_variants_for_canonical_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Canonical sessions accept only lowercase 32-character UUID hex IDs."""
+
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    canonical_id = "0123456789abcdef0123456789abcdef"
+    store = WorkflowStore()
+    await store.save(
+        WorkflowDef(
+            **{
+                **_definition("strict-canonical").__dict__,
+                "id": canonical_id,
+            }
+        )
+    )
+    context = PluginContext(
+        work_root=tmp_path,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+    handlers = workflow_build_tool_handlers(context.operation_executor(), work_root=tmp_path)
+    invalid_sessions = (
+        f"workflow:{{{canonical_id}}}",
+        f"workflow:{canonical_id.upper()}",
+        "workflow:01234567-89ab-cdef-0123-456789abcdef",
+        f"workflow: {canonical_id}",
+        f"workflow:{canonical_id} ",
+        f" workflow:{canonical_id}",
+    )
+
+    for invalid_session in invalid_sessions:
+        result = await handlers["workflow_graph"](
+            ToolCall(
+                id="graph",
+                name="workflow_graph",
+                metadata={"_runtime_session_id": invalid_session},
+            )
+        )
+        assert result.status == "failed", invalid_session
+        assert result.error == "no active workflow (session id missing)"
+
+
+@pytest.mark.asyncio
+async def test_workflow_graph_tools_recover_incomplete_project_session_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    store = WorkflowStore()
+    definition = WorkflowDef(
+        **{
+            **_definition("partial-project-binding").__dict__,
+            "id": uuid.uuid4().hex,
+            "work_root": str(project),
+        }
+    )
+    await store.save(definition)
+    context = PluginContext(
+        work_root=tmp_path,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store},
+    )
+    build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+    handlers = workflow_build_tool_handlers(context.operation_executor(), work_root=tmp_path)
+    result = await handlers["workflow_graph"](
+        ToolCall(
+            id="graph",
+            name="workflow_graph",
+            metadata={
+                "_runtime_session_id": f"workflow:{definition.id}",
+                "_runtime_session_metadata": {
+                    "owner_plugin": "workflow",
+                    "resource_type": "workflow",
+                    "resource_id": definition.id,
+                },
+                "work_root": str(project),
+            },
+        )
+    )
+    assert result.status == "ok"
+    assert result.metadata["operation_payload"]["name"] == definition.name
+
+
+@pytest.mark.asyncio
+async def test_workflow_document_get_repairs_incomplete_plugin_session(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    store = WorkflowStore()
+    session_store = _MemorySessionStore()
+    context = PluginContext(
+        work_root=project,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store, "session_store": session_store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=project,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+    created = await catalog.execute(
+        "workflow.create",
+        {**_definition("document-repair").to_dict(), "work_root": str(project)},
+    )
+    workflow = created.payload["workflow"]
+    session_id = created.payload["session_id"]
+    session_store.records[session_id].metadata = {}
+
+    result = await catalog.execute(
+        "workflow.document.get",
+        {"workflow_id": workflow["id"], "work_root": str(project)},
+    )
+    assert result.status == "ok"
+    assert result.payload["session_id"] == session_id
+    assert session_store.records[session_id].metadata["resource_id"] == workflow["id"]
+    assert session_store.records[session_id].metadata["resource_work_root"] == str(project)
+    assert "work_root" not in session_store.records[session_id].metadata
+
+
+@pytest.mark.asyncio
+async def test_workflow_document_get_repairs_stale_global_resource_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    store = WorkflowStore()
+    session_store = _MemorySessionStore()
+    context = PluginContext(
+        work_root=tmp_path,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store, "session_store": session_store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+    created = await catalog.execute("workflow.create", _definition("global-repair").to_dict())
+    workflow = created.payload["workflow"]
+    session_id = created.payload["session_id"]
+    session_store.records[session_id].metadata["work_root"] = str(tmp_path / "stale")
+
+    repaired = await catalog.execute("workflow.document.get", {"workflow_id": workflow["id"]})
+    assert repaired.status == "ok"
+    assert session_store.records[session_id].metadata["work_root"] == str(tmp_path / "stale")
+    assert session_store.records[session_id].metadata["resource_work_root"] == ""
+
+    handlers = workflow_build_tool_handlers(context.operation_executor(), work_root=tmp_path)
+    graph = await handlers["workflow_graph"](
+        ToolCall(
+            id="graph",
+            name="workflow_graph",
+            metadata={
+                "_runtime_session_id": session_id,
+                "_runtime_session_metadata": dict(session_store.records[session_id].metadata),
+            },
+        )
+    )
+    assert graph.status == "ok"
+    assert graph.metadata["operation_payload"]["name"] == workflow["name"]

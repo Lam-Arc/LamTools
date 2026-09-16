@@ -282,6 +282,23 @@ class WorkflowStore:
         slug_matches = [d for d in candidates if _ascii_slug(d.name) == slug]
         return slug_matches[0] if len(slug_matches) == 1 else None
 
+    async def get_by_id(self, workflow_id: str, *, work_root: str | None = None) -> WorkflowDef | None:
+        return await asyncio.to_thread(self.get_by_id_sync, workflow_id, work_root=work_root)
+
+    def get_by_id_sync(self, workflow_id: str, *, work_root: str | None = None) -> WorkflowDef | None:
+        target = str(workflow_id or "").strip()
+        if not target:
+            return None
+        # ID lookup must remain confined to the requested repository scope.
+        # ``list(work_root=...)`` intentionally combines global and project
+        # entries for discovery, so filtering that mixed result can select a
+        # same-ID workflow from the wrong scope.
+        for path in self._scoped_workflow_entries(work_root):
+            definition = self._read_entry(path)
+            if definition is not None and definition.id == target:
+                return definition
+        return None
+
     async def save(self, definition: WorkflowDef) -> WorkflowDef:
         if not definition.name:
             raise ValueError("workflow name is required")

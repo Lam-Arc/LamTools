@@ -1,0 +1,6 @@
+interface:
+  display_name: "Office Slides"
+  short_description: "Create and edit clear, editable management presentations"
+  default_prompt: "Use $office-slides to create an editable presentation from these materials."
+policy:
+  allow_implicit_invocation: true

@@ -1,10 +1,9 @@
 <template>
   <div v-if="isTauri" class="titlebar" data-tauri-drag-region>
     <div class="titlebar-left">
-      <SundayLogo :size="24" decorative />
+      <SundayLogo :size="24" surface :surface-theme="props.effectiveThemeMode" decorative />
       <span class="brand">
         <strong class="brand-name">Sunday</strong>
-        <span class="brand-tagline">AI software</span>
       </span>
 
       <!-- mode toggle: shows the current application mode -->
@@ -19,30 +18,34 @@
       </button>
     </div>
 
+    <div class="titlebar-workflow-tabs" data-titlebar-workflow-tabs></div>
+
     <div class="titlebar-right">
       <!-- sidebar pin buttons -->
-      <button
-        class="pin-btn"
-        :class="{ active: props.leftPinned }"
-        :title="props.leftPinned ? '取消固定左侧栏' : '固定左侧栏'"
-        @click="$emit('toggleLeftPinned')"
-      >
-        <svg viewBox="0 0 14 14" class="pin-icon pin-left">
-          <rect x="1" y="2" width="5.5" height="10" rx="2" fill="currentColor" />
-          <rect x="7.5" y="2" width="5.5" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
-        </svg>
-      </button>
-      <button
-        class="pin-btn"
-        :class="{ active: props.rightPinned }"
-        :title="props.rightPinned ? '取消固定右侧栏' : '固定右侧栏'"
-        @click="$emit('toggleRightPinned')"
-      >
-        <svg viewBox="0 0 14 14" class="pin-icon pin-right">
-          <rect x="1" y="2" width="5.5" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
-          <rect x="7.5" y="2" width="5.5" height="10" rx="2" fill="currentColor" />
-        </svg>
-      </button>
+      <div class="titlebar-sidebar-controls" data-titlebar-sidebar-controls>
+        <button
+          class="pin-btn"
+          :class="{ active: props.leftPinned }"
+          :title="props.leftPinned ? '取消固定左侧栏' : '固定左侧栏'"
+          @click="$emit('toggleLeftPinned')"
+        >
+          <svg viewBox="0 0 14 14" class="pin-icon pin-left">
+            <rect x="1" y="2" width="5.5" height="10" rx="2" fill="currentColor" />
+            <rect x="7.5" y="2" width="5.5" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+          </svg>
+        </button>
+        <button
+          class="pin-btn"
+          :class="{ active: props.rightPinned }"
+          :title="props.rightPinned ? '取消固定右侧栏' : '固定右侧栏'"
+          @click="$emit('toggleRightPinned')"
+        >
+          <svg viewBox="0 0 14 14" class="pin-icon pin-right">
+            <rect x="1" y="2" width="5.5" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+            <rect x="7.5" y="2" width="5.5" height="10" rx="2" fill="currentColor" />
+          </svg>
+        </button>
+      </div>
 
       <div ref="mobilePairingAnchor" class="mobile-pairing-anchor">
         <button
@@ -130,6 +133,7 @@ import SundayLogo from './SundayLogo.vue'
 const props = defineProps<{
   leftPinned?: boolean
   rightPinned?: boolean
+  effectiveThemeMode?: 'light' | 'dark'
   modeLabel?: string
   modeTitle?: string
   canToggleMode?: boolean
@@ -284,17 +288,30 @@ onUnmounted(() => {
   letter-spacing: .01em;
 }
 
-.brand-tagline {
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 46%, transparent);
-  font-size: 11px;
-  font-weight: 520;
-  letter-spacing: .025em;
-}
-
 .titlebar-left {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--space-2);
+}
+
+.titlebar-workflow-tabs {
+  position: absolute;
+  top: 0;
+  right: max(
+    calc(var(--titlebar-main-right, 18px) + var(--radius-xl) + var(--space-6)),
+    190px
+  );
+  bottom: 0;
+  left: max(
+    calc(var(--titlebar-main-left, 18px) + var(--radius-xl) + var(--space-6)),
+    190px
+  );
+  min-width: 0;
+  pointer-events: none;
+  transition:
+    left var(--dur-morph) var(--ease-inout),
+    right var(--dur-morph) var(--ease-inout);
 }
 
 /* ── Generic application mode toggle ── */
@@ -333,10 +350,17 @@ onUnmounted(() => {
 
 .titlebar-right {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 4px;
   -webkit-app-region: no-drag;
   app-region: no-drag;
+}
+
+.titlebar-sidebar-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .mobile-pairing-anchor {
@@ -605,9 +629,16 @@ onUnmounted(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .titlebar-workflow-tabs,
   .mobile-pairing-card,
   .mobile-pairing-trigger {
     transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .titlebar-sidebar-controls {
+    display: none;
   }
 }
 </style>

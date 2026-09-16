@@ -1,0 +1,6 @@
+interface:
+  display_name: "Office PDF"
+  short_description: "Read, create, transform, and verify professional PDF files"
+  default_prompt: "Use $office-pdf to process and verify this PDF."
+policy:
+  allow_implicit_invocation: true

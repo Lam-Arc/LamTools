@@ -87,10 +87,11 @@ function save() {
   width: 100%;
   min-height: 180px;
   resize: vertical;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, currentColor) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-main-text, currentColor) 6%, transparent);
-  color: var(--theme-main-text, currentColor);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;

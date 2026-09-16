@@ -13,7 +13,7 @@
         "git_status",
         "git_diff",
         "load_skill",
-        "sub_agent"
+        "message"
       ]
     },
     "execute": {

@@ -8,22 +8,24 @@ from dataclasses import replace
 from lamtools_core.llm import ChatMessage
 from lamtools_core.tokens import estimate_text_tokens
 
-from .formatting import truncate_text_to_tokens
+from .formatting import append_recent_user_messages, truncate_text_to_tokens
 from .models import (
     CompactionBudgetExceeded,
     CompactionFitInput,
     CompactionFitResult,
     CompactionTokenEstimator,
 )
-from .planner import _semantic_message_groups
-
-
 _logger = logging.getLogger(__name__)
 MAX_FIT_ATTEMPTS = 8
 
 
 class CompactionFitter:
-    """Fit a summary and recent tail with a bounded deterministic strategy."""
+    """Fit the model summary, optional Step tail, and recent-user suffix.
+
+    Program-appended user originals take precedence over model-summary detail;
+    if they cannot all fit, their oldest entries are silently removed while
+    the newest entry remains the final safety boundary.
+    """
 
     def __init__(self, estimate_tokens: CompactionTokenEstimator) -> None:
         self._estimate_tokens = estimate_tokens
@@ -41,11 +43,18 @@ class CompactionFitter:
         prefix = list(fit_input.system_prefix)
         recent = list(fit_input.recent_messages)
         summary_content = str(fit_input.summary_message.content or "")
+        if fit_input.recent_user_messages:
+            return self._fit_with_recent_user_suffix(
+                fit_input,
+                prefix=prefix,
+                recent=recent,
+                summary_content=summary_content,
+            )
         required_recent = self._required_recent_messages(recent)
         required_tokens = self._estimate_tokens([*prefix, *required_recent])
         if required_tokens > fit_input.target_tokens:
             raise CompactionBudgetExceeded(
-                "required latest turn exceeds target token budget",
+                "required latest turn/user message exceeds target token budget",
                 estimated_tokens=required_tokens,
                 target_tokens=fit_input.target_tokens,
             )
@@ -65,16 +74,14 @@ class CompactionFitter:
                 strategy="original",
             )
 
-        strategies = (
+        # First shrink the generated summary.  These bounded passes preserve
+        # as much of the planner-selected tail as the target allows.
+        for strategy, shrink in (
             ("compress_summary_once", self._compress_summary),
             ("compress_summary_twice", self._compress_summary),
-            ("drop_oldest_recent_turn", self._drop_oldest_recent_turn),
-            ("drop_oldest_recent_turn_again", self._drop_oldest_recent_turn),
             ("truncate_summary", self._truncate_summary),
             ("minimal_summary", self._minimal_summary),
-            ("latest_user_only", self._latest_user_only),
-        )
-        for strategy, shrink in strategies:
+        ):
             if attempts >= MAX_FIT_ATTEMPTS:
                 break
             next_content, next_recent = shrink(
@@ -108,24 +115,176 @@ class CompactionFitter:
                     strategy=strategy,
                 )
 
+        # If the configured union is still too large, remove the oldest
+        # selected unit at a time.  A unit is one non-assistant message or an
+        # assistant message with all immediately following tool results.  We
+        # keep dropping until the exact target is met, while retaining the
+        # newest user message as the final safety boundary.  Drops are local
+        # deterministic work and do not consume model calls; ``attempts`` is
+        # capped for compatibility with the fitter's bounded public contract.
+        while current_tokens > fit_input.target_tokens:
+            next_content, next_recent = self._drop_oldest_recent_turn(
+                summary_content,
+                recent,
+                prefix=prefix,
+                target_tokens=fit_input.target_tokens,
+            )
+            if len(next_recent) == len(recent):
+                break
+            summary_content = next_content
+            recent = next_recent
+            next_messages = candidate(summary_content, recent)
+            next_tokens = self._estimate_tokens(next_messages)
+            current_messages = next_messages
+            current_tokens = next_tokens
+            attempts = min(MAX_FIT_ATTEMPTS, attempts + 1)
+            if current_tokens <= fit_input.target_tokens:
+                return CompactionFitResult(
+                    messages=current_messages,
+                    estimated_tokens=current_tokens,
+                    attempts=attempts,
+                    strategy="drop_oldest_recent_unit",
+                )
+
+            # Recompute the largest summary that fits after each drop.  This
+            # lets us stop at the first feasible tail instead of jumping
+            # straight to latest-user-only and losing newer Steps needlessly.
+            truncated_content, _ = self._truncate_summary(
+                summary_content,
+                recent,
+                prefix=prefix,
+                target_tokens=fit_input.target_tokens,
+            )
+            truncated_messages = candidate(truncated_content, recent)
+            truncated_tokens = self._estimate_tokens(truncated_messages)
+            if truncated_tokens < current_tokens:
+                summary_content = truncated_content
+                current_messages = truncated_messages
+                current_tokens = truncated_tokens
+            if current_tokens <= fit_input.target_tokens:
+                return CompactionFitResult(
+                    messages=current_messages,
+                    estimated_tokens=current_tokens,
+                    attempts=attempts,
+                    strategy="drop_oldest_recent_unit",
+                )
+
+        # ``_truncate_summary`` can return an empty summary when only the
+        # minimum boundary fits.  Check that candidate explicitly before
+        # reporting an over-budget failure.
+        minimal_messages = candidate("", recent)
+        minimal_tokens = self._estimate_tokens(minimal_messages)
+        if minimal_tokens <= fit_input.target_tokens:
+            return CompactionFitResult(
+                messages=minimal_messages,
+                estimated_tokens=minimal_tokens,
+                attempts=min(MAX_FIT_ATTEMPTS, max(attempts, 1)),
+                strategy="minimal_summary",
+            )
+
         raise CompactionBudgetExceeded(
             "required context remains over the compaction target after bounded fitting",
             estimated_tokens=current_tokens,
             target_tokens=fit_input.target_tokens,
         )
 
+    def _fit_with_recent_user_suffix(
+        self,
+        fit_input: CompactionFitInput,
+        *,
+        prefix: list[ChatMessage],
+        recent: list[ChatMessage],
+        summary_content: str,
+    ) -> CompactionFitResult:
+        """Fit model summary text while preserving a program-owned suffix."""
+        user_messages = list(fit_input.recent_user_messages)
+
+        def candidate(
+            content: str,
+            retained: list[ChatMessage],
+            users: list[str],
+        ) -> list[ChatMessage]:
+            summary = replace(
+                fit_input.summary_message,
+                content=append_recent_user_messages(content, users),
+            )
+            return [*prefix, summary, *retained]
+
+        required_messages = candidate("", [], [user_messages[-1]])
+        required_tokens = self._estimate_tokens(required_messages)
+        if required_tokens > fit_input.target_tokens:
+            raise CompactionBudgetExceeded(
+                "required latest turn/user message exceeds target token budget",
+                estimated_tokens=required_tokens,
+                target_tokens=fit_input.target_tokens,
+            )
+
+        strategy = "original"
+        attempts = 1
+        while self._estimate_tokens(candidate("", recent, user_messages)) > fit_input.target_tokens:
+            next_recent = self._drop_oldest_recent_turn(
+                "",
+                recent,
+                prefix=prefix,
+                target_tokens=fit_input.target_tokens,
+            )[1]
+            if len(next_recent) < len(recent):
+                recent = next_recent
+                strategy = "drop_oldest_recent_unit"
+            elif len(user_messages) > 1:
+                user_messages.pop(0)
+                strategy = "drop_oldest_recent_user"
+            else:
+                break
+            attempts = min(MAX_FIT_ATTEMPTS, attempts + 1)
+
+        full_messages = candidate(summary_content, recent, user_messages)
+        full_tokens = self._estimate_tokens(full_messages)
+        if full_tokens <= fit_input.target_tokens:
+            return CompactionFitResult(
+                messages=full_messages,
+                estimated_tokens=full_tokens,
+                attempts=attempts,
+                strategy=strategy,
+                recent_user_messages=list(user_messages),
+            )
+
+        low = 0
+        high = estimate_text_tokens(summary_content)
+        best_content = ""
+        best_messages = candidate(best_content, recent, user_messages)
+        best_tokens = self._estimate_tokens(best_messages)
+        while low <= high:
+            middle = (low + high) // 2
+            next_content = truncate_text_to_tokens(summary_content, middle)
+            next_messages = candidate(next_content, recent, user_messages)
+            next_tokens = self._estimate_tokens(next_messages)
+            if next_tokens <= fit_input.target_tokens:
+                best_content = next_content
+                best_messages = next_messages
+                best_tokens = next_tokens
+                low = middle + 1
+            else:
+                high = middle - 1
+        return CompactionFitResult(
+            messages=best_messages,
+            estimated_tokens=best_tokens,
+            attempts=min(MAX_FIT_ATTEMPTS, attempts + 1),
+            strategy=(
+                "truncate_summary"
+                if strategy == "original"
+                else f"{strategy}_and_truncate_summary"
+            ),
+            recent_user_messages=list(user_messages),
+        )
+
     @staticmethod
     def _required_recent_messages(recent: list[ChatMessage]) -> list[ChatMessage]:
-        groups = _semantic_message_groups(recent)
         latest_user = next(
             (message for message in reversed(recent) if message.role == "user"),
             None,
         )
-        if latest_user is not None:
-            for group in groups:
-                if any(message is latest_user for message in group):
-                    return list(group)
-        return list(groups[-1] if groups else [])
+        return [latest_user] if latest_user is not None else []
 
     def _compress_summary(
         self,
@@ -155,14 +314,31 @@ class CompactionFitter:
         prefix: list[ChatMessage],
         target_tokens: int,
     ) -> tuple[str, list[ChatMessage]]:
-        _ = content, prefix, target_tokens
-        groups = _semantic_message_groups(recent)
+        _ = prefix, target_tokens
+        units = self._retention_units(recent)
         required = self._required_recent_messages(recent)
-        for index, group in enumerate(groups):
-            if any(message is required_message for message in required for required_message in group):
+        for unit in units:
+            if any(message is required_message for required_message in required for message in unit):
                 continue
-            return content, [message for group in groups[index + 1 :] for message in group]
+            dropped = {id(message) for message in unit}
+            return content, [message for message in recent if id(message) not in dropped]
         return content, list(recent)
+
+    @staticmethod
+    def _retention_units(recent: list[ChatMessage]) -> list[list[ChatMessage]]:
+        """Return source-ordered drop units, keeping assistant/tool pairs."""
+        units: list[list[ChatMessage]] = []
+        index = 0
+        while index < len(recent):
+            message = recent[index]
+            unit = [message]
+            index += 1
+            if message.role == "assistant":
+                while index < len(recent) and recent[index].role == "tool":
+                    unit.append(recent[index])
+                    index += 1
+            units.append(unit)
+        return units
 
     def _truncate_summary(
         self,

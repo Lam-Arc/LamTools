@@ -14,7 +14,9 @@
           aria-label="刷新激活状态"
           title="刷新激活状态"
           @click="refreshActivations"
-        >↻</button>
+        >
+          <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
         <button
           type="button"
           class="small-btn primary"
@@ -23,7 +25,9 @@
           aria-label="新增触发器"
           title="新增触发器"
           @click="addTrigger"
-        >＋</button>
+        >
+          <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
       </div>
     </header>
 
@@ -198,6 +202,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { Plus, RefreshCw } from 'lucide-vue-next'
 import UiSelect from '../../../../../../ui/src/components/UiSelect.vue'
 import AutoTextarea from '../../../../../../ui/src/components/AutoTextarea.vue'
 import type { WorkflowActivation, WorkflowDef, WorkflowTrigger } from './types'
@@ -544,9 +549,10 @@ async function deactivateTrigger(): Promise<void> {
 .wf-trigger-fields label, .wf-trigger-inputs { display: grid; min-width: 0; gap: var(--space-1); }
 .wf-trigger-fields label > span, .wf-trigger-inputs > span { color: color-mix(in srgb, var(--trigger-text) 62%, transparent); font-size: 10px; }
 .wf-trigger-field-wide { grid-column: 1 / -1; }
-.wf-trigger-panel input, .wf-trigger-panel :deep(.ui-select-trigger) { width: 100%; min-width: 0; box-sizing: border-box; min-height: 30px; border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-control-background) 70%, transparent); color: var(--theme-control-text); padding: 0 var(--space-2); font: inherit; font-size: 11px; outline: 0; }
+.wf-trigger-panel input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']) { width: 100%; min-width: 0; box-sizing: border-box; min-height: 30px; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); caret-color: var(--theme-composer-text); padding: 0 var(--space-2); font: inherit; font-size: 11px; outline: 0; }
+.wf-trigger-panel :deep(.ui-select-trigger) { width: 100%; min-width: 0; box-sizing: border-box; min-height: 30px; border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-control-background) 70%, transparent); color: var(--theme-control-text); padding: 0 var(--space-2); font: inherit; font-size: 11px; outline: 0; }
 .wf-trigger-panel :deep(.ui-select-trigger) { padding-right: var(--space-3); }
-.wf-trigger-panel input:focus, .wf-trigger-panel :deep(.ui-select-trigger:focus) { outline: none; }
+.wf-trigger-panel input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']):focus, .wf-trigger-panel :deep(.ui-select-trigger:focus) { outline: none; }
 .wf-trigger-checkbox-control { display: flex; align-items: center; gap: var(--space-1); min-height: 30px; color: var(--theme-control-text); }
 .wf-trigger-checkbox-control input { width: 14px; min-height: 14px; accent-color: var(--green); }
 .wf-trigger-checkbox-control small { color: color-mix(in srgb, var(--trigger-text) 58%, transparent); font-size: 10px; }

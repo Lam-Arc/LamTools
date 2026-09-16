@@ -6,6 +6,7 @@ import {
   addGradientStop,
   normalizeTheme,
   normalizeColor,
+  migrateSundayThemeDefaults,
   removeGradientStop,
   sortGradientStops,
   type ThemeArea,
@@ -92,8 +93,14 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
     contentWidth.value = clampWidth(value.contentWidth)
     if (value.themeMode === 'system' || value.themeMode === 'light' || value.themeMode === 'dark') themeMode.value = value.themeMode
     const legacyTheme = normalizeTheme({ ...DEFAULT_THEME, ...(value.theme || {}) })
-    lightTheme.value = normalizeTheme({ ...DEFAULT_THEME, ...(value.lightTheme || legacyTheme) })
-    darkTheme.value = normalizeTheme({ ...DEFAULT_THEME, ...(value.darkTheme || legacyTheme) })
+    lightTheme.value = migrateSundayThemeDefaults(
+      normalizeTheme({ ...DEFAULT_THEME, ...(value.lightTheme || legacyTheme) }),
+      'light',
+    )
+    darkTheme.value = migrateSundayThemeDefaults(
+      normalizeTheme({ ...DEFAULT_THEME, ...(value.darkTheme || legacyTheme) }),
+      'dark',
+    )
   }
 
   async function save() {

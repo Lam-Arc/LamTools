@@ -998,10 +998,11 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   min-width: 0;
   width: 100%;
   resize: none;
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
-  color: var(--theme-control-text);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: var(--space-2);
   font: inherit;
   font-size: 12px;

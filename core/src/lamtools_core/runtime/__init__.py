@@ -81,8 +81,8 @@ class RuntimeTurnInput:
     run_id: str = ""
     turn_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
-    guidance_source: Callable[[], list[str]] | None = field(default=None, repr=False, compare=False)
-    guidance_finalizer: Callable[[], list[str] | None] | None = field(default=None, repr=False, compare=False)
+    guidance_source: Callable[[], list[Any]] | None = field(default=None, repr=False, compare=False)
+    guidance_finalizer: Callable[[], list[Any] | None] | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"user_message": self.user_message}
@@ -233,7 +233,7 @@ class _RuntimeTaskEntry:
     run_id: str
     task: asyncio.Task[Any] | None = None
     guidance_open: bool = True
-    guidance: list[tuple[str, str]] = field(default_factory=list)
+    guidance: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
     guidance_ids: set[str] = field(default_factory=set)
 
 
@@ -361,6 +361,7 @@ class RuntimeTaskRegistry:
         *,
         run_id: str,
         guidance_id: str,
+        metadata: dict[str, Any] | None = None,
     ) -> Literal["accepted", "duplicate", "closed", "not_active"]:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
@@ -372,7 +373,7 @@ class RuntimeTaskRegistry:
         normalized_id = str(guidance_id or "").strip()
         if normalized_id and normalized_id in entry.guidance_ids:
             return "duplicate"
-        entry.guidance.append((normalized_id, guidance))
+        entry.guidance.append((normalized_id, guidance, deepcopy(metadata or {})))
         if normalized_id:
             entry.guidance_ids.add(normalized_id)
         return "accepted"
@@ -384,6 +385,7 @@ class RuntimeTaskRegistry:
         *,
         run_id: str = "",
         guidance_id: str = "",
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Queue one transient instruction for the matching active runtime task."""
         return self.accept_guidance(
@@ -391,18 +393,34 @@ class RuntimeTaskRegistry:
             text,
             run_id=run_id,
             guidance_id=guidance_id,
+            metadata=metadata,
         ) in {"accepted", "duplicate"}
 
-    def consume_guidance(self, thread_id: str, *, run_id: str = "") -> list[str]:
+    def consume_guidance(
+        self,
+        thread_id: str,
+        *,
+        run_id: str = "",
+        include_metadata: bool = False,
+    ) -> list[Any]:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
         if entry is None or entry.run_id != run_id or entry.task is None:
             return []
-        guidance = [text for _guidance_id, text in entry.guidance]
+        guidance = [
+            ({"content": text, "metadata": deepcopy(metadata)} if include_metadata else text)
+            for _guidance_id, text, metadata in entry.guidance
+        ]
         entry.guidance.clear()
         return guidance
 
-    def close_guidance_if_empty(self, thread_id: str, *, run_id: str) -> list[str] | None:
+    def close_guidance_if_empty(
+        self,
+        thread_id: str,
+        *,
+        run_id: str,
+        include_metadata: bool = False,
+    ) -> list[Any] | None:
         """Atomically consume pending guidance or seal an empty run."""
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
@@ -411,26 +429,49 @@ class RuntimeTaskRegistry:
         if not entry.guidance_open:
             return []
         if entry.guidance:
-            guidance = [text for _guidance_id, text in entry.guidance]
+            guidance = [
+                ({"content": text, "metadata": deepcopy(metadata)} if include_metadata else text)
+                for _guidance_id, text, metadata in entry.guidance
+            ]
             entry.guidance.clear()
             return guidance
         entry.guidance_open = False
         return []
 
-    def guidance_source(self, thread_id: str, *, run_id: str = "") -> Callable[[], list[str]]:
-        return lambda: self.consume_guidance(thread_id, run_id=run_id)
+    def guidance_source(
+        self,
+        thread_id: str,
+        *,
+        run_id: str = "",
+        include_metadata: bool = False,
+    ) -> Callable[[], list[Any]]:
+        return lambda: self.consume_guidance(
+            thread_id,
+            run_id=run_id,
+            include_metadata=include_metadata,
+        )
 
-    def guidance_finalizer(self, thread_id: str, *, run_id: str) -> Callable[[], list[str] | None]:
-        return lambda: self.close_guidance_if_empty(thread_id, run_id=run_id)
+    def guidance_finalizer(
+        self,
+        thread_id: str,
+        *,
+        run_id: str,
+        include_metadata: bool = False,
+    ) -> Callable[[], list[Any] | None]:
+        return lambda: self.close_guidance_if_empty(
+            thread_id,
+            run_id=run_id,
+            include_metadata=include_metadata,
+        )
 
     def retract_guidance(self, thread_id: str, *, run_id: str, guidance_id: str) -> None:
         entry = self._entries.get(thread_id)
         if entry is None or entry.run_id != run_id or not guidance_id:
             return
-        pending = [(item_id, text) for item_id, text in entry.guidance if item_id == guidance_id]
+        pending = [item for item in entry.guidance if item[0] == guidance_id]
         if not pending:
             return
-        entry.guidance = [(item_id, text) for item_id, text in entry.guidance if item_id != guidance_id]
+        entry.guidance = [item for item in entry.guidance if item[0] != guidance_id]
         entry.guidance_ids.discard(guidance_id)
 
     def release_run(self, thread_id: str, *, run_id: str) -> None:

@@ -47,21 +47,22 @@
   --composer-height: 120px;
   --composer-rest-bottom: 16px;
   --composer-clearance: 24px;
-  --theme-backdrop-background: linear-gradient(180deg, #202020 0%, #202020 100%);
-  --theme-backdrop-text: #f2efeb;
-  --theme-main-background: linear-gradient(180deg, #111111 0%, #111111 100%);
-  --theme-main-text: #f2efeb;
+  /* Flat Sunday dark fallback; Vue replaces these with the active preset. */
+  --theme-backdrop-background: #3A3B3F;
+  --theme-backdrop-text: #FBF7F0;
+  --theme-main-background: #1B1D22;
+  --theme-main-text: #FBF7F0;
   --theme-main-soft-background: rgba(255, 255, 255, 0.045);
   --theme-main-subtle-background: rgba(255, 255, 255, 0.028);
   --theme-main-sunken-background: rgba(0, 0, 0, 0.32);
-  --theme-main-border: rgba(255, 255, 255, 0.10);
-  --theme-composer-background: linear-gradient(180deg, rgba(44, 44, 43, 1) 0%, rgba(44, 44, 43, 1) 100%);
-  --theme-composer-text: #f2efeb;
+  --theme-main-border: #818289;
+  --theme-composer-background: #22242A;
+  --theme-composer-text: #FBF7F0;
   --theme-composer-soft-background: rgba(255, 255, 255, 0.045);
-  --theme-control-background: linear-gradient(180deg, rgba(52, 51, 49, 1) 0%, rgba(52, 51, 49, 1) 100%);
-  --theme-control-solid: #343331;
-  --theme-control-text: #f2efeb;
-  --theme-control-soft-background: rgba(255, 255, 255, 0.055);
+  --theme-control-background: #FBF7F0;
+  --theme-control-solid: #FBF7F0;
+  --theme-control-text: #2E3138;
+  --theme-control-soft-background: rgba(255, 255, 252, 0.82);
   position: fixed;
   /* The shell backdrop must continue behind the transparent custom titlebar;
      child surfaces keep their own titlebar offset below. */
@@ -72,7 +73,7 @@
 }
 
 .workspace-shell.left-open  { --main-left: var(--left-reveal); }
-.workspace-shell.right-open { --main-right: var(--right-reveal); }
+.workspace-shell.right-open.right-pinned { --main-right: var(--right-reveal); }
 .workspace-shell.stage-open { --stage-reveal: var(--stage-height, 300px); }
 .workspace-shell.stage-open { --main-left: var(--left-reveal); }
 .workspace-shell.stage-open { --main-right: var(--right-reveal); }
@@ -167,48 +168,43 @@
   right: 0;
   width: calc(var(--right-drawer-width) - var(--right-panel-gap));
   max-height: none;
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 18%, transparent);
+  border: 0;
   /* The rail meets the viewport on the right; only the exposed left edge is
      rounded. Keep the 2px main-panel gap intact via its width calculation. */
   border-radius: var(--radius-lg) 0 0 var(--radius-lg);
-  background: transparent;
-  isolation: isolate;
   opacity: 1;
   pointer-events: auto;
   transform: none;
-  transition: transform 240ms var(--ease-out), opacity 240ms var(--ease-out);
-}
-.drawer-right::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
-  /* Keep text and controls crisp while the single glass substrate feathers
-     independently to zero opacity along all four edges. */
-  background: color-mix(in srgb, var(--theme-backdrop-text) 4%, transparent);
-  -webkit-backdrop-filter: blur(var(--space-4)) saturate(1.08);
-  backdrop-filter: blur(var(--space-4)) saturate(1.08);
-  -webkit-mask-image:
-    linear-gradient(to right, transparent 0, #000 var(--space-5), #000 calc(100% - var(--space-5)), transparent 100%),
-    linear-gradient(to bottom, transparent 0, #000 var(--space-5), #000 calc(100% - var(--space-5)), transparent 100%);
-  -webkit-mask-composite: source-in;
-  mask-image:
-    linear-gradient(to right, transparent 0, #000 var(--space-5), #000 calc(100% - var(--space-5)), transparent 100%),
-    linear-gradient(to bottom, transparent 0, #000 var(--space-5), #000 calc(100% - var(--space-5)), transparent 100%);
-  mask-composite: intersect;
-  pointer-events: none;
+  visibility: visible;
+  /* The backdrop-filter ancestor must remain untransformed and fully opaque;
+     otherwise WebView2 creates a new backdrop root and the blur disappears. */
+  transition: visibility 0s linear 0s;
 }
 .drawer-right:not(.open) {
-  opacity: 0;
+  visibility: hidden;
   pointer-events: none;
+  transition-delay: var(--dur-base);
+}
+.drawer-right > .drawer-body {
+  opacity: 1;
+  transform: none;
+  transition: transform 240ms var(--ease-out), opacity 240ms var(--ease-out);
+}
+.drawer-right:not(.open) > .drawer-body {
+  opacity: 0;
   transform: translateX(10px);
   transition-duration: var(--dur-base), var(--dur-base);
 }
-.drawer-right.open { transform: none; }
+.drawer-right.open { visibility: visible; }
+.drawer-right.open:not(.pinned) {
+  /* Edge-hover drawers overlay the canvas. Moving the main surface away from
+     the pointer made the drawer repeatedly enter/leave and caused a full
+     workspace layout oscillation. Only a pinned drawer reserves layout. */
+  z-index: var(--z-popover);
+}
 
 /* Force drawers visible when stage is open */
-.workspace-shell.stage-open .drawer-right { opacity: 1; pointer-events: auto; transform: none; }
+.workspace-shell.stage-open .drawer-right { visibility: visible; pointer-events: auto; }
 
 .drawer-head {
   flex: 0 0 auto;
@@ -516,13 +512,14 @@
     box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
   }
   .drawer-left:not(.open) { transform: translateX(-102%); }
-  .drawer-right:not(.open) { transform: translateX(102%); }
-  .drawer-left.open,
-  .drawer-right.open {
+  .drawer-right { opacity: 1; }
+  .drawer-right:not(.open) > .drawer-body { transform: translateX(102%); }
+  .drawer-left.open {
     transform: translateX(0);
     opacity: 1;
     pointer-events: auto;
   }
+  .drawer-right.open { opacity: 1; pointer-events: auto; }
   /* The right rail is a full-width mobile drawer; keep the left project rail
      constrained to its comfortable reading width. */
   .drawer-right {
@@ -567,4 +564,5 @@
   .workspace-shell .drawer-right {
     transition: none !important;
   }
+  .workspace-shell .drawer-right > .drawer-body { transition: none !important; }
 }

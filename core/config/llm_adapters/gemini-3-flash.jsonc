@@ -24,7 +24,9 @@
       "presets": {
         "off": {},
         "light": { "set": { "generationConfig.thinkingConfig.thinkingLevel": "MINIMAL" } },
+        "medium": { "set": { "generationConfig.thinkingConfig.thinkingLevel": "HIGH" } },
         "high": { "set": { "generationConfig.thinkingConfig.thinkingLevel": "HIGH" } },
+        "xhigh": { "set": { "generationConfig.thinkingConfig.thinkingLevel": "HIGH" } },
         "max": { "set": { "generationConfig.thinkingConfig.thinkingLevel": "HIGH" } }
       }
     }

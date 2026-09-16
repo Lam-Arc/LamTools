@@ -147,6 +147,43 @@ class TestWorkflowAddNode:
         assert result.status == "failed"
         assert "already exists" in result.error
 
+    @pytest.mark.parametrize("kind", ["model", "agent"])
+    async def test_model_nodes_inherit_the_editing_turn_model(self, handlers, kind):
+        tool, ops = handlers
+        call = _call({"kind": kind, "node_id": f"{kind}-node", "config": {"model_id": None}})
+        call.metadata["runtime_snapshot"] = {"model_id": "deepseek-v4-flash"}
+
+        result = await tool["workflow_add_node"](call)
+
+        assert result.status == "ok"
+        assert ops.workflows["news"]["nodes"][0]["config"]["model_id"] == "deepseek-v4-flash"
+
+    async def test_explicit_model_selection_is_preserved(self, handlers):
+        tool, ops = handlers
+        call = _call({"kind": "model", "node_id": "model-node", "config": {"model_id": "chosen"}})
+        call.metadata["runtime_snapshot"] = {"model_id": "fallback"}
+
+        await tool["workflow_add_node"](call)
+
+        assert ops.workflows["news"]["nodes"][0]["config"]["model_id"] == "chosen"
+
+    async def test_output_node_gets_a_terminal_port_and_workflow_output(self, handlers):
+        tool, ops = handlers
+
+        result = await tool["workflow_add_node"](_call({
+            "kind": "output",
+            "node_id": "result",
+            "ports": [{"name": "in", "type": "string", "direction": "in"}],
+        }))
+
+        assert result.status == "ok"
+        output_ports = [
+            port for port in ops.workflows["news"]["nodes"][0]["ports"]
+            if port["direction"] == "out"
+        ]
+        assert output_ports[0]["name"] == "output"
+        assert ops.workflows["news"]["output_port"] == "result.output"
+
 
 class TestWorkflowConnect:
     async def test_connects_existing_nodes(self, handlers):

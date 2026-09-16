@@ -298,8 +298,14 @@ class CoreLiveConnection:
             # journal row as a protocol-neutral notification; the normal live
             # event remains below for the existing desktop projector.
             event_id = event.get("event_id") if isinstance(event, dict) else getattr(event, "event_id", "")
+            event_seq = event.get("seq", 0) if isinstance(event, dict) else getattr(event, "seq", 0)
             journal = getattr(getattr(self.context, "host", None), "sync_journal", None)
-            if event_id and journal is not None:
+            # seq=0 is the explicit marker for transient stream progress. Such
+            # events are never written to the sync journal, so querying SQLite
+            # for every tiny model delta only blocks this reader and can fill
+            # the 256-item subscriber queue, forcing a 1013 reconnect. Persisted
+            # events have a positive sequence and keep the normal sync lookup.
+            if event_id and event_seq and journal is not None:
                 try:
                     change = await journal.get_change(str(event_id))
                 except Exception:

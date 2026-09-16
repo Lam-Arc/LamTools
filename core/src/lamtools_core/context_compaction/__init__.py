@@ -1,11 +1,17 @@
 """Public API for the context-compaction pipeline."""
 
 from lamtools_core.context_compaction_budget import (
+    CONTEXT_COMPACTION_NAMESPACE,
+    DEFAULT_RETAINED_STEPS,
+    MAX_RETAINED_STEPS,
+    MAX_RETAINED_USER_MESSAGES,
     SummaryTokenBudget,
     TokenBudget,
     TokenMeasurement,
+    load_retained_steps,
     measure_for_compaction_trigger,
     resolve_compaction_budget,
+    resolve_retained_steps,
 )
 from .models import (
     COMPACTION_PREFIX,
@@ -24,8 +30,16 @@ from .models import (
     ContextCompactionResult,
 )
 from .formatting import (
+    RECENT_USER_MESSAGES_HEADING,
+    RECENT_USER_MESSAGES_METADATA_KEY,
+    NON_TEXT_USER_MESSAGE_PLACEHOLDER,
     format_messages_for_compaction,
+    append_recent_user_messages,
+    extract_recent_user_messages,
     parse_compaction_summary,
+    recent_user_message_text,
+    strip_recent_user_messages,
+    user_message_text,
     with_compaction_prefix,
 )
 from .fallback import (
@@ -50,6 +64,11 @@ from .controller import (
 __all__ = [
     "COMPACTION_PREFIX",
     "COMPACTION_PROMPT",
+    "RECENT_USER_MESSAGES_HEADING",
+    "RECENT_USER_MESSAGES_METADATA_KEY",
+    "NON_TEXT_USER_MESSAGE_PLACEHOLDER",
+    "CONTEXT_COMPACTION_NAMESPACE",
+    "DEFAULT_RETAINED_STEPS",
     "CompactionBudgetExceeded",
     "CompactionExecution",
     "CompactionFitInput",
@@ -65,15 +84,24 @@ __all__ = [
     "ContextCompactionRequest",
     "ContextCompactionResult",
     "MAX_FIT_ATTEMPTS",
+    "MAX_RETAINED_STEPS",
+    "MAX_RETAINED_USER_MESSAGES",
     "compact_context",
     "compress_structured_compaction_summary",
     "compaction_segment_input_limit",
     "fallback_structured_compaction_summary",
     "format_messages_for_compaction",
+    "append_recent_user_messages",
+    "extract_recent_user_messages",
+    "load_retained_steps",
     "parse_compaction_summary",
+    "recent_user_message_text",
     "resolve_compaction_budget",
+    "resolve_retained_steps",
     "select_context_compaction_layout",
+    "strip_recent_user_messages",
     "summarize_context_messages",
     "truncate_text_to_tokens",
+    "user_message_text",
     "with_compaction_prefix",
 ]

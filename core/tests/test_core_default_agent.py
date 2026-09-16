@@ -16,7 +16,7 @@ from lamtools_core.context_compaction import CompactionExecution, ContextCompact
 from lamtools_core.app.live_hub import CoreAppEventHub
 from lamtools_core.app.base_agent import build_core_plugin_operation_catalog, core_events_to_run_items
 from lamtools_core.event import CoreEvent
-from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
+from lamtools_core.llm import ChatMessage, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.shallow_thinking import SHALLOW_THINKING_PROMPT
 from lamtools_core.plugins.hook_config import HookRegistry
 from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
@@ -156,7 +156,7 @@ class ScriptedApprovalLLM:
         yield LLMStreamEvent(kind="done")
 
 
-class ScriptedRepeatedSubAgentApprovalLLM:
+class ScriptedRejectedLegacySubAgentLLM:
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
 
@@ -165,8 +165,7 @@ class ScriptedRepeatedSubAgentApprovalLLM:
 
     async def stream(self, request: LLMRequest):
         self.requests.append(request)
-        request_number = len(self.requests)
-        if request_number == 1:
+        if len(self.requests) == 1:
             yield LLMStreamEvent(
                 kind="done",
                 tool_calls=[
@@ -178,35 +177,10 @@ class ScriptedRepeatedSubAgentApprovalLLM:
                 ],
             )
             return
-        if request_number == 2:
-            yield LLMStreamEvent(
-                kind="done",
-                tool_calls=[
-                    LLMToolCall(
-                        id="call-child-write-one",
-                        name="write_file",
-                        arguments={"path": "first.md", "content": "first\n"},
-                    )
-                ],
-            )
-            return
-        if request_number == 3:
-            yield LLMStreamEvent(
-                kind="done",
-                tool_calls=[
-                    LLMToolCall(
-                        id="call-child-write-two",
-                        name="write_file",
-                        arguments={"path": "second.md", "content": "second\n"},
-                    )
-                ],
-            )
-            return
-        if request_number == 4:
-            yield LLMStreamEvent(kind="content_delta", content="Child saved both files.")
-            yield LLMStreamEvent(kind="done")
-            return
-        yield LLMStreamEvent(kind="content_delta", content="Parent received the completed files.")
+        tool_messages = [message for message in request.messages if message.role == "tool"]
+        assert tool_messages
+        assert "requires exactly" in tool_messages[-1].content.lower()
+        yield LLMStreamEvent(kind="content_delta", content="Legacy delegation was rejected.")
         yield LLMStreamEvent(kind="done")
 
 
@@ -695,14 +669,25 @@ class _ManualCompactionLLM:
 
 @pytest.mark.asyncio
 async def test_manual_compaction_anchors_boundary_at_first_retained_message():
-    store = InMemoryRuntimeStateStore()
+    class TrackingStore(InMemoryRuntimeStateStore):
+        def __init__(self):
+            super().__init__()
+            self.history_requests: list[int] = []
+
+        async def get_history(self, session_id, *, after_seq=0):
+            self.history_requests.append(after_seq)
+            return await super().get_history(session_id, after_seq=after_seq)
+
+    store = TrackingStore()
     state = RuntimeState(
         session_id="thread-manual-anchor",
         metadata={"context_window_tokens": 256_000},
     )
+    # The planner protects the latest twenty user messages by default; keep
+    # one older span so this manual-boundary test reaches the compaction path.
     history = [
         {"role": "user", "content": f"old message {index} " + ("x" * 5000)}
-        for index in range(6)
+        for index in range(25)
     ]
     await store.save_checkpoint(state, history)
     llm = _ManualCompactionLLM()
@@ -718,17 +703,149 @@ async def test_manual_compaction_anchors_boundary_at_first_retained_message():
     saved = await store.get("thread-manual-anchor")
     compaction = saved.metadata["context_compaction"]
     boundary = compaction["summary_seq"]
-    # The boundary points immediately before the first retained row while the
-    # original durable transcript remains untouched, like auto compaction.
+    # Default zero-Step retention summarizes the complete durable transcript;
+    # manual compaction leaves durable rows untouched and records the current
+    # high-water mark so a subsequent loader can legitimately return no rows.
     stored_history = await store.get_history("thread-manual-anchor")
-    assert boundary < len(stored_history)
-    assert boundary > 0
+    assert boundary == await store.history_max_seq("thread-manual-anchor")
+    assert boundary == len(stored_history)
     assert stored_history == history
     # Summary rows never leak into persisted history.
     assert all(
         item.get("metadata", {}).get("key") != "context_compaction_summary"
         for item in stored_history
     )
+
+    # An empty incremental tail at the current max sequence is valid; the
+    # effective-history loader must not fall back to the full legacy blob.
+    store.history_requests.clear()
+    effective = await command_execution._load_effective_compaction_history(
+        store,
+        "thread-manual-anchor",
+        saved.metadata,
+    )
+    assert store.history_requests == [boundary]
+    assert len(effective) == 1
+    assert effective[0].metadata["key"] == "context_compaction_summary"
+
+
+@pytest.mark.asyncio
+async def test_repeated_manual_compaction_preserves_prior_compacted_sequences_and_retained_tail(
+    monkeypatch,
+):
+    state_store = InMemoryRuntimeStateStore()
+    state = RuntimeState(
+        session_id="thread-manual-repeat",
+        metadata={
+            "context_window_tokens": 256_000,
+            "runtime_audit": {"loop_policy": {"compact_retained_steps": 2}},
+        },
+    )
+    await state_store.save_checkpoint(
+        state,
+        [
+            {"role": "user", "content": f"message-{seq}"}
+            for seq in range(1, 8)
+        ],
+    )
+    calls: list[list[ChatMessage]] = []
+
+    async def fake_compact(self, messages, **kwargs):
+        _ = self
+        calls.append(list(messages))
+        by_seq = {
+            int(message.metadata["history_seq"]): message
+            for message in messages
+            if isinstance(message.metadata.get("history_seq"), int)
+        }
+        summary = ChatMessage(
+            role="system",
+            content=f"summary-{len(calls)}",
+            metadata={"key": "context_compaction_summary"},
+        )
+        if len(calls) == 1:
+            compacted = [by_seq[seq] for seq in (1, 2, 3, 4, 7)]
+            retained = [by_seq[seq] for seq in (5, 6)]
+        elif len(calls) == 2:
+            # The second run may compact only the prior summary, which has no
+            # durable history_seq.  The retained rows must still anchor the
+            # boundary and the first run's folded set must remain persisted.
+            assert [message.metadata["history_seq"] for message in messages[1:]] == [5, 6, 8]
+            compacted = [messages[0]]
+            retained = list(messages[1:])
+        else:
+            # A later exact-budget fit can drop the previously retained Step
+            # rows.  They are absent from both result lists, so persistence
+            # must derive their sequence numbers from source_messages.
+            assert [message.metadata["history_seq"] for message in messages[1:]] == [5, 6, 8]
+            compacted = [messages[0]]
+            retained = [messages[-1]]
+        result = ContextCompactionResult(
+            status="compacted",
+            trigger="manual",
+            summary=summary.content,
+            summary_message=summary,
+            compacted_messages=compacted,
+            retained_messages=retained,
+            replacement_messages=[summary, *retained],
+            before_tokens=100,
+            after_tokens=50,
+            limit_tokens=200,
+        )
+        return CompactionExecution(result=result, measurement=kwargs["measurement"])
+
+    monkeypatch.setattr(command_execution.ContextCompactionController, "compact", fake_compact)
+
+    first = await command_execution.compact_runtime_history(
+        runtime_state_store=state_store,
+        thread_id=state.session_id,
+        llm_client=object(),
+        model="mock-model",
+    )
+    assert first["status"] == "compacted"
+    saved = await state_store.get(state.session_id)
+    assert saved is not None
+    first_meta = saved.metadata["context_compaction"]
+    assert first_meta["summary_seq"] == 4
+    assert first_meta["compacted_history_seqs"] == [1, 2, 3, 4, 7]
+
+    await state_store.append_history(
+        state.session_id,
+        [{"role": "user", "content": "message-8", "metadata": {"history_seq": 8}}],
+    )
+    second = await command_execution.compact_runtime_history(
+        runtime_state_store=state_store,
+        thread_id=state.session_id,
+        llm_client=object(),
+        model="mock-model",
+    )
+    assert second["status"] == "compacted"
+    saved = await state_store.get(state.session_id)
+    assert saved is not None
+    second_meta = saved.metadata["context_compaction"]
+    assert second_meta["summary_seq"] == 4
+    assert second_meta["compacted_history_seqs"] == [1, 2, 3, 4, 7]
+
+    third = await command_execution.compact_runtime_history(
+        runtime_state_store=state_store,
+        thread_id=state.session_id,
+        llm_client=object(),
+        model="mock-model",
+    )
+    assert third["status"] == "compacted"
+    saved = await state_store.get(state.session_id)
+    assert saved is not None
+    third_meta = saved.metadata["context_compaction"]
+    assert third_meta["summary_seq"] == 7
+    assert third_meta["compacted_history_seqs"] == [1, 2, 3, 4, 5, 6, 7]
+
+    effective = await command_execution._load_effective_compaction_history(
+        state_store,
+        state.session_id,
+        saved.metadata,
+    )
+    assert [message.metadata.get("history_seq") for message in effective[1:]] == [8]
+    assert len(calls) == 3
 
 
 @pytest.mark.asyncio
@@ -1272,57 +1389,123 @@ async def test_core_agent_approval_continues_in_request_work_root(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_core_agent_sub_agent_can_request_approval_twice_before_completing(tmp_path):
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        (
+            "sub_agent",
+            {
+                "action": "create",
+                "type": "consider",
+                "name": "reviewer",
+                "model": "model-a",
+                "reasoning_level": "medium",
+            },
+        ),
+        (
+            "sub_agent_message",
+            {"type": "consider", "name": "reviewer", "prompt": "continue"},
+        ),
+    ],
+)
+async def test_approval_respond_rechecks_forbidden_delegation_strategy(
+    tmp_path, isolated_config_root, tool_name, arguments
+):
+    from lamtools_core.config.subagent_prompt import write_subagent_settings
+
     work_root = tmp_path / "work"
     work_root.mkdir()
     state_store = InMemoryRuntimeStateStore()
-    llm = ScriptedRepeatedSubAgentApprovalLLM()
+    call_id = f"pending-{tool_name}"
+    state = RuntimeState(
+        session_id=f"thread-{tool_name}",
+        run_id=f"run-{tool_name}",
+        status="waiting",
+        loop_state="wait",
+        metadata={
+            "work_root": str(work_root),
+            "turn_id": f"turn-{tool_name}",
+            "original_user_message": "delegate work",
+            "pending_approval": {
+                "request_id": call_id,
+                "status": "waiting",
+                "tool_call": {
+                    "id": call_id,
+                    "name": tool_name,
+                    "arguments": arguments,
+                    "metadata": {},
+                },
+            },
+        },
+    )
+    await state_store.save(state)
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
+        model_provider=CapturingCoreAgentLLM(),
+        runtime_state_store=state_store,
+    )
+
+    # The call was already persisted while delegation was available. The
+    # approval continuation must use the current project policy, not the old
+    # pending-call snapshot.
+    write_subagent_settings(
+        {"delegation_strategy": "forbidden"},
+        scope="project",
+        work_root=work_root,
+    )
+    result = await catalog.execute(
+        "approval.respond",
+        {
+            "thread_id": state.session_id,
+            "request_id": call_id,
+            "action": "approve",
+        },
+    )
+
+    assert result.status == "error"
+    assert result.payload["decision"] == "failed"
+    tool_results = [
+        item
+        for item in result.payload["run_items"]
+        if item["kind"] == "tool_result"
+        and item["payload"].get("tool_name") == tool_name
+    ]
+    assert tool_results
+    assert tool_results[-1]["status"] == "failed"
+    assert "disabled" in str(tool_results[-1]["payload"]).lower() or "blocked" in str(
+        tool_results[-1]["payload"]
+    ).lower()
+
+
+@pytest.mark.asyncio
+async def test_core_agent_rejects_removed_blocking_sub_agent_contract(tmp_path):
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    llm = ScriptedRejectedLegacySubAgentLLM()
     catalog = create_core_agent_operations(
         spec=CoreAgentSpec(),
         paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
         model_provider=llm,
-        runtime_state_store=state_store,
     )
 
-    first_wait = await catalog.execute(
+    result = await catalog.execute(
         "turn.start",
         {"thread_id": "thread-repeated-sub-approval", "message": "delegate two files"},
     )
-    second_wait = await catalog.execute(
-        "approval.respond",
-        {"thread_id": "thread-repeated-sub-approval", "action": "approve"},
-    )
-    parent_state = await state_store.get("thread-repeated-sub-approval")
 
-    assert first_wait.payload["decision"] == "wait"
-    assert second_wait.status == "ok"
-    assert second_wait.payload["decision"] == "wait"
-    assert parent_state is not None
-    assert parent_state.status == "waiting"
-    assert parent_state.metadata["pending_approval"]["tool_call"]["id"] == "call-child-write-two"
-    assert parent_state.metadata["pending_approval"]["delegated_session"]["session_id"].endswith(":sub:writer")
-    assert any(
-        event["name"] == "runtime.approval_request"
-        and event["payload"]["tool_call_id"] == "call-child-write-two"
-        for event in second_wait.payload["events"]
-    )
-    assert not any(event["name"] == "runtime.approval_response" for event in second_wait.payload["events"])
-    assert sum(item["kind"] == "approval_response" for item in second_wait.payload["run_items"]) == 1
-    assert (work_root / "first.md").read_text(encoding="utf-8") == "first\n"
+    failed_sub_agent = [
+        item for item in result.payload["run_items"]
+        if item["kind"] == "tool_result" and item["payload"].get("tool_name") == "sub_agent"
+    ]
+    assert result.status == "ok"
+    assert result.payload["decision"] == "done"
+    assert result.payload["message"] == "Legacy delegation was rejected."
+    assert len(failed_sub_agent) == 1
+    assert failed_sub_agent[0]["status"] == "failed"
+    assert not (work_root / "first.md").exists()
     assert not (work_root / "second.md").exists()
-
-    completed = await catalog.execute(
-        "approval.respond",
-        {"thread_id": "thread-repeated-sub-approval", "action": "approve"},
-    )
-
-    assert completed.status == "ok"
-    assert completed.payload["decision"] == "done"
-    assert completed.payload["message"] == "Parent received the completed files."
-    assert not any(event["name"] == "runtime.approval_response" for event in completed.payload["events"])
-    assert sum(item["kind"] == "approval_response" for item in completed.payload["run_items"]) == 1
-    assert (work_root / "second.md").read_text(encoding="utf-8") == "second\n"
-    assert len(llm.requests) == 5
+    assert len(llm.requests) == 2
 
 
 @pytest.mark.asyncio

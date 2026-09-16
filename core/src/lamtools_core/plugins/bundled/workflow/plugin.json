@@ -199,6 +199,8 @@
             "arguments": [
               {"flags": ["name"], "help": "Workflow name"},
               {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--model-id"], "default": "", "help": "Fallback model for model/agent nodes without an explicit model"},
+              {"flags": ["--allow-commands"], "action": "store_true", "default": false, "help": "Authorize command and Python nodes for this explicit run"},
               {"flags": ["--input"], "action": "append", "default": [], "metavar": "KEY=VALUE", "help": "Workflow input (repeatable; VALUE parsed as JSON if possible)"},
               {"flags": ["--max-steps"], "type": "int", "default": null, "help": "Run at most N nodes (single-step debugging)"},
               {"flags": ["--start-node"], "default": null, "help": "Start running from this node (sub-graph; nodes before it are skipped)"},

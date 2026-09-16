@@ -32,14 +32,154 @@ const MAX_RECENT = 12
 /** Canonical ids are useful to consumers that need to build a stable menu. */
 export const WORKFLOW_CANONICAL_NODE_KINDS = [
   'model', 'agent', 'command', 'python', 'constant', 'input', 'output',
-  'template', 'condition', 'merge', 'join', 'subgraph',
+  'template', 'condition', 'merge', 'join', 'wait_event', 'approval', 'subgraph',
 ] as const
 
 /** Registry entries that are compatibility aliases, not new-node choices. */
 export const WORKFLOW_HIDDEN_NODE_KINDS = [...WORKFLOW_LEGACY_NODE_KINDS] as string[]
 
+/**
+ * Localized labels are presentation-only.  Registry ids, schema keys, and
+ * stored preference values continue to use their canonical (usually English)
+ * ids so that adding a node never changes the execution contract.
+ */
+export const WORKFLOW_NODE_LABELS: Readonly<Record<string, string>> = {
+  model: '模型',
+  agent: '智能体',
+  approval: '人工审批',
+  command: '命令',
+  python: 'Python 脚本',
+  constant: '常量',
+  input: '输入',
+  output: '输出',
+  template: '模板',
+  condition: '条件',
+  merge: '合并',
+  join: '汇聚',
+  subgraph: '子工作流',
+  wait_event: '等待事件',
+  ai: 'AI（兼容）',
+  script: 'Python 脚本（兼容）',
+  content: '内容（兼容）',
+  transform: '转换（兼容）',
+  branch: '分支（兼容）',
+}
+
+/** Short descriptions keep catalog rows useful without exposing raw schema copy. */
+export const WORKFLOW_NODE_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  model: '使用选定模型生成结果。',
+  agent: '调用智能体执行任务，可按需使用工具。',
+  approval: '暂停工作流，等待人工批准或拒绝。',
+  command: '运行一条 Shell 命令。',
+  python: '执行 Python 脚本，并通过端口传递变量。',
+  constant: '输出预设的常量值。',
+  input: '接收工作流输入。',
+  output: '输出工作流结果。',
+  template: '按照模板生成文本。',
+  condition: '按条件选择后续分支。',
+  merge: '合并多个输入，取首个有效值。',
+  join: '汇聚具名输入并收集为对象。',
+  subgraph: '调用另一个工作流。',
+  wait_event: '等待外部事件后继续执行。',
+  ai: '兼容旧版 AI 节点。',
+  script: '兼容旧版 Python 脚本节点。',
+  content: '兼容旧版内容节点。',
+  transform: '兼容旧版转换节点。',
+  branch: '兼容旧版分支节点。',
+}
+
+const WORKFLOW_CATEGORY_LABELS: Readonly<Record<string, string>> = {
+  workflow: '工作流',
+  'workflow/model': '模型',
+  'workflow/agent': '智能体',
+  'workflow/runtime': '运行时',
+  'workflow/data': '数据',
+  'workflow/composition': '编排',
+  'workflow/control': '控制',
+  'workflow/input': '输入',
+  'workflow/output': '输出',
+  'workflow/io': '输入输出',
+  'workflow/transform': '转换',
+  'workflow/human': '人工协作',
+  'workflow/legacy': '兼容',
+}
+
+const WORKFLOW_CATEGORY_SEGMENT_LABELS: Readonly<Record<string, string>> = {
+  ai: '智能',
+  agent: '智能体',
+  command: '命令',
+  composition: '编排',
+  control: '控制',
+  data: '数据',
+  input: '输入',
+  human: '人工协作',
+  io: '输入输出',
+  legacy: '兼容',
+  model: '模型',
+  output: '输出',
+  runtime: '运行时',
+  test: '测试',
+  transform: '转换',
+  vendor: '扩展',
+  workflow: '工作流',
+}
+
 export function workflowNodeTypeId(schema: WorkflowNodeSchema | null | undefined, fallback = ''): string {
   return String(schema?.type_id ?? schema?.name ?? fallback).trim()
+}
+
+/** Resolve the visible node name while retaining the registry's canonical id. */
+export function workflowNodeDisplayName(
+  schema: WorkflowNodeSchema | null | undefined,
+  fallback = '未命名节点',
+): string {
+  const typeId = workflowNodeTypeId(schema).toLowerCase()
+  const localized = (schema as Record<string, unknown> | null | undefined)?.display_name_zh
+    ?? (schema as Record<string, unknown> | null | undefined)?.title_zh
+  if (typeof localized === 'string' && localized.trim()) return localized.trim()
+  return WORKFLOW_NODE_LABELS[typeId]
+    || String(schema?.display_name ?? schema?.title ?? schema?.name ?? fallback).trim()
+    || fallback
+}
+
+/** Resolve the visible catalog/category label without changing filter values. */
+export function workflowCategoryDisplayName(category: unknown): string {
+  const canonical = String(category || 'workflow').trim() || 'workflow'
+  if (canonical === '全部') return canonical
+  if (WORKFLOW_CATEGORY_LABELS[canonical]) return WORKFLOW_CATEGORY_LABELS[canonical]
+  const segments = canonical.replace(/^workflow\//i, '').split(/[\\/._:-]+/).filter(Boolean)
+  if (!segments.length) return '工作流'
+  return segments.map((segment) => WORKFLOW_CATEGORY_SEGMENT_LABELS[segment.toLowerCase()] || '自定义').join(' / ')
+}
+
+/** Resolve a localized description, with the raw description retained for search. */
+export function workflowSchemaDescription(schema: WorkflowNodeSchema | null | undefined): string {
+  const typeId = workflowNodeTypeId(schema).toLowerCase()
+  const localized = (schema as Record<string, unknown> | null | undefined)?.description_zh
+  if (typeof localized === 'string' && localized.trim()) return localized.trim()
+  return WORKFLOW_NODE_DESCRIPTIONS[typeId]
+    || String(schema?.description || '').trim()
+    || '自定义工作流节点。'
+}
+
+/** Search aliases include both localized copy and the original registry data. */
+export function workflowSchemaSearchValues(
+  schema: WorkflowNodeSchema,
+  fallbackKey = '',
+): string[] {
+  return [
+    workflowNodeTypeId(schema, fallbackKey),
+    schema.name,
+    schema.type_id,
+    schema.display_name,
+    schema.title,
+    schema.description,
+    schema.category,
+    workflowNodeDisplayName(schema),
+    workflowSchemaDescription(schema),
+    ...(Array.isArray(schema.tags) ? schema.tags : []),
+    ...(Array.isArray(schema.keywords) ? schema.keywords : []),
+  ].map((value) => String(value || '').trim()).filter(Boolean)
 }
 
 /** Resolve a schema's editor kind without collapsing custom ids into command. */
@@ -287,7 +427,7 @@ export function createWorkflowNodeFromSchema(
   return {
     id,
     kind,
-    title: String(schema.display_name ?? schema.title ?? schema.name ?? id),
+    title: workflowNodeDisplayName(schema, id),
     config,
     ports,
     position,

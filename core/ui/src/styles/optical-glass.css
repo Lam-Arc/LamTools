@@ -1,0 +1,63 @@
+/**
+ * Shared optical liquid-glass substrate.
+ *
+ * The host remains stable so WebView2 can sample its real backdrop. Motion
+ * belongs to an inner content layer. Reflection and dispersion are localized
+ * overlays; there is intentionally no uniform border or edge-opacity fade.
+ */
+.optical-glass {
+  background: color-mix(in srgb, var(--text) var(--optical-glass-tint), transparent);
+  -webkit-backdrop-filter:
+    blur(var(--optical-glass-blur))
+    saturate(var(--optical-glass-saturation))
+    brightness(var(--optical-glass-brightness))
+    contrast(var(--optical-glass-contrast));
+  backdrop-filter:
+    blur(var(--optical-glass-blur))
+    saturate(var(--optical-glass-saturation))
+    brightness(var(--optical-glass-brightness))
+    contrast(var(--optical-glass-contrast));
+  isolation: isolate;
+}
+
+.optical-glass::before,
+.optical-glass::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.optical-glass::before {
+  z-index: 0;
+  background:
+    radial-gradient(120% 32% at 14% -8%, color-mix(in srgb, var(--text) var(--optical-glass-reflection), transparent), transparent 58%),
+    linear-gradient(112deg, transparent 28%, color-mix(in srgb, var(--blue) var(--optical-glass-dispersion), transparent) 46%, color-mix(in srgb, var(--purple) var(--optical-glass-tint), transparent) 52%, transparent 68%),
+    radial-gradient(72% 28% at 92% 104%, color-mix(in srgb, var(--text) var(--optical-glass-dispersion), transparent), transparent 64%);
+  box-shadow:
+    inset var(--space-1) 0 var(--space-4) color-mix(in srgb, var(--text) var(--optical-glass-dispersion), transparent),
+    inset 0 var(--space-1) var(--space-5) color-mix(in srgb, var(--text) var(--optical-glass-tint), transparent);
+}
+
+.optical-glass::after {
+  z-index: 2;
+  padding: 1px;
+  background: conic-gradient(
+    from 205deg,
+    transparent 0 16%,
+    color-mix(in srgb, var(--text) var(--optical-glass-reflection), transparent) 22%,
+    transparent 31% 58%,
+    color-mix(in srgb, var(--text) var(--optical-glass-dispersion), transparent) 66%,
+    transparent 75% 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+.optical-glass > * {
+  position: relative;
+  z-index: 1;
+}

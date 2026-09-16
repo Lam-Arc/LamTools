@@ -131,6 +131,11 @@ class WorkflowNodeRun:
     attempts: list[WorkflowAttempt] = field(default_factory=list)
     output: Any = None
     error: str = ""
+    cache_status: str = ""
+    cache_key: str = ""
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    audit: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -139,6 +144,11 @@ class WorkflowNodeRun:
             "attempts": [attempt.to_dict() for attempt in self.attempts],
             "output": _json_copy(self.output),
             "error": self.error,
+            "cache_status": self.cache_status,
+            "cache_key": self.cache_key,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "audit": _json_copy(self.audit),
         }
 
 
@@ -230,6 +240,13 @@ class WorkflowRunProjector:
                 node.status = event.kind.split(".", 1)[1]
                 node.output = event.payload.get("output", node.output)
                 node.error = str(event.payload.get("error") or node.error)
+                node.cache_status = str(event.payload.get("cache_status") or node.cache_status)
+                node.cache_key = str(event.payload.get("cache_key") or node.cache_key)
+                node.started_at = _parse_dt(event.payload.get("started_at")) or node.started_at
+                node.finished_at = _parse_dt(event.payload.get("finished_at")) or node.finished_at
+                audit = event.payload.get("audit")
+                if isinstance(audit, Mapping):
+                    node.audit = dict(audit)
             elif event.kind.startswith("attempt."):
                 attempt = next((item for item in node.attempts if item.attempt_id == event.attempt_id), None)
                 if attempt is None:

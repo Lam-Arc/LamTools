@@ -72,6 +72,67 @@ def test_runtime_projection_accumulates_tool_input_delta_preview():
     assert second[0].payload["input_preview"]["content"] == "<html>"
 
 
+def test_sub_agent_guidance_projects_as_completed_receive_tool_call():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-guidance-1",
+        group="plan",
+        source="core",
+        phase="runtime.guidance_received",
+        status=None,
+        sequence=7,
+        metadata={
+            "payload": {
+                "run_id": "run-1",
+                "turn_id": "turn-1",
+                "content": "review complete",
+                "response_index": 2,
+                "metadata": {
+                    "source": "sub_agent",
+                    "name": "reviewer",
+                    "type": "consider",
+                },
+            }
+        },
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    assert events[0].kind == "tool_result"
+    assert events[0].status == "completed"
+    assert events[0].payload == {
+        "type": "dynamicToolCall",
+        "tool_name": "sub_agent_receive",
+        "arguments": {"name": "reviewer", "type": "consider"},
+        "delta": "review complete",
+        "tool_result": "review complete",
+        "replace": True,
+        "status": "completed",
+        "error": None,
+        "metadata": {
+            "source": "sub_agent",
+            "name": "reviewer",
+            "type": "consider",
+            "lifecycle_action": "message_received",
+        },
+    }
+
+
+def test_human_guidance_projection_behavior_is_unchanged():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-guidance-human",
+        group="plan",
+        source="core",
+        phase="runtime.guidance_received",
+        status=None,
+        sequence=8,
+        metadata={"payload": {"content": "please continue", "response_index": 2}},
+    )
+
+    assert events is None
+
+
 def test_extract_tool_input_preview_write_file_content():
     preview = extract_tool_input_preview(
         "write_file",
@@ -448,7 +509,7 @@ def test_runtime_projection_nests_forwarded_sub_agent_text_under_parent_call():
     }
 
 
-def test_forwarded_sub_agent_lifecycle_does_not_set_parent_turn_terminal():
+def test_forwarded_sub_agent_lifecycle_projects_nested_terminal_without_parent_status():
     events = runtime_fact_to_run_item_events(
         thread_id="thread-1",
         event_id="child-done",
@@ -468,13 +529,31 @@ def test_forwarded_sub_agent_lifecycle_does_not_set_parent_turn_terminal():
                     "session_id": "thread-1:sub:qa",
                     "run_id": "child-run",
                     "parent_call_id": "call-sub-1",
+                    "parent_run_id": "parent-run",
+                    "completed_at": 1_700_000_000.0,
+                    "elapsed_ms": 250,
                 },
             },
         },
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
 
-    assert events == []
+    assert events is not None
+    assert len(events) == 1
+    terminal = events[0]
+    assert terminal.kind == "message"
+    assert terminal.status == "completed"
+    assert terminal.parent_item_id == "thread-1:parent-run:call-sub-1:tool"
+    assert terminal.item_id == "thread-1:sub:qa:child-run:terminal"
+    assert terminal.payload == {
+        "type": "agentMessage",
+        "content": "child finished",
+        "sub_agent_terminal": True,
+    }
+    assert terminal.metadata["sub_agent"]["status"] == "idle"
+    assert terminal.metadata["sub_agent"]["summary"] == "child finished"
+    assert terminal.metadata["sub_agent"]["completed_at"] == 1_700_000_000.0
+    assert terminal.metadata["sub_agent"]["elapsed_ms"] == 250
 
 
 def test_runtime_projection_maps_terminal_status():
@@ -800,6 +879,193 @@ def test_runtime_projection_does_not_double_count_terminal_stream_usage():
     )
 
     assert events == []
+
+
+def test_forwarded_sub_agent_failed_and_cancelled_map_to_nested_terminal_states():
+    for phase, expected_status, expected_child_status in (
+        ("runtime.failed", "failed", "error"),
+        ("runtime.cancelled", "cancelled", "interrupted"),
+    ):
+        events = runtime_fact_to_run_item_events(
+            thread_id="thread-1",
+            event_id=phase,
+            group="system",
+            source="sub_agent",
+            phase=phase,
+            status=expected_status,
+            sequence=10,
+            metadata={
+                "run_id": "parent-run",
+                "payload": {
+                    "error": "stopped",
+                    "sub_agent": {
+                        "name": "qa",
+                        "sub_session_id": "thread-1:sub:qa",
+                        "run_id": "child-run",
+                        "invocation_id": phase,
+                        "parent_call_id": "call-sub-1",
+                        "parent_run_id": "parent-run",
+                    },
+                },
+            },
+        )
+        assert events is not None
+        assert events[0].kind == "message"
+        assert events[0].status == expected_status
+        assert events[0].metadata["sub_agent"]["status"] == expected_child_status
+
+
+def test_forwarded_child_tool_ids_include_invocation_scope_but_keep_parent_link():
+    ids: list[str] = []
+    parents: list[str] = []
+    for invocation_id in ("invocation-1", "invocation-2"):
+        events = runtime_fact_to_run_item_events(
+            thread_id="thread-1",
+            event_id=invocation_id,
+            group="tool",
+            source="sub_agent",
+            phase="runtime.tool.started",
+            status="running",
+            sequence=1,
+            metadata={
+                "run_id": "parent-run",
+                "payload": {
+                    "tool_name": "read_file",
+                    "call_id": "functions.read_file:0",
+                    "sub_agent": {
+                        "name": "reader",
+                        "sub_session_id": "thread-1:sub:reader",
+                        "run_id": "child-run",
+                        "invocation_id": invocation_id,
+                        "parent_call_id": "message-call",
+                        "parent_run_id": "parent-run",
+                    },
+                },
+            },
+        )
+        assert events is not None
+        ids.append(events[0].item_id)
+        parents.append(events[0].parent_item_id)
+    assert len(set(ids)) == 2
+    assert parents == [
+        "thread-1:parent-run:message-call:tool",
+        "thread-1:parent-run:message-call:tool",
+    ]
+
+
+def test_all_forwarded_child_item_ids_are_stable_within_and_unique_across_invocations():
+    projected: dict[str, list[str]] = {
+        "text": [],
+        "usage": [],
+        "approval": [],
+    }
+    for invocation_id in ("invocation-1", "invocation-2"):
+        sub_agent = {
+            "name": "reader",
+            "sub_session_id": "thread-1:sub:reader",
+            "run_id": "child-run",
+            "invocation_id": invocation_id,
+            "parent_call_id": "message-call",
+            "parent_run_id": "parent-run",
+        }
+        text_ids: list[str] = []
+        for sequence, status, content in (
+            (1, "running", "partial"),
+            (2, "completed", "complete"),
+        ):
+            events = runtime_fact_to_run_item_events(
+                thread_id="thread-1",
+                event_id=f"{invocation_id}-text-{sequence}",
+                group="plan",
+                source="sub_agent",
+                phase="runtime.part",
+                status=status,
+                sequence=sequence,
+                metadata={
+                    "run_id": "parent-run",
+                    "payload": {
+                        "part_type": "text",
+                        "part_id": "child-run:response-0:text",
+                        "content": content,
+                        "sub_agent": sub_agent,
+                    },
+                },
+            )
+            assert events is not None
+            text_ids.append(events[0].item_id)
+        assert len(set(text_ids)) == 1
+        projected["text"].append(text_ids[0])
+
+        usage = runtime_fact_to_run_item_events(
+            thread_id="thread-1",
+            event_id=f"{invocation_id}-usage",
+            group="usage",
+            source="sub_agent",
+            phase="runtime.usage",
+            status="completed",
+            sequence=3,
+            metadata={
+                "run_id": "parent-run",
+                "payload": {
+                    "response_index": 0,
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    "sub_agent": sub_agent,
+                },
+            },
+        )
+        approval = runtime_fact_to_run_item_events(
+            thread_id="thread-1",
+            event_id=f"{invocation_id}-approval",
+            group="tool",
+            source="sub_agent",
+            phase="runtime.approval_request",
+            status="waiting",
+            sequence=4,
+            metadata={
+                "run_id": "parent-run",
+                "payload": {
+                    "request_id": "functions.write_file:0",
+                    "tool_call_id": "functions.write_file:0",
+                    "tool_name": "write_file",
+                    "sub_agent": sub_agent,
+                },
+            },
+        )
+        assert usage is not None and approval is not None
+        projected["usage"].append(usage[0].item_id)
+        projected["approval"].append(approval[0].item_id)
+
+    assert all(len(set(item_ids)) == 2 for item_ids in projected.values())
+
+
+def test_sub_agent_guidance_is_nested_under_current_parent_message_call():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="guidance-1",
+        group="plan",
+        source="core",
+        phase="runtime.guidance_received",
+        status=None,
+        sequence=3,
+        metadata={
+            "run_id": "parent-run",
+            "payload": {
+                "content": "review ready",
+                "metadata": {
+                    "source": "sub_agent",
+                    "name": "reviewer",
+                    "type": "consider",
+                    "sub_session_id": "thread-1:sub:reviewer",
+                    "parent_call_id": "message-call",
+                    "parent_run_id": "parent-run",
+                    "parent_turn_id": "parent-turn",
+                },
+            },
+        },
+    )
+    assert events is not None
+    assert events[0].parent_item_id == "thread-1:parent-run:message-call:tool"
+    assert events[0].metadata["sub_agent"]["name"] == "reviewer"
 
 
 def test_runtime_projection_preserves_compaction_display_metadata():

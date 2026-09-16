@@ -9,7 +9,9 @@
       "presets": {
         "off": {},
         "light": {},
+        "medium": {},
         "high": {},
+        "xhigh": {},
         "max": {}
       }
     }

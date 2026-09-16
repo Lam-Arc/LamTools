@@ -35,12 +35,14 @@ from lamtools_core.app.core_db import (
     CoreAppEvent,
     CoreCheckpoint,
     CoreCheckpointAttachmentRef,
+    CoreCheckpointArtifactRef,
     CoreCheckpointBlob,
     CoreCheckpointBlobRef,
     CoreCheckpointV2,
     CoreCheckpointV2Materialized,
     CoreCheckpointV2SessionHistory,
     CoreCheckpointV2SessionMessages,
+    CoreArtifact,
     CoreHistoryEntry,
     CoreDbBase,
     CoreRestoreOperation,
@@ -214,6 +216,12 @@ class CoreCheckpointCoordinator:
         )
         self.storage_root.mkdir(parents=True, exist_ok=True)
         self.conversation_backend = conversation_backend or CoreCheckpointConversationBackend(session_factory)
+        from lamtools_core.artifact.store import ArtifactStore
+        self.artifact_store = ArtifactStore(
+            session_factory,
+            self.storage_root / "blobs",
+            self.write_coordinator,
+        )
         self._schema_ready = False
         self._schema_lock = asyncio.Lock()
         key = os.path.normcase(str(self.work_root))
@@ -518,6 +526,7 @@ class CoreCheckpointCoordinator:
                     # mid-rollback failure stays fully reversible (audit 08 S3).
                     await self._backup_manifest_files(undo.id, target.manifest_hash)
                     restored_paths = tuple(await self._apply_manifest(target.manifest_hash))
+                    await self.artifact_store.restore_checkpoint(target.id, work_root=self.work_root)
                 if restore_scope in {"conversation", "all"}:
                     conversation_touched = True
                     await self._restore_conversation(target, operation_id)
@@ -557,6 +566,7 @@ class CoreCheckpointCoordinator:
                         await self._restore_conversation(undo_row, operation_id)
                     if workspace_touched:
                         await self._apply_manifest(undo_row.manifest_hash)
+                        await self.artifact_store.restore_checkpoint(undo.id, work_root=self.work_root)
                 finally:
                     await self._fail_operation(operation_id, str(exc))
                 raise
@@ -870,6 +880,17 @@ class CoreCheckpointCoordinator:
                 metadata_json={"v2_only": True},
                 created_at=created_at,
             ))
+            artifact_rows = list((await db.execute(select(CoreArtifact).where(
+                CoreArtifact.work_root == str(self.work_root),
+                CoreArtifact.deleted.is_(False),
+                CoreArtifact.latest_revision_id != "",
+            ))).scalars())
+            for artifact in artifact_rows:
+                db.add(CoreCheckpointArtifactRef(
+                    checkpoint_id=checkpoint_id,
+                    artifact_id=artifact.id,
+                    revision_id=artifact.latest_revision_id,
+                ))
             await db.flush()
             await self._prune_mainline(db, root_session_id=root_session_id, latest_id=checkpoint_id)
             return _checkpoint_ref(row)
@@ -960,6 +981,11 @@ class CoreCheckpointCoordinator:
         await db.execute(
             delete(CoreCheckpointV2SessionHistory).where(
                 CoreCheckpointV2SessionHistory.checkpoint_id.in_(deleted_sorted)
+            )
+        )
+        await db.execute(
+            delete(CoreCheckpointArtifactRef).where(
+                CoreCheckpointArtifactRef.checkpoint_id.in_(deleted_sorted)
             )
         )
         # Drop restore operations that reference pruned checkpoints (their

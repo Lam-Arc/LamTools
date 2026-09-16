@@ -1,0 +1,6 @@
+interface:
+  display_name: "Office Renderer"
+  short_description: "Validate Office data bindings and render layout diagnostics"
+  default_prompt: "Use $office-renderer to validate and render this Office artifact."
+policy:
+  allow_implicit_invocation: false

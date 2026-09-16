@@ -1,4 +1,6 @@
 import { mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,6 +12,15 @@ import {
   openContextMenu,
 } from '../src/components/context-menu/context-menu'
 import type { ContextMenuEntry } from '../src/components/context-menu/types'
+
+const contextMenuPanelSource = readFileSync(
+  resolve(import.meta.dirname, '../src/components/context-menu/ContextMenuPanel.vue'),
+  'utf8',
+)
+const opticalGlassCss = readFileSync(
+  resolve(import.meta.dirname, '../src/styles/optical-glass.css'),
+  'utf8',
+)
 
 const defaultViewport = {
   width: window.innerWidth,
@@ -54,6 +65,21 @@ describe('ContextMenuHost', () => {
     vi.restoreAllMocks()
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: defaultViewport.width })
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: defaultViewport.height })
+  })
+
+  it('keeps every root and submenu card on the stable liquid-glass substrate', () => {
+    expect(contextMenuPanelSource).toContain('class="context-menu-panel optical-glass"')
+    expect(opticalGlassCss).toMatch(/\.optical-glass\s*\{[\s\S]*?blur\(var\(--optical-glass-blur\)\)[\s\S]*?saturate\(var\(--optical-glass-saturation\)\)[\s\S]*?brightness\(var\(--optical-glass-brightness\)\)[\s\S]*?contrast\(var\(--optical-glass-contrast\)\)/)
+    expect(opticalGlassCss).toMatch(/\.optical-glass::before\s*\{[\s\S]*?radial-gradient[\s\S]*?linear-gradient[\s\S]*?box-shadow:/)
+    expect(opticalGlassCss).toMatch(/\.optical-glass::after\s*\{[\s\S]*?conic-gradient[\s\S]*?mask-composite: exclude;/)
+    expect(opticalGlassCss).not.toContain('mask-image')
+    expect(contextMenuPanelSource).toMatch(/\.context-menu-panel-content\s*\{[\s\S]*?animation: popover-in var\(--dur-base\) var\(--ease-out\);/)
+    expect(contextMenuPanelSource).not.toMatch(/\.context-menu-panel\s*\{[^}]*animation:/)
+  })
+
+  it('inherits menu text from the chat surface instead of control text', () => {
+    expect(contextMenuPanelSource).toContain('--text: var(--theme-main-text);')
+    expect(contextMenuPanelSource).not.toContain('--text: var(--theme-control-text);')
   })
 
   it('renders at the pointer, clamps to the viewport, and flips upward near the bottom-right edge', async () => {

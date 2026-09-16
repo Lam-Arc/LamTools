@@ -1,0 +1,6 @@
+interface:
+  display_name: "Office Documents"
+  short_description: "Create and edit structured professional documents"
+  default_prompt: "Use $office-documents to create a professional document from these materials."
+policy:
+  allow_implicit_invocation: true

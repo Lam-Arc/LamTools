@@ -90,6 +90,26 @@ export class TransportRpcError extends Error {
   }
 }
 
+/** WebSocket close details retained for diagnostics and delayed UI reporting. */
+export class TransportDisconnectedError extends Error {
+  readonly code: number | undefined
+  readonly reason: string
+  readonly wasClean: boolean | undefined
+
+  constructor(input: { code?: number; reason?: string; wasClean?: boolean } = {}) {
+    const details = [
+      input.code === undefined ? '' : `code=${input.code}`,
+      input.reason ? `reason=${input.reason}` : '',
+    ].filter(Boolean)
+    super(`LamTools direct transport disconnected${details.length ? ` (${details.join(', ')})` : ''}`)
+    this.name = 'TransportDisconnectedError'
+    this.code = input.code
+    this.reason = input.reason || ''
+    this.wasClean = input.wasClean
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}
+
 export function isLamToolsTransport(value: unknown): value is LamToolsTransport {
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<LamToolsTransport>

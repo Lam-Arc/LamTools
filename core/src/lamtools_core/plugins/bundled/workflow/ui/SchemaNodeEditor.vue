@@ -1,21 +1,21 @@
 <template>
-  <section v-if="fields.length || canSyncPorts" class="wf-schema-editor" aria-label="Schema 节点配置">
+  <section v-if="hasMeaningfulEditor" class="wf-schema-editor" aria-label="节点参数">
     <header class="wf-schema-editor-head">
       <div>
-        <h4>Schema 配置</h4>
-        <p v-if="schema?.description">{{ schema.description }}</p>
+        <h4>节点参数</h4>
+        <p v-if="schemaDescription">{{ schemaDescription }}</p>
       </div>
-      <span v-if="schema" class="wf-schema-type">{{ schema.type_id || schema.name }}</span>
+      <span v-if="schema" class="wf-schema-type" :title="schema.type_id || schema.name">{{ schemaDisplayName }}</span>
     </header>
     <div v-if="fields.length" class="wf-schema-fields">
       <label v-for="field in fields" :key="field.name" class="wf-schema-field">
-        <span class="wf-schema-label">{{ field.title || field.name }}<em v-if="field.required">必填</em></span>
-        <small v-if="field.description">{{ field.description }}</small>
+        <span class="wf-schema-label">{{ fieldLabel(field) }}<em v-if="field.required">必填</em></span>
+        <small v-if="fieldDescription(field)">{{ fieldDescription(field) }}</small>
         <UiSelect
           v-if="field.enum?.length"
           :model-value="stringValue(fieldValue(field.name))"
           :options="enumOptions(field)"
-          :aria-label="field.title || field.name"
+          :aria-label="fieldLabel(field)"
           @update:model-value="setField(field, $event)"
         />
         <label v-else-if="field.type === 'boolean'" class="wf-schema-toggle">
@@ -46,7 +46,9 @@
         />
       </label>
     </div>
-    <button v-if="canSyncPorts" type="button" class="wf-schema-sync" @click="syncPorts">按 Schema 补齐端口</button>
+    <button v-if="portsNeedSync" type="button" class="wf-schema-sync" @click="syncPorts">
+      补齐缺少的端口（{{ missingPortCount }}）
+    </button>
   </section>
 </template>
 
@@ -54,7 +56,7 @@
 import { computed, ref, watch } from 'vue'
 import UiSelect from '../../../../../../ui/src/components/UiSelect.vue'
 import AutoTextarea from '../../../../../../ui/src/components/AutoTextarea.vue'
-import { schemaFields, schemaPorts, type NormalizedSchemaField } from './catalog'
+import { schemaFields, schemaPorts, workflowNodeDisplayName, type NormalizedSchemaField } from './catalog'
 import type { WorkflowNodeSchema, WorkflowPort } from './types'
 
 const props = withDefaults(defineProps<{
@@ -77,10 +79,41 @@ const values = ref<Record<string, unknown>>({ ...props.modelValue })
 watch(() => props.modelValue, (next) => { values.value = { ...next } }, { deep: true })
 
 const fields = computed(() => schemaFields(props.schema, 'input').filter((field) => !props.excludeKeys.includes(field.name)))
-const canSyncPorts = computed(() => schemaFields(props.schema, 'input').length > 0 || schemaFields(props.schema, 'output').length > 0 || Boolean(props.schema?.output_name?.length))
+const expectedPorts = computed(() => schemaPorts(props.schema, props.ports))
+const missingPorts = computed(() => expectedPorts.value.filter((expected) => !props.ports.some((current) => (
+  current.direction === expected.direction && current.name === expected.name && current.type === expected.type
+))))
+const portsNeedSync = computed(() => missingPorts.value.length > 0)
+const missingPortCount = computed(() => missingPorts.value.length)
+const schemaDescription = computed(() => {
+  const value = (props.schema as Record<string, unknown> | null | undefined)?.description_zh
+    ?? props.schema?.description
+  return typeof value === 'string' ? value.trim() : ''
+})
+const schemaDisplayName = computed(() => workflowNodeDisplayName(props.schema, '节点'))
+// Descriptive schema copy belongs in the catalog/inspector summary.  Do not
+// render a "节点参数" shell when the node has neither editable parameters nor
+// missing ports; that was the empty, single-word configuration UI users hit
+// on Output and other structural nodes.
+const hasMeaningfulEditor = computed(() => fields.value.length > 0 || portsNeedSync.value)
+
+const FIELD_LABELS: Readonly<Record<string, string>> = {
+  prompt: '提示词', instruction: '指令', model_id: '模型', mode: '模式', command: '命令', script: '脚本',
+  value: '值', workflow_name: '工作流', iterate: '迭代方式', event_type: '事件类型', title: '标题',
+}
 
 function fieldValue(name: string): unknown { return values.value[name] }
 function stringValue(value: unknown): string { return value === undefined || value === null ? '' : String(value) }
+function fieldLabel(field: NormalizedSchemaField): string {
+  const localized = (field as Record<string, unknown>).title_zh
+  if (typeof localized === 'string' && localized.trim()) return localized.trim()
+  return FIELD_LABELS[field.name] || field.title || field.name
+}
+function fieldDescription(field: NormalizedSchemaField): string {
+  const localized = (field as Record<string, unknown>).description_zh
+  if (typeof localized === 'string' && localized.trim()) return localized.trim()
+  return field.description || ''
+}
 function formattedValue(value: unknown): string {
   if (typeof value === 'string') return value
   try { return JSON.stringify(value ?? '', null, 2) || '' } catch { return String(value ?? '') }
@@ -106,7 +139,8 @@ function setField(field: NormalizedSchemaField, raw: unknown): void {
 }
 
 function syncPorts(): void {
-  emit('update:ports', schemaPorts(props.schema, props.ports))
+  if (!portsNeedSync.value) return
+  emit('update:ports', expectedPorts.value)
 }
 </script>
 
@@ -121,7 +155,7 @@ function syncPorts(): void {
 .wf-schema-label { display: flex; align-items: center; gap: var(--space-1); color: color-mix(in srgb, var(--theme-main-text) 72%, transparent); font-size: 11px; }
 .wf-schema-label em { color: var(--orange); font-size: 9px; font-style: normal; }
 .wf-schema-field small { color: color-mix(in srgb, var(--theme-main-text) 48%, transparent); font-size: 10px; line-height: 1.3; }
-.wf-schema-field input:not([type='checkbox']) { width: 100%; box-sizing: border-box; min-height: 30px; border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-control-background) 70%, transparent); color: var(--theme-control-text); padding: 0 var(--space-2); font: inherit; font-size: 11px; outline: 0; }
+.wf-schema-field input:not([type='checkbox']) { width: 100%; box-sizing: border-box; min-height: 30px; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); caret-color: var(--theme-composer-text); padding: 0 var(--space-2); font: inherit; font-size: 11px; outline: 0; }
 .wf-schema-toggle { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--theme-control-text); font-size: 11px; }
 .wf-schema-toggle input { accent-color: var(--blue); }
 .wf-schema-sync { min-height: 28px; border: 1px dashed color-mix(in srgb, var(--theme-main-text) 22%, transparent); border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--theme-main-text) 72%, transparent); cursor: pointer; font-size: 10px; }

@@ -3,16 +3,18 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from lamtools_core.app.operation_catalog import OperationResult
+from lamtools_core.app.operation_catalog import OperationRequest, OperationResult
 from lamtools_core.plugins.bundled.workflow.backend import operations as workflow_operations
 from lamtools_core.plugins.bundled.workflow.backend.durable import WorkflowRunEventStore
 from lamtools_core.plugins.bundled.workflow.backend.human_tasks import HumanTaskCenter
 from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowDef,
+    WorkflowEdge,
     WorkflowNode,
     WorkflowPort,
     WorkflowRunner,
@@ -113,6 +115,95 @@ async def test_human_task_center_projects_secret_free_tasks_and_idempotent_compl
     assert duplicate["task"]["outcome"]["status"] == "received"
     assert len(await center.list(status="pending")) == 0
     assert len(await center.list(status="completed")) == 1
+
+
+@pytest.mark.asyncio
+async def test_human_task_center_hydrates_workflow_metadata_from_store(tmp_path: Path) -> None:
+    snapshots = WorkflowSnapshotStore(root=tmp_path)
+    events = WorkflowRunEventStore(root=tmp_path)
+    runner = WorkflowRunner(snapshot_store=snapshots, event_store=events)
+    workflow = _workflow(name="stored-review")
+    await runner.run(
+        workflow,
+        work_root=tmp_path,
+        thread_id="stored-review-thread",
+        run_id="stored-review-run",
+    )
+
+    class WorkflowStore:
+        async def list(self, *, work_root: str | None = None) -> list[dict[str, Any]]:
+            assert Path(str(work_root)).resolve() == tmp_path.resolve()
+            return [workflow.to_dict()]
+
+    center = HumanTaskCenter(
+        snapshot_store=snapshots,
+        event_store=events,
+        workflow_store=WorkflowStore(),
+        runner=runner,
+        work_root=tmp_path,
+    )
+
+    tasks = await center.list()
+    assert len(tasks) == 1
+    assert tasks[0]["workflow_id"] == workflow.id
+    assert tasks[0]["workflow_name"] == workflow.name
+
+
+@pytest.mark.asyncio
+async def test_human_task_complete_operation_returns_resumed_terminal_snapshot(
+    tmp_path: Path,
+) -> None:
+    snapshots = WorkflowSnapshotStore(root=tmp_path)
+    events = WorkflowRunEventStore(root=tmp_path)
+    runner = WorkflowRunner(snapshot_store=snapshots, event_store=events)
+    workflow = WorkflowDef(
+        id="workflow-approval-chain",
+        name="approval-chain",
+        revision=1,
+        nodes=[
+            WorkflowNode(
+                id="review", kind="approval",
+                config={"event_type": "review.completed"},
+                ports=[WorkflowPort(name="result", direction="out", type="object")],
+            ),
+            WorkflowNode(
+                id="after", kind="content",
+                ports=[
+                    WorkflowPort(name="review", direction="in", type="object"),
+                    WorkflowPort(name="out", direction="out", value="continued"),
+                ],
+            ),
+        ],
+        edges=[WorkflowEdge(
+            id="review-after", source="review", source_port="result",
+            target="after", target_port="review",
+        )],
+    )
+    paused = await runner.run(
+        workflow, work_root=str(tmp_path), thread_id="approval-thread", run_id="approval-run"
+    )
+    assert paused.status == "paused"
+    runtime = SimpleNamespace(runner=runner, store=None)
+    context = PluginContext(work_root=tmp_path, services={"workflow": runtime})
+
+    response = await workflow_operations.workflow_human_task_complete(
+        OperationRequest(
+            name="workflow.human_task.complete",
+            payload={
+                "task_id": "approval-run:review",
+                "decision": "approve",
+                "payload": {"note": "approved"},
+            },
+        ),
+        context=context,
+    )
+
+    assert response.status == "ok"
+    assert response.payload["run"]["status"] == "completed"
+    assert response.payload["run"]["output"] == "continued"
+    assert response.payload["run"]["node_states"]["review"]["status"] == "done"
+    assert response.payload["run"]["node_states"]["after"]["status"] == "done"
+    assert not _contains_private_key(response.payload)
 
 
 @pytest.mark.asyncio

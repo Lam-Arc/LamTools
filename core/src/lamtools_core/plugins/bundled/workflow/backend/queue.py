@@ -16,7 +16,13 @@ from typing import Any, Literal
 
 from lamtools_core.event.run_item import RunItemEvent
 
-from .runtime import WorkflowDef, WorkflowExecutionContext, WorkflowNodeState, WorkflowRunResult
+from .runtime import (
+    WorkflowDef,
+    WorkflowExecutionContext,
+    WorkflowNodeState,
+    WorkflowRunResult,
+    public_workflow_value,
+)
 
 
 QueueStatus = Literal[
@@ -130,6 +136,11 @@ class WorkflowQueueItem:
         return self.workflow_name
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the secret-safe public queue/RPC projection."""
+        return public_workflow_value(self.to_storage_dict())
+
+    def to_storage_dict(self) -> dict[str, Any]:
+        """Return the complete durable record used only by the queue store."""
         return {
             "queue_id": self.queue_id,
             "id": self.queue_id,
@@ -266,7 +277,7 @@ class WorkflowQueueStore:
 
     def _write_sync(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"version": QUEUE_STORE_VERSION, "items": [item.to_dict() for item in self._items.values()]}
+        payload = {"version": QUEUE_STORE_VERSION, "items": [item.to_storage_dict() for item in self._items.values()]}
         fd, name = tempfile.mkstemp(prefix=".workflow-queue-", suffix=".tmp", dir=str(self.path.parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -300,12 +311,12 @@ class WorkflowQueueStore:
         async with self._lock:
             self._load_sync()
             item = self._items.get(str(queue_id or ""))
-            return WorkflowQueueItem.from_dict(item.to_dict()) if item else None
+            return WorkflowQueueItem.from_dict(item.to_storage_dict()) if item else None
 
     async def values(self) -> list[WorkflowQueueItem]:
         async with self._lock:
             self._load_sync()
-            return [WorkflowQueueItem.from_dict(item.to_dict()) for item in self._items.values()]
+            return [WorkflowQueueItem.from_dict(item.to_storage_dict()) for item in self._items.values()]
 
     async def delete(self, queue_id: str) -> bool:
         async with self._lock:
@@ -743,8 +754,9 @@ class WorkflowRunQueue:
             if definition is None:
                 definition = await _maybe_await(self.manager.get(item.workflow_name, work_root=item.work_root or None))
             if definition is None and item.workflow_id:
-                definitions = await _maybe_await(self.manager.list(work_root=item.work_root or None))
-                definition = next((candidate for candidate in definitions if candidate.id == item.workflow_id), None)
+                definition = await _maybe_await(
+                    self.manager.get_by_id(item.workflow_id, work_root=item.work_root or None)
+                )
             if definition is None:
                 raise LookupError(f"Workflow not found: {item.workflow_name or item.workflow_id}")
             if item.workflow_id and definition.id != item.workflow_id:
@@ -767,7 +779,7 @@ class WorkflowRunQueue:
                 "permission_policy_required": True,
                 **{
                     key: item.metadata[key]
-                    for key in ("trace_id", "correlation_id", "actor_id", "actor_kind")
+                    for key in ("trace_id", "correlation_id", "actor_id", "actor_kind", "model_id")
                     if isinstance(item.metadata, Mapping) and key in item.metadata
                 },
             }
@@ -965,7 +977,7 @@ class WorkflowRunQueue:
             return
         for future in self._waiters.pop(item.queue_id, []):
             if not future.done():
-                future.set_result(WorkflowQueueItem.from_dict(item.to_dict()))
+                future.set_result(WorkflowQueueItem.from_dict(item.to_storage_dict()))
 
 
 WorkflowQueueService = WorkflowRunQueue

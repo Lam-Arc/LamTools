@@ -22,11 +22,27 @@
             }
           }
         },
+        "medium": {
+          "set": {
+            "thinking": {
+              "type": "enabled",
+              "budget_tokens": "$thinking_budget_high"
+            }
+          }
+        },
         "high": {
           "set": {
             "thinking": {
               "type": "enabled",
               "budget_tokens": "$thinking_budget_high"
+            }
+          }
+        },
+        "xhigh": {
+          "set": {
+            "thinking": {
+              "type": "enabled",
+              "budget_tokens": "$thinking_budget_max"
             }
           }
         },

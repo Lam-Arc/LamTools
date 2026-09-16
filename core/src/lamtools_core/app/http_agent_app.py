@@ -57,7 +57,7 @@ from .live_hub import CoreAppEventHub
 from .live_member import DefaultCoreLiveMemberHooks
 from .live_operations import CoreLiveContext, CoreLiveOperationHost, recover_stale_active_turns
 from .project_store import ActiveProjectSessionsError, CoreProjectStore
-from lamtools_core.artifact import ArtifactRegistry, kind_from_mime
+from lamtools_core.artifact import ArtifactRegistry, ArtifactStore, kind_from_mime
 from .live_router import create_core_live_router
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
@@ -420,7 +420,11 @@ def create_core_agent_http_app(
         _logger.info("[startup] operation catalog ready in %.3fs", perf_counter() - phase_started)
         phase_started = perf_counter()
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
-        _register_core_artifact_operations(agent_operations, project_store=core_db_handle.project_store)
+        _register_core_artifact_operations(
+            agent_operations,
+            project_store=core_db_handle.project_store,
+            artifact_store=core_db_handle.artifact_store,
+        )
         _register_core_session_operations(agent_operations, session_store=session_store)
         _register_core_config_operations(
             agent_operations,
@@ -561,6 +565,9 @@ def create_core_agent_http_app(
         app_state["plugin_runtimes"] = getattr(agent_operations, "plugin_runtimes", [])
 
     async def shutdown_core_agent() -> None:
+        from lamtools_core.sub_agent_supervisor import shutdown_sub_agent_supervisors
+
+        await shutdown_sub_agent_supervisors()
         await shutdown_plugin_backends(app_state.get("plugin_runtimes") or [])
         observer_supervisor = app_state.get("observer_supervisor")
         if observer_supervisor is not None:
@@ -775,24 +782,35 @@ def create_core_agent_http_app(
         project_id: str,
         artifact_id: str,
         path: str | None = Query(default=None),
+        revision_id: str | None = Query(default=None),
     ) -> FileResponse:
-        """按 artifact id 读取产物文件（manifest 为权威路径，支持 workspace:// 与 attachment://）。
+        """按 Artifact ID 读取不可变 Revision；无快照时兼容底层文件路径。
 
         ``path`` 为兜底：旧会话事件里的 artifact_id 是投影派生 id（artifact-{sha1}），
-        无法直接命中 manifest，此时按 path 反查注册表。
+        无法直接命中 V2 事实层时按路径解析旧 manifest 别名。
         """
         project = await app_state["core_db"].project_store.get(project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
-        registry = ArtifactRegistry(project.work_root)
-        record = registry.get(artifact_id)
+        store: ArtifactStore = app_state["core_db"].artifact_store
+        await store.migrate_legacy(project_id=project_id, work_root=project.work_root)
+        record = await store.get(artifact_id)
         if record is None and path:
+            registry = ArtifactRegistry(project.work_root)
             resolved_id = registry.resolve_artifact_id(path, work_root=project.work_root)
             if resolved_id:
-                record = registry.get(resolved_id)
-        if record is None:
+                record = await store.get(resolved_id)
+        if record is None or record.project_id != project_id:
             raise HTTPException(status_code=404, detail="Artifact not found")
-        if record.path.startswith("attachment://"):
+        target_revision_id = revision_id or record.latest_revision_id
+        if target_revision_id:
+            historical = await store.revision_path(record.artifact_id, target_revision_id)
+            if historical is None or not historical.is_file():
+                raise HTTPException(status_code=404, detail="Artifact revision not found")
+            path = historical
+            filename = record.name
+            mime = record.mime_type
+        elif record.path.startswith("attachment://"):
             attachment = await attachment_store().get(record.path[len("attachment://"):])
             if attachment is None:
                 raise HTTPException(status_code=404, detail="Attachment not found")
@@ -811,7 +829,7 @@ def create_core_agent_http_app(
         return FileResponse(path, media_type=mime or None, filename=filename)
 
     async def register_uploaded_artifact(record: dict[str, Any], project_id: str | None) -> None:
-        """上传即注册：把用户上传的附件登记到项目 artifact 注册表（best-effort，失败不影响上传）。"""
+        """上传即登记为项目输入 Artifact（best-effort，失败不影响上传）。"""
         if not project_id:
             return
         artifact_id = str(record.get("id") or "")
@@ -821,13 +839,21 @@ def create_core_agent_http_app(
             project = await app_state["core_db"].project_store.get(project_id)
             if project is None:
                 return
-            registry = ArtifactRegistry(project.work_root)
-            registry.register(
+            store: ArtifactStore = app_state["core_db"].artifact_store
+            attachment_record = await attachment_store().get(artifact_id)
+            attachment_path = Path(attachment_record.storage_path) if attachment_record is not None else Path()
+            await store.register(
+                project_id=project_id,
+                work_root=project.work_root,
                 kind=kind_from_mime(str(record.get("mime_type") or "")),
                 mime_type=str(record.get("mime_type") or ""),
                 name=str(record.get("filename") or artifact_id),
                 path=f"attachment://{artifact_id}",
                 source="user_upload",
+                role="input",
+                preferred_id=artifact_id,
+                content=attachment_path.read_bytes() if attachment_path.is_file() else None,
+                provenance={"attachment_id": artifact_id},
             )
         except Exception:  # noqa: BLE001 — registration must never break uploads
             pass
@@ -1026,6 +1052,9 @@ def _register_core_session_operations(catalog: OperationCatalog, *, session_stor
 
     async def session_delete(request: OperationRequest) -> OperationResult:
         sid = str(request.payload.get("session_id") or request.payload.get("sessionId") or request.payload.get("id") or "")
+        from lamtools_core.sub_agent_supervisor import shutdown_parent_sub_agents
+
+        await shutdown_parent_sub_agents(sid)
         await session_store.delete(sid)
         return OperationResult(name="session.delete", payload={"deleted": sid})
 
@@ -1038,74 +1067,109 @@ def _project_id(request: OperationRequest) -> str:
     return str(request.payload.get("project_id") or request.payload.get("projectId") or request.payload.get("id") or "")
 
 
-def _register_core_artifact_operations(catalog: OperationCatalog, *, project_store: CoreProjectStore) -> None:
-    """artifact.* operations — per-project registry under ``{work_root}/.lam/artifact``."""
+def _register_core_artifact_operations(
+    catalog: OperationCatalog,
+    *,
+    project_store: CoreProjectStore,
+    artifact_store: ArtifactStore,
+) -> None:
+    """Artifact V2 operations backed by the Core runtime database."""
 
-    async def _registry_for(request: OperationRequest) -> ArtifactRegistry | None:
+    async def _project_for(request: OperationRequest) -> Any | None:
         project = await project_store.get(_project_id(request))
-        if project is None:
-            return None
-        return ArtifactRegistry(project.work_root)
+        if project is not None:
+            await artifact_store.migrate_legacy(project_id=project.id, work_root=project.work_root)
+        return project
 
     async def artifact_list(request: OperationRequest) -> OperationResult:
-        registry = await _registry_for(request)
-        if registry is None:
+        project = await _project_for(request)
+        if project is None:
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
-        include_deleted = bool(request.payload.get("include_deleted"))
-        return OperationResult(
-            name=request.name,
-            payload={
-                "artifacts": [record.to_dict() for record in registry.list(include_deleted=include_deleted)],
-            },
-        )
+        records = await artifact_store.list(project.id, include_deleted=bool(request.payload.get("include_deleted")))
+        return OperationResult(name=request.name, payload={"artifacts": [record.to_dict() for record in records]})
 
     async def artifact_read(request: OperationRequest) -> OperationResult:
-        registry = await _registry_for(request)
-        if registry is None:
+        project = await _project_for(request)
+        if project is None:
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
         artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
-        record = registry.get(artifact_id)
-        if record is None:
+        record = await artifact_store.get(artifact_id)
+        if record is None or record.project_id != project.id:
             return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
         return OperationResult(name=request.name, payload={"artifact": record.to_dict()})
 
-    async def artifact_delete(request: OperationRequest) -> OperationResult:
-        registry = await _registry_for(request)
-        if registry is None:
+    async def artifact_revisions(request: OperationRequest) -> OperationResult:
+        read = await artifact_read(request)
+        if read.status == "error":
+            return read
+        artifact = read.payload["artifact"]
+        revisions = await artifact_store.revisions(str(artifact["artifact_id"]))
+        return OperationResult(name=request.name, payload={"artifact": artifact, "revisions": [r.to_dict() for r in revisions]})
+
+    async def artifact_remove(request: OperationRequest) -> OperationResult:
+        project = await _project_for(request)
+        if project is None:
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
         raw = request.payload.get("artifact_ids") or request.payload.get("artifactIds")
-        artifact_ids = [str(item) for item in raw if str(item).strip()] if isinstance(raw, list) else []
-        if not artifact_ids:
+        ids = [str(item) for item in raw if str(item).strip()] if isinstance(raw, list) else []
+        if not ids:
             return OperationResult(name=request.name, status="error", payload={"error": "artifact_ids is required"})
-        deleted = registry.soft_delete(artifact_ids)
-        return OperationResult(name=request.name, payload={"deleted": deleted})
+        return OperationResult(
+            name=request.name,
+            payload={"deleted": await artifact_store.soft_remove(ids, project_id=project.id)},
+        )
+
+    async def artifact_restore(request: OperationRequest) -> OperationResult:
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        raw = request.payload.get("artifact_ids") or request.payload.get("artifactIds")
+        ids = [str(item) for item in raw if str(item).strip()] if isinstance(raw, list) else []
+        return OperationResult(
+            name=request.name,
+            payload={
+                "restored": await artifact_store.soft_remove(
+                    ids,
+                    deleted=False,
+                    project_id=project.id,
+                )
+            },
+        )
+
+    async def artifact_revision_restore(request: OperationRequest) -> OperationResult:
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        try:
+            record = await artifact_store.restore_revision(
+                str(request.payload.get("artifact_id") or request.payload.get("artifactId") or ""),
+                str(request.payload.get("revision_id") or request.payload.get("revisionId") or ""),
+                project_id=project.id,
+            )
+        except (LookupError, OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"artifact": record.to_dict()})
 
     async def artifact_open(request: OperationRequest) -> OperationResult:
-        registry = await _registry_for(request)
-        if registry is None:
+        project = await _project_for(request)
+        if project is None:
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
         artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
-        record = registry.get(artifact_id) if artifact_id else None
+        record = await artifact_store.get(artifact_id) if artifact_id else None
+        if record is not None and record.project_id != project.id:
+            record = None
         artifact_path = record.path if record is not None else str(request.payload.get("path") or "").strip()
         if not artifact_path:
             return OperationResult(name=request.name, status="error", payload={"error": "Artifact path not found"})
         if artifact_path.startswith("attachment://"):
-            return OperationResult(
-                name=request.name,
-                status="error",
-                payload={"error": "Attachment-backed artifacts must use attachment.open"},
-            )
-        relative_path = artifact_path.removeprefix("workspace://")
-        candidate = (registry.work_root / relative_path).resolve()
+            return OperationResult(name=request.name, status="error", payload={"error": "Attachment-backed artifacts must use attachment.open"})
+        root = Path(project.work_root).resolve()
+        candidate = (root / artifact_path.removeprefix("workspace://")).resolve()
         try:
-            candidate.relative_to(registry.work_root)
-        except ValueError:
-            return OperationResult(name=request.name, status="error", payload={"error": "Artifact path escapes project"})
-        try:
-            from lamtools_core.attachment import open_with_default_app
-
+            candidate.relative_to(root)
             if not candidate.is_file():
                 raise FileNotFoundError(candidate)
+            from lamtools_core.attachment import open_with_default_app
             open_with_default_app(candidate)
         except (FileNotFoundError, OSError, ValueError) as exc:
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
@@ -1114,7 +1178,12 @@ def _register_core_artifact_operations(catalog: OperationCatalog, *, project_sto
     handlers = {
         "artifact.list": artifact_list,
         "artifact.read": artifact_read,
-        "artifact.delete": artifact_delete,
+        "artifact.show": artifact_read,
+        "artifact.revisions": artifact_revisions,
+        "artifact.delete": artifact_remove,
+        "artifact.remove": artifact_remove,
+        "artifact.restore": artifact_restore,
+        "artifact.revision.restore": artifact_revision_restore,
         "artifact.open": artifact_open,
     }
     for name, handler in handlers.items():
@@ -1435,8 +1504,14 @@ def _register_subagent_guide_operations(
     async def subagent_guide_get(request: OperationRequest) -> OperationResult:
         # Payload may override the work root the server was started with.
         root = str(request.payload.get("work_root") or request.payload.get("workRoot") or "").strip()
-        effective_root = root or work_root
+        effective_root = root or str(work_root or "").strip() or None
         requested_scope = str(request.payload.get("scope") or "").strip().lower()
+        if requested_scope == "project" and not effective_root:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "work_root is required to read a project-scoped guide"},
+            )
 
         # When a specific scope is requested, read only that level's file
         # (used by the global Settings UI which must not touch project scope).
@@ -1497,7 +1572,7 @@ def _register_subagent_guide_operations(
                 payload={"error": "scope must be 'project' or 'global'"},
             )
         root = str(request.payload.get("work_root") or request.payload.get("workRoot") or "").strip()
-        effective_root = root or work_root
+        effective_root = root or str(work_root or "").strip() or None
         if scope == "project" and not effective_root:
             return OperationResult(
                 name=request.name, status="error",
@@ -1518,43 +1593,70 @@ def _register_subagent_guide_operations(
     async def subagent_settings_get(request: OperationRequest) -> OperationResult:
         from lamtools_core.config.subagent_prompt import (
             DEFAULT_SUBAGENT_SETTINGS,
+            DELEGATION_STRATEGY_KEY,
+            ROLE_ASSIGNMENTS_KEY,
+            load_effective_delegation_strategy,
+            load_effective_role_assignments,
+            load_global_delegation_strategy,
+            load_local_subagent_settings,
             load_subagent_settings,
+            normalize_delegation_strategy,
             resolve_subagent_settings_path,
             settings_path_for_scope,
         )
 
         root = str(request.payload.get("work_root") or request.payload.get("workRoot") or "").strip()
-        effective_root = root or work_root
+        effective_root = root or str(work_root or "").strip() or None
         requested_scope = str(request.payload.get("scope") or "").strip().lower()
+        if requested_scope == "project" and not effective_root:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "work_root is required to read project-scoped settings"},
+            )
 
         # When a specific scope is requested, read only that level's file
         if requested_scope in ("project", "global"):
             path = settings_path_for_scope(requested_scope, effective_root)
-            if path.is_file():
+            local_settings = load_local_subagent_settings(
+                requested_scope, effective_root
+            )
+            role_assignments_inherited = ROLE_ASSIGNMENTS_KEY not in local_settings
+            delegation_strategy_inherited = (
+                DELEGATION_STRATEGY_KEY not in local_settings
+            )
+            settings = {**DEFAULT_SUBAGENT_SETTINGS, **local_settings}
+            # The scoped editor always receives local rows. An absent field is
+            # represented as [] plus the inheritance marker, never as an
+            # effective value that could be written back accidentally.
+            settings[ROLE_ASSIGNMENTS_KEY] = local_settings.get(
+                ROLE_ASSIGNMENTS_KEY, []
+            )
+            local_strategy: str | None = None
+            if not delegation_strategy_inherited:
                 try:
-                    import json as _json
-                    data = _json.loads(path.read_text(encoding="utf-8"))
-                    settings = dict(DEFAULT_SUBAGENT_SETTINGS)
-                    if isinstance(data, dict):
-                        settings.update(data)
-                except (OSError, ValueError):
-                    settings = dict(DEFAULT_SUBAGENT_SETTINGS)
-                return OperationResult(
-                    name=request.name,
-                    payload={
-                        "settings": settings,
-                        "scope": requested_scope,
-                        "resolved_path": str(path),
-                        "is_builtin": False,
-                    },
-                )
+                    local_strategy = normalize_delegation_strategy(
+                        local_settings[DELEGATION_STRATEGY_KEY]
+                    )
+                except ValueError:
+                    local_strategy = None
+            settings[DELEGATION_STRATEGY_KEY] = local_strategy
             return OperationResult(
                 name=request.name,
                 payload={
-                    "settings": dict(DEFAULT_SUBAGENT_SETTINGS),
-                    "scope": "builtin",
-                    "resolved_path": "",
-                    "is_builtin": True,
+                    "settings": settings,
+                    "effective_role_assignments": load_effective_role_assignments(
+                        effective_root
+                    ),
+                    "role_assignments_inherited": role_assignments_inherited,
+                    "effective_delegation_strategy": load_effective_delegation_strategy(
+                        effective_root
+                    ),
+                    "global_delegation_strategy": load_global_delegation_strategy(),
+                    "delegation_strategy_inherited": delegation_strategy_inherited,
+                    "scope": requested_scope,
+                    "resolved_path": str(path) if path.is_file() else "",
+                    "is_builtin": not path.is_file(),
                 },
             )
 
@@ -1574,6 +1676,15 @@ def _register_subagent_guide_operations(
             name=request.name,
             payload={
                 "settings": settings,
+                "effective_role_assignments": load_effective_role_assignments(
+                    effective_root
+                ),
+                "role_assignments_inherited": False,
+                "effective_delegation_strategy": load_effective_delegation_strategy(
+                    effective_root
+                ),
+                "global_delegation_strategy": load_global_delegation_strategy(),
+                "delegation_strategy_inherited": False,
                 "scope": scope,
                 "resolved_path": str(resolved) if resolved is not None else "",
                 "is_builtin": resolved is None,
@@ -1581,14 +1692,27 @@ def _register_subagent_guide_operations(
         )
 
     async def subagent_settings_set(request: OperationRequest) -> OperationResult:
-        from lamtools_core.config.subagent_prompt import write_subagent_settings
+        from lamtools_core.config.subagent_prompt import (
+            DELEGATION_STRATEGY_KEY,
+            normalize_delegation_strategy,
+            normalize_role_assignments,
+            write_subagent_settings,
+        )
 
-        updates = request.payload.get("settings") if isinstance(request.payload.get("settings"), dict) else {}
+        updates = (
+            dict(request.payload["settings"])
+            if isinstance(request.payload.get("settings"), dict)
+            else {}
+        )
         # Also accept top-level keys for convenience (e.g. {default_multimodal_model: "..."})
         for key in ("default_multimodal_model",):
             val = request.payload.get(key)
             if val is not None:
                 updates[key] = str(val).strip()
+        if DELEGATION_STRATEGY_KEY in request.payload:
+            updates[DELEGATION_STRATEGY_KEY] = request.payload[
+                DELEGATION_STRATEGY_KEY
+            ]
         scope = str(request.payload.get("scope") or "global").strip()
         if scope not in ("project", "global"):
             return OperationResult(
@@ -1596,15 +1720,37 @@ def _register_subagent_guide_operations(
                 payload={"error": "scope must be 'project' or 'global'"},
             )
         root = str(request.payload.get("work_root") or request.payload.get("workRoot") or "").strip()
-        effective_root = root or work_root
+        effective_root = root or str(work_root or "").strip() or None
         if scope == "project" and not effective_root:
             return OperationResult(
                 name=request.name, status="error",
                 payload={"error": "work_root is required to save a project-scoped setting"},
             )
+        if "role_assignments" in updates:
+            try:
+                updates["role_assignments"] = normalize_role_assignments(
+                    updates["role_assignments"]
+                )
+            except ValueError as exc:
+                return OperationResult(
+                    name=request.name,
+                    status="error",
+                    payload={"error": str(exc)},
+                )
+        if DELEGATION_STRATEGY_KEY in updates and updates[DELEGATION_STRATEGY_KEY] is not None:
+            try:
+                updates[DELEGATION_STRATEGY_KEY] = normalize_delegation_strategy(
+                    updates[DELEGATION_STRATEGY_KEY]
+                )
+            except ValueError as exc:
+                return OperationResult(
+                    name=request.name,
+                    status="error",
+                    payload={"error": str(exc)},
+                )
         try:
             path = write_subagent_settings(updates, scope=scope, work_root=effective_root)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             return OperationResult(
                 name=request.name, status="error",
                 payload={"error": f"failed to write settings: {exc}"},

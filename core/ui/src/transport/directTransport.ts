@@ -6,7 +6,7 @@ import type {
   TransportMessage,
   TransportRequest,
 } from './types'
-import { TransportRpcError } from './types'
+import { TransportDisconnectedError, TransportRpcError } from './types'
 
 type FetchLike = typeof fetch
 
@@ -156,7 +156,7 @@ export class DirectTransport implements LamToolsTransport {
           reject(new Error('LamTools direct transport connection failed'))
         }
       }
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (!isCurrent()) {
           if (!settled) {
             settled = true
@@ -167,7 +167,20 @@ export class DirectTransport implements LamToolsTransport {
         this.socket = null
         this.connectPromise = null
         this.connectReject = null
-        this.rejectPending(new Error('LamTools direct transport disconnected'))
+        const disconnectError = new TransportDisconnectedError({
+          code: Number.isFinite(event?.code) ? event.code : undefined,
+          reason: event?.reason || '',
+          wasClean: typeof event?.wasClean === 'boolean' ? event.wasClean : undefined,
+        })
+        // A short reconnect is intentionally silent in the product UI, but
+        // keep the browser diagnostic structured so a persistent failure still
+        // has an actionable close code/reason instead of one generic string.
+        console.warn('[LamTools transport] unexpected WebSocket close', {
+          code: disconnectError.code,
+          reason: disconnectError.reason,
+          wasClean: disconnectError.wasClean,
+        })
+        this.rejectPending(disconnectError)
         this.setState('disconnected')
         if (!settled) {
           settled = true

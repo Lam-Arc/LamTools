@@ -1,14 +1,14 @@
 /**
- * Tauri startup hand-off: native first paint → Sunday theme reveal → app shell.
- * Only transform, opacity and the reveal layer's clip-path are animated.
+ * Tauri startup hand-off: native transparent first paint → Sunday mark → app shell.
+ * Only the mark and shell entrance opacity/transforms are animated.
  */
 import { gsap } from 'gsap'
 import {
   SUNDAY_DARK_THEME,
   SUNDAY_LIGHT_THEME,
   gradientFromStops,
+  migrateSundayThemeDefaults,
   normalizeTheme,
-  rgbaFromHex,
   type ThemeData,
   type ThemeMode,
 } from '../helpers/theme'
@@ -29,11 +29,14 @@ export interface StartupThemePresentation {
   effectiveMode: 'light' | 'dark'
   theme: ThemeData
   backdropBackground: string
-  splashBackground: string
 }
 
 interface StartupThemeWindow extends Window {
-  __SUNDAY_STARTUP_THEME__?: Omit<StartupThemePresentation, 'theme'> & { backdropText: string }
+  __SUNDAY_STARTUP_THEME__?: {
+    effectiveMode: 'light' | 'dark'
+    backdropBackground: string
+    backdropText: string
+  }
 }
 
 let motionMedia: gsap.MatchMedia | null = null
@@ -117,17 +120,15 @@ export function resolveStartupThemePreference(
     : themeMode
   const defaultTheme = effectiveMode === 'dark' ? SUNDAY_DARK_THEME : SUNDAY_LIGHT_THEME
   const savedTheme = effectiveMode === 'dark' ? preferences?.darkTheme : preferences?.lightTheme
-  const theme = normalizeTheme({
+  const theme = migrateSundayThemeDefaults(normalizeTheme({
     ...defaultTheme,
     ...(savedTheme || preferences?.theme || {}),
-  })
-  const veilSource = theme.mainStops[0]?.color || theme.backdropStops[0]?.color || '#000000'
+  }), effectiveMode)
 
   return {
     effectiveMode,
     theme,
     backdropBackground: gradientFromStops(theme.backdropAngle, theme.backdropStops, 1),
-    splashBackground: rgbaFromHex(veilSource, effectiveMode === 'dark' ? 0.68 : 0.64),
   }
 }
 
@@ -144,10 +145,13 @@ export function startStartupSplash(): void {
   const reveal = root.querySelector<HTMLElement>('[data-startup-reveal]')
   const backdropBackground = bootstrappedTheme?.backdropBackground || startupTheme.backdropBackground
   const backdropText = bootstrappedTheme?.backdropText || startupTheme.theme.backdropText
-  const splashBackground = bootstrappedTheme?.splashBackground || startupTheme.splashBackground
-  document.body.style.background = backdropBackground
+  // The native window and every pre-shell webview layer stay transparent. The
+  // splash alone supplies a neutral tint over the native Acrylic backdrop;
+  // the normal workspace shell owns its themed surface after Vue mounts.
+  document.body.style.background = 'transparent'
+  document.body.style.backgroundColor = 'transparent'
   document.body.style.color = backdropText
-  root.style.background = splashBackground
+  root.style.background = 'var(--startup-glass-tint)'
   root.style.color = backdropText
   if (reveal) reveal.style.background = backdropBackground
 
@@ -192,7 +196,6 @@ export function completeStartupSplash(): void {
       ? window.getComputedStyle(shell).getPropertyValue('--theme-backdrop-background').trim()
       : ''
     stopMotion()
-    app?.removeAttribute('aria-hidden')
 
     if (!reveal || !mark) {
       removeSplash(root)
@@ -212,8 +215,10 @@ export function completeStartupSplash(): void {
 
     if (reducedMotion) {
       gsap.set(reveal, { clipPath: 'none', autoAlpha: 1 })
+      app?.removeAttribute('aria-hidden')
       completionFallbackId = window.setTimeout(() => removeSplash(root, entranceTargets), 180)
       completionTimeline = gsap.timeline({ onComplete: () => removeSplash(root, entranceTargets) })
+        .to(mark, { autoAlpha: 0, duration: 0.08, ease: 'none' })
         .to(root, { autoAlpha: 0, duration: 0.08, ease: 'none' })
       return
     }
@@ -227,6 +232,7 @@ export function completeStartupSplash(): void {
       autoAlpha: 1,
       clipPath: `circle(0px at ${centerX}px ${centerY}px)`,
     })
+
     if (entranceTargets.length) gsap.set(entranceTargets, { autoAlpha: 0 })
     if (titlebar) gsap.set(titlebar, { y: -6 })
     if (leftSidebar) gsap.set(leftSidebar, { x: -10 })
@@ -234,6 +240,9 @@ export function completeStartupSplash(): void {
     if (stageSurface) gsap.set(stageSurface, { y: 6 })
     if (rightSidebar) gsap.set(rightSidebar, { x: 10 })
     if (composer) gsap.set(composer, { y: 10 })
+    // Keep the mounted shell hidden until its initial entrance state is in
+    // place, otherwise a transparent splash can expose one unstyled frame.
+    app?.removeAttribute('aria-hidden')
 
     completionFallbackId = window.setTimeout(() => removeSplash(root, entranceTargets), 1400)
     const timeline = gsap.timeline({

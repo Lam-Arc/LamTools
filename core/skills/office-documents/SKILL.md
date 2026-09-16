@@ -2,10 +2,10 @@
 name: office-documents
 description: 创建、修改和排版报告、方案、周报、通知、操作手册及 Word/Markdown 文档。用户要求写正式文档、套用现有模板、润色或修改 DOCX 时使用；演示文稿、表格计算和 PDF 页面操作交给对应办公 Skill。
 metadata:
-  version: 0.1.0
+  version: 0.2.0
   language: zh-CN
   target: lamtools-desktop
-  status: instruction-draft
+  status: beta
 ---
 
 # 文档助手
@@ -13,7 +13,7 @@ metadata:
 ## 目标与边界
 
 把用户资料转成结构清楚、事实可靠、可继续编辑的文档。默认面向桌面端，不假设安卓具备生成能力。
-这是执行指令，不附带文档引擎。使用宿主已有工具；未提供的工具、模板和字体不得假装存在。
+bundle 内置确定性校验/渲染程序，但不内置文档创作引擎、模板或字体。使用宿主已有工具；未提供的能力不得假装存在。
 
 ## 启动条件与输入
 
@@ -31,7 +31,7 @@ metadata:
 
 ## 工作流程
 
-创建 DOCX 或正式排版文档时读取[共享办公视觉规范](../references/office-design-system.md)，先确定页面、样式和分页规则，再写入内容。复杂或多文件任务同时读取[工具对接约定](../references/tooling-contract.md)的执行收敛规则。
+创建 DOCX 或正式排版文档时读取[共享办公视觉规范](../references/office-design-system.md)，先确定页面、样式和分页规则，再写入内容。复杂或多文件任务同时读取[工具对接约定](../references/tooling-contract.md)的执行收敛规则。文档含数据承载表格、图表（包括文字对比表）或需要 DOCX/PDF 页面视觉验收时，读取[Office 数据与渲染合同](../references/office-renderer-contract.md)，按 `office-data.json` → `py -3.14 -m lamtools_core.cli office validate ...` → 同入口 `office render` 执行。纯装饰布局网格不需 manifest。
 
 ### 1. 识别操作类型
 

@@ -14,8 +14,14 @@
         "light": {
           "set": { "thinking.type": "enabled", "reasoning_effort": "low" }
         },
+        "medium": {
+          "set": { "thinking.type": "enabled", "reasoning_effort": "high" }
+        },
         "high": {
           "set": { "thinking.type": "enabled", "reasoning_effort": "high" }
+        },
+        "xhigh": {
+          "set": { "thinking.type": "enabled", "reasoning_effort": "max" }
         },
         "max": {
           "set": { "thinking.type": "enabled", "reasoning_effort": "max" }

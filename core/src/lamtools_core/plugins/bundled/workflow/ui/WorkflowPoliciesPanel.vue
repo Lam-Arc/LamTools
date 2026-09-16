@@ -210,11 +210,12 @@ function setDebounceMode(mode: string): void { patch('debounce', { ...policies.v
   width: 100%;
   min-height: 28px;
   padding: 0 var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
   outline: 0;
-  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
-  color: var(--theme-control-text);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font: inherit;
 }
 .wf-policy-help { margin: 0; color: color-mix(in srgb, var(--text) 45%, transparent); font-size: 10px; line-height: 1.45; }

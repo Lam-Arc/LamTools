@@ -183,6 +183,14 @@ def _execution_context(
     )
     environment = metadata.get("environment", payload.get("environment", {}))
     capabilities = metadata.get("capabilities", payload.get("capabilities", {}))
+    model_id = str(
+        payload.get("model_id")
+        or payload.get("modelId")
+        or metadata.get("model_id")
+        or metadata.get("modelId")
+        or (context.model_id if context is not None else "")
+        or ""
+    ).strip()
     return WorkflowExecutionContext(
         parent_session_id=str(metadata.get("session_id") or metadata.get("thread_id") or thread_id),
         parent_run_id=str(metadata.get("run_id") or run_id),
@@ -209,7 +217,7 @@ def _execution_context(
             key: metadata[key]
             for key in ("trace_id", "correlation_id", "actor_id", "actor_kind")
             if key in metadata
-        } | {"permission_policy_required": True},
+        } | {"permission_policy_required": True} | ({"model_id": model_id} if model_id else {}),
     )
 
 
@@ -222,6 +230,10 @@ def _session_metadata(definition: WorkflowDef) -> dict[str, Any]:
         "owner_plugin": "workflow",
         "resource_type": "workflow",
         "resource_id": definition.id,
+        # Repository scope is distinct from Core session project ownership.
+        # Keeping it explicit (including global "") lets legacy metadata be
+        # repaired without violating the session store's immutable work_root.
+        "resource_work_root": str(definition.work_root or ""),
     }
     if definition.work_root:
         metadata["work_root"] = definition.work_root
@@ -268,7 +280,16 @@ async def _ensure_workflow_session(
             return session_id
 
     current_metadata = dict(getattr(existing, "metadata", {}) or {})
-    current_metadata.update(metadata)
+    # Generic Core session writes intentionally cannot introduce or rebind a
+    # project work_root.  Repair workflow ownership and its independent
+    # repository scope while preserving whatever project ownership the host
+    # already assigned to this durable conversation.
+    current_work_root = str(current_metadata.get("work_root") or "").strip()
+    requested_work_root = str(metadata.get("work_root") or "").strip()
+    scope_safe_metadata = dict(metadata)
+    if current_work_root != requested_work_root:
+        scope_safe_metadata.pop("work_root", None)
+    current_metadata.update(scope_safe_metadata)
     patch = getattr(store, "patch", None)
     if callable(patch):
         await _maybe_await(
@@ -318,8 +339,7 @@ async def workflow_get(request: OperationRequest, *, context: PluginContext | No
         work_root = _scoped_work_root(context, request.payload)
         definition = None
         if workflow_id:
-            definitions = await runtime.manager.list(work_root=work_root)
-            definition = next((item for item in definitions if item.id == workflow_id), None)
+            definition = await runtime.manager.get_by_id(workflow_id, work_root=work_root)
         else:
             definition = await runtime.manager.get(name, work_root=work_root)
     except RuntimeError as exc:
@@ -344,8 +364,7 @@ async def _document_definition(
     runtime = _runtime(context)
     work_root = _scoped_work_root(context, request.payload)
     if workflow_id:
-        definitions = await runtime.manager.list(work_root=work_root)
-        definition = next((item for item in definitions if item.id == workflow_id), None)
+        definition = await runtime.manager.get_by_id(workflow_id, work_root=work_root)
     else:
         definition = await runtime.manager.get(name, work_root=work_root)
     if definition is None:
@@ -359,9 +378,15 @@ async def workflow_document_get(
     try:
         definition, _ = await _document_definition(request, context)
         document = document_from_workflow_def(definition)
+        # The document endpoint is also the recovery path for hosts that
+        # discovered a workflow resource before its plugin-owned session was
+        # persisted (or for legacy records whose metadata was incomplete).
+        # Bind the stable workflow session as part of the same repository
+        # lookup used to produce the document.
+        session_id = await _ensure_workflow_session(context, definition)
     except (LookupError, RuntimeError, TypeError, ValueError) as exc:
         return _error(request, exc)
-    return OperationResult(name=request.name, payload={"document": document})
+    return OperationResult(name=request.name, payload={"document": document, "session_id": session_id})
 
 
 async def workflow_document_save(
@@ -983,7 +1008,7 @@ async def workflow_run(request: OperationRequest, *, context: PluginContext | No
         cancelled = WorkflowRunResult(status="cancelled", error="cancelled", run_id=run_id)
         return OperationResult(
             name=request.name,
-            payload={"run": cancelled.to_dict(), "thread_id": thread_id, "run_id": run_id},
+            payload={"run": cancelled.to_public_dict(), "thread_id": thread_id, "run_id": run_id},
         )
     except Exception as exc:  # noqa: BLE001 — operation boundary
         return _error(request, exc)
@@ -995,7 +1020,7 @@ async def workflow_run(request: OperationRequest, *, context: PluginContext | No
             release = getattr(registry, "release_run", None)
             if callable(release):
                 release(thread_id, run_id=run_id)
-    return OperationResult(name=request.name, payload={"run": result.to_dict(), "thread_id": thread_id, "run_id": run_id})
+    return OperationResult(name=request.name, payload={"run": result.to_public_dict(), "thread_id": thread_id, "run_id": run_id})
 
 
 async def workflow_cancel(request: OperationRequest, *, context: PluginContext | None = None, **_: Any) -> OperationResult:
@@ -1052,7 +1077,7 @@ async def workflow_signal(request: OperationRequest, *, context: PluginContext |
         return _error(request, exc)
     return OperationResult(
         name=request.name,
-        payload={"run": result.to_dict(), "thread_id": thread_id, "run_id": run_id},
+        payload={"run": result.to_public_dict(), "thread_id": thread_id, "run_id": run_id},
     )
 
 
@@ -1252,8 +1277,7 @@ async def workflow_queue_enqueue(
         work_root = _scoped_work_root(context, payload)
         definition = await runtime.manager.get(name, work_root=work_root) if name else None
         if definition is None and workflow_id:
-            definitions = await runtime.manager.list(work_root=work_root)
-            definition = next((item for item in definitions if item.id == workflow_id), None)
+            definition = await runtime.manager.get_by_id(workflow_id, work_root=work_root)
         if definition is None:
             return _error(request, f"Workflow not found: {name or workflow_id}")
         raw_max_steps = payload.get("max_steps", payload.get("maxSteps"))
@@ -1274,6 +1298,9 @@ async def workflow_queue_enqueue(
             "single_node": str(payload.get("single_node") or payload.get("singleNode") or "") or None,
             "metadata": {**dict(request.metadata or {}), **dict(payload.get("metadata") or {})},
         }
+        requested_model_id = str(payload.get("model_id") or payload.get("modelId") or "").strip()
+        if requested_model_id:
+            queue_kwargs["metadata"]["model_id"] = requested_model_id
         if prior_values_provided:
             queue_kwargs["prior_values"] = prior_values
         if prior_states_provided:
@@ -1410,10 +1437,21 @@ async def workflow_queue_cancel(
 
 
 async def workflow_tools_list(request: OperationRequest, *, context: PluginContext | None = None, **_: Any) -> OperationResult:
-    try:
-        specs = _runtime(context).tool_specs
-    except RuntimeError:
-        specs = []
+    specs: list[Any] = []
+    if context is not None:
+        runner = context.service("sub_agent_runner")
+        if runner is None:
+            factory = context.service("sub_agent_runner_factory")
+            if callable(factory):
+                runner = await _maybe_await(factory())
+        provider = getattr(runner, "available_tool_specs", None)
+        if callable(provider):
+            specs = list(await _maybe_await(provider(mode="agent")) or [])
+    if not specs:
+        try:
+            specs = list(_runtime(context).tool_specs)
+        except RuntimeError:
+            specs = []
     return OperationResult(name=request.name, payload={"tools": [{"name": getattr(item, "name", ""), "description": getattr(item, "description", "")} for item in specs]})
 
 

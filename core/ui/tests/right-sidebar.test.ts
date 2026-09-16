@@ -39,6 +39,10 @@ afterEach(() => {
     const moduleSource = readFileSync(resolve(import.meta.dirname, '../src/components/RightSidebarModule.vue'), 'utf8')
 
     expect(hostSource).toContain('<TransitionGroup')
+    expect(hostSource).toContain('<Transition name="right-sidebar-mode" mode="out-in">')
+    expect(hostSource).toContain('.right-sidebar-mode-enter-active')
+    expect(hostSource).toContain('async function animateModuleModeChange()')
+    expect(hostSource).toContain("clearProps: 'opacity,transform,visibility,willChange'")
     expect(hostSource).toContain('move-class="right-sidebar-module-list-move"')
     expect(hostSource).toContain('duration: 0.18')
     expect(hostSource).toContain('hostMotionContext?.revert()')
@@ -123,6 +127,18 @@ afterEach(() => {
     wrapper.unmount()
   })
 
+  it('keeps module instances mounted while animating runtime and artifacts mode changes', async () => {
+    const wrapper = mount(RightSidebarHost, { props: { storageKey: 'test.sidebar.mode-motion' } })
+    const runtimeModule = wrapper.get('[data-module-id="runtime"]').element
+
+    ;(wrapper.vm as unknown as { selectMode: (mode: 'artifacts') => void }).selectMode('artifacts')
+    await flushPromises()
+
+    expect(wrapper.get('[data-module-id="runtime"]').element).toBe(runtimeModule)
+    expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toContain('成果')
+    wrapper.unmount()
+  })
+
   it('accepts backend widget discovery and preserves a missing optional facade as a clean state', async () => {
     const rpc = vi.fn(async (method: string) => {
       if (method === 'plugin.widget.list') return { widgets: [] }
@@ -132,6 +148,50 @@ afterEach(() => {
     await Promise.resolve()
     expect(wrapper.get('[data-module-id="rag"]').text()).toContain('未安装 RAG 插件')
     expect(rpc).toHaveBeenCalledWith('plugin.widget.list', expect.any(Object))
+    wrapper.unmount()
+  })
+
+  it('loads session-level sub-agent snapshots and routes source rows to message navigation', async () => {
+    const requestRpc = vi.fn(async (method: string) => {
+      if (method === 'sub_agent.list') {
+        return {
+          runs: [{
+            id: 'sub-1',
+            sub_session_id: 'sub-1',
+            name: 'reviewer',
+            type: 'execute',
+            model: 'model-a',
+            reasoning_level: 'medium',
+            status: 'running',
+            source_message_id: 'parent-1',
+            source_part_id: 'agent-1',
+            started_at: '2026-07-18T00:00:00.000Z',
+          }],
+        }
+      }
+      return {}
+    })
+    const locateSubAgent = vi.fn()
+    const wrapper = mount(RightSidebarHost, {
+      props: {
+        storageKey: 'test.sidebar.sub-agent',
+        sessionId: 'thread-1',
+        requestRpc,
+        locateSubAgent,
+      },
+    })
+
+    await flushPromises()
+    const row = wrapper.get('[data-module-id="sub-agents"] [data-sub-agent-id="sub-1"]')
+    expect(row.text()).toContain('execute')
+    expect(row.text()).toContain('运行中')
+    expect(row.attributes('title')).toBe('model-a · medium')
+    await row.trigger('click')
+    expect(locateSubAgent).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'reviewer',
+      sourceMessageId: 'parent-1',
+      sourcePartId: 'agent-1',
+    }))
     wrapper.unmount()
   })
 

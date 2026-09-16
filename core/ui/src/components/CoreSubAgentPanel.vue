@@ -20,27 +20,67 @@
         正在读取 Sub Agent 记录...
       </p>
 
-      <button
-        v-for="run in visibleRuns"
-        :key="run.subSessionId"
-        type="button"
-        class="core-sub-agent-panel__row"
-        :class="{ 'is-active': activeSubAgentId === run.subSessionId }"
-        :data-sub-agent-id="run.subSessionId"
-        aria-haspopup="dialog"
-        :aria-controls="dialogId || undefined"
-        :aria-expanded="activeSubAgentId === run.subSessionId"
-        :aria-describedby="tooltipRun?.subSessionId === run.subSessionId ? tooltipId : undefined"
-        @mouseenter="showTooltip(run, $event)"
-        @mouseleave="hideTooltip"
-        @focus="showTooltip(run, $event)"
-        @blur="hideTooltip"
-        @click="openRun(run)"
-      >
-        <span class="core-sub-agent-panel__dot" :class="'is-' + run.status" aria-hidden="true" />
-        <span class="core-sub-agent-panel__name">{{ run.name }}</span>
-        <span class="core-sub-agent-panel__status">{{ statusLabel(run.status) }}</span>
-      </button>
+      <TransitionGroup name="sub-agent-list" tag="div" class="core-sub-agent-panel__runs">
+        <div v-for="run in visibleRuns" :key="runIdentity(run)" class="core-sub-agent-panel__item">
+          <button
+            type="button"
+            class="core-sub-agent-panel__row"
+            :class="{ 'is-active': activeSubAgentId === run.subSessionId }"
+            :data-sub-agent-id="run.subSessionId"
+            :title="runMetadataTitle(run)"
+            aria-haspopup="false"
+            :aria-controls="dialogId || undefined"
+            :aria-expanded="activeSubAgentId === run.subSessionId"
+            :aria-describedby="tooltipRun?.subSessionId === run.subSessionId ? tooltipId : undefined"
+            @mouseenter="showTooltip(run, $event)"
+            @mouseleave="hideTooltip"
+            @focus="showTooltip(run, $event)"
+            @blur="hideTooltip"
+            @click="openRun(run)"
+          >
+            <span class="core-sub-agent-panel__dot" :class="'is-' + run.status" aria-hidden="true">
+              <Transition name="sub-agent-status-icon" mode="out-in">
+                <span v-if="run.status === 'running'" :key="run.status" class="core-sub-agent-panel__spinner" />
+                <span v-else-if="run.status === 'error'" :key="run.status" class="core-sub-agent-panel__marker">!</span>
+                <span v-else-if="run.status === 'pending'" :key="run.status" class="core-sub-agent-panel__marker">…</span>
+                <span v-else-if="run.status === 'paused'" :key="run.status" class="core-sub-agent-panel__marker">Ⅱ</span>
+                <span v-else-if="run.status === 'interrupted'" :key="run.status" class="core-sub-agent-panel__marker">↯</span>
+                <span v-else-if="run.status === 'closed'" :key="run.status" class="core-sub-agent-panel__marker">×</span>
+                <span v-else-if="run.status === 'idle'" :key="run.status" class="core-sub-agent-panel__marker">·</span>
+                <span v-else :key="run.status" class="core-sub-agent-panel__marker">✓</span>
+              </Transition>
+            </span>
+            <span class="core-sub-agent-panel__type">{{ runType(run) }}</span>
+            <span class="core-sub-agent-panel__name">{{ run.name }}</span>
+            <span class="core-sub-agent-panel__separator" aria-hidden="true">·</span>
+            <span class="core-sub-agent-panel__metadata" :title="runMetadataTitle(run)">
+              <span v-if="hasRunMetadata(run)" class="core-sub-agent-panel__model">{{ compactLabel(run.model || run.modelId, '—') }}</span>
+              <span v-if="hasRunMetadata(run) && run.reasoningLevel" class="core-sub-agent-panel__reasoning">{{ run.reasoningLevel }}</span>
+            </span>
+            <span class="core-sub-agent-panel__separator" aria-hidden="true">·</span>
+            <span class="core-sub-agent-panel__elapsed" :aria-label="'耗时 ' + elapsedLabel(run)">{{ elapsedLabel(run) }}</span>
+            <Transition name="sub-agent-status-label" mode="out-in">
+              <span :key="run.status" class="core-sub-agent-panel__status" :data-status="run.status">
+                {{ statusLabel(run.status) }}
+              </span>
+            </Transition>
+          </button>
+
+          <Transition name="sub-agent-timeline">
+            <div
+              v-if="activeSubAgentId === run.subSessionId && !run.sourceMessageId && run.timeline.length > 0"
+              class="core-sub-agent-panel__timeline-reveal"
+            >
+              <div class="core-sub-agent-panel__timeline" :aria-label="run.name + ' 子代理时间线'">
+                <p v-for="message in run.timeline.slice(-3)" :key="message.id">
+                  <strong>{{ message.role === 'user' ? '任务' : '过程' }}</strong>
+                  <span>{{ message.content || '…' }}</span>
+                </p>
+              </div>
+            </div>
+          </Transition>
+        </div>
+      </TransitionGroup>
 
       <button
         v-if="overflowCount > 0"
@@ -66,8 +106,8 @@
           role="tooltip"
           :style="tooltipStyle"
         >
-          <span>首次任务</span>
-          <p>{{ tooltipRun.task || '未记录任务内容。' }}</p>
+          <span>{{ hasRunMetadata(tooltipRun) ? runMetadataTitle(tooltipRun) : '首次任务' }}</span>
+          <p>{{ tooltipRun.task || tooltipRun.summary || '未记录任务内容。' }}</p>
         </div>
       </Transition>
     </Teleport>
@@ -76,7 +116,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
-import type { CoreSubAgentRun, MessagePartStatus } from '../types'
+import type { CoreSubAgentRun, CoreSubAgentStatus } from '../types'
 
 const props = withDefaults(defineProps<{
   runs: readonly CoreSubAgentRun[]
@@ -110,6 +150,8 @@ const expanded = ref(false)
 const tooltipRun = ref<CoreSubAgentRun | null>(null)
 const tooltipTrigger = ref<HTMLElement | null>(null)
 const tooltipStyle = ref<Record<string, string>>({})
+const elapsedNow = ref(Date.now())
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
 
 const safeLimit = computed(() => Math.min(4, Math.max(1, Math.floor(props.limit))))
 const overflowCount = computed(() => Math.max(0, props.runs.length - safeLimit.value))
@@ -122,7 +164,7 @@ const summaryText = computed(() => {
 })
 
 watch(
-  () => props.runs.map(run => run.subSessionId).sort().join('\u0000'),
+  () => props.runs.map(runIdentity).sort().join('\u0000'),
   () => {
     expanded.value = false
     hideTooltip()
@@ -165,11 +207,52 @@ function updateTooltipPosition() {
   }
 }
 
-function statusLabel(status: MessagePartStatus): string {
+function statusLabel(status: CoreSubAgentStatus): string {
   if (status === 'running') return '运行中'
   if (status === 'pending') return '等待中'
+  if (status === 'paused') return '已暂停'
+  if (status === 'interrupted') return '已中断'
+  if (status === 'closed') return '已关闭'
+  if (status === 'idle') return '空闲'
   if (status === 'error') return '失败'
   return '已完成'
+}
+
+function runType(run: CoreSubAgentRun): string {
+  const type = String(run.type || 'execute').toLowerCase()
+  return type.includes('consider') ? 'consider' : 'execute'
+}
+
+function runIdentity(run: CoreSubAgentRun): string {
+  return run.name.trim().toLowerCase() || run.id || run.subSessionId
+}
+
+function hasRunMetadata(run: CoreSubAgentRun): boolean {
+  return Boolean(run.model || run.modelId || run.reasoningLevel)
+}
+
+function runMetadataTitle(run: CoreSubAgentRun): string {
+  const model = compactLabel(run.model || run.modelId, '—')
+  const reasoning = compactLabel(run.reasoningLevel, '—')
+  return `${model} · ${reasoning}`
+}
+
+function elapsedLabel(run: CoreSubAgentRun): string {
+  let elapsed = typeof run.elapsedMs === 'number' ? run.elapsedMs : undefined
+  if (elapsed === undefined) {
+    const start = Date.parse(run.startedAt || '')
+    const end = run.completedAt ? Date.parse(run.completedAt) : elapsedNow.value
+    elapsed = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0
+  }
+  if (elapsed < 1000) return `${Math.round(elapsed)}ms`
+  const seconds = elapsed / 1000
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`
+  return `${Math.floor(seconds / 60)}m ${String(Math.floor(seconds % 60)).padStart(2, '0')}s`
+}
+
+function compactLabel(value: unknown, fallback: string): string {
+  const text = String(value || '').trim()
+  return text ? text.slice(0, 40) : fallback
 }
 
 let tooltipScrollRaf = 0
@@ -186,18 +269,22 @@ function onWindowScroll() {
 onMounted(() => {
   window.addEventListener('resize', updateTooltipPosition)
   window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
+  elapsedTimer = setInterval(() => { elapsedNow.value = Date.now() }, 1000)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateTooltipPosition)
   window.removeEventListener('scroll', onWindowScroll, { capture: true } as EventListenerOptions)
   if (tooltipScrollRaf) cancelAnimationFrame(tooltipScrollRaf)
+  if (elapsedTimer) clearInterval(elapsedTimer)
+  elapsedTimer = null
 })
 </script>
 
 <style scoped>
 .core-sub-agent-panel {
-  color: var(--theme-backdrop-text, var(--text));
+  --text: var(--theme-backdrop-text);
+  color: var(--text);
 }
 
 .core-sub-agent-panel__head p {
@@ -210,11 +297,19 @@ onBeforeUnmount(() => {
   gap: 2px;
 }
 
+.core-sub-agent-panel__runs,
+.core-sub-agent-panel__item {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
 .core-sub-agent-panel__notice {
   min-height: 2.25rem;
   margin: 0;
   padding: .5rem;
-  color: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 62%, transparent);
+  color: color-mix(in srgb, var(--text) 62%, transparent);
   font-size: .75rem;
   line-height: 1.45;
 }
@@ -231,7 +326,7 @@ onBeforeUnmount(() => {
   min-height: 2rem;
   border: 0;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 8%, transparent);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
   color: inherit;
   padding: 0 .625rem;
   font: inherit;
@@ -239,7 +334,7 @@ onBeforeUnmount(() => {
 }
 
 .core-sub-agent-panel__notice button:hover {
-  background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 12%, transparent);
+  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
 }
 
 .core-sub-agent-panel__row {
@@ -247,7 +342,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   min-height: 2.25rem;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto minmax(0, auto) auto auto auto;
   align-items: center;
   gap: .5rem;
   border: 0;
@@ -257,15 +352,22 @@ onBeforeUnmount(() => {
   padding: 0 .5rem;
   text-align: left;
   cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.core-sub-agent-panel__row:hover {
+  transform: translateX(2px);
 }
 
 .core-sub-agent-panel__row:hover,
 .core-sub-agent-panel__row.is-active {
-  background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 7%, transparent);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
 }
 
 .core-sub-agent-panel__row:active {
-  background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 10%, transparent);
+  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
 }
 
 .core-sub-agent-panel__row:focus-visible,
@@ -275,22 +377,65 @@ onBeforeUnmount(() => {
 }
 
 .core-sub-agent-panel__dot {
-  width: .5rem;
-  height: .5rem;
+  width: 1rem;
+  height: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 38%, transparent);
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+  font-size: .625rem;
+  line-height: 1;
+  transition:
+    background var(--dur-base) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.core-sub-agent-panel__row:hover .core-sub-agent-panel__dot {
+  transform: scale(1.06);
 }
 
 .core-sub-agent-panel__dot.is-running {
-  background: var(--green, #32d17d);
+  background: color-mix(in srgb, var(--green) 70%, var(--theme-backdrop-background));
 }
 
 .core-sub-agent-panel__dot.is-pending {
-  background: var(--orange, #ff9142);
+  background: color-mix(in srgb, var(--orange) 70%, var(--theme-backdrop-background));
 }
 
 .core-sub-agent-panel__dot.is-error {
-  background: var(--red, #f5555d);
+  background: color-mix(in srgb, var(--red) 70%, var(--theme-backdrop-background));
+}
+
+.core-sub-agent-panel__dot.is-failed {
+  background: color-mix(in srgb, var(--red) 70%, var(--theme-backdrop-background));
+}
+
+.core-sub-agent-panel__dot.is-paused {
+  background: color-mix(in srgb, var(--orange) 64%, var(--theme-backdrop-background));
+}
+
+.core-sub-agent-panel__dot.is-interrupted,
+.core-sub-agent-panel__dot.is-closed {
+  background: color-mix(in srgb, var(--text) 28%, transparent);
+}
+
+.core-sub-agent-panel__marker { color: var(--theme-backdrop-text); font-weight: 750; }
+.core-sub-agent-panel__spinner {
+  width: .625rem;
+  height: .625rem;
+  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 36%, transparent);
+  border-top-color: var(--theme-backdrop-text);
+  border-radius: 50%;
+  animation: core-sub-agent-spin calc(var(--dur-theme) * 1.5) linear infinite;
+}
+
+.core-sub-agent-panel__type {
+  color: color-mix(in srgb, var(--text) 66%, transparent);
+  font-size: .6875rem;
+  font-family: var(--font-mono);
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 .core-sub-agent-panel__name {
@@ -303,11 +448,91 @@ onBeforeUnmount(() => {
   line-height: 1.35;
 }
 
+.core-sub-agent-panel__metadata {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: .3rem;
+  color: color-mix(in srgb, var(--text) 52%, transparent);
+  font-size: .625rem;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.core-sub-agent-panel__separator {
+  color: color-mix(in srgb, var(--text) 34%, transparent);
+  font-size: .6875rem;
+  line-height: 1;
+}
+
+.core-sub-agent-panel__model,
+.core-sub-agent-panel__reasoning {
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.core-sub-agent-panel__reasoning {
+  color: color-mix(in srgb, var(--text) 42%, transparent);
+}
+
 .core-sub-agent-panel__status {
-  color: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 58%, transparent);
+  color: color-mix(in srgb, var(--text) 58%, transparent);
   font-size: .6875rem;
   line-height: 1.35;
   white-space: nowrap;
+}
+
+.core-sub-agent-panel__elapsed {
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+  font-size: .625rem;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sub-agent-status-icon-enter-active,
+.sub-agent-status-icon-leave-active,
+.sub-agent-status-label-enter-active,
+.sub-agent-status-label-leave-active {
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.sub-agent-status-icon-enter-from,
+.sub-agent-status-icon-leave-to {
+  opacity: 0;
+  transform: scale(.72);
+}
+
+.sub-agent-status-label-enter-from,
+.sub-agent-status-label-leave-to {
+  opacity: 0;
+  transform: translateY(2px);
+}
+
+.sub-agent-list-move,
+.sub-agent-list-enter-active,
+.sub-agent-list-leave-active {
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+
+.sub-agent-list-enter-from {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.sub-agent-list-leave-to {
+  opacity: 0;
+  transform: translateX(4px);
+}
+
+.sub-agent-list-leave-active {
+  position: absolute;
+  inset-inline: 0;
 }
 
 .core-sub-agent-panel__more {
@@ -320,7 +545,7 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 62%, transparent);
+  color: color-mix(in srgb, var(--text) 62%, transparent);
   padding: 0 .5rem;
   font: inherit;
   font-size: .75rem;
@@ -329,12 +554,12 @@ onBeforeUnmount(() => {
 }
 
 .core-sub-agent-panel__more:hover {
-  background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 6%, transparent);
-  color: var(--theme-backdrop-text, currentColor);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
 }
 
 .core-sub-agent-panel__more span:first-child {
-  color: var(--theme-backdrop-text, currentColor);
+  color: var(--text);
   font-family: var(--font-mono, monospace);
   font-weight: 800;
   text-align: center;
@@ -343,9 +568,49 @@ onBeforeUnmount(() => {
 .core-sub-agent-panel__empty {
   margin: 0;
   padding: .5rem;
-  color: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 56%, transparent);
+  color: color-mix(in srgb, var(--text) 56%, transparent);
   font-size: .75rem;
   line-height: 1.5;
+}
+
+.core-sub-agent-panel__timeline-reveal {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 1fr;
+  overflow: hidden;
+}
+
+.core-sub-agent-panel__timeline {
+  min-height: 0;
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 var(--space-2) var(--space-1) calc(var(--space-2) + 1.5rem);
+  padding: var(--space-2);
+  border-left: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  color: color-mix(in srgb, var(--text) 68%, transparent);
+  font-size: .6875rem;
+  line-height: 1.4;
+}
+.core-sub-agent-panel__timeline p { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-1); margin: 0; }
+.core-sub-agent-panel__timeline span { overflow-wrap: anywhere; }
+
+.sub-agent-timeline-enter-active,
+.sub-agent-timeline-leave-active {
+  transition:
+    grid-template-rows var(--dur-slow) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out);
+}
+
+.sub-agent-timeline-enter-from,
+.sub-agent-timeline-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+@keyframes core-sub-agent-spin {
+  to { transform: rotate(360deg); }
 }
 
 .core-sub-agent-tooltip {
@@ -384,7 +649,9 @@ onBeforeUnmount(() => {
 
 .sub-agent-tooltip-enter-active,
 .sub-agent-tooltip-leave-active {
-  transition: opacity 160ms cubic-bezier(.25, 1, .5, 1), transform 160ms cubic-bezier(.25, 1, .5, 1);
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
 }
 
 .sub-agent-tooltip-enter-from,
@@ -401,9 +668,26 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .core-sub-agent-panel__spinner { animation: none; }
+  .core-sub-agent-panel__row,
+  .core-sub-agent-panel__dot,
+  .sub-agent-list-move,
+  .sub-agent-list-enter-active,
+  .sub-agent-list-leave-active,
+  .sub-agent-status-icon-enter-active,
+  .sub-agent-status-icon-leave-active,
+  .sub-agent-status-label-enter-active,
+  .sub-agent-status-label-leave-active,
+  .sub-agent-timeline-enter-active,
+  .sub-agent-timeline-leave-active,
   .sub-agent-tooltip-enter-active,
   .sub-agent-tooltip-leave-active {
     transition: none;
+  }
+
+  .core-sub-agent-panel__row:hover,
+  .core-sub-agent-panel__row:hover .core-sub-agent-panel__dot {
+    transform: none;
   }
 }
 </style>

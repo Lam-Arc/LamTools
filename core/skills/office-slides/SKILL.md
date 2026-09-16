@@ -2,10 +2,10 @@
 name: office-slides
 description: 从资料、报告或提纲创建可编辑 PPTX，或读取、修改已有演示文稿。用于项目汇报、方案介绍、工作总结、培训材料和指定页面修改；需要结合文档、数据图表和结构图时由本 Skill 组织成果。
 metadata:
-  version: 0.1.0
+  version: 0.2.0
   language: zh-CN
   target: lamtools-desktop
-  status: instruction-draft
+  status: beta
 ---
 
 # PPT 制作
@@ -33,7 +33,7 @@ metadata:
 
 ## 工作流程
 
-新建演示稿时读取[共享办公视觉规范](../references/office-design-system.md)。先选用其中的页面配方并确定内容区边界，再创建对象；不要以自由坐标堆叠作为默认布局方式。复杂或多文件任务同时读取[工具对接约定](../references/tooling-contract.md)的执行收敛规则。
+新建演示稿时读取[共享办公视觉规范](../references/office-design-system.md)。先选用其中的页面配方并确定内容区边界，再创建对象；不要以自由坐标堆叠作为默认布局方式。复杂或多文件任务同时读取[工具对接约定](../references/tooling-contract.md)的执行收敛规则。含数据承载表格、图表（包括文字对比表）或需要 Office 页面视觉验收时，再读取[Office 数据与渲染合同](../references/office-renderer-contract.md)，按 `office-data.json` → `py -3.14 -m lamtools_core.cli office validate ...` → 同入口 `office render` 执行。纯装饰布局网格不需 manifest。
 
 ### 1. 理解内容与现有文件
 

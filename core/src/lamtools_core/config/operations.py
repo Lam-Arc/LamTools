@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Any
 
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
+from lamtools_core.context_compaction_budget import (
+    CONTEXT_COMPACTION_NAMESPACE,
+    MAX_RETAINED_STEPS,
+)
 
 from .imagegen_store import IMAGEGEN_NAMESPACE, load_imagegen_config, save_imagegen_config
 from .model_store import ModelConfig, ModelStore
@@ -270,6 +274,13 @@ def build_config_operation_catalog(
             if merged is None:
                 return _error(request, "invalid core.runtimeControls value")
             set_setting(namespace, merged)
+        elif namespace == CONTEXT_COMPACTION_NAMESPACE:
+            merged = _merge_context_compaction(
+                get_setting(namespace), dict(value)
+            )
+            if merged is None:
+                return _error(request, "invalid core.contextCompaction value")
+            set_setting(namespace, merged)
         else:
             current = get_setting(namespace)
             merged = {**(current if isinstance(current, dict) else {}), **dict(value)}
@@ -521,6 +532,17 @@ _DEFAULT_PERMISSION_PRESETS = ("ask", "auto", "full_access")
 _RUNTIME_CONTROL_BOOLS = (
     "allow_access_outside_workdir",
 )
+
+
+def _merge_context_compaction(current: Any, incoming: dict[str, Any]) -> dict[str, Any] | None:
+    """Merge context-compaction settings with strict retained-step bounds."""
+    merged = {**(current if isinstance(current, dict) else {})}
+    if "retained_steps" in incoming:
+        raw = incoming["retained_steps"]
+        if isinstance(raw, bool) or not isinstance(raw, int) or not 0 <= raw <= MAX_RETAINED_STEPS:
+            return None
+        merged["retained_steps"] = raw
+    return merged
 
 
 def _merge_runtime_controls(request: OperationRequest, current: Any, incoming: dict[str, Any]) -> dict[str, Any] | None:

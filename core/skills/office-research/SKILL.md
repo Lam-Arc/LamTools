@@ -2,10 +2,10 @@
 name: office-research
 description: 围绕明确问题阅读本地资料，使用 websearch/webfetch 补充证据，形成带来源、日期和不确定性说明的研究或对比报告。用于方案比较、产品调查、行业资料整理和项目调研；长任务可结合 subAgent 分工。
 metadata:
-  version: 0.1.0
+  version: 0.2.0
   language: zh-CN
   target: lamtools-desktop
-  status: instruction-draft
+  status: beta
 ---
 
 # 资料研究与对比报告

@@ -348,6 +348,28 @@ fn get_api_base(state: tauri::State<'_, BackendState>) -> Result<String, String>
 }
 
 #[tauri::command]
+fn enable_startup_glass(window: WebviewWindow) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use tauri::window::{Effect, EffectsBuilder};
+
+        window
+            .set_effects(
+                EffectsBuilder::new()
+                    .effect(Effect::Acrylic)
+                    .color((58, 59, 63, 32).into())
+                    .build(),
+            )
+            .map_err(|error| format!("startup glass effect failed: {error}"))?;
+    }
+
+    #[cfg(not(windows))]
+    let _ = window;
+
+    Ok(())
+}
+
+#[tauri::command]
 fn minimize_window(window: tauri::WebviewWindow) {
     let _ = window.minimize();
 }
@@ -1341,6 +1363,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_api_base,
+            enable_startup_glass,
             minimize_window,
             toggle_maximize_window,
             set_maximize_button_bounds,

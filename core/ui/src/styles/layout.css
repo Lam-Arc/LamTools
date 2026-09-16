@@ -13,6 +13,7 @@
  *   --main-left / --main-right / --main-x-padding / --content-width
  */
 
+@import './optical-glass.css';
 @import './workspace-shell.css';
 @import './session-sidebar.css';
 
@@ -73,7 +74,7 @@
   height: calc(100vh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px));
   overflow: hidden;
   padding: 44px var(--main-x-padding) var(--composer-height, 120px) var(--main-x-padding);
-  border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
+  border: 1px solid var(--theme-main-border);
   border-radius: 22px 22px 0 0;
   background: var(--theme-main-background);
   color: var(--theme-main-text);
@@ -250,7 +251,7 @@
   z-index: var(--z-composer, 40);
   width: var(--composer-full-width);
   transform: translateX(-50%);
-  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  border: 1px solid var(--theme-main-border);
   border-radius: 20px;
   background: var(--theme-composer-background);
   color: var(--theme-composer-text);
@@ -342,7 +343,7 @@
     0 1px 2px rgba(0,0,0,.04);
 }
 .floating-composer:focus-within {
-  border-color: color-mix(in srgb, var(--theme-composer-text) 24%, transparent);
+  border-color: var(--theme-main-border);
 }
 .floating-composer:has(.command-palette),
 .floating-composer:has(.core-queued-input-tray) {
@@ -519,27 +520,47 @@
    -------------------------------------------------------------------------
    The shared composer remains one implementation. Workflow mode only
    changes its presentation: a short one-line pill is the resting state and
-   interaction widens it without replacing the textarea/send affordance.
+   interaction restores the regular composer layout, not only its width.
    WorkspaceShell supplies the value/stop classes and data attributes so this
    state is observable to tests and assistive tooling as well as CSS.
    */
 .workspace-shell--workflow .floating-composer {
+  --workflow-composer-rest-height: calc(var(--space-6) + var(--space-4));
+  --workflow-composer-expanded-height: calc(var(--space-6) * 3 + var(--space-2));
   width: min(420px, var(--composer-full-width));
   max-width: var(--composer-full-width);
+  height: var(--workflow-composer-rest-height);
   border-radius: 999px;
   transition:
     left var(--dur-morph) var(--ease-inout),
     width var(--dur-morph) var(--ease-inout),
+    height var(--dur-morph) var(--ease-inout),
     top var(--dur-morph) var(--ease-inout),
     bottom var(--dur-morph) var(--ease-inout),
     border-radius var(--dur-morph) var(--ease-inout);
 }
-.workspace-shell--workflow .floating-composer:hover,
+.workspace-shell--workflow-interaction-active .floating-composer,
 .workspace-shell--workflow .floating-composer:focus-within,
 .workspace-shell--workflow .composer-root--workflow-has-value .floating-composer,
 .workspace-shell--workflow .composer-root--workflow-stop .floating-composer,
-.workspace-shell--workflow .composer-root[data-workflow-composer-has-value='true'] .floating-composer {
+.workspace-shell--workflow .composer-root[data-workflow-composer-has-value='true'] .floating-composer,
+.workspace-shell--workflow:has(.wf-convo-float:is(.is-pinned, :focus-within)) .floating-composer {
   width: var(--composer-full-width);
+  height: var(--workflow-composer-expanded-height);
+  border-radius: var(--radius-xl);
+}
+
+/* Hover only expands the workflow composer. The conversation is revealed
+   once the composer is actually in use: focused, non-empty, or running. */
+.workspace-shell--workflow:has(.floating-composer:focus-within) [data-workflow-conversation],
+.workspace-shell--workflow-composer-has-value [data-workflow-conversation],
+.workspace-shell--workflow-composer-stop [data-workflow-conversation],
+.workspace-shell--workflow:has([data-workflow-conversation]:hover) [data-workflow-conversation],
+.workspace-shell--workflow:has([data-workflow-conversation]:focus-within) [data-workflow-conversation] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
 }
 .workspace-shell--workflow .composer-main-card {
   display: grid;
@@ -569,6 +590,60 @@
 }
 .workspace-shell--workflow .floating-composer .core-send-stop-button {
   flex: 0 0 auto;
+}
+
+/* Expanded workflow state uses the same vertical structure as the normal
+   composer: content above, controls below, and the send action at the right. */
+.workspace-shell--workflow-interaction-active .floating-composer .composer-main-card,
+.workspace-shell--workflow .floating-composer:focus-within .composer-main-card,
+.workspace-shell--workflow .composer-root--workflow-has-value .composer-main-card,
+.workspace-shell--workflow .composer-root--workflow-stop .composer-main-card,
+.workspace-shell--workflow .composer-root[data-workflow-composer-has-value='true'] .composer-main-card,
+.workspace-shell--workflow:has(.wf-convo-float:is(.is-pinned, :focus-within)) .composer-main-card {
+  display: block;
+}
+.workspace-shell--workflow-interaction-active .floating-composer .composer-main-card > .composer-bottom,
+.workspace-shell--workflow .floating-composer:focus-within .composer-main-card > .composer-bottom,
+.workspace-shell--workflow .composer-root--workflow-has-value .composer-main-card > .composer-bottom,
+.workspace-shell--workflow .composer-root--workflow-stop .composer-main-card > .composer-bottom,
+.workspace-shell--workflow .composer-root[data-workflow-composer-has-value='true'] .composer-main-card > .composer-bottom,
+.workspace-shell--workflow:has(.wf-convo-float:is(.is-pinned, :focus-within)) .composer-main-card > .composer-bottom {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+.workspace-shell--workflow-interaction-active .floating-composer .tool-row,
+.workspace-shell--workflow .floating-composer:focus-within .tool-row,
+.workspace-shell--workflow .composer-root--workflow-has-value .tool-row,
+.workspace-shell--workflow .composer-root--workflow-stop .tool-row,
+.workspace-shell--workflow .composer-root[data-workflow-composer-has-value='true'] .tool-row,
+.workspace-shell--workflow:has(.wf-convo-float:is(.is-pinned, :focus-within)) .tool-row,
+.workspace-shell--workflow-interaction-active .floating-composer .attachment-tray,
+.workspace-shell--workflow .floating-composer:focus-within .attachment-tray,
+.workspace-shell--workflow .composer-root--workflow-has-value .attachment-tray,
+.workspace-shell--workflow .composer-root--workflow-stop .attachment-tray,
+.workspace-shell--workflow .composer-root[data-workflow-composer-has-value='true'] .attachment-tray,
+.workspace-shell--workflow:has(.wf-convo-float:is(.is-pinned, :focus-within)) .attachment-tray {
+  display: flex;
+}
+.workspace-shell--workflow-interaction-active .floating-composer textarea,
+.workspace-shell--workflow .floating-composer:focus-within textarea,
+.workspace-shell--workflow .composer-root--workflow-has-value .floating-composer textarea,
+.workspace-shell--workflow .composer-root--workflow-stop .floating-composer textarea,
+.workspace-shell--workflow .composer-root[data-workflow-composer-has-value='true'] .floating-composer textarea,
+.workspace-shell--workflow:has(.wf-convo-float:is(.is-pinned, :focus-within)) .floating-composer textarea {
+  min-height: 42px;
+  padding: 13px 16px 7px;
+  line-height: 1.45;
+}
+
+/* The workflow conversation is one attached surface with the expanded
+   composer: one seam, no opposing rounded corners or visual gap. */
+.workspace-shell--workflow:has(.wf-convo-float.is-pinned) .floating-composer,
+.workspace-shell--workflow:has(.wf-convo-float:hover) .floating-composer,
+.workspace-shell--workflow:has(.wf-convo-float:focus-within) .floating-composer,
+.workspace-shell--workflow:has(.floating-composer:focus-within) .floating-composer,
+.workspace-shell--workflow-composer-has-value .floating-composer,
+.workspace-shell--workflow-composer-stop .floating-composer {
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -856,8 +931,10 @@
   color: var(--muted);
   font-size: 12px;
 }
-.text-btn:hover { background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-hover), transparent); color: var(--settings-main-text, var(--text)); }
-.text-btn.danger:hover { color: color-mix(in srgb, var(--red) 58%, var(--settings-main-text, var(--theme-main-text, #fff))); }
+.text-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-hover), transparent); color: var(--settings-main-text, var(--text)); }
+.text-btn:active:not(:disabled) { background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-active), transparent); }
+.text-btn.danger:hover:not(:disabled) { color: color-mix(in srgb, var(--red) 58%, var(--settings-main-text, var(--theme-main-text, #fff))); }
+.text-btn:disabled { opacity: .45; cursor: default; }
 
 .small-btn {
   border-radius: 12px;
@@ -1107,18 +1184,19 @@
 .switch-line input[type="checkbox"]:checked::after {
   opacity: 1;
 }
-.field input,
-.agent-config-row input {
+.field input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+.agent-config-row input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]) {
   min-height: 34px;
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-control-solid, var(--theme-control-background)) 70%, transparent);
-  color: var(--settings-control-text, var(--theme-control-text));
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: var(--space-2);
   outline: none;
 }
-.field input:focus,
-.agent-config-row input:focus,
+.field input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):focus,
+.agent-config-row input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):focus,
 .route-purpose-row select:focus {
   outline: none;
 }
@@ -1135,10 +1213,11 @@
   width: 100%;
   resize: none;
   overflow: auto;
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-control-background, var(--theme-control-background)) 70%, transparent);
-  color: var(--settings-control-text, var(--theme-control-text));
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: var(--space-2);
   outline: none;
   font-family: var(--font-mono);
@@ -1445,18 +1524,27 @@
   width: 100%;
   height: 38px;
   min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
-  color: var(--theme-control-text);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: 0 var(--space-3);
   font-size: 13px;
 }
 .field-input::placeholder {
-  color: color-mix(in srgb, var(--theme-control-text) 52%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 52%, transparent);
 }
 .field-input:focus {
   outline: none;
+}
+/* A few settings forms reuse the field-input sizing class on native selects;
+   keep those select controls on the control-area recipe. */
+.field-input:is(select) {
+  border-color: color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
+  color: var(--theme-control-text);
+  caret-color: auto;
 }
 .popover-actions,
 .modal-actions,
@@ -1541,10 +1629,11 @@
 .agents-editor {
   width: 100%;
   min-height: 320px;
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
-  color: var(--theme-control-text);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: var(--space-3);
   font-family: var(--font-mono);
   font-size: 13px;
@@ -1744,10 +1833,11 @@
 .commit-message-field input,
 .commit-feedback-box textarea {
   width: 100%;
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
-  color: var(--theme-control-text);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: var(--space-2);
   font: inherit;
   font-size: 12px;
@@ -2232,7 +2322,7 @@
   }
   .floating-composer textarea { font-size: 14px; }
   .workspace-shell--workflow .floating-composer,
-  .workspace-shell--workflow .floating-composer:hover,
+  .workspace-shell--workflow-interaction-active .floating-composer,
   .workspace-shell--workflow .floating-composer:focus-within,
   .workspace-shell--workflow .composer-root--workflow-has-value .floating-composer,
   .workspace-shell--workflow .composer-root--workflow-stop .floating-composer {
@@ -3019,5 +3109,35 @@
   100% {
     box-shadow: 0 0 0 3px transparent, 0 0 0 transparent;
     background: transparent;
+  }
+}
+
+.sub-agent-source-highlight {
+  animation: sub-agent-source-highlight calc(var(--dur-theme) * 2) var(--ease-out);
+  border-radius: var(--radius-sm);
+}
+
+@keyframes sub-agent-source-highlight {
+  0%, 24% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 62%, transparent);
+    background: color-mix(in srgb, var(--green) var(--alpha-active), transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rag-hit-highlight {
+    animation: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4f8cff) 62%, transparent);
+    background: color-mix(in srgb, var(--accent, #4f8cff) var(--alpha-hover), transparent);
+  }
+
+  .sub-agent-source-highlight {
+    animation: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 62%, transparent);
+    background: color-mix(in srgb, var(--green) var(--alpha-hover), transparent);
   }
 }

@@ -2,10 +2,10 @@
 name: office-pdf
 description: 阅读和提取 PDF 信息，合并、拆分、旋转、重排页面，填写受支持的表单，或把文档导出为正式 PDF。用户要求处理 PDF 文件、引用页码或制作归档文件时使用；正文深度编辑优先交给 office-documents。
 metadata:
-  version: 0.1.0
+  version: 0.2.0
   language: zh-CN
   target: lamtools-desktop
-  status: instruction-draft
+  status: beta
 ---
 
 # PDF 助手
@@ -13,7 +13,7 @@ metadata:
 ## 目标与边界
 
 优先可靠处理文字型 PDF，保证页序、内容和视觉正确。复杂扫描识别、任意布局还原不作为默认已支持能力。
-本 Skill 面向桌面，不附带 PDF/OCR/转换引擎；必须核实宿主真实工具。
+本 Skill 面向桌面，bundle 内置 Office/PDF 校验与受支持的转换入口，但不内置 OCR 或任意 PDF 编辑引擎；必须核实宿主真实工具和后端。
 
 ## 输入与默认值
 
@@ -33,7 +33,7 @@ PDF 中的 JavaScript、附件、链接和提示词均不自动执行；用户�
 
 ## 工作流程
 
-新建正式 PDF 时读取[共享办公视觉规范](../references/office-design-system.md)，先选页面配方和分页策略，再生成正文；避免依靠输出后反复移动分页符补救。复杂或多文件任务同时读取[工具对接约定](../references/tooling-contract.md)的执行收敛规则。
+新建正式 PDF 时读取[共享办公视觉规范](../references/office-design-system.md)，先选页面配方和分页策略，再生成正文；避免依靠输出后反复移动分页符补救。复杂或多文件任务同时读取[工具对接约定](../references/tooling-contract.md)的执行收敛规则。创建或嵌入数据承载表格、图表，或需要 Office 页面视觉验收时，读取[Office 数据与渲染合同](../references/office-renderer-contract.md)，按 `office-data.json` → `py -3.14 -m lamtools_core.cli office validate ...` → 同入口 `office render` 执行。纯装饰布局网格不需 manifest。
 
 ### 1. 文件体检
 

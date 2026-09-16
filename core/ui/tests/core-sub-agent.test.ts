@@ -144,6 +144,79 @@ describe('selectCoreSubAgentRuns', () => {
 
     expect(selectCoreSubAgentRuns([assistantMessage('parent', [part])])[0].status).toBe('running')
   })
+
+  it('keeps a live event without sub_session_id and folds resumed lifecycles by name', () => {
+    const first = agentPart({
+      id: 'agent-live-1',
+      sessionId: '',
+      name: 'reviewer',
+      task: 'Review',
+      status: 'running',
+    })
+    first.startedAt = '2026-07-18T00:00:00.000Z'
+    first.metadata = { ...first.metadata, type: 'consider', model: 'model-a', reasoning_level: 'high' }
+    const resumed = agentPart({
+      id: 'agent-live-2',
+      sessionId: 'child-2',
+      name: 'reviewer',
+      task: 'Review again',
+      status: 'completed',
+    })
+    resumed.startedAt = '2026-07-18T00:01:00.000Z'
+    resumed.completedAt = '2026-07-18T00:01:02.000Z'
+    resumed.metadata = { ...resumed.metadata, model: 'model-b', reasoning_level: 'medium' }
+
+    const runs = selectCoreSubAgentRuns([
+      assistantMessage('parent-1', [first]),
+      assistantMessage('parent-2', [resumed]),
+    ])
+
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toMatchObject({
+      name: 'reviewer',
+      status: 'completed',
+      model: 'model-b',
+      reasoningLevel: 'medium',
+      sourceMessageIds: ['parent-1', 'parent-2'],
+      sourcePartIds: ['agent-live-1', 'agent-live-2'],
+      subSessionIds: ['child-2'],
+    })
+    expect(runs[0].elapsedMs).toBe(2000)
+  })
+
+  it('preserves explicit consider/model/reasoning metadata when a later child event omits it', () => {
+    const first = agentPart({
+      id: 'agent-consider-1',
+      sessionId: 'sub-consider',
+      name: 'planner',
+      task: 'Plan the change.',
+      status: 'running',
+    })
+    first.metadata = {
+      ...first.metadata,
+      type: 'consider',
+      model: 'model-a',
+      reasoning_level: 'high',
+    }
+    const later = agentPart({
+      id: 'agent-consider-2',
+      sessionId: 'sub-consider',
+      name: 'planner',
+      task: 'Continue the plan.',
+      status: 'completed',
+    })
+
+    const [run] = selectCoreSubAgentRuns([
+      assistantMessage('parent-1', [first]),
+      assistantMessage('parent-2', [later]),
+    ])
+
+    expect(run).toMatchObject({
+      type: 'consider',
+      model: 'model-a',
+      reasoningLevel: 'high',
+    })
+  })
 })
 
 describe('CoreSubAgentPanel', () => {
@@ -181,7 +254,39 @@ describe('CoreSubAgentPanel', () => {
     await wrapper.setProps({ runs: [...runs].reverse() })
 
     expect(wrapper.findAll('[data-sub-agent-id]')).toHaveLength(6)
+    expect(wrapper.findAll('[data-sub-agent-id]').map(row => row.attributes('data-sub-agent-id')))
+      .toEqual(['sub-6', 'sub-5', 'sub-4', 'sub-3', 'sub-2', 'sub-1'])
     expect(wrapper.get('.core-sub-agent-panel__more').text()).toContain('收起')
+    wrapper.unmount()
+  })
+
+  it('keeps the stable named row and overflow state when a reused agent gets a new child session', async () => {
+    const runs = Array.from({ length: 6 }, (_, index) => fakeRun(index + 1))
+    const wrapper = mount(CoreSubAgentPanel, { props: { runs } })
+
+    await wrapper.get('.core-sub-agent-panel__more').trigger('click')
+    const firstRow = wrapper.get('[data-sub-agent-id="sub-1"]').element
+    await wrapper.setProps({
+      runs: runs.map((run, index) => index === 0 ? { ...run, subSessionId: 'sub-1-resumed' } : run),
+    })
+
+    expect(wrapper.findAll('[data-sub-agent-id]')).toHaveLength(6)
+    expect(wrapper.get('[data-sub-agent-id="sub-1-resumed"]').element).toBe(firstRow)
+    expect(wrapper.get('.core-sub-agent-panel__more').text()).toContain('收起')
+    wrapper.unmount()
+  })
+
+  it('reveals and removes the inline timeline for a run without a source message', async () => {
+    const run = fakeRun(1)
+    const wrapper = mount(CoreSubAgentPanel, {
+      props: { runs: [run], activeSubAgentId: '' },
+    })
+
+    expect(wrapper.find('.core-sub-agent-panel__timeline').exists()).toBe(false)
+    await wrapper.setProps({ activeSubAgentId: run.subSessionId })
+    expect(wrapper.get('.core-sub-agent-panel__timeline').text()).toContain('任务 1')
+    await wrapper.setProps({ activeSubAgentId: '' })
+    expect(wrapper.find('.core-sub-agent-panel__timeline').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -211,6 +316,45 @@ describe('CoreSubAgentPanel', () => {
     await wrapper.get('[role="alert"] button').trigger('click')
     expect(wrapper.emitted('retry')).toHaveLength(1)
     wrapper.unmount()
+  })
+
+  it('shows type and status text while exposing model/reasoning in the row title', () => {
+    const run = fakeRun(1)
+    run.type = 'consider'
+    run.model = 'model-a'
+    run.reasoningLevel = 'high'
+    const wrapper = mount(CoreSubAgentPanel, { props: { runs: [run] } })
+    const row = wrapper.get('[data-sub-agent-id="sub-1"]')
+    expect(row.text()).toContain('consider')
+    expect(row.text()).toContain('运行中')
+    expect(row.attributes('title')).toBe('model-a · high')
+    wrapper.unmount()
+  })
+
+  it('keeps list, timeline, status, backdrop, and reduced-motion transitions in the source contract', () => {
+    const panelSource = readFileSync(resolve(process.cwd(), 'src/components/CoreSubAgentPanel.vue'), 'utf8')
+    const dialogSource = readFileSync(resolve(process.cwd(), 'src/components/CoreSubAgentDialog.vue'), 'utf8')
+
+    expect(panelSource).toContain('<TransitionGroup name="sub-agent-list"')
+    expect(panelSource).toContain('<Transition name="sub-agent-timeline">')
+    expect(panelSource).toContain('<Transition name="sub-agent-status-icon" mode="out-in">')
+    expect(panelSource).toContain('.sub-agent-list-move')
+    expect(panelSource).toContain('grid-template-rows var(--dur-slow) var(--ease-out)')
+    expect(panelSource).toContain('@media (prefers-reduced-motion: reduce)')
+    expect(dialogSource).toContain('<Transition name="sub-agent-dialog-status" mode="out-in">')
+    expect(dialogSource).toContain('sub-agent-dialog-backdrop-enter var(--dur-base) var(--ease-out)')
+    expect(dialogSource).toContain('.core-sub-agent-dialog::backdrop')
+    expect(dialogSource).toContain('@media (prefers-reduced-motion: reduce)')
+  })
+
+  it('keeps source navigation smooth only when motion is allowed and highlights the final child heading', () => {
+    const appSource = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
+    const layoutSource = readFileSync(resolve(process.cwd(), 'src/styles/layout.css'), 'utf8')
+
+    expect(appSource).toContain("window.matchMedia('(prefers-reduced-motion: reduce)').matches")
+    expect(appSource).toContain("target.classList.add('sub-agent-source-highlight')")
+    expect(layoutSource).toContain('@keyframes sub-agent-source-highlight')
+    expect(layoutSource).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.sub-agent-source-highlight/)
   })
 })
 

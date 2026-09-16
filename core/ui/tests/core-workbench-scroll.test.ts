@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   coreApplyHistoryScrollCeiling,
+  coreIsBottomSentinelVisible,
   coreIsScrollNearBottom,
   coreHistoryAutoLoadThreshold,
   coreShouldAutoLoadHistory,
@@ -102,6 +103,10 @@ describe('core workbench auto-follow scroll', () => {
     expect(source).toContain('event.preventDefault()')
     expect(source).toContain('new IntersectionObserver')
     expect(source).toContain('ref="threadBottomSentinel"')
+    expect(source).toContain('coreIsBottomSentinelVisible(entry)')
+    expect(source).toContain('threshold: [0, CORE_SCROLL_SENTINEL_VISIBLE_RATIO]')
+    expect(source).toContain('observerGeneration !== threadBottomObserverGeneration')
+    expect(source).toContain('target !== threadBottomSentinel.value')
     expect(source).not.toContain('new ResizeObserver')
     expect(source).toContain('captureThreadHistoryAnchor')
     expect(source).toContain('restoreThreadHistoryAnchor')
@@ -112,6 +117,14 @@ describe('core workbench auto-follow scroll', () => {
     expect(coreIsScrollNearBottom({ scrollHeight: 1000, scrollTop: 620, clientHeight: 300 })).toBe(true)
     expect(coreIsScrollNearBottom({ scrollHeight: 1000, scrollTop: 500, clientHeight: 300 })).toBe(false)
     expect(coreIsScrollNearBottom(null)).toBe(true)
+  })
+
+  it('requires the sentinel to be almost fully visible before declaring bottom', () => {
+    expect(coreIsBottomSentinelVisible({ isIntersecting: true, intersectionRatio: 1 })).toBe(true)
+    expect(coreIsBottomSentinelVisible({ isIntersecting: true, intersectionRatio: 0.995 })).toBe(true)
+    expect(coreIsBottomSentinelVisible({ isIntersecting: true, intersectionRatio: 0.5 })).toBe(false)
+    expect(coreIsBottomSentinelVisible({ isIntersecting: false, intersectionRatio: 1 })).toBe(false)
+    expect(coreIsBottomSentinelVisible(null)).toBe(false)
   })
 
   it('uses the bottom sentinel as the follow source and scroll target', async () => {
@@ -159,6 +172,25 @@ describe('core workbench auto-follow scroll', () => {
     el.scrollTop = 500
     controller.handleScroll()
     expect(controller.autoFollow.value).toBe(false)
+  })
+
+  it('lets an upward scrollbar move beat a stale programmatic marker in sentinel mode', async () => {
+    const el = fakeScrollElement()
+    el.scrollTop = 700
+    const sentinel: CoreScrollSentinel = { scrollIntoView() {} }
+    const controller = useCoreAutoFollowScroll(ref(el), {
+      sentinelRef: ref(sentinel),
+      afterDomUpdate: async () => {},
+      afterFrame: async () => {},
+    })
+
+    await controller.scrollToBottom(true)
+    expect(controller.autoFollow.value).toBe(true)
+
+    el.scrollTop = 500
+    controller.handleScroll()
+    expect(controller.autoFollow.value).toBe(false)
+    expect(controller.atBottom.value).toBe(false)
   })
 
   it('lets upward wheel input seize control and restores follow when user reaches bottom', () => {

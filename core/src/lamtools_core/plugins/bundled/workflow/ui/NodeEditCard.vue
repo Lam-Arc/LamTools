@@ -472,10 +472,11 @@ function apply() {
 .wf-edit-card :deep(.field input),
 .wf-edit-card :deep(.field textarea) {
   width: 100%;
-  background: var(--theme-main-subtle-background);
-  border: 1px solid var(--theme-main-border);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm, 6px);
-  color: inherit;
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: 6px 8px;
   font-size: 12px;
 }

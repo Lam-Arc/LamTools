@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { flushPromises, mount } from '@vue/test-utils'
 import CoreConfirmDialog from '../src/components/CoreConfirmDialog.vue'
 import MessageAttachmentDeck from '../src/components/MessageAttachmentDeck.vue'
@@ -31,6 +33,19 @@ afterEach(() => {
 })
 
 describe('MessageAttachmentDeck', () => {
+  it('keeps the intentional overlap with theme-aware neutral surfaces', () => {
+    const source = readFileSync(resolve(import.meta.dirname, '../src/components/MessageAttachmentDeck.vue'), 'utf8')
+
+    expect(source).toContain('const STACK_STEP = 36')
+    expect(source).toMatch(/\.message-attachment-deck--left \.message-attachment-deck__card \+ \.message-attachment-deck__card\s*\{[\s\S]*?margin-left:\s*calc\(var\(--deck-item-step, var\(--deck-step\)\) - 72px\)/)
+    expect(source).toMatch(/\.message-attachment-deck__preview\s*\{[\s\S]*?background:\s*var\(--theme-main-background\)/)
+    expect(source).toMatch(/\.message-attachment-deck__visual\s*\{[\s\S]*?background:\s*var\(--theme-main-subtle-background\)/)
+    expect(source).toMatch(/\.message-attachment-deck__track\s*\{[\s\S]*?min-height:\s*72px/)
+    expect(source).toMatch(/\.message-attachment-deck__card--active\s*\{[\s\S]*?width:\s*220px;\s*\}/)
+    expect(source).not.toContain('background: var(--theme-main-solid, #111111)')
+    expect(source).not.toMatch(/\.message-attachment-deck__card--active\s*\{[\s\S]*?height:\s*112px/)
+  })
+
   it('keeps a single element root so transition attributes are inherited', () => {
     const wrapper = mountDeck({
       attrs: { class: 'message-artifacts' },
@@ -40,7 +55,7 @@ describe('MessageAttachmentDeck', () => {
     expect(wrapper.get('.message-attachment-deck').classes()).toContain('message-artifacts')
   })
 
-  it('mirrors uploaded attachments to the right and expands by hover or click', async () => {
+  it('mirrors uploaded attachments to the right and expands only while hovered', async () => {
     const wrapper = mountDeck({ props: { attachments: [textAttachment], side: 'right' } })
     expect(wrapper.get('.message-attachment-deck').classes()).toContain('message-attachment-deck--right')
     const card = wrapper.get('.message-attachment-deck__card')
@@ -52,15 +67,22 @@ describe('MessageAttachmentDeck', () => {
     await new Promise(resolve => setTimeout(resolve, 150))
     expect(card.classes()).not.toContain('message-attachment-deck__card--active')
 
-    await card.get('button').trigger('click')
-    expect(card.classes()).toContain('message-attachment-deck__card--active')
+    const preview = card.get('button')
+    await preview.trigger('focus')
+    expect(card.classes()).not.toContain('message-attachment-deck__card--active')
+    await preview.trigger('click')
     await card.trigger('pointerleave')
-    expect(card.classes()).toContain('message-attachment-deck__card--active')
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(card.classes()).not.toContain('message-attachment-deck__card--active')
   })
 
-  it('asks before opening a pinned attachment with the system default application', async () => {
+  it('opens a text attachment on double click in a body-level plain text preview', async () => {
     const transport = createFakeTransport()
-    const request = vi.spyOn(transport, 'request')
+    const request = vi.spyOn(transport, 'request').mockResolvedValue({
+      status: 200,
+      headers: { 'content-type': 'text/markdown' },
+      body: new TextEncoder().encode('# Notes\nPreview body'),
+    } as never)
     const wrapper = mountDeck({ props: { attachments: [textAttachment], transport } })
     await flushPromises()
     request.mockClear()
@@ -70,40 +92,40 @@ describe('MessageAttachmentDeck', () => {
     expect(wrapper.findComponent(CoreConfirmDialog).exists()).toBe(false)
     expect(request).not.toHaveBeenCalled()
 
-    await preview.trigger('click')
-    expect(wrapper.getComponent(CoreConfirmDialog).props()).toMatchObject({
-      open: true,
-      title: '使用默认应用打开？',
-      detail: 'notes.md',
-    })
-    expect(request).not.toHaveBeenCalled()
-    wrapper.getComponent(CoreConfirmDialog).vm.$emit('confirm')
+    await preview.trigger('dblclick')
     await flushPromises()
+    expect(wrapper.findComponent(CoreConfirmDialog).exists()).toBe(false)
     expect(request).toHaveBeenCalledWith({
       kind: 'http',
-      method: 'POST',
-      path: '/attachments/att-text/open',
+      method: 'GET',
+      path: '/attachments/att-text/download',
     })
-    expect(wrapper.findComponent(CoreConfirmDialog).exists()).toBe(false)
-    expect(wrapper.get('.message-attachment-deck__card').classes()).toContain('message-attachment-deck__card--active')
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog?.textContent).toContain('Preview body')
+    expect(document.body.querySelector('.message-attachment-deck__text-overlay')).not.toBeNull()
   })
 
   it('keeps the attachment expanded when opening is cancelled', async () => {
     const transport = createFakeTransport()
     const request = vi.spyOn(transport, 'request')
-    const wrapper = mountDeck({ props: { attachments: [textAttachment], transport } })
+    const wrapper = mountDeck({ props: { attachments: [{
+      ...textAttachment,
+      filename: 'report.pdf',
+      label: 'report.pdf',
+      mime_type: 'application/pdf',
+      preview_type: 'external',
+    }], transport } })
     await flushPromises()
     request.mockClear()
 
     const preview = wrapper.get('.message-attachment-deck__preview')
-    await preview.trigger('click')
-    await preview.trigger('click')
+    await preview.trigger('dblclick')
     wrapper.getComponent(CoreConfirmDialog).vm.$emit('cancel')
     await wrapper.vm.$nextTick()
 
     expect(request).not.toHaveBeenCalled()
     expect(wrapper.findComponent(CoreConfirmDialog).exists()).toBe(false)
-    expect(wrapper.get('.message-attachment-deck__card').classes()).toContain('message-attachment-deck__card--active')
+    expect(wrapper.get('.message-attachment-deck__card').classes()).not.toContain('message-attachment-deck__card--active')
   })
 
   it('reports an attachment open failure without collapsing the card', async () => {
@@ -114,18 +136,23 @@ describe('MessageAttachmentDeck', () => {
       }
       return { status: 200, headers: {}, body: new Uint8Array() } as never
     })
-    const wrapper = mountDeck({ props: { attachments: [textAttachment], transport } })
+    const wrapper = mountDeck({ props: { attachments: [{
+      ...textAttachment,
+      filename: 'report.pdf',
+      label: 'report.pdf',
+      mime_type: 'application/pdf',
+      preview_type: 'external',
+    }], transport } })
     await flushPromises()
 
     const preview = wrapper.get('.message-attachment-deck__preview')
-    await preview.trigger('click')
-    await preview.trigger('click')
+    await preview.trigger('dblclick')
     wrapper.getComponent(CoreConfirmDialog).vm.$emit('confirm')
     await flushPromises()
 
     expect(wrapper.getComponent(CoreConfirmDialog).props('error')).toBe('无法打开：HTTP 500')
     expect(wrapper.getComponent(CoreConfirmDialog).props('open')).toBe(true)
-    expect(wrapper.get('.message-attachment-deck__card').classes()).toContain('message-attachment-deck__card--active')
+    expect(wrapper.get('.message-attachment-deck__card').classes()).not.toContain('message-attachment-deck__card--active')
   })
 
   it('falls back to a project path when a historical artifact id is not registered', async () => {
@@ -141,8 +168,7 @@ describe('MessageAttachmentDeck', () => {
     request.mockClear()
 
     const preview = wrapper.get('.message-attachment-deck__preview')
-    await preview.trigger('click')
-    await preview.trigger('click')
+    await preview.trigger('dblclick')
     wrapper.getComponent(CoreConfirmDialog).vm.$emit('confirm')
     await flushPromises()
 

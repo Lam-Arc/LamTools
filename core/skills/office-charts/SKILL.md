@@ -2,10 +2,10 @@
 name: office-charts
 description: 根据表格、CSV 或明确数字生成趋势、对比、占比、分布及相关性图表，并改善图表的选型、标注、配色和可读性。用户要求数据可视化、画统计图或美化业务图表时使用；流程和结构关系使用 office-infographics。
 metadata:
-  version: 0.1.0
+  version: 0.2.0
   language: zh-CN
   target: lamtools-desktop
-  status: instruction-draft
+  status: beta
 ---
 
 # 数据图表
@@ -13,7 +13,7 @@ metadata:
 ## 目标与边界
 
 把已核实数据转成清晰、准确、适合实际展示尺寸的图表，保留数据和可再生成的源配置。
-默认桌面本地执行。Skill 不包含渲染器，不默认调用任何第三方图表 API。
+默认桌面本地执行。Office Skills bundle 内置确定性校验/渲染程序，但不内置图表创作引擎，也不默认调用任何第三方图表 API。
 正式数值图表应由数据驱动渲染，不用生成式图片替代真实坐标、数值或标签。
 
 ## 输入与默认值
@@ -32,7 +32,7 @@ metadata:
 
 ## 工作流程
 
-需要精细排版时读取[共享办公视觉规范](../references/office-design-system.md)，先确定最终载体尺寸、绘图区和标签区，再生成图表。复杂或多文件任务同时读取[工具对接约定](../references/tooling-contract.md)的执行收敛规则。
+需要精细排版时读取[共享办公视觉规范](../references/office-design-system.md)，先确定最终载体尺寸、绘图区和标签区，再生成图表。复杂或多文件任务同时读取[工具对接约定](../references/tooling-contract.md)的执行收敛规则。任何数据图表生成前读取[Office 数据与渲染合同](../references/office-renderer-contract.md)，先写唯一 `office-data.json` 并绑定稳定 dataset ID，在任意项目目录运行 `py -3.14 -m lamtools_core.cli office validate ...`，通过后再运行同入口的 `office render`。
 
 ### 1. 检查数据
 
@@ -67,7 +67,7 @@ metadata:
 需要截断数轴、使用对数轴、归一化或变换时明确标注；不借变换夸大趋势。
 增长率与百分点、累计与当期、实际与预测必须分清；预测用不同线型和明显分界。
 
-生成柱状图前明确零线与增长方向。竖向正值必须从底部零线向上增长，横向正值必须从左侧零线向右增长；手工 SVG/Canvas 坐标使用 `y = plot_bottom - scaled_value`。不要直接把正值高度从页面顶部向下绘制。含负值时以零线为界向相反方向延伸。
+生成柱状图前明确零线与增长方向。纯正值柱状图和条形图默认必须包含零基线，不得用截断轴夸大小幅差异；确需聚焦窄幅变化时改用点图或折线图，并在图内明确标注轴范围。竖向正值必须从底部零线向上增长，横向正值必须从左侧零线向右增长；手工 SVG/Canvas 坐标使用 `y = plot_bottom - scaled_value`。不要直接把正值高度从页面顶部向下绘制。含负值时以零线为界向相反方向延伸。
 
 先按最终嵌入尺寸计算标签空间：长类别名优先横向条形图；类别过多时拆图或小多图。禁止把多个包含完整坐标、图例和标签的图表压成一张图后再缩小到文字不可读。
 

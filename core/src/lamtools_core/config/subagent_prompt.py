@@ -41,7 +41,20 @@ DEFAULT_SUBAGENT_GUIDE = """\
 #: display_name used in the capability prompt to tell text models which multimodal
 #: model to delegate to. Empty string means "not configured" (fallback to
 #: hard-coded examples).
-DEFAULT_SUBAGENT_SETTINGS: dict[str, object] = {"default_multimodal_model": ""}
+DELEGATION_STRATEGY_KEY = "delegation_strategy"
+DELEGATION_STRATEGIES = ("forbidden", "low", "medium", "high")
+DEFAULT_DELEGATION_STRATEGY = "medium"
+DEFAULT_SUBAGENT_SETTINGS: dict[str, object] = {
+    "default_multimodal_model": "",
+    DELEGATION_STRATEGY_KEY: DEFAULT_DELEGATION_STRATEGY,
+}
+
+ROLE_ASSIGNMENTS_KEY = "role_assignments"
+ROLE_ASSIGNMENT_TYPES = ("consider", "execute")
+ROLE_ASSIGNMENT_REASONING_LEVELS = ("off", "light", "medium", "high", "xhigh", "max")
+_REASONING_LEVEL_INDEX = {
+    level: index for index, level in enumerate(ROLE_ASSIGNMENT_REASONING_LEVELS)
+}
 
 
 def subagent_guide_dirs(work_root: str | Path | None) -> list[Path]:
@@ -114,20 +127,265 @@ def resolve_subagent_settings_path(work_root: str | Path | None = None) -> Path 
     return None
 
 
+def _read_settings_file(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return dict(data) if isinstance(data, dict) else {}
+
+
+def _global_settings_path() -> Path | None:
+    """Return the configured global settings path, including legacy fallback."""
+    for directory in subagent_guide_dirs(None):
+        path = directory / SETTINGS_FILENAME
+        if path.is_file():
+            return path
+    return None
+
+
+def load_local_subagent_settings(
+    scope: str,
+    work_root: str | Path | None = None,
+) -> dict[str, object]:
+    """Load only one writable scope without injecting defaults.
+
+    Missing keys stay missing so a project file that only changes another
+    setting cannot accidentally shadow global role assignments with a
+    synthesized empty list.
+    """
+    if scope not in ("project", "global"):
+        raise ValueError("scope must be 'project' or 'global'")
+    if scope == "project":
+        if not work_root:
+            return {}
+        path = settings_path_for_scope(scope, work_root)
+    else:
+        path = settings_path_for_scope(scope, work_root)
+    return _read_settings_file(path)
+
+
+def _role_assignment_key(task_type: object) -> str:
+    return str(task_type or "").strip().casefold()
+
+
+def normalize_delegation_strategy(value: object) -> str:
+    """Validate one persisted sub-agent delegation strategy."""
+    if not isinstance(value, str):
+        raise ValueError("delegation_strategy must be a string")
+    strategy = value.strip().lower()
+    if strategy not in DELEGATION_STRATEGIES:
+        allowed = ", ".join(DELEGATION_STRATEGIES)
+        raise ValueError(f"delegation_strategy must be one of: {allowed}")
+    return strategy
+
+
+def load_effective_delegation_strategy(
+    work_root: str | Path | None = None,
+) -> str:
+    """Resolve global baseline plus an explicit project override.
+
+    Missing and invalid hand-edited values degrade safely to the inherited
+    value, with ``medium`` as the legacy/built-in fallback.
+    """
+    strategy = load_global_delegation_strategy()
+    project_settings = load_local_subagent_settings("project", work_root)
+    if DELEGATION_STRATEGY_KEY in project_settings:
+        try:
+            strategy = normalize_delegation_strategy(
+                project_settings[DELEGATION_STRATEGY_KEY]
+            )
+        except ValueError:
+            pass
+    return strategy
+
+
+def load_global_delegation_strategy() -> str:
+    """Return the global strategy or the built-in ``medium`` fallback."""
+    global_path = _global_settings_path()
+    global_settings = _read_settings_file(global_path) if global_path else {}
+    if DELEGATION_STRATEGY_KEY not in global_settings:
+        return DEFAULT_DELEGATION_STRATEGY
+    try:
+        return normalize_delegation_strategy(
+            global_settings[DELEGATION_STRATEGY_KEY]
+        )
+    except ValueError:
+        return DEFAULT_DELEGATION_STRATEGY
+
+
+_DELEGATION_STRATEGY_PROMPTS = {
+    "forbidden": "当前子代理委派策略：禁止委派子代理。",
+    "low": "当前子代理委派策略：仅在大范围调查、探索时委派子代理。",
+    "medium": "当前子代理委派策略：保持当前默认委派策略。",
+    "high": (
+        "当前子代理委派策略：必须先制定计划并由用户确认；确认后立即生成高中心化 "
+        "Checklist，尽可能由多个子代理并行推进，主 Agent 统一负责决策指挥、任务分配、"
+        "依赖协调、冲突调解、结果整合与最终验收。"
+    ),
+}
+
+
+def render_delegation_strategy_prompt(work_root: str | Path | None = None) -> str:
+    """Render the effective strategy as stable leading-system discipline."""
+    strategy = load_effective_delegation_strategy(work_root)
+    return (
+        "## Sub-agent 委派策略\n"
+        "本策略优先于通用委派指南与角色建议。\n"
+        + _DELEGATION_STRATEGY_PROMPTS[strategy]
+    )
+
+
+def normalize_reasoning_level(value: object) -> str:
+    """Normalize one role-assignment reasoning level or raise ``ValueError``."""
+    if not isinstance(value, str):
+        raise ValueError("reasoning level must be a string")
+    level = value.strip().lower()
+    if level == "xh":
+        level = "xhigh"
+    if level not in _REASONING_LEVEL_INDEX:
+        allowed = ", ".join(ROLE_ASSIGNMENT_REASONING_LEVELS)
+        raise ValueError(f"reasoning level must be one of: {allowed}")
+    return level
+
+
+def normalize_role_assignment(value: object) -> dict[str, str]:
+    """Validate and normalize one persisted role-assignment rule."""
+    if not isinstance(value, dict):
+        raise ValueError("each role assignment must be an object")
+    expected = {"task_type", "type", "model", "reasoning_min", "reasoning_max"}
+    unknown = set(value) - expected
+    missing = expected - set(value)
+    if unknown:
+        raise ValueError(f"unknown role assignment fields: {', '.join(sorted(unknown))}")
+    if missing:
+        raise ValueError(f"missing role assignment fields: {', '.join(sorted(missing))}")
+
+    raw_task_type = value.get("task_type")
+    if not isinstance(raw_task_type, str):
+        raise ValueError("task_type must be a string")
+    task_type = raw_task_type.strip()
+    if not task_type:
+        raise ValueError("task_type must not be empty")
+    raw_type = value.get("type")
+    if not isinstance(raw_type, str):
+        raise ValueError("type must be a string")
+    assignment_type = raw_type.strip().lower()
+    if assignment_type not in ROLE_ASSIGNMENT_TYPES:
+        raise ValueError("type must be 'consider' or 'execute'")
+    raw_model = value.get("model")
+    if not isinstance(raw_model, str):
+        raise ValueError("model must be a string")
+    model = raw_model.strip()
+    if not model:
+        raise ValueError("model must be an exact non-empty model_id")
+    reasoning_min = normalize_reasoning_level(value.get("reasoning_min"))
+    reasoning_max = normalize_reasoning_level(value.get("reasoning_max"))
+    if _REASONING_LEVEL_INDEX[reasoning_min] > _REASONING_LEVEL_INDEX[reasoning_max]:
+        raise ValueError("reasoning_min must not be greater than reasoning_max")
+    return {
+        "task_type": task_type,
+        "type": assignment_type,
+        "model": model,
+        "reasoning_min": reasoning_min,
+        "reasoning_max": reasoning_max,
+    }
+
+
+def normalize_role_assignments(value: object) -> list[dict[str, str]]:
+    """Validate a rule list, rejecting duplicate normalized task types."""
+    if not isinstance(value, list):
+        raise ValueError("role_assignments must be an array")
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in value:
+        normalized = normalize_role_assignment(item)
+        key = _role_assignment_key(normalized["task_type"])
+        if key in seen:
+            raise ValueError(f"duplicate task_type: {normalized['task_type']}")
+        seen.add(key)
+        result.append(normalized)
+    return result
+
+
+def merge_role_assignments(
+    global_rules: object,
+    project_rules: object,
+) -> list[dict[str, str]]:
+    """Merge project rules over the global baseline by trimmed casefold task type."""
+    baseline = normalize_role_assignments(global_rules)
+    overrides = normalize_role_assignments(project_rules)
+    merged = [dict(rule) for rule in baseline]
+    positions = {
+        _role_assignment_key(rule["task_type"]): index
+        for index, rule in enumerate(merged)
+    }
+    for rule in overrides:
+        key = _role_assignment_key(rule["task_type"])
+        if key in positions:
+            merged[positions[key]] = dict(rule)
+        else:
+            positions[key] = len(merged)
+            merged.append(dict(rule))
+    return merged
+
+
+def load_effective_role_assignments(
+    work_root: str | Path | None = None,
+) -> list[dict[str, str]]:
+    """Return global rules with project rules overriding the same task type."""
+    global_path = _global_settings_path()
+    global_settings = _read_settings_file(global_path) if global_path else {}
+    project_settings = load_local_subagent_settings("project", work_root)
+    global_rules = global_settings.get(ROLE_ASSIGNMENTS_KEY, [])
+    project_rules = project_settings.get(ROLE_ASSIGNMENTS_KEY, [])
+    try:
+        return merge_role_assignments(global_rules, project_rules)
+    except ValueError:
+        # Settings edited manually should not prevent Core from starting. Each
+        # invalid scope degrades independently while RPC/CLI writes stay strict.
+        try:
+            global_normalized = normalize_role_assignments(global_rules)
+        except ValueError:
+            global_normalized = []
+        try:
+            project_normalized = normalize_role_assignments(project_rules)
+        except ValueError:
+            project_normalized = []
+        return merge_role_assignments(global_normalized, project_normalized)
+
+
 def load_subagent_settings(work_root: str | Path | None = None) -> dict[str, object]:
-    """Load sub-agent settings (project > global > defaults).
+    """Load effective sub-agent settings (global baseline + project override).
 
     Returns a dict with at least ``default_multimodal_model``.
     """
-    path = resolve_subagent_settings_path(work_root)
-    if path is not None:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-            if isinstance(data, dict):
-                return {**DEFAULT_SUBAGENT_SETTINGS, **data}
-        except (OSError, json.JSONDecodeError):
-            pass
-    return dict(DEFAULT_SUBAGENT_SETTINGS)
+    global_path = _global_settings_path()
+    global_settings = _read_settings_file(global_path) if global_path else {}
+    project_settings = load_local_subagent_settings("project", work_root)
+    settings = {**DEFAULT_SUBAGENT_SETTINGS, **global_settings, **project_settings}
+    settings[ROLE_ASSIGNMENTS_KEY] = load_effective_role_assignments(work_root)
+    settings[DELEGATION_STRATEGY_KEY] = load_effective_delegation_strategy(work_root)
+    return settings
+
+
+def render_role_assignments_prompt(work_root: str | Path | None = None) -> str:
+    """Render effective role assignments as a stable system-prompt section."""
+    rules = load_effective_role_assignments(work_root)
+    if not rules:
+        return ""
+    lines = [
+        "## Sub-agent 角色分配",
+        "匹配任务类型时，优先使用对应的类型、模型与思考强度范围；未匹配时按实际任务选择。",
+    ]
+    for rule in rules:
+        lines.append(
+            "- 任务类型：{task_type}；类型：{type}；建议模型：{model}；"
+            "建议思考强度：{reasoning_min}–{reasoning_max}".format(**rule)
+        )
+    return "\n".join(lines)
 
 
 def resolve_default_multimodal_model(work_root: str | Path | None = None) -> str | None:
@@ -162,14 +420,20 @@ def write_subagent_settings(updates: dict[str, object], *, scope: str, work_root
     """Merge ``updates`` into the settings file for ``scope`` and return its path."""
     path = settings_path_for_scope(scope, work_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, object] = dict(DEFAULT_SUBAGENT_SETTINGS)
-    if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-            if isinstance(data, dict):
-                existing.update(data)
-        except (OSError, json.JSONDecodeError):
-            pass
+    existing = _read_settings_file(path)
+    updates = dict(updates)
+    if DELEGATION_STRATEGY_KEY in updates:
+        if updates[DELEGATION_STRATEGY_KEY] is None:
+            existing.pop(DELEGATION_STRATEGY_KEY, None)
+            updates.pop(DELEGATION_STRATEGY_KEY)
+        else:
+            updates[DELEGATION_STRATEGY_KEY] = normalize_delegation_strategy(
+                updates[DELEGATION_STRATEGY_KEY]
+            )
+    if ROLE_ASSIGNMENTS_KEY in updates:
+        updates[ROLE_ASSIGNMENTS_KEY] = normalize_role_assignments(
+            updates[ROLE_ASSIGNMENTS_KEY]
+        )
     existing.update(updates)
     from lamtools_core.config.root import atomic_write_text
 
@@ -180,12 +444,29 @@ def write_subagent_settings(updates: dict[str, object], *, scope: str, work_root
 __all__ = [
     "DEFAULT_SUBAGENT_GUIDE",
     "DEFAULT_SUBAGENT_SETTINGS",
+    "DEFAULT_DELEGATION_STRATEGY",
+    "DELEGATION_STRATEGIES",
+    "DELEGATION_STRATEGY_KEY",
     "GUIDE_FILENAME",
+    "ROLE_ASSIGNMENTS_KEY",
+    "ROLE_ASSIGNMENT_REASONING_LEVELS",
+    "ROLE_ASSIGNMENT_TYPES",
     "SETTINGS_FILENAME",
     "SUBAGENT_DIR",
     "guide_path_for_scope",
+    "load_effective_role_assignments",
+    "load_effective_delegation_strategy",
+    "load_global_delegation_strategy",
+    "load_local_subagent_settings",
     "load_subagent_guide",
     "load_subagent_settings",
+    "merge_role_assignments",
+    "normalize_reasoning_level",
+    "normalize_delegation_strategy",
+    "normalize_role_assignment",
+    "normalize_role_assignments",
+    "render_role_assignments_prompt",
+    "render_delegation_strategy_prompt",
     "resolve_default_multimodal_model",
     "resolve_subagent_guide_path",
     "resolve_subagent_settings_path",

@@ -42,10 +42,12 @@ describe('core composer execution helpers', () => {
     expect(coreThinkingModeOptions({
       model: { thinking_supported: true },
       provider: { name: '讯飞 max', base_url: 'https://maas-coding.example.test' },
-    }).map((option) => option.value)).toEqual(['max', 'high', 'light', 'off'])
+    }).map((option) => option.value)).toEqual(['max', 'xhigh', 'high', 'medium', 'light', 'off'])
     expect(coreThinkingModeOptions({ model: { thinking_supported: true } }).map((option) => option.value)).toEqual([
       'max',
+      'xhigh',
       'high',
+      'medium',
       'light',
       'off',
     ])
@@ -83,6 +85,7 @@ describe('core composer execution helpers', () => {
     }
 
     expect(normalizeCoreThinkingMode('invalid', 'high')).toBe('high')
+    expect(normalizeCoreThinkingMode('xh')).toBe('xhigh')
     expect(readStoredCoreThinkingMode(storage, 'thinking', 'max')).toBe('max')
     writeStoredCoreThinkingMode(storage, 'thinking', 'low')
     writeStoredCoreShallowThinking(storage, 'shallow', true)

@@ -726,6 +726,11 @@ class WorkflowNodeState:
     cache_key: str = ""
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    # Stable, secret-safe execution evidence for run inspectors.  This is
+    # intentionally summary metadata: never provider reasoning, raw prompts,
+    # credentials, or bearer tokens.
+    attempt_history: list[dict[str, Any]] = field(default_factory=list)
+    audit: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -741,7 +746,12 @@ class WorkflowNodeState:
             "cache_key": self.cache_key,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "attempt_history": _json_copy(self.attempt_history),
+            "audit": _json_copy(self.audit),
         }
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return public_workflow_value(self.to_dict())
 
     @classmethod
     def from_dict(cls, value: dict[str, Any], *, node_id: str = "") -> "WorkflowNodeState":
@@ -764,6 +774,11 @@ class WorkflowNodeState:
             cache_key=str(value.get("cache_key") or value.get("cacheKey") or ""),
             started_at=_parse_dt(value.get("started_at") or value.get("startedAt")),
             finished_at=_parse_dt(value.get("finished_at") or value.get("finishedAt")),
+            attempt_history=[
+                dict(item) for item in (value.get("attempt_history") or value.get("attemptHistory") or [])
+                if isinstance(item, Mapping)
+            ],
+            audit=dict(value.get("audit") or {}),
         )
 
 
@@ -806,6 +821,14 @@ class WorkflowRunResult:
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }
+
+    def to_public_dict(self) -> dict[str, Any]:
+        """Return the RPC/event view without credentials or resume bearers."""
+        result = self.to_dict()
+        result["node_states"] = {
+            key: state.to_public_dict() for key, state in self.node_states.items()
+        }
+        return public_workflow_value(result)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "WorkflowRunResult":
@@ -1068,6 +1091,25 @@ class WorkflowManager:
 
     async def get(self, name: str, *, work_root: str | None = None) -> WorkflowDef | None:
         return await self.store.get(name, work_root=work_root)
+
+    async def get_by_id(self, workflow_id: str, *, work_root: str | None = None) -> WorkflowDef | None:
+        """Resolve a workflow ID within one repository scope.
+
+        File-backed stores provide an exact scoped lookup.  Keep the
+        list-and-filter fallback for store-compatible integrations that have
+        not adopted the optional ``get_by_id`` seam yet.
+        """
+        provider = getattr(self.store, "get_by_id", None)
+        if callable(provider):
+            result = provider(workflow_id, work_root=work_root)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+        definitions = await self.store.list(work_root=work_root)
+        target = str(workflow_id or "").strip()
+        if not target:
+            return None
+        return next((item for item in definitions if item.id == target), None)
 
     async def get_document(self, name: str, *, work_root: str | None = None) -> dict[str, Any] | None:
         from .document import document_from_workflow_def
@@ -2614,9 +2656,9 @@ class WorkflowRunner:
                     wait_descriptor=descriptor,
                 )
 
-            await self._emit_state(node, "running", thread_id, run_id, workflow_id=workflow_id)
             state.status = "running"
             state.started_at = self.clock()
+            await self._emit_state(node, "running", thread_id, run_id, workflow_id=workflow_id)
 
             try:
                 outputs = await self._execute_with_retries(
@@ -2682,6 +2724,7 @@ class WorkflowRunner:
                     outputs = {fb_port: fb_value}
                     state.status = "done"
                     state.error = error_msg
+                    state.output = outputs.get(fb_port)
                     state.finished_at = self.clock()
                     await self._emit_state(
                         node, "completed", thread_id, run_id,
@@ -3220,6 +3263,15 @@ class WorkflowRunner:
             if lookup.hit:
                 state.cache_status = "hit"
                 state.attempts = max(1, state.attempts)
+                now = self.clock()
+                state.attempt_history.append({
+                    "number": state.attempts,
+                    "status": "cache_hit",
+                    "started_at": now.isoformat(),
+                    "finished_at": now.isoformat(),
+                    "cache_status": "hit",
+                    "cache_key": cache_key,
+                })
                 return dict(lookup.value) if isinstance(lookup.value, dict) else {"output": lookup.value}
             state.cache_status = "miss"
         else:
@@ -3240,6 +3292,16 @@ class WorkflowRunner:
             state.attempt_id = attempt_id
             state.idempotency_key = idempotency_key
             state.error = ""
+            attempt_started_at = self.clock()
+            attempt_audit: dict[str, Any] = {}
+            attempt_record: dict[str, Any] = {
+                "attempt_id": attempt_id,
+                "number": number,
+                "status": "started",
+                "started_at": attempt_started_at.isoformat(),
+                "finished_at": None,
+            }
+            state.attempt_history.append(attempt_record)
             attempt_context = execution_context
             builtin_name = self._builtin_executor_name(node)
             engine_timeout = None if builtin_name in {"command", "script"} else policy.timeout_seconds
@@ -3355,6 +3417,7 @@ class WorkflowRunner:
                             await _materialize_inputs(execution_inputs),
                             work_root,
                             attempt_execution_context,
+                            audit=attempt_audit,
                         ),
                         attempt_execution_context,
                     )
@@ -3362,13 +3425,15 @@ class WorkflowRunner:
                     outputs = await _await_with_context_cancel(
                         self._execute_ai_llm(
                             execution_node, await _materialize_inputs(execution_inputs), work_root,
-                            str(execution_node.config.get("mode") or "single") == "loop", attempt_execution_context,
+                            str(execution_node.config.get("mode") or "single") == "loop",
+                            attempt_execution_context, audit=attempt_audit,
                         ), attempt_execution_context,
                     )
                 elif builtin_executor == "agent":
                     outputs = await _await_with_context_cancel(
                         self._execute_ai_agent(
-                            execution_node, await _materialize_inputs(execution_inputs), work_root, attempt_execution_context,
+                            execution_node, await _materialize_inputs(execution_inputs), work_root,
+                            attempt_execution_context, audit=attempt_audit,
                         ), attempt_execution_context,
                     )
                 elif builtin_executor == "content":
@@ -3452,8 +3517,16 @@ class WorkflowRunner:
                         payload={"number": number, "idempotency_key": idempotency_key},
                     )
                 )
+                attempt_record["status"] = "completed"
+                attempt_record["finished_at"] = self.clock().isoformat()
+                if attempt_audit:
+                    safe_audit = public_workflow_value(attempt_audit)
+                    attempt_record["audit"] = safe_audit
+                    state.audit = safe_audit
                 return outputs
             except asyncio.CancelledError:
+                attempt_record["status"] = "interrupted"
+                attempt_record["finished_at"] = self.clock().isoformat()
                 raise
             except Exception as exc:  # noqa: BLE001 — retry boundary
                 timed_out = isinstance(exc, TimeoutError)
@@ -3462,6 +3535,11 @@ class WorkflowRunner:
                     RuntimeError(f"node execution timed out after {policy.timeout_seconds}s")
                     if timed_out and policy.timeout_seconds is not None
                     else RuntimeError(error_text)
+                )
+                attempt_record["status"] = "timed_out" if timed_out else "failed"
+                attempt_record["finished_at"] = self.clock().isoformat()
+                attempt_record["error"] = _redact_exception_text(
+                    last_exc, locals().get("resolved_secrets", [])
                 )
                 await self._append_durable_event(
                     WorkflowRunEvent(
@@ -3655,6 +3733,7 @@ class WorkflowRunner:
     async def _execute_ai(
         self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str,
         execution_context: WorkflowExecutionContext | None = None,
+        audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Unified AI node. ``config.mode`` selects the execution strategy:
 
@@ -3666,17 +3745,22 @@ class WorkflowRunner:
         cfg = node.config
         mode = str(cfg.get("mode") or "single")
         if mode == "agent":
-            return await self._execute_ai_agent(node, bound_inputs, work_root, execution_context)
-        return await self._execute_ai_llm(node, bound_inputs, work_root, mode == "loop", execution_context)
+            return await self._execute_ai_agent(
+                node, bound_inputs, work_root, execution_context, audit=audit
+            )
+        return await self._execute_ai_llm(
+            node, bound_inputs, work_root, mode == "loop", execution_context, audit=audit
+        )
 
     async def _execute_ai_llm(
         self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str, is_loop: bool,
         execution_context: WorkflowExecutionContext | None = None,
+        audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         cfg = node.config
         instruction = str(cfg.get("instruction") or cfg.get("system_prompt") or "")
         output_format_text = str(cfg.get("output_format_text") or "")
-        model_id = str(cfg.get("model_id") or "")
+        model_id = str(cfg.get("model_id") or _execution_model_id(execution_context) or "")
         temperature = cfg.get("temperature")
         reasoning_effort = str(cfg.get("reasoning_effort") or "")
         max_tokens = cfg.get("max_tokens")
@@ -3695,7 +3779,7 @@ class WorkflowRunner:
                 val = bound_inputs.get(key)
                 if val is None or val == SKIP_SENTINEL:
                     return ""
-                return _summarize(val) if not isinstance(val, str) else val
+                return _serialize_prompt_value(val) if not isinstance(val, str) else val
             return re.sub(r"\{\{(\w+)\}\}", _repl, text)
 
         instruction_rendered = _interpolate(instruction)
@@ -3718,7 +3802,7 @@ class WorkflowRunner:
         if has_tokens:
             user_content = "(rendered from template — see system prompt)" if not bound_inputs else "(inputs embedded in instruction)"
         else:
-            context_lines = [f"- {k}: {_summarize(v)}" for k, v in bound_inputs.items() if v is not None and v != SKIP_SENTINEL]
+            context_lines = [f"- {k}: {_serialize_prompt_value(v)}" for k, v in bound_inputs.items() if v is not None and v != SKIP_SENTINEL]
             user_content = "\n".join(context_lines) if context_lines else "(no additional input)"
 
         messages: list[ChatMessage] = []
@@ -3755,6 +3839,8 @@ class WorkflowRunner:
                 trace_id=execution_context.trace_id if execution_context else "",
                 lineage=list(execution_context.lineage) if execution_context else [],
             )
+            if audit is not None:
+                audit.update(_model_audit_metadata(response, model_id=model_id, rounds=i + 1))
             last_content = _response_content(response)
             if is_loop and "[DONE]" in last_content:
                 last_content = last_content.replace("[DONE]", "").strip()
@@ -3769,6 +3855,7 @@ class WorkflowRunner:
     async def _execute_ai_agent(
         self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str,
         execution_context: WorkflowExecutionContext | None = None,
+        audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         cfg = node.config
         goal = str(cfg.get("instruction") or cfg.get("goal") or "")
@@ -3780,11 +3867,11 @@ class WorkflowRunner:
                 val = bound_inputs.get(m.group(1).strip())
                 if val is None or val == SKIP_SENTINEL:
                     return ""
-                return _summarize(val) if not isinstance(val, str) else val
+                return _serialize_prompt_value(val) if not isinstance(val, str) else val
             return re.sub(r"\{\{(\w+)\}\}", _repl, text)
 
         goal_rendered = _interpolate(goal)
-        context_lines = [f"- {k}: {_summarize(v)}" for k, v in bound_inputs.items() if v is not None and v != SKIP_SENTINEL and f"{{{{{k}}}}}" not in goal]
+        context_lines = [f"- {k}: {_serialize_prompt_value(v)}" for k, v in bound_inputs.items() if v is not None and v != SKIP_SENTINEL and f"{{{{{k}}}}}" not in goal]
         task = goal_rendered + ("\n\nContext:\n" + "\n".join(context_lines) if context_lines else "")
         if structured:
             field_desc = ", ".join(f"{p.name}({_normalise_type(p.type)})" for p in out_ports)
@@ -3811,7 +3898,7 @@ class WorkflowRunner:
             raise RuntimeError("AI agent mode requires an agent invoker (none configured)")
         kwargs: dict[str, Any] = {
             "task": task, "agent": str(cfg.get("agent") or ""),
-            "model": str(cfg.get("model_id") or ""), "mode": str(cfg.get("mode") or ""),
+            "model": str(cfg.get("model_id") or _execution_model_id(execution_context) or ""), "mode": str(cfg.get("mode") or ""),
             "attachments": list(execution_context.attachments) if execution_context else [],
             "allowed_tools": allowed_tools,
             "context": execution_context,
@@ -3831,6 +3918,8 @@ class WorkflowRunner:
                 "execution_context": execution_context,
             })
         result = await _call_with_supported_kwargs(self.agent_invoker.invoke, kwargs)
+        if audit is not None:
+            audit.update(_agent_audit_metadata(result, node=node, configured_model=kwargs["model"]))
         if isinstance(result, str):
             content = result
         elif isinstance(result, dict):
@@ -4409,6 +4498,8 @@ class WorkflowRunner:
     ) -> None:
         active = self._active_runs.get((thread_id, run_id))
         workflow_revision = active.workflow.revision if active is not None else 0
+        state = active.node_states.get(node.id) if active is not None else None
+        occurred_at = self.clock()
         event_kind = {
             "running": "started",
             "completed": "completed",
@@ -4424,7 +4515,18 @@ class WorkflowRunner:
                 workflow_id=workflow_id,
                 workflow_revision=workflow_revision,
                 node_id=node.id,
-                payload={"error": error, "cache_status": cache_status, "cache_key": cache_key},
+                occurred_at=occurred_at,
+                payload={
+                    "error": error or (state.error if state is not None else ""),
+                    "output": public_workflow_value(state.output) if state is not None else None,
+                    "attempts": state.attempts if state is not None else 0,
+                    "attempt_history": public_workflow_value(state.attempt_history) if state is not None else [],
+                    "started_at": state.started_at.isoformat() if state is not None and state.started_at else None,
+                    "finished_at": state.finished_at.isoformat() if state is not None and state.finished_at else None,
+                    "cache_status": cache_status or (state.cache_status if state is not None else ""),
+                    "cache_key": cache_key or (state.cache_key if state is not None else ""),
+                    "audit": public_workflow_value(state.audit) if state is not None else {},
+                },
             )
         )
         if self.emit is None:
@@ -4437,8 +4539,18 @@ class WorkflowRunner:
             "status": status,
             "title": node.title,
             "kind": node.kind,
+            "occurred_at": occurred_at.isoformat(),
             **({"error": error} if error else {}),
         }
+        if state is not None:
+            payload.update({
+                "attempts": state.attempts,
+                "attempt_history": public_workflow_value(state.attempt_history),
+                "started_at": state.started_at.isoformat() if state.started_at else None,
+                "finished_at": state.finished_at.isoformat() if state.finished_at else None,
+                "output": public_workflow_value(state.output),
+                "audit": public_workflow_value(state.audit),
+            })
         if cache_status:
             payload["cache_status"] = cache_status
         if cache_key:
@@ -4500,6 +4612,7 @@ class WorkflowRunner:
             "run_id": run_id,
             "node_id": node_id,
             "status": status,
+            "occurred_at": self.clock().isoformat(),
             **details,
         }
         metadata = {
@@ -5028,6 +5141,131 @@ def _summarize(value: Any) -> str:
     return text if len(text) <= 500 else text[:500] + "…"
 
 
+def _serialize_prompt_value(value: Any) -> str:
+    """Serialize an executable AI-node input without applying UI preview limits."""
+    if isinstance(value, LazyInput):
+        return repr(value)
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+_PUBLIC_PRIVATE_KEYS = {
+    "password", "passwd", "secret", "secrets", "token", "access_token",
+    "refresh_token", "id_token", "api_key", "apikey", "private_key",
+    "client_secret", "authorization", "cookie", "resume_token",
+    "continuation_token", "runtime_credentials", "credential_secret",
+}
+
+
+def _public_key(value: Any) -> str:
+    text = str(value).strip().replace("-", "_")
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", text).lower()
+
+
+def _is_private_public_key(normalized: str) -> bool:
+    if normalized in _PUBLIC_PRIVATE_KEYS or normalized.endswith(
+        ("_password", "_secret", "_token", "_api_key")
+    ):
+        return True
+    if normalized in {
+        "reasoning", "reasoning_content", "thinking", "thought", "thoughts",
+        "chain_of_thought", "chainofthought", "cot", "hidden_reasoning",
+        "internal_reasoning", "analysis", "analysis_content", "thought_signature",
+    }:
+        return True
+    return (
+        normalized.startswith(("reasoning_", "thinking_", "analysis_", "chain_of_thought_"))
+        or normalized.endswith(("_reasoning", "_thinking", "_analysis", "_chain_of_thought"))
+    )
+
+
+def public_workflow_value(value: Any) -> Any:
+    """Copy a public run/event value while removing bearer and secret fields."""
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, nested in value.items():
+            name = str(key)
+            normalized = _public_key(name)
+            if _is_private_public_key(normalized):
+                continue
+            result[name] = public_workflow_value(nested)
+        return result
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [public_workflow_value(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    return value.get(name, default) if isinstance(value, Mapping) else getattr(value, name, default)
+
+
+def _safe_tool_calls(value: Any) -> list[dict[str, Any]]:
+    raw_calls = _field(value, "tool_calls", [])
+    if not isinstance(raw_calls, (list, tuple)):
+        return []
+    calls: list[dict[str, Any]] = []
+    for raw in raw_calls:
+        name = str(_field(raw, "name", "") or "").strip()
+        status = str(_field(raw, "status", "") or "").strip()
+        if name or status:
+            calls.append({**({"name": name} if name else {}), **({"status": status} if status else {})})
+    return calls
+
+
+def _model_audit_metadata(response: Any, *, model_id: str, rounds: int) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"kind": "model", "model_id": model_id, "rounds": rounds}
+    finish_reason = str(_field(response, "finish_reason", "") or "").strip()
+    if finish_reason:
+        metadata["finish_reason"] = finish_reason
+    calls = _safe_tool_calls(response)
+    if calls:
+        metadata["tool_calls"] = calls
+    usage = _field(response, "usage")
+    if isinstance(usage, Mapping):
+        safe_usage = {
+            str(key): nested for key, nested in usage.items()
+            if isinstance(nested, (int, float)) and not isinstance(nested, bool)
+        }
+        if safe_usage:
+            metadata["usage"] = safe_usage
+    return metadata
+
+
+def _agent_audit_metadata(
+    result: Any, *, node: WorkflowNode, configured_model: Any
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "kind": "agent",
+        "agent": str(node.config.get("agent") or ""),
+        "model_id": str(_field(result, "model_id", configured_model) or configured_model or ""),
+    }
+    for key in (
+        "session_id", "run_id", "decision", "tool_call_count", "model_rounds",
+        "ended_with_final_response",
+    ):
+        value = _field(result, key)
+        if value not in (None, ""):
+            metadata[key] = value
+    breakdown = _field(result, "tool_call_breakdown")
+    if isinstance(breakdown, Mapping):
+        metadata["tool_calls"] = [
+            {"name": str(name), "count": int(count)}
+            for name, count in breakdown.items()
+            if str(name).strip() and isinstance(count, int) and not isinstance(count, bool)
+        ]
+    elif _safe_tool_calls(result):
+        metadata["tool_calls"] = _safe_tool_calls(result)
+    return metadata
+
+
 async def _materialize_inputs(values: dict[str, Any]) -> dict[str, Any]:
     """Resolve lazy values at a built-in service boundary."""
     result: dict[str, Any] = {}
@@ -5074,6 +5312,18 @@ def _inherited_allowed_tools(
             result = {str(item).strip() for item in candidate if str(item).strip()}
             return result
     return None
+
+
+def _execution_model_id(context: WorkflowExecutionContext | None) -> str:
+    """Resolve the run-level model inherited by model and agent nodes."""
+    if context is None:
+        return ""
+    for source in (context.event_metadata, context.runtime_snapshot, context.snapshot):
+        if isinstance(source, dict):
+            model_id = str(source.get("model_id") or source.get("modelId") or "").strip()
+            if model_id:
+                return model_id
+    return ""
 
 
 @dataclass(frozen=True, slots=True)

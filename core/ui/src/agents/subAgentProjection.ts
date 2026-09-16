@@ -1,5 +1,6 @@
 import type {
   CoreMessage,
+  CoreSubAgentStatus,
   CoreSubAgentRun,
   MessagePart,
   MessagePartStatus,
@@ -16,65 +17,218 @@ export function selectCoreSubAgentRuns(messages: readonly CoreMessage[]): CoreSu
   for (const message of messages) {
     for (const part of message.parts ?? []) {
       if (!isSubAgentPart(part)) continue
-      const subSessionId = subAgentSessionId(part)
-      if (!subSessionId) continue
-
       order += 1
+      // Agent names are the stable identity across resumed child sessions.
+      // During the first streaming events the backend may not have assigned a
+      // sub_session_id yet; retain those events by falling back to the name,
+      // then the event id as a last resort.
+      const subSessionId = subAgentSessionId(part)
+      // Completed legacy summaries without a durable id cannot be located
+      // safely. Keep active events, and retain old summaries when they carry
+      // the model field used by pre-session snapshots (args.model).
+      if (
+        !subSessionId
+        && !isSubAgentLifecyclePart(part)
+        && part.status !== 'running'
+        && part.status !== 'pending'
+        && !subAgentModelId(part)
+      ) continue
+      const name = subAgentName(part)
+      const key = subAgentRunKey(part, name, subSessionId)
       const task = subAgentTask(part)
-      const existing = runs.get(subSessionId)
-      const run = existing ?? createRun(part, subSessionId, task, message.timestamp, order)
-      if (!existing) runs.set(subSessionId, run)
+      const existing = runs.get(key)
+      const run = existing ?? createRun(part, key, subSessionId, task, message.timestamp, order)
+      if (!existing) runs.set(key, run)
+
+      const lifecycleChanged = Boolean(existing && isNewSubAgentLifecycle(existing, part, subSessionId))
+      if (lifecycleChanged) {
+        // A named agent can be resumed more than once.  Keep the previous
+        // source arrays for navigation, while the scalar timing/status fields
+        // describe the currently active lifecycle.
+        run.startedAt = subAgentTimestamp(part, 'started') || part.startedAt || message.timestamp || run.startedAt
+        run.completedAt = undefined
+        run.elapsedMs = 0
+      }
 
       if (!run.task && task) {
         run.task = task
-        run.timeline.unshift(taskMessage(subSessionId, task, part.startedAt || message.timestamp))
+        run.timeline.unshift(taskMessage(run.subSessionId, task, part.startedAt || message.timestamp))
       }
 
-      const name = subAgentName(part)
       const modelId = subAgentModelId(part)
-      const updatedAt = part.completedAt || part.startedAt || message.timestamp
+      const explicitType = subAgentType(part)
+      const explicitReasoningLevel = subAgentReasoningLevel(part)
+      const partStartedAt = subAgentTimestamp(part, 'started')
+      const partCompletedAt = subAgentTimestamp(part, 'completed')
+      const updatedAt = partCompletedAt || part.completedAt || partStartedAt || part.startedAt || message.timestamp
       run.name = name || run.name
       run.modelId = modelId || run.modelId
-      run.status = subAgentProjectedStatus(part)
-      run.startedAt = run.startedAt || part.startedAt || message.timestamp
+      run.model = modelId || run.model || run.modelId
+      run.type = explicitType || run.type || 'execute'
+      run.reasoningLevel = explicitReasoningLevel || run.reasoningLevel
+      run.status = subAgentProjectedStatus(part, existing)
+      run.startedAt = run.startedAt || partStartedAt || part.startedAt || message.timestamp
       run.updatedAt = updatedAt || run.updatedAt
+      run.completedAt = isTerminalStatus(run.status)
+        ? partCompletedAt || part.completedAt || run.completedAt || (run.status !== 'completed' ? updatedAt : undefined)
+        : undefined
+      run.elapsedMs = subAgentElapsedMs(part, run.startedAt, run.completedAt, message.timestamp)
+      run.summary = subAgentSummary(part, task) || run.summary || run.task
+      run.sourceCallId = subAgentSourceCallId(part) || run.sourceCallId
       run.lastOrder = order
       if (!run.sourcePartIds.includes(part.id)) run.sourcePartIds.push(part.id)
+      const sourceMessageId = subAgentSourceMessageId(part) || message.id
+      const sourcePartId = subAgentSourcePartId(part) || part.id
+      if (!run.sourceMessageIds) run.sourceMessageIds = []
+      if (!run.sourceMessageIds.includes(sourceMessageId)) run.sourceMessageIds.push(sourceMessageId)
+      run.sourceMessageId = sourceMessageId
+      run.sourcePartId = sourcePartId
+      if (!run.subSessionIds) run.subSessionIds = []
+      if (subSessionId && !run.subSessionIds.includes(subSessionId)) run.subSessionIds.push(subSessionId)
+      if (subSessionId) run.subSessionId = subSessionId
 
       const replacementIndex = run.timeline.findIndex(item => item.metadata?.sourcePartId === part.id)
       run.timeline = run.timeline.filter(item => item.metadata?.sourcePartId !== part.id)
-      const projectedMessages = subAgentMessages(part, subSessionId, message.timestamp)
+      const projectedMessages = subAgentMessages(part, run.subSessionId, message.timestamp)
       if (replacementIndex >= 0) run.timeline.splice(replacementIndex, 0, ...projectedMessages)
       else run.timeline.push(...projectedMessages)
     }
   }
 
   return [...runs.values()]
-    .sort((a, b) => b.lastOrder - a.lastOrder)
+    .sort(compareSubAgentRuns)
     .map(({ lastOrder: _lastOrder, ...run }) => run)
 }
 
 function createRun(
   part: MessagePart,
+  key: string,
   subSessionId: string,
   task: string,
   timestamp: string,
   order: number,
 ): MutableSubAgentRun {
-  const startedAt = part.startedAt || timestamp
+  const startedAt = subAgentTimestamp(part, 'started') || part.startedAt || timestamp
+  const sessionId = subSessionId || key
+  const modelId = subAgentModelId(part)
   return {
-    id: subSessionId,
-    subSessionId,
+    id: subSessionId || key,
+    subSessionId: sessionId,
     name: subAgentName(part) || 'Sub Agent',
     task,
     status: part.status,
-    modelId: subAgentModelId(part),
+    modelId,
     startedAt,
-    updatedAt: part.completedAt || startedAt,
-    timeline: task ? [taskMessage(subSessionId, task, startedAt)] : [],
+    updatedAt: subAgentTimestamp(part, 'completed') || part.completedAt || startedAt,
+    timeline: task ? [taskMessage(sessionId, task, startedAt)] : [],
     sourcePartIds: [],
+    type: subAgentType(part),
+    model: modelId,
+    reasoningLevel: subAgentReasoningLevel(part),
+    summary: subAgentSummary(part, task),
+    completedAt: isTerminalStatus(part.status) ? subAgentTimestamp(part, 'completed') || part.completedAt : undefined,
+    elapsedMs: subAgentElapsedMs(part, startedAt, subAgentTimestamp(part, 'completed') || part.completedAt, timestamp),
+    sourceMessageIds: [],
+    subSessionIds: subSessionId ? [subSessionId] : [],
     lastOrder: order,
   }
+}
+
+function subAgentRunKey(part: MessagePart, name: string, subSessionId: string): string {
+  const stableName = name.trim().toLowerCase()
+  if (stableName && stableName !== 'sub_agent' && stableName !== 'subagent') return `name:${stableName}`
+  if (subSessionId) return `session:${subSessionId}`
+  return `part:${part.id}`
+}
+
+/**
+ * Lifecycle/tool rows do not always carry a child session id.  They are still
+ * useful evidence for the durable named-agent row (create/close/message), so
+ * retain them when the action or mailbox tool identifies the event.
+ */
+function isSubAgentLifecyclePart(part: MessagePart): boolean {
+  const toolName = String(part.toolName || part.label || '').trim().toLowerCase()
+  if (toolName === 'sub_agent_message' || toolName === 'sub_agent_receive') return true
+  if (toolName !== 'sub_agent' && toolName !== 'subagent') return false
+  const action = subAgentLifecycleAction(part)
+  return action === 'create'
+    || action === 'close'
+    || action === 'created'
+    || action === 'enabled'
+    || action === 'reopened'
+    || action === 'closed'
+    || action === 'message_sent'
+    || action === 'message_received'
+}
+
+function subAgentLifecycleAction(part: MessagePart): string {
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  const args = record(part.toolArgs)
+  const explicit = firstText(
+    args.action,
+    metadata.lifecycle_action,
+    metadata.lifecycleAction,
+    metadata.action,
+    nestedMetadata.lifecycle_action,
+    nestedMetadata.lifecycleAction,
+    nestedMetadata.action,
+    envelope.lifecycle_action,
+    envelope.lifecycleAction,
+    envelope.action,
+  ).toLowerCase()
+  if (explicit) return explicit
+  const toolName = String(part.toolName || part.label || '').trim().toLowerCase()
+  if (toolName === 'sub_agent_message') return 'message_sent'
+  if (toolName === 'sub_agent_receive') return 'message_received'
+  return ''
+}
+
+function compareSubAgentRuns(left: MutableSubAgentRun, right: MutableSubAgentRun): number {
+  // Active work stays above historical rows; within a state, newest evidence
+  // wins.  This is deterministic for equal timestamps because lastOrder is a
+  // monotonic source-order tie breaker.
+  const stateRank: Record<string, number> = {
+    running: 0,
+    pending: 1,
+    paused: 2,
+    error: 3,
+    failed: 3,
+    interrupted: 4,
+    idle: 5,
+    closed: 6,
+    completed: 7,
+  }
+  const rankDelta = (stateRank[String(left.status)] ?? 8) - (stateRank[String(right.status)] ?? 8)
+  if (rankDelta !== 0) return rankDelta
+  const leftTime = Date.parse(left.updatedAt || left.completedAt || left.startedAt || '')
+  const rightTime = Date.parse(right.updatedAt || right.completedAt || right.startedAt || '')
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) return rightTime - leftTime
+  return right.lastOrder - left.lastOrder
+}
+
+function isNewSubAgentLifecycle(
+  run: CoreSubAgentRun,
+  part: MessagePart,
+  subSessionId: string,
+): boolean {
+  const currentStatus = run.status
+  const active = part.status === 'running' || part.status === 'pending'
+  const action = subAgentLifecycleAction(part)
+  if ((action === 'create' || action === 'created' || action === 'enabled' || action === 'reopened')
+    && (currentStatus === 'closed' || currentStatus === 'interrupted' || currentStatus === 'error' || currentStatus === 'completed')) {
+    return true
+  }
+  if (action === 'message_sent' && (currentStatus === 'closed' || currentStatus === 'paused' || currentStatus === 'completed')) {
+    return true
+  }
+  if (active && (currentStatus === 'completed' || currentStatus === 'error')) return true
+  return Boolean(subSessionId && run.subSessionId && subSessionId !== run.subSessionId)
+}
+
+function isTerminalStatus(status: CoreSubAgentStatus | undefined): boolean {
+  return status === 'completed' || status === 'error'
 }
 
 function taskMessage(subSessionId: string, task: string, timestamp: string): CoreMessage {
@@ -88,6 +242,24 @@ function taskMessage(subSessionId: string, task: string, timestamp: string): Cor
 }
 
 function subAgentMessages(part: MessagePart, subSessionId: string, timestamp: string): CoreMessage[] {
+  const eventKind = subAgentEventKind(part)
+  // Mailbox prompts are user turns in the child transcript.  The transport
+  // result is only an acknowledgement ("accepted"), which must never appear
+  // as a fabricated assistant answer.
+  if (eventKind === 'message_sent') {
+    const prompt = subAgentPrompt(part)
+    return prompt ? [timelineMessage(part, subSessionId, part.startedAt || timestamp, 'user', 0, prompt, [])] : []
+  }
+  if (eventKind === 'message_received') {
+    const content = subAgentConclusion(part)
+    return content
+      ? [timelineMessage(part, subSessionId, part.completedAt || part.startedAt || timestamp, 'assistant', 0, content, [])]
+      : []
+  }
+  // Lifecycle rows (create/enable/close) belong to the parent process stream,
+  // not the child conversation itself.
+  if (eventKind === 'created' || eventKind === 'enabled' || eventKind === 'closed') return []
+
   const parts = subAgentTimelineParts(part)
   const messages: CoreMessage[] = []
   let assistantParts: MessagePart[] = []
@@ -118,14 +290,109 @@ function subAgentMessages(part: MessagePart, subSessionId: string, timestamp: st
   return messages
 }
 
-function subAgentProjectedStatus(part: MessagePart): MessagePartStatus {
+function subAgentProjectedStatus(part: MessagePart, previous?: CoreSubAgentRun): CoreSubAgentStatus {
+  const lifecycle = subAgentLifecycleAction(part)
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  const durableStatus = firstText(
+    metadata.status,
+    nestedMetadata.status,
+    metadata.agent_status,
+    metadata.agentStatus,
+    envelope.status,
+    envelope.agent_status,
+    envelope.agentStatus,
+  ).toLowerCase()
   const childParts = subAgentTimelineParts(part).filter(item => !isUserTimelinePart(item))
-  const childStatus = childParts.at(-1)?.status
+  const childStatus = subAgentLatestChildStatus(part, childParts)
   const statuses = [part.status, childStatus]
   if (statuses.includes('running')) return 'running'
   if (statuses.includes('pending')) return 'pending'
   if (statuses.includes('error')) return 'error'
+  if (childStatus === 'interrupted') return 'interrupted'
+  if (lifecycle === 'closed' || lifecycle === 'close') return 'closed'
+  if (durableStatus) {
+    const normalizedDurable = normalizeSubAgentStatus(durableStatus)
+    if (normalizedDurable === 'error' || normalizedDurable === 'interrupted'
+      || normalizedDurable === 'paused' || normalizedDurable === 'closed') return normalizedDurable
+  }
+  if (lifecycle === 'message_sent') {
+    // The acknowledgement itself is completed, but a terminal child item
+    // proves that the asynchronous invocation already settled.
+    if (childStatus === 'completed') return 'idle'
+    if (childStatus === 'error') return 'error'
+    if (childStatus === 'paused') return 'paused'
+    return 'running'
+  }
+  if (lifecycle === 'message_received' && previous) return previous.status
+  if (durableStatus) return normalizeSubAgentStatus(durableStatus)
+  if (lifecycle === 'created' || lifecycle === 'create' || lifecycle === 'enabled' || lifecycle === 'reopened') return 'idle'
   return childStatus || part.status
+}
+
+type SubAgentEventKind = '' | 'created' | 'enabled' | 'closed' | 'message_sent' | 'message_received'
+
+function subAgentEventKind(part: MessagePart): SubAgentEventKind {
+  const toolName = String(part.toolName || part.label || '').trim().toLowerCase()
+  if (toolName === 'sub_agent_message') return 'message_sent'
+  if (toolName === 'sub_agent_receive') return 'message_received'
+  if (toolName !== 'sub_agent' && toolName !== 'subagent') return ''
+  const action = subAgentLifecycleAction(part)
+  if (action === 'close' || action === 'closed') return 'closed'
+  if (action === 'create' || action === 'created') return 'created'
+  if (action === 'enabled' || action === 'reopened') return 'enabled'
+  return ''
+}
+
+function subAgentPrompt(part: MessagePart): string {
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const args = record(part.toolArgs)
+  return firstText(
+    args.prompt,
+    args.message,
+    metadata.prompt,
+    metadata.message,
+    nestedMetadata.prompt,
+    nestedMetadata.message,
+  )
+}
+
+function normalizeSubAgentStatus(value: unknown): CoreSubAgentStatus {
+  const status = String(value || '').trim().toLowerCase()
+  if (status === 'running' || status === 'active' || status === 'interrupting') return 'running'
+  if (status === 'pending' || status === 'waiting' || status === 'queued') return 'pending'
+  if (status === 'error' || status === 'failed' || status === 'rejected') return 'error'
+  if (status === 'paused' || status === 'blocked' || status === 'wait') return 'paused'
+  if (status === 'closed' || status === 'disabled') return 'closed'
+  if (status === 'interrupted' || status === 'cancelled' || status === 'canceled') return 'interrupted'
+  if (status === 'idle' || status === 'ready' || status === 'enabled') return 'idle'
+  if (status === 'completed' || status === 'done' || status === 'success' || status === 'ok') return 'completed'
+  return 'completed'
+}
+
+function subAgentLatestChildStatus(part: MessagePart, childParts: MessagePart[]): CoreSubAgentStatus | undefined {
+  const latest = childParts.at(-1)
+  if (!latest) return undefined
+  const metadata = record(part.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  const rawLists = [
+    metadata.subLineParts,
+    metadata.sub_line_parts,
+    envelope.subLineParts,
+    envelope.sub_line_parts,
+    envelope.events,
+    envelope.items,
+  ]
+  for (const rawList of rawLists) {
+    if (!Array.isArray(rawList)) continue
+    const raw = rawList.find(item => record(item).id === latest.id || record(item).item_id === latest.id)
+      || rawList[rawList.length - 1]
+    const rawStatus = firstText(record(raw).status, record(raw).state)
+    if (rawStatus) return normalizeSubAgentStatus(rawStatus)
+  }
+  return normalizeSubAgentStatus(latest.status)
 }
 
 function assistantMessage(
@@ -196,36 +463,56 @@ function isUserTimelinePart(part: MessagePart): boolean {
 }
 
 function isSubAgentPart(part: MessagePart): boolean {
-  if (part.partType !== 'agent_summary' && part.partType !== 'sub_line') return false
   const toolName = String(part.toolName || part.label || '').toLowerCase()
-  return part.partType === 'sub_line' || !toolName || toolName.includes('sub_agent') || toolName.includes('subagent')
+  if (part.partType === 'sub_line') return true
+  if (toolName === 'sub_agent_message' || toolName === 'sub_agent_receive') return true
+  if (toolName === 'sub_agent' || toolName === 'subagent') return true
+  if (part.partType === 'agent_summary') return !toolName
+  return false
 }
 
 function subAgentSessionId(part: MessagePart): string {
   const metadata = record(part.metadata)
   const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
   const args = record(part.toolArgs)
   return firstText(
+    part.subSessionId,
     metadata.sub_session_id,
     metadata.subSessionId,
     nestedMetadata.sub_session_id,
     nestedMetadata.subSessionId,
+    envelope.sub_session_id,
+    envelope.subSessionId,
+    envelope.session_id,
+    envelope.sessionId,
+    envelope.id,
     args.sub_session_id,
     args.subSessionId,
+    args.session_id,
+    args.sessionId,
   )
 }
 
 function subAgentName(part: MessagePart): string {
   const metadata = record(part.metadata)
   const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
   const args = record(part.toolArgs)
   return firstText(
+    part.agentName,
+    (part as MessagePart & { name?: unknown }).name,
+    (part as MessagePart & { agent?: unknown }).agent,
     metadata.agent_name,
     metadata.agentName,
     metadata.agent,
     nestedMetadata.agent_name,
     nestedMetadata.agentName,
     nestedMetadata.agent,
+    envelope.name,
+    envelope.agent_name,
+    envelope.agentName,
+    envelope.agent,
     args.agent_name,
     args.agentName,
     args.agent,
@@ -236,47 +523,267 @@ function subAgentName(part: MessagePart): string {
 function subAgentTask(part: MessagePart): string {
   const metadata = record(part.metadata)
   const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
   const args = record(part.toolArgs)
   return firstText(
+    (part as MessagePart & { task?: unknown }).task,
     args.task,
     args.task_description,
     args.taskDescription,
     args.description,
     metadata.task,
+    metadata.task_description,
+    metadata.taskDescription,
     nestedMetadata.task,
+    nestedMetadata.task_description,
+    nestedMetadata.taskDescription,
+    envelope.task,
+    envelope.task_description,
+    envelope.taskDescription,
+    envelope.prompt,
   )
 }
 
 function subAgentModelId(part: MessagePart): string {
   const metadata = record(part.metadata)
   const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
   const args = record(part.toolArgs)
   return firstText(
+    part.model,
+    (part as MessagePart & { modelId?: unknown }).modelId,
     metadata.model_id,
     metadata.modelId,
     metadata.model,
     nestedMetadata.model_id,
     nestedMetadata.modelId,
     nestedMetadata.model,
+    envelope.model_id,
+    envelope.modelId,
+    envelope.model,
+    args.model,
     args.model_id,
     args.modelId,
   )
 }
 
+function subAgentSourceCallId(part: MessagePart): string {
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  const args = record(part.toolArgs)
+  return firstText(
+    part.sourceCallId,
+    (part as MessagePart & { callId?: unknown }).callId,
+    metadata.source_call_id,
+    metadata.sourceCallId,
+    metadata.call_id,
+    metadata.callId,
+    nestedMetadata.source_call_id,
+    nestedMetadata.sourceCallId,
+    envelope.source_call_id,
+    envelope.sourceCallId,
+    envelope.call_id,
+    envelope.callId,
+    args.source_call_id,
+    args.sourceCallId,
+    args.call_id,
+    args.callId,
+  )
+}
+
+function subAgentSourceMessageId(part: MessagePart): string {
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  return firstText(
+    part.sourceMessageId,
+    metadata.source_message_id,
+    metadata.sourceMessageId,
+    metadata.message_id,
+    metadata.messageId,
+    nestedMetadata.source_message_id,
+    nestedMetadata.sourceMessageId,
+    envelope.source_message_id,
+    envelope.sourceMessageId,
+    envelope.message_id,
+    envelope.messageId,
+  )
+}
+
+function subAgentSourcePartId(part: MessagePart): string {
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  return firstText(
+    part.sourcePartId,
+    metadata.source_part_id,
+    metadata.sourcePartId,
+    metadata.part_id,
+    metadata.partId,
+    nestedMetadata.source_part_id,
+    nestedMetadata.sourcePartId,
+    envelope.source_part_id,
+    envelope.sourcePartId,
+    envelope.part_id,
+    envelope.partId,
+  )
+}
+
+function subAgentType(part: MessagePart): 'consider' | 'execute' | '' {
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  const args = record(part.toolArgs)
+  const raw = firstText(
+    part.agentType,
+    (part as MessagePart & { type?: unknown }).type,
+    metadata.type,
+    metadata.agent_type,
+    metadata.agentType,
+    metadata.mode,
+    metadata.active_mode,
+    nestedMetadata.type,
+    nestedMetadata.agent_type,
+    envelope.type,
+    envelope.agent_type,
+    envelope.agentType,
+    envelope.mode,
+    args.type,
+    args.mode,
+    args.active_mode,
+  ).toLowerCase()
+  if (raw.includes('consider') || raw.includes('think') || raw.includes('reason')) return 'consider'
+  if (raw.includes('execute')) return 'execute'
+  return ''
+}
+
+function subAgentReasoningLevel(part: MessagePart): string {
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  const args = record(part.toolArgs)
+  return firstText(
+    part.reasoningLevel,
+    (part as MessagePart & { reasoningEffort?: unknown }).reasoningEffort,
+    metadata.reasoning_level,
+    metadata.reasoningLevel,
+    metadata.reasoning_effort,
+    metadata.reasoningEffort,
+    nestedMetadata.reasoning_level,
+    nestedMetadata.reasoningLevel,
+    nestedMetadata.reasoning_effort,
+    envelope.reasoning_level,
+    envelope.reasoningLevel,
+    envelope.reasoning_effort,
+    envelope.reasoningEffort,
+    args.reasoning_level,
+    args.reasoningLevel,
+    args.reasoning_effort,
+  )
+}
+
+function subAgentSummary(part: MessagePart, task = ''): string {
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  const direct = firstText(
+    part.summary,
+    metadata.summary,
+    metadata.final_answer,
+    metadata.finalAnswer,
+    nestedMetadata.summary,
+    envelope.summary,
+    envelope.final_answer,
+    envelope.finalAnswer,
+  )
+  if (subAgentEventKind(part) === 'created' || subAgentEventKind(part) === 'enabled'
+    || subAgentEventKind(part) === 'closed' || subAgentEventKind(part) === 'message_sent') {
+    return direct || task
+  }
+  return direct || subAgentConclusion(part) || task
+}
+
+function subAgentElapsedMs(
+  part: MessagePart,
+  startedAt: string,
+  completedAt: string | undefined,
+  fallbackEnd: string,
+): number {
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  const explicit = firstNumber(
+    part.elapsedMs,
+    metadata.elapsed_ms,
+    metadata.elapsedMs,
+    metadata.duration_ms,
+    metadata.durationMs,
+    nestedMetadata.elapsed_ms,
+    nestedMetadata.elapsedMs,
+    nestedMetadata.duration_ms,
+    nestedMetadata.durationMs,
+    envelope.elapsed_ms,
+    envelope.elapsedMs,
+    envelope.duration_ms,
+    envelope.durationMs,
+  )
+  if (explicit !== undefined && Number.isFinite(explicit) && explicit >= 0) return Math.round(explicit)
+  const start = Date.parse(startedAt || '')
+  if (!Number.isFinite(start)) return 0
+  const terminal = isTerminalStatus(part.status)
+  const end = Date.parse(completedAt || (terminal ? fallbackEnd : new Date().toISOString()))
+  if (!Number.isFinite(end) || end < start) return 0
+  return Math.max(0, end - start)
+}
+
+function subAgentTimestamp(part: MessagePart, edge: 'started' | 'completed'): string {
+  const metadata = record(part.metadata)
+  const nestedMetadata = record(metadata.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
+  const values = edge === 'started'
+    ? [part.startedAt, metadata.started_at, metadata.startedAt, nestedMetadata.started_at, nestedMetadata.startedAt, envelope.started_at, envelope.startedAt]
+    : [part.completedAt, metadata.completed_at, metadata.completedAt, nestedMetadata.completed_at, nestedMetadata.completedAt, envelope.completed_at, envelope.completedAt]
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return new Date(value < 1e12 ? value * 1000 : value).toISOString()
+    }
+    const text = firstText(value)
+    if (!text) continue
+    const numeric = Number(text)
+    if (Number.isFinite(numeric)) {
+      return new Date(numeric < 1e12 ? numeric * 1000 : numeric).toISOString()
+    }
+    if (Number.isFinite(Date.parse(text))) return text
+  }
+  return ''
+}
+
 function subAgentTimelineParts(part: MessagePart): MessagePart[] {
   const metadata = record(part.metadata)
+  const envelope = record(metadata.sub_agent || metadata.subAgent)
   const rawParts = Array.isArray(metadata.subLineParts)
     ? metadata.subLineParts
     : Array.isArray(metadata.sub_line_parts)
       ? metadata.sub_line_parts
-      : []
+      : Array.isArray(envelope.subLineParts)
+        ? envelope.subLineParts
+        : Array.isArray(envelope.sub_line_parts)
+          ? envelope.sub_line_parts
+          : Array.isArray(envelope.events)
+            ? envelope.events
+            : Array.isArray(envelope.items)
+              ? envelope.items
+              : []
   const normalized = rawParts
     .map((item, index) => normalizeTimelinePart(part.id, item, index))
     .filter((item): item is MessagePart => Boolean(item))
   if (normalized.length > 0) return normalized
 
   const fallback: MessagePart[] = []
-  const reasoning = Array.isArray(metadata.reasoning_blocks) ? metadata.reasoning_blocks : []
+  const reasoning = Array.isArray(metadata.reasoning_blocks)
+    ? metadata.reasoning_blocks
+    : Array.isArray(envelope.reasoning_blocks) ? envelope.reasoning_blocks : []
   for (const [index, item] of reasoning.entries()) {
     const content = typeof item === 'string' ? item : firstText(record(item).content)
     if (!content) continue
@@ -288,7 +795,9 @@ function subAgentTimelineParts(part: MessagePart): MessagePart[] {
     })
   }
 
-  const toolCalls = Array.isArray(metadata.tool_calls) ? metadata.tool_calls : []
+  const toolCalls = Array.isArray(metadata.tool_calls)
+    ? metadata.tool_calls
+    : Array.isArray(envelope.tool_calls) ? envelope.tool_calls : []
   for (const [index, item] of toolCalls.entries()) {
     const tool = record(item)
     const toolName = firstText(tool.name, tool.tool_name, tool.toolName) || 'tool'
@@ -371,9 +880,13 @@ function subAgentConclusion(part: MessagePart): string {
   return detail && detail !== toolName ? detail : ''
 }
 
-function subAgentStatusLabel(status: MessagePartStatus): string {
+function subAgentStatusLabel(status: CoreSubAgentStatus): string {
   if (status === 'running') return '运行中'
   if (status === 'pending') return '等待中'
+  if (status === 'paused') return '已暂停'
+  if (status === 'interrupted') return '已中断'
+  if (status === 'closed') return '已关闭'
+  if (status === 'idle') return '空闲'
   if (status === 'error') return '失败'
   return '已完成'
 }
@@ -409,6 +922,17 @@ function firstText(...values: unknown[]): string {
     if (text) return text
   }
   return ''
+}
+
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed)) return parsed
+    }
+  }
+  return undefined
 }
 
 function firstTextContent(...values: unknown[]): string {

@@ -16,6 +16,16 @@ document.addEventListener('contextmenu', (event) => event.preventDefault(), { ca
 
 startStartupSplash()
 
+// Applying Acrylic in tauri.conf paints a solid gray native surface before
+// WebView2 has produced its transparent first frame. Enable it only after the
+// centered mark has been composited once, so startup begins transparently.
+window.requestAnimationFrame(() => {
+  if (typeof (window as any).__TAURI_INTERNALS__ !== 'object') return
+  void invoke('enable_startup_glass').catch((error) => {
+    console.warn('[Main] startup glass effect unavailable:', error)
+  })
+})
+
 const BACKEND_API_RETRY_ATTEMPTS = 80
 const BACKEND_API_RETRY_DELAY_MS = 250
 

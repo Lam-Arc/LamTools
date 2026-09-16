@@ -25,6 +25,7 @@ from lamtools_core.plugins.bundled.workflow.backend.executors import WorkflowExe
 from lamtools_core.plugins.bundled.workflow.backend.registry import WorkflowNodeRegistry
 from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowDef,
+    WorkflowExecutionContext,
     WorkflowNode,
     WorkflowPort,
     WorkflowRunner,
@@ -100,6 +101,34 @@ async def test_model_and_agent_nodes_use_independent_public_invokers(tmp_path: P
     assert agent_result.status == "completed"
     assert agent_result.output == "agent-result"
     assert [kind for kind, _ in calls] == ["model", "agent"]
+
+
+@pytest.mark.asyncio
+async def test_model_and_agent_nodes_inherit_run_model(tmp_path: Path) -> None:
+    captured: dict[str, str] = {}
+
+    class Model:
+        async def invoke(self, request: Any, **kwargs: Any) -> Any:
+            captured["model"] = request.model
+            return SimpleNamespace(content="model-result")
+
+    class Agent:
+        async def run(self, **kwargs: Any) -> Any:
+            captured["agent"] = kwargs.get("model", "")
+            return SimpleNamespace(message="agent-result")
+
+    context = WorkflowExecutionContext(event_metadata={"model_id": "session-model"})
+    runner = WorkflowRunner(model_invoker=Model(), agent_invoker=Agent())
+    await runner.run(
+        WorkflowDef(name="model", nodes=[_node("m", "model", config={"instruction": "one"})]),
+        work_root=str(tmp_path), run_id="model-run", execution_context=context,
+    )
+    await runner.run(
+        WorkflowDef(name="agent", nodes=[_node("a", "agent", config={"instruction": "two"})]),
+        work_root=str(tmp_path), run_id="agent-run", execution_context=context,
+    )
+
+    assert captured == {"model": "session-model", "agent": "session-model"}
 
 
 @pytest.mark.asyncio

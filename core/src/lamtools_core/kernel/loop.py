@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import re
@@ -30,8 +31,15 @@ _logger = logging.getLogger(__name__)
 from lamtools_core.context_compaction import (
     ContextCompactionController,
     ContextCompactionError,
+    RECENT_USER_MESSAGES_METADATA_KEY,
+    extract_recent_user_messages,
 )
-from lamtools_core.context_compaction_budget import TokenBudget, resolve_compaction_budget
+from lamtools_core.context_compaction_budget import (
+    TokenBudget,
+    load_retained_steps,
+    resolve_compaction_budget,
+    resolve_retained_steps,
+)
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
@@ -136,6 +144,38 @@ def _chat_message_from_dict(value: Any) -> ChatMessage | None:
         if "provider_state" in value
         else None,
     )
+
+
+def _message_history_seq(message: ChatMessage) -> int:
+    raw = message.metadata.get("history_seq")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def _history_seq_set(value: Any) -> set[int]:
+    if not isinstance(value, list):
+        return set()
+    result: set[int] = set()
+    for item in value:
+        try:
+            parsed = int(item)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            result.add(parsed)
+    return result
+
+
+def _summary_recent_user_messages(
+    compaction: dict[str, Any], summary_text: str
+) -> list[str]:
+    raw = compaction.get(RECENT_USER_MESSAGES_METADATA_KEY)
+    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        return list(raw)
+    return extract_recent_user_messages(summary_text)
 
 
 _INTERNAL_MESSAGE_METADATA_KEYS = ("history_seq", "lam_compaction_resume")
@@ -370,23 +410,68 @@ class CoreLoopKernel:
         if isinstance(compaction_meta, dict) and summary_text.strip():
             # A summary exists whenever compaction happened; the boundary seq
             # is the first retained row minus one and may legitimately be 0.
-            boundary = int(compaction_meta.get("summary_seq") or 0)
-            if boundary > 0:
-                history = await self._load_history(state.session_id, after_seq=boundary)
-                # Boundary drift guard: when nothing loads past the anchor the
-                # stored seq is stale (history was rebuilt/cleared externally).
-                # Fall back to the full history so context is not reduced to
-                # the summary alone; the next compaction re-anchors from rows.
-                if not history:
+            try:
+                boundary = max(0, int(compaction_meta.get("summary_seq") or 0))
+            except (TypeError, ValueError):
+                boundary = 0
+            compacted_seqs = _history_seq_set(
+                compaction_meta.get("compacted_history_seqs")
+            )
+            if compacted_seqs:
+                # Manual compaction keeps durable rows in place. Filter only
+                # rows folded into the summary so retained Steps interspersed
+                # with user rows remain visible.
+                max_seq = await self._history_max_seq(state.session_id)
+                compacted_through_max = (
+                    max_seq is not None
+                    and max_seq > 0
+                    and boundary == max_seq
+                    and compacted_seqs == set(range(1, max_seq + 1))
+                )
+                if compacted_through_max:
+                    # A zero-tail manual compaction has no durable rows to
+                    # retain. Read the incremental tail at the boundary;
+                    # unlike a generic full-history fallback this remains
+                    # empty on stores that honor ``after_seq``.
+                    history = await self._load_history(
+                        state.session_id,
+                        after_seq=boundary,
+                    )
+                    if len(history) == max_seq:
+                        # Legacy blob stores may ignore ``after_seq`` and
+                        # return every row; slice that shape without a second
+                        # full read.
+                        history = history[boundary:]
+                else:
                     full_history = await self._load_history(state.session_id)
-                    if full_history:
-                        history = full_history
+                    history = [
+                        message
+                        for message in full_history
+                        if _message_history_seq(message) not in compacted_seqs
+                    ]
+            elif boundary > 0:
+                max_seq = await self._history_max_seq(state.session_id)
+                history = await self._load_history(state.session_id, after_seq=boundary)
+                # Legacy blob stores ignore ``after_seq`` and return all rows;
+                # detect that shape before applying the boundary slice.
+                if max_seq == 0 and history:
+                    history = history[boundary:]
+                # An empty result at the current max is valid. Only recover
+                # the full history when rows are known to exist beyond it.
+                elif not history and max_seq is None:
+                    history = await self._load_history(state.session_id)
+                elif not history and max_seq != boundary:
+                    history = await self._load_history(state.session_id)
             else:
                 history = await self._load_history(state.session_id)
+            recent_users = _summary_recent_user_messages(compaction_meta, summary_text)
             history.insert(0, ChatMessage(
                 role="system",
                 content=summary_text,
-                metadata={"key": "context_compaction_summary"},
+                metadata={
+                    "key": "context_compaction_summary",
+                    RECENT_USER_MESSAGES_METADATA_KEY: recent_users,
+                },
             ))
         else:
             history = await self._load_history(state.session_id)
@@ -1564,6 +1649,21 @@ class CoreLoopKernel:
         ]
         return _repair_incomplete_tool_history(messages)
 
+    async def _history_max_seq(self, session_id: str) -> int | None:
+        """Read the durable history high-water mark when the store exposes it."""
+        getter = getattr(self.state_store, "history_max_seq", None)
+        if not callable(getter):
+            return None
+        try:
+            value = getter(session_id)
+            if inspect.isawaitable(value):
+                value = await value
+            if isinstance(value, bool):
+                return None
+            return max(0, int(value))
+        except (TypeError, ValueError, OSError):
+            return None
+
     async def _save_checkpoint(self, state: RuntimeState) -> None:
         """Persist runtime state metadata (mid-loop checkpoint).
 
@@ -1603,10 +1703,28 @@ class CoreLoopKernel:
         incremental operations.
         """
         if isinstance(self.state_store, RuntimeCheckpointStore):
-            self._recompute_compaction_boundary(state, history)
+            # Compaction summaries are request-local context rows. Keep them
+            # available to later steps in this run, but never persist them or
+            # let them shift the resume marker index during a full rewrite.
+            persisted_history = [
+                message
+                for message in history
+                if not (
+                    message.role == "system"
+                    and message.metadata.get("key") == "context_compaction_summary"
+                )
+            ]
+            self._recompute_compaction_boundary(state, persisted_history)
             await self.state_store.replace_history(
-                state.session_id, [m.to_dict() for m in history]
+                state.session_id, [m.to_dict() for m in persisted_history]
             )
+            # ``replace_history`` assigns fresh row sequence numbers.  The
+            # manual-compaction filter set belongs to the old numbering and
+            # must not survive a successful rewrite; keeping it until after
+            # the write preserves crash recovery if the rewrite fails.
+            compaction = state.metadata.get("context_compaction") if isinstance(state.metadata, dict) else None
+            if isinstance(compaction, dict):
+                compaction.pop("compacted_history_seqs", None)
             await self.state_store.save(state)
             return
         await self.state_store.save(state)
@@ -1931,15 +2049,28 @@ class CoreLoopKernel:
         else:
             source = turn_input.guidance_source
             guidance_items = source() if source is not None else []
-        guidance = [str(item).strip() for item in guidance_items if str(item).strip()]
+        guidance: list[tuple[str, dict[str, Any]]] = []
+        for item in guidance_items:
+            if isinstance(item, dict):
+                content = str(item.get("content") or item.get("text") or "").strip()
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            else:
+                content = str(item).strip()
+                metadata = {}
+            if content:
+                guidance.append((content, metadata))
         if not guidance:
             return False
-        for item in guidance:
-            history.append(ChatMessage(role="user", content=item))
+        for content, metadata in guidance:
+            history.append(ChatMessage(role="user", content=content))
             await self.event_sink.emit(CoreEvent(
                 name="runtime.guidance_received",
                 category="message",
-                payload={"content": item, "response_index": response_index},
+                payload={
+                    "content": content,
+                    "response_index": response_index,
+                    **({"metadata": metadata} if metadata else {}),
+                },
                 session_id=state.session_id,
                 run_id=state.run_id,
                 tags=["guidance"],
@@ -2890,6 +3021,11 @@ class CoreLoopKernel:
         budget = self._resolve_compaction_budget(window)
         trigger_tokens = budget.trigger_tokens
         limit_tokens = budget.target_tokens
+        retained_steps = (
+            resolve_retained_steps(getattr(self.policy, "compact_retained_steps", None))
+            if getattr(self.policy, "compact_retained_steps", None) is not None
+            else load_retained_steps()
+        )
 
         def estimate_request_messages(messages: list[ChatMessage], *, fast: bool) -> int:
             original_messages = request.messages
@@ -2935,6 +3071,7 @@ class CoreLoopKernel:
         request.metadata["total_context_window_tokens"] = total_window
         request.metadata["reserved_output_tokens"] = reserved_output_tokens
         request.metadata["context_compaction_trigger_tokens"] = trigger_tokens
+        request.metadata["context_compaction_retained_steps"] = retained_steps
         state.metadata["runtime_context_metrics"] = {
             **metrics,
             "estimated_prompt_tokens": before_tokens,
@@ -2942,6 +3079,7 @@ class CoreLoopKernel:
             "total_context_window_tokens": total_window,
             "reserved_output_tokens": reserved_output_tokens,
             "context_compaction_trigger_tokens": trigger_tokens,
+            "context_compaction_retained_steps": retained_steps,
             "context_compacted": False,
             "model_id": current_model,
         }
@@ -2958,6 +3096,12 @@ class CoreLoopKernel:
         await self._persist_runtime_context_metrics(state, history=history)
         if before_tokens < trigger_tokens:
             return
+        # A single run may execute several model/tool steps. Once its context
+        # has been compacted, keep the summary available to following steps
+        # without immediately compacting that same summary again; a new run
+        # gets a fresh opportunity after durable history is reloaded.
+        if state.metadata.get("_context_compaction_run_id") == state.run_id:
+            return
 
         before_messages = len(request.messages)
         request_messages_before_compaction = list(request.messages)
@@ -2973,6 +3117,7 @@ class CoreLoopKernel:
             allow_previous_model=allow_previous,
             trigger="model_switch" if model_switched else "auto",
             measurement=measurement,
+            retained_steps=retained_steps,
         )
         result = execution.result
         execution_model = execution.execution_model
@@ -3025,7 +3170,9 @@ class CoreLoopKernel:
             "retained_count": result.retained_count,
             "before_tokens": result.before_tokens,
             "after_tokens": result.after_tokens,
+            RECENT_USER_MESSAGES_METADATA_KEY: list(result.recent_user_messages),
         }
+        state.metadata["_context_compaction_run_id"] = state.run_id
         # Mutate the in-memory history list so the rest of this run sees the
         # compacted view, but do NOT persist the replacement over the original
         # and do NOT let the summary message leak into history rows.
@@ -3037,27 +3184,28 @@ class CoreLoopKernel:
                     for message in request_messages_before_compaction
                     if id(message) not in history_message_ids
                 }
-                compacted_ids = {id(message) for message in result.compacted_messages}
-                retained_ids = {id(message) for message in result.retained_messages}
-                source_ids = {id(item) for item in request_messages_before_compaction}
-                # A fitter may drop a previously retained tail turn to satisfy
-                # the exact target. Keep that turn before the resume marker in
-                # persisted history; the marker makes it invisible to the
-                # next context load while preserving the original row span.
-                dropped_before_resume = [
-                    message
-                    for message in history
-                    if id(message) in source_ids
-                    and id(message) not in compacted_ids
-                    and id(message) not in retained_ids
-                ]
                 compacted_history = [
                     message
                     for message in result.replacement_messages
                     if id(message) not in request_only_ids
                     and message.metadata.get("key") != "context_compaction_summary"
                 ]
-                history[:] = [*dropped_before_resume, *compacted_history]
+                summary_history = next(
+                    (
+                        message
+                        for message in result.replacement_messages
+                        if message.metadata.get("key") == "context_compaction_summary"
+                    ),
+                    result.summary_message,
+                )
+                # Keep the summary in this run's in-memory context so a later
+                # model/tool step receives the same compressed view. The
+                # history checkpoint filters this request-local row before
+                # persistence.
+                history[:] = [
+                    *([summary_history] if summary_history is not None else []),
+                    *compacted_history,
+                ]
         request.metadata["estimated_prompt_tokens"] = result.after_tokens
 
         request.metadata["context_compacted"] = True
@@ -3075,6 +3223,7 @@ class CoreLoopKernel:
             "total_context_window_tokens": total_window,
             "reserved_output_tokens": reserved_output_tokens,
             "context_compaction_trigger_tokens": trigger_tokens,
+            "context_compaction_retained_steps": retained_steps,
             "context_compacted": True,
             "context_compaction_mode": "structured_summary",
             "context_tokens_before_compaction": result.before_tokens,

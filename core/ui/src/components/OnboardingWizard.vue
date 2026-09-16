@@ -338,10 +338,11 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   width: 100%;
   min-height: 34px;
   padding: 0 var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--theme-control-text, #f2efeb) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-control-background, #343331) 70%, transparent);
-  color: var(--theme-control-text, #f2efeb);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font: inherit;
 }
 
@@ -355,7 +356,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 }
 
 .onboarding-form input::placeholder {
-  color: color-mix(in srgb, var(--theme-control-text, #f2efeb) 45%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 45%, transparent);
 }
 
 .preset-summary {

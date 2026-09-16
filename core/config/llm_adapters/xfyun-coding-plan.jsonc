@@ -24,10 +24,22 @@
             "reasoning_effort": "low"
           }
         },
+        "medium": {
+          "set": {
+            "enable_thinking": true,
+            "reasoning_effort": "medium"
+          }
+        },
         "high": {
           "set": {
             "enable_thinking": true,
             "reasoning_effort": "medium"
+          }
+        },
+        "xhigh": {
+          "set": {
+            "enable_thinking": true,
+            "reasoning_effort": "high"
           }
         },
         "max": {

@@ -2,10 +2,10 @@
 name: office-spreadsheets
 description: 读取、清洗、合并、去重、统计和制作 Excel/CSV 表格，包括预算、台账、汇总表和数据分析。用户要求处理 XLSX、计算公式、修改工作表或校验报表时使用；独立图表交给 office-charts。
 metadata:
-  version: 0.1.0
+  version: 0.2.0
   language: zh-CN
   target: lamtools-desktop
-  status: instruction-draft
+  status: beta
 ---
 
 # 表格助手
@@ -13,7 +13,7 @@ metadata:
 ## 目标与边界
 
 生成或修改可继续使用、数字可核验的工作簿；保留必要公式、格式和原始数据。
-本 Skill 只规定桌面工作流程，不内置工作簿库、计算引擎或真实工具接口。先读取宿主工具文档再操作。
+本 Skill 内置的数据校验/渲染程序不等于工作簿创作库或公式计算引擎；创作和重算仍须先核实宿主真实能力。
 
 ## 输入与默认值
 
@@ -31,6 +31,8 @@ metadata:
 不得向外部服务上传整本表格，除非用户已授权指定内容和目的。
 
 ## 工作流程
+
+创建或修改数据承载表格/图表时先读取[Office 数据与渲染合同](../references/office-renderer-contract.md)，在首次写入前生成唯一 `office-data.json`，并让每个对象绑定稳定 dataset ID；在任意项目目录直接运行 `py -3.14 -m lamtools_core.cli office validate ...`，通过后再运行同入口的 `office render`。纯装饰布局网格不需 manifest。
 
 ### 1. 盘点结构
 
@@ -66,7 +68,7 @@ metadata:
 ### 5. 验证数据、公式与版面
 
 校验清洗前后行数、分类小计、总计、筛选口径和关键记录。
-有计算引擎时实际重算并检查错误；无计算引擎时独立核算关键结果，但如实记录“工作簿未实际重算”。
+有计算引擎时实际重算并检查错误；重算结果必须保存回最终交付并由 manifest `source.sha256` 绑定的同一文件，不能只重算临时副本后交付未重算原件。无计算引擎时独立核算关键结果，但如实记录“工作簿未实际重算”。
 扫描 #REF!、#DIV/0!、#VALUE!、#NAME? 等错误；#N/A 需区分预期缺失与计算缺陷。
 重新打开输出文件，确认关键公式仍是公式、范围正确、数据没有静默截断。
 检查所有新增/修改区域的实际预览，确认列宽、图表、中文和打印范围合理。

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Office Infographics"
+  short_description: "Turn processes and relationships into clear visual diagrams"
+  default_prompt: "Use $office-infographics to visualize this process clearly."
+policy:
+  allow_implicit_invocation: true

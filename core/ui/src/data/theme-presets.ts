@@ -95,8 +95,8 @@ const morningMistLightTheme = {
 
 export const THEME_PRESETS: ThemePreset[] = [
   {
-    id: 'sunday', group: 'theme', name: 'Sunday', note: '暖白底色与粉紫蓝光感。',
-    method: '以暖白工作区承载内容，粉紫蓝只出现在背景、控件和过程图标。', rationale: '在长时间使用的克制界面中保留 Sunday 的亲和与生命力。',
+    id: 'sunday', group: 'theme', name: 'Sunday', note: '象牙白与石墨灰的纯色主题。',
+    method: '浅色使用象牙白承载石墨标记，暗色反转为石墨底与象牙标记。', rationale: '纯色层级更安静，并以清晰实线边界维持长期工作的可读性。',
     theme: SUNDAY_DARK_THEME, lightTheme: SUNDAY_LIGHT_THEME, darkTheme: SUNDAY_DARK_THEME,
   },
   {

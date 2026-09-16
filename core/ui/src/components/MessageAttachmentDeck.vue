@@ -50,10 +50,11 @@
             type="button"
             class="message-attachment-deck__preview"
             :aria-expanded="activeKey === item.key"
-            :aria-label="`${pinnedKey === item.key ? '使用默认应用打开' : '展开'} ${item.name}`"
-            @click="togglePinned(item)"
-            @focus="setFocused(item.key)"
-            @blur="clearFocused(item.key)"
+            :aria-label="`${item.displayKind === 'text' ? '双击文本预览' : '双击打开'} ${item.name}`"
+            @click="releasePointerFocus"
+            @dblclick.stop="openDeckItem(item)"
+            @keydown.enter.prevent="openDeckItem(item)"
+            @keydown.space.prevent="openDeckItem(item)"
           >
             <span class="message-attachment-deck__visual" :class="`message-attachment-deck__visual--${item.tone}`">
               <img
@@ -108,6 +109,39 @@
       @cancel="cancelOpen"
       @confirm="confirmOpen"
     />
+
+    <Teleport to="body">
+      <div
+        v-if="textPreviewItem"
+        class="message-attachment-deck__text-overlay"
+        role="presentation"
+        @click.self="closeTextPreview"
+      >
+        <section
+          ref="textDialogEl"
+          class="message-attachment-deck__text-dialog"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="`${textPreviewItem.name} 文本预览`"
+          tabindex="-1"
+          @keydown.esc.prevent="closeTextPreview"
+        >
+          <header class="message-attachment-deck__text-header">
+            <span class="message-attachment-deck__text-title">
+              <FileText :size="16" :stroke-width="1.8" aria-hidden="true" />
+              <strong>{{ textPreviewItem.name }}</strong>
+              <span>纯文本</span>
+            </span>
+            <button type="button" aria-label="关闭文本预览" title="关闭" @click="closeTextPreview">
+              <X :size="16" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+          </header>
+          <div v-if="textPreviewLoading" class="message-attachment-deck__text-state">正在读取文本…</div>
+          <div v-else-if="textPreviewError" class="message-attachment-deck__text-state message-attachment-deck__text-state--error" role="alert">{{ textPreviewError }}</div>
+          <pre v-else class="message-attachment-deck__text-content">{{ textPreviewContent }}</pre>
+        </section>
+      </div>
+    </Teleport>
   </section>
 </template>
 
@@ -125,6 +159,7 @@ import {
   Image as ImageIcon,
   Presentation,
   Sheet,
+  X,
   type LucideIcon,
 } from 'lucide-vue-next'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
@@ -187,11 +222,14 @@ const trackEl = ref<HTMLElement | null>(null)
 const measuredWidth = ref(760)
 const pageIndex = ref(0)
 const hoveredKey = ref('')
-const focusedKey = ref('')
-const pinnedKey = ref('')
 const openingKey = ref('')
 const pendingOpenItem = ref<DeckItem | null>(null)
 const openError = ref('')
+const textPreviewItem = ref<DeckItem | null>(null)
+const textPreviewContent = ref('')
+const textPreviewError = ref('')
+const textPreviewLoading = ref(false)
+const textDialogEl = ref<HTMLElement | null>(null)
 const reducedMotion = ref(false)
 const previewUrls = reactive<Record<string, string>>({})
 const textPreviews = reactive<Record<string, string>>({})
@@ -203,6 +241,7 @@ let flipAnimation: gsap.core.Animation | null = null
 let pageTimeline: gsap.core.Timeline | null = null
 let animationRevision = 0
 let hoverLeaveTimer: ReturnType<typeof setTimeout> | null = null
+let textPreviewRestoreFocus: HTMLElement | null = null
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'svg'])
 const CODE_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'vue', 'py', 'rs', 'go', 'java', 'c', 'cc', 'cpp', 'h', 'hpp', 'cs', 'php', 'rb', 'sh', 'ps1', 'sql', 'html', 'css', 'scss', 'less'])
@@ -315,7 +354,7 @@ const visibleItems = computed(() => {
   const start = pageIndex.value * pageSize.value
   return deckItems.value.slice(start, start + pageSize.value)
 })
-const activeKey = computed(() => hoveredKey.value || focusedKey.value || pinnedKey.value)
+const activeKey = computed(() => hoveredKey.value)
 const activeVisibleIndex = computed(() => visibleItems.value.findIndex(item => item.key === activeKey.value))
 const fullPagedPage = computed(() => (
   pageCount.value > 1 && visibleItems.value.length === pageSize.value
@@ -383,7 +422,7 @@ function animateState(mutate: () => void): void {
         flipAnimation = Flip.from(state, {
           targets: nextCards,
           duration: 0.3,
-          ease: 'back.out(1.12)',
+          ease: 'power2.out',
           simple: true,
           scale: true,
           nested: true,
@@ -428,28 +467,54 @@ function clearHovered(key: string): void {
   }, HOVER_HANDOFF_MS)
 }
 
-function setFocused(key: string): void {
-  if (focusedKey.value === key) return
-  animateState(() => { focusedKey.value = key })
+function releasePointerFocus(event: MouseEvent): void {
+  if (event.currentTarget instanceof HTMLElement) {
+    event.currentTarget.blur()
+  }
 }
 
-function clearFocused(key: string): void {
-  if (focusedKey.value !== key) return
-  animateState(() => { focusedKey.value = '' })
-}
-
-async function togglePinned(item: DeckItem): Promise<void> {
-  const key = item.key
-  if (pinnedKey.value === key) {
-    if (openingKey.value) return
-    openError.value = ''
-    pendingOpenItem.value = item
+async function openDeckItem(item: DeckItem): Promise<void> {
+  if (openingKey.value) return
+  if (item.displayKind === 'text') {
+    await openTextPreview(item)
     return
   }
-  animateState(() => {
-    pinnedKey.value = key
-    focusedKey.value = ''
-  })
+  openError.value = ''
+  pendingOpenItem.value = item
+}
+
+async function openTextPreview(item: DeckItem): Promise<void> {
+  textPreviewItem.value = item
+  textPreviewContent.value = ''
+  textPreviewError.value = ''
+  textPreviewLoading.value = true
+  try {
+    let path = ''
+    if (item.artifact) path = artifactRequestPath(item.artifact)
+    else if (item.attachment) path = `/attachments/${encodeURIComponent(item.attachment.id)}/download`
+    if (path) {
+      const response = await props.transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path })
+      if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`)
+      textPreviewContent.value = new TextDecoder().decode(Uint8Array.from(response.body))
+    } else if (typeof item.artifact?.content === 'string') {
+      textPreviewContent.value = item.artifact.content
+    } else {
+      throw new Error('缺少可读取的文本路径')
+    }
+  } catch (error) {
+    textPreviewError.value = `无法读取文本：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    textPreviewLoading.value = false
+  }
+}
+
+function closeTextPreview(): void {
+  textPreviewItem.value = null
+  textPreviewContent.value = ''
+  textPreviewError.value = ''
+  textPreviewLoading.value = false
+  textPreviewRestoreFocus?.focus()
+  textPreviewRestoreFocus = null
 }
 
 function cancelOpen(): void {
@@ -510,8 +575,6 @@ function changePage(nextPage: number): void {
   if (!track || reducedMotion.value) {
     pageIndex.value = nextPage
     hoveredKey.value = ''
-    focusedKey.value = ''
-    pinnedKey.value = ''
     return
   }
   gsapContext?.add(() => {
@@ -526,8 +589,6 @@ function changePage(nextPage: number): void {
       onComplete: () => {
         pageIndex.value = nextPage
         hoveredKey.value = ''
-        focusedKey.value = ''
-        pinnedKey.value = ''
       },
     }).fromTo(track, {
       x: direction * 18,
@@ -536,7 +597,7 @@ function changePage(nextPage: number): void {
       x: 0,
       autoAlpha: 1,
       duration: 0.24,
-      ease: 'back.out(1.1)',
+      ease: 'power2.out',
       immediateRender: false,
     })
   })
@@ -623,13 +684,19 @@ watch([pageCount, pageSize], () => {
 
 watch(() => deckItems.value.map(item => item.key).join('|'), () => {
   const keys = new Set(deckItems.value.map(item => item.key))
-  if (pinnedKey.value && !keys.has(pinnedKey.value)) pinnedKey.value = ''
   for (const key of Object.keys(previewUrls)) {
     if (keys.has(key)) continue
     const url = previewUrls[key]
     if (ownedObjectUrls.delete(url)) URL.revokeObjectURL(url)
     delete previewUrls[key]
   }
+})
+
+watch(textPreviewItem, async item => {
+  if (!item) return
+  textPreviewRestoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  await nextTick()
+  textDialogEl.value?.focus()
 })
 
 onMounted(() => {
@@ -662,6 +729,8 @@ onBeforeUnmount(() => {
   gsapContext = null
   for (const url of ownedObjectUrls) URL.revokeObjectURL(url)
   ownedObjectUrls.clear()
+  textPreviewRestoreFocus?.focus()
+  textPreviewRestoreFocus = null
 })
 </script>
 
@@ -700,7 +769,7 @@ onBeforeUnmount(() => {
   --deck-step: 36px;
   display: flex;
   min-width: 0;
-  min-height: 112px;
+  min-height: 72px;
   align-items: center;
   overflow: visible;
 }
@@ -737,7 +806,6 @@ onBeforeUnmount(() => {
   z-index: var(--z-stage);
   flex-basis: 220px;
   width: 220px;
-  height: 112px;
 }
 
 .message-attachment-deck__preview {
@@ -750,7 +818,9 @@ onBeforeUnmount(() => {
   border: 1px solid var(--theme-main-border);
   border-radius: var(--radius);
   padding: 0;
-  background: transparent;
+  /* Stacked cards still need an opaque surface, but it should inherit the
+     current content area instead of collapsing to a hard black fallback. */
+  background: var(--theme-main-background);
   box-shadow: none;
   color: var(--text);
   text-align: left;
@@ -768,9 +838,8 @@ onBeforeUnmount(() => {
 }
 
 .message-attachment-deck__card--active .message-attachment-deck__preview {
-  background: color-mix(in srgb, var(--theme-main-solid) 42%, transparent);
-  -webkit-backdrop-filter: blur(8px) saturate(1.12);
-  backdrop-filter: blur(8px) saturate(1.12);
+  border-color: color-mix(in srgb, var(--theme-main-text) 20%, var(--theme-main-border));
+  background: var(--theme-main-background);
 }
 
 .message-attachment-deck__visual {
@@ -782,25 +851,24 @@ onBeforeUnmount(() => {
   place-items: center;
   align-self: center;
   overflow: hidden;
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
-  color: color-mix(in srgb, var(--text) 72%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-subtle-background);
+  color: color-mix(in srgb, var(--text) 68%, transparent);
 }
 
 .message-attachment-deck__card--active .message-attachment-deck__visual {
-  flex-basis: 112px;
-  width: 112px;
-  height: 112px;
+  border-right: 1px solid var(--theme-main-border);
+  border-radius: 0;
 }
 
-.message-attachment-deck__visual--image { color: var(--purple); }
+.message-attachment-deck__visual--image { color: color-mix(in srgb, var(--purple) 62%, var(--text)); }
 .message-attachment-deck__visual--code,
-.message-attachment-deck__visual--text { color: var(--blue); }
+.message-attachment-deck__visual--text { color: color-mix(in srgb, var(--text) 76%, transparent); }
 .message-attachment-deck__visual--json,
-.message-attachment-deck__visual--archive { color: var(--orange); }
-.message-attachment-deck__visual--pdf { color: var(--red); }
-.message-attachment-deck__visual--sheet { color: var(--green); }
-.message-attachment-deck__visual--presentation { color: var(--purple); }
+.message-attachment-deck__visual--archive { color: color-mix(in srgb, var(--orange) 58%, var(--text)); }
+.message-attachment-deck__visual--pdf { color: color-mix(in srgb, var(--red) 62%, var(--text)); }
+.message-attachment-deck__visual--sheet { color: color-mix(in srgb, var(--green) 62%, var(--text)); }
+.message-attachment-deck__visual--presentation { color: color-mix(in srgb, var(--purple) 58%, var(--text)); }
 
 .message-attachment-deck__thumbnail {
   display: block;
@@ -815,6 +883,10 @@ onBeforeUnmount(() => {
   bottom: var(--space-1);
   max-width: calc(100% - var(--space-2));
   overflow: hidden;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-radius: 3px;
+  padding: 2px 3px;
+  background: var(--theme-main-background);
   color: currentColor;
   font-family: var(--font-mono);
   font-size: 9px;
@@ -869,7 +941,7 @@ onBeforeUnmount(() => {
   font-size: 10px;
   line-height: 1.35;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 1;
   white-space: normal;
 }
 
@@ -898,17 +970,112 @@ onBeforeUnmount(() => {
   opacity: .45;
 }
 
+.message-attachment-deck__text-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--theme-backdrop-text) 20%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.message-attachment-deck__text-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(860px, 92vw);
+  height: min(680px, 82vh);
+  overflow: hidden;
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius);
+  background: var(--theme-main-background);
+  color: var(--theme-main-text);
+  box-shadow: var(--shadow-lg);
+}
+
+.message-attachment-deck__text-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 42px;
+  border-bottom: 1px solid var(--theme-main-border);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  background: var(--theme-main-subtle-background);
+}
+
+.message-attachment-deck__text-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.message-attachment-deck__text-title strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachment-deck__text-title span {
+  color: color-mix(in srgb, var(--theme-main-text) 48%, transparent);
+  font-size: 10px;
+}
+
+.message-attachment-deck__text-header button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text) 64%, transparent);
+}
+
+.message-attachment-deck__text-header button:hover {
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
+  color: var(--theme-main-text);
+}
+
+.message-attachment-deck__text-content,
+.message-attachment-deck__text-state {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-3);
+}
+
+.message-attachment-deck__text-content {
+  color: var(--theme-main-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-attachment-deck__text-state {
+  display: grid;
+  place-items: center;
+  color: color-mix(in srgb, var(--theme-main-text) 58%, transparent);
+  font-size: 12px;
+}
+
+.message-attachment-deck__text-state--error { color: color-mix(in srgb, var(--red) 76%, var(--theme-main-text)); }
+
 @media (max-width: 520px) {
   .message-attachment-deck__card--active {
     flex-basis: 184px;
     width: 184px;
   }
 
-  .message-attachment-deck__card--active .message-attachment-deck__visual {
-    flex-basis: 96px;
-    width: 96px;
-    height: 96px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

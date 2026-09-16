@@ -10,6 +10,7 @@ import {
   updateCoreSessionListStatus,
 } from '../src/appServer'
 import type { CoreAppSnapshot } from '../src/appServer'
+import { selectCoreSubAgentRuns } from '../src/agents/subAgentProjection'
 
 describe('core appServer workbench projection', () => {
   it('carries payload checklist metadata into MessagePart metadata', () => {
@@ -455,6 +456,122 @@ describe('core appServer workbench projection', () => {
       id: 'main-text',
       partType: 'model_text',
       content: 'Main received the child result.',
+    })
+  })
+
+  it('keeps asynchronous sub-agent lifecycle calls as ordinary process tools', () => {
+    const itemId = 'thread-1:run-parent:create-agent:tool'
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-1',
+      snapshot_seq: 2,
+      core: {
+        thread_id: 'thread-1',
+        snapshot_seq: 2,
+        status: 'completed',
+        item_order: [itemId],
+        turns: {
+          'turn-1': { turn_id: 'turn-1', status: 'completed', items: [itemId] },
+        },
+        items: {
+          [itemId]: {
+            item_id: itemId,
+            turn_id: 'turn-1',
+            kind: 'tool_result',
+            status: 'completed',
+            payload: {
+              type: 'dynamicToolCall',
+              tool_name: 'sub_agent',
+              arguments: {
+                action: 'create', type: 'consider', name: 'reviewer',
+                model: 'model-a', reasoning_level: 'medium',
+              },
+              tool_result: '{}',
+              metadata: { lifecycle_action: 'created' },
+            },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const [message] = selectCoreWorkbenchMessages(snapshot)
+    expect(message?.parts?.[0]).toMatchObject({
+      id: itemId,
+      partType: 'tool_call',
+      toolName: 'sub_agent',
+      toolArgs: { action: 'create', name: 'reviewer' },
+    })
+  })
+
+  it('projects an async mailbox parent through selectors and settles its child run', () => {
+    const parentId = 'thread-async:run-1:mail-call:tool'
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-async',
+      snapshot_seq: 6,
+      core: {
+        thread_id: 'thread-async',
+        snapshot_seq: 6,
+        status: 'completed',
+        item_order: [parentId, 'mail-child', 'main-text'],
+        turns: {
+          'turn-async': { turn_id: 'turn-async', status: 'completed', items: [parentId, 'mail-child', 'main-text'] },
+        },
+        items: {
+          [parentId]: {
+            item_id: parentId,
+            turn_id: 'turn-async',
+            kind: 'tool_result',
+            status: 'completed',
+            payload: {
+              type: 'dynamicToolCall',
+              tool_name: 'sub_agent_message',
+              arguments: { type: 'execute', name: 'reviewer', prompt: '继续检查' },
+              metadata: {
+                sub_agent: {
+                  status: 'idle',
+                  name: 'reviewer',
+                  type: 'execute',
+                  model: 'model-a',
+                  reasoning_level: 'medium',
+                  sub_session_id: 'thread-async:sub:reviewer',
+                },
+              },
+              tool_result: 'accepted',
+            },
+          },
+          'mail-child': {
+            item_id: 'mail-child',
+            parent_item_id: parentId,
+            turn_id: 'turn-async',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: '异步回复' },
+          },
+          'main-text': {
+            item_id: 'main-text',
+            turn_id: 'turn-async',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: '主线程继续' },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const projected = selectCoreWorkbenchMessages(snapshot)
+    expect(projected).toHaveLength(1)
+    const first = projected[0]
+    if (!first) throw new Error('expected projected assistant message')
+    expect((first.parts ?? []).map(part => part.toolName)).toEqual(['sub_agent_message', undefined])
+    expect(first.parts?.[0]?.metadata?.subLineParts).toMatchObject([
+      { id: 'mail-child', partType: 'model_text', status: 'completed' },
+    ])
+    const [run] = selectCoreSubAgentRuns(projected)
+    expect(run).toMatchObject({
+      name: 'reviewer',
+      subSessionId: 'thread-async:sub:reviewer',
+      status: 'idle',
+      model: 'model-a',
+      reasoningLevel: 'medium',
     })
   })
 

@@ -8,7 +8,13 @@ import pytest
 
 import lamtools_core.cli as cli_module
 from lamtools_core.cli import CoreHttpLLMClient, LLMConfig
-from lamtools_core.llm import ChatMessage, LLMRequest
+from lamtools_core.llm import (
+    ChatMessage,
+    LLMRequest,
+    REASONING_LEVELS,
+    normalize_reasoning_level,
+    reasoning_level_from_legacy,
+)
 from lamtools_core.llm.profiles import (
     apply_thinking_payload,
     build_profiled_anthropic_request,
@@ -453,6 +459,94 @@ def _text_request(model: str) -> LLMRequest:
         temperature=0.2,
         max_tokens=100,
     )
+
+
+def test_sub_agent_late_context_stays_at_provider_history_tail():
+    late_context = "[Request-local sub-agent context]\nname: reviewer\nsummary: current"
+    request = LLMRequest(
+        messages=[
+            ChatMessage(role="system", content="stable system"),
+            ChatMessage(role="user", content="durable task"),
+            ChatMessage(role="assistant", content="durable answer"),
+            ChatMessage(role="user", content=late_context),
+        ],
+        model="test-model",
+        temperature=0.2,
+        max_tokens=100,
+    )
+
+    openai = build_profiled_openai_request(
+        request,
+        {"id": "openai", "protocol": "openai-chat-completions"},
+    )["payload"]
+    assert openai["messages"][-1] == {"role": "user", "content": late_context}
+
+    responses = build_profiled_responses_request(
+        request,
+        {"id": "responses", "protocol": "openai-responses"},
+    )["payload"]
+    assert responses["input"][-1]["role"] == "user"
+    assert responses["input"][-1]["content"][-1]["text"] == late_context
+
+    anthropic = build_profiled_anthropic_request(
+        [message.to_dict() for message in request.messages],
+        {"id": "anthropic", "protocol": "anthropic-messages"},
+        model=request.model,
+        max_tokens=100,
+        temperature=0.2,
+    )["payload"]
+    assert anthropic["messages"][-1] == {"role": "user", "content": late_context}
+    assert late_context not in anthropic["system"]
+
+    gemini = build_profiled_gemini_request(
+        request,
+        {"id": "gemini", "protocol": "gemini-generative-language"},
+    )["payload"]
+    assert gemini["contents"][-1] == {"role": "user", "parts": [{"text": late_context}]}
+    assert late_context not in json.dumps(gemini.get("systemInstruction", {}), ensure_ascii=False)
+
+
+def test_reasoning_levels_normalize_to_six_canonical_values_and_keep_aliases():
+    assert REASONING_LEVELS == ("off", "light", "medium", "high", "xhigh", "max")
+    assert normalize_reasoning_level("minimal") == "light"
+    assert normalize_reasoning_level("medium") == "medium"
+    assert normalize_reasoning_level("xh") == "xhigh"
+    assert normalize_reasoning_level("ultra") == "max"
+    assert normalize_reasoning_level("unknown", "xhigh") == "xhigh"
+    assert reasoning_level_from_legacy(reasoning_effort="xh") == "xhigh"
+    assert reasoning_level_from_legacy(thinking_enabled=True) == "high"
+
+
+def test_builtin_adapter_profiles_define_medium_and_xhigh_presets():
+    profiles = _builtin_profiles()
+    expected = set(REASONING_LEVELS)
+    for profile_id, profile in profiles.items():
+        presets = ((profile.get("request") or {}).get("reasoning") or {}).get("presets")
+        if isinstance(presets, dict):
+            assert set(presets) == expected, profile_id
+
+
+def test_deepseek_reasoning_mapping_is_off_low_high_high_max():
+    profile = _builtin_profiles()["deepseek-chat"]
+    expected = {
+        "off": ("disabled", None),
+        "light": ("enabled", "low"),
+        "medium": ("enabled", "high"),
+        "high": ("enabled", "high"),
+        "xhigh": ("enabled", "high"),
+        "max": ("enabled", "max"),
+    }
+    for level, (thinking_type, effort) in expected.items():
+        payload = build_profiled_openai_request(
+            _text_request("deepseek-chat"),
+            profile,
+            reasoning_level=level,
+        )["payload"]
+        assert payload["thinking"]["type"] == thinking_type
+        if effort is None:
+            assert "reasoning_effort" not in payload
+        else:
+            assert payload["reasoning_effort"] == effort
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,8 @@ declare module '@lamtools/bundled-workflow-ui' {
   export function schemaFields(value: unknown, direction?: string): any[]
   export function schemaPorts(value: unknown, existing?: any[]): any[]
   export const WorkflowNodeCatalog: any
+  export const SchemaNodeEditor: any
+  export const WorkflowNodeRuntimeDock: any
   export const WorkflowRunInputForm: any
   export const WorkflowQueuePanel: any
   export const WorkflowResourcesPanel: any
@@ -26,6 +28,7 @@ declare module '@lamtools/bundled-workflow-ui' {
   export function isWorkflowDocumentV2(value: unknown): boolean
   export function reconcileWorkflowNodePorts(definition: any, previous: any, next: any): any
   export function normalizeNodeStateStatus(value: unknown): any
+  export function normalizeWorkflowNodeState(value: unknown, nodeId?: string): any
   export function normalizeWorkflowRunStatus(value: unknown): any
   export function normalizeCanvasElement(value: unknown, key?: string): any
   export function normalizeCanvasElements(value: unknown, legacyBuckets?: Record<string, unknown>): any[]
@@ -44,6 +47,8 @@ declare module '@lamtools/bundled-workflow-ui' {
   export const WORKFLOW_CANVAS_STORAGE_KEY: string
   export const WORKFLOW_CLIPBOARD_TYPE: string
   export const WORKFLOW_CLIPBOARD_VERSION: number
+  export const WORKFLOW_CANONICAL_NODE_KINDS: readonly string[]
+  export const WORKFLOW_NODE_KINDS: readonly string[]
   export type WorkflowDef = any
   export type WorkflowNode = any
   export type WorkflowActivation = any

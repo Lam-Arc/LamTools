@@ -18,7 +18,9 @@
         "minWidth": 800,
         "minHeight": 600,
         "decorations": false,
-        "backgroundColor": "#202020",
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "shadow": true,
         "dragDropEnabled": false,
         "additionalBrowserArgs": "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-tabs"
       },

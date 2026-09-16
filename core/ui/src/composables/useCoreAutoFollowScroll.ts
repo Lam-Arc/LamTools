@@ -35,6 +35,7 @@ import { nextTick, ref, type Ref } from 'vue'
  */
 
 export const CORE_SCROLL_BOTTOM_THRESHOLD_PX = 80
+export const CORE_SCROLL_SENTINEL_VISIBLE_RATIO = 0.99
 export const CORE_HISTORY_AUTO_LOAD_THRESHOLD_PX = 1280
 
 export function coreHistoryAutoLoadThreshold(clientHeight: number): number {
@@ -132,6 +133,18 @@ export function coreIsScrollNearBottom(
   return max - top <= thresholdPx
 }
 
+/**
+ * `isIntersecting` only means that at least one pixel overlaps. When an
+ * observer uses a near-full threshold, treating a partially clipped sentinel
+ * as visible loses the only threshold crossing that should trigger follow.
+ */
+export function coreIsBottomSentinelVisible(
+  entry: Pick<IntersectionObserverEntry, 'isIntersecting' | 'intersectionRatio'> | null | undefined,
+  visibleRatio = CORE_SCROLL_SENTINEL_VISIBLE_RATIO,
+): boolean {
+  return Boolean(entry?.isIntersecting && entry.intersectionRatio >= visibleRatio)
+}
+
 export function useCoreAutoFollowScroll(
   elementRef: Ref<CoreScrollableElement | null>,
   options: UseCoreAutoFollowScrollOptions = {},
@@ -174,11 +187,14 @@ export function useCoreAutoFollowScroll(
     if (sentinelRef?.value) {
       const movedUp = currentScrollTop < lastScrollTop - 0.5
       const contentShrank = Boolean(el && el.scrollHeight < lastScrollHeight - 0.5)
-      const wasProgrammatic = programmatic
       lastScrollTop = currentScrollTop
       lastScrollHeight = el?.scrollHeight ?? 0
       if (programmatic) programmatic = false
-      if (movedUp && !contentShrank && !wasProgrammatic) {
+      // A bottom-directed programmatic scroll never moves upward. Therefore an
+      // upward position change must win immediately even if a stale
+      // programmatic marker is waiting to be consumed (for example, the user
+      // grabs the scrollbar before the browser dispatches the write's event).
+      if (movedUp && !contentShrank) {
         autoFollow.value = false
         atBottom.value = false
       } else if (sentinelVisible) {

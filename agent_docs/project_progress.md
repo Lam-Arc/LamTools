@@ -16,6 +16,19 @@ one stable RemoteTransport while ConnectionManager selects the secure LAN or
 Relay route. Pairing, device identity, secure-storage separation, Noise
 authentication, replay protection, protocol versioning, reconnect handling,
 and multi-client response ownership are in place.
+The latest Workflow UI closure adds multi-workflow tabs, a responsive
+schema-driven node catalog, Chinese presentation labels, and semantic Lucide
+icons while leaving canonical node IDs and execution contracts unchanged.
+The current Workflow observability closure adds a persistent run panel, live
+node/edge execution states, safe input/output/timing/retry/cache/error and
+audit projections, an explicit HumanTask approval path, and usable Schema
+defaults/JSON parameter editing. It also hardens public run/queue projections
+against credentials, tokens, and hidden reasoning content.
+The follow-up canvas-runtime closure moves that observability into a
+graph-native sidecar: the default run panel is removed, graph nodes stay
+opaque with restrained active-state treatment, and the dock accumulates public
+delta/output/log/tool/artifact/error/approval information without turning the
+canvas into a text dashboard.
 
 ## Current Position
 
@@ -29,6 +42,25 @@ and multi-client response ownership are in place.
   parsing Core business messages.
 - Context-compaction trigger behavior was corrected so precise planning is not
   skipped by a fast estimate and short no-LLM histories return `not_needed`.
+- Context compaction now defaults to retaining `0` Steps: all non-prefix
+  history is summarized, then the newest 20 user instructions are appended
+  verbatim as a numbered recent-user section. The setting is available through
+  the CLI, settings RPC, and CoreSettings UI.
+- The follow-up compaction fixes preserve same-run summary visibility in memory
+  while filtering durable rows, use valid high-water/compacted sequences for a
+  manual zero-tail, roll prior structured recent-user sections forward, and
+  keep automatic/manual overrides aligned across edge cases.
+- Workflow UI is at the user-acceptance handoff: open workflow tabs, dirty
+  switch protection, responsive sidebar/popover catalog search and filters,
+  localized presentation copy, and semantic icon affordances are implemented;
+  visual acceptance remains user-owned in Tauri. Runtime observability and
+  approval UX are implemented, but the Agent adapter currently exposes only
+  tool names/counts rather than per-call tool status.
+- Sunday’s control-surface contrast and icon-coverage closure is complete at
+  the code and runtime-readiness level. The clarified “background” is the
+  backdrop workbench / background-board / sidebar area; chat main and
+  composer remain separate surfaces with their own flat fills and shared
+  boundary color. Visual acceptance remains user-owned in Tauri.
 
 ## Verification
 
@@ -43,6 +75,46 @@ and multi-client response ownership are in place.
 - Website build passes.
 - LamTools design audit: 69 files scanned, 0 deviations.
 - `git diff --check` passes.
+- Latest Workflow UI closure: full `npm run typecheck` passed; the five
+  Workflow UI test files passed 49 tests; backend
+  `core/tests/test_workflow_node_contract.py` passed 7 tests; the LamTools
+  design audit covered 83 files with 0 deviations; and the independent Tester
+  gave the final code review a pass. These checks do not constitute a visual
+  Tauri acceptance pass.
+- Latest Workflow observability closure (`workflow_observability_20260914`):
+  Workflow backend coverage passed 214 tests / 1693 deselected; focused
+  Workflow UI coverage passed 56 tests; UI typecheck, `npm run build:app`,
+  LamTools design audit (84 files / 0 deviations), and `git diff --check`
+  passed. Independent Tester review passed (backend 45 / UI 45).
+- Real run evidence for workflow `工作流测试1` (`77638d5256364cc99f6887fa00e17d08`):
+  revision 148 with 9 current nodes and 9 links paused at HumanTask approval,
+  then completed after approval. The Agent returned 23 sources and the model
+  produced 17,970 characters. This confirms a real end-to-end run, not visual
+  acceptance of the Tauri surface.
+- Latest graph-native Workflow runtime sidecar closure
+  (`workflow_canvas_runtime_sidecar_20260914`): full UI coverage passed 83
+  files / 620 tests; UI typecheck and `npm run build:app` passed (only existing
+  chunk/dynamic-import warnings); LamTools design audit passed 84 files / 0
+  deviations; `git diff --check` exited 0 with line-ending warnings; and the
+  independent Tester passed 4 files / 45 tests plus typecheck and diff check.
+- This closure did not perform Tauri visual acceptance or a real Workflow run.
+  The known `工作流测试1` data is currently damaged at revision 155 with 8
+  nodes and 0 links; it was deliberately neither rerun nor restored here.
+
+## Workflow dynamic-module loading repair (2026-09-14)
+
+- Root cause: during HMR, a stale `index.ts` module URL remained in the failed
+  module cache while the deprecated `WorkflowRunPanel` export and dead
+  `WorkflowView` state still referenced the old surface. This made entering
+  Workflow fail before the view mounted.
+- Repair: removed the deprecated component/export and the dead `WorkflowView`
+  state, then fully restarted Tauri so the module graph and failed URL cache
+  were rebuilt.
+- Verification: all three Workflow Vite modules returned HTTP 200; backend
+  Workflow V2 document reading succeeded; focused Workflow coverage passed 34
+  tests; UI typecheck, `npm run build:app`, and the LamTools design audit
+  passed. This is loading verification, not visual acceptance or real
+  Workflow execution evidence.
 
 ## Office retest process-audit closure (2026-09-10)
 
@@ -369,11 +441,10 @@ and multi-client response ownership are in place.
 
 ## Next Milestone
 
-Sunday 品牌、启动首帧、桌面构建、Inno 安装验收和模块化右侧栏部署均已
-完成。下一步继续 Artifact 重做共识与契约设计、Office 生成质量、真实设备
-LAN/Relay 配对重连，以及 Docker Hub 可用后的真实镜像构建；本次 sidebar
-实施证据保留在
-`agent_docs/latest_session_work.md`。
+本轮下一里程碑是用户在当前 Tauri 窗口完成 Workflow UI 的视觉验收，并按需
+运行一个真实工作流。Artifact 重做共识与契约、Office 生成质量、真实设备
+LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本轮不替代这些
+工作，也不把进程/日志核验写成视觉通过。
 
 ## ComfyUI 工作流与 Agent 对齐规划（2026-09-13）
 
@@ -484,6 +555,61 @@ LAN/Relay 配对重连，以及 Docker Hub 可用后的真实镜像构建；本�
   同步对应 UI 测试，再运行聚焦验证。证据：上述三份组件及
   `core/ui/tests/core-session-title-editor.test.ts`、
   `core/ui/tests/core-project-components.test.ts`。
+
+## Optical liquid-glass closure (2026-09-14)
+
+- Task ID/deployment: `optical_liquid_glass` /
+  `optical_liquid_glass`; closure state: `complete`. The active goal was to
+  apply advanced optical liquid glass consistently to the right sidebar and
+  all shared right-click cards under a code-only verification scope.
+- Overall progress/current position: `core/ui/src/styles/optical-glass.css`
+  now provides token-driven clear transmission, restrained 8px blur,
+  saturation 1.14, brightness 1.02, contrast 1.03, and 2% tint, with localized
+  radial/linear/conic reflection, dispersion, highlight, and environment/color
+  response layers. `layout.css` imports the stylesheet; `.optical-glass` is
+  applied to the WorkspaceShell right drawer and ContextMenuPanel. Both use
+  border 0; the old four-edge masks and per-surface filters are removed, with
+  no uniform white border or edge-opacity fade.
+- Verification: focused coverage passed 36/36 and independent coverage passed
+  56/56; full UI coverage passed 82 files / 614 tests; UI typecheck and
+  `build:app` passed; LamTools design audit passed 84 files / 0 violations;
+  independent Tester review passed; scoped `git diff --check` passed.
+- Limitation and disposition: no Tauri runtime or visual check was authorized
+  or performed. The worktree remains heavily dirty and uncommitted; unrelated
+  and concurrent changes were preserved, with no stage, commit, revert,
+  cleanup, or attribution.
+- Exact next entry point: if visual validation is later authorized, inspect the
+  Tauri right drawer and shared context menus for background transmission,
+  localized highlights, and reduced edge treatment; otherwise continue the
+  existing Workflow acceptance, Artifact consensus, Office visual-quality,
+  real-device LAN/Relay, and Docker image milestones. No deployment-specific
+  blocker is known.
+
+## Context-menu liquid-glass closure (2026-09-14)
+
+- Task ID/deployment: `context_menu_liquid_glass` /
+  `context_menu_liquid_glass`; closure state: `complete`. The active goal was
+  to align every right-click card with the right-sidebar transparency and blur
+  standard under the code-only verification scope.
+- Overall progress/current position: all seven right-click caller surfaces
+  route through the shared `openContextMenu`/`ContextMenuHost`; root menus and
+  submenus share `ContextMenuPanel.vue`. Its stable outer surface uses
+  `blur(var(--space-4)) saturate(1.08)`, a four-edge mask, and a 4% current-area
+  text tint; animation is isolated to inner content so the outer compositing
+  remains visually stable.
+- Verification: focused context-menu coverage passed 58/58; full UI coverage
+  passed 82 files / 614 tests; UI typecheck and `build:app` passed; LamTools
+  design audit passed 83 files / 0 violations; independent Tester review
+  passed; scoped `git diff --check` passed.
+- Limitation and disposition: no Tauri runtime/visual check was performed,
+  per the code-only scope. The working tree remains heavily dirty and
+  uncommitted; unrelated and concurrent changes were preserved, with no
+  stage, commit, revert, cleanup, or attribution.
+- Exact next entry point: when visual validation is requested, inspect the
+  shared Tauri context-menu host across root and submenu surfaces; otherwise
+  continue the existing project-level Workflow acceptance, Artifact consensus,
+  Office visual-quality, real-device LAN/Relay, and Docker image milestones.
+  No deployment-specific blocker is known.
 
 ## Right-sidebar motion closure (2026-09-13)
 
@@ -765,3 +891,755 @@ LAN/Relay 配对重连，以及 Docker Hub 可用后的真实镜像构建；本�
   complete it through signal/approval, and verify Arrange once-timeout resume;
   (6) restart/reload during a run and confirm the pinned revision resumes
   without duplicate external side effects.
+
+## Transparent startup window closure (2026-09-14)
+
+- Deployment `transparent_startup_window_20260914` is complete. The main Tauri
+  window now uses `transparent: true`, an alpha-zero background, and
+  `shadow: false`; pre-shell `html`/`body`/`#app` and the splash are transparent,
+  with only the centered Sunday mark painted.
+- The full-screen veil/reveal/backdrop-filter path was removed. The normal
+  workspace shell takes over after Vue is ready; click-through remains disabled.
+  Normal and reduced-motion paths clear `aria-hidden` and clean animation state.
+- Verification: focused startup tests 12/12; full UI contracts 610/610;
+  full UI typecheck and desktop Vite build passed; `npm run build:app` generated
+  `lamcore.exe`; config JSON/bootstrap syntax checks passed; Lam design audit
+  83/0; scoped `git diff --check` passed with line-ending warnings only.
+- No Tauri GUI/OS visual check was run; manual smoke remains user-owned. The
+  worktree remains heavily dirty/uncommitted; no stage, commit, revert, cleanup,
+  or attribution was performed, and no deployment-specific blocker is known.
+
+## Workflow UI tabs, responsive catalog, and localized affordances closure (2026-09-14)
+
+- Task ID/deployment: `workflow_ui_acceptance_closure_20260914`; closure state:
+  `complete`.
+- Outcome: Workflow View now supports multiple open workflow tabs with active,
+  dirty, close, and unsaved-switch handling. The node catalog is
+  `object_info`/schema-driven and responsive for sidebar and popover placement,
+  with bounded scrolling, search, category filters, recent/favorite filters,
+  keyboard activation, and mobile-sized controls. Chinese display names,
+  descriptions, category labels, and accessible copy are presentation-only;
+  canonical English type IDs, stored preferences, schema keys, and execution
+  contracts remain unchanged. Node, catalog, inspector, queue, trigger, and
+  canvas affordances use semantic Lucide icons instead of text glyphs.
+- Evidence and verification: the Workflow UI contract surface is 5 test files
+  / 49 tests passed (`workflow-canvas-parity.test.ts`,
+  `workflow-node-contract.test.ts`, `workflow-policies-panel.test.ts`,
+  `workflow-runtime-services.test.ts`, and `workflow-ui.test.ts`). Backend
+  `core/tests/test_workflow_node_contract.py` passed 7 tests. Full
+  `npm run typecheck` passed; the LamTools design audit covered 83 files with
+  0 deviations; an independent Tester passed the final code review. No Tauri
+  visual acceptance is claimed.
+- Runtime handoff: the current Tauri development process/log chain was checked
+  read-only with frontend Vite listening on `127.0.0.1:5173` and the backend on
+  `127.0.0.1:49733`; this confirms readiness only, not visual behavior.
+- Git handoff: Workflow UI source/test changes are the in-scope product work;
+  this closure updates only `agent_docs/project_progress.md` and
+  `agent_docs/latest_session_work.md` and leaves `project_diary.md` unchanged.
+  Concurrent, unrelated startup/desktop changes remain un-attributed in
+  `core/desktop/index.html`, `core/desktop/src-tauri/tauri.conf.json`,
+  `core/ui/src/motion/startupSplash.ts`, and
+  `core/ui/tests/startup-splash.test.ts`. Untracked temporary material remains
+  in `artifacts/`, `core/core.db-wal`, and `core/core.db-shm`; none was touched.
+  The working tree is heavily dirty and uncommitted; no stage, commit, revert,
+  cleanup, or attribution was performed.
+- Exact next entry point: the user opens the current Tauri Workflow surface and
+  visually checks tabs, responsive catalog bounds, Chinese copy, and semantic
+  icons, then runs a representative Workflow. If a defect appears, continue
+  only from the Workflow UI files and their 5-file/49-test contract surface;
+  do not reinterpret the process check as a visual pass.
+
+## Artifact V2 closure (2026-09-14)
+
+- Task ID/deployment: `artifact_v2_closure` /
+  `artifact_system_v2_20260914`; closure state: `complete`.
+- Outcome: SQLite Artifact V2 now provides stable per-project-path identity,
+  immutable SHA-256-deduplicated revisions, legacy `.lam/artifact` manifest and
+  historical projection-ID aliases, event-boundary ingestion, upload-as-input
+  and generated/file-change outputs, soft remove/restore, revision
+  preview/restore, and RPC/HTTP/CLI parity. Checkpoints retain Revision
+  pointers; workspace rollback restores referenced revisions and soft-removes
+  artifacts created after the target checkpoint. Project-scoped read/mutation
+  boundaries were hardened in main review.
+- UI outcome: the project 成果库 supports role/kind/status/search filters,
+  history/restore, StagePane preview, and event-driven refresh. Conversation
+  preview stacking remains intact; card and preview surfaces are opaque.
+- Verification: backend focused final coverage passed 34 tests / 1 skipped;
+  the broader related suite before the final narrow hardening passed 60 / 2
+  skipped; focused UI coverage passed 3 files / 24 tests; full UI coverage
+  passed 83 files / 624 tests; UI typecheck, `npm run build:app`, website
+  build, and Python `compileall` passed; LamTools design audit passed 84 files
+  / 0 deviations; scoped `git diff --check` passed with line-ending warnings.
+  Existing Vite chunk/dynamic-import and aiosqlite datetime deprecation
+  warnings are non-blocking.
+- Limitation: no Tauri visual/runtime acceptance was run under the code-only
+  scope; no visual pass is claimed. The repository remains heavily dirty and
+  uncommitted. No stage, commit, revert, cleanup, or unrelated attribution was
+  performed.
+- Exact next entry point: user performs Tauri acceptance of the project 成果库,
+  StagePane preview, conversation card opacity/stacking, event refresh, and
+  revision restore/rollback; then exercises the matching CLI/RPC paths. If a
+  defect appears, continue from the Artifact V2 backend/RPC/CLI contract and
+  the project library/StagePane UI while preserving legacy aliases and
+  project-scoped boundaries.
+
+## Reasoning levels, sub-agent overrides, and Shallow visibility closure (2026-09-15)
+
+- Deployment `reasoning_levels_xhigh_medium` is complete. Reasoning controls now
+  use six canonical levels: `off`, `light`, `medium`, `high`, `xhigh`, and
+  `max`; the `xh` alias normalizes to `xhigh`. Adapter profiles provide the
+  complete preset surface and collapse unsupported levels to the nearest
+  supported provider level. DeepSeek follows the verified mapping
+  `off → disabled`, `light → low`, `medium/high/xhigh → high`, and
+  `max → max`.
+- Sub-agent dispatch accepts a per-call model and `reasoning_level`; omitted
+  values inherit the parent agent settings. Existing narrow runner signatures
+  remain compatible through optional-argument filtering. The UI no longer
+  exposes the Shallow switch, while the underlying compatibility field, CLI,
+  and legacy-session behavior remain available.
+- Verification evidence: the independent Tester passed 108 Python tests,
+  22 UI tests across 3 files, UI typecheck, 26 adapter preset checks,
+  DeepSeek payload checks, inheritance/override and legacy-runner checks,
+  Shallow-visibility checks, and `git diff --check`. The main agent additionally
+  passed 185 Python tests (28 warnings), 22 UI tests, typecheck, 8 focused
+  supplementary tests, and CLI `medium`/`xhigh` plus approval-resume
+  `reasoning_level` continuation checks. No Tauri visual acceptance is claimed.
+- Git handoff: the worktree remains heavily dirty and uncommitted, including
+  unrelated and concurrent user changes. No stage, commit, revert, cleanup, or
+  attribution was performed. Exact next entry point is to preserve the
+  canonical six-level contract and provider mappings when adding adapters or
+  changing delegation settings; use the focused reasoning/sub-agent/UI tests
+  before broader validation.
+
+## Startup optical-glass closure (2026-09-15)
+
+- Deployment `startup_optical_glass_20260915` is complete. The startup layer in
+  `core/desktop/index.html` now uses a low-gray tint, 8px blur, static localized
+  dispersion/environment-color penetration, and a masked edge highlight.
+- Native Acrylic tint in `core/desktop/src-tauri/src/main.rs` was reduced from
+  alpha 32 to 18. These changes preserve the transparent first paint and avoid
+  a full-screen opaque treatment.
+- Verification: startup-focused tests 12/12; UI typecheck; desktop build;
+  `cargo check --no-default-features` (existing dead_code warnings only); and
+  LamTools design audit 84 files / 0 deviations all passed. No Tauri GUI/OS
+  visual check was run; manual smoke remains user-owned.
+- The worktree remains heavily dirty and uncommitted; no stage, commit, revert,
+  cleanup, or attribution was performed. No deployment-specific blocker is
+  known. Exact next entry point: user performs startup visual smoke in Tauri;
+  if needed, inspect `index.html`, `main.rs`, and the startup splash contract.
+
+## Asynchronous sub-agent lifecycle and messaging closure (2026-09-15)
+
+- Deployment `subagent_async_lifecycle_ui` is complete. Sub-agents now use
+  explicit `create`/`close` lifecycle operations and the stable `(parent,
+  name)` key for reuse. `sub_agent_message(type, name, prompt)` validates the
+  type and name before dispatch; each sub-agent has a dedicated `message`
+  operation for sending a message to its parent. Dispatch returns immediately
+  through the background supervisor, while a prompt sent to a busy sub-agent
+  is injected before model sampling at the next `step`.
+- Consider and execute agents have separate tool sets, neither can delegate
+  another sub-agent, and both preserve the sub-agent message path. Late
+  context appends the name, model, and summary after history as a final user
+  message so provider requests retain a cacheable prefix. The UI displays
+  `type name · model reasoning · elapsed`, keeps `consider` and `execute` as
+  the only types, and the right rail lists current and historical sub-agents
+  for the session with click-to-locate/expand and model/reasoning hover details.
+- Verification: backend focused coverage passed 160 tests; default-agent and
+  HTTP coverage passed 61 tests with 1 skip; UI coverage passed 28 tests; UI
+  typecheck, Python `compileall`, LamTools design audit (84 files / 0
+  violations), and scoped `git diff --check` passed. The independent model
+  notes verification had already passed 216 related tests.
+- The extended live-router suite retains one pre-existing pagination-resume
+  failure unrelated to this deployment; it is not attributed to the
+  sub-agent lifecycle changes. No Tauri visual/runtime acceptance is claimed.
+- The worktree remains heavily dirty and uncommitted; no stage, commit,
+  revert, cleanup, or unrelated attribution was performed. Exact next entry
+  point is the focused supervisor/runner/toolbox/HTTP and sub-agent UI test
+  surface when extending lifecycle, validation, or provider-tail behavior.
+
+## Asynchronous sub-agent UI motion follow-up (2026-09-15)
+
+- This is the motion completion follow-up for deployment
+  `subagent_async_lifecycle_ui`. `CoreSubAgentPanel` now animates list add,
+  remove, and reorder operations; rows without a source timeline can expand;
+  remaining rows expose their expanded content; and status icons/labels stay
+  synchronized with the projected state.
+- `CoreSubAgentDialog` now has status, backdrop, and close micro-motion.
+  `RightSidebarHost` transitions files/modules and uses a GSAP
+  mount-preserving transition for runtime/artifacts, so switching those views
+  does not remount their module instances. `LamToolsApp` locates a sub-agent
+  run and finishes with a temporary highlight on the source heading.
+- The reduced-motion path disables these animations and uses `scroll-behavior:
+  auto`. Verification passed for the two focused Vitest files (33 tests),
+  `npm run typecheck`, the LamTools design audit (84 files / 0 deviations),
+  and scoped `git diff --check` (CRLF warnings only). No Tauri visual/runtime
+  acceptance is claimed.
+- The worktree remains heavily dirty and uncommitted; no stage, commit,
+  revert, cleanup, or unrelated attribution was performed. Exact next entry
+  point: user performs Tauri visual acceptance of sub-agent list/dialog/right-
+  rail transitions, heading highlight, and reduced-motion behavior.
+
+## Startup theme reveal follow-up (2026-09-15)
+
+- The transparent startup glass remains unchanged. Once application preparation
+  completes, the saved theme background now performs a single circular reveal:
+  it expands from the actual Sunday mark center to a `farthest-corner` radius
+  over 0.5s, then hands off to the staged main-shell fade-in.
+- The reduced-motion path skips the reveal and uses a direct cross-fade. This
+  follow-up preserves the low-cost static glass treatment and existing startup
+  accessibility cleanup.
+- Verification: startup-focused tests 12/12, UI typecheck, desktop build,
+  LamTools design audit 84/0, and scoped `git diff --check` all passed. No
+  Tauri visual verification was run; manual acceptance remains user-owned.
+
+## Sunday ivory/graphite brand closure (2026-09-15)
+
+- Task/deployment: `sunday_ivory_graphite_close` /
+  `sunday_ivory_graphite_20260915`; closure state: `complete`.
+- Outcome: Sunday’s light/dark themes now use flat ivory/graphite surfaces;
+  main and composer share the same fill and solid border treatment. Exact old
+  default themes migrate safely without overwriting user-customized themes.
+  The logo was geometrically redrawn on a 1024 viewBox with a circular eye,
+  round-cap wink, and wide smile, and synchronized across the Vue component,
+  startup inline mark, source SVG assets, light/dark variants, ICO, ICNS, and
+  legacy ICO copies.
+- Verification: focused brand/theme/startup coverage passed 48 tests; UI
+  typecheck/build, desktop Vite build, Tauri Rust build, LamTools audit
+  (84 files / 0 deviations), and targeted `git diff --check` passed. ICO
+  copies hash-match and the ICNS is valid.
+- Limitation: the full UI suite passed 634/637; three existing
+  `MessageView`/`chat-thread-process` failures are unrelated to this
+  deployment. No Tauri visual validation was run under the code-only scope.
+- Git handoff: the worktree remains heavily dirty and uncommitted; no stage,
+  commit, revert, cleanup, or unrelated attribution was performed. Exact next
+  entry point: when visual validation is requested, inspect the Sunday mark,
+  title-bar placement, startup mark, and light/dark theme surfaces in Tauri;
+  otherwise continue from the focused brand/theme tests and preserve the
+  migration and asset-synchronization contracts.
+
+## Sunday reference-image trace correction (2026-09-15)
+
+- Task/deployment: `sunday_reference_icon_trace_archive` /
+  `sunday_reference_icon_trace_20260915`; closure state: `complete`.
+- The brand assets now follow the supplied reference artwork. The complete
+  framed 1254×1254 light and dark PNGs are retained losslessly with SHA-256
+  `43baa9ec01d1f571852e3dc86463b27e39a077ff43c49523d6bfb27f12768291`
+  (dark) and
+  `dba8a5508c294093fb3723bfe9417a04564bf797a2bf61121247464db0bd0087`
+  (light). Application icon, title-bar icon, and startup surface use the
+  complete framed artwork with explicit effective-theme switching; the
+  standalone mark uses the measured tight 1024-viewBox vector geometry.
+- The flat ivory/graphite palette is sampled into the theme tokens without
+  gradients. ICO, ICNS, and legacy ICO copies were regenerated from the
+  corrected application artwork. Startup fallback colors match the resolved
+  backdrop, and Tauri development was fully restarted after the changes.
+- Verification: focused Sunday coverage passed 47 tests; UI typecheck/build,
+  desktop build, `cargo check`, LamTools design audit (84 files / 0
+  deviations), and native icon/hash checks passed. The full UI suite passed
+  637/640; the three failures are unrelated `chat-thread-process` label
+  assertions. No Computer Use or visual GUI verification was performed.
+- Runtime handoff: Tauri dev is running in session `66861`, frontend `5173`,
+  backend `64257`. Visual acceptance of the startup, title-bar, and theme
+  surfaces remains user-owned. The repository remains heavily dirty and
+  uncommitted; unrelated and concurrent changes were preserved, with no
+  stage, commit, revert, cleanup, or attribution performed.
+- Exact next entry point: perform the user-owned Tauri visual smoke for both
+  effective themes, checking the complete framed startup/title-bar icon,
+  measured standalone mark, and flat ivory/graphite contrast; if a defect is
+  found, continue from the synchronized SVG/PNG/ICO/ICNS asset set and the
+  47-test brand contract.
+
+## Sunday workbench frame and icon coverage closure (2026-09-15)
+
+- Task ID/deployment: `archivist_sunday_workbench_frame_color_20260915` /
+  `sunday_workbench_frame_color_20260915`; closure state: `complete`.
+- User clarification: “背景” means the `backdrop` workbench/background-board /
+  sidebar area, not the chat main surface. The final flat contract is light
+  workbench `#D2D8E6`, chat main/composer `#FDFBF7`, and controls `#2E3138`
+  with `#FBF7F0` text; dark workbench `#818289`, chat main/composer
+  `#1B1D22`, and controls `#FBF7F0` with `#2E3138` text. No gradients are
+  part of this contract.
+- Exact migrations cover the older colorful, prior gray-control, and
+  immediately previous inverted-control Sunday defaults. Any custom theme
+  remains unchanged by migration.
+- The raw 1254×1254 reference PNGs remain byte-identical. Centered 1120px
+  crops resized with LANCZOS produce 1254px display masters at approximately
+  90% meaningful alpha coverage; SundayLogo, startup splash, SVG icon wrappers,
+  ICO, and ICNS use those normalized display masters. All three ICO copies are
+  byte-identical with 16/24/32/48/64/256 sizes, and the ICNS is valid.
+- Verification: independent scoped checks passed 54/54 focused UI tests, UI
+  typecheck, desktop Vite build, `cargo check` (four existing dead-code
+  warnings), and scoped `git diff --check`. The full UI suite was 645/648;
+  three unrelated chat-thread-process assertions still expect obsolete
+  `001 · name` labels instead of current `execute name` labels.
+- Runtime handoff: fresh Tauri dev is active in exec session `28924`, frontend
+  port `5173`, backend port `63144`; the backend became ready in 2108 ms and
+  the desktop plugin host is ready. No Computer Use or GUI visual verification
+  was performed, so visual acceptance remains user-owned.
+- Git handoff: the repository remains heavily dirty and uncommitted. No
+  stage, commit, revert, cleanup, or unrelated attribution was performed;
+  concurrent and unrelated changes remain preserved. Exact next entry point:
+  the user performs Tauri visual smoke in both themes, checking the corrected
+  workbench frame color, complete enlarged icon in startup/title bar, chat
+  surfaces, controls, and boundaries. If a defect appears, continue from the
+  Sunday theme helpers, workspace styles, and normalized display-master asset
+  set.
+
+## Compaction keep-recent-step setting pause (2026-09-15)
+
+- Task ID/deployment: `compaction_keep_steps_settings_closure` /
+  `compression_keep_steps_settings_20260915`; closure state: `paused`.
+- Current compaction is token-budgeted. Its structural planner retains whole
+  semantic user-turn groups within the token target; no setting currently
+  controls a count of retained “steps”. `LoopPolicy.max_history_messages` is
+  a separate message-count safety trim, and the Goal evaluator’s
+  `kernel_steps[-12:]` is only a fixed recent-step projection for evaluation.
+  These three mechanisms must not be conflated.
+- Implementation is paused pending the user’s definition of “Step” (for
+  example, a semantic user-turn group versus a kernel loop iteration). No
+  production edits or checks were performed for this request.
+- Git disposition: read-only handoff; the repository remains heavily dirty
+  and uncommitted. No stage, commit, revert, cleanup, or unrelated attribution
+  was performed, and `project_diary.md` remains untouched.
+- Exact next entry point: after the user defines “Step”, map that meaning to
+  the compaction planner and settings contract, then implement and test the
+  corresponding configurable retention behavior without changing the
+  independent history trim or Goal projection semantics.
+
+## Compaction retained-step setting implementation (2026-09-15)
+
+- Task ID/deployment: `compaction_step_tail_backend` /
+  `compaction_step_tail_20260915`; closure state: `complete`.
+- The requested setting is implemented in the shared compaction path:
+  `core.contextCompaction.retained_steps`, default `6`, validated to `1–100`.
+  CoreSettings exposes the number field and save/refresh flow; the CLI provides
+  `context-compaction show` and `context-compaction config --retained-steps`.
+  A model Step is one `assistant` response plus its immediately following
+  contiguous `tool` results. The planner initially protects the latest N Steps
+  union the latest 20 user messages, then the exact token-budget fitter may
+  drop the oldest protected units while preserving the newest user boundary.
+  Automatic and manual `/compact` use this same policy; per-invocation and
+  `LoopPolicy.compact_retained_steps` overrides remain available.
+- Main-agent verification: the expanded backend set passed 341 tests with 28
+  existing aiosqlite deprecation warnings; `compileall` passed. UI focused
+  coverage (54), typecheck, and the LamTools design audit (84 files / 0
+  deviations) passed. Scoped `git diff --check` passed with only LF/CRLF
+  warnings. `ruff` was unavailable (`No module named ruff`).
+- Independent Tester’s corrected regression surface passed 247 tests in
+  35.85 seconds. It confirmed union retention, exact-budget shrinkage,
+  assistant+tool atomic dropping, the newest-user minimum boundary, and the
+  shared automatic/manual path. The earlier nine kernel compatibility failures
+  were fixed and are not a remaining limitation; the planner/fitter stage
+  documentation was synchronized.
+- Git disposition: the repository remains heavily dirty and uncommitted;
+  unrelated and concurrent changes were preserved. No stage, commit, revert,
+  cleanup, or attribution was performed. `project_diary.md` was left to the
+  main agent and was not edited by this closure.
+- Exact next entry point: future changes should begin with the focused
+  compaction/step-tail/kernel contract and preserve the setting namespace,
+  Step grouping, 20-user union, newest-user boundary, and exact-budget fitter
+  behavior. Visual Tauri acceptance was not part of this code-focused closure.
+
+## Input composer token alignment closure (2026-09-15)
+
+- Task/deployment: `input_token_alignment_archive` /
+  `input_token_alignment_20260915`; closure state: `complete`.
+- All active Core UI text-like input boxes and textareas now derive their
+  background, border, text, caret, and placeholder colors from composer tokens.
+  Transparent title inputs remain the explicit exception and stay area-local.
+  Selects, buttons, badges, and native non-text inputs continue to use the
+  control-area tokens. `.agents/skills/lam-design-spec/SKILL.md` is synchronized,
+  and `core/ui/tests/input-composer-tokens.test.ts` scans app/components/workflow/styles.
+- Verification: executor affected tests passed 60/60; focused contract passed
+  4/4; UI typecheck passed; the LamTools design audit found 0 violations in 84
+  files; and the scoped diff check passed. Independent Tester PASS followed
+  scanner hardening: focused 4/4 passed and the static scan found no applicable
+  residue. The full UI suite recorded 651 passes and 3 unrelated failures in
+  `tests/chat-thread-process.test.ts` expecting obsolete sub-agent labels.
+- No Computer Use or Tauri visual verification was run. The pre-existing
+  `CoreGoalStrip.vue` cancel-button composer coloring is outside this input-box
+  scope. The worktree remains heavily dirty and uncommitted; no stage, commit,
+  revert, cleanup, or broad attribution was performed. Exact next entry point:
+  when extending text-entry surfaces or token rules, begin with the composer
+  token contract and `input-composer-tokens.test.ts` scanner, preserving the
+  transparent title-input exception and control-area semantics.
+
+## Composer action-button color closure (2026-09-15)
+
+- Task/deployment: `composer_action_button_archive` /
+  `composer_action_button_colors_20260915`; closure state: `complete`.
+- `CoreSendStopButton` send and stop outer surfaces now use
+  `--theme-composer-text`; the paper-plane, stop glyph, and motion trail use
+  `--theme-composer-background`. Runtime GSAP color resolution no longer reads
+  control tokens or red. Existing motion, accessibility, and hit-area behavior
+  is preserved. The canonical lam-design-spec records this explicit composer
+  action-button exception.
+- Verification: executor focused coverage passed 3 files / 8 tests; UI
+  typecheck, LamTools design audit (84 files / 0 violations), and scoped diff
+  check passed. Independent Tester PASS covered 3 files / 22 tests, typecheck,
+  design audit 84/0, scoped diff check, and a temporary non-reduced GSAP
+  send-to-stop-to-send runtime test; the temporary test was removed.
+- Limitation: jsdom cannot compute pseudo-element `currentColor`; source
+  inheritance was verified. No Tauri or pixel visual run was performed. The
+  worktree remains heavily dirty and uncommitted; no stage, commit, revert,
+  cleanup, or broad attribution was performed. Exact next entry point: when
+  changing send/stop visuals, start with `CoreSendStopButton`, its composer
+  exception in lam-design-spec, and the focused action-button contract while
+  retaining the existing motion/accessibility/hit-area behavior.
+
+## Title input transparency closure (2026-09-15)
+
+- Task/deployment: `title_input_transparency_archive` /
+  `title_input_transparency_20260915`; closure state: `complete`.
+- Root cause: the shared text-input selector accumulated specificity through
+  many `:not(...)` clauses and overrode transparent inline title-editor classes.
+  The global text-input recipe now sits in zero-specificity `:where(...)`,
+  preserving composer colors, native exclusions, and the select-control recipe.
+  Seven inline/pure-text title exceptions reliably override to border 0,
+  transparent background, and local text/caret. Ordinary form values named
+  `title` or `name` remain composer input boxes.
+- Verification: executor coverage passed 5 files / 62 focused tests; UI
+  typecheck, LamTools design audit (84 files / 0 violations), and scoped diff
+  checks passed. Independent Tester PASS covered 8 files / 109 tests,
+  typecheck, scoped diff check, and selector-specificity/source review.
+- Limitation: this is a static CSS contract; no rendered Tauri CSSOM or visual
+  run was performed. One discarded invalid explicit Vitest-config attempt had
+  no product impact. The worktree remains heavily dirty and uncommitted; no
+  stage, commit, revert, cleanup, or broad attribution was performed. Exact
+  next entry point: when adding title-like controls, begin with the zero-
+  specificity global recipe and the seven explicit title exceptions, keeping
+  ordinary `title`/`name` form fields on composer tokens.
+
+## Context compaction full-summary and recent-user retention closure (2026-09-15)
+
+- Task ID/deployment: `compaction_full_summary_recent_users_20260915`; closure
+  state: `complete`.
+- Outcome: `core.contextCompaction.retained_steps` now defaults to `0` and
+  accepts `0–100`. Zero summarizes all non-prefix history. Every compaction
+  appends a program-owned `## Recent user messages` section containing the
+  newest 20 user instructions verbatim, numbered `1.`, `2.`, and so on.
+- Retention policy: positive Step settings protect recent Step units (one
+  assistant response plus its contiguous tool results) together with the
+  recent-user suffix. The exact-budget fitter drops the oldest retained Steps,
+  then the oldest numbered user entries, while preserving the newest user
+  instruction unless that instruction alone cannot fit. Repeated compaction
+  strips the prior generated section before rebuilding it; text/content blocks
+  from multimodal instructions are retained while media-only blocks are
+  omitted.
+- Surface coverage: automatic and manual `/compact` share the policy, and the
+  CLI, settings RPC, and CoreSettings UI accept `0`.
+- Exact files changed: `core/src/lamtools_core/app/command_execution.py`,
+  `core/src/lamtools_core/app/default_agent.py`, `core/src/lamtools_core/cli.py`,
+  `core/src/lamtools_core/config/operations.py`,
+  `core/src/lamtools_core/context_compaction/__init__.py`,
+  `core/src/lamtools_core/context_compaction/controller.py`,
+  `core/src/lamtools_core/context_compaction/fitter.py`,
+  `core/src/lamtools_core/context_compaction/formatting.py`,
+  `core/src/lamtools_core/context_compaction/models.py`,
+  `core/src/lamtools_core/context_compaction/planner.py`,
+  `core/src/lamtools_core/context_compaction_budget.py`,
+  `core/src/lamtools_core/kernel/loop.py`,
+  `core/src/lamtools_core/kernel/policy.py`,
+  `core/tests/test_context_compaction.py`,
+  `core/tests/test_context_compaction_step_tail.py`, and
+  `core/ui/src/components/CoreSettings.vue`.
+- Verification: main backend regression passed 348 tests; the independent
+  Tester passed 209 tests; CoreSettings Vitest passed 15 tests; UI typecheck,
+  `compileall`, LamTools design audit (84 files / 0 deviations), and scoped
+  `git diff --check` passed. No Tauri visual/runtime check was run.
+- Current position and next milestone: the code and contracts are complete;
+  future compaction changes should begin with the focused compaction/step-tail
+  tests and preserve the zero default, 20-user suffix, newest-user boundary,
+  and exact-budget ordering.
+
+## Sub-agent lifecycle event copy and mailbox projection closure (2026-09-15)
+
+- This is the event-surface follow-up to `subagent_async_lifecycle_ui`.
+  Lifecycle and mailbox rows now use explicit Chinese copy and matching Lucide
+  icons: `UserRoundPlus` for `创建了 {name} · {model} {reasoning}`, `Power`
+  for `启用了 {name} · {model} {reasoning}`, `PowerOff` for `关闭了 {name}`,
+  `Send` for `向 {name} 发送了消息`, and `Inbox` for `收到了 {name} 的消息`.
+- Backend operation results distinguish `created`, `enabled`, `closed`, and
+  `message_sent`. A child-to-parent guidance event projects as the
+  `sub_agent_receive` tool with `message_received` metadata, while asynchronous
+  lifecycle operations remain ordinary tool rows. UI metadata is kept out of
+  the model history; the model receives only the original message body.
+- Verification: the UI closure surface passed 116 tests; the backend closure
+  surface passed 249 tests; and UI typecheck passed. No Tauri visual/runtime
+  acceptance is claimed under the code-only scope.
+- The worktree remains heavily dirty and uncommitted. Existing and concurrent
+  changes were preserved; no stage, commit, revert, cleanup, attribution, or
+  `project_diary.md` edit was performed. Exact next entry point: if event
+  presentation changes again, begin with `MessageView`, the runtime projection,
+  and lifecycle/mailbox metadata contracts while retaining the five copy/icon
+  mappings and body-only model history.
+
+## Context compaction full-summary bugfix continuation (2026-09-16)
+
+- Task ID/deployment: `compaction_full_summary_recent_users_20260915`; closure
+  state: `complete`.
+- Verified fixes: same-run later Steps retain the generated summary in memory
+  while durable rows filter it; manual zero-tail compaction uses valid
+  high-water/compacted sequence values without falling back to full history;
+  repeated compaction rolls the prior structured `recent_user_messages`
+  section together with new raw users into the newest 20. Internal request-local
+  users are excluded. Typed media fields are excluded while media-only users
+  receive a placeholder.
+- Formatting and policy: the visible numbered original-user suffix remains
+  intact. Ambiguous heading/number/newline, CRLF, and special `splitlines()`
+  cases carry an invisible length footer for exact round-trip reconstruction.
+  Automatic/manual policy overrides remain equivalent.
+- Verification: main focused coverage passed 289 tests; independent focused
+  coverage passed 215 tests plus a 95-test compaction trio; 61 targeted tests
+  and 20,000 randomized round-trips passed; `compileall` and scoped
+  `git diff --check` passed. The full Core run passed 1,965 tests and skipped 2;
+  six unrelated failures remain in tool counts, artifact DB, and live-resume
+  coverage. No Tauri run was performed.
+- Current position and next milestone: the compaction behavior is complete and
+  ready for follow-up from the focused compaction/round-trip contracts. Preserve
+  the durable-row filter, sequence high-water handling, newest-20 roll-forward,
+  media/request-local exclusions, visible suffix, and invisible exact-length
+  footer when extending it.
+
+## Sub-agent runtime integration repair closure (2026-09-16)
+
+- Deployment `fix_subagent_runtime_integration`; closure state: `complete`.
+- The sub-agent contract now requires explicit `action/type/name/model/
+  reasoning_level` for create/close operations and `type/name/prompt` for
+  `sub_agent_message`; the dedicated child `message(message)` channel is
+  auto-allowed. `consider` and `execute` retain isolated tool sets and cannot
+  recursively delegate. Child runs are asynchronous, use `name` as the stable
+  reuse key, and deduplicate across runs/invocations; child item IDs carry
+  sub-session, run, and invocation identity.
+- Child-to-parent messages use persistent mailbox and live guidance, injected
+  at the next Step. Parent/child run, Step, call, and source anchors refresh on
+  message and close. Approval resume restores child identity, toolbox, and
+  request-local context; child events remain attached to the active
+  `sub_agent_message` item. Runtime states distinguish running, idle, paused,
+  closed, interrupted, and error.
+- Reasoning aliases `xh`/`XH` and `Medium` normalize across schema, CLI, and
+  runtime, with DeepSeek multi-level-to-fewer-level mapping covered. Model
+  notes enter model request prompts. Name, model, and summary are appended
+  after history as request-local context to preserve cache prefixes.
+- The right rail merges current and historical sub-agents, supports click to
+  locate/expand/highlight, hover model/reasoning details, status ordering, and
+  reduced-motion-safe transitions. Rows use `类型 名 · 模型 思考强度 · 耗时`;
+  lifecycle copy/icons cover create, enable, close, send, and receive states.
+  Shallow remains hidden as a UI entry while active indicators remain valid.
+- Verification: main-agent backend expansion passed 205 tests; the full UI
+  suite passed 86 files / 665 tests; `npm run typecheck`, `npm run build:app`,
+  Python `compileall`, the LamTools design audit (84 files / 0 deviations),
+  and scoped `git diff --check` passed. Build emitted only existing
+  chunk/dynamic-import warnings and diff check only line-ending warnings.
+  Independent Tester verdict: PASS (backend 152 tests, UI 665 tests,
+  typecheck, compileall, and diff check passed). No Tauri visual acceptance
+  was run, per the code-only scope.
+- The worktree remains heavily dirty and uncommitted. No stage, commit,
+  revert, cleanup, or unrelated attribution was performed. Exact next entry
+  point: begin with the sub-agent supervisor/runner contracts, runtime
+  projection, and right-rail projection tests when extending this behavior;
+  preserve asynchronous mailbox delivery, child identity on approval resume,
+  late context placement, and the five lifecycle copy/icon mappings.
+
+## Context compaction final fix delta (2026-09-16)
+
+- Task ID/deployment: `compaction_full_summary_recent_users_20260915`; closure
+  state: `complete`.
+- Consecutive manual compactions now union prior `compacted_history_seqs`
+  while preserving positive retained Steps. Steps removed by the exact-budget
+  fitter are marked and excluded from same-run memory, durable history, and
+  the next run across both manual and automatic paths.
+- Final verification: main focused coverage passed 291 tests; independent
+  targeted coverage passed; the previously recorded full Core result remains
+  `1965 passed, 2 skipped`, with six unrelated failures in tool-count,
+  artifact-DB, and live-resume tests. No Tauri run was performed.
+- Next milestone: any compaction follow-up should start with the focused
+  sequence-union and fitter-removal contracts and preserve the zero-tail,
+  newest-20 suffix, and positive-Step retention guarantees.
+
+## Sub-agent role assignments closure (2026-09-16)
+
+- The role-assignment contract now has a global `role_assignments` baseline.
+  Project settings merge by trimmed, case-folded `task_type`: same-name
+  project entries override the global entry and new project entries append.
+  Each entry carries `task_type`, `type`, `model`, `reasoning_min`, and
+  `reasoning_max`; `type` is restricted to `consider` or `execute`, and
+  reasoning levels are `off/light/medium/high/xhigh/max` with `xh` normalized
+  to `xhigh` and no `shallow` level.
+- Shared UI covers both global and project assignments and persists canonical
+  `model_id` values. RPC responses expose `local`, `effective`, and
+  `inherited` state. CLI parity provides `subagent roles show/set/delete`.
+  The generated system-prompt role section is placed immediately after the
+  guide section.
+- Verification: backend 77 tests passed; frontend 37 tests passed;
+  typecheck, Python `compileall`, LamTools design audit (84 files / 0
+  deviations), and `git diff --check` passed. No Tauri visual acceptance was
+  performed.
+
+## Office renderer contract planning handoff (2026-09-16)
+
+- Deployment `office_renderer_contract_20260916` is paused after a read-only
+  audit and planning pass. Core currently has no durable, unified Office
+  renderer implementation.
+- The proposed contract is a unified `office render` CLI/service with an
+  agent-authored canonical data manifest. Rendering must fail closed: validate
+  every table cell and chart series/category/value binding against the manifest
+  before producing Office or PDF output; a mismatch returns structured error
+  details and stops rendering.
+- The renderer should use LibreOffice Office-to-PDF conversion with an isolated
+  profile and no auto-install, declare PyMuPDF/python-pptx/openpyxl packaging,
+  produce PDF/PNG previews, and report text-overlap diagnostics containing
+  page, element, text, bounding boxes, and the conflicting element.
+- No production, Skill, test, build, Tauri, Computer Use, or Git mutations were
+  performed in this paused closure. Implementation awaits user confirmation of
+  the proposed contract.
+
+## Sub-agent delegation strategy closure (2026-09-16)
+
+- Deployment `subagent_delegation_strategy` is complete. Delegation strategy
+  supports `forbidden`, `low`, `medium`, and `high`, with `medium` as the
+  default. A global baseline is inherited by projects; a project can explicitly
+  override it, while `null`/`unset` removes the local key and restores
+  inheritance.
+- RPC exposes `local`, `effective`, `global`, and `inherited` strategy state.
+  CLI parity is `subagent strategy show/set/unset`. A project with blank
+  `work_root` is rejected, and the same validation is applied to the unified
+  guide/roles configuration. The shared editor supports all four levels and a
+  project-level “inherit global” choice, with independent saves.
+- Prompt ordering is `guide → strategy (priority declaration) → roles`; the
+  high-strategy responsibility text is complete. In `CoreBaseAgentKit` and the
+  unified `_build_core_runtime_toolbox`, `forbidden` hides/disables
+  `sub_agent` and `sub_agent_message`. Direct calls and approval resumes that
+  switch to `forbidden` are blocked, while already-running historical agents
+  remain open. Explicit user/operator lifecycle RPCs are outside the main-agent
+  strategy boundary.
+- Verification: backend prompt/CLI 83 passed; config-default tests 5 passed;
+  approval-focused tests 2 passed and approval group 5 passed; blank-root CLI
+  9 passed and blank-root RPC 4 passed; frontend 3 files / 40 tests passed;
+  typecheck, `compileall`, LamTools design audit (84 files / 0 deviations),
+  and `git diff --check` passed. Tester accepted with no P0/P1/P2 findings.
+  No Tauri or Computer Use validation was performed.
+
+## Title-bar sidebar toggle and narrow-screen closure (2026-09-16)
+
+- Task ID/deployment: `titlebar_sidebar_controls_archive` /
+  `titlebar_sidebar_controls_20260916`; closure state: `complete`.
+- WorkspaceShell now owns left/right pin state. Both pin changes, including
+  responsive auto-unpin, are emitted and synchronized into LamToolsApp; TitleBar
+  only requests the toggles. At max-width 640px, only the two sidebar controls
+  are hidden; device/account and native window controls remain available.
+- Verification: focused coverage 24/24; full UI contract 87 files / 674 tests;
+  UI typecheck passed; LamTools design audit covered 84 files with 0 violations;
+  affected-file `git diff --check` was clean.
+- Limitation: code-only verification; no Tauri visual/runtime check was run.
+- Git handoff: read-only; the heavily dirty, uncommitted tree was preserved.
+  No stage, commit, revert, cleanup, or unrelated attribution was performed.
+  Exact next entry point: use the WorkspaceShell/LamToolsApp/TitleBar pin
+  synchronization contracts and responsive sidebar-control tests for follow-up.
+
+## Unified Office renderer implementation (2026-09-16)
+
+- Deployment `office_renderer_implementation_20260916` originally placed the
+  Skill-bundle companion runtime below `_shared`; the standard packaging repair
+  recorded later in this document supersedes that location. The former
+  `lamtools_core.office` package remains removed.
+- The runtime keeps the manifest-first canonical dataset contract. Supported
+  bindings are `pptx_table`, `pptx_chart`, `docx_table`, `xlsx_range`, and
+  `xlsx_chart`; every data-bearing target is checked item by item before
+  rendering. Data or structure failures are fail-closed and produce no
+  Office/PDF/PNG output. Windows `auto` selects Microsoft Office COM first and
+  falls back to LibreOffice through `soffice.com`; successful rendering also
+  provides PDF/PNG previews and structured text-overlap diagnostics.
+- CLI entry points are `office validate` and `office render`. Source,
+  simulated-`_MEIPASS`, and wheel-install runtime location checks passed; the
+  wheel contains the companion runtime and no `__pycache__`. The PyInstaller
+  spec static-path check passed, but a complete PyInstaller build was not run.
+- Verification: final main regression coverage passed 157 tests and
+  independent acceptance passed 133 tests. A real Microsoft Office COM CLI
+  smoke run passed. Deliberate data mismatch and text overlap cases retained
+  exit codes 2 and 4 with structured diagnostics.
+- The implementation handoff does not claim pixel-level human visual
+  acceptance. The repository remains concurrently dirty; this documentation
+  update does not stage, commit, revert, clean, or attribute unrelated work.
+
+## Office Skill standard packaging repair (2026-09-16)
+
+- Deployment `office_skill_standard_packaging_20260916` moved the renderer from
+  the nonstandard `_shared` tree into the standard explicit-only
+  `core/skills/office-renderer/{SKILL.md,agents/,scripts/}` package. All ten
+  authoring Skills now include `agents/openai.yaml` and report version 0.2.0 beta.
+- Office authoring guidance now uses the working-directory-independent
+  `py -3.14 -m lamtools_core.cli office ...` entry point and explicitly forbids
+  PATH probing followed by bypass. The bundled `scripts/office.py` remains a
+  standalone fallback and emits structured JSON failures.
+- `SkillRegistry` now honors `policy.allow_implicit_invocation` and invalidates
+  its cache when `agents/openai.yaml` changes. The renderer remains explicitly
+  loadable but stays out of automatic Skill prompt indexes.
+- Verification: 11/11 Skills passed `quick_validate.py`; Office/Skill/runtime
+  focused tests passed 117; Core CLI tests passed 59. Scoped `git diff --check`
+  passed with line-ending warnings only. Wheel build was not rerun because
+  `hatchling` is unavailable in the local Python environments; static force-
+  include and PyInstaller recursive Skill packaging remain in place.
+
+## Turn artifact discovery and artifact-card redesign (2026-09-16)
+
+- Status: complete, pending user GUI visual acceptance.
+- Final Agent replies now serve as a validated fallback artifact source for
+  command/Office-generated files that did not emit ToolArtifact metadata.
+- “本轮产出” and the project成果库 receive the same registered files; missing,
+  external, incomplete-stream, and child-agent paths are excluded.
+- Artifact cards now use neutral theme surfaces and Lucide file-type icons.
+  Code/text opens in internal plain text, with CLI parity via `artifact preview`.
+- Follow-up GUI defects are closed: enlargement is hover-only and the code/text
+  modal is body-teleported with a neutral window-relative backdrop.
+- Evidence: 8 backend artifact tests, 93 focused UI tests, UI typecheck, and the
+  84-file design audit all passed. No Tauri visual check or git commit was run.
+
+## Office Skill direct execution prompt repair (2026-09-16)
+
+- Status: complete; behavioral GUI retest remains user-owned.
+- Office renderer guidance now gives one minimal final-artifact path and forbids
+  source inspection, environment/backend probes, scratch Office experiments,
+  and renderer re-certification during ordinary document work.
+- Whole-document visual claims now require every generated page/sheet preview
+  to be viewed once. Representative-page checks must be labeled sampled, and
+  automated `visual=passed` is explicitly separated from full preview review.
+- Verification: prompt-contract and renderer suites passed 31 tests; all 11
+  Office Skills passed the Skill Creator validator under UTF-8; scoped diff
+  check passed with line-ending warnings only. No GUI/Office production rerun
+  was performed.
+
+## Direct transport transient-disconnect repair and 16-2 process audit (2026-09-17)
+
+- Direct transport close errors now retain WebSocket code, reason, and clean-close
+  state. UI reporting delays only transport disconnects for two seconds and
+  cancels the toast on successful reconnect; persistent disconnects remain
+  visible and non-transport errors remain immediate.
+- The live router skips sync-journal SQLite lookups for transient `seq=0` model
+  deltas, removing a confirmed queue-pressure path to `1013 Event stream
+  overflow`.
+- Verification: focused UI coverage passed 42 tests; the full UI suite passed
+  683 tests across 87 files; typecheck, production build, and the 84-file design
+  audit passed. Focused backend coverage passed; the broader live-router/hub run
+  had one pre-existing unrelated resume-page-cursor failure.
+- `16-2-test` completed in about 607 seconds with 48 LLM calls, 82 unique tool
+  calls, and 2 failed commands. The weighted provider cache hit rate was 96.05%.
+  The new prompt contract was loaded, but the Agent still performed forbidden
+  environment/install probing and a scratch formula-cache experiment. It also
+  changed and rerendered the workbook after viewing its previews, then claimed a
+  full review without reopening the updated pages. Product quality was not
+  assessed in this audit.
+
+## Optional Office readiness check (2026-09-17)
+
+- The former prompt-level prohibition list was replaced with a short positive
+  path. Ordinary work can start directly; when environment readiness is
+  uncertain, the Agent may run `py -3.14 -m lamtools_core.cli office check`
+  once and continue after `Office 应用已就绪 · Test Passed 3/3`.
+- The check creates disposable minimal DOCX, XLSX, and PPTX sources and performs
+  real PDF conversions through the configured Microsoft Office/LibreOffice
+  backend. Temporary inputs and outputs are removed automatically.
+- The same `check` command is available through the bundled Skill script. Both
+  Core CLI and standalone runs passed 3/3 on the current machine. Focused
+  renderer/CLI/prompt tests passed 33 tests, and all 11 Office Skills passed the
+  standard Skill validator under UTF-8.

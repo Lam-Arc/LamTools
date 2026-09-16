@@ -46,6 +46,10 @@ class LoopPolicy:
     compact_limit_ratio: float = 0.6
     compact_trigger_tokens: int | None = None
     compact_limit_tokens: int | None = None
+    # Optional explicit structural retention override.  ``None`` means read
+    # the global ``core.contextCompaction.retained_steps`` setting (default 0)
+    # at compaction time.
+    compact_retained_steps: int | None = None
     # Summary request reserves. None preserves the controller defaults; set
     # these when a model/provider needs an explicit output cap or safety
     # margin instead of the derived policy.

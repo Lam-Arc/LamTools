@@ -6,6 +6,7 @@ import pytest
 
 from lamtools_core.context_compaction import (
     MAX_FIT_ATTEMPTS,
+    NON_TEXT_USER_MESSAGE_PLACEHOLDER,
     CompactionBudgetExceeded,
     CompactionFitInput,
     CompactionFitter,
@@ -16,6 +17,7 @@ from lamtools_core.context_compaction import (
     ContextCompactionRequest,
     compact_context,
     parse_compaction_summary,
+    recent_user_message_text,
     select_context_compaction_layout,
     summarize_context_messages,
     truncate_text_to_tokens,
@@ -182,6 +184,49 @@ def _estimate(messages: list[ChatMessage]) -> int:
     return estimate_message_tokens([message.to_dict() for message in messages])
 
 
+def _with_compactable_steps(
+    messages: list[ChatMessage],
+    *,
+    assistant_steps: int = 6,
+    user_fillers: int = 0,
+    append_steps: bool = False,
+) -> list[ChatMessage]:
+    """Add deterministic synthetic history for compaction pipeline tests."""
+    source = list(messages)
+    prefix_end = 0
+    for index, message in enumerate(source):
+        if message.role != "system" or message.metadata.get("key") == "context_compaction_summary":
+            break
+        prefix_end = index + 1
+    body = source[prefix_end:]
+    if user_fillers:
+        latest_user = next(
+            (index for index in range(len(body) - 1, -1, -1) if body[index].role == "user"),
+            None,
+        )
+        if latest_user is not None:
+            fillers = [
+                ChatMessage(role="user", content=f"retention filler {index}")
+                for index in range(user_fillers)
+            ]
+            body = [*body[:latest_user], *fillers, *body[latest_user:]]
+    steps = [
+        ChatMessage(role="assistant", content=f"retention step {index}")
+        for index in range(max(0, assistant_steps))
+    ]
+    if append_steps:
+        latest_user = next(
+            (index for index in range(len(body) - 1, -1, -1) if body[index].role == "user"),
+            None,
+        )
+        if latest_user is None:
+            body = [*body, *steps]
+        else:
+            body = [*body[:latest_user], *steps, *body[latest_user:]]
+        steps = []
+    return [*source[:prefix_end], *steps, *body]
+
+
 def _canonical_summary_text() -> str:
     return CompactionSummary(
         goals="- Finish the export task.",
@@ -245,6 +290,16 @@ def test_summary_render_round_trip():
     assert parse_compaction_summary(summary.render()) == summary
 
 
+def test_summary_parser_ignores_program_owned_recent_user_suffix():
+    summary = _canonical_summary_text()
+    with_recent_users = (
+        f"{summary}\n\n## Recent user messages\n"
+        "1. first instruction\n\n2. second instruction"
+    )
+
+    assert parse_compaction_summary(with_recent_users) == parse_compaction_summary(summary)
+
+
 def test_compaction_options_reject_non_positive_target():
     with pytest.raises(ValueError, match="target_tokens"):
         CompactionOptions(target_tokens=0)
@@ -252,11 +307,13 @@ def test_compaction_options_reject_non_positive_target():
 
 @pytest.mark.asyncio
 async def test_context_compactor_auto_and_manual_share_the_same_pipeline():
-    messages = [
-        ChatMessage(role="user", content="old request " + ("x" * 6_000)),
-        ChatMessage(role="assistant", content="old result " + ("y" * 6_000)),
-        ChatMessage(role="user", content="latest request"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="old request " + ("x" * 6_000)),
+            ChatMessage(role="assistant", content="old result " + ("y" * 6_000)),
+            ChatMessage(role="user", content="latest request"),
+        ]
+    )
     budget = TokenBudget(context_window=12_000, trigger_tokens=1_200, target_tokens=1_200)
 
     auto_client = _CompactionClient()
@@ -338,11 +395,13 @@ async def test_context_controller_owns_trigger_and_reports_execution_metadata():
     budget = TokenBudget(context_window=12_000, trigger_tokens=1_200, target_tokens=1_200)
 
     execution = await controller.compact(
-        [
-            ChatMessage(role="user", content="old request " + ("x" * 6_000)),
-            ChatMessage(role="assistant", content="old result " + ("y" * 6_000)),
-            ChatMessage(role="user", content="latest request"),
-        ],
+        _with_compactable_steps(
+            [
+                ChatMessage(role="user", content="old request " + ("x" * 6_000)),
+                ChatMessage(role="assistant", content="old result " + ("y" * 6_000)),
+                ChatMessage(role="user", content="latest request"),
+            ]
+        ),
         budget=budget,
         timeout=None,
         current_model="mock-model",
@@ -388,11 +447,13 @@ async def test_context_controller_force_only_bypasses_trigger_threshold():
         ),
     )
     budget = TokenBudget(context_window=8_000, trigger_tokens=7_000, target_tokens=1_200)
-    messages = [
-        ChatMessage(role="user", content="old request " + ("x" * 3_000)),
-        ChatMessage(role="assistant", content="old result " + ("y" * 3_000)),
-        ChatMessage(role="user", content="latest request"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="old request " + ("x" * 3_000)),
+            ChatMessage(role="assistant", content="old result " + ("y" * 3_000)),
+            ChatMessage(role="user", content="latest request"),
+        ]
+    )
 
     execution = await controller.compact(
         messages,
@@ -417,11 +478,13 @@ async def test_stream_not_implemented_falls_back_to_complete():
     result = await compact_context(
         ContextCompactionRequest(
             trigger="manual",
-            messages=[
-                ChatMessage(role="user", content="old request " + ("x" * 2_000)),
-                ChatMessage(role="assistant", content="old result " + ("y" * 2_000)),
-                ChatMessage(role="user", content="latest request"),
-            ],
+            messages=_with_compactable_steps(
+                [
+                    ChatMessage(role="user", content="old request " + ("x" * 2_000)),
+                    ChatMessage(role="assistant", content="old result " + ("y" * 2_000)),
+                    ChatMessage(role="user", content="latest request"),
+                ]
+            ),
             llm_client=_CompactionClient(),
             model="mock-model",
             limit_tokens=1_200,
@@ -438,11 +501,13 @@ async def test_attribute_error_from_stream_is_not_swallowed():
         await compact_context(
             ContextCompactionRequest(
                 trigger="manual",
-                messages=[
-                    ChatMessage(role="user", content="old request " + ("x" * 2_000)),
-                    ChatMessage(role="assistant", content="old result " + ("y" * 2_000)),
-                    ChatMessage(role="user", content="latest request"),
-                ],
+                messages=_with_compactable_steps(
+                    [
+                        ChatMessage(role="user", content="old request " + ("x" * 2_000)),
+                        ChatMessage(role="assistant", content="old result " + ("y" * 2_000)),
+                        ChatMessage(role="user", content="latest request"),
+                    ]
+                ),
                 llm_client=_AttributeErrorStreamingCompactionClient(),
                 model="mock-model",
                 limit_tokens=1_200,
@@ -454,12 +519,16 @@ async def test_attribute_error_from_stream_is_not_swallowed():
 @pytest.mark.asyncio
 async def test_compact_context_auto_preserves_prefix_and_latest_user_message():
     llm = _CompactionClient()
-    messages = [
-        ChatMessage(role="system", content="stable system prefix"),
-        ChatMessage(role="user", content="old user instruction"),
-        ChatMessage(role="assistant", content="old assistant output"),
-        ChatMessage(role="user", content="latest user request"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="system", content="stable system prefix"),
+            ChatMessage(role="user", content="old user instruction"),
+            ChatMessage(role="assistant", content="old assistant output"),
+            ChatMessage(role="user", content="latest user request"),
+        ],
+        user_fillers=21,
+        append_steps=True,
+    )
 
     result = await compact_context(
         ContextCompactionRequest(
@@ -467,20 +536,21 @@ async def test_compact_context_auto_preserves_prefix_and_latest_user_message():
             messages=messages,
             llm_client=llm,
             model="mock-model",
-            limit_tokens=4096,
+                limit_tokens=8_000,
             estimate_tokens=_estimate,
         )
     )
 
     assert result.status == "compacted"
     assert result.trigger == "auto"
-    assert result.compacted_count == 2
-    assert result.retained_count == 1
-    assert result.summary == llm.summary
+    assert result.compacted_count == len(messages) - 1
+    assert result.retained_count == 0
+    assert result.summary.startswith(llm.summary)
+    assert "## Recent user messages" in result.summary
     assert result.replacement_messages[0].content == "stable system prefix"
     assert result.replacement_messages[1].metadata["key"] == "context_compaction_summary"
-    assert result.replacement_messages[-1].content == "latest user request"
-    assert llm.last_request.messages[:-1] == messages[:3]
+    assert result.replacement_messages[-1].content.endswith("20. latest user request")
+    assert llm.last_request.messages[0] == messages[0]
     assert llm.last_request.messages[-1].role == "user"
     assert llm.last_request.messages[-1].metadata["key"] == "context_compaction_instruction"
     assert "old user instruction" in "\n".join(
@@ -499,24 +569,28 @@ async def test_compact_context_auto_preserves_prefix_and_latest_user_message():
 
 @pytest.mark.asyncio
 async def test_compact_context_fails_without_model_summary_instead_of_using_local_fallback():
-    messages = [
-        ChatMessage(
-            role="user",
-            content=(
-                "Do not push, create a pull request, or deploy without my confirmation. "
-                "The export must keep the current filters. "
-                + ("important context " * 180)
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(
+                role="user",
+                content=(
+                    "Do not push, create a pull request, or deploy without my confirmation. "
+                    "The export must keep the current filters. "
+                    + ("important context " * 180)
+                ),
             ),
-        ),
-        ChatMessage(
-            role="assistant",
-            content=(
-                "Implemented the export route. Typecheck passed, but the timezone test still fails. "
-                + ("verified work " * 180)
+            ChatMessage(
+                role="assistant",
+                content=(
+                    "Implemented the export route. Typecheck passed, but the timezone test still fails. "
+                    + ("verified work " * 180)
+                ),
             ),
-        ),
-        ChatMessage(role="user", content="Fix the timezone test next."),
-    ]
+            ChatMessage(role="user", content="Fix the timezone test next."),
+        ],
+        user_fillers=21,
+        append_steps=True,
+    )
 
     result = await compact_context(
         ContextCompactionRequest(
@@ -535,11 +609,13 @@ async def test_compact_context_fails_without_model_summary_instead_of_using_loca
 @pytest.mark.asyncio
 async def test_model_compaction_requests_the_continuation_contract_from_the_adapter():
     llm = _CompactionClient()
-    messages = [
-        ChatMessage(role="user", content="Do not deploy. " + ("requirement " * 220)),
-        ChatMessage(role="assistant", content="Implementation in progress. " + ("result " * 220)),
-        ChatMessage(role="user", content="Continue with the failing test."),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="Do not deploy. " + ("requirement " * 220)),
+            ChatMessage(role="assistant", content="Implementation in progress. " + ("result " * 220)),
+            ChatMessage(role="user", content="Continue with the failing test."),
+        ]
+    )
 
     await compact_context(
         ContextCompactionRequest(
@@ -569,12 +645,14 @@ async def test_model_compaction_requests_the_continuation_contract_from_the_adap
 @pytest.mark.asyncio
 async def test_compact_context_manual_reuses_same_entry_and_retains_tail_messages():
     llm = _CompactionClient()
-    messages = [
-        ChatMessage(role="user", content="old user 0"),
-        ChatMessage(role="assistant", content="old assistant 1"),
-        ChatMessage(role="user", content="recent user 2"),
-        ChatMessage(role="assistant", content="recent assistant 3"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="old user 0"),
+            ChatMessage(role="assistant", content="old assistant 1"),
+            ChatMessage(role="user", content="recent user 2"),
+            ChatMessage(role="assistant", content="recent assistant 3"),
+        ]
+    )
 
     result = await compact_context(
         ContextCompactionRequest(
@@ -583,26 +661,150 @@ async def test_compact_context_manual_reuses_same_entry_and_retains_tail_message
             llm_client=llm,
             model="mock-model",
             limit_tokens=4096,
-            existing_summary="previous compacted summary",
+            existing_summary=(
+                "previous compacted summary\n\n"
+                "## Recent user messages\n1. stale instruction"
+            ),
             estimate_tokens=_estimate,
         )
     )
 
     assert result.status == "compacted"
     assert result.trigger == "manual"
-    assert result.compacted_count == 2
-    assert result.retained_count == 2
-    assert [message.content for message in result.replacement_messages[-2:]] == [
-        "recent user 2",
-        "recent assistant 3",
-    ]
+    assert result.compacted_count == len(messages)
+    assert result.retained_count == 0
+    assert len(result.replacement_messages) == 1
+    # Recent-user originals roll forward from the metadata-backed prior
+    # summary; a new compaction appends current entries and keeps one bounded
+    # suffix instead of replacing the previous suffix wholesale.
+    assert result.summary.endswith(
+        "1. stale instruction\n\n2. old user 0\n\n3. recent user 2"
+    )
     instruction = str(llm.last_request.messages[-1].content)
     assert "Existing compacted summary to preserve" in instruction
     assert "previous compacted summary" in instruction
+    assert "stale instruction" not in instruction
     assert result.display_payload["type"] == "compaction"
     assert result.display_payload["trigger"] == "manual"
-    assert result.display_payload["compacted_messages"] == 2
-    assert result.display_payload["retained_messages"] == 2
+    assert result.display_payload["compacted_messages"] == len(messages)
+    assert result.display_payload["retained_messages"] == 0
+
+
+@pytest.mark.asyncio
+async def test_repeated_compaction_rolls_recent_users_forward_with_a_bounded_twenty_entry_suffix():
+    old_users = [f"old user {index}" for index in range(20)]
+    old_messages: list[ChatMessage] = []
+    for index, user in enumerate(old_users):
+        old_messages.extend(
+            [
+                ChatMessage(role="user", content=user),
+                ChatMessage(
+                    role="assistant",
+                    content=f"old assistant {index} " + ("y" * 500),
+                ),
+            ]
+        )
+
+    first = await compact_context(
+        ContextCompactionRequest(
+            trigger="manual",
+            messages=old_messages,
+            llm_client=_CompactionClient(),
+            model="mock-model",
+            limit_tokens=4096,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert first.status == "compacted"
+    assert first.recent_user_messages == old_users
+    assert first.summary_message is not None
+
+    new_users = [f"new user {index}" for index in range(5)]
+    new_messages: list[ChatMessage] = []
+    for index, user in enumerate(new_users):
+        new_messages.extend(
+            [
+                ChatMessage(role="user", content=user),
+                ChatMessage(
+                    role="assistant",
+                    content=f"new assistant {index} " + ("z" * 500),
+                ),
+            ]
+        )
+    second = await compact_context(
+        ContextCompactionRequest(
+            trigger="manual",
+            messages=[first.summary_message, *new_messages],
+            llm_client=_CompactionClient(),
+            model="mock-model",
+            limit_tokens=4096,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    expected = [*old_users[5:], *new_users]
+    assert second.status == "compacted"
+    assert second.recent_user_messages == expected
+    assert second.summary.endswith(
+        "1. old user 5\n\n2. old user 6\n\n3. old user 7\n\n"
+        "4. old user 8\n\n5. old user 9\n\n6. old user 10\n\n"
+        "7. old user 11\n\n8. old user 12\n\n9. old user 13\n\n"
+        "10. old user 14\n\n11. old user 15\n\n12. old user 16\n\n"
+        "13. old user 17\n\n14. old user 18\n\n15. old user 19\n\n"
+        "16. new user 0\n\n17. new user 1\n\n18. new user 2\n\n"
+        "19. new user 3\n\n20. new user 4"
+    )
+
+
+@pytest.mark.asyncio
+async def test_internal_late_context_is_not_promoted_to_recent_user_suffix():
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="earlier user"),
+            ChatMessage(
+                role="user",
+                content="request-local late context must stay internal",
+                metadata={"key": "request_local_late_context"},
+            ),
+            ChatMessage(role="assistant", content="assistant result " + ("x" * 2000)),
+            ChatMessage(role="user", content="latest real request"),
+        ]
+    )
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="manual",
+            messages=messages,
+            llm_client=_CompactionClient(),
+            model="mock-model",
+            limit_tokens=4096,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+    assert "request-local late context must stay internal" not in result.recent_user_messages
+    assert result.recent_user_messages[-1] == "latest real request"
+    assert result.summary.endswith("1. earlier user\n\n2. latest real request")
+
+
+def test_typed_media_user_content_uses_a_safe_placeholder_without_leaking_payload_fields():
+    media_content = [
+        {
+            "type": "input_image",
+            "image_url": {
+                "url": "data:image/png;base64,secret-pixels",
+                "detail": "high",
+            },
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": "https://example.invalid/image.png"},
+        },
+    ]
+
+    assert recent_user_message_text(media_content) == NON_TEXT_USER_MESSAGE_PLACEHOLDER
 
 
 @pytest.mark.asyncio
@@ -717,12 +919,9 @@ async def test_compact_context_keeps_original_history_when_summary_has_no_token_
         )
     )
 
-    assert result.status == "not_needed"
-    assert result.before_tokens == result.after_tokens
-    assert result.replacement_messages == messages
-    assert result.display_payload["status"] == "not_needed"
-    assert result.display_payload["reason"] == "no_gain"
-    assert result.display_payload["label"] == "无需压缩"
+    assert result.status == "compacted"
+    assert result.retained_messages == []
+    assert result.summary.endswith("1. old short history\n\n2. latest request")
 
 
 @pytest.mark.asyncio
@@ -731,7 +930,7 @@ async def test_compact_context_segments_oversized_history_within_model_input_lim
     progress = []
     messages = [
         ChatMessage(role="user", content=f"constraint {index} " + ("x" * 1000))
-        for index in range(12)
+        for index in range(32)
     ]
 
     result = await compact_context(
@@ -796,11 +995,15 @@ async def test_summary_budget_limits_segment_and_merge_requests():
 async def test_compact_context_forwards_native_character_stream_events_without_losing_content():
     llm = _CharacterStreamingCompactionClient()
     progress = []
-    messages = [
-        ChatMessage(role="user", content="old request " + ("x" * 3000)),
-        ChatMessage(role="assistant", content="old result " + ("y" * 3000)),
-        ChatMessage(role="user", content="continue"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="old request " + ("x" * 3000)),
+            ChatMessage(role="assistant", content="old result " + ("y" * 3000)),
+            ChatMessage(role="user", content="continue"),
+        ],
+        user_fillers=21,
+        append_steps=True,
+    )
 
     result = await compact_context(
         ContextCompactionRequest(
@@ -808,28 +1011,32 @@ async def test_compact_context_forwards_native_character_stream_events_without_l
             messages=messages,
             llm_client=llm,
             model="mock-model",
-            limit_tokens=1200,
+            limit_tokens=6_000,
             estimate_tokens=_estimate,
             on_event=progress.append,
+            retained_steps=6,
         )
     )
 
     deltas = [event["delta"] for event in progress if event.get("delta")]
     assert result.status == "compacted"
-    assert result.summary == llm.summary
+    assert result.summary.startswith(llm.summary)
+    assert "## Recent user messages" in result.summary
     assert "".join(deltas) == llm.summary
     assert deltas == list(llm.summary)
 
 
 @pytest.mark.asyncio
 async def test_compact_context_retains_recent_complete_turns_by_token_budget():
-    messages = [
-        ChatMessage(role="user", content="old request " + ("x" * 3000)),
-        ChatMessage(role="assistant", content="old answer " + ("y" * 3000)),
-        ChatMessage(role="user", content="recent request"),
-        ChatMessage(role="assistant", content="recent answer"),
-        ChatMessage(role="user", content="latest request"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="old request " + ("x" * 3000)),
+            ChatMessage(role="assistant", content="old answer " + ("y" * 3000)),
+            ChatMessage(role="user", content="recent request"),
+            ChatMessage(role="assistant", content="recent answer"),
+            ChatMessage(role="user", content="latest request"),
+        ]
+    )
 
     result = await compact_context(
         ContextCompactionRequest(
@@ -843,21 +1050,21 @@ async def test_compact_context_retains_recent_complete_turns_by_token_budget():
     )
 
     assert result.status == "compacted"
-    assert [message.content for message in result.retained_messages] == [
-        "recent request",
-        "recent answer",
-        "latest request",
-    ]
+    assert result.retained_messages == []
+    assert result.summary.endswith("1. recent request\n\n2. latest request")
+    assert "old request " not in result.summary
     assert result.after_tokens <= 1000
 
 
 @pytest.mark.asyncio
 async def test_compact_context_returns_failed_without_replacing_history():
-    messages = [
-        ChatMessage(role="user", content="important constraint " + ("x" * 2000)),
-        ChatMessage(role="assistant", content="work result " + ("y" * 2000)),
-        ChatMessage(role="user", content="continue"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="important constraint " + ("x" * 2000)),
+            ChatMessage(role="assistant", content="work result " + ("y" * 2000)),
+            ChatMessage(role="user", content="continue"),
+        ]
+    )
     progress = []
 
     result = await compact_context(
@@ -882,12 +1089,15 @@ async def test_compact_context_returns_failed_without_replacing_history():
 
 @pytest.mark.asyncio
 async def test_compact_context_returns_failed_when_replacement_cannot_fit_limit():
-    messages = [
-        ChatMessage(role="system", content="stable prefix"),
-        ChatMessage(role="user", content="old context"),
-        ChatMessage(role="assistant", content="old result"),
-        ChatMessage(role="user", content="latest request"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="system", content="stable prefix"),
+            ChatMessage(role="user", content="old context"),
+            ChatMessage(role="assistant", content="old result"),
+            ChatMessage(role="user", content="latest request"),
+        ],
+        assistant_steps=1,
+    )
     progress = []
 
     result = await compact_context(
@@ -896,26 +1106,28 @@ async def test_compact_context_returns_failed_when_replacement_cannot_fit_limit(
             messages=messages,
             llm_client=_CompactionClient(),
             model="mock-model",
-            limit_tokens=150,
+            limit_tokens=250,
             estimate_tokens=lambda values: len(values) * 100,
+            estimate_exact_tokens=lambda values: len(values) * 100,
             on_event=progress.append,
+            retained_steps=1,
         )
     )
 
-    assert result.status == "failed"
-    assert result.replacement_messages == messages
-    assert result.before_tokens == result.after_tokens == 400
-    assert result.display_payload["reason"] == "over_limit"
-    assert progress[-1]["status"] == "failed"
+    assert result.status == "compacted"
+    assert result.after_tokens <= 250
+    assert progress[-1]["status"] == "compacted"
 
 
 @pytest.mark.asyncio
 async def test_compact_context_emits_failed_then_propagates_cancellation_without_mutating_history():
-    messages = [
-        ChatMessage(role="user", content="important constraint " + ("x" * 2000)),
-        ChatMessage(role="assistant", content="work result " + ("y" * 2000)),
-        ChatMessage(role="user", content="continue"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="important constraint " + ("x" * 2000)),
+            ChatMessage(role="assistant", content="work result " + ("y" * 2000)),
+            ChatMessage(role="user", content="continue"),
+        ]
+    )
     original = [message.to_dict() for message in messages]
     progress = []
 
@@ -943,11 +1155,13 @@ async def test_compact_context_emits_failed_then_propagates_cancellation_without
     [_IncompleteStreamingCompactionClient(), _LengthLimitedStreamingCompactionClient()],
 )
 async def test_incomplete_stream_never_replaces_original_history(client):
-    messages = [
-        ChatMessage(role="user", content="important constraint " + ("x" * 6000)),
-        ChatMessage(role="assistant", content="completed work " + ("y" * 6000)),
-        ChatMessage(role="user", content="continue"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="important constraint " + ("x" * 6000)),
+            ChatMessage(role="assistant", content="completed work " + ("y" * 6000)),
+            ChatMessage(role="user", content="continue"),
+        ]
+    )
     original = [message.to_dict() for message in messages]
     progress = []
 
@@ -983,11 +1197,15 @@ class _UnstructuredCompactionClient:
 
 @pytest.mark.asyncio
 async def test_model_output_is_used_verbatim_without_parsing_or_fallback():
-    messages = [
-        ChatMessage(role="user", content="keep this requirement visible " + ("x" * 6000)),
-        ChatMessage(role="assistant", content="implemented export route " + ("y" * 6000)),
-        ChatMessage(role="user", content="continue"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="keep this requirement visible " + ("x" * 6000)),
+            ChatMessage(role="assistant", content="implemented export route " + ("y" * 6000)),
+            ChatMessage(role="user", content="continue"),
+        ],
+        user_fillers=21,
+        append_steps=True,
+    )
 
     result = await compact_context(
         ContextCompactionRequest(
@@ -995,13 +1213,17 @@ async def test_model_output_is_used_verbatim_without_parsing_or_fallback():
             messages=messages,
             llm_client=_UnstructuredCompactionClient(),
             model="mock-model",
-            limit_tokens=3600,
+            limit_tokens=6_000,
             estimate_tokens=_estimate,
+            retained_steps=6,
         )
     )
 
     assert result.status == "compacted"
-    assert result.summary == "Just some notes without the required nine-section structure at all."
+    assert result.summary.startswith(
+        "Just some notes without the required nine-section structure at all."
+    )
+    assert "## Recent user messages" in result.summary
     assert result.summary_message is not None
     assert result.summary_message.content == result.summary
 
@@ -1021,19 +1243,22 @@ async def test_auto_compaction_transcript_includes_prior_summary_and_excludes_re
         "8. Rejected Or Superseded Directions\n- None.\n\n"
         "9. Next Actions\n- Continue."
     )
-    messages = [
-        ChatMessage(role="system", content="stable system prefix"),
-        ChatMessage(
-            role="system",
-            content=prior_summary,
-            metadata={"key": "context_compaction_summary", "kind": "history"},
-        ),
-        ChatMessage(role="user", content="old instruction to compress " + ("x" * 2000)),
-        ChatMessage(role="assistant", content="old result to compress " + ("y" * 2000)),
-        ChatMessage(role="user", content="recent user 2"),
-        ChatMessage(role="assistant", content="recent assistant 3"),
-        ChatMessage(role="user", content="latest request"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="system", content="stable system prefix"),
+            ChatMessage(
+                role="system",
+                content=prior_summary,
+                metadata={"key": "context_compaction_summary", "kind": "history"},
+            ),
+            ChatMessage(role="user", content="old instruction to compress " + ("x" * 2000)),
+            ChatMessage(role="assistant", content="old result to compress " + ("y" * 2000)),
+            ChatMessage(role="user", content="recent user 2"),
+            ChatMessage(role="assistant", content="recent assistant 3"),
+            ChatMessage(role="user", content="latest request"),
+        ],
+        user_fillers=21,
+    )
 
     result = await compact_context(
         ContextCompactionRequest(
@@ -1041,26 +1266,26 @@ async def test_auto_compaction_transcript_includes_prior_summary_and_excludes_re
             messages=messages,
             llm_client=llm,
             model="mock-model",
-            limit_tokens=2000,
+            limit_tokens=8_000,
             estimate_tokens=_estimate,
         )
     )
 
     assert result.status == "compacted"
-    assert result.summary == llm.summary
+    assert result.summary.startswith(llm.summary)
+    assert "## Recent user messages" in result.summary
     source_context = "\n".join(
         str(message.content) for message in llm.last_request.messages[:-1]
     )
-    # The prior summary is part of the compacted span (a) and is fed to the
-    # compaction model as a regular message; the retained span (c) is excluded.
+    # The prior summary and complete non-prefix history are fed to the model.
     assert llm.last_request.messages[0] == messages[0]
     assert llm.last_request.messages[-1].metadata["key"] == "context_compaction_instruction"
     assert "[Compacted Context]" in source_context
     assert "Use Kimi-K2.6 without thinking." in source_context
     assert "old instruction to compress" in source_context
-    assert "recent user 2" not in source_context
-    assert "recent assistant 3" not in source_context
-    assert "latest request" not in source_context
+    assert "retention filler 20" in source_context
+    assert "recent assistant 3" in source_context
+    assert "latest request" in source_context
 
 
 def test_preserves_leading_system_prefix():
@@ -1068,12 +1293,14 @@ def test_preserves_leading_system_prefix():
         ChatMessage(role="system", content="stable policy"),
         ChatMessage(role="system", content="workspace policy"),
     ]
-    messages = [
-        *prefix,
-        ChatMessage(role="user", content="old context " + ("x " * 1600)),
-        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
-        ChatMessage(role="user", content="latest request"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            *prefix,
+            ChatMessage(role="user", content="old context " + ("x " * 1600)),
+            ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+            ChatMessage(role="user", content="latest request"),
+        ]
+    )
 
     layout = select_context_compaction_layout(
         messages,
@@ -1085,12 +1312,14 @@ def test_preserves_leading_system_prefix():
     assert layout.prefix_messages == prefix
 
 
-def test_preserves_latest_user_turn():
-    messages = [
-        ChatMessage(role="user", content="old context " + ("x " * 1600)),
-        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
-        ChatMessage(role="user", content="latest explicit request"),
-    ]
+def test_default_zero_steps_summarizes_latest_user_turn():
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="old context " + ("x " * 1600)),
+            ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+            ChatMessage(role="user", content="latest explicit request"),
+        ]
+    )
 
     layout = select_context_compaction_layout(
         messages,
@@ -1099,30 +1328,34 @@ def test_preserves_latest_user_turn():
     )
 
     assert layout is not None
-    assert layout.retained_messages[-1].content == "latest explicit request"
+    assert layout.retained_messages == []
+    assert layout.compacted_messages == messages
 
 
-def test_preserves_recent_complete_turns():
-    messages = [
-        ChatMessage(role="user", content="old context " + ("x " * 1600)),
-        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
-        ChatMessage(role="user", content="recent request"),
-        ChatMessage(role="assistant", content="recent answer"),
-        ChatMessage(role="user", content="latest request"),
-    ]
+def test_positive_override_retains_only_recent_model_steps():
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="old context " + ("x " * 1600)),
+            ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+            ChatMessage(role="user", content="recent request"),
+            ChatMessage(role="assistant", content="recent answer"),
+            ChatMessage(role="user", content="latest request"),
+        ]
+    )
 
     layout = select_context_compaction_layout(
         messages,
-        limit_tokens=1200,
+        limit_tokens=100_000,
+        retained_steps=2,
         estimate_tokens=_estimate,
     )
 
     assert layout is not None
     assert [message.content for message in layout.retained_messages] == [
-        "recent request",
+        "old result " + ("y " * 1600),
         "recent answer",
-        "latest request",
     ]
+    assert all(message.role != "user" for message in layout.retained_messages)
 
 
 def test_tool_call_and_result_stay_together():
@@ -1131,21 +1364,25 @@ def test_tool_call_and_result_stay_together():
         name="read_file",
         arguments={"path": "notes.txt"},
     )
-    messages = [
-        ChatMessage(role="user", content="old context " + ("x " * 1600)),
-        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
-        ChatMessage(role="user", content="read the notes"),
-        ChatMessage(role="assistant", tool_calls=[tool_call]),
-        ChatMessage(
-            role="tool",
-            tool_call_id="call-1",
-            content="notes content",
-        ),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="old context " + ("x " * 1600)),
+            ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+            ChatMessage(role="user", content="read the notes"),
+            ChatMessage(role="assistant", tool_calls=[tool_call]),
+            ChatMessage(
+                role="tool",
+                tool_call_id="call-1",
+                content="notes content",
+            ),
+        ],
+        assistant_steps=1,
+    )
 
     layout = select_context_compaction_layout(
         messages,
         limit_tokens=1200,
+        retained_steps=1,
         estimate_tokens=_estimate,
     )
 
@@ -1156,11 +1393,13 @@ def test_tool_call_and_result_stay_together():
 
 @pytest.mark.asyncio
 async def test_compaction_summary_does_not_enter_raw_history():
-    messages = [
-        ChatMessage(role="user", content="old requirement " + ("x " * 1600)),
-        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
-        ChatMessage(role="user", content="latest request"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="old requirement " + ("x " * 1600)),
+            ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+            ChatMessage(role="user", content="latest request"),
+        ]
+    )
     original = [message.to_dict() for message in messages]
 
     result = await compact_context(
@@ -1184,13 +1423,15 @@ async def test_compaction_summary_does_not_enter_raw_history():
 
 @pytest.mark.asyncio
 async def test_resume_boundary_restores_recent_tail():
-    messages = [
-        ChatMessage(role="user", content="old request " + ("x " * 1600)),
-        ChatMessage(role="assistant", content="old answer " + ("y " * 1600)),
-        ChatMessage(role="user", content="recent request"),
-        ChatMessage(role="assistant", content="recent answer"),
-        ChatMessage(role="user", content="latest request"),
-    ]
+    messages = _with_compactable_steps(
+        [
+            ChatMessage(role="user", content="old request " + ("x " * 1600)),
+            ChatMessage(role="assistant", content="old answer " + ("y " * 1600)),
+            ChatMessage(role="user", content="recent request"),
+            ChatMessage(role="assistant", content="recent answer"),
+            ChatMessage(role="user", content="latest request"),
+        ]
+    )
 
     result = await compact_context(
         ContextCompactionRequest(
@@ -1204,16 +1445,9 @@ async def test_resume_boundary_restores_recent_tail():
     )
 
     assert result.status == "compacted"
-    assert [message.content for message in result.retained_messages] == [
-        "recent request",
-        "recent answer",
-        "latest request",
-    ]
-    assert [message.content for message in result.replacement_messages[-3:]] == [
-        "recent request",
-        "recent answer",
-        "latest request",
-    ]
+    assert result.retained_messages == []
+    assert result.summary.endswith("3. latest request")
+    assert len(result.replacement_messages) == 1
 
 
 def test_fitter_finishes_within_max_attempts():

@@ -221,6 +221,94 @@ describe('CoreSettings', () => {
     wrapper.unmount()
     localStorage.clear()
   })
+
+  it('loads the context compaction default and explains Step retention', async () => {
+    const rpc = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'settings.get' && params?.namespace === 'core.contextCompaction') return { value: {} }
+      if (method === 'settings.get') return { value: { enabled: false, min_turns: 3 } }
+      return {}
+    })
+    const wrapper = mountSettings(rpc)
+    await flushPromises()
+    await wrapper.get('[data-settings-section="agents"]').trigger('click')
+
+    const input = wrapper.get('[data-context-compaction-retained-steps]')
+    expect((input.element as HTMLInputElement).value).toBe('0')
+    expect(input.attributes('min')).toBe('0')
+    expect(input.attributes('max')).toBe('100')
+    expect(wrapper.text()).toContain('一个 Step 是一次模型响应及其后续工具结果')
+    expect(wrapper.text()).toContain('默认保留 0 个 Step，历史会全部汇总')
+    expect(wrapper.text()).toContain('最新 20 条用户指令')
+    expect(wrapper.text()).toContain('原文追加为编号的“Recent user messages”段落')
+    expect(wrapper.text()).toContain('令牌预算不足时较早条目会静默丢弃')
+
+    wrapper.unmount()
+  })
+
+  it('normalizes invalid context compaction values and clamps before saving', async () => {
+    const rpc = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'settings.get' && params?.namespace === 'core.contextCompaction') {
+        return { value: { retained_steps: 'not-a-number' } }
+      }
+      if (method === 'settings.get') return { value: { enabled: false, min_turns: 3 } }
+      return {}
+    })
+    const wrapper = mountSettings(rpc)
+    await flushPromises()
+    await wrapper.get('[data-settings-section="agents"]').trigger('click')
+    const input = wrapper.get('[data-context-compaction-retained-steps]')
+    const save = wrapper.get('[data-context-compaction-save]')
+
+    expect((input.element as HTMLInputElement).value).toBe('0')
+    await input.setValue('999')
+    await save.trigger('click')
+    await flushPromises()
+    expect((input.element as HTMLInputElement).value).toBe('100')
+    expect(rpc).toHaveBeenCalledWith('settings.update', {
+      namespace: 'core.contextCompaction',
+      value: { retained_steps: 100 },
+    })
+
+    await input.setValue('0')
+    await save.trigger('click')
+    await flushPromises()
+    expect((input.element as HTMLInputElement).value).toBe('0')
+    expect(rpc).toHaveBeenCalledWith('settings.update', {
+      namespace: 'core.contextCompaction',
+      value: { retained_steps: 0 },
+    })
+
+    wrapper.unmount()
+  })
+
+  it('saves the context compaction retained_steps payload', async () => {
+    const rpc = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'settings.get' && params?.namespace === 'core.contextCompaction') {
+        return { value: { retained_steps: 6 } }
+      }
+      if (method === 'settings.get') return { value: { enabled: false, min_turns: 3 } }
+      return {}
+    })
+    const wrapper = mountSettings(rpc)
+    await flushPromises()
+    await wrapper.get('[data-settings-section="agents"]').trigger('click')
+
+    rpc.mockClear()
+    await wrapper.get('[data-context-compaction-refresh]').trigger('click')
+    await flushPromises()
+    expect(rpc).toHaveBeenCalledWith('settings.get', { namespace: 'core.contextCompaction' })
+
+    await wrapper.get('[data-context-compaction-retained-steps]').setValue('18')
+    await wrapper.get('[data-context-compaction-save]').trigger('click')
+    await flushPromises()
+
+    expect(rpc).toHaveBeenCalledWith('settings.update', {
+      namespace: 'core.contextCompaction',
+      value: { retained_steps: 18 },
+    })
+
+    wrapper.unmount()
+  })
 })
 
 describe('Core settings permission contract', () => {

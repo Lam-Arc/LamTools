@@ -2,10 +2,10 @@
 name: office-infographics
 description: 将文字资料整理成流程图、泳道图、时间线、路线图、组织结构、方案对比和一页式信息图。用户要求把步骤、关系或长说明可视化时使用；以数值统计为核心的图表交给 office-charts。
 metadata:
-  version: 0.1.0
+  version: 0.2.0
   language: zh-CN
   target: lamtools-desktop
-  status: instruction-draft
+  status: beta
 ---
 
 # 信息图与流程图
@@ -13,7 +13,7 @@ metadata:
 ## 目标与边界
 
 先确认信息之间的关系，再制作结构正确、层次清晰、风格统一的配图。面向桌面工作环境。
-本 Skill 不附带模板引擎、图标库或渲染器；使用宿主已提供的真实能力，不猜测模板名称和接口。
+本 Skill 不附带信息图模板引擎或图标库；bundle 内置的 Office 校验/渲染程序只负责受支持载体的门禁和预览，不替代信息图创作能力。
 流程与关系用结构化图形表达。生成式插图可作为经授权的装饰，但不能取代需要准确文字和箭头的主体。
 
 ## 输入与默认值
@@ -32,7 +32,7 @@ metadata:
 
 ## 工作流程
 
-需要精细排版时读取[共享办公视觉规范](../references/office-design-system.md)，以最终嵌入尺寸而非独立大画布尺寸规划节点密度和字号。复杂或多文件任务同时读取[工具对接约定](../references/tooling-contract.md)的执行收敛规则。
+需要精细排版时读取[共享办公视觉规范](../references/office-design-system.md)，以最终嵌入尺寸而非独立大画布尺寸规划节点密度和字号。复杂或多文件任务同时读取[工具对接约定](../references/tooling-contract.md)的执行收敛规则。信息图含数据承载表格、图表（包括文字对比表）时，读取[Office 数据与渲染合同](../references/office-renderer-contract.md)，先写 `office-data.json` 并绑定稳定 dataset ID，在任意项目目录运行 `py -3.14 -m lamtools_core.cli office validate ...`，通过后再运行同入口的 `office render`。纯节点/装饰布局不需 manifest。
 
 ### 1. 结构化信息
 

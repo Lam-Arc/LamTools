@@ -260,7 +260,7 @@ describe('WorkspaceShell rendering', () => {
 });
 
 describe('CoreExecutionControls', () => {
-  it('emits model, thinking, and shallow changes from the shared composer controls', async () => {
+  it('emits model and thinking changes from the shared composer controls', async () => {
     const wrapper = mount(CoreExecutionControls, {
       props: {
         modelValue: '',
@@ -283,13 +283,10 @@ describe('CoreExecutionControls', () => {
     await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
     await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter');
     await wrapper.findAll('[data-model-thinking-level-option]')[1].trigger('click');
-    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
-    await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter');
-    await wrapper.get('[data-model-thinking-shallow-option]').trigger('click');
-
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['model-1']);
     expect(wrapper.emitted('update:thinkingMode')?.[0]).toEqual(['max']);
-    expect(wrapper.emitted('update:shallowThinkingEnabled')?.[0]).toEqual([true]);
+    expect(wrapper.find('[data-model-thinking-shallow-option]').exists()).toBe(false);
+    expect(wrapper.emitted('update:shallowThinkingEnabled')).toBeUndefined();
   });
 });
 

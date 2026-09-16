@@ -120,14 +120,15 @@ function onLoad() {
   flex: 1;
   min-width: 0;
   padding: 5px 10px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: rgba(0,0,0,0.3);
-  color: var(--theme-main-text, #f2efeb);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font-size: 13px;
   outline: none;
 }
-.stage-browser-url:focus { border-color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 30%, transparent); }
+.stage-browser-url:focus { border-color: color-mix(in srgb, var(--theme-composer-text) 12%, transparent); }
 .stage-browser-btn {
   flex: 0 0 auto;
   width: 30px;

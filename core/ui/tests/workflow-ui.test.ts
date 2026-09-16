@@ -63,11 +63,11 @@ describe('workflow status and structured run compatibility', () => {
 describe('workflow continuation adapter', () => {
   it('sends preferred continuation and legacy state for migration hosts', () => {
     expect(buildWorkflowRunPayload('demo', {
-      runId: 'run-1', threadId: 'thread-1', maxSteps: 1,
+      runId: 'run-1', threadId: 'thread-1', modelId: 'model-1', permissions: { run_command: true }, maxSteps: 1,
       priorValues: { 'a.out': 1 },
       priorNodeStates: { a: { node_id: 'a', status: 'done' as any, attempts: 1 } },
       continuation: { token: 'next-token', state: { cursor: 1 }, runId: 'run-1' },
-    })).toMatchObject({ continuation_token: 'next-token', continuation_state: { cursor: 1 }, prior_values: { 'a.out': 1 }, run_id: 'run-1' })
+    })).toMatchObject({ continuation_token: 'next-token', continuation_state: { cursor: 1 }, prior_values: { 'a.out': 1 }, run_id: 'run-1', model_id: 'model-1', permissions: { run_command: true } })
   })
 
   it('falls back once when the host rejects continuation fields', async () => {

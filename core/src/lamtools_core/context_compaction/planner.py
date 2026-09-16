@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from lamtools_core.context_compaction_budget import TokenBudget
+from lamtools_core.context_compaction_budget import (
+    DEFAULT_RETAINED_STEPS,
+    TokenBudget,
+    load_retained_steps,
+    resolve_retained_steps,
+)
 from lamtools_core.llm import ChatMessage
 from lamtools_core.tokens import estimate_message_tokens
 
@@ -27,7 +32,13 @@ def compaction_segment_input_limit(context_window_tokens: int) -> int:
 
 
 class CompactionPlanner:
-    """Plan which messages are summarized and which recent tail is retained."""
+    """Plan a Step tail and the history that must be summarized.
+
+    By default no Step is retained, so the complete non-prefix history enters
+    summarization. A positive setting retains that many latest model Steps;
+    recent user instructions are appended to the summary later by the
+    controller instead of remaining as raw messages.
+    """
 
     def __init__(self, estimate_tokens: CompactionTokenEstimator | None = None) -> None:
         self._estimate_tokens = estimate_tokens
@@ -38,6 +49,7 @@ class CompactionPlanner:
         *,
         budget: TokenBudget,
         preserve_latest_user: bool = True,
+        retained_steps: int | None = None,
         estimate_tokens: CompactionTokenEstimator | None = None,
     ) -> CompactionPlan | None:
         return _select_layout(
@@ -45,6 +57,7 @@ class CompactionPlanner:
             preserve_latest_user=preserve_latest_user,
             compact_all=False,
             limit_tokens=budget.target_tokens,
+            retained_steps=retained_steps,
             estimate_tokens=estimate_tokens or self._estimate_tokens,
         )
 
@@ -55,6 +68,7 @@ def select_context_compaction_layout(
     preserve_latest_user: bool = True,
     compact_all: bool = False,
     limit_tokens: int = 0,
+    retained_steps: int | None = None,
     estimate_tokens: CompactionTokenEstimator | None = None,
 ) -> CompactionPlan | None:
     """Compatibility wrapper for the pre-planner API."""
@@ -63,6 +77,7 @@ def select_context_compaction_layout(
         preserve_latest_user=preserve_latest_user,
         compact_all=compact_all,
         limit_tokens=limit_tokens,
+        retained_steps=retained_steps,
         estimate_tokens=estimate_tokens,
     )
 
@@ -73,6 +88,7 @@ def _select_layout(
     preserve_latest_user: bool,
     compact_all: bool,
     limit_tokens: int,
+    retained_steps: int | None,
     estimate_tokens: CompactionTokenEstimator | None,
 ) -> CompactionPlan | None:
     prefix_end = 0
@@ -87,71 +103,127 @@ def _select_layout(
     if not body:
         return None
 
-    estimator = estimate_tokens or (
-        lambda values: estimate_message_tokens([message.to_dict() for message in values])
-    )
     prefix_messages = list(messages[:prefix_end])
-    if compact_all:
-        latest_user = (
-            next((message for message in reversed(body) if message.role == "user"), None)
-            if preserve_latest_user
-            else None
+    # ``compact_all`` and ``preserve_latest_user`` remain accepted for callers
+    # of the old API. Automatic and manual compaction now share one preferred
+    # retention policy; the fitter may still discard its oldest selected units
+    # when the token budget requires it.
+    _ = compact_all, preserve_latest_user
+    resolved_steps = (
+        load_retained_steps()
+        if retained_steps is None
+        else resolve_retained_steps(retained_steps)
+    )
+    protected_indexes = _protected_message_indexes(
+        body,
+        retained_steps=resolved_steps,
+    )
+    estimator = estimate_tokens or (
+        lambda values: estimate_message_tokens(
+            [message.to_dict() for message in values]
         )
-        retained_messages = [latest_user] if latest_user is not None else []
-        compacted_messages = [message for message in body if message is not latest_user]
-        if not compacted_messages:
-            return None
-        return CompactionPlan(
-            system_prefix=prefix_messages,
-            messages_to_summarize=compacted_messages,
-            recent_messages=retained_messages,
-        )
-
+    )
     fixed_tokens = estimator(prefix_messages)
-    retained_budget = max(0, limit_tokens - fixed_tokens - _summary_output_limit(limit_tokens))
-    groups = _semantic_message_groups(body)
-    retained_ids: set[int] = set()
+    retained_budget = max(
+        0,
+        limit_tokens - fixed_tokens - _summary_output_limit(limit_tokens),
+    )
+    latest_user_index = next(
+        (
+            index
+            for index in range(len(body) - 1, -1, -1)
+            if body[index].role == "user"
+        ),
+        None,
+    )
 
-    def retained_values(extra: list[ChatMessage] | None = None) -> list[ChatMessage]:
-        selected = set(retained_ids)
-        selected.update(id(message) for message in (extra or []))
-        return [message for message in body if id(message) in selected]
-
-    def retained_token_count(extra: list[ChatMessage] | None = None) -> int:
-        return max(0, estimator([*prefix_messages, *retained_values(extra)]) - fixed_tokens)
-
-    latest_group_index = len(groups) - 1
-    if preserve_latest_user:
-        latest_user = next((message for message in reversed(body) if message.role == "user"), None)
-        if latest_user is not None:
-            latest_group_index = next(
-                index for index, group in enumerate(groups) if any(message is latest_user for message in group)
-            )
-            latest_group = groups[latest_group_index]
-            required = (
-                latest_group
-                if retained_token_count(latest_group) <= retained_budget
-                else [latest_user]
-            )
-            retained_ids.update(id(message) for message in required)
-
-    start_index = latest_group_index if preserve_latest_user else len(groups)
-    for group in reversed(groups[:start_index]):
-        if len(retained_ids) + len(group) >= len(body):
-            continue
-        if retained_token_count(group) > retained_budget:
+    # Step/user counts define the preferred tail, while the token target is
+    # authoritative. Move its oldest units into the summary input until the
+    # retained span leaves the normal summary allowance. The newest user is
+    # the only non-droppable boundary and is checked against the hard target
+    # by the controller before any model call.
+    for unit in _retention_index_units(body):
+        retained_values = [
+            message for index, message in enumerate(body) if index in protected_indexes
+        ]
+        retained_tokens = max(
+            0,
+            estimator([*prefix_messages, *retained_values]) - fixed_tokens,
+        )
+        if limit_tokens <= 0 or retained_tokens <= retained_budget:
             break
-        retained_ids.update(id(message) for message in group)
+        if latest_user_index is not None and latest_user_index in unit:
+            continue
+        protected_indexes.difference_update(unit)
 
-    retained_messages = retained_values()
-    compacted_messages = [message for message in body if id(message) not in retained_ids]
+    retained_messages = [
+        message for index, message in enumerate(body) if index in protected_indexes
+    ]
+    compacted_messages = [
+        message for index, message in enumerate(body) if index not in protected_indexes
+    ]
     if not compacted_messages:
-        return None
+        if limit_tokens <= 0 or estimator([*prefix_messages, *retained_messages]) <= limit_tokens:
+            return None
     return CompactionPlan(
         system_prefix=prefix_messages,
         messages_to_summarize=compacted_messages,
         recent_messages=retained_messages,
     )
+
+
+def _protected_message_indexes(
+    messages: list[ChatMessage],
+    *,
+    retained_steps: int = DEFAULT_RETAINED_STEPS,
+) -> set[int]:
+    """Return the configured latest model Steps.
+
+    A Step starts at an assistant model message and owns every immediately
+    following ``tool`` result.  The returned indexes are always in source
+    order when projected back onto ``messages``; no token budget is consulted.
+    """
+    step_groups = _model_step_groups(messages)
+    selected: set[int] = set()
+    step_count = max(0, int(retained_steps))
+    if step_count:
+        for group in step_groups[-step_count:]:
+            selected.update(group)
+    return selected
+
+
+def _model_step_groups(messages: list[ChatMessage]) -> list[list[int]]:
+    """Group assistant messages with their following contiguous tool results."""
+    groups: list[list[int]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        if message.role != "assistant":
+            index += 1
+            continue
+        group = [index]
+        index += 1
+        while index < len(messages) and messages[index].role == "tool":
+            group.append(index)
+            index += 1
+        groups.append(group)
+    return groups
+
+
+def _retention_index_units(messages: list[ChatMessage]) -> list[list[int]]:
+    """Return source-ordered units suitable for summary/drop boundaries."""
+    units: list[list[int]] = []
+    index = 0
+    while index < len(messages):
+        unit = [index]
+        message = messages[index]
+        index += 1
+        if message.role == "assistant":
+            while index < len(messages) and messages[index].role == "tool":
+                unit.append(index)
+                index += 1
+        units.append(unit)
+    return units
 
 
 def _summary_output_limit(limit_tokens: int) -> int:

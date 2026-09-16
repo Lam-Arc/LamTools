@@ -132,7 +132,7 @@ describe('「本轮产出」面板：内部去重', () => {
     expect(wrapper.findAll('.message-artifacts .message-attachment-deck__card')).toHaveLength(2)
   })
 
-  it('展示代码/配置/文档 file_change，兼容历史 file_read 图片并排除普通读取', () => {
+  it('展示代码/配置/文档 file_change，并排除 command/file-read 证据', () => {
     const m = msg('assistant:t5', [part('p1', [
       { kind: 'file_change', uri: 'src/app.ts', content: '+export const ready = true' },
       { kind: 'file_change', uri: 'settings.jsonc', content: '+{"ready": true}' },
@@ -146,9 +146,9 @@ describe('「本轮产出」面板：内部去重', () => {
     ])])
     const wrapper = mountMessageView({ props: { msg: m } })
     const cards = wrapper.findAll('.message-artifacts .message-attachment-deck__card')
-    expect(cards).toHaveLength(4)
+    expect(cards).toHaveLength(3)
     expect(wrapper.text()).toContain('本轮产出')
-    expect(wrapper.text()).toContain('legacy.png')
+    expect(wrapper.text()).not.toContain('legacy.png')
     expect(wrapper.text()).not.toContain('notes.txt')
   })
 })

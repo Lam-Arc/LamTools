@@ -54,10 +54,11 @@ watch(() => props.modelValue, () => nextTick(autoGrow))
 .auto-textarea {
   width: 100%;
   box-sizing: border-box;
-  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm, 6px);
-  color: var(--theme-control-text);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: var(--space-1) var(--space-2);
   font-size: 11px;
   line-height: 1.55;

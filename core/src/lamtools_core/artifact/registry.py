@@ -60,6 +60,17 @@ class ArtifactRecord:
     children_ids: list[str] = field(default_factory=list)
     created_at: str = ""
     deleted: bool = False
+    role: str = "deliverable"
+    latest_revision_id: str = ""
+    revision_count: int = 0
+    project_id: str = ""
+    work_root: str = ""
+    thread_id: str = ""
+    turn_id: str = ""
+    item_id: str = ""
+    tool_name: str = ""
+    provenance: dict[str, Any] = field(default_factory=dict)
+    availability: str = "available"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -80,6 +91,17 @@ class ArtifactRecord:
             children_ids=[str(i) for i in data.get("children_ids") or []],
             created_at=str(data.get("created_at") or ""),
             deleted=bool(data.get("deleted")),
+            role=str(data.get("role") or ("input" if data.get("source") == "user_upload" else "deliverable")),
+            latest_revision_id=str(data.get("latest_revision_id") or ""),
+            revision_count=int(data.get("revision_count") or 0),
+            project_id=str(data.get("project_id") or ""),
+            work_root=str(data.get("work_root") or ""),
+            thread_id=str(data.get("thread_id") or ""),
+            turn_id=str(data.get("turn_id") or ""),
+            item_id=str(data.get("item_id") or ""),
+            tool_name=str(data.get("tool_name") or ""),
+            provenance=dict(data.get("provenance") or {}),
+            availability=str(data.get("availability") or "available"),
         )
 
 

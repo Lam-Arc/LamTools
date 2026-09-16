@@ -4,39 +4,24 @@
     data-plugin-mode="workflow"
     :data-workflow-running="workflowRunning ? 'true' : 'false'"
   >
-    <nav v-if="workflowTabs.length > 1" class="wf-workflow-tabs" role="tablist" aria-label="打开的工作流">
-      <button
-        v-for="tab in workflowTabs"
-        :key="tab.id"
-        type="button"
-        class="wf-workflow-tab"
-        :class="{ active: tab.id === activeWorkflowId }"
-        role="tab"
-        :aria-selected="tab.id === activeWorkflowId ? 'true' : 'false'"
-        :tabindex="tab.id === activeWorkflowId ? 0 : -1"
-        @click="selectWorkflow(tab.id)"
-      >
-        <span class="wf-workflow-tab-title">{{ tab.name || '未命名工作流' }}</span>
-        <span v-if="tab.dirty" class="wf-workflow-tab-dirty" aria-label="有未保存修改">●</span>
-        <span
-          class="wf-workflow-tab-close"
-          role="button"
-          tabindex="0"
-          aria-label="关闭工作流标签"
-          @click.stop="closeWorkflowTab(tab.id)"
-          @keydown.enter.stop.prevent="closeWorkflowTab(tab.id)"
-          @keydown.space.stop.prevent="closeWorkflowTab(tab.id)"
-        >×</span>
-      </button>
-    </nav>
     <WorkflowCanvas
       :definition="workflowDefinition || emptyWorkflow"
       :node-states="workflowNodeStates"
+      :node-state-details="workflowRun?.node_states || {}"
+      :timeline="workflowTimeline"
+      :human-tasks="humanTasks"
+      :selected-human-task="selectedHumanTask"
+      :human-task-loading="humanTaskLoading"
+      :human-task-busy="humanTaskBusy"
+      :human-task-error="humanTaskError"
+      :on-refresh-human-tasks="refreshHumanTasks"
+      :on-select-human-task="selectHumanTask"
+      :on-complete-human-task="completeHumanTask"
       :selected-node-id="selectedNodeId || undefined"
       :available-tools="availableTools"
       :available-models="availableModels"
       :node-schemas="nodeSchemas"
-      :locked="canvasLocked"
+      :locked="chat.activeTurnRunning.value"
       @update:definition="onWorkflowUpdate"
       @select-node="onSelectNode"
       @run-from="runFromNode"
@@ -77,34 +62,63 @@
 
   <Teleport v-if="workflowDefinition" defer to=".workspace-plugin-header">
     <div class="thread-header wf-floating-header" data-workflow-header>
-      <CoreSessionTitleEditor
-        :title="workflowDefinition.name"
-        :session-id="workflowSessionId(workflowDefinition)"
-        :rename="renameWorkflow"
-      />
-      <button
-        type="button"
-        class="stage-toggle-btn"
-        :class="{ active: canvasLocked }"
-        :title="canvasLocked ? '解锁画布' : '锁定画布'"
-        :aria-label="canvasLocked ? '解锁画布' : '锁定画布'"
-        @click="canvasLocked = !canvasLocked"
-      >
-        <svg v-if="canvasLocked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-        <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>
-      </button>
+      <div class="wf-header-title">
+        <CoreSessionTitleEditor
+          :title="workflowDefinition.name"
+          :session-id="workflowSessionId(workflowDefinition)"
+          :rename="renameWorkflow"
+        />
+      </div>
     </div>
   </Teleport>
 
-  <Teleport v-if="conversationExpanded" defer to=".workspace-plugin-modal">
-    <section class="wf-convo-float" role="dialog" aria-modal="false" aria-label="工作流对话">
+  <Teleport v-if="workflowTabs.length > 1" defer to="[data-titlebar-workflow-tabs]">
+    <nav class="wf-workflow-tabs" role="tablist" aria-label="打开的工作流">
+      <button
+        v-for="tab in workflowTabs"
+        :key="tab.id"
+        type="button"
+        class="wf-workflow-tab"
+        :class="{ active: tab.id === activeWorkflowId }"
+        role="tab"
+        :aria-selected="tab.id === activeWorkflowId ? 'true' : 'false'"
+        :tabindex="tab.id === activeWorkflowId ? 0 : -1"
+        @click="selectWorkflow(tab.id)"
+      >
+        <span class="wf-workflow-tab-title">{{ tab.name || '未命名工作流' }}</span>
+        <span v-if="tab.dirty" class="wf-workflow-tab-dirty" aria-label="有未保存修改">
+          <CircleDotDashed :size="9" :stroke-width="2" aria-hidden="true" />
+        </span>
+        <span
+          class="wf-workflow-tab-close"
+          role="button"
+          tabindex="0"
+          aria-label="关闭工作流标签"
+          @click.stop="closeWorkflowTab(tab.id)"
+          @keydown.enter.stop.prevent="closeWorkflowTab(tab.id)"
+          @keydown.space.stop.prevent="closeWorkflowTab(tab.id)"
+        >
+          <X :size="13" :stroke-width="1.8" aria-hidden="true" />
+        </span>
+      </button>
+    </nav>
+  </Teleport>
+
+  <Teleport v-if="workflowDefinition" defer to=".workspace-plugin-modal">
+    <section
+      class="wf-convo-float"
+      :class="{ 'is-pinned': conversationExpanded }"
+      data-workflow-conversation
+      role="region"
+      aria-label="工作流对话"
+    >
       <header class="wf-convo-float-head">
         <h3>{{ workflowDefinition?.name || '工作流' }} · 对话</h3>
         <button type="button" class="text-btn" title="收起" @click="conversationExpanded = false">
           <X :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </header>
-      <div class="wf-convo-float-body">
+      <div class="wf-convo-float-body thread">
         <ChatThread
           :messages="chat.messages.value"
           :process-expanded-ids="chat.processExpandedIds.value"
@@ -153,7 +167,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { X } from 'lucide-vue-next'
+import { CircleDotDashed, X } from 'lucide-vue-next'
 import type { CoreAppEvent } from '../../../../../../ui/src/appServer'
 import type { ProjectGroup, SessionItem } from '../../../../../../ui/src/components/SessionSidebar.vue'
 import type { PluginModeSurface } from '../../../../../../ui/src/plugins/context'
@@ -170,12 +184,15 @@ import {
   type WorkflowQueueItem,
   type WorkflowActivation,
   type WorkflowRunResult,
+  type WorkflowRunTimelineItem,
   type WorkflowHumanTask,
 } from './types'
 import {
   createWorkflowApi,
   isWorkflowRevisionConflict,
   normalizeWorkflowNodeState,
+  normalizeWorkflowRunResponse,
+  normalizeWorkflowRunResult,
   type WorkflowApi,
   type WorkflowContinuationState,
 } from './api'
@@ -228,6 +245,8 @@ const {
   refreshSessions,
   setRuntimeStatus,
   availableModels,
+  selectedModelId,
+  permissionPreset,
   composerText,
   ensureRightPanelOpen,
   lastEvent,
@@ -242,6 +261,7 @@ const openWorkflowIds = ref<string[]>([])
 const workflowNodeStates = ref<Record<string, NodeStateStatus>>({})
 const workflowRun = ref<WorkflowRunResult | null>(null)
 const workflowContinuation = ref<WorkflowContinuationState | undefined>(undefined)
+const workflowTimeline = ref<WorkflowRunTimelineItem[]>([])
 const workflowDocumentState = ref<WorkflowDocumentSnapshot | null>(null)
 const selectedNodeId = ref<string | null>(null)
 const selectedNode = computed<WorkflowNode | null>(() => (
@@ -264,7 +284,6 @@ const queueLoading = ref(false)
 const workflowRunning = ref(false)
 const workflowStatusText = ref('')
 const activeRunId = ref('')
-const canvasLocked = ref(false)
 const conversationExpanded = ref(false)
 const showWorkflowCreate = ref(false)
 const workflowCreateLoading = ref(false)
@@ -316,6 +335,7 @@ const workflowModeInstructions = computed(() => {
     '节点类型由后端 object_info 注册表动态提供，目录按 category 分组并支持搜索；常用类型包括 model、agent、command、python、constant、input、output、template、condition、merge、join、subgraph。',
     '- model：独立的模型推理节点，config.instruction 是指令，config.model_id 选择模型；不再用旧 ai 的 mode 复用 Agent。',
     '- agent：独立的 Agent 执行节点，config.instruction 是目标，config.model_id 选择模型，config.tools/allowed_tools 选择工具。',
+    '创建 model 或 agent 节点时必须填写 config.model_id；用户未指定时使用当前会话模型，后端也会以当前会话模型兜底。',
     '- command：跑 shell 命令调用 CLI 工具（curl/git/ffmpeg 等）。config.command 是 shell 命令，用与 run_command 相同的 shell（Windows 下 Git Bash）。stdin 收 {"inputs":{端口名:值}} JSON，同时设 INPUT_<端口名> 环境变量。stdout 是 JSON 对象则按 key 拆到同名输出端口，否则整段放默认端口。',
     '- python：写 Python 代码。config.script 是纯 Python，输入端口名直接当变量用，给输出端口名赋值即输出；旧 script 节点继续兼容。',
     '- constant：仅有输出端口，每个端口保存常量值；旧 content 节点继续兼容。',
@@ -426,6 +446,10 @@ const workflowSurface: PluginModeSurface = {
   turnOptions: () => ({
     active_mode: 'workflow:workflow',
     instructions: workflowModeInstructions.value,
+    // Bind the turn to the selected workflow's actual repository scope. The
+    // session may predate plugin metadata repair and otherwise inherit the
+    // currently selected project (or a stale default) instead.
+    work_root: workflowRoot(activeWorkflow.value) || '',
   }),
   rightSidebar: workflowRightSidebar,
   sidebar: {
@@ -585,6 +609,70 @@ function formatTimestamp(value: string | null | undefined): string {
   return parsed.toLocaleString()
 }
 
+function applyWorkflowRunResult(raw: unknown, continuation?: WorkflowContinuationState): WorkflowRunResult | null {
+  if (!isRecord(raw)) return null
+  const normalized = normalizeWorkflowRunResult(raw as any)
+  if (!normalized.run_id && activeRunId.value) normalized.run_id = activeRunId.value
+  activeRunId.value = normalized.run_id || activeRunId.value
+  workflowRun.value = normalized
+  workflowContinuation.value = continuation || continuationFromRun(raw)
+  workflowNodeStates.value = Object.fromEntries(
+    Object.entries(normalized.node_states || {}).map(([nodeId, state]) => [nodeId, normalizeNodeStateStatus(state.status)]),
+  ) as Record<string, NodeStateStatus>
+  mergeWorkflowRunTimeline(normalized)
+  workflowRunning.value = normalized.status === 'running'
+  workflowStatusText.value = workflowRunStatusLabel(normalized.status)
+  return normalized
+}
+
+function continuationFromRun(raw: Record<string, unknown>): WorkflowContinuationState | undefined {
+  const value = isRecord(raw.continuation) ? raw.continuation : raw
+  const token = String(value.token ?? value.continuation_token ?? '').trim()
+  const state = value.state ?? value.continuation_state
+  const runId = String(value.run_id ?? value.runId ?? '').trim()
+  if (!token && state === undefined && !runId) return undefined
+  return {
+    ...(token ? { token } : {}),
+    ...(state !== undefined ? { state } : {}),
+    ...(runId ? { runId } : {}),
+  }
+}
+
+function mergeWorkflowRunTimeline(run: WorkflowRunResult): void {
+  for (const state of Object.values(run.node_states || {})) {
+    const id = `state:${state.node_id}`
+    if (workflowTimeline.value.some((item) => item.id === id)) continue
+    workflowTimeline.value.push({
+      id,
+      node_id: state.node_id,
+      title: workflowNodeTitle(state.node_id),
+      status: state.status,
+      input: state.input,
+      output: state.output,
+      error: state.error,
+      attempts: state.attempts,
+      attempt_id: state.attempt_id,
+      duration_ms: state.duration_ms,
+      cache_status: state.cache_status,
+      cache_key: state.cache_key,
+      tool_calls: state.tool_calls,
+      logs: state.logs,
+      audit: state.audit,
+      started_at: state.started_at,
+      finished_at: state.finished_at,
+    })
+  }
+}
+
+function appendWorkflowTimeline(item: WorkflowRunTimelineItem): void {
+  const existingIndex = workflowTimeline.value.findIndex((entry) => entry.id === item.id)
+  if (existingIndex >= 0) {
+    workflowTimeline.value = workflowTimeline.value.map((entry, index) => index === existingIndex ? { ...entry, ...item } : entry)
+    return
+  }
+  workflowTimeline.value = [...workflowTimeline.value.slice(-199), item]
+}
+
 async function refreshWorkflows(): Promise<void> {
   try {
     const roots = projects.value.map((project) => project.workRoot).filter(Boolean)
@@ -679,14 +767,15 @@ async function refreshHumanTasks(): Promise<void> {
   try {
     const tasks = await workflowApi.listHumanTasks({
       workRoot: workflowRoot(definition) || activeProject.value?.workRoot || undefined,
+      workflowId: definition.id,
       status: 'pending',
       limit: 50,
     })
     humanTasks.value = tasks
     if (selectedHumanTask.value) {
       const current = tasks.find((task) => task.task_id === selectedHumanTask.value?.task_id)
-      if (!current) selectedHumanTask.value = null
-    }
+      selectedHumanTask.value = current || tasks[0] || null
+    } else selectedHumanTask.value = tasks[0] || null
   } catch (error) {
     humanTaskError.value = messageFromError(error)
   } finally {
@@ -723,6 +812,17 @@ async function completeHumanTask(
     const completed = await workflowApi.completeHumanTask(task.task_id, decision, payload, {
       workRoot: definition ? workflowRoot(definition) || activeProject.value?.workRoot || undefined : undefined,
     })
+    if (completed.run) {
+      // A signal may finish the waiting run synchronously.  Treat the returned
+      // snapshot as the active run so node states, continuation, output, and
+      // the canvas-side result panel all move together.
+      if (!activeRunId.value && task.run_id) activeRunId.value = task.run_id
+      const response = normalizeWorkflowRunResponse({ run: completed.run as any })
+      const applied = applyWorkflowRunResult(response.run, response.continuation)
+      if (applied && task.node_id && workflowDefinition.value?.nodes.some((node) => node.id === task.node_id)) {
+        selectedNodeId.value = task.node_id
+      }
+    }
     await refreshHumanTasks()
     selectedHumanTask.value = completed.task
     setRuntimeStatus(completed.idempotent ? '任务已处理' : '人工任务已提交', 2500)
@@ -813,6 +913,9 @@ function addNodeFromCatalog(schema: WorkflowNodeSchema): void {
   while (definition.nodes.some((node) => node.id === id)) id = `${base}-${++serial}`
   const lastX = definition.nodes.reduce((max, node) => Math.max(max, Number(node.position?.x) || 0), 0)
   const node = createWorkflowNodeFromSchema(schema, id, { x: lastX + 260, y: 120 + (definition.nodes.length % 4) * 110 })
+  if (['ai', 'model', 'agent'].includes(node.kind) && !String(node.config.model_id || '').trim()) {
+    node.config.model_id = selectedModelId.value
+  }
   applyWorkflowDocumentUpdate({ ...definition, nodes: [...definition.nodes, node] }, `添加节点：${node.title}`)
   selectedNodeId.value = node.id
   scheduleAutosave()
@@ -827,6 +930,8 @@ async function enqueueWorkflow(): Promise<void> {
   try {
     const item = await workflowApi.enqueue(definition.name, {
       workRoot: workflowRoot(definition),
+      modelId: selectedModelId.value,
+      permissions: workflowRunPermissions(),
       threadId: workflowSessionId(definition),
       inputs: {},
     })
@@ -952,6 +1057,7 @@ async function selectWorkflow(workflowId: string): Promise<void> {
     selectedNodeId.value = null
     workflowRun.value = null
     workflowContinuation.value = undefined
+    workflowTimeline.value = []
     queueItems.value = []
     historyItems.value = []
     selectedQueueItem.value = null
@@ -973,6 +1079,7 @@ async function selectWorkflow(workflowId: string): Promise<void> {
     workflowNodeStates.value = {}
     workflowRun.value = null
     workflowContinuation.value = undefined
+    workflowTimeline.value = []
     selectedNodeId.value = null
     const sessionId = workflowSessionId(hydrated)
     await selectWorkflowSession(hydrated, sessionId)
@@ -1239,6 +1346,7 @@ async function executeWorkflowRun(
   const runId = resume ? (continuation?.runId || previous?.run_id || newRunId()) : newRunId()
   const threadId = workflowSessionId(definition)
   activeRunId.value = runId
+  if (!resume) workflowTimeline.value = []
   workflowRunning.value = true
   workflowStatusText.value = options.singleNode ? '运行节点…' : options.startNode ? '从此节点运行…' : maxSteps !== undefined ? '单步运行中…' : '运行中…'
   const initialStates = resume && previous
@@ -1266,6 +1374,8 @@ async function executeWorkflowRun(
   try {
     const result = await workflowApi.run(definition.name, {
       workRoot: workflowRoot(definition),
+      modelId: selectedModelId.value,
+      permissions: workflowRunPermissions(),
       maxSteps,
       priorValues: resume && previous ? previous.values : undefined,
       priorNodeStates: resume && previous ? previous.node_states : undefined,
@@ -1278,11 +1388,7 @@ async function executeWorkflowRun(
     })
     if (activeRunId.value !== result.run_id && result.run_id) return
     activeRunId.value = result.run_id || runId
-    workflowRun.value = result.run
-    workflowContinuation.value = result.continuation
-    workflowNodeStates.value = Object.fromEntries(
-      Object.entries(result.run.node_states || {}).map(([nodeId, state]) => [nodeId, normalizeNodeStateStatus(state.status)]),
-    ) as Record<string, NodeStateStatus>
+    applyWorkflowRunResult(result.run, result.continuation)
     if (result.run.status === 'paused') workflowStatusText.value = '已暂停（单步）'
     else if (result.run.status === 'completed') workflowStatusText.value = '完成'
     else if (result.run.status === 'cancelled') workflowStatusText.value = '已取消'
@@ -1332,6 +1438,12 @@ function newRunId(): string {
   return `workflow_run_${Date.now()}_${Math.random().toString(16).slice(2)}`
 }
 
+function workflowRunPermissions(): Record<string, unknown> {
+  return ['auto', 'full_access'].includes(permissionPreset.value)
+    ? { run_command: true }
+    : {}
+}
+
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -1361,32 +1473,85 @@ function handleRuntimeEvent(event: CoreAppEvent | null): void {
   const workflowId = String(nested.workflow_id || payload.workflow_id || '')
   const runId = String(nested.run_id || payload.run_id || event.turn_id || '')
   if (!workflowId || workflowId !== activeWorkflowId.value || !activeRunId.value || runId !== activeRunId.value) return
-  const nodeId = String(nested.node_id || payload.node_id || event.item_id || '')
   const status = String(nested.status || payload.status || '')
-  const runStatus = nested.run_status || payload.run_status
-  if (runStatus) {
-    const normalizedRunStatus = normalizeWorkflowRunStatus(runStatus)
-    if (workflowRun.value) workflowRun.value = { ...workflowRun.value, status: normalizedRunStatus }
+  const lifecycleStatuses = new Set(['running', 'progress', 'completed', 'failed', 'paused', 'cancelled', 'canceled'])
+  const explicitNodeId = nested.node_id || payload.node_id
+  const fallbackNodeId = event.item_id && !lifecycleStatuses.has(status.toLowerCase()) ? event.item_id : ''
+  const nodeId = String(explicitNodeId || fallbackNodeId || '')
+  const runStatus = nested.run_status || payload.run_status || (!nodeId && lifecycleStatuses.has(status.toLowerCase()) ? status : undefined)
+  const normalizedRunStatus = runStatus ? normalizeWorkflowRunStatus(runStatus) : undefined
+  const metadata = isRecord((event as CoreAppEvent & { metadata?: unknown }).metadata)
+    ? (event as CoreAppEvent & { metadata?: Record<string, unknown> }).metadata || {}
+    : {}
+  if (normalizedRunStatus && workflowRun.value) {
+    workflowRun.value = {
+      ...workflowRun.value,
+      status: normalizedRunStatus,
+      ...(normalizedRunStatus !== 'running' && !workflowRun.value.finished_at ? { finished_at: event.created_at } : {}),
+      ...(nested.steps_remaining !== undefined ? { steps_remaining: Number(nested.steps_remaining) || 0 } : {}),
+    }
+    workflowRunning.value = normalizedRunStatus === 'running'
+    workflowStatusText.value = workflowRunStatusLabel(normalizedRunStatus)
   }
-  if (!nodeId || !status) return
+  if (!status) return
   const detail = normalizeWorkflowNodeState({
     ...nested,
     ...(nested.output !== undefined ? { output: nested.output } : {}),
     ...(nested.attempts !== undefined ? { attempts: nested.attempts } : {}),
   }, nodeId)
-  workflowNodeStates.value = { ...workflowNodeStates.value, [nodeId]: detail.status }
-  if (workflowRun.value) {
+  if (nodeId) {
+    workflowNodeStates.value = { ...workflowNodeStates.value, [nodeId]: detail.status }
+  }
+  if (workflowRun.value && nodeId) {
+    const previousDetail = workflowRun.value.node_states[nodeId]
     workflowRun.value = {
       ...workflowRun.value,
-      node_states: { ...workflowRun.value.node_states, [nodeId]: detail },
+      node_states: {
+        ...workflowRun.value.node_states,
+        [nodeId]: { ...previousDetail, ...detail, node_id: nodeId },
+      },
       error: String(nested.error || payload.error || workflowRun.value.error || ''),
     }
   }
+  if (workflowRun.value && !nodeId && nested.output !== undefined) {
+    workflowRun.value = { ...workflowRun.value, output: nested.output }
+  }
+  const item: WorkflowRunTimelineItem = {
+    id: String(event.event_id || `${runId}:${nodeId || 'run'}:${status}:${event.seq}`),
+    ...(nodeId ? { node_id: nodeId, title: String(nested.title || workflowNodeTitle(nodeId)) } : { title: status === 'progress' ? '运行进度' : '运行事件' }),
+    status: nodeId ? (detail.status || status) : status,
+    kind: String(nested.kind || event.event_type || status),
+    occurred_at: event.created_at || null,
+    ...(detail.input !== undefined ? { input: detail.input } : {}),
+    ...(nested.input !== undefined ? { input: nested.input } : {}),
+    ...(nested.inputs !== undefined ? { input: nested.inputs } : {}),
+    ...(detail.output !== undefined ? { output: detail.output } : {}),
+    ...(nested.output !== undefined ? { output: nested.output } : {}),
+    ...(detail.error ? { error: detail.error } : nested.error ? { error: String(nested.error) } : {}),
+    ...(detail.attempts ? { attempts: detail.attempts } : nested.attempts !== undefined ? { attempts: Number(nested.attempts) || 0 } : {}),
+    ...(detail.attempt_id ? { attempt_id: detail.attempt_id } : {}),
+    ...(detail.duration_ms !== undefined ? { duration_ms: detail.duration_ms } : {}),
+    ...(detail.cache_status ? { cache_status: detail.cache_status } : {}),
+    ...(detail.cache_key ? { cache_key: detail.cache_key } : {}),
+    ...(detail.tool_calls ? { tool_calls: detail.tool_calls } : Array.isArray(nested.tool_calls) ? { tool_calls: nested.tool_calls } : {}),
+    ...(detail.logs ? { logs: detail.logs } : Array.isArray(nested.logs) ? { logs: nested.logs } : {}),
+    ...(detail.audit !== undefined ? { audit: detail.audit } : nested.audit !== undefined ? { audit: nested.audit } : {}),
+    ...(detail.started_at ? { started_at: detail.started_at } : {}),
+    ...(detail.finished_at ? { finished_at: detail.finished_at } : {}),
+    ...(metadata.started_at || metadata.startedAt ? { started_at: String(metadata.started_at || metadata.startedAt) } : {}),
+    ...(metadata.finished_at || metadata.finishedAt ? { finished_at: String(metadata.finished_at || metadata.finishedAt) } : {}),
+  }
+  appendWorkflowTimeline(item)
 }
 
-function scheduleGraphReload(): void {
+function scheduleGraphReload(force = false): void {
   if (!workflowDefinition.value) return
-  if (Date.now() - lastSelfSaveAt < 3000) return
+  // A workflow-building turn writes several valid revisions in sequence.
+  // Loading an intermediate revision lets Vue Flow produce a local layout
+  // edit, which then conflicts with the remaining agent writes. Wait for the
+  // turn boundary and load the final graph atomically instead.
+  if (chat.activeTurnRunning.value && !force) return
+  if (!force && Date.now() - lastSelfSaveAt < 3000) return
   if (graphReloadTimer) clearTimeout(graphReloadTimer)
   graphReloadTimer = setTimeout(() => {
     const definition = workflowDefinition.value
@@ -1409,7 +1574,7 @@ watch(() => chat.messages.value.length, () => {
   if (chat.activeTurnRunning.value) scheduleGraphReload()
 })
 watch(chat.activeTurnRunning, (running, previous) => {
-  if (previous && !running) scheduleGraphReload()
+  if (previous && !running) scheduleGraphReload(true)
 })
 
 onMounted(() => {
@@ -1444,30 +1609,33 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 .wf-workflow-tabs {
-  position: absolute;
-  /* The title editor owns the first overlay row. Tabs only exist when there
-     is something to switch to and occupy their own row below it. */
-  top: calc(var(--space-6) * 2);
-  left: var(--space-3);
-  z-index: 22;
+  position: relative;
   display: flex;
-  gap: 2px;
-  max-width: min(52vw, 620px);
+  align-items: flex-end;
+  gap: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  max-width: none;
   overflow-x: auto;
-  padding: 2px;
-  border: 1px solid var(--theme-main-border);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-main-background) 92%, transparent);
-  box-shadow: var(--shadow-sm);
+  padding: 0;
+  border-bottom: 0;
+  background: transparent;
+  pointer-events: auto;
+  scrollbar-width: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
+.wf-workflow-tabs::-webkit-scrollbar { display: none; }
 .wf-workflow-tab {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  min-height: 28px;
+  min-height: 30px;
   max-width: 220px;
-  border: 0;
-  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
   background: transparent;
   color: var(--theme-main-text);
   padding: 0 var(--space-2);
@@ -1476,11 +1644,17 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 .wf-workflow-tab:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
-.wf-workflow-tab.active { background: color-mix(in srgb, var(--blue) 14%, transparent); color: var(--blue); }
+.wf-workflow-tab.active {
+  z-index: 1;
+  border-color: var(--theme-main-border);
+  border-bottom-color: transparent;
+  background: var(--theme-main-soft-background);
+  color: var(--theme-main-text);
+}
 .wf-workflow-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .wf-workflow-tab-title { overflow: hidden; text-overflow: ellipsis; }
-.wf-workflow-tab-dirty { color: var(--orange); font-size: 9px; }
-.wf-workflow-tab-close { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: color-mix(in srgb, var(--theme-main-text) 55%, transparent); font-size: 15px; line-height: 1; }
+.wf-workflow-tab-dirty { display: grid; place-items: center; color: var(--orange); }
+.wf-workflow-tab-close { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: var(--radius-sm); color: color-mix(in srgb, var(--theme-main-text) 55%, transparent); }
 .wf-workflow-tab-close:hover, .wf-workflow-tab-close:focus-visible { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); outline: 0; }
 .wf-switch-guard { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; background: color-mix(in srgb, var(--theme-main-background) 66%, transparent); backdrop-filter: blur(2px); }
 .wf-switch-guard-card { width: 360px; max-width: calc(100vw - 32px); padding: var(--space-4); border: 1px solid var(--theme-main-border); border-radius: var(--radius-md, 12px); background: var(--theme-main-background); color: var(--theme-main-text); box-shadow: var(--shadow-lg, var(--shadow-md)); }
@@ -1508,22 +1682,19 @@ onBeforeUnmount(() => {
   display: grid;
   gap: var(--space-2);
 }
-@media (max-width: 1100px) {
-  .wf-workflow-tabs { top: calc(var(--space-6) * 3 + var(--space-3)); }
-}
 @media (max-width: 680px) {
-  .wf-workflow-tabs { left: var(--space-1); right: var(--space-1); max-width: none; }
-  .wf-workflow-tab { max-width: 170px; }
+  .wf-workflow-tabs { display: none; }
 }
 .wf-create-head h2 { margin: 0; font-size: 15px; font-weight: 700; color: var(--theme-main-text); }
 .wf-create-input {
   width: 100%;
   box-sizing: border-box;
   min-height: 32px;
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
-  color: var(--theme-control-text);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: 0 var(--space-2);
   font: inherit;
   outline: 0;
@@ -1548,26 +1719,131 @@ onBeforeUnmount(() => {
   background: transparent;
   border: 0;
 }
-.stage-toggle-btn {
+.wf-header-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wf-convo-float {
+  position: fixed;
+  left: var(--main-left);
+  right: var(--main-right);
+  bottom: calc(
+    var(--composer-bottom-offset, 0px) +
+    var(--composer-rest-bottom, 16px) +
+    var(--workflow-composer-expanded-height, var(--composer-height, 120px))
+  );
+  z-index: calc(var(--z-composer, 40) - 1);
+  width: min(
+    var(--content-width),
+    calc(100vw - var(--main-left) - var(--main-right) - var(--main-x-padding) - var(--main-x-padding) - 2px)
+  );
+  margin-inline: auto;
+  height: min(560px, 58vh);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--theme-main-border);
+  border-bottom: 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  background: var(--theme-main-background);
+  color: var(--theme-main-text);
+  box-shadow: var(--shadow-sm);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    visibility 0s linear var(--dur-morph),
+    left var(--dur-morph) var(--ease-inout),
+    right var(--dur-morph) var(--ease-inout),
+    width var(--dur-morph) var(--ease-inout);
+}
+.wf-convo-float.is-pinned {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+.wf-convo-float-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 46px;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--theme-main-border);
+}
+.wf-convo-float-head h3 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--theme-main-text);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-convo-float-head .text-btn {
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
-  cursor: pointer;
   display: grid;
   place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text) 58%, transparent);
 }
-.stage-toggle-btn:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
-.stage-toggle-btn.active { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent); }
-
-.wf-convo-float-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--theme-main-border); }
-.wf-convo-float-head h3 { margin: 0; color: var(--theme-main-text); }
-.wf-convo-float { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: var(--z-modal); width: min(640px, 70vw); height: min(560px, 76vh); display: flex; flex-direction: column; background: var(--theme-main-background); border: 1px solid var(--theme-main-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); pointer-events: auto; }
-.wf-convo-float-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--space-3); }
-@media (max-width: 640px) { .wf-convo-float { width: calc(100vw - var(--space-4)); height: calc(100vh - 96px); } }
+.wf-convo-float-head .text-btn:hover {
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
+  color: var(--theme-main-text);
+}
+.wf-convo-float-body.thread {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-4);
+  overflow-x: hidden;
+  overflow-y: auto;
+  box-sizing: border-box;
+  -webkit-mask-image: none;
+  mask-image: none;
+  scrollbar-gutter: stable;
+}
+.wf-convo-float-body :deep(.chat-thread) {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  margin: 0;
+}
+.wf-convo-float-body :deep(.message-view),
+.wf-convo-float-body :deep(.assistant-row),
+.wf-convo-float-body :deep(.assistant-message),
+.wf-convo-float-body :deep(.assistant-reply-bubble) {
+  min-width: 0;
+  max-width: 100%;
+}
+.wf-convo-float-body :deep(.markdown-body),
+.wf-convo-float-body :deep(pre),
+.wf-convo-float-body :deep(code) {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .wf-convo-float {
+    left: var(--space-3);
+    right: var(--space-3);
+    width: auto;
+    margin-inline: 0;
+    height: min(52vh, 480px);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .wf-convo-float,
   .wf-convo-float * { transition: none; animation: none; }

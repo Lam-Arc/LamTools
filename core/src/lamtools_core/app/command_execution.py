@@ -13,10 +13,14 @@ from lamtools_core.config.retry_store import (
 )
 from lamtools_core.context_compaction import (
     ContextCompactionController,
+    RECENT_USER_MESSAGES_METADATA_KEY,
+    extract_recent_user_messages,
 )
 from lamtools_core.context_compaction_budget import (
     TokenBudget,
+    load_retained_steps,
     resolve_compaction_budget,
+    resolve_retained_steps,
 )
 from lamtools_core.llm import ChatMessage, LLMClient, LLMToolCall
 from lamtools_core.llm.shallow_thinking import ShallowThinkingClient
@@ -153,6 +157,12 @@ async def compact_runtime_history(
         trigger_tokens=trigger_tokens,
         target_tokens=target_tokens,
     )
+    retained_override = loop_policy.get("compact_retained_steps")
+    retained_steps = (
+        resolve_retained_steps(retained_override)
+        if retained_override is not None
+        else load_retained_steps()
+    )
 
     active_model = str(
         runtime_snapshot.get("model_id")
@@ -215,6 +225,7 @@ async def compact_runtime_history(
         trigger="manual",
         measurement=measurement,
         force=True,
+        retained_steps=retained_steps,
     )
     result = execution.result
     if result is None:
@@ -236,7 +247,9 @@ async def compact_runtime_history(
         state,
         result=result,
         execution=execution,
+        source_messages=messages,
         budget=budget,
+        retained_steps=retained_steps,
         before_messages=len(messages),
         total_context_window_tokens=total_context_window_tokens,
         reserved_output_tokens=reserved_output_tokens,
@@ -327,20 +340,63 @@ async def _load_effective_compaction_history(
         boundary = max(0, int(compaction.get("summary_seq") or 0))
     except (TypeError, ValueError):
         boundary = 0
-    raw_history = await runtime_state_store.get_history(thread_id, after_seq=boundary)
-    if boundary > 0 and not raw_history:
-        raw_history = await runtime_state_store.get_history(thread_id)
-        boundary = 0
-    elif boundary > 0:
-        # Legacy stores may accept ``after_seq`` but return their complete
-        # history blob. Detect that shape without issuing another history read.
-        history_max_seq = getattr(runtime_state_store, "history_max_seq", None)
-        if callable(history_max_seq):
-            max_seq = history_max_seq(thread_id)
-            if inspect.isawaitable(max_seq):
-                max_seq = await max_seq
-            if isinstance(max_seq, int) and max_seq > 0 and len(raw_history) == max_seq:
+    compacted_seqs = _history_seq_set(compaction.get("compacted_history_seqs"))
+    max_seq: int | None = None
+    history_max_seq = getattr(runtime_state_store, "history_max_seq", None)
+    if callable(history_max_seq):
+        try:
+            max_value = history_max_seq(thread_id)
+            if inspect.isawaitable(max_value):
+                max_value = await max_value
+            if not isinstance(max_value, bool):
+                max_seq = max(0, int(max_value))
+        except (TypeError, ValueError, OSError):
+            max_seq = None
+
+    if compacted_seqs:
+        # Manual compaction intentionally leaves durable rows untouched. Read
+        # the full set and remove only rows folded into the summary; this keeps
+        # retained model Steps even when user rows are interspersed between
+        # them.  A zero-tail compaction is a safe fast path: when every known
+        # row through the durable high-water mark was compacted, ask for the
+        # empty incremental tail at that boundary instead of falling back to
+        # the full history blob.
+        compacted_through_max = (
+            max_seq is not None
+            and max_seq > 0
+            and boundary == max_seq
+            and compacted_seqs == set(range(1, max_seq + 1))
+        )
+        if compacted_through_max:
+            raw_history = await runtime_state_store.get_history(
+                thread_id,
+                after_seq=boundary,
+            )
+            # Legacy blob stores may ignore ``after_seq`` and return the full
+            # blob.  Slice that shape locally without issuing a second full
+            # read; an actual empty incremental tail remains empty.
+            if len(raw_history) == max_seq:
                 raw_history = raw_history[boundary:]
+        else:
+            raw_history = await runtime_state_store.get_history(thread_id)
+            boundary = 0
+    else:
+        raw_history = await runtime_state_store.get_history(thread_id, after_seq=boundary)
+        if boundary > 0 and max_seq == 0:
+            # Legacy blob stores ignore ``after_seq`` and report no row max.
+            full_history = await runtime_state_store.get_history(thread_id)
+            raw_history = full_history[boundary:]
+        elif boundary > 0 and max_seq is not None and len(raw_history) == max_seq:
+            # Legacy-compatible stores may return all rows despite accepting
+            # the keyword; detect that shape without a second read.
+            raw_history = raw_history[boundary:]
+        elif boundary > 0 and not raw_history and (
+            max_seq is None or max_seq != boundary
+        ):
+            # A stale anchor is recoverable only when rows are known to exist
+            # beyond it. An empty result at the current max is legitimate.
+            raw_history = await runtime_state_store.get_history(thread_id)
+            boundary = 0
 
     messages: list[ChatMessage] = []
     for index, item in enumerate(raw_history):
@@ -349,6 +405,8 @@ async def _load_effective_compaction_history(
             continue
         if "history_seq" not in message.metadata:
             message.metadata["history_seq"] = boundary + index + 1
+        if _message_history_seq(message) in compacted_seqs:
+            continue
         if (
             message.role == "system"
             and message.metadata.get("key") == "context_compaction_summary"
@@ -356,12 +414,21 @@ async def _load_effective_compaction_history(
             continue
         messages.append(message)
     if summary.strip():
+        raw_recent = compaction.get(RECENT_USER_MESSAGES_METADATA_KEY)
+        recent_users = (
+            list(raw_recent)
+            if isinstance(raw_recent, list) and all(isinstance(item, str) for item in raw_recent)
+            else extract_recent_user_messages(summary)
+        )
         messages.insert(
             0,
             ChatMessage(
                 role="system",
                 content=summary,
-                metadata={"key": "context_compaction_summary"},
+                metadata={
+                    "key": "context_compaction_summary",
+                    RECENT_USER_MESSAGES_METADATA_KEY: recent_users,
+                },
             ),
         )
     return messages
@@ -421,22 +488,73 @@ async def _persist_manual_compaction_metadata(
     *,
     result: Any,
     execution: Any,
+    source_messages: list[ChatMessage],
     budget: TokenBudget,
+    retained_steps: int,
     before_messages: int,
     total_context_window_tokens: int,
     reserved_output_tokens: int,
 ) -> None:
     """Persist the automatic-compaction metadata without rewriting history."""
-    boundary = 0
-    if result.retained_messages:
-        first_retained = result.retained_messages[0]
-        first_seq = (
-            first_retained.metadata.get("history_seq")
-            if isinstance(first_retained.metadata, dict)
-            else None
-        )
-        if isinstance(first_seq, int) and first_seq > 0:
-            boundary = first_seq - 1
+    retained_ids = {id(message) for message in result.retained_messages}
+    prefix_ids = {id(message) for message in result.prefix_messages}
+    current_compacted_history_seqs = {
+        int(message.metadata.get("history_seq"))
+        for message in result.compacted_messages
+        if isinstance(message.metadata, dict)
+        and isinstance(message.metadata.get("history_seq"), int)
+        and message.metadata.get("history_seq") > 0
+    }
+    # The fitter may drop a preferred retained Step to satisfy the exact
+    # target. It is absent from ``result.compacted_messages`` as well as the
+    # final retained list, but it is still folded into the new summary and
+    # must be recorded so future manual loads do not resurrect that raw row.
+    current_compacted_history_seqs.update(
+        int(message.metadata.get("history_seq"))
+        for message in source_messages
+        if id(message) not in retained_ids
+        and id(message) not in prefix_ids
+        and isinstance(message.metadata, dict)
+        and isinstance(message.metadata.get("history_seq"), int)
+        and message.metadata.get("history_seq") > 0
+    )
+    previous_compaction = state.metadata.get("context_compaction") if isinstance(state.metadata, dict) else None
+    previous_compacted_history_seqs = (
+        _history_seq_set(previous_compaction.get("compacted_history_seqs"))
+        if isinstance(previous_compaction, dict)
+        else set()
+    )
+    compacted_history_seqs = sorted(
+        previous_compacted_history_seqs | current_compacted_history_seqs
+    )
+
+    retained_history_seqs = [
+        int(message.metadata.get("history_seq"))
+        for message in result.retained_messages
+        if isinstance(message.metadata, dict)
+        and isinstance(message.metadata.get("history_seq"), int)
+        and message.metadata.get("history_seq") > 0
+    ]
+    # A retained row is the durable resume point.  Use the first retained
+    # sequence, even when the compacted set contains a later interspersed row;
+    # using max(compacted) would hide the retained span on the next manual run.
+    boundary = max(0, retained_history_seqs[0] - 1) if retained_history_seqs else 0
+    if not retained_history_seqs:
+        # Zero-tail compaction has no retained row to anchor against. Prefer a
+        # verified durable high-water mark; a known compacted sequence is the
+        # fallback for stores that do not expose one.
+        history_max_seq = getattr(runtime_state_store, "history_max_seq", None)
+        if callable(history_max_seq):
+            try:
+                max_value = history_max_seq(state.session_id)
+                if inspect.isawaitable(max_value):
+                    max_value = await max_value
+                if not isinstance(max_value, bool):
+                    boundary = max(0, int(max_value))
+            except (TypeError, ValueError, OSError):
+                boundary = max(compacted_history_seqs, default=0)
+        else:
+            boundary = max(compacted_history_seqs, default=0)
     if not isinstance(state.metadata, dict):
         state.metadata = {}
     state.metadata["context_compaction"] = {
@@ -446,6 +564,9 @@ async def _persist_manual_compaction_metadata(
         "retained_count": result.retained_count,
         "before_tokens": result.before_tokens,
         "after_tokens": result.after_tokens,
+        "retained_steps": retained_steps,
+        RECENT_USER_MESSAGES_METADATA_KEY: list(result.recent_user_messages),
+        "compacted_history_seqs": compacted_history_seqs,
     }
     previous_metrics = state.metadata.get("runtime_context_metrics")
     metrics = dict(previous_metrics) if isinstance(previous_metrics, dict) else {}
@@ -456,6 +577,7 @@ async def _persist_manual_compaction_metadata(
         "total_context_window_tokens": total_context_window_tokens,
         "reserved_output_tokens": reserved_output_tokens,
         "context_compaction_trigger_tokens": budget.trigger_tokens,
+        "context_compaction_retained_steps": retained_steps,
         "context_compacted": True,
         "context_compaction_mode": "structured_summary",
         "context_tokens_before_compaction": result.before_tokens,
@@ -554,6 +676,29 @@ def _chat_message_from_dict(value: Any) -> ChatMessage | None:
         if "provider_state" in value
         else None,
     )
+
+
+def _message_history_seq(message: ChatMessage) -> int:
+    raw = message.metadata.get("history_seq")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def _history_seq_set(value: Any) -> set[int]:
+    if not isinstance(value, list):
+        return set()
+    result: set[int] = set()
+    for item in value:
+        try:
+            parsed = int(item)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            result.add(parsed)
+    return result
 
 
 __all__ = [

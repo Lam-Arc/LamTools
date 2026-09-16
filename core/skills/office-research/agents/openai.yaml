@@ -1,0 +1,6 @@
+interface:
+  display_name: "Office Research"
+  short_description: "Produce source-grounded research and comparison reports"
+  default_prompt: "Use $office-research to investigate this question and cite the evidence."
+policy:
+  allow_implicit_invocation: true

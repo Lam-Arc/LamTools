@@ -84,6 +84,8 @@ export interface CorePluginModeContext {
   refreshSessions: () => Promise<void>
   setRuntimeStatus: (text: string, duration?: number) => void
   availableModels: Ref<Array<{ id: string; display_name?: string; model_id?: string }>>
+  selectedModelId: Ref<string>
+  permissionPreset: Ref<string>
   composerText: Ref<string>
   ensureRightPanelOpen: () => void
   lastEvent: Ref<CoreAppEvent | null>

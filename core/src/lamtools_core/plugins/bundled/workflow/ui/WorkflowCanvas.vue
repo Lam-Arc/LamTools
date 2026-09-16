@@ -41,6 +41,7 @@
       :edges-updatable="!locked"
       :edges-focusable="true"
       :nodes-focusable="true"
+      :elevate-nodes-on-select="false"
       :default-viewport="{ zoom: 1 }"
       fit-view-on-init
       @node-click="onNodeClick"
@@ -139,7 +140,17 @@ import EdgeConditionEditor from './EdgeConditionEditor.vue'
 import CoreConfirmDialog from '../../../../../../ui/src/components/CoreConfirmDialog.vue'
 import { closeContextMenu, contextMenuState, isNativeContextTarget, openContextMenu } from '../../../../../../ui/src/components/context-menu/context-menu'
 import type { ContextMenuEntry } from '../../../../../../ui/src/components/context-menu/types'
-import type { WorkflowDef, WorkflowNodeKind, WorkflowNodeData, WorkflowNodeSchema, NodeStateStatus, WorkflowPort } from './types'
+import type {
+  NodeStateStatus,
+  WorkflowDef,
+  WorkflowHumanTask,
+  WorkflowNodeData,
+  WorkflowNodeKind,
+  WorkflowNodeSchema,
+  WorkflowNodeState,
+  WorkflowPort,
+  WorkflowRunTimelineItem,
+} from './types'
 import { reconcileWorkflowNodePorts } from './document'
 import {
   createWorkflowNodeFromSchema,
@@ -167,6 +178,16 @@ import {
 const props = defineProps<{
   definition: WorkflowDef
   nodeStates: Record<string, NodeStateStatus>
+  nodeStateDetails?: Record<string, WorkflowNodeState>
+  timeline?: WorkflowRunTimelineItem[]
+  humanTasks?: WorkflowHumanTask[]
+  selectedHumanTask?: WorkflowHumanTask | null
+  humanTaskLoading?: boolean
+  humanTaskBusy?: boolean
+  humanTaskError?: string
+  onRefreshHumanTasks?: () => void | Promise<void>
+  onSelectHumanTask?: (taskId: string) => void | Promise<void>
+  onCompleteHumanTask?: (task: WorkflowHumanTask, decision: string, payload: Record<string, unknown>) => void | Promise<void>
   selectedNodeId?: string
   availableTools?: Array<{ name: string; description: string }>
   availableModels?: Array<{ id: string; display_name?: string; model_id?: string }>
@@ -198,17 +219,66 @@ const snapGrid = [22, 22] as [number, number]
 const workflowEdgeZIndex = 10
 const workflowNodeZIndex = 20
 const nodePickerPos = ref<MenuPos | null>(null)
+const viewportRevision = ref(0)
+
+function readLayoutPixels(name: string, fallback: number): number {
+  if (typeof window === 'undefined') return fallback
+  const target = canvasRoot.value || document.documentElement
+  const value = Number.parseFloat(window.getComputedStyle(target).getPropertyValue(name))
+  return Number.isFinite(value) ? Math.max(0, value) : fallback
+}
+
+function activeWorkflowNodeZIndex(): number {
+  return Math.max(workflowNodeZIndex + 1, readLayoutPixels('--z-composer', 40) - 1)
+}
+
+function nodeZIndex(nodeId: string): number {
+  const status = props.nodeStates[nodeId] ?? 'idle'
+  return status === 'running' || status === 'waiting' ? activeWorkflowNodeZIndex() : workflowNodeZIndex
+}
+
+function nodeRuntimeData(node: WorkflowNodeData): Record<string, unknown> {
+  return {
+    node,
+    state: props.nodeStates[node.id] ?? 'idle',
+    stateDetail: props.nodeStateDetails?.[node.id] ?? null,
+    timeline: (props.timeline ?? []).filter((item) => item.node_id === node.id),
+    humanTasks: (props.humanTasks ?? []).filter((task) => task.node_id === node.id),
+    selectedHumanTask: props.selectedHumanTask?.node_id === node.id ? props.selectedHumanTask : null,
+    humanTaskLoading: props.humanTaskLoading ?? false,
+    humanTaskBusy: props.humanTaskBusy ?? false,
+    humanTaskError: props.humanTaskError ?? '',
+    onRefreshHumanTasks: props.onRefreshHumanTasks,
+    onSelectHumanTask: props.onSelectHumanTask,
+    onCompleteHumanTask: props.onCompleteHumanTask,
+  }
+}
+
+function onViewportResize(): void {
+  viewportRevision.value += 1
+}
 
 const nodePickerStyle = computed(() => {
   const anchor = nodePickerPos.value
   if (!anchor) return {}
+  // Keep the popover above the floating composer.  The revision ref makes the
+  // computed position follow viewport changes (including mobile rotation).
+  void viewportRevision.value
   const viewportWidth = typeof window === 'undefined' ? 1200 : window.innerWidth
   const viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight
   const panelWidth = Math.min(380, Math.max(320, viewportWidth - 24))
-  const panelHeight = Math.min(620, Math.max(240, viewportHeight - 24))
+  const titlebarOffset = readLayoutPixels('--titlebar-offset', 0)
+  const composerHeight = readLayoutPixels('--composer-height', 120)
+  const composerBottomOffset = readLayoutPixels('--composer-bottom-offset', 0)
+  const composerRestBottom = readLayoutPixels('--composer-rest-bottom', 16)
+  const edgePadding = 12
+  const safeTop = Math.max(edgePadding, titlebarOffset + edgePadding)
+  const safeBottom = Math.max(safeTop, viewportHeight - composerHeight - composerBottomOffset - composerRestBottom - edgePadding)
+  const panelHeight = Math.min(620, Math.max(0, safeBottom - safeTop))
   return {
     left: `${Math.max(12, Math.min(anchor.x, viewportWidth - panelWidth - 12))}px`,
-    top: `${Math.max(12, Math.min(anchor.y, viewportHeight - panelHeight - 12))}px`,
+    top: `${Math.max(safeTop, Math.min(anchor.y, safeBottom - panelHeight))}px`,
+    maxHeight: `${panelHeight}px`,
   }
 })
 
@@ -293,8 +363,8 @@ function syncFromDefinition() {
     id: n.id,
     type: 'workflow',
     position: n.position ?? { x: 0, y: 0 },
-    zIndex: workflowNodeZIndex,
-    data: { node: n, state: props.nodeStates[n.id] ?? 'idle' },
+    zIndex: nodeZIndex(n.id),
+    data: nodeRuntimeData(n),
     selected: selectedNodeIds.value.has(n.id),
     draggable: selectedNodeIds.value.has(n.id),
     class: selectedNodeIds.value.has(n.id) ? 'wf-node-selected' : '',
@@ -316,13 +386,26 @@ function syncFromDefinition() {
 }
 
 watch(() => props.definition, syncFromDefinition, { deep: false, immediate: true })
-// Node-state changes (runtime status) update each node's data.state in place
-// WITHOUT touching positions or structure (so a running node doesn't reset
-// dragged positions).
-watch(() => props.nodeStates, () => {
+// Runtime changes update node data and active z-order in place WITHOUT
+// touching positions or graph structure.
+watch(() => [
+  props.nodeStates,
+  props.nodeStateDetails,
+  props.timeline,
+  props.humanTasks,
+  props.selectedHumanTask,
+  props.humanTaskLoading,
+  props.humanTaskBusy,
+  props.humanTaskError,
+], () => {
   vfNodes.value = vfNodes.value.map((n) => ({
     ...n,
-    ...(n.type === 'workflow' ? { data: { ...n.data, state: props.nodeStates[n.id] ?? (n.data as any)?.state ?? 'idle' } } : {}),
+    ...(n.type === 'workflow'
+      ? {
+          zIndex: nodeZIndex(n.id),
+          data: nodeRuntimeData((n.data as { node: WorkflowNodeData }).node),
+        }
+      : {}),
   }))
 }, { deep: false })
 watch(() => props.selectedNodeId, (id) => {
@@ -466,6 +549,8 @@ onBeforeUnmount(() => {
   closeBulkDeleteConfirm()
   if (contextMenuState.ownerId?.startsWith('workflow:')) closeContextMenu()
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('resize', onViewportResize)
+  window.visualViewport?.removeEventListener('resize', onViewportResize)
 })
 
 // Single native contextmenu handler on the canvas root. Detects whether the
@@ -1246,6 +1331,8 @@ async function refreshClipboard(): Promise<void> {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('resize', onViewportResize)
+  window.visualViewport?.addEventListener('resize', onViewportResize)
   void refreshClipboard()
 })
 

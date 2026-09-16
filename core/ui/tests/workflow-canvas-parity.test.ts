@@ -11,6 +11,8 @@ import {
   normalizeImportedWorkflow,
   parseWorkflowClipboardPayload,
   remapWorkflowClipboard,
+  WORKFLOW_CANONICAL_NODE_KINDS,
+  WORKFLOW_NODE_KINDS,
   workflowCanvasElementZIndex,
   writeWorkflowClipboardPayload,
 } from '@lamtools/bundled-workflow-ui'
@@ -42,7 +44,37 @@ describe('workflow canvas parity models', () => {
     ), 'utf8')
 
     expect(viewSource).toContain('v-if="workflowTabs.length > 1"')
-    expect(viewSource).toContain('top: calc(var(--space-6) * 2)')
+    expect(viewSource).toContain('<div class="wf-header-title">')
+    expect(viewSource).toContain('to="[data-titlebar-workflow-tabs]"')
+    expect(viewSource).toContain('-webkit-app-region: no-drag')
+    expect(viewSource).toContain('border-radius: var(--radius) var(--radius) 0 0')
+    expect(viewSource).toContain('background: var(--theme-main-soft-background)')
+    expect(viewSource).toContain('.wf-workflow-tabs { display: none; }')
+    expect(viewSource).toContain('<Teleport v-if="workflowDefinition" defer to=".workspace-plugin-modal">')
+    expect(viewSource).toContain('data-workflow-conversation')
+    expect(viewSource).toContain('class="wf-convo-float-body thread"')
+    expect(viewSource).toContain('border-radius: var(--radius-xl) var(--radius-xl) 0 0')
+    expect(viewSource).toContain('var(--composer-height, 120px)')
+    expect(viewSource).not.toContain(':global(.workspace-shell--workflow-interaction-active)')
+    expect(viewSource).not.toContain('bottom var(--dur-morph)')
+    expect(viewSource).not.toContain(':global(.workspace-shell--workflow-composer-has-value)')
+    expect(layoutSource).toContain('.workspace-shell--workflow-interaction-active .floating-composer')
+    expect(layoutSource).toContain('.workspace-shell--workflow:has(.floating-composer:focus-within) [data-workflow-conversation]')
+    expect(layoutSource).toContain('.workspace-shell--workflow-composer-has-value [data-workflow-conversation]')
+    expect(layoutSource).toContain('.workspace-shell--workflow-composer-stop [data-workflow-conversation]')
+    expect(layoutSource).toContain('.workspace-shell--workflow:has([data-workflow-conversation]:hover) [data-workflow-conversation]')
+    expect(layoutSource).toContain('.workspace-shell--workflow:has(.wf-convo-float:hover) .floating-composer')
+    expect(layoutSource).not.toContain('.workspace-shell--workflow-interaction-active [data-workflow-conversation]')
+    expect(layoutSource).not.toContain([
+      '.workspace-shell--workflow-interaction-active .floating-composer,',
+      '.workspace-shell--workflow:has(.floating-composer:focus-within) .floating-composer,',
+      '.workspace-shell--workflow-composer-has-value .floating-composer,',
+    ].join('\n'))
+    expect(viewSource).toContain('var(--workflow-composer-expanded-height, var(--composer-height, 120px))')
+    expect(viewSource).not.toContain('bottom var(--dur-morph)')
+    expect(viewSource).toMatch(/\.wf-convo-float\s*\{[\s\S]*?left: var\(--main-left\);[\s\S]*?right: var\(--main-right\);[\s\S]*?margin-inline: auto;/)
+    expect(viewSource).not.toMatch(/\.wf-convo-float\s*\{[\s\S]*?transform:/)
+    expect(viewSource).not.toMatch(/\.workspace-shell--workflow-interaction-active\) \.wf-convo-float,[\s\S]*?transform:/)
     expect(canvasSource).not.toContain('<Controls')
     expect(canvasSource).not.toContain('@vue-flow/controls')
     expect(canvasSource).toContain('<Grid2x2')
@@ -60,6 +92,85 @@ describe('workflow canvas parity models', () => {
     expect(controlBarSource).toContain('<Square')
     expect(layoutSource).toContain('top: var(--titlebar-offset, 0px)')
     expect(layoutSource).toContain('height: calc(100dvh - var(--titlebar-offset, 0px))')
+  })
+
+  it('passes the active workflow repository scope into turn options', () => {
+    const viewSource = readFileSync(resolve(
+      __dirname,
+      '../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue',
+    ), 'utf8')
+
+    expect(viewSource).toContain("work_root: workflowRoot(activeWorkflow.value) || ''")
+    expect(viewSource).toContain(':locked="chat.activeTurnRunning.value"')
+    expect(viewSource).not.toContain('canvasLocked')
+    expect(viewSource).toContain('if (chat.activeTurnRunning.value && !force) return')
+    expect(viewSource).toContain('if (previous && !running) scheduleGraphReload(true)')
+  })
+
+  it('keeps the catalog localized, semantic, and bounded above the composer', () => {
+    const catalogSource = readFileSync(resolve(
+      __dirname,
+      '../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNodeCatalog.vue',
+    ), 'utf8')
+    const nodeSource = readFileSync(resolve(
+      __dirname,
+      '../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNode.vue',
+    ), 'utf8')
+
+    expect(catalogSource).toContain('<Plus')
+    expect(catalogSource).toContain('<Star')
+    expect(catalogSource).toContain('<X')
+    expect(catalogSource).toContain('workflowSchemaSearchValues')
+    expect(catalogSource).toContain('overflow: auto')
+    expect(catalogSource).toContain('--composer-height')
+    expect(catalogSource).not.toContain('categoryGlyph')
+    expect(catalogSource).not.toContain('>×</')
+    expect(catalogSource).not.toContain('>★</')
+    expect(nodeSource).toContain('<component :is="nodeTypeIcon"')
+    expect(nodeSource).toContain('BrainCircuit')
+    expect(nodeSource).toContain('workflowNodeDisplayName')
+  })
+
+  it('keeps visible built-in ids and workflow affordances aligned', () => {
+    const visibleBuiltIns = [
+      'model', 'agent', 'command', 'python', 'constant', 'input', 'output',
+      'template', 'condition', 'merge', 'join', 'wait_event', 'approval', 'subgraph',
+    ]
+    expect([...WORKFLOW_CANONICAL_NODE_KINDS]).toEqual(visibleBuiltIns)
+    expect([...WORKFLOW_NODE_KINDS]).toEqual(expect.arrayContaining(visibleBuiltIns))
+
+    const inspectorSource = readFileSync(resolve(
+      __dirname,
+      '../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowInspector.vue',
+    ), 'utf8')
+    const queueSource = readFileSync(resolve(
+      __dirname,
+      '../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowQueuePanel.vue',
+    ), 'utf8')
+    const triggersSource = readFileSync(resolve(
+      __dirname,
+      '../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowTriggersPanel.vue',
+    ), 'utf8')
+    const viewSource = readFileSync(resolve(
+      __dirname,
+      '../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue',
+    ), 'utf8')
+
+    expect(inspectorSource).toContain('approval: UserCheck')
+    expect(inspectorSource).toContain('wait_event: Clock3')
+    expect(inspectorSource).toContain('|| Blocks')
+    expect(inspectorSource).not.toContain('|| Command')
+    expect(inspectorSource).toContain('<Maximize2')
+    expect(queueSource).toContain('<RefreshCw')
+    expect(queueSource).toContain('<ChevronRight')
+    expect(queueSource).toContain('<X')
+    expect(queueSource).not.toMatch(/>\s*[↻›×]\s*<\/./)
+    expect(triggersSource).toContain('<RefreshCw')
+    expect(triggersSource).toContain('<Plus')
+    expect(triggersSource).not.toMatch(/>\s*[↻＋]\s*<\/./)
+    expect(viewSource).not.toContain('LockKeyhole')
+    expect(viewSource).not.toContain('锁定画布')
+    expect(viewSource).not.toContain('<svg')
   })
 
   it('uses the middle mouse button for panning and stable port ids for handles', () => {
@@ -116,7 +227,7 @@ describe('workflow canvas parity models', () => {
     expect(desktopSource).toContain("document.addEventListener('contextmenu', (event) => event.preventDefault(), { capture: true })")
   })
 
-  it('keeps workflow node cards translucent, blurred, and softly shadowed', () => {
+  it('keeps node cards opaque while runtime details use a glass side dock', () => {
     const canvasSource = readFileSync(resolve(
       __dirname,
       '../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue',
@@ -127,11 +238,15 @@ describe('workflow canvas parity models', () => {
     ), 'utf8')
 
     expect(nodeSource).toContain('box-shadow: var(--shadow-sm)')
-    expect(nodeSource).toContain('opacity: 0.8')
-    expect(nodeSource).toContain('.wf-node::before')
-    expect(nodeSource).toContain('backdrop-filter: blur(var(--space-2)) saturate(1.8) contrast(1.08)')
+    expect(nodeSource).toContain('background: var(--theme-main-background)')
+    expect(nodeSource).toContain('WorkflowNodeRuntimeDock')
+    expect(nodeSource).toContain('conic-gradient')
+    expect(nodeSource).not.toContain('opacity: 0.8;')
+    expect(nodeSource).not.toContain('backdrop-filter: blur(var(--space-2)) saturate(1.8) contrast(1.08)')
     expect(nodeSource).not.toContain('var(--shadow);')
     expect(canvasSource).toContain('var(--shadow-sm)')
+    expect(canvasSource).toContain(':elevate-nodes-on-select="false"')
+    expect(canvasSource).toContain("readLayoutPixels('--z-composer', 40) - 1")
   })
 
   it('clears local selection after an empty box-selection gesture', () => {

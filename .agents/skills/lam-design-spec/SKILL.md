@@ -24,8 +24,8 @@ version: 0.1.0
 |------|---------|---------|------|------|
 | backdrop | `--theme-backdrop-background` | `--theme-backdrop-text` | — | 外壳、侧栏、会话列表、项目菜单 |
 | main | `--theme-main-background` | `--theme-main-text` | `-soft-background` / `-subtle-background` / `-sunken-background` / `-border` | 主卡片、内容区、设置页 |
-| composer | `--theme-composer-background` | `--theme-composer-text` | `-soft-background` | 底部输入栏、composer 菜单 |
-| control | `--theme-control-background` | `--theme-control-text` | `-soft-background` | 按钮、输入框、下拉、select、徽章 |
+| composer | `--theme-composer-background` | `--theme-composer-text` | `-soft-background` | 底部输入栏、文本输入框、composer 菜单 |
+| control | `--theme-control-background` | `--theme-control-text` | `-soft-background` | 按钮、下拉、select、徽章、原生非文本控件（checkbox/radio/range/color/file；不含文本输入框） |
 
 **最常见错误**：control 控件误用 `--theme-main-text`，或直接用静态 `--panel/--line/--text` 绕过主题——主题切换时该组件不变色。
 
@@ -66,8 +66,8 @@ version: 0.1.0
 
 ### 输入框 — 三类
 1. **标题输入**（main area）：无边框纯文字。`border:0` / `outline:0` / `background:transparent`，focus 也保持无边框（光标闪动即聚焦指示）。重字重（760）、极小内边距（`2px 0`）。取自 `CoreSessionTitleEditor.vue`。
-2. **小字输入**（control area）：2 行行高起步，随输入增高到最高 5 行，超出 5 行后 `overflow:auto` 滚动；`resize:none`（不可拖拽）；`width:100%`（不横向拓宽）；`white-space:pre-wrap` 自动换行。背景 `color-mix(--theme-control-background 70%)`，文字 `--theme-control-text`，边框 `control-text 12%`。
-3. **常规输入框**（control area）：单行表单控件，同小字输入的背景/文字/边框配方。
+2. **小字输入**（composer area）：2 行行高起步，随输入增高到最高 5 行，超出 5 行后 `overflow:auto` 滚动；`resize:none`（不可拖拽）；`width:100%`（不横向拓宽）；`white-space:pre-wrap` 自动换行。背景 `color-mix(--theme-composer-background 70%)`，文字 `--theme-composer-text`，边框 `composer-text 12%`。
+3. **常规输入框**（composer area）：单行表单控件，同小字输入的背景/文字/边框配方。
 
 **输入框不做聚焦态**：光标闪动即聚焦指示，不加边框/outline（覆盖全局 `:focus-visible`）。
 
@@ -80,6 +80,8 @@ version: 0.1.0
 统一变体 primary / secondary / ghost / danger × sm / md。`--radius-sm` · disabled `opacity:.45`。hover 机制：中性变体（secondary/ghost）用 `--alpha-*`；彩色填充按钮（primary/danger）用 `filter: brightness(.94)`，不混用。
 - **primary**：填充 `--theme-control-background`、文字 `--theme-control-text`（跟主题联动，不用 `--blue`）。
 - **danger**：`--red` 语义色（固定）。
+
+**Composer send/stop action exception**：`CoreSendStopButton` is a composer-area action surface even though it is a button. Its outer key surface uses `--theme-composer-text`; its paper-plane/stop glyph and motion trail use `--theme-composer-background`. Send and stop share this inversion. This explicit recipe supersedes the generic control-area button colors for this component; do not introduce control tokens or semantic red for its action colors.
 
 ### 悬停 / 选中态
 统一规则 + `--alpha-*` token，hover → active 恒 +4pp。部分组件（settings-nav）当前把 hover 与 active 合并为同值——规范后须区分。

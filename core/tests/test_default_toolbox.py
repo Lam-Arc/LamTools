@@ -47,6 +47,15 @@ class FakeSubAgentRunner:
         return f"sub:{task}"
 
 
+class ReasoningAwareSubAgentRunner:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def run(self, **kwargs):
+        self.calls.append(kwargs)
+        return "sub:reasoning"
+
+
 class FailingSubAgentRunner:
     def __init__(self) -> None:
         self.calls = 0
@@ -243,6 +252,10 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     assert "mcp_tool" in names
     assert "load_skill" in names
     assert "sub_agent" in names
+    sub_agent_schema = specs["sub_agent"].input_schema
+    assert "reasoning_level" in sub_agent_schema["properties"]
+    assert "reasoning_effort" not in sub_agent_schema["properties"]
+    assert sub_agent_schema["required"] == ["action", "type", "name", "model", "reasoning_level"]
     assert toolbox.tool_permissions["write_file"] == "ask_user"
     assert toolbox.tool_permissions["read_file"] == "auto_allow"
     assert toolbox.tool_permissions["load_skill"] == "auto_allow"
@@ -576,6 +589,27 @@ async def test_core_toolbox_forwards_sub_agent_model_and_mode(tmp_path):
     assert result.status == "ok"
     assert runner.calls[0]["model"] == "strong-model"
     assert runner.calls[0]["mode"] == "consider"
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_forwards_canonical_sub_agent_reasoning_override(tmp_path):
+    runner = ReasoningAwareSubAgentRunner()
+    toolbox = build_core_toolbox(work_root=tmp_path, sub_agent_runner=runner)
+
+    result = await toolbox.execute(
+        ToolCall(
+            id="sub-reasoning",
+            name="sub_agent",
+            arguments={
+                "task": "inspect",
+                "agent": "reader",
+                "reasoning_level": "xh",
+            },
+        )
+    )
+
+    assert result.status == "ok"
+    assert runner.calls[0]["reasoning_level"] == "xhigh"
 
 
 @pytest.mark.asyncio

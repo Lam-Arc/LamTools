@@ -312,6 +312,10 @@ async def workflow_export_comfyui(args: Any) -> int:
 
 async def workflow_run(args: Any) -> int:
     payload: dict[str, Any] = {"name": args.name}
+    if getattr(args, "model_id", ""):
+        payload["model_id"] = args.model_id
+    if getattr(args, "allow_commands", False):
+        payload["permissions"] = {"run_command": True}
     if args.work_root:
         payload["work_root"] = args.work_root
     if args.max_steps is not None:

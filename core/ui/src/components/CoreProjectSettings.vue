@@ -360,10 +360,11 @@ onUnmounted(() => {
 
 .field-input {
   min-height: 36px;
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
-  color: var(--settings-control-text, var(--settings-main-text, #fff));
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: 0 9px;
 }
 
@@ -437,10 +438,11 @@ onUnmounted(() => {
   width: 100%;
   min-height: 220px;
   margin-top: 10px;
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
-  color: var(--settings-control-text, var(--settings-main-text, #fff));
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: 9px;
   font-family: var(--font-mono);
   font-size: 13px;

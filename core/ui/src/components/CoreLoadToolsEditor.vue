@@ -774,14 +774,14 @@ onMounted(fetchModes)
   gap: var(--space-2);
   min-height: 36px;
   padding: 0 var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-control-background, var(--theme-control-background)) 70%, transparent);
-  color: color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 48%, transparent);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 48%, transparent);
 }
 
 .loadtools-search:focus-within {
-  color: var(--settings-control-text, var(--theme-control-text, #fff));
+  color: var(--theme-composer-text);
 }
 
 .loadtools-search input {
@@ -792,12 +792,13 @@ onMounted(fetchModes)
   border: 0;
   outline: 0;
   background: transparent;
-  color: var(--settings-control-text, var(--theme-control-text, #fff));
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font-size: 12px;
 }
 
 .loadtools-search input::placeholder {
-  color: color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 48%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 48%, transparent);
 }
 
 .mode-search {
@@ -971,6 +972,7 @@ onMounted(fetchModes)
   outline: 0;
   background: transparent;
   color: var(--settings-main-text, var(--theme-main-text, #fff));
+  caret-color: inherit;
   font-size: 21px;
   font-weight: 760;
   letter-spacing: -.02em;
@@ -1002,6 +1004,7 @@ onMounted(fetchModes)
   outline: 0;
   background: transparent;
   color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 64%, transparent);
+  caret-color: inherit;
   font-size: 12px;
 }
 

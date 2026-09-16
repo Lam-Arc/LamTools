@@ -19,6 +19,60 @@ function mountChatThread(options: any = {}) {
 }
 
 describe('ChatThread process cards', () => {
+  it('renders sub-agent lifecycle and mailbox events with explicit copy and icons', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-sub-agent-events',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-09-15T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [
+        {
+          id: 'create-agent', partType: 'tool_call', status: 'completed', toolName: 'sub_agent',
+          toolArgs: { action: 'create', type: 'consider', name: 'reviewer', model: 'model-a', reasoning_level: 'medium' },
+        },
+        {
+          id: 'enable-agent', partType: 'tool_call', status: 'completed', toolName: 'sub_agent',
+          toolArgs: { action: 'create', type: 'consider', name: 'reviewer', model: 'model-a', reasoning_level: 'medium' },
+          metadata: { metadata: { lifecycle_action: 'enabled' } },
+        },
+        {
+          id: 'close-agent', partType: 'tool_call', status: 'completed', toolName: 'sub_agent',
+          toolArgs: { action: 'close', type: 'consider', name: 'reviewer', model: 'model-a', reasoning_level: 'medium' },
+        },
+        {
+          id: 'send-agent-message', partType: 'tool_call', status: 'completed', toolName: 'sub_agent_message',
+          toolArgs: { type: 'consider', name: 'reviewer', prompt: '继续检查。' },
+        },
+        {
+          id: 'receive-agent-message', partType: 'tool_call', status: 'completed', toolName: 'sub_agent_receive',
+          toolArgs: { type: 'consider', name: 'reviewer' }, toolResult: '发现一个边界问题。',
+        },
+      ],
+    }]
+    const wrapper = mountChatThread({
+      props: { messages, processExpandedIds: new Set(['m-sub-agent-events']) },
+    })
+
+    await wrapper.get('.process-group-summary').trigger('click')
+    const rows = wrapper.findAll('.process-group-body .tool-card-header')
+    expect(rows.map(row => row.text())).toEqual([
+      '创建了 reviewer · model-a medium',
+      '启用了 reviewer · model-a medium',
+      '关闭了 reviewer',
+      '向 reviewer 发送了消息',
+      '收到了 reviewer 的消息',
+    ])
+    expect(rows.map(row => row.get('svg').classes())).toEqual([
+      expect.arrayContaining(['lucide-user-round-plus']),
+      expect.arrayContaining(['lucide-power']),
+      expect.arrayContaining(['lucide-power-off']),
+      expect.arrayContaining(['lucide-send']),
+      expect.arrayContaining(['lucide-inbox']),
+    ])
+    wrapper.unmount()
+  })
+
   it('routes ordinary process states through the configurable theme icon color', () => {
     const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
 
@@ -928,7 +982,7 @@ describe('ChatThread process cards', () => {
 
     const block = wrapper.find('.sub-line-block');
     expect(block.exists()).toBe(true);
-    expect(block.find('.sub-line-heading').text()).toContain('001 · repo_reader');
+    expect(block.find('.sub-line-heading').text()).toContain('execute repo_reader');
     expect(block.find('.sub-line-heading').text()).not.toContain('子任务');
     expect(block.find('.sub-line-heading.tool-card-header').exists()).toBe(false);
     // Sub-agent details collapse by default until the heading is opened
@@ -1007,12 +1061,12 @@ describe('ChatThread process cards', () => {
     });
 
     const block = wrapper.find('.sub-line-block');
-    expect(block.find('.sub-line-heading').text()).toContain('001 · retrospective_analyst');
+    expect(block.find('.sub-line-heading').text()).toContain('execute retrospective_analyst');
     // Nested child timeline is rendered by the same MessageView, hidden until opened
     await block.find('.sub-line-heading').trigger('click');
     expect(block.find('.message-view.sub-line-chat').exists()).toBe(true);
     expect(block.find('.sub-line-nested-process').exists()).toBe(false);
-    expect(block.find('.sub-line-chat .assistant-meta').text()).toContain('001 · retrospective_analyst');
+    expect(block.find('.sub-line-chat .assistant-meta').text()).toContain('execute retrospective_analyst');
     expect(block.find('.sub-line-chat .reasoning-toggle').exists()).toBe(true);
     await block.find('.sub-line-chat .reasoning-toggle').trigger('click');
     expect(block.find('.sub-line-chat .reasoning-body').text()).toContain('先读取子任务');
@@ -1113,7 +1167,7 @@ describe('ChatThread process cards', () => {
     });
 
     const block = wrapper.find('.sub-line-block');
-    expect(block.text()).toContain('002 · worker');
+    expect(block.text()).toContain('execute worker');
     expect(block.text()).not.toContain('执行子任务');
     // Conclusion sits inside the collapsed sub-line; open it to surface the text
     await block.find('.sub-line-heading').trigger('click');

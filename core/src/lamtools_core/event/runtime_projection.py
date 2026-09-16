@@ -377,10 +377,55 @@ def runtime_fact_to_run_item_events(
         return [
             RunItemEvent(
                 kind="approval_response",
-                item_id=request_id,
+                item_id=(
+                    _tool_item_id(fact, payload)
+                    if sub_agent is not None
+                    else request_id
+                ),
                 status="completed",
                 payload=response_payload,
                 **base,
+            )
+        ]
+
+    if phase == "runtime.guidance_received":
+        guidance_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        if guidance_metadata.get("source") != "sub_agent":
+            return None
+        guidance_sub_agent = dict(guidance_metadata)
+        guidance_base = {
+            **base,
+            "parent_item_id": _sub_agent_parent_item_id(fact, guidance_sub_agent),
+            "metadata": {
+                **base["metadata"],
+                "sub_agent": guidance_sub_agent,
+            },
+        }
+        content = str(payload.get("content") or fact.full_text or fact.preview or fact.summary or "")
+        arguments = {
+            "name": str(guidance_metadata.get("name") or ""),
+            "type": str(guidance_metadata.get("type") or ""),
+        }
+        return [
+            RunItemEvent(
+                kind="tool_result",
+                item_id=f"{_sub_agent_item_scope(fact, guidance_sub_agent)}:receive:{fact.id}",
+                status="completed",
+                payload={
+                    "type": "dynamicToolCall",
+                    "tool_name": "sub_agent_receive",
+                    "arguments": arguments,
+                    "delta": content,
+                    "tool_result": content,
+                    "replace": True,
+                    "status": "completed",
+                    "error": None,
+                    "metadata": {
+                        **guidance_metadata,
+                        "lifecycle_action": "message_received",
+                    },
+                },
+                **guidance_base,
             )
         ]
 
@@ -406,6 +451,7 @@ def runtime_fact_to_run_item_events(
         return [
             RunItemEvent(
                 kind="usage",
+                item_id=_usage_item_id(fact, payload),
                 status="running",
                 payload={"type": "turn", "runtime_metrics": metrics, "replace": True},
                 usage=metrics,
@@ -540,7 +586,7 @@ def runtime_fact_to_run_item_events(
                 )
             ]
         item_type = "agentMessage" if part_type in {"text", "model_text"} else part_type
-        item_id = str(payload.get("part_id") or f"{fact.thread_id}:part:{fact.sequence or fact.id}")
+        item_id = _agent_item_id(fact, payload)
         content = _complete_text_from_event(fact, payload) if status in TERMINAL_STATUSES else _text_from_event(fact, payload)
         delta = payload.get("delta")
         if isinstance(delta, str) and delta and status not in TERMINAL_STATUSES:
@@ -604,10 +650,61 @@ def runtime_fact_to_run_item_events(
         ]
 
     if sub_agent is not None and phase in {"runtime.done", "runtime.failed", "runtime.cancelled"}:
-        # The parent sub_agent tool result owns the delegated run's visible
-        # terminal state. A forwarded child lifecycle must never terminate the
-        # parent turn that carries it.
-        return []
+        # Child completion must close the nested timeline without ever
+        # producing a main-line ``status`` item (which would terminate the
+        # parent turn in the app-server reducer).
+        child_status = {
+            "runtime.done": "idle",
+            "runtime.failed": "error",
+            "runtime.cancelled": "interrupted",
+        }[phase]
+        item_status = {
+            "runtime.done": "completed",
+            "runtime.failed": "failed",
+            "runtime.cancelled": "cancelled",
+        }[phase]
+        child_summary = max(
+            [
+                text
+                for text in (
+                    str(sub_agent.get("summary") or ""),
+                    str(payload.get("error") or payload.get("message") or ""),
+                    str(fact.summary or ""),
+                    str(fact.preview or ""),
+                    str(fact.full_text or ""),
+                )
+                if text
+            ],
+            key=len,
+            default="",
+        )
+        terminal_sub_agent = {
+            **sub_agent,
+            "status": child_status,
+            "summary": child_summary,
+            "completed_at": sub_agent.get("completed_at") or _created_at_ms(fact) / 1000,
+            "elapsed_ms": max(0, int(sub_agent.get("elapsed_ms") or 0)),
+        }
+        terminal_base = {
+            **base,
+            "metadata": {
+                **base["metadata"],
+                "sub_agent": terminal_sub_agent,
+            },
+        }
+        return [
+            RunItemEvent(
+                kind="message",
+                item_id=f"{_sub_agent_item_scope(fact, terminal_sub_agent)}:terminal",
+                status=item_status,
+                payload={
+                    "type": "agentMessage",
+                    "content": child_summary,
+                    "sub_agent_terminal": True,
+                },
+                **terminal_base,
+            )
+        ]
 
     if phase in {"runtime.done", "runtime.failed", "runtime.cancelled"}:
         completed_status = {
@@ -771,10 +868,29 @@ def _partial_json_string_field(text: str, field: str) -> str | None:
 
 
 def _tool_item_id(fact: RuntimeProjectionInput, payload: dict[str, Any]) -> str:
+    sub_agent = payload.get("sub_agent")
+    if isinstance(sub_agent, dict):
+        return f"{_sub_agent_item_scope(fact, sub_agent)}:{_tool_call_id(fact, payload)}:tool"
     metadata = _metadata(fact)
     run_id = str(payload.get("run_id") or metadata.get("run_id") or "").strip()
     scope_id = run_id or _turn_id(fact, payload)
     return f"{fact.thread_id}:{scope_id}:{_tool_call_id(fact, payload)}:tool"
+
+
+def _sub_agent_item_scope(
+    fact: RuntimeProjectionInput,
+    sub_agent: dict[str, Any],
+) -> str:
+    session_id = str(
+        sub_agent.get("sub_session_id")
+        or sub_agent.get("session_id")
+        or sub_agent.get("parent_item_key")
+        or f"{fact.thread_id}:sub:{sub_agent.get('name') or sub_agent.get('agent') or 'agent'}"
+    ).strip()
+    child_run_id = str(sub_agent.get("run_id") or "").strip()
+    invocation_id = str(sub_agent.get("invocation_id") or "").strip()
+    suffix = ":".join(part for part in (child_run_id, invocation_id) if part)
+    return f"{session_id}:{suffix}" if suffix else session_id
 
 
 def _sub_agent_parent_item_id(
@@ -797,20 +913,37 @@ def _sub_agent_parent_item_id(
 
 
 def _agent_item_id(fact: RuntimeProjectionInput, payload: dict[str, Any]) -> str:
+    sub_agent = payload.get("sub_agent")
     direct = payload.get("part_id")
     if direct:
-        return str(direct)
+        raw_item_id = str(direct)
+        return (
+            f"{_sub_agent_item_scope(fact, sub_agent)}:{raw_item_id}"
+            if isinstance(sub_agent, dict)
+            else raw_item_id
+        )
     metadata = _metadata(fact)
     run_id = str(payload.get("run_id") or metadata.get("run_id") or "").strip()
     response_index = payload.get("response_index")
     response_suffix = f":response-{response_index}" if response_index not in {None, ""} else ""
-    if run_id:
-        return f"{run_id}{response_suffix}:model_text"
-    return f"{_turn_id(fact, payload)}:model_text"
+    raw_item_id = (
+        f"{run_id}{response_suffix}:model_text"
+        if run_id
+        else f"{_turn_id(fact, payload)}:model_text"
+    )
+    return (
+        f"{_sub_agent_item_scope(fact, sub_agent)}:{raw_item_id}"
+        if isinstance(sub_agent, dict)
+        else raw_item_id
+    )
 
 
 def _usage_item_id(fact: RuntimeProjectionInput, payload: dict[str, Any]) -> str:
     call_id = event_model_call_id(fact.metadata, fallback_run_id=event_run_id(fact.metadata, fallback_run_id=""))
+    sub_agent = payload.get("sub_agent")
+    if isinstance(sub_agent, dict):
+        raw_item_id = f"{call_id}:usage" if call_id else f"usage:{fact.id}"
+        return f"{_sub_agent_item_scope(fact, sub_agent)}:{raw_item_id}"
     if call_id:
         return f"{call_id}:usage"
     return f"{fact.thread_id}:usage:{fact.id}"

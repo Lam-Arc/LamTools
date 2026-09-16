@@ -7,12 +7,18 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from lamtools_core.agent import SUB_AGENT_TOOL_NAME, SubAgentRunResult
+from lamtools_core.agent import (
+    SUB_AGENT_CHILD_MESSAGE_TOOL_NAME,
+    SUB_AGENT_CHILD_MESSAGE_TOOL_SPEC,
+    SUB_AGENT_MESSAGE_TOOL_NAME,
+    SUB_AGENT_TOOL_NAME,
+    SubAgentRunResult,
+)
 from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
 from lamtools_core.attachment.service import AttachmentRecord, build_capability_aware_attachment_input
 from lamtools_core.event import CoreEvent, EventSink
 from lamtools_core.kernel import CoreLoopKernel, LoopPolicy
-from lamtools_core.llm import ChatMessage
+from lamtools_core.llm import ChatMessage, normalize_reasoning_level, reasoning_level_from_legacy
 from lamtools_core.runtime import (
     InMemoryRuntimeStateStore,
     RuntimeCheckpointStore,
@@ -27,6 +33,7 @@ from lamtools_core.tool.approval_continuation import ApprovedToolExecution, appr
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
 from lamtools_core.tool.loadtools import LoadTools, mode_names
 from lamtools_core.tool.mcp_tools import MCPToolCaller
+from lamtools_core.tool.permission import AUTO_ALLOW
 
 # Type alias for the attachment-lookup protocol (duck-typed AttachmentService.get).
 AttachmentServiceLike = Any
@@ -178,6 +185,12 @@ class KernelSubAgentRunner:
         allow_access_outside_workdir: bool = False,
         runtime_permissions_provider: Callable[[], Mapping[str, Any] | None] | None = None,
         model_context_sink: Any | None = None,
+        plugin_tool_specs: list[ToolSpec] | None = None,
+        plugin_tool_handlers: dict[str, Any] | None = None,
+        plugin_tool_providers: list[Callable[..., Any]] | None = None,
+        plugin_mode_tool_sets: dict[str, set[str]] | None = None,
+        plugin_availability: Callable[[str], bool] | None = None,
+        parent_guidance_sink: Callable[[str, str, str, str], bool] | None = None,
     ) -> None:
         self.work_root = Path(work_root)
         self.llm_client = llm_client
@@ -185,7 +198,14 @@ class KernelSubAgentRunner:
         self.instructions = instructions
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.reasoning_level = reasoning_level
+        # Normalize once at the runner boundary so every child model call
+        # receives a canonical product level. Legacy boolean callers retain
+        # their previous enabled-by-default high behavior.
+        self.reasoning_level = reasoning_level_from_legacy(
+            reasoning_level=reasoning_level,
+            thinking_enabled=thinking_enabled,
+            fallback="off",
+        )
         self.thinking_enabled = thinking_enabled
         self.thinking_budget = thinking_budget
         self.approval_policy = approval_policy
@@ -222,26 +242,147 @@ class KernelSubAgentRunner:
         self.allow_access_outside_workdir = allow_access_outside_workdir
         self.runtime_permissions_provider = runtime_permissions_provider
         self.model_context_sink = model_context_sink
+        self.plugin_tool_specs = list(plugin_tool_specs or [])
+        self.plugin_tool_handlers = dict(plugin_tool_handlers or {})
+        self.plugin_tool_providers = list(plugin_tool_providers or [])
+        self.plugin_mode_tool_sets = {
+            str(mode): {str(name) for name in names}
+            for mode, names in (plugin_mode_tool_sets or {}).items()
+        }
+        self.plugin_availability = plugin_availability
+        self.parent_guidance_sink = parent_guidance_sink
         # Per-session serialization: parallel sub_agent calls with the same
         # agent name share one child session id, so concurrent runs would
         # interleave history writes (audit 02 S2).  Keyed by session id, which
         # keeps the dict bounded by the number of distinct agent names.
         self._session_locks: dict[str, asyncio.Lock] = {}
+        self._owned_mcp_registry: Any | None = None
+
+    async def create_supervisor_runner(self) -> "KernelSubAgentRunner":
+        """Clone with an MCP registry whose lifecycle belongs to the supervisor."""
+        independent_mcp = None
+        independent_specs: list[ToolSpec] = []
+        if self.mcp_caller is not None and hasattr(self.mcp_caller, "config_files"):
+            from lamtools_core.mcp import MCPToolRegistry
+
+            independent_mcp = MCPToolRegistry(
+                self.work_root, config_files=list(self.mcp_caller.config_files)
+            )
+            await independent_mcp.load()
+            independent_specs = independent_mcp.tool_specs()
+        clone = KernelSubAgentRunner(
+            work_root=self.work_root, llm_client=self.llm_client, model_id=self.model_id,
+            instructions=self.instructions, temperature=self.temperature, max_tokens=self.max_tokens,
+            reasoning_level=self.reasoning_level, thinking_enabled=self.thinking_enabled,
+            thinking_budget=self.thinking_budget, approval_policy=self.approval_policy,
+            permission_preset=self.permission_preset, active_tier=self.active_tier,
+            tier_tools=self.tier_tools, runtime_snapshot=self.runtime_snapshot,
+            loaded_skill_roots=self.loaded_skill_roots, skill_registry=self.skill_registry,
+            mcp_caller=independent_mcp, mcp_tool_specs=independent_specs,
+            context_window_tokens=self.context_window_tokens,
+            compact_trigger_ratio=self.compact_trigger_ratio, state_store=self.state_store,
+            session_prefix=self.session_prefix, parent_event_sink=self.parent_event_sink,
+            checkpoint_coordinator=self.checkpoint_coordinator,
+            activated_mcp_servers=set(self.activated_mcp_servers), active_mode=self.active_mode,
+            load_tools=self.load_tools, attachment_service=self.attachment_service,
+            imagegen_config=self.imagegen_config,
+            allow_access_outside_workdir=self.allow_access_outside_workdir,
+            runtime_permissions_provider=self.runtime_permissions_provider,
+            model_context_sink=self.model_context_sink, plugin_tool_specs=self.plugin_tool_specs,
+            plugin_tool_handlers=self.plugin_tool_handlers,
+            plugin_tool_providers=self.plugin_tool_providers,
+            plugin_mode_tool_sets=self.plugin_mode_tool_sets,
+            plugin_availability=self.plugin_availability,
+            parent_guidance_sink=self.parent_guidance_sink,
+        )
+        clone._owned_mcp_registry = independent_mcp
+        return clone
+
+    async def close(self) -> None:
+        if self._owned_mcp_registry is not None:
+            await self._owned_mcp_registry.close()
+            self._owned_mcp_registry = None
 
     def _disabled_tools(self) -> set[str]:
         """Sub-agent disabled set: never sub_agent itself; generate_image only
         when the 生图 setting is disabled (mirrors the main agent)."""
-        disabled = {SUB_AGENT_TOOL_NAME}
+        disabled = {SUB_AGENT_TOOL_NAME, SUB_AGENT_MESSAGE_TOOL_NAME}
         if not bool((self.imagegen_config or {}).get("enabled")):
             disabled.add("generate_image")
         return disabled
 
     def _build_toolbox(self, disabled_tools: set[str], *, active_mode: str | None) -> CoreToolbox:
+        async def child_message(call: ToolCall):
+            from lamtools_core.sub_agent_supervisor import current_child_identity
+
+            identity = current_child_identity()
+            if identity is None:
+                from lamtools_core.tool import ToolResult
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error="unbound child context")
+            supervisor, _child_type, _child_name = identity
+            try:
+                payload = await supervisor.child_message(
+                    (call.arguments or {}).get("message"),
+                    message_id=call.id,
+                )
+            except ValueError as exc:
+                from lamtools_core.tool import ToolResult
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
+            from lamtools_core.tool import ToolResult
+            return ToolResult(call_id=call.id, name=call.name, status="ok", content="accepted", metadata=payload)
+
+        child_message_spec = ToolSpec(
+            name=SUB_AGENT_CHILD_MESSAGE_TOOL_NAME,
+            description=SUB_AGENT_CHILD_MESSAGE_TOOL_SPEC["description"],
+            input_schema=SUB_AGENT_CHILD_MESSAGE_TOOL_SPEC["input_schema"],
+            permission=AUTO_ALLOW,
+        )
+        child_load_tools = deepcopy(self.load_tools or {})
+        for mode_config in child_load_tools.values():
+            if mode_config.tools and SUB_AGENT_CHILD_MESSAGE_TOOL_NAME not in mode_config.tools:
+                mode_config.tools.append(SUB_AGENT_CHILD_MESSAGE_TOOL_NAME)
+
+        def child_runtime_permissions() -> Mapping[str, Any] | None:
+            provider = self.runtime_permissions_provider
+            value = provider() if provider is not None else None
+            if not isinstance(value, Mapping):
+                return value
+            merged = dict(value)
+            raw_tiers = value.get("tier_tools")
+            if isinstance(raw_tiers, Mapping):
+                merged["tier_tools"] = {
+                    str(tier): (
+                        []
+                        if str(tier) == "full_edit" and not tools
+                        else [
+                            *dict.fromkeys(
+                                [*(str(tool) for tool in tools), SUB_AGENT_CHILD_MESSAGE_TOOL_NAME]
+                            )
+                        ]
+                    )
+                    for tier, tools in raw_tiers.items()
+                    if isinstance(tools, (set, frozenset, list, tuple))
+                }
+            return merged
+
+        child_tier_tools = deepcopy(self.tier_tools)
+        if isinstance(child_tier_tools, dict):
+            for tier, tools in child_tier_tools.items():
+                if str(tier) == "full_edit" and not tools:
+                    continue
+                if isinstance(tools, set):
+                    tools.add(SUB_AGENT_CHILD_MESSAGE_TOOL_NAME)
+                elif isinstance(tools, (list, tuple, frozenset)):
+                    child_tier_tools[tier] = [
+                        *dict.fromkeys(
+                            [*(str(tool) for tool in tools), SUB_AGENT_CHILD_MESSAGE_TOOL_NAME]
+                        )
+                    ]
         return build_core_toolbox(
             work_root=self.work_root,
             approval_policy=self.approval_policy,
             active_tier=self.active_tier,
-            tier_tools=self.tier_tools,
+            tier_tools=child_tier_tools,
             loaded_skill_roots=self.loaded_skill_roots,
             skill_registry=self.skill_registry,
             mcp_caller=self.mcp_caller,
@@ -249,11 +390,30 @@ class KernelSubAgentRunner:
             disabled_tools=disabled_tools,
             imagegen_config=self.imagegen_config,
             activated_mcp_servers=self.activated_mcp_servers,
-            load_tools=self.load_tools,
+            load_tools=child_load_tools,
             active_mode=active_mode,
             allow_access_outside_workdir=self.allow_access_outside_workdir,
-            runtime_permissions_provider=self.runtime_permissions_provider,
+            runtime_permissions_provider=(
+                child_runtime_permissions if self.runtime_permissions_provider is not None else None
+            ),
+            plugin_tool_specs=[*self.plugin_tool_specs, child_message_spec],
+            plugin_tool_handlers={**self.plugin_tool_handlers, SUB_AGENT_CHILD_MESSAGE_TOOL_NAME: child_message},
+            plugin_tool_providers=self.plugin_tool_providers,
+            plugin_mode_tool_sets=self.plugin_mode_tool_sets,
+            plugin_availability=self.plugin_availability,
         )
+
+    def available_tool_specs(self, *, mode: str = "") -> list[ToolSpec]:
+        """Return exactly the tools a workflow Agent node can execute.
+
+        The workflow editor consumes this catalog, so it must be assembled by
+        the same toolbox path as execution rather than from the workflow
+        plugin's graph-editing tools alone.
+        """
+
+        effective_mode = self._resolve_mode(mode)
+        toolbox = self._build_toolbox(self._disabled_tools(), active_mode=effective_mode)
+        return list(toolbox.tool_specs())
 
     def _resolve_mode(self, mode: str) -> str | None:
         """Resolve a per-call mode override against the configured loadtools.
@@ -313,6 +473,8 @@ class KernelSubAgentRunner:
         task: str,
         agent: str = "",
         model: str = "",
+        reasoning_level: str | None = None,
+        reasoning_effort: str | None = None,
         mode: str = "",
         attachments: list[str] | None = None,
         parent_call_id: str = "",
@@ -320,6 +482,9 @@ class KernelSubAgentRunner:
         parent_turn_id: str = "",
         allowed_tools: list[str] | None = None,
         execution_context: Any | None = None,
+        late_context: str = "",
+        guidance_source: Callable[[], list[str]] | None = None,
+        guidance_finalizer: Callable[[], list[str] | None] | None = None,
     ) -> SubAgentRunResult:
         agent_name = normalize_sub_session_agent_name(agent)
         lock = self._session_locks.setdefault(
@@ -330,6 +495,8 @@ class KernelSubAgentRunner:
                 task=task,
                 agent=agent,
                 model=model,
+                reasoning_level=reasoning_level,
+                reasoning_effort=reasoning_effort,
                 mode=mode,
                 attachments=attachments,
                 parent_call_id=parent_call_id,
@@ -337,6 +504,9 @@ class KernelSubAgentRunner:
                 parent_turn_id=parent_turn_id,
                 allowed_tools=allowed_tools,
                 execution_context=execution_context,
+                late_context=late_context,
+                guidance_source=guidance_source,
+                guidance_finalizer=guidance_finalizer,
             )
 
     async def _run_locked(
@@ -345,6 +515,8 @@ class KernelSubAgentRunner:
         task: str,
         agent: str = "",
         model: str = "",
+        reasoning_level: str | None = None,
+        reasoning_effort: str | None = None,
         mode: str = "",
         attachments: list[str] | None = None,
         parent_call_id: str = "",
@@ -352,6 +524,9 @@ class KernelSubAgentRunner:
         parent_turn_id: str = "",
         allowed_tools: list[str] | None = None,
         execution_context: Any | None = None,
+        late_context: str = "",
+        guidance_source: Callable[[], list[str]] | None = None,
+        guidance_finalizer: Callable[[], list[str] | None] | None = None,
     ) -> SubAgentRunResult:
         # Resolve model early: the LLM may pass a display_name (e.g. "Kimi-K2.6")
         # instead of a model_id (e.g. "xopkimik26"). Translate to canonical
@@ -359,6 +534,12 @@ class KernelSubAgentRunner:
         # kernel config, metadata, result) uses the same value.
         effective_model = _resolve_model_id_for_capability(
             (model or "").strip() or self.model_id
+        )
+        explicit_reasoning = str(reasoning_level or "").strip() or str(reasoning_effort or "").strip()
+        effective_reasoning_level = (
+            normalize_reasoning_level(explicit_reasoning, self.reasoning_level)
+            if explicit_reasoning
+            else self.reasoning_level
         )
         effective_mode = self._resolve_mode(mode)
         user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
@@ -383,12 +564,17 @@ class KernelSubAgentRunner:
             parent_call_id=parent_call_id,
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
+            type=effective_mode or "execute",
+            model_id=effective_model,
+            reasoning_level=effective_reasoning_level,
         )
         kernel = self._build_kernel(
             toolbox=toolbox,
             event_sink=child_sink,
             model_id=effective_model,
+            reasoning_level=effective_reasoning_level,
             active_mode=effective_mode,
+            late_context=late_context,
         )
         workflow_metadata = _workflow_context_metadata(
             execution_context,
@@ -403,11 +589,24 @@ class KernelSubAgentRunner:
                     "session_id": f"{self.session_prefix}:sub:{agent_name}",
                     "model_id": effective_model,
                     "active_mode": effective_mode,
-                    "reasoning_level": self.reasoning_level,
+                    "reasoning_level": effective_reasoning_level,
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
-                    **({"workflow_execution": workflow_metadata} if workflow_metadata else {}),
                     "actor_kind": "sub_agent",
+                    "delegated_session": {
+                        "session_id": f"{self.session_prefix}:sub:{agent_name}",
+                        "parent_thread_id": self.session_prefix,
+                        "agent": agent_name,
+                        "task": task,
+                        "model": effective_model,
+                        "mode": effective_mode or "execute",
+                        "reasoning_level": effective_reasoning_level,
+                        "attachments": list(attachments or []),
+                        "parent_call_id": parent_call_id,
+                        "parent_run_id": parent_run_id,
+                        "parent_turn_id": parent_turn_id,
+                    },
+                    **({"workflow_execution": workflow_metadata} if workflow_metadata else {}),
                     **(
                         {
                             "runtime_snapshot": deepcopy(self.runtime_snapshot),
@@ -417,8 +616,32 @@ class KernelSubAgentRunner:
                         else {}
                     ),
                 },
+                guidance_source=guidance_source,
+                guidance_finalizer=guidance_finalizer,
             )
         )
+        delegated_session = {
+            "session_id": result.session_id,
+            "parent_thread_id": self.session_prefix,
+            "agent": agent_name,
+            "task": task,
+            "model": effective_model,
+            "mode": effective_mode or "execute",
+            "reasoning_level": effective_reasoning_level,
+            "attachments": list(attachments or []),
+            "parent_call_id": parent_call_id,
+            "parent_run_id": parent_run_id,
+            "parent_turn_id": parent_turn_id,
+        }
+        result.state.metadata["actor_kind"] = "sub_agent"
+        result.state.metadata["delegated_session"] = delegated_session
+        pending_approval = result.state.metadata.get("pending_approval")
+        if isinstance(pending_approval, dict):
+            result.state.metadata["pending_approval"] = {
+                **pending_approval,
+                "delegated_session": delegated_session,
+            }
+        await self.state_store.save(result.state)
         return self._result_from_kernel(result, model_id=effective_model)
 
     def _build_kernel(
@@ -427,7 +650,9 @@ class KernelSubAgentRunner:
         toolbox: Any,
         event_sink: EventSink,
         model_id: str = "",
+        reasoning_level: str | None = None,
         active_mode: str | None = None,
+        late_context: str = "",
     ) -> CoreLoopKernel:
         return CoreLoopKernel(
             kit=CoreBaseAgentKit(
@@ -437,11 +662,12 @@ class KernelSubAgentRunner:
                     instructions=self.instructions,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
-                    reasoning_level=self.reasoning_level,
+                    reasoning_level=reasoning_level or self.reasoning_level,
                     thinking_enabled=self.thinking_enabled,
                     thinking_budget=self.thinking_budget,
                     approval_policy=self.approval_policy,
                     active_mode=active_mode,
+                    request_local_late_context=late_context,
                 ),
                 toolbox=toolbox,
             ),
@@ -586,9 +812,12 @@ class KernelSubAgentRunner:
         parent_run_id: str = "",
         parent_turn_id: str = "",
         model: str = "",
+        reasoning_level: str | None = None,
+        reasoning_effort: str | None = None,
         mode: str = "",
         attachments: list[str] | None = None,
         execution_context: Any | None = None,
+        supervisor: Any | None = None,
     ) -> SubAgentRunResult:
         state = await self.state_store.get(session_id)
         if state is None:
@@ -610,6 +839,19 @@ class KernelSubAgentRunner:
                 "approval": {"approved": True, "auto_approved": True},
             },
         )
+        effective_model = _resolve_model_id_for_capability(
+            (model or "").strip() or self.model_id
+        )
+        explicit_reasoning = (
+            str(reasoning_level or "").strip()
+            or str(reasoning_effort or "").strip()
+        )
+        effective_reasoning_level = (
+            normalize_reasoning_level(explicit_reasoning, self.reasoning_level)
+            if explicit_reasoning
+            else self.reasoning_level
+        )
+        effective_mode = self._resolve_mode(mode)
         child_sink = SubAgentEventForwardingSink(
             parent_sink=self.parent_event_sink,
             parent_session_id=self.session_prefix,
@@ -618,6 +860,9 @@ class KernelSubAgentRunner:
             parent_call_id=parent_call_id,
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
+            type=effective_mode or "execute",
+            model_id=effective_model,
+            reasoning_level=effective_reasoning_level,
         )
         await child_sink.emit(CoreEvent(
             name="runtime.approval_response",
@@ -633,22 +878,9 @@ class KernelSubAgentRunner:
             run_id=state.run_id,
             tags=["approval", "resolved"],
         ))
-        approval_toolbox = build_core_toolbox(
-            work_root=self.work_root,
-            approval_policy=self.approval_policy,
-            active_tier=self.active_tier,
-            tier_tools=self.tier_tools,
-            loaded_skill_roots=self.loaded_skill_roots,
-            skill_registry=self.skill_registry,
-            mcp_caller=self.mcp_caller,
-            mcp_tool_specs=self.mcp_tool_specs,
-            disabled_tools=self._disabled_tools(),
-            imagegen_config=self.imagegen_config,
-            activated_mcp_servers=self.activated_mcp_servers,
-            load_tools=self.load_tools,
-            active_mode=self.active_mode,
-            allow_access_outside_workdir=self.allow_access_outside_workdir,
-            runtime_permissions_provider=self.runtime_permissions_provider,
+        approval_toolbox = self._build_toolbox(
+            self._disabled_tools(),
+            active_mode=effective_mode,
         )
         call = approval_toolbox.prepare_approved_call(call)
         tool_result = await approval_toolbox.execute(call)
@@ -697,19 +929,43 @@ class KernelSubAgentRunner:
             original_task=task,
             approved_tool=approved_tool,
         )
-        resumed = await self._run_turn(
-            task=continuation,
-            agent=agent,
-            parent_call_id=parent_call_id,
-            session_id=session_id,
-            state=state,
-            parent_run_id=parent_run_id,
-            parent_turn_id=parent_turn_id,
-            model=model,
-            mode=mode,
-            attachments=attachments,
-            execution_context=execution_context,
-        )
+        async def continue_child() -> SubAgentRunResult:
+            resume_late_context = (
+                await supervisor.request_local_context(agent)
+                if supervisor is not None
+                else (
+                    "[Request-local sub-agent context]\n"
+                    f"name: {normalize_sub_session_agent_name(agent)}\n"
+                    f"type: {effective_mode or 'execute'}\n"
+                    f"model_id: {effective_model}\n"
+                    f"reasoning_level: {effective_reasoning_level}\n"
+                    "summary: (none)"
+                )
+            )
+            return await self._run_turn(
+                task=continuation,
+                agent=agent,
+                parent_call_id=parent_call_id,
+                session_id=session_id,
+                state=state,
+                parent_run_id=parent_run_id,
+                parent_turn_id=parent_turn_id,
+                model=model,
+                reasoning_level=reasoning_level,
+                reasoning_effort=reasoning_effort,
+                mode=mode,
+                attachments=attachments,
+                execution_context=execution_context,
+                late_context=resume_late_context,
+            )
+
+        if supervisor is None:
+            resumed = await continue_child()
+        else:
+            from lamtools_core.sub_agent_supervisor import bound_child_identity
+
+            with bound_child_identity(supervisor, effective_mode or "execute", agent):
+                resumed = await continue_child()
         return replace(resumed, tool_call_count=resumed.tool_call_count + 1)
 
     async def _run_turn(
@@ -723,34 +979,27 @@ class KernelSubAgentRunner:
         parent_run_id: str = "",
         parent_turn_id: str = "",
         model: str = "",
+        reasoning_level: str | None = None,
+        reasoning_effort: str | None = None,
         mode: str = "",
         attachments: list[str] | None = None,
         execution_context: Any | None = None,
+        late_context: str = "",
     ) -> SubAgentRunResult:
         # Same early resolution as run() — translate display_name to model_id.
         effective_model = _resolve_model_id_for_capability(
             (model or "").strip() or self.model_id
         )
+        explicit_reasoning = str(reasoning_level or "").strip() or str(reasoning_effort or "").strip()
+        effective_reasoning_level = (
+            normalize_reasoning_level(explicit_reasoning, self.reasoning_level)
+            if explicit_reasoning
+            else self.reasoning_level
+        )
         effective_mode = self._resolve_mode(mode)
         user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
         disabled_tools = self._disabled_tools()
-        toolbox = build_core_toolbox(
-            work_root=self.work_root,
-            approval_policy=self.approval_policy,
-            active_tier=self.active_tier,
-            tier_tools=self.tier_tools,
-            loaded_skill_roots=self.loaded_skill_roots,
-            skill_registry=self.skill_registry,
-            mcp_caller=self.mcp_caller,
-            mcp_tool_specs=self.mcp_tool_specs,
-            disabled_tools=disabled_tools,
-            imagegen_config=self.imagegen_config,
-            activated_mcp_servers=self.activated_mcp_servers,
-            load_tools=self.load_tools,
-            active_mode=effective_mode,
-            allow_access_outside_workdir=self.allow_access_outside_workdir,
-            runtime_permissions_provider=self.runtime_permissions_provider,
-        )
+        toolbox = self._build_toolbox(disabled_tools, active_mode=effective_mode)
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
             parent_sink=self.parent_event_sink,
@@ -760,12 +1009,17 @@ class KernelSubAgentRunner:
             parent_call_id=parent_call_id,
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
+            type=effective_mode or "execute",
+            model_id=effective_model,
+            reasoning_level=effective_reasoning_level,
         )
         kernel = self._build_kernel(
             toolbox=toolbox,
             event_sink=child_sink,
             model_id=effective_model,
+            reasoning_level=effective_reasoning_level,
             active_mode=effective_mode,
+            late_context=late_context,
         )
         workflow_metadata = _workflow_context_metadata(
             execution_context,
@@ -782,9 +1036,23 @@ class KernelSubAgentRunner:
                     "session_id": session_id,
                     "model_id": effective_model,
                     "active_mode": effective_mode,
-                    "reasoning_level": self.reasoning_level,
+                    "reasoning_level": effective_reasoning_level,
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
+                    "actor_kind": "sub_agent",
+                    "delegated_session": {
+                        "session_id": session_id,
+                        "parent_thread_id": self.session_prefix,
+                        "agent": agent_name,
+                        "task": task,
+                        "model": effective_model,
+                        "mode": effective_mode or "execute",
+                        "reasoning_level": effective_reasoning_level,
+                        "attachments": list(attachments or []),
+                        "parent_call_id": parent_call_id,
+                        "parent_run_id": parent_run_id,
+                        "parent_turn_id": parent_turn_id,
+                    },
                     **({"workflow_execution": workflow_metadata} if workflow_metadata else {}),
                     **(
                         {"runtime_snapshot": deepcopy(self.runtime_snapshot)}

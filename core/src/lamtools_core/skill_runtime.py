@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 from pathlib import Path
 from typing import Iterable
 
@@ -18,6 +19,11 @@ class SkillRuntime:
 
 def builtin_core_skill_roots() -> tuple[Path, ...]:
     """Return the packaged or source-tree directory containing built-in skills."""
+    if getattr(sys, "frozen", False):
+        bundle_root = getattr(sys, "_MEIPASS", None)
+        if bundle_root:
+            return (Path(bundle_root) / "resources" / "skills",)
+
     module_root = Path(__file__).resolve().parent
     packaged_root = module_root / "resources" / "skills"
     if packaged_root.is_dir():

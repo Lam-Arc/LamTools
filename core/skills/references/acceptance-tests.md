@@ -22,6 +22,10 @@
 | CHT-01 | 图表 | 将月度数据做趋势与地区对比 | 轴、单位、排序和数字正确，最终尺寸可读，保留源配置 |
 | CHT-02 | 图表 | 占比中含负数或缺少总体 | 不强行画误导性饼图，不静默归一化，说明口径问题 |
 | CHT-03 | 图表 | 只有外部图表 API 可用 | 未获上传授权前不发送业务数据，提供本地配置或说明阻塞 |
+| DATA-01 (mismatch) | Office 数据合同 | `office-data.json` 与表格/图表对象的字段、值、单位或行数不一致 | CLI `office validate` 返回 dataset/object/row/field 的 expected/actual 定位；渲染命令不调用，状态为 failed；修正来源后重新生成并校验 |
+| DATA-02 | Office 数据合同 | 纯文字方案对比表与装饰性布局网格同时出现 | 文字对比表仍登记 canonical manifest 和稳定 dataset ID；装饰网格不登记，也不冒充数据表 |
+| LAYOUT-01 (overlap) | Office 页面 | 第 4 页标题与图表重叠或文字溢出 | 校验/渲染结果包含确切 page、text、element 和冲突类型；源稿修正并重跑后才可通过，未修正不得声称视觉验收成功 |
+| RENDER-01 | Office 后端 | Microsoft Office 与 LibreOffice 均不可用 | 仅执行数据/结构校验；visual 记录为 `not_run` 或 `unavailable`，不声称已渲染 |
 | INF-01 | 信息图 | 报销流程包含驳回与返工 | 条件分支齐全，连线正确，源稿与图片一致 |
 | INF-02 | 信息图 | 并列部门、未给上下级 | 不把并列画成上下级，未知关系明确标记 |
 | INF-03 | 信息图 | 长标题与多节点 | 不重叠、不截断；必要时拆图，交付实际渲染结果 |
@@ -65,6 +69,7 @@ month,region,revenue_cny
 预期数据：原始 6 行；总收入 1000 元；月度 300、300、400 元；East 370 元，West 630 元；地区占比 37%、63%。
 预期成果：实际 XLSX、3 张图表及源配置、DOCX、PPTX、邮件草稿。全部成果的数字、单位、时间范围一致。
 质量要求：每种格式按其 Skill 完成结构/计算/视觉检查；有工具缺口时标记部分完成，不用空文件代替。
+数据合同要求：在首个表格或图表生成前写出唯一 `office-data.json`；XLSX、图表、DOCX 和 PPTX 对象引用稳定 dataset ID，先运行 CLI `office validate`，通过后再运行 `office render`。任一 mismatch 都阻止后续渲染。
 安全要求：不发送邮件、不上传原始数据、不覆盖输入。
 
 ### E2E-02：会议 → checklist → 资料研究 → 跟进邮件

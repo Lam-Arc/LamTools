@@ -7,16 +7,14 @@
   <script id="sunday-theme-bootstrap">
     (() => {
       const light = {
-        angle: 112,
-        stops: [['#fff0df', 0], ['#f7efff', 58], ['#edf2ff', 100]],
-        text: '#17265a',
-        surface: '#fffdf8',
+        angle: 180,
+        stops: [['#D2D8E6', 0]],
+        text: '#2E3138',
       }
       const dark = {
-        angle: 112,
-        stops: [['#171926', 0], ['#241c31', 56], ['#182438', 100]],
-        text: '#f4efff',
-        surface: '#11131d',
+        angle: 180,
+        stops: [['#3A3B3F', 0]],
+        text: '#FBF7F0',
       }
       const isColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
       const clamp = (value, min, max, fallback) => {
@@ -42,7 +40,40 @@
       const systemDark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
       const effectiveMode = mode === 'system' ? (systemDark ? 'dark' : 'light') : mode
       const fallback = effectiveMode === 'dark' ? dark : light
-      const saved = preferences && (preferences[effectiveMode + 'Theme'] || preferences.theme) || {}
+      const themeFingerprint = value => {
+        const scalarKeys = [
+          'backdropAngle', 'backdropText', 'mainAngle', 'mainText', 'mainOpacity',
+          'composerAngle', 'composerText', 'composerOpacity',
+          'controlAngle', 'controlText', 'controlOpacity', 'processIconColor',
+        ]
+        const areas = ['backdrop', 'main', 'composer', 'control']
+        if (!value || areas.some(area => !Array.isArray(value[area + 'Stops']))) return ''
+        return [
+          ...scalarKeys.map(key => String(value[key]).toLowerCase()),
+          ...areas.map(area => value[area + 'Stops'].map(stop => `${String(stop.color).toLowerCase()}@${stop.position}`).join(',')),
+        ].join('|')
+      }
+      const legacyLightFingerprint = '112|#17265a|145|#162451|1|105|#17275a|1|105|#183b83|1|#6755e8|#fff0df@0,#f7efff@58,#edf2ff@100|#fffdf8@0,#f9f9f4@100|#f8f6ff@0,#edf3ff@100|#dcecff@0,#ecdfff@100'
+      const legacyDarkFingerprint = '112|#f4efff|145|#f5f2fb|1|105|#f7f3fc|1|105|#fbf7ff|1|#a693ff|#171926@0,#241c31@56,#182438@100|#11131d@0,#181521@100|#252538@0,#2b2137@100|#29416d@0,#503269@100'
+      const legacyFlatLightFingerprint = '180|#2e3138|180|#2e3138|1|180|#2e3138|1|180|#2e3138|1|#c9d0df|#fcf9f5@0|#fdfbf7@0|#fdfbf7@0|#d6dcea@0'
+      const legacyFlatDarkFingerprint = '180|#fbf7f0|180|#fbf7f0|1|180|#fbf7f0|1|180|#fbf7f0|1|#888990|#121419@0|#1b1d22@0|#1b1d22@0|#35383f@0'
+      const legacyInvertedLightFingerprint = '180|#2e3138|180|#2e3138|1|180|#2e3138|1|180|#fbf7f0|1|#c9d0df|#fcf9f5@0|#fdfbf7@0|#fdfbf7@0|#2e3138@0'
+      const legacyInvertedDarkFingerprint = '180|#fbf7f0|180|#fbf7f0|1|180|#fbf7f0|1|180|#2e3138|1|#888990|#121419@0|#1b1d22@0|#1b1d22@0|#fbf7f0@0'
+      const legacyFrameDarkFingerprint = '180|#fbf7f0|180|#fbf7f0|1|180|#fbf7f0|1|180|#2e3138|1|#888990|#818289@0|#1b1d22@0|#1b1d22@0|#fbf7f0@0'
+      const legacyUnifiedComposerLightFingerprint = '180|#2e3138|180|#2e3138|1|180|#2e3138|1|180|#fbf7f0|1|#c9d0df|#d2d8e6@0|#fdfbf7@0|#fdfbf7@0|#2e3138@0'
+      const legacyUnifiedComposerDarkFingerprint = '180|#fbf7f0|180|#fbf7f0|1|180|#fbf7f0|1|180|#2e3138|1|#888990|#3a3b3f@0|#1b1d22@0|#1b1d22@0|#fbf7f0@0'
+      let saved = preferences && (preferences[effectiveMode + 'Theme'] || preferences.theme) || {}
+      if ([
+        legacyLightFingerprint,
+        legacyDarkFingerprint,
+        legacyFlatLightFingerprint,
+        legacyFlatDarkFingerprint,
+        legacyInvertedLightFingerprint,
+        legacyInvertedDarkFingerprint,
+        legacyFrameDarkFingerprint,
+        legacyUnifiedComposerLightFingerprint,
+        legacyUnifiedComposerDarkFingerprint,
+      ].includes(themeFingerprint(saved))) saved = {}
       const rawStops = Array.isArray(saved.backdropStops) ? saved.backdropStops : []
       const stops = rawStops.slice(0, 8).map(stop => [
         isColor(stop && stop.color) ? stop.color : fallback.stops[0][0],
@@ -57,18 +88,17 @@
       const angle = clamp(saved.backdropAngle, 0, 360, fallback.angle)
       const backdrop = solid ? stops[0][0] : `linear-gradient(${angle}deg, ${stops.map(stop => `${stop[0]} ${stop[1]}%`).join(', ')})`
       const text = isColor(saved.backdropText) ? saved.backdropText : fallback.text
-      const rawSurface = Array.isArray(saved.mainStops) && saved.mainStops[0] && saved.mainStops[0].color
-      const surface = isColor(rawSurface) ? rawSurface : fallback.surface
-      const hex = surface.slice(1)
-      const alpha = effectiveMode === 'dark' ? 0.68 : 0.64
-      const splash = `rgba(${parseInt(hex.slice(0, 2), 16)}, ${parseInt(hex.slice(2, 4), 16)}, ${parseInt(hex.slice(4, 6), 16)}, ${alpha})`
-      const startupTheme = { effectiveMode, backdropBackground: backdrop, backdropText: text, splashBackground: splash }
+      const startupTheme = { effectiveMode, backdropBackground: backdrop, backdropText: text }
       window.__SUNDAY_STARTUP_THEME__ = startupTheme
       const style = document.documentElement.style
-      style.setProperty('--startup-body-background', backdrop)
       style.setProperty('--startup-body-text', text)
-      style.setProperty('--startup-splash-background', splash)
       style.setProperty('--startup-reveal-background', backdrop)
+      style.setProperty('--startup-mark-color', effectiveMode === 'dark' ? '#FBF7F0' : '#2E3138')
+      style.setProperty('--startup-icon-surface', effectiveMode === 'dark' ? '#1B1D22' : '#FDFBF7')
+      style.setProperty('--startup-icon-face', effectiveMode === 'dark' ? '#FBF7F0' : '#2E3138')
+      style.setProperty('--startup-icon-frame-hi', effectiveMode === 'dark' ? '#B8BAC0' : '#F1F4FA')
+      style.setProperty('--startup-icon-frame-lo', effectiveMode === 'dark' ? '#696B71' : '#AEB7C8')
+      style.setProperty('--startup-icon-inner-stroke', effectiveMode === 'dark' ? '#0F1013' : '#98A2B5')
       style.setProperty('--startup-mark-shadow', effectiveMode === 'dark'
         ? 'drop-shadow(0 14px 26px rgba(0, 0, 0, 0.24))'
         : 'drop-shadow(0 12px 22px rgba(23, 36, 81, 0.12))')
@@ -77,17 +107,40 @@
   <style>
     :root {
       --titlebar-offset: 36px;
-      --startup-body-background: linear-gradient(112deg, #fff0df 0%, #f7efff 58%, #edf2ff 100%);
-      --startup-body-text: #17265a;
-      --startup-splash-background: rgba(255, 253, 248, 0.64);
-      --startup-reveal-background: linear-gradient(112deg, #fff0df 0%, #f7efff 58%, #edf2ff 100%);
+      --startup-body-text: #2E3138;
+      --startup-glass-tint: rgba(58, 59, 63, 0.12);
+      --startup-glass-optics:
+        radial-gradient(ellipse 64% 48% at 8% -8%, rgba(113, 189, 255, 0.075), transparent 72%),
+        radial-gradient(ellipse 52% 44% at 94% 9%, rgba(255, 177, 211, 0.052), transparent 76%),
+        radial-gradient(ellipse 45% 58% at 72% 104%, rgba(151, 126, 255, 0.044), transparent 75%),
+        linear-gradient(118deg, rgba(255, 255, 255, 0.018), transparent 34%, rgba(111, 177, 255, 0.012) 64%, transparent);
+      --startup-glass-edge:
+        radial-gradient(ellipse 34% 11% at 18% 0%, rgba(255, 255, 255, 0.46), transparent 74%),
+        radial-gradient(ellipse 10% 38% at 100% 28%, rgba(206, 225, 255, 0.32), transparent 76%),
+        radial-gradient(ellipse 26% 9% at 76% 100%, rgba(230, 217, 255, 0.25), transparent 78%),
+        radial-gradient(ellipse 8% 25% at 0% 78%, rgba(255, 224, 205, 0.18), transparent 80%);
+      --startup-reveal-background: #D2D8E6;
+      --startup-mark-color: #2E3138;
+      --startup-icon-surface: #FDFBF7;
+      --startup-icon-face: #2E3138;
+      --startup-icon-frame-hi: #F1F4FA;
+      --startup-icon-frame-lo: #AEB7C8;
+      --startup-icon-inner-stroke: #98A2B5;
       --startup-mark-shadow: drop-shadow(0 12px 22px rgba(23, 36, 81, 0.12));
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; min-height: 100%; }
-    body { overflow: hidden; background: var(--startup-body-background); color: var(--startup-body-text); font-family: system-ui, sans-serif; }
+    html, body, #app {
+      width: 100%;
+      min-height: 100%;
+      background: transparent !important;
+      background-color: transparent !important;
+    }
+    body { overflow: hidden; color: var(--startup-body-text); font-family: system-ui, sans-serif; }
+    #app[aria-hidden="true"] { visibility: hidden; }
 
-    /* Native first paint: a translucent Sunday veil and the bare mark. */
+    /* Acrylic supplies the environmental blur. These static layers keep the
+       scene legible while adding restrained transmission, dispersion and
+       local edge reflections without a uniform glass border. */
     #startup-splash {
       position: fixed;
       z-index: 100;
@@ -95,39 +148,86 @@
       display: grid;
       place-items: center;
       overflow: hidden;
-      background: var(--startup-splash-background);
-      -webkit-backdrop-filter: blur(18px) saturate(1.04);
-      backdrop-filter: blur(18px) saturate(1.04);
+      background: var(--startup-glass-tint);
+      -webkit-backdrop-filter: blur(18px) saturate(1.04) brightness(0.985) contrast(1.02);
+      backdrop-filter: blur(18px) saturate(1.04) brightness(0.985) contrast(1.02);
+      color: var(--startup-body-text);
+      isolation: isolate;
       pointer-events: none;
+    }
+    #startup-splash::before,
+    #startup-splash::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    #startup-splash::before {
+      z-index: 0;
+      background: var(--startup-glass-optics);
+      opacity: 0.9;
+    }
+    #startup-splash::after {
+      z-index: 1;
+      padding: 1px;
+      background: var(--startup-glass-edge);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      opacity: 0.78;
     }
     .startup-splash__reveal {
       position: absolute;
+      z-index: 2;
       inset: 0;
       background: var(--startup-reveal-background);
       clip-path: circle(0 at 50% 50%);
+      contain: paint;
       will-change: clip-path, opacity;
     }
     .startup-splash__mark {
       position: relative;
-      z-index: 1;
+      z-index: 3;
       display: grid;
       width: 112px;
       height: 112px;
       place-items: center;
-      filter: var(--startup-mark-shadow);
       will-change: transform, opacity;
     }
-    .startup-splash__mark svg { width: 100%; height: 100%; display: block; }
+    .startup-splash__mark svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      user-select: none;
+      pointer-events: none;
+      filter: var(--startup-mark-shadow);
+    }
     @media (prefers-reduced-motion: reduce) {
-      .startup-splash__reveal { clip-path: none; }
+      .startup-splash__reveal { clip-path: none; will-change: auto; }
       .startup-splash__mark { will-change: auto; }
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --startup-body-background: linear-gradient(112deg, #171926 0%, #241c31 56%, #182438 100%);
-        --startup-body-text: #f4efff;
-        --startup-splash-background: rgba(17, 19, 29, 0.68);
-        --startup-reveal-background: linear-gradient(112deg, #171926 0%, #241c31 56%, #182438 100%);
+        --startup-body-text: #FBF7F0;
+        --startup-glass-tint: rgba(27, 29, 34, 0.18);
+        --startup-glass-optics:
+          radial-gradient(ellipse 64% 48% at 8% -8%, rgba(76, 157, 255, 0.072), transparent 72%),
+          radial-gradient(ellipse 52% 44% at 94% 9%, rgba(220, 105, 255, 0.042), transparent 76%),
+          radial-gradient(ellipse 45% 58% at 72% 104%, rgba(91, 122, 255, 0.045), transparent 75%),
+          linear-gradient(118deg, rgba(255, 255, 255, 0.012), transparent 34%, rgba(73, 141, 255, 0.012) 64%, transparent);
+        --startup-glass-edge:
+          radial-gradient(ellipse 34% 11% at 18% 0%, rgba(225, 240, 255, 0.28), transparent 74%),
+          radial-gradient(ellipse 10% 38% at 100% 28%, rgba(157, 195, 255, 0.24), transparent 76%),
+          radial-gradient(ellipse 26% 9% at 76% 100%, rgba(205, 184, 255, 0.18), transparent 78%),
+          radial-gradient(ellipse 8% 25% at 0% 78%, rgba(255, 194, 168, 0.12), transparent 80%);
+        --startup-reveal-background: #3A3B3F;
+        --startup-mark-color: #FBF7F0;
+        --startup-icon-surface: #1B1D22;
+        --startup-icon-face: #FBF7F0;
+        --startup-icon-frame-hi: #B8BAC0;
+        --startup-icon-frame-lo: #696B71;
+        --startup-icon-inner-stroke: #0F1013;
         --startup-mark-shadow: drop-shadow(0 14px 26px rgba(0, 0, 0, 0.24));
       }
     }
@@ -142,16 +242,20 @@
   <div id="startup-splash" data-startup-splash role="status" aria-label="Sunday 正在启动">
     <div class="startup-splash__reveal" data-startup-reveal aria-hidden="true"></div>
     <span class="startup-splash__mark" data-startup-mark aria-hidden="true">
-        <svg viewBox="0 0 1254 1254" fill="none" focusable="false">
-          <defs>
-            <linearGradient id="startup-warm" x1="240" y1="608" x2="445" y2="243" gradientUnits="userSpaceOnUse"><stop stop-color="#FD4754"/><stop offset="1" stop-color="#FECA30"/></linearGradient>
-            <linearGradient id="startup-sweep" x1="80" y1="645" x2="971" y2="1160" gradientUnits="userSpaceOnUse"><stop stop-color="#10AEFD"/><stop offset="1" stop-color="#823CFC"/></linearGradient>
-            <linearGradient id="startup-arch" x1="717" y1="492" x2="1078" y2="266" gradientUnits="userSpaceOnUse"><stop stop-color="#0453FD"/><stop offset="1" stop-color="#C745FD"/></linearGradient>
-          </defs>
-          <ellipse cx="380.5" cy="447" rx="215.5" ry="212.5" fill="url(#startup-warm)"/>
-          <path fill="url(#startup-arch)" d="M1172 440c-4-20-13-37-25-50-28-32-74-56-128-69-57-14-114-4-151 13-34 15-62 33-89 58-25 23-46 50-58 78-11 26-1 51 19 65 18 13 42 13 60 3 17-9 27-25 43-41 29-28 68-37 107-36 47 0 84 21 119 59 17 17 43 15 60 6 30-16 50-47 43-86Z"/>
-          <path fill="url(#startup-sweep)" d="M1209 700c-3-22-12-38-26-47-19-13-41-10-61-3-32 12-53 34-75 56-34 37-62 67-96 97-49 43-112 73-183 95-58 18-114 22-172 17-48-4-95-16-139-31-58-20-102-47-144-85-43-38-80-83-117-120-19-19-44-30-67-33-27-4-51 7-65 28-16 24-13 54-3 84 15 45 40 90 69 127 46 58 90 99 141 135 55 38 115 63 179 82 96 28 200 30 303 11 77-14 143-43 195-72 57-32 102-70 144-116 38-42 61-79 80-112 24-42 42-84 37-113Z"/>
-        </svg>
+      <svg viewBox="0 0 1024 1024" fill="none" focusable="false" aria-hidden="true">
+        <defs>
+          <linearGradient id="startup-icon-frame" x1="136" y1="56" x2="874" y2="982" gradientUnits="userSpaceOnUse">
+            <stop stop-color="var(--startup-icon-frame-hi)" />
+            <stop offset="0.48" stop-color="var(--startup-icon-frame-lo)" />
+            <stop offset="1" stop-color="var(--startup-icon-frame-hi)" />
+          </linearGradient>
+        </defs>
+        <rect x="28" y="28" width="968" height="968" rx="224" fill="url(#startup-icon-frame)" />
+        <rect x="66" y="66" width="892" height="892" rx="184" fill="var(--startup-icon-surface)" stroke="var(--startup-icon-inner-stroke)" stroke-width="8" />
+        <ellipse cx="367.5" cy="421.7" rx="64.1" ry="63.7" fill="var(--startup-icon-face)" />
+        <path d="M599.8 442.4C647.1 408.3 694.7 405.8 726.3 435.3" stroke="var(--startup-icon-face)" stroke-width="45.7" stroke-linecap="round" />
+        <path d="M318.1 581.4C410.9 697.3 603.9 694.6 703.4 582.6" stroke="var(--startup-icon-face)" stroke-width="58" stroke-linecap="round" />
+      </svg>
     </span>
   </div>
   <div id="app"></div>

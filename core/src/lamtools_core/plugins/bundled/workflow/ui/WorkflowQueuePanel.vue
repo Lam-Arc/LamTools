@@ -5,7 +5,9 @@
         <h3>队列与历史</h3>
         <span class="wf-queue-summary">排队 {{ items.length }} · 历史 {{ history.length }}</span>
       </div>
-      <button type="button" class="wf-queue-refresh" :disabled="loading" aria-label="刷新队列" title="刷新" @click="refresh">↻</button>
+      <button type="button" class="wf-queue-refresh" :disabled="loading" aria-label="刷新队列" title="刷新" @click="refresh">
+        <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
+      </button>
     </header>
     <div class="wf-queue-tabs" role="tablist" aria-label="队列视图">
       <button type="button" role="tab" :aria-selected="tab === 'queue'" :class="{ active: tab === 'queue' }" @click="tab = 'queue'">当前队列</button>
@@ -31,14 +33,21 @@
             <strong>{{ item.run_id || item.queue_id || '未命名运行' }}</strong>
             <small>{{ statusLabel(item.status) }} · 优先级 {{ item.priority }} · {{ formatTimestamp(item.created_at) }}</small>
           </span>
-          <span class="wf-queue-chevron" aria-hidden="true">›</span>
+          <span class="wf-queue-chevron" aria-hidden="true">
+            <ChevronRight :size="14" :stroke-width="1.8" />
+          </span>
         </button>
         <button v-if="canCancel(item)" type="button" class="wf-queue-cancel" :aria-label="`取消运行 ${item.run_id || item.queue_id}`" @click="cancel(item)">取消</button>
       </li>
     </ul>
     <p v-else class="wf-queue-empty">{{ tab === 'queue' ? '当前没有排队运行' : '还没有运行历史' }}</p>
     <article v-if="selected" class="wf-queue-detail" aria-label="队列运行详情">
-      <header><strong>运行详情</strong><button type="button" class="wf-queue-close" aria-label="关闭详情" @click="selectedId = ''">×</button></header>
+      <header>
+        <strong>运行详情</strong>
+        <button type="button" class="wf-queue-close" aria-label="关闭详情" @click="selectedId = ''">
+          <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+      </header>
       <dl>
         <div><dt>状态</dt><dd :class="`status-text-${selected.status}`">{{ statusLabel(selected.status) }}</dd></div>
         <div><dt>队列 ID</dt><dd><code>{{ selected.queue_id || '—' }}</code></dd></div>
@@ -64,6 +73,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { ChevronRight, RefreshCw, X } from 'lucide-vue-next'
 import type { WorkflowCacheFact, WorkflowQueueItem, WorkflowQueueStatus } from './types'
 
 const props = withDefaults(defineProps<{
@@ -124,7 +134,7 @@ function formatTimestamp(value: string | null | undefined): string {
 .wf-queue-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .wf-queue-head h3 { margin: 0; font-size: 12px; font-weight: 700; }
 .wf-queue-summary { display: block; margin-top: 2px; color: color-mix(in srgb, var(--theme-backdrop-text) 46%, transparent); font-size: 10px; }
-.wf-queue-refresh, .wf-queue-close { min-width: 28px; min-height: 28px; border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--theme-backdrop-text) 66%, transparent); cursor: pointer; font-size: 17px; }
+.wf-queue-refresh, .wf-queue-close { display: grid; place-items: center; min-width: 28px; min-height: 28px; border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--theme-backdrop-text) 66%, transparent); cursor: pointer; }
 .wf-queue-refresh:hover:not(:disabled), .wf-queue-close:hover { background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent); color: var(--theme-backdrop-text); }
 .wf-queue-refresh:disabled { opacity: .4; cursor: default; }
 .wf-queue-tabs { display: flex; gap: var(--space-1); }
@@ -155,7 +165,7 @@ function formatTimestamp(value: string | null | undefined): string {
 .wf-queue-item-copy strong, .wf-queue-item-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-queue-item-copy strong { font-size: 10px; font-weight: 600; }
 .wf-queue-item-copy small { color: color-mix(in srgb, var(--theme-backdrop-text) 48%, transparent); font-size: 9px; }
-.wf-queue-chevron { margin-left: auto; color: color-mix(in srgb, var(--theme-backdrop-text) 42%, transparent); font-size: 16px; }
+.wf-queue-chevron { display: grid; margin-left: auto; place-items: center; color: color-mix(in srgb, var(--theme-backdrop-text) 42%, transparent); }
 .wf-queue-cancel { flex: 0 0 auto; border: 0; border-left: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 9%, transparent); background: transparent; color: var(--red); padding: 0 var(--space-2); cursor: pointer; font-size: 10px; }
 .wf-queue-cancel:hover { background: color-mix(in srgb, var(--red) var(--alpha-hover), transparent); }
 .wf-queue-empty { margin: 0; color: color-mix(in srgb, var(--theme-backdrop-text) 42%, transparent); font-size: 11px; }

@@ -20,7 +20,7 @@ describe('CoreExecutionControls', () => {
     expect(children[2].getAttribute('data-core-model-thinking-menu')).not.toBeNull()
   })
 
-  it('groups shallow thinking into the compact thinking selector without changing the thinking level', async () => {
+  it('groups model and thinking controls into the compact selector', async () => {
     const wrapper = mount(CoreExecutionControls, {
       props: {
         modelValue: 'model-1',
@@ -55,20 +55,7 @@ describe('CoreExecutionControls', () => {
 
     expect(wrapper.emitted('update:modelValue')).toEqual([['model-2']])
 
-    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click')
-    await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter')
-    const shallowOption = wrapper.get('[data-model-thinking-shallow-option]')
-    expect(shallowOption).toBeTruthy()
-    expect(shallowOption.classes()).toContain('core-model-thinking-menu__shallow')
-    await shallowOption.trigger('click')
-
-    expect(wrapper.emitted('update:shallowThinkingEnabled')).toEqual([[true]])
-    expect(wrapper.emitted('update:thinkingMode')).toBeUndefined()
-
-    await wrapper.setProps({ shallowThinkingEnabled: true })
-    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click')
-    await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter')
-    const enabledShallowOption = wrapper.get('[data-model-thinking-shallow-option]')
-    expect(enabledShallowOption.classes()).toContain('active')
+    expect(wrapper.find('[data-model-thinking-shallow-option]').exists()).toBe(false)
+    expect(wrapper.emitted('update:shallowThinkingEnabled')).toBeUndefined()
   })
 })

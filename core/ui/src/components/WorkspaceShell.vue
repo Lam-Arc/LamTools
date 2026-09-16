@@ -9,6 +9,7 @@
         'workspace-shell--empty-session': emptySession,
         'workspace-shell--full-bleed': mainContentFullBleed,
         'workspace-shell--workflow': workflowMode,
+        'workspace-shell--workflow-interaction-active': workflowMode && workflowInteractionActive,
         'workspace-shell--workflow-composer-has-value': workflowMode && workflowComposerHasValue,
         'workspace-shell--workflow-composer-stop': workflowMode && composerActionMode === 'stop',
       },
@@ -23,6 +24,8 @@
     @selectstart="onSwipeSelectStart"
     @focusin="onShellFocusIn"
     @focusout="onShellFocusOut"
+    @pointerover="onWorkflowInteractionPointerOver"
+    @pointerout="onWorkflowInteractionPointerOut"
     @input.capture="onShellInput"
   >
     <!-- Notifications are owned by the shared toast service. -->
@@ -168,7 +171,7 @@
         </slot>
       </template>
       <template #tools>
-        <slot v-if="!workflowMode" name="composer-tools" />
+        <slot name="composer-tools" />
       </template>
       <template #action>
         <slot name="composer-action">
@@ -189,7 +192,7 @@
       v-if="showRightPanel"
       :id="rightDrawerId"
       data-workspace-right-drawer
-      class="workspace-drawer drawer-right"
+      class="workspace-drawer drawer-right optical-glass"
       :class="{ open: rightOpen || stageOpen, pinned: rightPinned }"
       :inert="(!rightOpen && !stageOpen) || undefined"
       :aria-hidden="!rightOpen && !stageOpen"
@@ -219,7 +222,7 @@
  * Product provides slots for actual content.
  */
 import { gsap } from 'gsap'
-import { nextTick, onMounted, onUnmounted, ref, toRef, useId, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, toRef, useId, watch } from 'vue'
 import { useComposerLayout } from '../composables/useComposerLayout'
 import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
@@ -241,6 +244,8 @@ const props = withDefaults(
     mainContentFullBleed?: boolean
     /** Enables Workflow-specific Composer density and canvas affordances. */
     workflowMode?: boolean
+    /** Host-owned text state so programmatic composer updates count as active use. */
+    composerHasValue?: boolean
     theme?: ThemeData
     rightPanelTitle?: string
     /** Set false when the right-panel slot owns its own modular header. */
@@ -272,6 +277,7 @@ const props = withDefaults(
     contentWidth: 780,
     mainContentFullBleed: false,
     workflowMode: false,
+    composerHasValue: false,
     rightPanelTitle: '运行状态',
     showRightPanelHeader: true,
     composerPlaceholder: '输入内容...',
@@ -294,6 +300,7 @@ const emit = defineEmits<{
   'new-session': []
   'update:left-open': [value: boolean]
   'update:left-pinned': [value: boolean]
+  'update:right-pinned': [value: boolean]
   settings: []
   plugins: []
   search: []
@@ -358,7 +365,13 @@ const composerLayout = useComposerLayout({
 const composerShellClass = composerLayout.shellClass
 const composerRootClass = composerLayout.rootClass
 const composerLayoutStyle = composerLayout.style
-const workflowComposerHasValue = ref(false)
+const workflowComposerObservedValue = ref(false)
+const workflowInteractionActive = ref(false)
+const workflowComposerHasValue = computed(() => (
+  props.workflowMode && (props.composerHasValue || workflowComposerObservedValue.value)
+))
+const WORKFLOW_INTERACTION_LEAVE_GRACE_MS = 120
+let workflowInteractionLeaveTimer: number | undefined
 let composerMotionContext: gsap.Context | null = null
 let composerPlacementTween: gsap.core.Tween | null = null
 let composerPlacementRevision = 0
@@ -371,23 +384,56 @@ onMounted(() => {
 
 watch(
   [() => props.workflowMode, () => props.composerActionMode],
-  () => { void nextTick(syncWorkflowComposerValue) },
+  () => {
+    if (!props.workflowMode) {
+      clearWorkflowInteractionLeave()
+      workflowInteractionActive.value = false
+    }
+    void nextTick(syncWorkflowComposerValue)
+  },
 )
+
+function isWorkflowInteractionTarget(target: EventTarget | null): boolean {
+  return target instanceof Element
+    && Boolean(target.closest('.floating-composer, .wf-convo-float'))
+}
+
+function clearWorkflowInteractionLeave(): void {
+  if (workflowInteractionLeaveTimer === undefined) return
+  window.clearTimeout(workflowInteractionLeaveTimer)
+  workflowInteractionLeaveTimer = undefined
+}
+
+function onWorkflowInteractionPointerOver(event: PointerEvent): void {
+  if (!props.workflowMode || !isWorkflowInteractionTarget(event.target)) return
+  clearWorkflowInteractionLeave()
+  workflowInteractionActive.value = true
+}
+
+function onWorkflowInteractionPointerOut(event: PointerEvent): void {
+  if (!props.workflowMode || !isWorkflowInteractionTarget(event.target)) return
+  if (isWorkflowInteractionTarget(event.relatedTarget)) return
+  clearWorkflowInteractionLeave()
+  workflowInteractionLeaveTimer = window.setTimeout(() => {
+    workflowInteractionLeaveTimer = undefined
+    workflowInteractionActive.value = false
+  }, WORKFLOW_INTERACTION_LEAVE_GRACE_MS)
+}
 
 function syncWorkflowComposerValue(): void {
   if (!props.workflowMode) {
-    workflowComposerHasValue.value = false
+    workflowComposerObservedValue.value = false
     return
   }
   const textarea = shellElement.value?.querySelector<HTMLTextAreaElement>('.floating-composer textarea')
-  workflowComposerHasValue.value = Boolean(textarea?.value.trim())
+  workflowComposerObservedValue.value = Boolean(textarea?.value.trim())
 }
 
 function onShellInput(event: Event): void {
   if (!props.workflowMode) return
   const target = event.target
   if (!(target instanceof HTMLTextAreaElement) || !target.closest('.floating-composer')) return
-  workflowComposerHasValue.value = Boolean(target.value.trim())
+  workflowComposerObservedValue.value = Boolean(target.value.trim())
 }
 
 watch(composerLayout.placement, async () => {
@@ -426,6 +472,7 @@ watch(composerLayout.placement, async () => {
 })
 
 onUnmounted(() => {
+  clearWorkflowInteractionLeave()
   composerPlacementRevision += 1
   composerPlacementTween?.kill()
   composerPlacementTween = null
@@ -462,7 +509,6 @@ function onComposerDrop(event: DragEvent): void {
 
 function onSidebarTogglePinned() {
   toggleLeftPinned()
-  emit('update:left-pinned', leftPinned.value)
 }
 
 type SwipeGesture = {
@@ -549,6 +595,10 @@ function onSwipePointerUp(event: PointerEvent): void {
 
 function onSwipePointerCancel(): void {
   swipeGesture = null
+  if (props.workflowMode) {
+    clearWorkflowInteractionLeave()
+    workflowInteractionActive.value = false
+  }
 }
 
 // Sync stageOpen: prop → useShellLayout, and useShellLayout → emit
@@ -561,6 +611,12 @@ watch(stageOpen, (val) => {
 watch(leftOpen, (value) => {
   emit('update:left-open', value)
 }, { immediate: true })
+watch(leftPinned, (value) => {
+  emit('update:left-pinned', value)
+})
+watch(rightPinned, (value) => {
+  emit('update:right-pinned', value)
+})
 
 // Sync theme/density/contentWidth from parent into useShellLayout state
 watch(() => props.theme, (val) => {

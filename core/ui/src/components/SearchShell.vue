@@ -433,12 +433,13 @@ onMounted(async () => {
   background: transparent;
   border: none;
   outline: none;
-  color: var(--settings-card-text, var(--settings-main-text, var(--text)));
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font-size: 15px;
   font-family: inherit;
 }
 .search-input-row input::placeholder {
-  color: var(--settings-muted, #8a8580);
+  color: color-mix(in srgb, var(--theme-composer-text) 45%, transparent);
 }
 
 .search-clear {

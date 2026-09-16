@@ -184,7 +184,7 @@ function subAgentChildrenByParentId(
     if (!rawItem) continue
     const item = withItemArtifacts(rawItem, artifactsByItem.get(itemId))
     orderedItems.push(item)
-    if (item.type === 'agent_summary' && item.tool_name === 'sub_agent') {
+    if (isSubAgentParentItem(item)) {
       subAgentParentIds.add(item.item_id)
     }
   }
@@ -218,7 +218,7 @@ function subAgentChildrenByParentId(
 }
 
 function withSubAgentChildren(item: CoreAppItem, children: CoreAppItem[] | undefined): CoreAppItem {
-  if (!children?.length || item.type !== 'agent_summary' || item.tool_name !== 'sub_agent') return item
+  if (!children?.length || !isSubAgentParentItem(item)) return item
   return {
     ...item,
     metadata: {
@@ -307,6 +307,34 @@ function maybeAppendInitialAssistantWaiting(state: CoreAppSnapshot, messages: Co
       ...(runtimeModelId ? { runtime_model_id: runtimeModelId } : {}),
     },
   })
+}
+
+/** Return true for the long-running delegated call, excluding create/close
+ * lifecycle controls.  Older snapshots retain ``dynamicToolCall`` while newer
+ * projections normalize the call to ``agent_summary``; both shapes need the
+ * same child suppression/nesting semantics. */
+function isSubAgentParentItem(item: CoreAppItem): boolean {
+  const toolName = String(item.tool_name || '').trim().toLowerCase()
+  // Asynchronous mailbox calls can own child events too.  They remain an
+  // ordinary process tool in the main transcript, but their descendants must
+  // be nested under the call instead of leaking as sibling assistant rows.
+  if (toolName === 'sub_agent_message') return true
+  if (toolName !== 'sub_agent' && toolName !== 'subagent') return false
+  if (item.type === 'agent_summary') return true
+  const args = isRecord(item.arguments) ? item.arguments : {}
+  const metadata = isRecord(item.metadata) ? item.metadata : {}
+  const nested = isRecord(metadata.metadata) ? metadata.metadata : {}
+  const action = String(
+    args.action
+    || metadata.lifecycle_action
+    || metadata.lifecycleAction
+    || metadata.action
+    || nested.lifecycle_action
+    || nested.lifecycleAction
+    || nested.action
+    || '',
+  ).trim().toLowerCase()
+  return action !== 'create' && action !== 'close' && action !== 'created' && action !== 'closed'
 }
 
 function itemTurnId(state: CoreAppSnapshot, item: CoreAppItem): string {
@@ -596,6 +624,8 @@ function normalizeCoreItemDisplayType(payload: Record<string, unknown>, fallback
   if (fallback === 'status' || fallback === 'error') return fallback
   const type = String(payload.type || fallback)
   if (type === 'dynamicToolCall' && String(payload.tool_name || '') === 'sub_agent') {
+    const args = isRecord(payload.arguments) ? payload.arguments : {}
+    if (args.action === 'create' || args.action === 'close') return type
     return 'agent_summary'
   }
   return type

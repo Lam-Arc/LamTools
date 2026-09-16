@@ -7,7 +7,7 @@ The workflow name is derived from the run's session id (``wf_<name>``).
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -126,8 +126,9 @@ def workflow_build_tool_specs(
                 "it is created empty first (lazy bootstrap). Query workflow.object_info "
                 "for the current dynamic kind catalog. Core kinds include:\n"
                 "- model: one model completion. Named output ports force structured JSON. "
-                "Instruction supports {{port_name}} interpolation.\n"
-                "- agent: independent tool-capable agent execution; config.allowed_tools can narrow inherited authority.\n"
+                "Instruction supports {{port_name}} interpolation. If config.model_id is omitted, the current turn model is inherited.\n"
+                "- agent: independent tool-capable agent execution; config.allowed_tools can narrow inherited authority. "
+                "If config.model_id is omitted, the current turn model is inherited.\n"
                 "- command: invoke a CLI tool via shell (curl/git/ffmpeg/...). config.command "
                 "is the shell command, run in the same shell run_command uses (Git Bash on "
                 "Windows). stdin receives {\"inputs\":{port:val}} JSON and INPUT_<PORT> env "
@@ -217,16 +218,71 @@ def workflow_build_tool_handlers(
 ) -> dict[str, Callable[[ToolCall], Awaitable[ToolResult]]]:
     """Handlers that edit the current workflow graph via workflow.get/update."""
 
+    # A handler can be reused by a long-lived toolbox while the active
+    # workflow changes.  Resolution records the scope selected by the
+    # repository lookup on the call itself so the subsequent get/create/update
+    # operations all use the same scope (including the global, empty scope).
+    resolved_scope_key = "_workflow_scope_resolved"
+    resolved_root_key = "_workflow_scope_root"
+
     def _call_work_root(call: ToolCall) -> str:
         metadata = call.metadata if isinstance(call.metadata, dict) else {}
-        raw = metadata.get("work_root") or metadata.get("workRoot")
-        if not raw:
-            session_metadata = metadata.get("_runtime_session_metadata")
-            if isinstance(session_metadata, dict):
-                raw = session_metadata.get("work_root") or session_metadata.get("workRoot")
-        if raw:
-            return str(raw)
+        if metadata.get(resolved_scope_key) is True:
+            return str(metadata.get(resolved_root_key) or "")
+        if "work_root" in metadata or "workRoot" in metadata:
+            return str(metadata.get("work_root", metadata.get("workRoot")) or "")
+        session_metadata = metadata.get("_runtime_session_metadata")
+        if isinstance(session_metadata, dict) and (
+            "work_root" in session_metadata or "workRoot" in session_metadata
+        ):
+            return str(
+                session_metadata.get("work_root", session_metadata.get("workRoot")) or ""
+            )
         return str(work_root or "")
+
+    def _set_resolved_scope(call: ToolCall, workflow: dict[str, Any]) -> None:
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        # ``WorkflowDef.work_root`` is authoritative after a repository lookup.
+        # An empty value intentionally means the global workflow scope.
+        metadata[resolved_scope_key] = True
+        metadata[resolved_root_key] = str(workflow.get("work_root") or "").strip()
+
+    def _call_model_id(call: ToolCall) -> str:
+        """Resolve the model that is actually running the editing turn."""
+
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        candidates: list[Any] = [metadata.get("runtime_snapshot"), metadata.get("snapshot")]
+        execution_context = metadata.get("execution_context")
+        if isinstance(execution_context, Mapping):
+            candidates.extend((
+                execution_context.get("runtime_snapshot"),
+                execution_context.get("snapshot"),
+            ))
+        for candidate in candidates:
+            if isinstance(candidate, Mapping):
+                model_id = str(candidate.get("model_id") or candidate.get("modelId") or "").strip()
+                if model_id:
+                    return model_id
+        return str(metadata.get("model_id") or metadata.get("modelId") or "").strip()
+
+    def _canonical_workflow_id(session_id: str) -> str:
+        """Return an ID only for the exact canonical session syntax.
+
+        Workflow resource IDs are generated as lowercase 32-character UUID
+        hex values.  Keep this boundary strict so UUID parser conveniences
+        (braces, hyphens, surrounding whitespace, or uppercase) cannot make
+        a forged session string look canonical.
+        """
+
+        prefix = "workflow:"
+        if not session_id.startswith(prefix):
+            return ""
+        raw_id = session_id[len(prefix):]
+        if len(raw_id) != 32 or any(
+            not ("0" <= char <= "9" or "a" <= char <= "f") for char in raw_id
+        ):
+            return ""
+        return raw_id
 
     async def _get_graph(name: str, call: ToolCall) -> dict[str, Any] | None:
         payload: dict[str, Any] = {"name": name}
@@ -293,28 +349,99 @@ def workflow_build_tool_handlers(
         saved = (getattr(result, "payload", {}) or {}).get("workflow")
         return saved if isinstance(saved, dict) else wf
 
+    async def _lookup_workflow_by_id(
+        resource_id: str,
+        *,
+        scoped_root: str | None,
+    ) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {"workflow_id": resource_id}
+        if scoped_root:
+            payload["work_root"] = scoped_root
+        result = await execute_operation("workflow.get", payload, {})
+        if str(getattr(result, "status", "error") or "error") != "ok":
+            return None
+        workflow = (getattr(result, "payload", {}) or {}).get("workflow")
+        if not isinstance(workflow, dict) or not str(workflow.get("name") or "").strip():
+            return None
+        return workflow
+
     async def _resolve_name(call: ToolCall) -> str:
-        session_metadata = call.metadata.get("_runtime_session_metadata")
-        if isinstance(session_metadata, dict):
-            resource_id = str(session_metadata.get("resource_id") or "").strip()
-            if (
-                session_metadata.get("owner_plugin") == "workflow"
-                and session_metadata.get("resource_type") == "workflow"
-                and resource_id
-            ):
-                payload: dict[str, Any] = {"workflow_id": resource_id}
-                scoped_root = str(session_metadata.get("work_root") or _call_work_root(call) or "").strip()
-                if scoped_root:
-                    payload["work_root"] = scoped_root
-                result = await execute_operation("workflow.get", payload, {})
-                if str(getattr(result, "status", "error") or "error") == "ok":
-                    workflow = (getattr(result, "payload", {}) or {}).get("workflow")
-                    if isinstance(workflow, dict):
-                        return str(workflow.get("name") or "").strip()
-        session = str(call.metadata.get("_runtime_session_id") or "").strip()
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        session_metadata = metadata.get("_runtime_session_metadata")
+        if not isinstance(session_metadata, dict):
+            session_metadata = metadata.get("session_metadata")
+        if not isinstance(session_metadata, dict):
+            session_metadata = {}
+
+        owner = str(session_metadata.get("owner_plugin") or "").strip()
+        resource_type = str(session_metadata.get("resource_type") or "").strip()
+        resource_id = str(session_metadata.get("resource_id") or "").strip()
+        if owner or resource_type or resource_id:
+            # Any non-empty workflow binding metadata is authoritative.  Do
+            # not let a malformed/non-workflow binding fall through to an
+            # id-only lookup and accidentally cross an ordinary session
+            # boundary.  Unrelated fields such as runtime preferences do not
+            # hide a structurally valid workflow session id.
+            if owner != "workflow" or resource_type != "workflow" or not resource_id:
+                return ""
+            # The selected turn scope is host-owned and may repair incomplete
+            # or stale persisted session metadata.  Try all available scopes
+            # deterministically, then the global scope, without ever using the
+            # mixed discovery list.
+            candidate_roots: list[str | None] = []
+
+            def _add_candidate(raw_root: Any) -> None:
+                candidate = str(raw_root or "").strip() or None
+                if candidate not in candidate_roots:
+                    candidate_roots.append(candidate)
+
+            if "work_root" in metadata or "workRoot" in metadata:
+                _add_candidate(metadata.get("work_root", metadata.get("workRoot")))
+            if "resource_work_root" in session_metadata:
+                _add_candidate(session_metadata.get("resource_work_root"))
+            if "work_root" in session_metadata or "workRoot" in session_metadata:
+                _add_candidate(
+                    session_metadata.get("work_root", session_metadata.get("workRoot"))
+                )
+            if not candidate_roots:
+                _add_candidate(_call_work_root(call))
+            _add_candidate(None)
+            for scoped_root in candidate_roots:
+                workflow = await _lookup_workflow_by_id(resource_id, scoped_root=scoped_root)
+                if workflow is not None:
+                    _set_resolved_scope(call, workflow)
+                    return str(workflow.get("name") or "").strip()
+            return ""
+
+        raw_session = str(
+            metadata.get("_runtime_session_id")
+            or metadata.get("session_id")
+            or metadata.get("thread_id")
+            or ""
+        )
+        canonical_id = _canonical_workflow_id(raw_session)
+        if canonical_id:
+            # A metadata-less canonical session may be a project resource or a
+            # global resource.  Try the active call scope first, then global;
+            # the exact UUID lookup keeps this fallback resource-bound.
+            scoped_root = _call_work_root(call).strip() or None
+            roots: list[str | None] = [scoped_root]
+            if scoped_root is not None:
+                roots.append(None)
+            for candidate_root in roots:
+                workflow = await _lookup_workflow_by_id(canonical_id, scoped_root=candidate_root)
+                if workflow is not None:
+                    _set_resolved_scope(call, workflow)
+                    return str(workflow.get("name") or "").strip()
+            return ""
+
+        session = raw_session.strip()
         # Legacy sessions used wf_<name>; keep resolving those while old
         # clients migrate to metadata-bound workflow:<id> sessions.
         if session.startswith("wf_"):
+            # Legacy names have no stable scope marker.  Preserve the
+            # historical project-scoped behavior while canonical sessions
+            # above always resolve and pin their repository scope.
             return session[3:]
         return ""
 
@@ -351,6 +478,23 @@ def workflow_build_tool_handlers(
         ports = args.get("ports") if isinstance(args.get("ports"), list) else _default_ports(kind)
         ports = _ensure_port_ids(node_id, ports)
         config = args.get("config") if isinstance(args.get("config"), dict) else {}
+        if kind in {"model", "agent"} and not str(config.get("model_id") or "").strip():
+            inherited_model_id = _call_model_id(call)
+            if inherited_model_id:
+                config = {**config, "model_id": inherited_model_id}
+        if kind == "output" and not any(
+            str(port.get("direction") or "") == "out" for port in ports
+        ):
+            input_port = next((port for port in ports if str(port.get("direction") or "") == "in"), {})
+            ports = _ensure_port_ids(node_id, [
+                *ports,
+                {
+                    "name": "output",
+                    "type": str(input_port.get("type") or "any"),
+                    "direction": "out",
+                    "description": "Workflow output",
+                },
+            ])
         # Auto-scaffold a starter script from the port names + comments, so the
         # model opens a ready-to-fill file with the right variable names.
         if kind in {"script", "python"} and not str(config.get("script") or "").strip():
@@ -366,6 +510,13 @@ def workflow_build_tool_handlers(
         }
         nodes.append(node)
         wf["nodes"] = nodes
+        if kind == "output" and not str(wf.get("output_port") or "").strip():
+            output_port = next(
+                (port for port in ports if str(port.get("direction") or "") == "out"),
+                None,
+            )
+            if output_port is not None:
+                wf["output_port"] = f"{node_id}.{output_port.get('name') or 'output'}"
         saved = await _save_graph(name, wf, call)
         return _ok(call, {"added": node, "workflow": saved})
 

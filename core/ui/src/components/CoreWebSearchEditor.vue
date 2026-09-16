@@ -365,9 +365,10 @@ onMounted(fetchConfig)
   width: 100%;
   padding: 7px 10px;
   border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
-  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
-  color: var(--settings-control-text, var(--settings-main-text, #fff));
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font-size: 13px;
 }
 
@@ -396,9 +397,10 @@ onMounted(fetchConfig)
   min-height: 140px;
   padding: 10px;
   border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
-  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
-  color: var(--settings-control-text, var(--settings-main-text, #fff));
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font-family: var(--mono, ui-monospace, 'Cascadia Code', Consolas, monospace);
   font-size: 12px;
   line-height: 1.6;

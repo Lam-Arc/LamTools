@@ -222,9 +222,10 @@ onMounted(fetchConfig)
   width: 100%;
   padding: 7px 10px;
   border-radius: var(--radius-sm, 8px);
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
-  color: var(--settings-main-text, #fff);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font-size: 13px;
 }
 

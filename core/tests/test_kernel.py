@@ -10,7 +10,11 @@ from typing import Any
 
 import pytest
 
-from lamtools_core.context_compaction import COMPACTION_PROMPT
+from lamtools_core.context_compaction import (
+    COMPACTION_PROMPT,
+    CompactionExecution,
+    ContextCompactionResult,
+)
 from lamtools_core.event import CollectingEventSink, CoreEvent, EventSink
 from lamtools_core.app.base_agent import core_events_to_run_items
 from lamtools_core.kernel import (
@@ -31,7 +35,14 @@ from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, L
 from lamtools_core.llm.helpers import normalize_usage
 from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.prompt import PromptContext
-from lamtools_core.runtime import RuntimeState, RuntimeStateStore, RuntimeTaskRegistry, RuntimeToolStep, RuntimeTurnInput
+from lamtools_core.runtime import (
+    InMemoryRuntimeStateStore,
+    RuntimeState,
+    RuntimeStateStore,
+    RuntimeTaskRegistry,
+    RuntimeToolStep,
+    RuntimeTurnInput,
+)
 from lamtools_core.tool import ToolCall, ToolResult
 
 
@@ -988,6 +999,57 @@ class TestKernelUnboundedLoop:
         assert [event.payload["content"] for event in sink.events if event.name == "runtime.guidance_received"] == [
             "new direction"
         ]
+
+    @pytest.mark.asyncio
+    async def test_guidance_metadata_is_emitted_but_not_added_to_model_history(self):
+        registry = RuntimeTaskRegistry()
+        current_task = asyncio.current_task()
+        assert current_task is not None
+        assert registry.accept_run("metadata-thread", "metadata-run") is True
+        assert registry.register("metadata-thread", current_task, run_id="metadata-run") is True
+        assert registry.accept_guidance(
+            "metadata-thread",
+            "child evidence",
+            run_id="metadata-run",
+            guidance_id="sub-agent-message",
+            metadata={"source": "sub_agent", "name": "reviewer", "type": "consider"},
+        ) == "accepted"
+        sink = CollectingEventSink()
+        kit = MockRuntimeKit([
+            MockKitStep(reply="First", decision="continue"),
+            MockKitStep(reply="Final", decision="done"),
+        ])
+        kernel = _make_kernel(kit, event_sink=sink)
+
+        await kernel.run(RuntimeTurnInput(
+            user_message="start",
+            run_id="metadata-run",
+            turn_id="metadata-run",
+            metadata={"session_id": "metadata-thread"},
+            guidance_source=registry.guidance_source(
+                "metadata-thread", run_id="metadata-run", include_metadata=True
+            ),
+            guidance_finalizer=registry.guidance_finalizer(
+                "metadata-thread", run_id="metadata-run", include_metadata=True
+            ),
+        ))
+
+        event = next(item for item in sink.events if item.name == "runtime.guidance_received")
+        assert event.payload == {
+            "content": "child evidence",
+            "response_index": 0,
+            "metadata": {"source": "sub_agent", "name": "reviewer", "type": "consider"},
+        }
+        assert any(
+            message.role == "user" and message.content == "child evidence"
+            for history in kit.context_histories
+            for message in history
+        )
+        assert all(
+            "sub_agent" not in str(message.content)
+            for history in kit.context_histories
+            for message in history
+        )
 
     @pytest.mark.asyncio
     async def test_guidance_stops_remaining_sequential_tool_calls_before_next_model_round(self):
@@ -2976,14 +3038,15 @@ class TestKernelContextCompaction:
         store = SeededCheckpointStore(old_history)
         sink = CollectingEventSink()
         llm = CapturingLLMClient()
+        history_kit = HistoryRequestKit(steps=[
+            MockKitStep(
+                tool_calls=[ToolCall(id="inspect-1", name="read_file")],
+                decision="continue",
+            ),
+            MockKitStep(reply="complete", decision="done"),
+        ])
         kernel = _make_kernel(
-            HistoryRequestKit(steps=[
-                MockKitStep(
-                    tool_calls=[ToolCall(id="inspect-1", name="read_file")],
-                    decision="continue",
-                ),
-                MockKitStep(reply="complete", decision="done"),
-            ]),
+            history_kit,
             llm_client=llm,
             state_store=store,  # type: ignore[arg-type]
             event_sink=sink,
@@ -3015,13 +3078,220 @@ class TestKernelContextCompaction:
         # and the summary message never leaks into history rows.
         assert len(store.history) > 0
         persisted_content = "\n".join(str(item.get("content") or "") for item in store.history)
-        assert "old user 4" in persisted_content
-        assert "current task" in persisted_content
+        # Default zero-Step retention removes the complete old raw history.
+        assert "old user 4" not in persisted_content
+        assert "old assistant 4" not in persisted_content
+        assert "current task" not in persisted_content
+        assert str(compaction_meta["summary"]).endswith("6. current task")
         assert "old user 0" not in persisted_content
         assert all(
             item.get("metadata", {}).get("key") != "context_compaction_summary"
             for item in store.history
         )
+        # The compacted summary remains available to the next model Step in
+        # this same run, exactly once, while the request-local row is filtered
+        # out of the durable history checkpoint above.
+        assert len(history_kit.context_histories) >= 2
+        same_run_summaries = [
+            message
+            for message in history_kit.context_histories[1]
+            if message.metadata.get("key") == "context_compaction_summary"
+        ]
+        assert len(same_run_summaries) == 1
+
+    @pytest.mark.asyncio
+    async def test_auto_compaction_does_not_resurface_fitter_dropped_step_in_same_or_next_run(
+        self, monkeypatch
+    ):
+        """A retained Step dropped by the exact fitter must stay dropped.
+
+        The kernel keeps the compacted replacement in the in-memory history
+        for later model Steps and rewrites that same view at loop exit.  A
+        previously proposed ``dropped_before_resume`` backfill reintroduced
+        fitter-dropped rows before the summary, so the row was visible again
+        during the same run and was written to durable history.
+        """
+
+        session_id = "auto-fitter-drop-session"
+        store = InMemoryRuntimeStateStore()
+        await store.save_checkpoint(
+            RuntimeState(session_id=session_id),
+            [
+                {
+                    "role": "user",
+                    "content": "old user 0",
+                    "metadata": {"history_seq": 1},
+                },
+                {
+                    "role": "assistant",
+                    "content": "dropped assistant step",
+                    "metadata": {"history_seq": 2},
+                },
+                {
+                    "role": "tool",
+                    "content": "dropped tool result",
+                    "metadata": {"history_seq": 3},
+                },
+                {
+                    "role": "user",
+                    "content": "old user 1",
+                    "metadata": {"history_seq": 4},
+                },
+                {
+                    "role": "assistant",
+                    "content": "retained assistant step",
+                    "metadata": {"history_seq": 5},
+                },
+                {
+                    "role": "tool",
+                    "content": "retained tool result",
+                    "metadata": {"history_seq": 6},
+                },
+            ],
+        )
+
+        class HistoryRequestKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                return LLMRequest(
+                    messages=[
+                        ChatMessage(role="system", content="stable prefix"),
+                        *context.history,
+                    ],
+                    model="mock-model",
+                )
+
+        kit = HistoryRequestKit(
+            steps=[
+                MockKitStep(reply="first pass", decision="continue"),
+                MockKitStep(reply="completed", decision="done"),
+            ]
+        )
+        compaction_sources: list[list[str]] = []
+
+        async def fake_compact(self, messages, **kwargs):
+            _ = self
+            compaction_sources.append([str(message.content) for message in messages])
+            prefix = [messages[0]]
+            by_seq = {
+                int(message.metadata["history_seq"]): message
+                for message in messages
+                if isinstance(message.metadata.get("history_seq"), int)
+            }
+            retained = [
+                message
+                for seq in (5, 6)
+                if (message := by_seq.get(seq)) is not None
+            ]
+            # This is the exact shape produced when the fitter drops the
+            # oldest selected retained Step (seqs 2–3): those rows are
+            # intentionally absent from both result lists.
+            dropped_ids = {
+                id(message)
+                for seq in (2, 3)
+                if (message := by_seq.get(seq)) is not None
+            }
+            retained_ids = {id(message) for message in retained}
+            prefix_ids = {id(message) for message in prefix}
+            compacted = [
+                message
+                for message in messages
+                if id(message) not in prefix_ids
+                and id(message) not in retained_ids
+                and id(message) not in dropped_ids
+                and message.metadata.get("key") != "context_compaction_summary"
+            ]
+            summary = ChatMessage(
+                role="system",
+                content="[Compacted Context]\n- summary excludes dropped step",
+                metadata={"key": "context_compaction_summary"},
+            )
+            result = ContextCompactionResult(
+                status="compacted",
+                trigger="auto",
+                summary=summary.content,
+                summary_message=summary,
+                prefix_messages=prefix,
+                compacted_messages=compacted,
+                retained_messages=retained,
+                replacement_messages=[*prefix, summary, *retained],
+                before_tokens=100,
+                after_tokens=20,
+                limit_tokens=60,
+            )
+            return CompactionExecution(
+                result=result,
+                measurement=kwargs["measurement"],
+                execution_model="mock-model",
+                strategy="drop_oldest_recent_unit",
+            )
+
+        monkeypatch.setattr(
+            "lamtools_core.kernel.loop.ContextCompactionController.compact",
+            fake_compact,
+        )
+        llm = CapturingLLMClient()
+        policy = LoopPolicy(
+            context_window_tokens=100,
+            compact_trigger_tokens=1,
+            compact_limit_tokens=1,
+            compact_retained_steps=2,
+            model_retries=1,
+        )
+        kernel = _make_kernel(
+            kit,
+            llm_client=llm,
+            state_store=store,  # type: ignore[arg-type]
+            policy=policy,
+        )
+
+        first = await kernel.run(
+            _make_turn_input(user_message="first request", session_id=session_id)
+        )
+        assert first.decision == "done"
+        assert compaction_sources
+        assert "dropped assistant step" in compaction_sources[0]
+
+        def visible_raw(history: list[ChatMessage]) -> list[str]:
+            return [
+                str(message.content)
+                for message in history
+                if message.metadata.get("key") != "context_compaction_summary"
+            ]
+
+        # The second model Step of the same run receives the compacted view,
+        # not the Step that the fitter discarded.
+        assert len(kit.context_histories) >= 2
+        assert all(
+            "dropped assistant step" not in content
+            and "dropped tool result" not in content
+            for content in visible_raw(kit.context_histories[1])
+        )
+
+        persisted = await store.get_history(session_id)
+        persisted_text = "\n".join(str(item.get("content") or "") for item in persisted)
+        assert "dropped assistant step" not in persisted_text
+        assert "dropped tool result" not in persisted_text
+
+        # A new run must not resurrect the fitter-dropped Step from durable
+        # history or from the compaction boundary loader.
+        second = await kernel.run(
+            _make_turn_input(user_message="next request", session_id=session_id)
+        )
+        assert second.decision == "done"
+        assert len(kit.context_histories) >= 3
+        assert all(
+            "dropped assistant step" not in content
+            and "dropped tool result" not in content
+            for content in visible_raw(kit.context_histories[2])
+        )
+        assert llm.last_request is not None
+        final_text = "\n".join(
+            str(message.content)
+            for message in llm.last_request.messages
+            if message.metadata.get("key") != "context_compaction_summary"
+        )
+        assert "dropped assistant step" not in final_text
+        assert "dropped tool result" not in final_text
 
     @pytest.mark.asyncio
     async def test_model_switch_tries_previous_model_once_before_current_sampling(self):
@@ -3182,17 +3452,17 @@ class TestKernelContextCompaction:
         assert len(summary_messages) == 1
         assert "Current Objective And Done Criteria" in summary_messages[0].content
         assert "Active User Instructions" in summary_messages[0].content
-        assert "External Action Authorization" in summary_messages[0].content
-        assert "old user 0 requested an earlier constraint" in summary_messages[0].content
-        assert "Next Actions" in summary_messages[0].content
+        assert "## Recent user messages" in summary_messages[0].content
+        assert summary_messages[0].content.endswith("6. current task")
+        assert "1. old user 0 " in summary_messages[0].content
         raw_messages = [
             str(m.content)
             for m in llm.last_request.messages
             if m.metadata.get("key") != "context_compaction_summary"
         ]
         assert "old user 0" not in "\n".join(raw_messages)
-        assert llm.last_request.messages[-1].role == "user"
-        assert llm.last_request.messages[-1].content == "current task"
+        assert llm.last_request.messages[-1].role == "system"
+        assert llm.last_request.messages[-1].content.endswith("6. current task")
 
         events = [event for event in sink.events if event.name == "runtime.context_compacted"]
         assert len(events) == 1
@@ -3290,11 +3560,9 @@ class TestKernelContextCompaction:
             if message.metadata.get("key") == "context_compaction_summary"
         ]
         assert len(summary_messages) == 1
-        assert "Active User Instructions" in summary_messages[0].content
-        assert "effective information" in summary_messages[0].content
-        assert "verbose summary " in summary_messages[0].content
+        assert "## Recent user messages" in summary_messages[0].content
+        assert summary_messages[0].content.endswith("6. current task")
         assert "tool output " not in summary_messages[0].content
-        assert "compaction summary truncated to fit budget" in summary_messages[0].content
 
     @pytest.mark.asyncio
     async def test_compaction_stream_model_call_uses_kernel_retry_policy(self):
@@ -3499,8 +3767,10 @@ class TestKernelContextCompaction:
             if message.metadata.get("key") != "context_compaction_summary"
         ]
         assert "CURRENT_TOOL_RESULT_SENTINEL" not in "\n".join(raw_messages)
-        assert llm.last_request.messages[-1].role == "user"
-        assert llm.last_request.messages[-1].content == "current long task with exact acceptance criteria"
+        assert llm.last_request.messages[-1].role == "system"
+        assert llm.last_request.messages[-1].content.endswith(
+            "1. current long task with exact acceptance criteria"
+        )
         metrics_events = [event for event in sink.events if event.name == "runtime.metrics"]
         assert len(metrics_events) >= 2
         assert metrics_events[-1].payload["runtime_metrics"]["estimated_prompt_tokens"] == llm.last_request.metadata["context_tokens_after_compaction"]

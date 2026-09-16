@@ -12,7 +12,9 @@
       "presets": {
         "off": {},
         "light": { "set": { "reasoning_effort": "low" } },
+        "medium": { "set": { "reasoning_effort": "medium" } },
         "high": { "set": { "reasoning_effort": "medium" } },
+        "xhigh": { "set": { "reasoning_effort": "high" } },
         "max": { "set": { "reasoning_effort": "high" } }
       }
     }

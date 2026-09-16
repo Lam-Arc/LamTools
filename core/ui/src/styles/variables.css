@@ -35,9 +35,19 @@
   --space-6: 32px;
 
   /* —— 阴影分级（替代各组件 bespoke 阴影；--shadow 旧别名指向 --shadow-lg 向后兼容）—— */
+  --shadow-xs: 0 1px 4px rgba(0,0,0,.06);
   --shadow-sm: 0 2px 8px rgba(0,0,0,.12);
   --shadow-md: 0 8px 32px rgba(0,0,0,.28);
   --shadow-lg: 0 28px 90px rgba(0,0,0,.46);
+
+  /* —— 光学液态玻璃（高透、低磨砂、环境色保留）—— */
+  --optical-glass-blur: var(--space-2);
+  --optical-glass-saturation: 1.14;
+  --optical-glass-brightness: 1.02;
+  --optical-glass-contrast: 1.03;
+  --optical-glass-tint: 2%;
+  --optical-glass-reflection: 8%;
+  --optical-glass-dispersion: 3%;
 
   /* —— 交互态 alpha（替代 4%–18% 的随机取值；hover→active 恒 +4pp）—— */
   --alpha-hover: 8%;

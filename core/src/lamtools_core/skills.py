@@ -13,6 +13,7 @@ class Skill:
     description: str
     location: Path
     content: str
+    allow_implicit_invocation: bool = True
 
 
 class SkillRegistry:
@@ -69,7 +70,8 @@ class SkillRegistry:
         skills = [
             skill
             for skill in self.available(work_root)
-            if state_store is None or state_store.is_enabled(skill.name)
+            if skill.allow_implicit_invocation
+            and (state_store is None or state_store.is_enabled(skill.name))
         ]
         if not skills:
             return ""
@@ -131,11 +133,12 @@ class SkillRegistry:
     def signature(self, work_root: str | Path | None) -> tuple[tuple[str, int, int], ...]:
         paths: list[tuple[str, int, int]] = []
         for path in self._candidate_skill_files(work_root):
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            paths.append((str(path), stat.st_mtime_ns, stat.st_size))
+            for candidate in (path, path.parent / "agents" / "openai.yaml"):
+                try:
+                    stat = candidate.stat()
+                except OSError:
+                    continue
+                paths.append((str(candidate), stat.st_mtime_ns, stat.st_size))
         return tuple(paths)
 
     def _candidate_skill_files(self, work_root: str | Path | None) -> list[Path]:
@@ -186,7 +189,29 @@ class SkillRegistry:
             description=description,
             location=path,
             content=content,
+            allow_implicit_invocation=self._allow_implicit_invocation(path.parent),
         )
+
+    @staticmethod
+    def _allow_implicit_invocation(base: Path) -> bool:
+        """Read the standard agents/openai.yaml invocation policy.
+
+        The field is intentionally parsed without a YAML dependency because it
+        is a single boolean policy value. Invalid or absent metadata preserves
+        the standard default: implicit invocation is allowed.
+        """
+
+        path = base / "agents" / "openai.yaml"
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return True
+        match = re.search(
+            r"(?m)^\s*allow_implicit_invocation\s*:\s*(true|false)\s*(?:#.*)?$",
+            raw,
+            re.IGNORECASE,
+        )
+        return match is None or match.group(1).casefold() == "true"
 
     @staticmethod
     def _split_frontmatter(raw: str) -> tuple[dict[str, str], str]:

@@ -317,7 +317,7 @@ function formatDate(value?: number): string {
 .mobile-control-account-device-state.offline { color: color-mix(in srgb, var(--text) 42%, transparent); }
 .mobile-control-account-form { display: grid; gap: var(--space-3); }
 .mobile-control-field { display: grid; gap: var(--space-1); min-width: 0; color: color-mix(in srgb, var(--text) 62%, transparent); font-size: 11px; }
-.mobile-control-field input { width: 100%; box-sizing: border-box; min-height: 36px; border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-control-background) 70%, transparent); color: var(--theme-control-text); padding: 0 var(--space-2); }
+.mobile-control-field input { width: 100%; box-sizing: border-box; min-height: 36px; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); caret-color: var(--theme-composer-text); padding: 0 var(--space-2); }
 .mobile-control-account-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
 .mobile-control-more-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 36px; padding: 0 var(--space-1); border: 0; border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent); background: transparent; color: color-mix(in srgb, var(--text) 65%, transparent); font: inherit; font-size: 12px; cursor: pointer; }
 .mobile-control-toggle-card { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }

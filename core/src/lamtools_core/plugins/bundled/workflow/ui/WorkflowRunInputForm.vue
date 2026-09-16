@@ -126,7 +126,7 @@ function submit(): void {
 .wf-run-input-label { display: flex; gap: var(--space-1); color: color-mix(in srgb, var(--theme-backdrop-text) 76%, transparent); font-size: 11px; }
 .wf-run-input-label em { color: var(--orange); font-size: 9px; font-style: normal; }
 .wf-run-input-field small { color: color-mix(in srgb, var(--theme-backdrop-text) 48%, transparent); font-size: 10px; line-height: 1.3; }
-.wf-run-input-field input:not([type='checkbox']), .wf-run-input-field textarea { width: 100%; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-control-background) 70%, transparent); color: var(--theme-control-text); padding: var(--space-1) var(--space-2); font: inherit; font-size: 11px; outline: 0; }
+.wf-run-input-field input:not([type='checkbox']), .wf-run-input-field textarea { width: 100%; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); caret-color: var(--theme-composer-text); padding: var(--space-1) var(--space-2); font: inherit; font-size: 11px; outline: 0; }
 .wf-run-input-field textarea { min-height: 46px; resize: vertical; font-family: var(--font-mono); }
 .wf-run-input-toggle { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--theme-control-text); font-size: 11px; }
 .wf-run-input-toggle input { accent-color: var(--blue); }

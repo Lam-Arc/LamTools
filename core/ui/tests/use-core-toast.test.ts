@@ -4,6 +4,7 @@ import { nextTick } from 'vue'
 import CoreToastHost from '../src/components/CoreToastHost.vue'
 import {
   __resetCoreToastStoreForTests,
+  createCoreConnectionErrorToastGate,
   dismissAllToasts,
   dismissToast,
   showToast,
@@ -63,6 +64,38 @@ describe('useCoreToast service', () => {
     vi.advanceTimersByTime(101)
     const { toasts } = useCoreToast()
     expect(toasts.value).toHaveLength(0)
+  })
+
+  it('suppresses a transient disconnect that reconnects inside two seconds', () => {
+    let connected = false
+    const gate = createCoreConnectionErrorToastGate({ isConnected: () => connected })
+
+    gate.report('LamTools direct transport disconnected (code=1006)', 8000)
+    vi.advanceTimersByTime(1500)
+    connected = true
+    gate.onConnectionState('open')
+    vi.advanceTimersByTime(1000)
+
+    expect(useCoreToast().toasts.value).toHaveLength(0)
+  })
+
+  it('shows a diagnosed disconnect only after the two-second grace expires', () => {
+    const gate = createCoreConnectionErrorToastGate({ isConnected: () => false })
+
+    gate.report('LamTools direct transport disconnected (code=1013, reason=overflow)', 8000)
+    vi.advanceTimersByTime(1999)
+    expect(useCoreToast().toasts.value).toHaveLength(0)
+    vi.advanceTimersByTime(1)
+
+    expect(useCoreToast().toasts.value.map((toast) => toast.text)).toEqual([
+      'LamTools direct transport disconnected (code=1013, reason=overflow)',
+    ])
+  })
+
+  it('keeps non-transport errors immediate', () => {
+    const gate = createCoreConnectionErrorToastGate({ isConnected: () => false })
+    gate.report('模型供应商返回 502', 8000)
+    expect(useCoreToast().toasts.value.map((toast) => toast.text)).toEqual(['模型供应商返回 502'])
   })
 })
 

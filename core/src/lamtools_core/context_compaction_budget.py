@@ -21,6 +21,48 @@ DEFAULT_SUMMARY_OUTPUT_TOKENS = 4_096
 DEFAULT_SUMMARY_PROTOCOL_TOKENS = 1_024
 DEFAULT_SUMMARY_SAFETY_RATIO = 0.03
 
+# Structural context retention defaults.  These values are deliberately kept
+# beside the token-budget policy so every compaction entrypoint uses one
+# canonical policy rather than carrying its own fallback.
+DEFAULT_RETAINED_STEPS = 0
+MAX_RETAINED_STEPS = 100
+MAX_RETAINED_USER_MESSAGES = 20
+CONTEXT_COMPACTION_NAMESPACE = "core.contextCompaction"
+
+
+def resolve_retained_steps(value: Any = None) -> int:
+    """Validate a retained-step setting, falling back to the public default.
+
+    Settings are JSON values, so only an actual integer is accepted.  In
+    particular, booleans (which are ``int`` subclasses in Python), floats and
+    numeric strings are invalid and resolve to the default.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return DEFAULT_RETAINED_STEPS
+    if not 0 <= value <= MAX_RETAINED_STEPS:
+        return DEFAULT_RETAINED_STEPS
+    return value
+
+
+def load_retained_steps() -> int:
+    """Read the global context-compaction setting with safe fallback.
+
+    The import is lazy to keep this low-level budget module independent of the
+    config package at import time (the config package itself imports model and
+    LLM helpers used by this module).
+    """
+    try:
+        from lamtools_core.config.settings_store import get_setting
+
+        value = get_setting(CONTEXT_COMPACTION_NAMESPACE)
+        if isinstance(value, dict):
+            value = value.get("retained_steps")
+        return resolve_retained_steps(value)
+    except Exception:
+        # A malformed/unavailable settings file must never disable context
+        # compaction.  The documented default remains safe and deterministic.
+        return DEFAULT_RETAINED_STEPS
+
 
 @dataclass(frozen=True, slots=True)
 class TokenBudget:
@@ -213,13 +255,19 @@ def measure_for_compaction_trigger(
 
 
 __all__ = [
+    "CONTEXT_COMPACTION_NAMESPACE",
     "DEFAULT_SUMMARY_OUTPUT_TOKENS",
     "DEFAULT_SUMMARY_PROTOCOL_TOKENS",
     "DEFAULT_SUMMARY_SAFETY_RATIO",
+    "DEFAULT_RETAINED_STEPS",
     "FAST_ESTIMATE_SAFETY_FACTOR",
+    "MAX_RETAINED_STEPS",
+    "MAX_RETAINED_USER_MESSAGES",
     "SummaryTokenBudget",
     "TokenBudget",
     "TokenMeasurement",
+    "load_retained_steps",
     "measure_for_compaction_trigger",
+    "resolve_retained_steps",
     "resolve_compaction_budget",
 ]

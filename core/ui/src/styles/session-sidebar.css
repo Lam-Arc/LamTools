@@ -50,8 +50,8 @@
 .sidebar-search-wrap.is-expanded {
   flex-basis: min(100%, var(--sidebar-width));
   width: min(100%, var(--sidebar-width));
-  border-color: color-mix(in srgb, var(--theme-control-text) 12%, transparent);
-  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
+  border-color: color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
 }
 .sidebar-search-toggle {
   flex: 0 0 var(--sidebar-row-height);
@@ -90,7 +90,8 @@
   border-radius: 0;
   outline: 0;
   background: transparent;
-  color: var(--theme-control-text);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font: inherit;
   font-size: var(--sidebar-text-size);
   opacity: 0;
@@ -104,7 +105,7 @@
   pointer-events: auto;
 }
 .sidebar-search::placeholder {
-  color: color-mix(in srgb, var(--theme-control-text) 52%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 52%, transparent);
 }
 .sidebar-section + .sidebar-section {
   margin-top: var(--sidebar-section-gap);

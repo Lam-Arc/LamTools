@@ -130,18 +130,6 @@
           <span>{{ option.label }}</span>
           <span v-if="option.value === thinkingMode" class="core-model-thinking-menu__check" aria-hidden="true">✓</span>
         </button>
-        <button
-          class="core-model-thinking-menu__option core-model-thinking-menu__shallow"
-          :class="{ active: shallowThinkingEnabled }"
-          type="button"
-          role="menuitemcheckbox"
-          :aria-checked="shallowThinkingEnabled"
-          data-model-thinking-shallow-option
-          @click="toggleShallow"
-        >
-          <span>{{ shallowLabel }}</span>
-          <span v-if="shallowThinkingEnabled" class="core-model-thinking-menu__check" aria-hidden="true">✓</span>
-        </button>
       </section>
     </div>
   </div>
@@ -292,11 +280,6 @@ function selectModel(option: CoreSelectOption): void {
 
 function selectThinking(value: string): void {
   emit('update:thinkingMode', value)
-  close()
-}
-
-function toggleShallow(): void {
-  emit('update:shallowThinkingEnabled', !props.shallowThinkingEnabled)
   close()
 }
 
@@ -598,12 +581,6 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
 .core-model-thinking-menu__option:disabled {
   opacity: .42;
   cursor: default;
-}
-
-.core-model-thinking-menu__shallow {
-  margin-top: var(--space-1);
-  border-top: 1px solid color-mix(in srgb, var(--text) var(--alpha-active), transparent);
-  border-radius: 0;
 }
 
 .core-model-thinking-menu__check {

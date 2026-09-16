@@ -44,11 +44,23 @@ export function useShellLayout(options: ShellLayoutOptions) {
   const shellClass = computed(() => ({
     'left-open': leftOpen.value,
     'right-open': rightOpen.value,
+    'right-pinned': rightPinned.value,
     'stage-open': stageOpen.value,
     [`density-${density.value}`]: true,
   }))
 
   const rightDrawerModal = computed(() => rightOpen.value && isNarrowViewport.value)
+
+  // The native title bar lives outside `.workspace-shell`, so mirror only the
+  // two live main-surface insets to :root for title-bar extensions such as
+  // Workflow tabs. This keeps them aligned while drawers open, close or pin.
+  const titlebarMainInsets = computed(() => {
+    const rightWidth = density.value === 'compact' ? 272 : density.value === 'loose' ? 324 : 292
+    return {
+      left: leftOpen.value ? 'var(--sidebar-width)' : '18px',
+      right: (stageOpen.value || (rightOpen.value && rightPinned.value)) ? `${rightWidth}px` : '18px',
+    }
+  })
 
   // --- shell CSS variables ---
   const shellStyle = computed(() => {
@@ -86,6 +98,16 @@ export function useShellLayout(options: ShellLayoutOptions) {
       }
       const meta = document.querySelector('meta[name="theme-color"]')
       if (meta && style['--theme-titlebar-bg']) meta.setAttribute('content', style['--theme-titlebar-bg'])
+    },
+    { immediate: true },
+  )
+
+  watch(
+    titlebarMainInsets,
+    ({ left, right }) => {
+      if (typeof document === 'undefined') return
+      document.documentElement.style.setProperty('--titlebar-main-left', left)
+      document.documentElement.style.setProperty('--titlebar-main-right', right)
     },
     { immediate: true },
   )
@@ -258,6 +280,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
   })
 
   onUnmounted(() => {
+    document.documentElement.style.removeProperty('--titlebar-main-left')
+    document.documentElement.style.removeProperty('--titlebar-main-right')
     document.removeEventListener('pointerdown', onPointerDown)
     document.removeEventListener('keydown', onKeydown)
     if (narrowMediaQuery) {

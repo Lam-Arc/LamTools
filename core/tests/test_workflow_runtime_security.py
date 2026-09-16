@@ -10,12 +10,16 @@ import pytest
 from lamtools_core.plugins.bundled.workflow.backend.data_packet import WorkflowDataPacket
 from lamtools_core.plugins.bundled.workflow.backend.credentials import CredentialRef
 from lamtools_core.plugins.bundled.workflow.backend.registry import WorkflowNodeRegistry
+from lamtools_core.plugins.bundled.workflow.backend.operations import _queue_item_payload
+from lamtools_core.plugins.bundled.workflow.backend.queue import WorkflowQueueItem
 from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowDef,
     WorkflowExecutionContext,
     WorkflowNode,
     WorkflowPort,
     WorkflowRunner,
+    WorkflowNodeState,
+    WorkflowRunResult,
 )
 
 
@@ -71,6 +75,82 @@ class _Snapshots:
 
     async def delete(self, thread_id: str, run_id: str) -> None:
         return None
+
+
+def test_public_run_and_queue_projections_remove_secrets_and_hidden_reasoning() -> None:
+    state = WorkflowNodeState(
+        node_id="agent",
+        status="done",
+        output={"answer": "safe", "access_token": "output-token"},
+        attempts=1,
+        audit={
+            "tool_calls": [{"name": "web_search", "count": 2}],
+            "model_rounds": 3,
+            "reasoning": "hidden chain of thought",
+            "thinking_content": "hidden thinking",
+            "analysis": "hidden analysis",
+        },
+        attempt_history=[{
+            "number": 1,
+            "status": "completed",
+            "api_key": "attempt-secret",
+            "reasoning_content": "hidden attempt reasoning",
+        }],
+    )
+    run = WorkflowRunResult(
+        status="completed",
+        output={"answer": "safe", "token": "result-token"},
+        node_states={"agent": state},
+        values={"agent.out": {"answer": "safe", "runtime_credentials": {"key": "secret"}}},
+        run_id="run-safe",
+    )
+    item = WorkflowQueueItem(
+        queue_id="queue-safe",
+        workflow_id="workflow-safe",
+        workflow_name="safe",
+        run_id="run-safe",
+        inputs={"prompt": "keep", "api_key": "input-secret"},
+        prior_values={"upstream": {"access_token": "prior-token", "value": 42}},
+        prior_node_states={
+            "agent": WorkflowNodeState(
+                node_id="agent", status="done",
+                output={"value": 42, "token": "state-token"},
+            )
+        },
+        result=run,
+        metadata={
+            "trace_id": "trace-safe",
+            "runtime_credentials": {"provider": "metadata-secret"},
+            "chainOfThought": "hidden metadata reasoning",
+        },
+    )
+
+    public_run = run.to_public_dict()
+    rpc_queue = _queue_item_payload(item)
+    encoded_public = json.dumps({"run": public_run, "queue": rpc_queue})
+    for secret in (
+        "output-token", "attempt-secret", "result-token", "input-secret",
+        "prior-token", "state-token", "metadata-secret", "hidden chain of thought",
+        "hidden thinking", "hidden analysis", "hidden attempt reasoning",
+        "hidden metadata reasoning",
+    ):
+        assert secret not in encoded_public
+    assert rpc_queue["inputs"] == {"prompt": "keep"}
+    assert rpc_queue["prior_values"] == {"upstream": {"value": 42}}
+    assert rpc_queue["metadata"] == {"trace_id": "trace-safe"}
+    assert rpc_queue["result"]["node_states"]["agent"]["audit"] == {
+        "tool_calls": [{"name": "web_search", "count": 2}],
+        "model_rounds": 3,
+    }
+    assert rpc_queue["status"] == "queued"
+    assert rpc_queue["result"]["status"] == "completed"
+    assert rpc_queue["result"]["output"] == {"answer": "safe"}
+
+    # Persistence retains the original execution inputs; only the public/RPC
+    # projection is filtered.
+    stored = item.to_storage_dict()
+    assert stored["inputs"]["api_key"] == "input-secret"
+    assert stored["metadata"]["runtime_credentials"]["provider"] == "metadata-secret"
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,9 @@
     <!-- Center body: always in edit mode -->
     <div class="wf-node-body" @pointerdown.stop>
       <header class="wf-node-head">
+        <span class="wf-node-icon" :title="nodeKindLabel" aria-hidden="true">
+          <component :is="nodeTypeIcon" :size="14" :stroke-width="1.8" />
+        </span>
         <span class="wf-node-kind" :title="nodeTypeId">{{ nodeKindLabel }}</span>
         <input v-model="localTitle" class="wf-title-input" type="text" placeholder="标题" @blur="pushTitle" />
         <span class="wf-node-state">
@@ -28,20 +31,20 @@
       <template v-if="kind === 'ai'">
         <UiSelect :model-value="localConfig.mode" :options="modeOptions" aria-label="AI 模式" @update:model-value="localConfig.mode = $event; pushConfig()" />
         <AutoTextarea v-model="localConfig.instruction" :min-rows="2" :max-rows="4" placeholder="指令…" @blur="pushConfig" />
-        <UiSelect :model-value="localConfig.model_id" :options="modelOptions" aria-label="模型" @update:model-value="localConfig.model_id = $event; pushConfig()" />
+        <UiSelect :model-value="String(localConfig.model_id || '')" :options="modelOptions" aria-label="模型" @update:model-value="localConfig.model_id = $event; pushConfig()" />
       </template>
 
       <!-- Canonical Model and Agent are independent node types. The legacy
            `ai` branch above keeps old graphs working while these two nodes
            expose the same model selector without the old mode multiplexing. -->
       <template v-else-if="kind === 'model' || kind === 'agent'">
-        <AutoTextarea v-model="localConfig.instruction" :min-rows="2" :max-rows="4" :placeholder="kind === 'agent' ? 'Agent 目标…' : '模型指令…'" @blur="pushConfig" />
-        <UiSelect :model-value="localConfig.model_id" :options="modelOptions" aria-label="模型" @update:model-value="localConfig.model_id = $event; pushConfig()" />
+        <AutoTextarea v-model="localConfig.instruction" :min-rows="2" :max-rows="4" :placeholder="kind === 'agent' ? '智能体目标…' : '模型指令…'" @blur="pushConfig" />
+        <UiSelect :model-value="String(localConfig.model_id || '')" :options="modelOptions" aria-label="模型" @update:model-value="localConfig.model_id = $event; pushConfig()" />
       </template>
 
       <!-- Command: shell command -->
       <template v-else-if="kind === 'command'">
-        <AutoTextarea v-model="localConfig.command" :min-rows="2" :max-rows="4" placeholder="command…（curl/git/ffmpeg 等）" @blur="pushConfig" />
+        <AutoTextarea v-model="localConfig.command" :min-rows="2" :max-rows="4" placeholder="命令…（curl/git/ffmpeg 等）" @blur="pushConfig" />
       </template>
 
       <!-- Script: Python (binder: ports-as-variables) -->
@@ -89,10 +92,12 @@
           @update:model-value="onSchemaConfig"
           @update:ports="onSchemaPorts"
         />
-        <p v-if="!schemaFieldsCount" class="wf-schema-hint">{{ nodeTypeId }}</p>
+        <p v-if="!schemaFieldsCount" class="wf-schema-hint">
+          {{ workflowNodeDisplayName(schema, '此节点') }}：暂无可配置参数
+        </p>
       </template>
 
-      <p v-else class="wf-node-unsupported">{{ nodeTypeId }}</p>
+      <p v-else class="wf-node-unsupported">此节点暂不支持可视化配置</p>
     </div>
 
     <!-- Output ports (right side) -->
@@ -102,36 +107,118 @@
         <Handle type="source" :position="Position.Right" :id="portHandleId(p)" class="wf-handle" />
       </div>
     </div>
+
+    <WorkflowNodeRuntimeDock
+      :node-id="node.id"
+      :title="node.title || node.id"
+      :kind="String(kind)"
+      :state="state"
+      :detail="data.stateDetail"
+      :timeline="data.timeline"
+      :human-tasks="data.humanTasks"
+      :selected-human-task="data.selectedHumanTask"
+      :human-task-loading="data.humanTaskLoading"
+      :human-task-busy="data.humanTaskBusy"
+      :human-task-error="data.humanTaskError"
+      :on-refresh-human-tasks="data.onRefreshHumanTasks"
+      :on-select-human-task="data.onSelectHumanTask"
+      :on-complete-human-task="data.onCompleteHumanTask"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
-import { Circle, CircleCheck, CircleDot, CircleX, Clock3, type LucideIcon } from 'lucide-vue-next'
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Blocks,
+  Bot,
+  Braces,
+  BrainCircuit,
+  Circle,
+  CircleCheck,
+  CircleDot,
+  CircleX,
+  Clock3,
+  Combine,
+  FileCode2,
+  GitBranch,
+  GitMerge,
+  Sparkles,
+  Terminal,
+  TextQuote,
+  Variable,
+  Workflow,
+  type LucideIcon,
+} from 'lucide-vue-next'
 import { Handle, Position } from '@vue-flow/core'
 import UiSelect from '../../../../../../ui/src/components/UiSelect.vue'
 import AutoTextarea from '../../../../../../ui/src/components/AutoTextarea.vue'
 import SchemaNodeEditor from './SchemaNodeEditor.vue'
-import { schemaFields, workflowNodeTypeId } from './catalog'
-import { normalizeNodeStateStatus, type WorkflowNode, type WorkflowNodeKind, type WorkflowNodeSchema, type NodeStateStatus, type WorkflowPort } from './types'
+import WorkflowNodeRuntimeDock from './WorkflowNodeRuntimeDock.vue'
+import { schemaFields, workflowNodeDisplayName, workflowNodeTypeId } from './catalog'
+import {
+  normalizeNodeStateStatus,
+  type NodeStateStatus,
+  type WorkflowHumanTask,
+  type WorkflowNode,
+  type WorkflowNodeKind,
+  type WorkflowNodeSchema,
+  type WorkflowNodeState,
+  type WorkflowPort,
+  type WorkflowRunTimelineItem,
+} from './types'
 
 const props = defineProps<{
-  data: { node: WorkflowNode; state?: NodeStateStatus; onToggle?: () => void }
+  data: {
+    node: WorkflowNode
+    state?: NodeStateStatus
+    stateDetail?: WorkflowNodeState | null
+    timeline?: WorkflowRunTimelineItem[]
+    humanTasks?: WorkflowHumanTask[]
+    selectedHumanTask?: WorkflowHumanTask | null
+    humanTaskLoading?: boolean
+    humanTaskBusy?: boolean
+    humanTaskError?: string
+    onRefreshHumanTasks?: () => void | Promise<void>
+    onSelectHumanTask?: (taskId: string) => void | Promise<void>
+    onCompleteHumanTask?: (task: WorkflowHumanTask, decision: string, payload: Record<string, unknown>) => void | Promise<void>
+    onToggle?: () => void
+  }
 }>()
+
+const data = computed(() => props.data)
 
 const node = computed(() => props.data.node)
 const kind = computed<WorkflowNodeKind>(() => node.value.kind)
 const nodeTypeId = computed(() => workflowNodeTypeId({ type_id: node.value.type_id, name: node.value.kind }))
 const kindClass = computed(() => `kind-${nodeTypeId.value.replace(/[^a-zA-Z0-9_-]/g, '-') || 'node'}`)
 const nodeKindLabel = computed(() => {
-  const labels: Record<string, string> = {
-    model: 'Model', agent: 'Agent', command: 'Command', python: 'Python',
-    constant: 'Constant', input: 'Input', output: 'Output', template: 'Template',
-    condition: 'Condition', merge: 'Merge', join: 'Join', subgraph: 'Subgraph',
-    ai: 'AI', script: 'Script', content: 'Content', transform: 'Transform', branch: 'Branch',
-  }
-  return labels[nodeTypeId.value] || nodeTypeId.value || 'Node'
+  return workflowNodeDisplayName({ name: nodeTypeId.value, type_id: nodeTypeId.value }, '节点')
 })
+const NODE_ICONS: Readonly<Record<string, LucideIcon>> = {
+  model: BrainCircuit,
+  agent: Bot,
+  approval: CircleCheck,
+  command: Terminal,
+  python: FileCode2,
+  constant: Variable,
+  input: ArrowDownToLine,
+  output: ArrowUpFromLine,
+  template: TextQuote,
+  condition: GitBranch,
+  merge: GitMerge,
+  join: Combine,
+  subgraph: Workflow,
+  ai: Sparkles,
+  script: FileCode2,
+  content: Braces,
+  transform: Blocks,
+  branch: GitBranch,
+  wait_event: Clock3,
+}
+const nodeTypeIcon = computed<LucideIcon>(() => NODE_ICONS[nodeTypeId.value.toLowerCase()] || Blocks)
 const inputPorts = computed(() => node.value.ports.filter((p) => p.direction === 'in'))
 const outputPorts = computed(() => node.value.ports.filter((p) => p.direction === 'out'))
 const state = computed<NodeStateStatus>(() => normalizeNodeStateStatus(props.data.state))
@@ -172,14 +259,14 @@ const localConfig = ref<Record<string, any>>({ ...node.value.config })
 const localPorts = ref<WorkflowPort[]>(node.value.ports.map((p) => ({ ...p })))
 
 const modeOptions = [
-  { value: 'single', label: 'single' },
-  { value: 'loop', label: 'loop' },
-  { value: 'agent', label: 'agent' },
+  { value: 'single', label: '单次' },
+  { value: 'loop', label: '循环' },
+  { value: 'agent', label: '智能体' },
 ]
 const iterateOptions = [
-  { value: 'none', label: 'none' },
-  { value: 'loop', label: 'loop' },
-  { value: 'map', label: 'map' },
+  { value: 'none', label: '不迭代' },
+  { value: 'loop', label: '循环' },
+  { value: 'map', label: '映射' },
 ]
 const modelOptions = computed(() => [
   { value: '', label: '（默认模型）' },
@@ -229,35 +316,51 @@ function onSchemaPorts(value: WorkflowPort[]): void {
   align-items: stretch;
   border-radius: var(--radius, 12px);
   border: 1px solid var(--theme-main-border);
-  background: transparent;
+  background: var(--theme-main-background);
   color: var(--theme-main-text);
   font-size: 12px;
   box-shadow: var(--shadow-sm);
-  -webkit-backdrop-filter: blur(var(--space-2)) saturate(1.8) contrast(1.08);
-  backdrop-filter: blur(var(--space-2)) saturate(1.8) contrast(1.08);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
   overflow: visible;
 }
-.wf-node::before {
+.wf-node::before,
+.wf-node::after {
   content: '';
   position: absolute;
+  pointer-events: none;
+}
+.wf-node::before {
+  inset: -3px;
+  z-index: -1;
+  border-radius: calc(var(--radius, 12px) + 3px);
+  opacity: 0;
+  background: conic-gradient(from var(--wf-run-angle, 0deg), var(--purple), var(--blue), var(--green), var(--orange), var(--purple));
+  filter: blur(3px);
+}
+.wf-node::after {
   inset: 0;
   z-index: -1;
   border-radius: inherit;
   background: var(--theme-main-background);
-  opacity: 0.8;
-  pointer-events: none;
 }
-.wf-node.kind-ai { background: color-mix(in srgb, var(--purple) 8%, transparent); border-color: color-mix(in srgb, var(--purple) 30%, var(--theme-main-border)); }
-.wf-node.kind-command { background: color-mix(in srgb, var(--orange) 8%, transparent); border-color: color-mix(in srgb, var(--orange) 30%, var(--theme-main-border)); }
-.wf-node.kind-script { background: color-mix(in srgb, var(--blue) 8%, transparent); border-color: color-mix(in srgb, var(--blue) 30%, var(--theme-main-border)); }
-.wf-node.kind-content { background: color-mix(in srgb, var(--blue) 8%, transparent); border-color: color-mix(in srgb, var(--blue) 30%, var(--theme-main-border)); }
-.wf-node.kind-subgraph { background: color-mix(in srgb, var(--green) 8%, transparent); border-color: color-mix(in srgb, var(--green) 30%, var(--theme-main-border)); }
-.wf-node.kind-model { background: color-mix(in srgb, var(--purple) 8%, transparent); border-color: color-mix(in srgb, var(--purple) 30%, var(--theme-main-border)); }
-.wf-node.kind-agent { background: color-mix(in srgb, var(--green) 8%, transparent); border-color: color-mix(in srgb, var(--green) 30%, var(--theme-main-border)); }
-.wf-node.kind-python, .wf-node.kind-constant { background: color-mix(in srgb, var(--blue) 8%, transparent); border-color: color-mix(in srgb, var(--blue) 30%, var(--theme-main-border)); }
-.wf-node.state-running { box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 60%, transparent), var(--shadow-sm); }
+.wf-node.kind-ai { border-color: color-mix(in srgb, var(--purple) 30%, var(--theme-main-border)); }
+.wf-node.kind-command { border-color: color-mix(in srgb, var(--orange) 30%, var(--theme-main-border)); }
+.wf-node.kind-script { border-color: color-mix(in srgb, var(--blue) 30%, var(--theme-main-border)); }
+.wf-node.kind-content { border-color: color-mix(in srgb, var(--blue) 30%, var(--theme-main-border)); }
+.wf-node.kind-subgraph { border-color: color-mix(in srgb, var(--green) 30%, var(--theme-main-border)); }
+.wf-node.kind-model { border-color: color-mix(in srgb, var(--purple) 30%, var(--theme-main-border)); }
+.wf-node.kind-agent { border-color: color-mix(in srgb, var(--green) 30%, var(--theme-main-border)); }
+.wf-node.kind-python, .wf-node.kind-constant { border-color: color-mix(in srgb, var(--blue) 30%, var(--theme-main-border)); }
+.wf-node.state-running { box-shadow: var(--shadow-sm); }
+.wf-node.state-running::before { opacity: 1; animation: wf-node-rainbow-flow 2.4s linear infinite; }
 .wf-node.state-error { box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 60%, transparent), var(--shadow-sm); }
+
+@property --wf-run-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes wf-node-rainbow-flow { to { --wf-run-angle: 360deg; } }
 
 /* Port rows */
 .wf-ports { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 8px 0; }
@@ -278,10 +381,10 @@ function onSchemaPorts(value: WorkflowPort[]): void {
   color: color-mix(in srgb, var(--theme-main-text) 52%, transparent);
   font: 10px var(--font-mono, monospace);
 }
-.wf-node-icon { font-size: 13px; opacity: 0.9; flex-shrink: 0; }
+.wf-node-icon { display: grid; width: 16px; height: 16px; place-items: center; color: color-mix(in srgb, var(--theme-main-text) 78%, transparent); opacity: 0.9; flex-shrink: 0; }
 .wf-title-input {
   flex: 1; min-width: 0; border: 0; outline: 0; border-radius: 0;
-  background: transparent; color: inherit; padding: 2px 4px;
+  background: transparent; color: inherit; caret-color: inherit; padding: 2px 4px;
   font-size: 12px; font-weight: 650;
 }
 .wf-title-input:focus { background: transparent; }
@@ -325,5 +428,6 @@ function onSchemaPorts(value: WorkflowPort[]): void {
     transition: none;
     animation: none;
   }
+  .wf-node.state-running::before { background: linear-gradient(120deg, var(--purple), var(--blue), var(--green)); }
 }
 </style>

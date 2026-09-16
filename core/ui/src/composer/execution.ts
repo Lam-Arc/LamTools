@@ -1,5 +1,5 @@
 /** Product-level reasoning controls. Provider parameter names stay in Core's adapter profiles. */
-export type CoreThinkingMode = 'off' | 'light' | 'high' | 'max'
+export type CoreThinkingMode = 'off' | 'light' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export type CorePermissionPreset = 'ask' | 'auto' | 'full_access'
 
@@ -66,13 +66,17 @@ export type CoreThinkingLabels = Record<CoreThinkingMode, string>
 export const CORE_THINKING_LABELS: CoreThinkingLabels = {
   off: '关闭',
   light: '轻',
+  medium: '中',
   high: '高',
+  xhigh: '超高',
   max: '极高',
 }
 
 export const CORE_THINKING_BUDGETS: Record<Exclude<CoreThinkingMode, 'off'>, number> = {
   light: 2_048,
+  medium: 4_096,
   high: 8_192,
+  xhigh: 12_288,
   max: 16_384,
 }
 
@@ -80,7 +84,9 @@ export function normalizeCoreThinkingMode(value: unknown, fallback: CoreThinking
   const normalized = String(value ?? '').trim().toLowerCase()
   if (normalized === 'off' || normalized === 'none' || normalized === 'disabled') return 'off'
   if (normalized === 'light' || normalized === 'low' || normalized === 'minimal') return 'light'
-  if (normalized === 'high' || normalized === 'medium') return 'high'
+  if (normalized === 'medium') return 'medium'
+  if (normalized === 'high') return 'high'
+  if (normalized === 'xhigh' || normalized === 'xh') return 'xhigh'
   if (normalized === 'max' || normalized === 'ultra') return 'max'
   return fallback
 }
@@ -166,8 +172,8 @@ export function coreThinkingModeOptions(
     return [{ value: 'off', label: labels.off }]
   }
   const modes: CoreThinkingMode[] = params.model?.reasoning_off_supported === false
-    ? ['max', 'high', 'light']
-    : ['max', 'high', 'light', 'off']
+    ? ['max', 'xhigh', 'high', 'medium', 'light']
+    : ['max', 'xhigh', 'high', 'medium', 'light', 'off']
   return modes.map((value) => ({ value, label: labels[value] }))
 }
 

@@ -13,6 +13,8 @@ from lamtools_core.tool.permission import AUTO_ALLOW, PermissionTier
 
 SUB_AGENT_NAME = "sub"
 SUB_AGENT_TOOL_NAME = "sub_agent"
+SUB_AGENT_MESSAGE_TOOL_NAME = "sub_agent_message"
+SUB_AGENT_CHILD_MESSAGE_TOOL_NAME = "message"
 
 
 @dataclass(frozen=True)
@@ -80,61 +82,54 @@ SUB_AGENT_SPEC = CoreAgentSpec(
 
 SUB_AGENT_TOOL_SPEC: dict[str, Any] = {
     "name": SUB_AGENT_TOOL_NAME,
-    "description": SUB_AGENT_SPEC.description,
+    "description": "Create or close one reusable, non-blocking sub-agent.",
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "task": {
-                "type": "string",
-                "description": (
-                    "Self-contained complete task for the sub-agent, including every delegated "
-                    "deliverable and required tool action. At minimum make clear the scope, goal "
-                    "and output format; keep it bounded and non-overlapping with the main agent."
-                ),
-            },
-            "agent": {
-                "type": ["string", "null"],
-                "description": (
-                    "Stable sub-session name chosen by the running agent; leave null to use the "
-                    "default sub session. Each name is a reusable session: follow-up calls with "
-                    "the same name resume its conversation history."
-                ),
-            },
+            "action": {"type": "string", "enum": ["create", "close"]},
+            "type": {"type": "string", "enum": ["consider", "execute"]},
+            "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
             "model": {
-                "type": ["string", "null"],
-                "description": (
-                    "Optional model override for this sub-agent (model_id or display_name); leave "
-                    "null/empty to follow the main agent's model. Specify only when the task "
-                    "needs a different capability (e.g. stronger reasoning, longer context)."
-                ),
+                "type": "string",
+                "description": "Exact model_id or a unique exact display_name.",
             },
-            "mode": {
-                "type": ["string", "null"],
-                "description": (
-                    "Optional loadtools mode constraining this sub-agent's tools. Use \"consider\" "
-                    "for read-only research (avoids accidental file changes), \"execute\" or "
-                    "null/empty for full access, or any custom mode defined in loadtools.jsonc. "
-                    "Leave null/empty when write/command access is required."
-                ),
-            },
-            "attachments": {
-                "type": ["array", "null"],
-                "items": {"type": "string"},
-                "description": (
-                    "Optional list of attachment IDs to forward to the sub-agent (e.g. image, "
-                    "audio, document attachments from the main session). The sub-agent receives "
-                    "their content blocks directly — use this to delegate multimodal analysis "
-                    "(images, etc.) to a sub-agent running a model that supports those input "
-                    "types when the main agent's model does not."
-                ),
+            "reasoning_level": {
+                "type": "string",
+                "enum": ["off", "light", "medium", "Medium", "high", "xhigh", "xh", "max"],
             },
         },
-        "required": ["task", "agent"],
+        "required": ["action", "type", "name", "model", "reasoning_level"],
     },
     "permission": AUTO_ALLOW,
     "failure_modes": [{"type": "agent_failed", "message": "Agent execution failed"}],
     "recovery": "Simplify task description or provide a narrower delegated role.",
+}
+
+SUB_AGENT_MESSAGE_TOOL_SPEC: dict[str, Any] = {
+    "name": SUB_AGENT_MESSAGE_TOOL_NAME,
+    "description": "Send guidance to an active reusable sub-agent without blocking.",
+    "input_schema": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "type": {"type": "string", "enum": ["consider", "execute"]},
+            "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+            "prompt": {"type": "string", "minLength": 1},
+        },
+        "required": ["type", "name", "prompt"],
+    },
+    "permission": AUTO_ALLOW,
+}
+
+SUB_AGENT_CHILD_MESSAGE_TOOL_SPEC: dict[str, Any] = {
+    "name": SUB_AGENT_CHILD_MESSAGE_TOOL_NAME,
+    "description": "Send a persistent message to the parent agent.",
+    "input_schema": {
+        "type": "object", "additionalProperties": False,
+        "properties": {"message": {"type": "string", "minLength": 1}},
+        "required": ["message"],
+    },
+    "permission": AUTO_ALLOW,
 }
 
 
@@ -143,6 +138,10 @@ __all__ = [
     "SubAgentRunResult",
     "SUB_AGENT_NAME",
     "SUB_AGENT_TOOL_NAME",
+    "SUB_AGENT_MESSAGE_TOOL_NAME",
+    "SUB_AGENT_CHILD_MESSAGE_TOOL_NAME",
     "SUB_AGENT_SPEC",
     "SUB_AGENT_TOOL_SPEC",
+    "SUB_AGENT_MESSAGE_TOOL_SPEC",
+    "SUB_AGENT_CHILD_MESSAGE_TOOL_SPEC",
 ]

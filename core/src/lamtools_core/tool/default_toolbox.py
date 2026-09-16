@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import inspect
 from copy import deepcopy
@@ -8,7 +9,14 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Mapping, Protocol, runtime_checkable
 
 from lamtools_core.event import CoreEvent
-from lamtools_core.agent import SUB_AGENT_TOOL_NAME, SUB_AGENT_TOOL_SPEC, SubAgentRunResult
+from lamtools_core.agent import (
+    SUB_AGENT_MESSAGE_TOOL_NAME,
+    SUB_AGENT_MESSAGE_TOOL_SPEC,
+    SUB_AGENT_TOOL_NAME,
+    SUB_AGENT_TOOL_SPEC,
+    SubAgentRunResult,
+)
+from lamtools_core.llm import normalize_reasoning_level, reasoning_level_from_legacy
 from lamtools_core.skills import SkillRegistry
 from lamtools_core.tool import ToolCall, ToolContext, ToolResult, ToolSpec
 from lamtools_core.tool.approval import ApprovalGate
@@ -151,6 +159,7 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "mcp_tool": ASK_USER,
     "mcp_activate": AUTO_ALLOW,
     SUB_AGENT_TOOL_NAME: AUTO_ALLOW,
+    SUB_AGENT_MESSAGE_TOOL_NAME: AUTO_ALLOW,
     "write_checklist": AUTO_ALLOW,
     "update_checklist": AUTO_ALLOW,
     "question": ASK_USER,
@@ -174,6 +183,7 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "mcp_activate",
     "mcp_tool",
     SUB_AGENT_TOOL_NAME,
+    SUB_AGENT_MESSAGE_TOOL_NAME,
     "write_checklist",
     "update_checklist",
     "question",
@@ -197,6 +207,7 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "mcp_tool": "mcp",
     "mcp_activate": "mcp",
     SUB_AGENT_TOOL_NAME: "agent",
+    SUB_AGENT_MESSAGE_TOOL_NAME: "agent",
     "write_checklist": "control",
     "update_checklist": "control",
     "question": "control",
@@ -636,6 +647,7 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     deepcopy(SUB_AGENT_TOOL_SPEC),
+    deepcopy(SUB_AGENT_MESSAGE_TOOL_SPEC),
 )
 
 
@@ -1709,6 +1721,100 @@ class CoreToolbox:
                     status="failed",
                     error="Sub-agent runner not available",
                 )
+            # Narrow injected runners are an internal compatibility seam used
+            # by Workflow adapters/tests, not the model-facing main-agent path.
+            if not hasattr(self.sub_agent_runner, "session_prefix"):
+                return await _legacy_call_sub_agent(call)
+            args = call.arguments if isinstance(call.arguments, dict) else {}
+            # The model-facing lifecycle contract is intentionally strict.
+            # Workflow internals still use KernelSubAgentRunner.run directly.
+            required = {"action", "type", "name", "model", "reasoning_level"}
+            if set(args) != required:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error="sub_agent requires exactly action,type,name,model,reasoning_level")
+            from lamtools_core.sub_agent_supervisor import get_sub_agent_supervisor
+            call_metadata = call.metadata if isinstance(call.metadata, Mapping) else {}
+            parent_thread_id = str(
+                call_metadata.get("parent_session_id")
+                or call_metadata.get("session_id")
+                or getattr(self.sub_agent_runner, "session_prefix", "")
+            )
+            supervisor = await get_sub_agent_supervisor(
+                parent_thread_id=parent_thread_id,
+                runner=self.sub_agent_runner,
+                data_dir=self.data_dir or (self.work_root / ".lam" / "core" / "data"),
+            )
+            try:
+                common = {
+                    "type": args["type"], "name": args["name"], "model": args["model"],
+                    "reasoning_level": args["reasoning_level"],
+                }
+                if args["action"] == "create":
+                    operation = await supervisor.create_operation(
+                        **common,
+                        source_ids={
+                            "call_id": call.id,
+                            "run_id": str(call_metadata.get("parent_run_id") or ""),
+                            "turn_id": str(call_metadata.get("parent_turn_id") or ""),
+                            "message_id": str(call_metadata.get("parent_message_id") or ""),
+                            "part_id": str(call_metadata.get("parent_part_id") or ""),
+                        },
+                    )
+                elif args["action"] == "close":
+                    operation = await supervisor.close_operation(
+                        **common,
+                        source_ids={
+                            "call_id": call.id,
+                            "run_id": str(call_metadata.get("parent_run_id") or ""),
+                            "turn_id": str(call_metadata.get("parent_turn_id") or ""),
+                            "message_id": str(call_metadata.get("parent_message_id") or ""),
+                            "part_id": str(call_metadata.get("parent_part_id") or ""),
+                        },
+                    )
+                else:
+                    raise ValueError("action must be exactly 'create' or 'close'")
+            except ValueError as exc:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
+            return ToolResult(
+                call_id=call.id, name=call.name, status="ok",
+                content=json.dumps(operation.to_dict(), ensure_ascii=False), metadata=operation.to_dict(),
+            )
+
+        async def call_sub_agent_message(call: ToolCall) -> ToolResult:
+            if self.sub_agent_runner is None:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error="Sub-agent runner not available")
+            args = call.arguments if isinstance(call.arguments, dict) else {}
+            if set(args) != {"type", "name", "prompt"}:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error="sub_agent_message requires exactly type,name,prompt")
+            from lamtools_core.sub_agent_supervisor import get_sub_agent_supervisor
+            meta = call.metadata if isinstance(call.metadata, Mapping) else {}
+            supervisor = await get_sub_agent_supervisor(
+                parent_thread_id=str(meta.get("parent_session_id") or meta.get("session_id") or getattr(self.sub_agent_runner, "session_prefix", "")),
+                runner=self.sub_agent_runner,
+                data_dir=self.data_dir or (self.work_root / ".lam" / "core" / "data"),
+            )
+            try:
+                payload = await supervisor.message(
+                    type=args["type"],
+                    name=args["name"],
+                    prompt=args["prompt"],
+                    source_ids={
+                        "call_id": call.id,
+                        "run_id": str(meta.get("parent_run_id") or ""),
+                        "turn_id": str(meta.get("parent_turn_id") or ""),
+                        "message_id": str(meta.get("parent_message_id") or ""),
+                        "part_id": str(meta.get("parent_part_id") or ""),
+                    },
+                )
+            except ValueError as exc:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
+            return ToolResult(call_id=call.id, name=call.name, status="ok", content="accepted", metadata=payload)
+
+        async def call_sub_agent_legacy_removed(call: ToolCall) -> ToolResult:
+            # Kept only as a marker to make the old synchronous body below
+            # unreachable without deleting its well-tested result formatting.
+            return await call_sub_agent(call)
+
+        async def _legacy_call_sub_agent(call: ToolCall) -> ToolResult:
             args = call.arguments if isinstance(call.arguments, dict) else {}
             task = str(args.get("task") or "").strip()
             if not task:
@@ -1722,6 +1828,23 @@ class CoreToolbox:
             mode = str(args.get("mode") or "").strip()
             if mode.lower() in ("null", "none", "undefined"):
                 mode = ""
+            requested_reasoning_level = str(args.get("reasoning_level") or "").strip()
+            requested_reasoning_effort = str(args.get("reasoning_effort") or "").strip()
+            if requested_reasoning_level.lower() in ("null", "none", "undefined"):
+                requested_reasoning_level = ""
+            if requested_reasoning_effort.lower() in ("null", "none", "undefined"):
+                requested_reasoning_effort = ""
+            parent_reasoning_level = reasoning_level_from_legacy(
+                reasoning_level=getattr(self.sub_agent_runner, "reasoning_level", ""),
+                thinking_enabled=getattr(self.sub_agent_runner, "thinking_enabled", None),
+                fallback="off",
+            )
+            explicit_reasoning = requested_reasoning_level or requested_reasoning_effort
+            effective_reasoning_level = (
+                normalize_reasoning_level(explicit_reasoning, parent_reasoning_level)
+                if explicit_reasoning
+                else parent_reasoning_level
+            )
             raw_attachments = args.get("attachments")
             attachments = [str(a) for a in raw_attachments if isinstance(a, (str, int)) and str(a).strip()] if isinstance(raw_attachments, list) else []
             call_metadata = call.metadata if isinstance(call.metadata, Mapping) else {}
@@ -1750,6 +1873,12 @@ class CoreToolbox:
                 "parent_run_id": str(call_metadata.get("parent_run_id") or ""),
                 "parent_turn_id": str(call_metadata.get("parent_turn_id") or ""),
             }
+            # Forward an explicit override only to runners that advertise the
+            # canonical parameter.  Deliberately leaving an omitted override
+            # out preserves inheritance for the production runner and keeps
+            # narrow legacy/fake runners compatible.
+            if explicit_reasoning:
+                run_kwargs["reasoning_level"] = effective_reasoning_level
             if execution_context:
                 run_kwargs["execution_context"] = execution_context
             # Existing hosts often provide a deliberately narrow fake/legacy
@@ -1767,12 +1896,20 @@ class CoreToolbox:
             )
             if not accepts_context:
                 run_kwargs.pop("execution_context", None)
+            accepts_reasoning = (
+                not parameters
+                or "reasoning_level" in parameters
+                or any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values())
+            )
+            if not accepts_reasoning:
+                run_kwargs.pop("reasoning_level", None)
             outcome = await self.sub_agent_runner.run(**run_kwargs)
             if isinstance(outcome, SubAgentRunResult):
                 metadata = {
                     "agent": agent,
                     "model": model,
                     "mode": mode,
+                    "reasoning_level": effective_reasoning_level,
                     "attachments": attachments,
                     "sub_session_id": outcome.session_id,
                     "sub_run_id": outcome.run_id,
@@ -1797,6 +1934,7 @@ class CoreToolbox:
                             "task": task,
                             "model": model,
                             "mode": mode,
+                            "reasoning_level": effective_reasoning_level,
                             "attachments": attachments,
                             "parent_call_id": call.id,
                             "parent_run_id": str(call.metadata.get("parent_run_id") or ""),
@@ -1853,6 +1991,7 @@ class CoreToolbox:
                 content=str(outcome),
                 metadata={
                     "agent": str(args.get("agent") or ""),
+                    "reasoning_level": effective_reasoning_level,
                 },
             )
 
@@ -1889,6 +2028,7 @@ class CoreToolbox:
             "mcp_tool": call_mcp,
             "mcp_activate": activate_mcp,
             SUB_AGENT_TOOL_NAME: call_sub_agent,
+            SUB_AGENT_MESSAGE_TOOL_NAME: call_sub_agent_message,
             "write_checklist": _write_checklist_handler,
             "update_checklist": _update_checklist_handler,
             "question": _question_handler,

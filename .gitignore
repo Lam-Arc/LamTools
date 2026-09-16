@@ -143,6 +143,7 @@ core/scripts/
 # Scratch / debugging artifacts (local only)
 core/_swap_checkboxes.py
 *.png
+!core/ui/src/assets/sunday-app-icon-*.png
 !core/mobile/android/app/src/main/res/**/ic_launcher*.png
 !core/mobile/android/app/src/main/res/**/splash.png
 !core/mobile/ios/App/App/Assets.xcassets/**/*.png

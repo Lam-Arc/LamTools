@@ -50,6 +50,7 @@ export type {
   WorkflowQueueItem,
   WorkflowQueueStatus,
   WorkflowRunResult,
+  WorkflowRunTimelineItem,
   WorkflowSchemaField,
   WorkflowTrigger,
   WorkflowPolicies,
@@ -59,6 +60,8 @@ export {
   WORKFLOW_CATALOG_STORAGE_KEY,
   WORKFLOW_CANONICAL_NODE_KINDS,
   WORKFLOW_HIDDEN_NODE_KINDS,
+  WORKFLOW_NODE_DESCRIPTIONS,
+  WORKFLOW_NODE_LABELS,
   createWorkflowNodeFromSchema,
   isWorkflowSchemaHidden,
   normalizeSchemaType,
@@ -68,9 +71,13 @@ export {
   schemaFields,
   schemaPorts,
   toggleWorkflowCatalogFavorite,
+  workflowCategoryDisplayName,
   workflowCatalogEntries,
+  workflowNodeDisplayName,
   workflowNodeKindForTypeId,
   workflowNodeTypeId,
+  workflowSchemaDescription,
+  workflowSchemaSearchValues,
   writeWorkflowCatalogPreferences,
 } from './catalog'
 export type { WorkflowCatalogVariant } from './catalog'
@@ -115,6 +122,7 @@ export type {
 export { default as WorkflowNodeCatalog } from './WorkflowNodeCatalog.vue'
 export { default as SchemaNodeEditor } from './SchemaNodeEditor.vue'
 export { default as WorkflowRunInputForm } from './WorkflowRunInputForm.vue'
+export { default as WorkflowNodeRuntimeDock } from './WorkflowNodeRuntimeDock.vue'
 export { default as WorkflowQueuePanel } from './WorkflowQueuePanel.vue'
 export { default as WorkflowResourcesPanel } from './WorkflowResourcesPanel.vue'
 export { default as WorkflowTriggersPanel } from './WorkflowTriggersPanel.vue'

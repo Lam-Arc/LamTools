@@ -185,6 +185,7 @@ export function createCoreAppServerRuntimeController<
       applyResponse(response)
     }
     runtime.reconnectAttempt = 0
+    runtime.lastError = ''
   }
 
   function disconnect() {

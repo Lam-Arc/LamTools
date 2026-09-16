@@ -481,6 +481,78 @@ class CoreAttachment(CoreDbBase):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class CoreArtifact(CoreDbBase):
+    """Stable logical artifact identity; bytes live in immutable revisions."""
+
+    __tablename__ = "core_artifacts"
+    __table_args__ = (
+        UniqueConstraint("project_id", "normalized_path", name="uq_core_artifact_project_path"),
+        Index("idx_core_artifacts_project_created", "project_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False, default="")
+    work_root: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    normalized_path: Mapped[str] = mapped_column(String(2048), nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, default="file")
+    mime_type: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    path: Mapped[str] = mapped_column(String(2048), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="agent_generated")
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="deliverable")
+    prompt: Mapped[str] = mapped_column(String, nullable=False, default="")
+    parent_ids_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    children_ids_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    latest_revision_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    revision_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    thread_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="")
+    turn_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    item_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    tool_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    provenance_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    deleted: Mapped[bool] = mapped_column(nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreArtifactRevision(CoreDbBase):
+    __tablename__ = "core_artifact_revisions"
+    __table_args__ = (
+        UniqueConstraint("artifact_id", "source_event_id", name="uq_core_artifact_revision_event"),
+        Index("idx_core_artifact_revisions_artifact_created", "artifact_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    blob_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mime_type: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False, default="")
+    thread_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="")
+    turn_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    item_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    tool_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    source_event_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    restored_from_revision_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreArtifactAlias(CoreDbBase):
+    __tablename__ = "core_artifact_aliases"
+    alias: Mapped[str] = mapped_column(String(2048), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreCheckpointArtifactRef(CoreDbBase):
+    __tablename__ = "core_checkpoint_artifact_refs"
+    checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    revision_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class CoreMemory(CoreDbBase):
     """Short-term memory entries produced by dreaming.
 
@@ -1400,6 +1472,7 @@ class CoreAppDb:
     memory_store: Any = None  # MemoryStoreProtocol; typed as Any to avoid import cycle
     member_defaults: dict = field(default_factory=dict)
     session_actors: SessionActorRegistry = field(default_factory=SessionActorRegistry)
+    artifact_store: Any = None
 
     async def close(self) -> None:
         await self.engine.dispose()
@@ -1433,6 +1506,7 @@ async def open_core_app_db(
     from .project_store import CoreProjectStore
     from .sync_store import CoreSyncJournal
     from lamtools_core.mem.store import SqlAlchemyMemoryStore
+    from lamtools_core.artifact.store import ArtifactStore
 
     sync_journal = CoreSyncJournal(
         session_factory,
@@ -1485,6 +1559,11 @@ async def open_core_app_db(
         memory_store=SqlAlchemyMemoryStore(session_factory, write_coordinator),
         member_defaults=dict(member_defaults or {}),
         session_actors=session_actors,
+        artifact_store=ArtifactStore(
+            session_factory,
+            db_path.parent / "core-agent" / "artifact-blobs",
+            write_coordinator,
+        ),
     )
 
 
@@ -1991,8 +2070,12 @@ __all__ = [
     "CoreArrangeJob",
     "CoreArrangeOccurrence",
     "CoreArrangeSignal",
+    "CoreArtifact",
+    "CoreArtifactAlias",
+    "CoreArtifactRevision",
     "CoreAttachment",
     "CoreCheckpoint",
+    "CoreCheckpointArtifactRef",
     "CoreCheckpointBlob",
     "CoreGoal",
     "CoreHandoffContext",

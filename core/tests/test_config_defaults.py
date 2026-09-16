@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from lamtools_core.config.defaults import (
@@ -29,6 +30,9 @@ def test_ensure_default_config_files_creates_every_default(tmp_path, isolated_co
         assert (isolated_config_root / name).is_file()
     assert (isolated_config_root / "subagent" / "guide.md").is_file()
     assert (isolated_config_root / "subagent" / "settings.json").is_file()
+    assert json.loads(
+        (isolated_config_root / "subagent" / "settings.json").read_text(encoding="utf-8")
+    )["delegation_strategy"] == "medium"
     assert (isolated_config_root / "models").is_dir()
     # Bundled resources are copied when present (dev checkout has them).
     if (bundled_resources_dir() / "loadtools.jsonc").is_file():

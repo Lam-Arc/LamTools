@@ -5,8 +5,13 @@ import asyncio
 import pytest
 
 from lamtools_core.app import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
+from lamtools_core.event import CollectingEventSink
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.runtime import InMemoryRuntimeStateStore
+from lamtools_core.sub_agent_supervisor import shutdown_parent_sub_agents
+from lamtools_core.tool import ToolCall, ToolSpec
+from lamtools_core.tool.permission import AUTO_ALLOW
+from lamtools_core.tool.loadtools import default_load_tools
 from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
 
 
@@ -46,10 +51,128 @@ class ScriptedSubAgentOnlyLLM:
         assert request.model == self.expected_model
         if self.expected_instructions:
             assert self.expected_instructions in request.messages[0].content
-        assert request.messages[-1].role == "user"
-        assert request.messages[-1].content == "inspect the project"
+        user_message = (
+            request.messages[-2]
+            if str(request.messages[-1].content).startswith("[request-local")
+            else request.messages[-1]
+        )
+        assert user_message.role == "user"
+        assert user_message.content == "inspect the project"
         yield LLMStreamEvent(kind="content_delta", content="sub result")
         yield LLMStreamEvent(kind="done")
+
+
+def test_available_tool_specs_include_plugin_tools_used_by_workflow_agents(tmp_path) -> None:
+    async def external_lookup(_call):
+        raise AssertionError("catalog inspection must not execute the tool")
+
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=ScriptedSubAgentOnlyLLM(),
+        model_id="fake-model",
+        plugin_tool_specs=[
+            ToolSpec(
+                name="external_lookup",
+                description="Look up external data",
+                input_schema={"type": "object", "properties": {}},
+            )
+        ],
+        plugin_tool_handlers={"external_lookup": external_lookup},
+    )
+
+    names = {spec.name for spec in runner.available_tool_specs(mode="agent")}
+
+    assert "read_file" in names
+    assert "external_lookup" in names
+    assert "sub_agent" not in names
+    assert "sub_agent_message" not in names
+    assert "message" in names
+
+
+def test_consider_and_execute_are_fail_closed_non_delegating_tool_sets(tmp_path) -> None:
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=ScriptedSubAgentOnlyLLM(),
+        model_id="fake-model",
+        load_tools=default_load_tools(),
+    )
+    consider_box = runner._build_toolbox(runner._disabled_tools(), active_mode="consider")
+    execute_box = runner._build_toolbox(runner._disabled_tools(), active_mode="execute")
+    consider = {tool["function"]["name"] for tool in consider_box.model_tools(active_mode="consider")}
+    execute = {tool["function"]["name"] for tool in execute_box.model_tools(active_mode="execute")}
+
+    assert "read_file" in consider and "write_file" not in consider
+    assert "write_file" in execute
+    for names in (consider, execute):
+        assert "message" in names
+        assert "sub_agent" not in names
+        assert "sub_agent_message" not in names
+
+
+@pytest.mark.asyncio
+async def test_public_run_forwards_effective_child_identity_metadata(tmp_path) -> None:
+    sink = CollectingEventSink()
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=ScriptedSubAgentOnlyLLM(),
+        model_id="fake-model",
+        reasoning_level="medium",
+        load_tools=default_load_tools(),
+        parent_event_sink=sink,
+        session_prefix="parent-thread",
+    )
+    await runner.run(
+        task="inspect the project",
+        agent="reviewer",
+        mode="consider",
+        reasoning_level="xh",
+        parent_call_id="message-call",
+        parent_run_id="parent-run",
+        parent_turn_id="parent-turn",
+    )
+
+    forwarded = [event for event in sink.events if event.payload.get("sub_agent")]
+    assert forwarded
+    assert all(event.payload["sub_agent"]["type"] == "consider" for event in forwarded)
+    assert all(event.payload["sub_agent"]["model_id"] == "fake-model" for event in forwarded)
+    assert all(event.payload["sub_agent"]["reasoning_level"] == "xhigh" for event in forwarded)
+
+
+def test_child_message_is_auto_allowed_across_restricted_modes_and_live_tiers(tmp_path) -> None:
+    runtime_permissions = {
+        "active_tier": "read_only",
+        "tier_tools": {
+            "read_only": ["read_file"],
+            "limited_edit": ["read_file", "write_file"],
+            "full_edit": [],
+        },
+    }
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=ScriptedSubAgentOnlyLLM(),
+        model_id="fake-model",
+        load_tools=default_load_tools(),
+        active_tier="read_only",
+        tier_tools=runtime_permissions["tier_tools"],
+        runtime_permissions_provider=lambda: runtime_permissions,
+    )
+
+    for mode in ("consider", "execute"):
+        toolbox = runner._build_toolbox(runner._disabled_tools(), active_mode=mode)
+        specs = {spec.name: spec for spec in toolbox.tool_specs()}
+        names = {
+            tool["function"]["name"]
+            for tool in toolbox.model_tools(active_mode=mode)
+        }
+        prepared = toolbox.prepare_call(
+            ToolCall(id=f"message-{mode}", name="message", arguments={"message": "status"})
+        )
+
+        assert specs["message"].permission == AUTO_ALLOW
+        assert "message" in names
+        assert "sub_agent" not in names
+        assert prepared.requires_approval is False
+        assert prepared.metadata["approval"]["blocked"] is False
 
 
 class ScriptedMainAndSubAgentLLM:
@@ -71,17 +194,18 @@ class ScriptedMainAndSubAgentLLM:
                     LLMToolCall(
                         id="call-sub",
                         name="sub_agent",
-                        arguments={"task": "inspect the project", "agent": "worker"},
+                        arguments={
+                            "action": "create",
+                            "type": "consider",
+                            "name": "worker",
+                            "model": "fake-model",
+                            "reasoning_level": "high",
+                        },
                     )
                 ],
             )
             return
-        if len(self.requests) == 2:
-            assert "sub_agent" not in tool_names
-            yield LLMStreamEvent(kind="content_delta", content="sub result")
-            yield LLMStreamEvent(kind="done")
-            return
-        yield LLMStreamEvent(kind="content_delta", content="main saw sub result")
+        yield LLMStreamEvent(kind="content_delta", content="main created the sub-agent without waiting")
         yield LLMStreamEvent(kind="done")
 
 
@@ -154,55 +278,54 @@ class EmptySubAgentResultLLM:
                     LLMToolCall(
                         id="call-empty-sub",
                         name="sub_agent",
-                        arguments={"task": "inspect the project", "agent": "worker"},
+                        arguments={"action": "create", "type": "consider", "name": "Worker"},
                     )
                 ],
             )
             return
-        if len(self.requests) == 2:
-            yield LLMStreamEvent(kind="done")
-            return
         tool_messages = [message for message in request.messages if message.role == "tool"]
         assert tool_messages
-        assert "failed" in tool_messages[-1].content.lower()
-        if len(self.requests) == 3:
-            yield LLMStreamEvent(
-                kind="content_delta",
-                content=(
-                    "[根因] 子 Agent 返回空结果 [证据] 工具状态为 failed "
-                    "[方案1] 主 Agent 接管 [方案2] 重新委派 [选择] 方案1 "
-                    "[验证信号] 主 Agent 给出有效答复\nmain handled sub-agent failure"
-                ),
-            )
-            yield LLMStreamEvent(kind="done")
-            return
-        yield LLMStreamEvent(kind="content_delta", content="main handled sub-agent failure")
+        assert "requires exactly" in tool_messages[-1].content.lower()
+        yield LLMStreamEvent(kind="content_delta", content="main handled strict sub-agent validation")
         yield LLMStreamEvent(kind="done")
 
 
 class WritingSubAgentLLM:
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
+        self.main_steps = 0
+        self.child_steps = 0
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         raise AssertionError("Core operation should use streaming")
 
     async def stream(self, request: LLMRequest):
         self.requests.append(request)
-        if len(self.requests) == 1:
+        tool_names = {tool["function"]["name"] for tool in request.tools or []}
+        if "sub_agent" in tool_names:
+            self.main_steps += 1
+        else:
+            self.child_steps += 1
+        if self.main_steps == 1 and "sub_agent" in tool_names:
             yield LLMStreamEvent(
                 kind="done",
                 tool_calls=[
                     LLMToolCall(
                         id="call-writing-sub",
                         name="sub_agent",
-                        arguments={"task": "write a story to story.txt", "agent": "writer"},
+                        arguments={
+                            "action": "create", "type": "execute", "name": "writer",
+                            "model": "fake-model", "reasoning_level": "high",
+                        },
                     )
                 ],
             )
             return
-        if len(self.requests) == 2:
-            assert "sub_agent" not in {tool["function"]["name"] for tool in request.tools or []}
+        if "sub_agent" in tool_names:
+            yield LLMStreamEvent(kind="content_delta", content="Main remains responsive.")
+            yield LLMStreamEvent(kind="done")
+            return
+        if self.child_steps == 1:
             yield LLMStreamEvent(kind="thinking_delta", content="Plan the delegated file write.")
             yield LLMStreamEvent(kind="content_delta", content="Preparing the story file.")
             yield LLMStreamEvent(
@@ -216,28 +339,23 @@ class WritingSubAgentLLM:
                 ],
             )
             return
-        if len(self.requests) == 3:
-            assert request.messages[-1].role == "tool"
+        if self.child_steps == 2:
             yield LLMStreamEvent(
                 kind="content_delta",
                 content="I wrote story.txt with the requested story.",
             )
             yield LLMStreamEvent(kind="done")
             return
-        tool_messages = [message for message in request.messages if message.role == "tool"]
-        assert tool_messages
-        assert "I wrote story.txt" in tool_messages[-1].content
-        yield LLMStreamEvent(
-            kind="content_delta",
-            content="The sub-agent wrote story.txt and confirmed completion.",
-        )
-        yield LLMStreamEvent(kind="done")
+        raise AssertionError("unexpected writing sub-agent request")
 
 
 class ApprovalSubAgentLLM:
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
-        self.child_started = False
+        self.main_steps = 0
+        self.child_steps = 0
+        self.child_message_tools: set[str] = set()
+        self.parent_received_child_message = False
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         raise AssertionError("Core operation should use streaming")
@@ -245,17 +363,35 @@ class ApprovalSubAgentLLM:
     async def stream(self, request: LLMRequest):
         self.requests.append(request)
         tool_names = {tool["function"]["name"] for tool in request.tools or []}
-        if len(self.requests) == 1:
+        if "sub_agent" in tool_names:
+            self.main_steps += 1
+            if self.main_steps >= 3:
+                self.parent_received_child_message = any(
+                    "approved file is ready" in str(message.content)
+                    for message in request.messages
+                )
+                yield LLMStreamEvent(kind="content_delta", content="Main received child report.")
+                yield LLMStreamEvent(kind="done")
+                return
+        else:
+            self.child_steps += 1
+        if self.main_steps == 1 and "sub_agent" in tool_names:
             yield LLMStreamEvent(kind="done", tool_calls=[
                 LLMToolCall(
                     id="call-approval-sub",
                     name="sub_agent",
-                    arguments={"task": "write approved.txt", "agent": "writer"},
+                    arguments={
+                        "action": "create", "type": "execute", "name": "writer",
+                        "model": "fake-model", "reasoning_level": "high",
+                    },
                 )
             ])
             return
-        if "sub_agent" not in tool_names and not self.child_started:
-            self.child_started = True
+        if "sub_agent" in tool_names:
+            yield LLMStreamEvent(kind="content_delta", content="Main remains responsive during child approval.")
+            yield LLMStreamEvent(kind="done")
+            return
+        if self.child_steps == 1:
             yield LLMStreamEvent(kind="done", tool_calls=[
                 LLMToolCall(
                     id="call-child-write",
@@ -264,12 +400,29 @@ class ApprovalSubAgentLLM:
                 )
             ])
             return
-        if "sub_agent" not in tool_names:
-            yield LLMStreamEvent(kind="content_delta", content="Child saved approved.txt.")
+        if self.child_steps == 2:
+            self.child_message_tools = tool_names
+            assert request.messages[-1].role == "user"
+            assert str(request.messages[-1].content).startswith(
+                "[Request-local sub-agent context]"
+            )
+            assert "name: writer" in str(request.messages[-1].content)
+            assert "type: execute" in str(request.messages[-1].content)
+            assert "model_id: fake-model" in str(request.messages[-1].content)
+            assert "reasoning_level: high" in str(request.messages[-1].content)
+            yield LLMStreamEvent(kind="done", tool_calls=[
+                LLMToolCall(
+                    id="call-child-message",
+                    name="message",
+                    arguments={"message": "approved file is ready"},
+                )
+            ])
+            return
+        if self.child_steps == 3:
+            yield LLMStreamEvent(kind="content_delta", content="Child finished after approval.")
             yield LLMStreamEvent(kind="done")
             return
-        yield LLMStreamEvent(kind="content_delta", content="Main received the approved child result.")
-        yield LLMStreamEvent(kind="done")
+        raise AssertionError("unexpected child approval continuation")
 
 
 @pytest.mark.asyncio
@@ -285,6 +438,40 @@ async def test_kernel_sub_agent_runner_uses_core_loop_without_recursive_sub_agen
     assert len(llm.requests) == 1
     assert "sub_agent" not in {tool["function"]["name"] for tool in llm.requests[0].tools or []}
     assert "read_file" in {tool["function"]["name"] for tool in llm.requests[0].tools or []}
+
+
+@pytest.mark.asyncio
+async def test_kernel_sub_agent_runner_forwards_explicit_reasoning_and_inherits_parent(tmp_path):
+    explicit_llm = ScriptedSubAgentOnlyLLM()
+    explicit_runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=explicit_llm,
+        model_id="fake-model",
+        reasoning_level="medium",
+    )
+
+    await explicit_runner.run(
+        task="inspect the project",
+        agent="worker",
+        reasoning_level="xh",
+        late_context="[request-local child identity]",
+    )
+    assert explicit_llm.requests[0].metadata["reasoning_level"] == "xhigh"
+    assert explicit_llm.requests[0].messages[-1].role == "user"
+    assert explicit_llm.requests[0].messages[-1].content == "[request-local child identity]"
+    state = await explicit_runner.state_store.get("core-sub-agent:sub:worker")
+    history = await explicit_runner.state_store.get_history(state.session_id)
+    assert all(item.get("content") != "[request-local child identity]" for item in history)
+
+    inherited_llm = ScriptedSubAgentOnlyLLM()
+    inherited_runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=inherited_llm,
+        model_id="fake-model",
+        reasoning_level="medium",
+    )
+    await inherited_runner.run(task="inspect the project", agent="worker")
+    assert inherited_llm.requests[0].metadata["reasoning_level"] == "medium"
 
 
 @pytest.mark.asyncio
@@ -409,11 +596,13 @@ async def test_kernel_sub_agent_runner_uses_parent_model_and_instructions(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_core_agent_operation_executes_default_sub_agent_runner(tmp_path):
+async def test_core_agent_operation_creates_sub_agent_without_blocking(tmp_path):
     llm = ScriptedMainAndSubAgentLLM()
+    work_root = tmp_path / "work"
+    _write_project_model(work_root, "fake-model", "text")
     catalog = create_core_agent_operations(
         spec=CoreAgentSpec(default_model="fake-model"),
-        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
         model_provider=llm,
     )
 
@@ -421,14 +610,17 @@ async def test_core_agent_operation_executes_default_sub_agent_runner(tmp_path):
 
     tool_results = [item for item in result.payload["run_items"] if item["kind"] == "tool_result"]
     assert result.status == "ok"
-    assert result.payload["message"] == "main saw sub result"
-    assert len(llm.requests) == 3
+    assert result.payload["message"] == "main created the sub-agent without waiting"
+    assert len(llm.requests) == 2
     assert tool_results
-    assert "sub result" in tool_results[0]["payload"]["tool_result"]
+    assert '"status": "idle"' in tool_results[0]["payload"]["tool_result"]
+    listed = await catalog.execute("sub_agent.list", {"thread_id": "thread-sub"})
+    assert listed.payload["items"][0]["name"] == "worker"
+    await shutdown_parent_sub_agents("thread-sub")
 
 
 @pytest.mark.asyncio
-async def test_core_agent_operation_reports_empty_sub_agent_result_as_failed(tmp_path):
+async def test_core_agent_operation_rejects_legacy_sub_agent_arguments(tmp_path):
     llm = EmptySubAgentResultLLM()
     catalog = create_core_agent_operations(
         spec=CoreAgentSpec(default_model="fake-model"),
@@ -444,7 +636,7 @@ async def test_core_agent_operation_reports_empty_sub_agent_result_as_failed(tmp
         if item["kind"] == "tool_result" and item["payload"].get("tool_name") == "sub_agent"
     ]
     assert result.status == "ok"
-    assert result.payload["message"].endswith("main handled sub-agent failure")
+    assert result.payload["message"] == "main handled strict sub-agent validation"
     assert len(sub_agent_results) == 1
     assert sub_agent_results[0]["status"] == "failed"
     assert sub_agent_results[0]["payload"]["error"]
@@ -454,6 +646,7 @@ async def test_core_agent_operation_reports_empty_sub_agent_result_as_failed(tmp
 async def test_core_agent_operation_forwards_sub_agent_file_tool_and_handoff(tmp_path):
     llm = WritingSubAgentLLM()
     work_root = tmp_path / "work"
+    _write_project_model(work_root, "fake-model", "text")
     catalog = create_core_agent_operations(
         spec=CoreAgentSpec(default_model="fake-model"),
         paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
@@ -469,59 +662,35 @@ async def test_core_agent_operation_forwards_sub_agent_file_tool_and_handoff(tmp
         },
     )
 
-    write_results = [
-        item
-        for item in result.payload["run_items"]
-        if item["kind"] == "tool_result" and item["payload"].get("tool_name") == "write_file"
-    ]
-    sub_agent_results = [
-        item
-        for item in result.payload["run_items"]
-        if item["kind"] == "tool_result" and item["payload"].get("tool_name") == "sub_agent"
-    ]
-    sub_agent_calls = [
-        item
-        for item in result.payload["run_items"]
-        if item["kind"] == "tool_call" and item["payload"].get("tool_name") == "sub_agent"
-    ]
-    child_reasoning = [
-        item
-        for item in result.payload["run_items"]
-        if item["kind"] == "thinking" and item.get("source") == "sub_agent"
-    ]
-    child_text = [
-        item
-        for item in result.payload["run_items"]
-        if item["kind"] == "message" and item.get("source") == "sub_agent"
-    ]
+    assert result.payload["message"] == "Main remains responsive."
+    accepted = await catalog.execute(
+        "sub_agent.message",
+        {"thread_id": "thread-writing-sub", "type": "execute", "name": "writer", "prompt": "write a story"},
+    )
+    assert accepted.status == "ok"
+    for _ in range(100):
+        if (work_root / "story.txt").exists():
+            listed = await catalog.execute("sub_agent.list", {"thread_id": "thread-writing-sub"})
+            if listed.payload["items"][0]["status"] == "idle":
+                break
+        await asyncio.sleep(0.01)
     assert (work_root / "story.txt").read_text(encoding="utf-8") == "A complete delegated story."
-    assert result.payload["message"] == "The sub-agent wrote story.txt and confirmed completion."
-    assert len(write_results) == 1
-    parent_item_ids = {item["item_id"] for item in sub_agent_calls}
-    assert len(parent_item_ids) == 1
-    parent_item_id = parent_item_ids.pop()
-    assert write_results[0]["source"] == "sub_agent"
-    assert write_results[0]["turn_id"] == result.payload["turn_id"]
-    assert write_results[0]["parent_item_id"] == parent_item_id
-    assert write_results[0]["metadata"]["sub_agent"]["agent"] == "writer"
-    assert child_reasoning
-    assert child_reasoning[0]["parent_item_id"] == parent_item_id
-    assert child_reasoning[0]["metadata"]["sub_agent"]["run_id"]
-    assert any("Preparing the story file." in item["payload"].get("content", "") for item in child_text)
-    assert any("I wrote story.txt" in item["payload"].get("content", "") for item in child_text)
-    assert all(item["parent_item_id"] == parent_item_id for item in child_text)
-    assert len(sub_agent_results) == 1
-    assert sub_agent_results[0]["payload"]["metadata"]["ended_with_final_response"] is True
+    assert listed.payload["items"][0]["summary"] == "I wrote story.txt with the requested story."
+    assert listed.payload["items"][0]["source_message_id"] == f"assistant:{result.payload['turn_id']}"
+    await shutdown_parent_sub_agents("thread-writing-sub")
 
 
 @pytest.mark.asyncio
-async def test_core_agent_operation_resumes_sub_agent_after_child_tool_approval(tmp_path):
+async def test_child_approval_pauses_only_sub_agent_not_parent(tmp_path):
     llm = ApprovalSubAgentLLM()
+    state_store = InMemoryRuntimeStateStore()
     work_root = tmp_path / "work"
+    _write_project_model(work_root, "fake-model", "text")
     catalog = create_core_agent_operations(
         spec=CoreAgentSpec(default_model="fake-model"),
         paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
         model_provider=llm,
+        runtime_state_store=state_store,
     )
 
     started = await catalog.execute(
@@ -533,45 +702,67 @@ async def test_core_agent_operation_resumes_sub_agent_after_child_tool_approval(
         },
     )
 
-    assert started.payload["decision"] == "wait"
+    assert started.payload["decision"] == "done"
+    assert started.payload["message"] == "Main remains responsive during child approval."
     assert not (work_root / "approved.txt").exists()
-    child_approvals = [
-        item
-        for item in started.payload["run_items"]
-        if item["kind"] == "approval_request" and item["payload"].get("request_id") == "call-child-write"
-    ]
-    assert len(child_approvals) == 1
-    assert child_approvals[0]["source"] == "sub_agent"
-    delegated_waits = [
-        item
-        for item in started.payload["run_items"]
-        if item["kind"] == "tool_result" and item["payload"].get("tool_name") == "sub_agent"
-    ]
-    assert len(delegated_waits) == 1
-    assert delegated_waits[0]["status"] == "waiting"
+    accepted = await catalog.execute(
+        "sub_agent.message",
+        {"thread_id": "thread-child-approval", "type": "execute", "name": "writer", "prompt": "write approved.txt"},
+    )
+    assert accepted.status == "ok"
+    for _ in range(100):
+        listed = await catalog.execute("sub_agent.list", {"thread_id": "thread-child-approval"})
+        if listed.payload["items"][0]["status"] == "paused":
+            break
+        await asyncio.sleep(0.01)
+    assert listed.payload["items"][0]["status"] == "paused"
+    assert not (work_root / "approved.txt").exists()
 
-    resumed = await catalog.execute(
+    child_state = await state_store.get("thread-child-approval:sub:writer")
+    assert child_state is not None
+    assert child_state.metadata["delegated_session"]["parent_thread_id"] == "thread-child-approval"
+    pending = child_state.metadata["pending_approval"]
+    approved = await catalog.execute(
         "approval.respond",
         {
             "thread_id": "thread-child-approval",
-            "request_id": "call-child-write",
-            "decision": "approve_once",
+            "request_id": pending["request_id"],
+            "action": "approve",
         },
     )
-
-    assert resumed.status == "ok"
-    assert resumed.payload["decision"] == "done"
-    assert resumed.payload["message"] == "Main received the approved child result."
+    assert approved.status == "ok"
+    assert approved.payload["thread_id"] == "thread-child-approval"
     assert (work_root / "approved.txt").read_text(encoding="utf-8") == "approved child content"
-    handoffs = [
-        item
-        for item in resumed.payload["run_items"]
-        if item["kind"] == "tool_result" and item["payload"].get("tool_name") == "sub_agent"
+    assert "message" in llm.child_message_tools
+    assert "sub_agent" not in llm.child_message_tools
+    assert "sub_agent_message" not in llm.child_message_tools
+    forwarded = [
+        event["payload"]["sub_agent"]
+        for event in approved.payload["events"]
+        if isinstance(event.get("payload"), dict)
+        and isinstance(event["payload"].get("sub_agent"), dict)
     ]
-    assert len(handoffs) == 1
-    assert handoffs[0]["payload"]["metadata"]["ended_with_final_response"] is True
-    assert handoffs[0]["payload"]["metadata"]["tool_call_count"] == 1
-    assert len(llm.requests) == 4
+    assert forwarded
+    assert all(item["type"] == "execute" for item in forwarded)
+    assert all(item["model_id"] == "fake-model" for item in forwarded)
+    assert all(item["reasoning_level"] == "high" for item in forwarded)
+    child_history = await state_store.get_history("thread-child-approval:sub:writer")
+    assert all(
+        not str(item.get("content") or "").startswith("[Request-local sub-agent context]")
+        for item in child_history
+    )
+    listed_after_approval = await catalog.execute(
+        "sub_agent.list", {"thread_id": "thread-child-approval"}
+    )
+    assert listed_after_approval.payload["items"][0]["status"] == "idle"
+
+    follow_up = await catalog.execute(
+        "turn.start",
+        {"thread_id": "thread-child-approval", "message": "follow-up"},
+    )
+    assert follow_up.status == "ok"
+    assert llm.parent_received_child_message is True
+    await shutdown_parent_sub_agents("thread-child-approval")
 
 
 class SystemPromptInspectingLLM:

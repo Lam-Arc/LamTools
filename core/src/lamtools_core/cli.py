@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import copy
+import importlib
+import inspect
 from urllib.parse import quote, urlsplit, urlunsplit
 import asyncio
 import hashlib
@@ -15,7 +17,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import httpx
 
@@ -40,6 +42,7 @@ from lamtools_core.app.project_visuals import PROJECT_COLOR_KEYS, PROJECT_ICON_K
 from lamtools_core.event import CollectingEventSink, RunItemEvent
 from lamtools_core.kernel import CoreLoopKernel, LoopPolicy
 from lamtools_core.llm import (
+    ChatMessage,
     LLMRequest,
     LLMResponse,
     LLMStreamEvent,
@@ -70,6 +73,12 @@ from lamtools_core.llm.model_capabilities import resolve_capability
 from lamtools_core.config.model_store import ModelConfig, ModelStore
 from lamtools_core.config.provider_store import ProviderConfig, ProviderStore
 from lamtools_core.config.settings_store import delete_setting, get_setting, set_setting
+from lamtools_core.context_compaction_budget import (
+    CONTEXT_COMPACTION_NAMESPACE,
+    DEFAULT_RETAINED_STEPS,
+    MAX_RETAINED_STEPS,
+    load_retained_steps,
+)
 from lamtools_core.config.root import ensure_projects_root
 from lamtools_core.export import ConversationExportService, build_handoff_context
 from lamtools_core.export.serializers import full_to_zip, to_json, transcript_to_jsonl, transcript_to_markdown, transcript_to_text
@@ -175,6 +184,47 @@ class LLMConfig:
     capability: str = ""  # "text" | "multimodal" | "" (resolved at request time)
     provider_extra: dict[str, Any] = field(default_factory=dict)
     model_extra: dict[str, Any] = field(default_factory=dict)
+    notes: str = ""
+
+
+def _messages_with_model_notes(
+    messages: list[ChatMessage],
+    notes: str,
+) -> list[ChatMessage]:
+    """Return a non-mutating request message list with model notes in system context."""
+
+    normalized = str(notes or "").strip()
+    if not normalized:
+        return messages
+
+    note_block = f"当前模型备注：{normalized}"
+    system_index = next(
+        (index for index, message in enumerate(messages) if message.role == "system"),
+        None,
+    )
+    if system_index is None:
+        return [ChatMessage(role="system", content=note_block), *messages]
+
+    system_message = messages[system_index]
+    content = system_message.content
+    if isinstance(content, str):
+        if note_block in content:
+            return messages
+        separator = "" if not content or content.endswith("\n") else "\n"
+        merged_content: str | list[dict[str, Any]] = f"{content}{separator}{note_block}"
+    else:
+        if any(
+            isinstance(part, dict)
+            and isinstance(part.get("text"), str)
+            and note_block in part["text"]
+            for part in content
+        ):
+            return messages
+        merged_content = [*content, {"type": "text", "text": note_block}]
+
+    updated = list(messages)
+    updated[system_index] = replace(system_message, content=merged_content)
+    return updated
 
 
 def _parse_retry_after(value: object) -> float | None:
@@ -444,7 +494,7 @@ class CoreHttpLLMClient:
 
     def _request_with_defaults(self, request: LLMRequest) -> LLMRequest:
         return LLMRequest(
-            messages=request.messages,
+            messages=_messages_with_model_notes(request.messages, self.config.notes),
             model=request.model or self.config.model_id,
             temperature=request.temperature if request.temperature is not None else self.temperature,
             max_tokens=request.max_tokens if request.max_tokens is not None else self.max_tokens,
@@ -526,6 +576,7 @@ async def run_core_cli_task(
         )
     if options.shallow_thinking_enabled:
         llm_client = ShallowThinkingClient(llm_client)
+
 
     # ``run-local`` has no live consumer for token-by-token stream updates.
     # Keeping those transient events in memory made the diagnostic artifact
@@ -893,6 +944,7 @@ def load_llm_config(*, model_ref: str = "") -> LLMConfig:
         model_record_id=model.model_id,
         model_id=model.model_id,
         display_name=model.display_name or model.model_id,
+        notes=model.notes,
         context_window=model.context_window,
         max_output_tokens=model.max_output_tokens,
         temperature=model.temperature,
@@ -1021,7 +1073,7 @@ def build_parser(
     serve.add_argument("--work-root", "--project", dest="work_root", default="")
     serve.add_argument("--frontend-dir", default="", help="Path to built frontend SPA directory (desktop/packaged mode)")
     serve.add_argument("--thinking", choices=("enabled", "disabled"), default="enabled")
-    serve.add_argument("--reasoning-level", choices=("off", "light", "high", "max"), default="")
+    serve.add_argument("--reasoning-level", choices=("off", "light", "medium", "high", "xhigh", "max"), default="")
     serve.add_argument("--thinking-budget", type=int, default=10000)
     serve.add_argument("--max-tokens", type=int, default=None)
     serve.add_argument("--temperature", type=float, default=0.2)
@@ -1048,7 +1100,7 @@ def build_parser(
     run.add_argument("--work-root", "--project", dest="work_root", default="")
     run.add_argument("--thinking-budget", type=int, default=10000)
     run.add_argument("--no-thinking", action="store_true")
-    run.add_argument("--reasoning-level", choices=("off", "light", "high", "max"), default=None)
+    run.add_argument("--reasoning-level", choices=("off", "light", "medium", "high", "xhigh", "max"), default=None)
     run.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
     run.add_argument("--auto-approve", action="store_true", help="Run approval-gated Core tools without prompting")
     run.add_argument("--allow-outside-workdir", action="store_true", default=None, help="Allow file tools to access paths outside work_root")
@@ -1076,7 +1128,7 @@ def build_parser(
     run_local.add_argument("--core-db", default="", help="Path to Core agent database")
     run_local.add_argument("--thinking-budget", type=int, default=10000)
     run_local.add_argument("--no-thinking", action="store_true")
-    run_local.add_argument("--reasoning-level", choices=("off", "light", "high", "max"), default=None)
+    run_local.add_argument("--reasoning-level", choices=("off", "light", "medium", "high", "xhigh", "max"), default=None)
     run_local.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
     run_local.add_argument("--auto-approve", action="store_true", help="Run approval-gated tools without prompting")
     run_local.add_argument("--allow-outside-workdir", action="store_true", default=None, help="Allow file tools to access paths outside work_root")
@@ -1112,7 +1164,7 @@ def build_parser(
     start.add_argument("--model-id", default="")
     start.add_argument("--thinking", choices=("enabled", "disabled"), default="enabled")
     start.add_argument("--thinking-budget", type=int, default=10000)
-    start.add_argument("--reasoning-level", choices=("off", "light", "high", "max"), default=None)
+    start.add_argument("--reasoning-level", choices=("off", "light", "medium", "high", "xhigh", "max"), default=None)
     start.add_argument("--shallow", action="store_true")
     start.add_argument("--auto-approve", action="store_true", help="Run approval-gated Core tools without prompting")
     start.add_argument("--approval-policy", choices=("require", "auto_approve"), default=None)
@@ -1352,6 +1404,96 @@ def build_parser(
     update_check.add_argument("--json", action="store_true", help="Print the raw check result as JSON")
     update_check.set_defaults(func=cmd_update_check)
 
+    office = sub.add_parser("office", help="Validate and render Office documents")
+    office_sub = office.add_subparsers(dest="office_command", required=True)
+
+    office_check = office_sub.add_parser("check", help="Run one bounded Office readiness check")
+    office_check.add_argument(
+        "--backend",
+        choices=("auto", "microsoft", "libreoffice"),
+        default="auto",
+        help="Office backend (defaults to auto)",
+    )
+    office_check.add_argument(
+        "--timeout",
+        type=_office_positive_float,
+        default=15.0,
+        help="Maximum seconds for each format conversion",
+    )
+    office_check.add_argument(
+        "--report",
+        "--report-path",
+        dest="report_path",
+        default=None,
+        help="Optional path for the JSON readiness report",
+    )
+    office_check.set_defaults(func=cmd_office_check)
+
+    def _add_office_arguments(command: argparse.ArgumentParser, *, render: bool) -> None:
+        # Positional paths keep the command convenient for shell scripts;
+        # option aliases cover callers that need self-documenting invocations.
+        command.add_argument("source_pos", nargs="?", help="Office input/source path")
+        command.add_argument("manifest_pos", nargs="?", help="Canonical data manifest path")
+        if render:
+            command.add_argument("output_pos", nargs="?", help="Directory for rendered PDF/PNG output")
+        command.add_argument(
+            "--input",
+            "--source",
+            "--input-path",
+            "--source-path",
+            dest="source_path",
+            default=None,
+            help="Office input/source path (can replace the first positional path)",
+        )
+        command.add_argument(
+            "--manifest",
+            "--manifest-path",
+            dest="manifest_path",
+            default=None,
+            help="Canonical data manifest path (can replace the second positional path)",
+        )
+        command.add_argument(
+            "--output-dir",
+            "--output",
+            "--out-dir",
+            dest="output_dir_path",
+            default=None,
+            help="Directory for rendered PDF/PNG output",
+        )
+        command.add_argument(
+            "--backend",
+            choices=("auto", "microsoft", "libreoffice"),
+            default="auto",
+            help="Renderer backend (render defaults to auto)",
+        )
+        command.add_argument(
+            "--timeout",
+            type=_office_positive_float,
+            default=120.0,
+            help="Renderer process timeout in seconds",
+        )
+        command.add_argument(
+            "--dpi",
+            type=_office_positive_int,
+            default=144,
+            help="PNG preview resolution",
+        )
+        command.add_argument(
+            "--report",
+            "--report-path",
+            dest="report_path",
+            default=None,
+            help="Optional path for the JSON report",
+        )
+
+    office_validate = office_sub.add_parser("validate", help="Validate manifest and source data without rendering")
+    _add_office_arguments(office_validate, render=False)
+    office_validate.set_defaults(func=cmd_office_validate)
+
+    office_render = office_sub.add_parser("render", help="Validate then render Office/PDF previews")
+    _add_office_arguments(office_render, render=True)
+    office_render.set_defaults(func=cmd_office_render)
+
     mobile = sub.add_parser("mobile", help="Manage desktop mobile control")
     mobile_sub = mobile.add_subparsers(dest="mobile_command", required=True)
     for action in ("start", "stop", "status"):
@@ -1371,24 +1513,50 @@ def build_parser(
     account.add_argument("--password", required=True)
     account.set_defaults(func=cmd_mobile_control, mobile_action="account")
 
-    artifact = sub.add_parser("artifact", help="Manage project artifacts (.lam/artifact/)")
+    artifact = sub.add_parser("artifact", help="Manage project artifacts and immutable revisions")
     artifact_sub = artifact.add_subparsers(dest="artifact_command", required=True)
     artifact_list = artifact_sub.add_parser("list", help="List artifacts of a project workspace")
     artifact_list.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
+    artifact_list.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     artifact_list.add_argument("--include-deleted", action="store_true", help="Also list soft-deleted tombstones")
     artifact_list.set_defaults(func=cmd_artifact_list)
-    artifact_show = artifact_sub.add_parser("show", help="Show a single artifact manifest")
+    artifact_show = artifact_sub.add_parser("show", help="Show a single artifact record")
     artifact_show.add_argument("artifact_id")
     artifact_show.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
+    artifact_show.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     artifact_show.set_defaults(func=cmd_artifact_show)
     artifact_open = artifact_sub.add_parser("open", help="Open an artifact with the system default application")
     artifact_open.add_argument("artifact_id")
     artifact_open.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
+    artifact_open.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     artifact_open.set_defaults(func=cmd_artifact_open)
-    artifact_delete = artifact_sub.add_parser("delete", help="Soft-delete artifacts (id/manifest 保留)")
+    artifact_preview = artifact_sub.add_parser("preview", help="Print an artifact as UTF-8 plain text")
+    artifact_preview.add_argument("artifact_id")
+    artifact_preview.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
+    artifact_preview.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    artifact_preview.add_argument("--max-chars", type=int, default=200000, help="Maximum text characters to print")
+    artifact_preview.set_defaults(func=cmd_artifact_preview)
+    artifact_delete = artifact_sub.add_parser("delete", help="Soft-remove artifacts while retaining identity and revisions")
     artifact_delete.add_argument("artifact_ids", nargs="+")
     artifact_delete.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
+    artifact_delete.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     artifact_delete.set_defaults(func=cmd_artifact_delete)
+    artifact_restore = artifact_sub.add_parser("restore", help="Restore soft-removed artifacts")
+    artifact_restore.add_argument("artifact_ids", nargs="+")
+    artifact_restore.add_argument("--work-root", default="")
+    artifact_restore.add_argument("--core-db", default="")
+    artifact_restore.set_defaults(func=cmd_artifact_restore)
+    artifact_revisions = artifact_sub.add_parser("revisions", help="List immutable artifact revisions")
+    artifact_revisions.add_argument("artifact_id")
+    artifact_revisions.add_argument("--work-root", default="")
+    artifact_revisions.add_argument("--core-db", default="")
+    artifact_revisions.set_defaults(func=cmd_artifact_revisions)
+    artifact_revision_restore = artifact_sub.add_parser("restore-revision", help="Restore one historical revision")
+    artifact_revision_restore.add_argument("artifact_id")
+    artifact_revision_restore.add_argument("revision_id")
+    artifact_revision_restore.add_argument("--work-root", default="")
+    artifact_revision_restore.add_argument("--core-db", default="")
+    artifact_revision_restore.set_defaults(func=cmd_artifact_restore_revision)
 
     session = sub.add_parser("session", help="Query Sunday sessions")
     session_sub = session.add_subparsers(dest="session_command", required=True)
@@ -1584,6 +1752,24 @@ def build_parser(
 
     subagent = sub.add_parser("subagent", help="Manage sub-agent delegation guide")
     subagent_sub = subagent.add_subparsers(dest="subagent_command", required=True)
+    for command in ("list", "create", "close", "message"):
+        lifecycle = subagent_sub.add_parser(command, help=f"{command.title()} session sub-agents")
+        lifecycle.add_argument("thread_id")
+        if command != "list":
+            lifecycle.add_argument("--type", choices=("consider", "execute"), required=True)
+            lifecycle.add_argument("--name", required=True)
+        if command in {"create", "close"}:
+            lifecycle.add_argument("--model", required=True)
+            lifecycle.add_argument(
+                "--reasoning-level",
+                choices=("off", "light", "medium", "Medium", "high", "xhigh", "max", "xh"),
+                required=True,
+            )
+        if command == "message":
+            lifecycle.add_argument("prompt")
+        lifecycle.add_argument("--raw", action="store_true")
+        _add_live_connection_arguments(lifecycle)
+        lifecycle.set_defaults(func=cmd_subagent_lifecycle)
     sa_guide = subagent_sub.add_parser("guide", help="Show or edit the sub-agent delegation guide")
     sa_guide_sub = sa_guide.add_subparsers(dest="subagent_guide_command", required=True)
     sa_guide_show = sa_guide_sub.add_parser("show", help="Print the effective sub-agent guide")
@@ -1599,6 +1785,59 @@ def build_parser(
     sa_guide_edit.add_argument("--scope", choices=("project", "global"), default="global", help="Edit scope")
     sa_guide_edit.add_argument("--work-root", default="", help="Project work root (required for --scope project)")
     sa_guide_edit.set_defaults(func=cmd_subagent_guide_edit)
+    sa_roles = subagent_sub.add_parser("roles", help="Manage sub-agent role assignments")
+    sa_roles_sub = sa_roles.add_subparsers(dest="subagent_roles_command", required=True)
+    sa_roles_show = sa_roles_sub.add_parser("show", help="Show role assignments")
+    sa_roles_show.add_argument(
+        "--scope",
+        choices=("global", "project", "effective"),
+        default="effective",
+    )
+    sa_roles_show.add_argument("--work-root", default="", help="Project work root")
+    sa_roles_show.set_defaults(func=cmd_subagent_roles_show)
+    sa_roles_set = sa_roles_sub.add_parser("set", help="Add or replace one role assignment")
+    sa_roles_set.add_argument("task_type", help="Task type matched case-insensitively")
+    sa_roles_set.add_argument("--type", choices=("consider", "execute"), required=True)
+    sa_roles_set.add_argument("--model", required=True, help="Exact configured model_id")
+    sa_roles_set.add_argument(
+        "--reasoning-min",
+        choices=("off", "light", "medium", "high", "xhigh", "max", "xh"),
+        required=True,
+    )
+    sa_roles_set.add_argument(
+        "--reasoning-max",
+        choices=("off", "light", "medium", "high", "xhigh", "max", "xh"),
+        required=True,
+    )
+    sa_roles_set.add_argument("--scope", choices=("global", "project"), default="global")
+    sa_roles_set.add_argument("--work-root", default="", help="Project work root")
+    sa_roles_set.set_defaults(func=cmd_subagent_roles_set)
+    sa_roles_delete = sa_roles_sub.add_parser("delete", help="Delete one local role assignment")
+    sa_roles_delete.add_argument("task_type", help="Task type matched case-insensitively")
+    sa_roles_delete.add_argument("--scope", choices=("global", "project"), default="global")
+    sa_roles_delete.add_argument("--work-root", default="", help="Project work root")
+    sa_roles_delete.set_defaults(func=cmd_subagent_roles_delete)
+    sa_strategy = subagent_sub.add_parser("strategy", help="Manage the sub-agent delegation strategy")
+    sa_strategy_sub = sa_strategy.add_subparsers(dest="subagent_strategy_command", required=True)
+    sa_strategy_show = sa_strategy_sub.add_parser("show", help="Show the delegation strategy")
+    sa_strategy_show.add_argument(
+        "--scope",
+        choices=("global", "project", "effective"),
+        default="effective",
+    )
+    sa_strategy_show.add_argument("--work-root", default="", help="Project work root")
+    sa_strategy_show.set_defaults(func=cmd_subagent_strategy_show)
+    sa_strategy_set = sa_strategy_sub.add_parser("set", help="Set a local delegation strategy")
+    sa_strategy_set.add_argument(
+        "strategy", choices=("forbidden", "low", "medium", "high")
+    )
+    sa_strategy_set.add_argument("--scope", choices=("global", "project"), default="global")
+    sa_strategy_set.add_argument("--work-root", default="", help="Project work root")
+    sa_strategy_set.set_defaults(func=cmd_subagent_strategy_set)
+    sa_strategy_unset = sa_strategy_sub.add_parser("unset", help="Remove a local strategy and inherit")
+    sa_strategy_unset.add_argument("--scope", choices=("global", "project"), default="project")
+    sa_strategy_unset.add_argument("--work-root", default="", help="Project work root")
+    sa_strategy_unset.set_defaults(func=cmd_subagent_strategy_unset)
 
     models = sub.add_parser("models", help="Manage model definitions (jsonc-backed)")
     models_sub = models.add_subparsers(dest="models_command", required=True)
@@ -1643,6 +1882,28 @@ def build_parser(
         help="Whether new sessions may access paths outside the work directory",
     )
     permissions_config.set_defaults(func=cmd_permissions_config)
+
+    context_compaction = sub.add_parser(
+        "context-compaction",
+        help="Show or configure structural context-compaction retention",
+    )
+    context_compaction_sub = context_compaction.add_subparsers(
+        dest="context_compaction_command", required=True
+    )
+    context_compaction_show = context_compaction_sub.add_parser(
+        "show", help="Show effective context-compaction retention"
+    )
+    context_compaction_show.set_defaults(func=cmd_context_compaction_show)
+    context_compaction_config = context_compaction_sub.add_parser(
+        "config", help="Update structural context-compaction retention"
+    )
+    context_compaction_config.add_argument(
+        "--retained-steps",
+        type=int,
+        default=None,
+        help=f"Initial model Steps to retain (0-{MAX_RETAINED_STEPS}; default {DEFAULT_RETAINED_STEPS})",
+    )
+    context_compaction_config.set_defaults(func=cmd_context_compaction_config)
 
     loadtools = sub.add_parser("loadtools", help="Manage mode tool-set configuration (loadtools.jsonc)")
     loadtools_sub = loadtools.add_subparsers(dest="loadtools_command", required=True)
@@ -1708,6 +1969,441 @@ def _add_live_connection_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
     parser.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     parser.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+
+
+# Office commands deliberately keep their exit codes independent from the
+# renderer implementation.  Scripts can therefore distinguish data/manifest
+# errors from renderer infrastructure and layout QA failures without parsing
+# human-readable messages.
+OFFICE_EXIT_SUCCESS = 0
+OFFICE_EXIT_MANIFEST_MISMATCH = 2
+OFFICE_EXIT_RENDER_FAILURE = 3
+OFFICE_EXIT_LAYOUT_CONFLICT = 4
+
+# Compatibility aliases used by callers that name the two sides of a
+# manifest mismatch separately or distinguish unavailable backends.
+OFFICE_EXIT_DATA_MISMATCH = OFFICE_EXIT_MANIFEST_MISMATCH
+OFFICE_EXIT_RENDER_UNAVAILABLE = OFFICE_EXIT_RENDER_FAILURE
+
+
+def _office_jsonable(value: Any) -> Any:
+    """Convert service reports and issue objects into JSON-safe values."""
+
+    if hasattr(value, "as_dict") and callable(value.as_dict):
+        return _office_jsonable(value.as_dict())
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _office_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_office_jsonable(item) for item in value]
+    if hasattr(value, "__dict__") and not isinstance(value, type):
+        return _office_jsonable(vars(value))
+    # Dataclass values not exposing ``as_dict`` (for example a lightweight
+    # mocked report in tests) are handled without importing dataclasses at
+    # module import time.
+    if hasattr(value, "__dataclass_fields__"):
+        from dataclasses import asdict
+
+        return _office_jsonable(asdict(value))
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return value
+
+
+def _office_issue_values(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    issues = payload.get("issues")
+    if not isinstance(issues, list):
+        return []
+    return [item for item in issues if isinstance(item, Mapping)]
+
+
+def _office_payload_exit_code(payload: Mapping[str, Any], *, action: str) -> int:
+    """Map a report's stable status/issue fields to the CLI exit classes."""
+
+    exit_class = str(payload.get("exit_class") or "").casefold()
+    statuses = payload.get("statuses")
+    statuses = statuses if isinstance(statuses, Mapping) else {}
+    issue_codes = {
+        str(item.get("code") or "").casefold() for item in _office_issue_values(payload)
+    }
+
+    # Layout conflicts are a separate automation concern even when the
+    # service's report calls them a generic visual issue.
+    if (
+        "layout" in exit_class
+        or "overlap" in exit_class
+        or any("overlap" in code or "layout" in code for code in issue_codes)
+    ):
+        return OFFICE_EXIT_LAYOUT_CONFLICT
+
+    if (
+        str(statuses.get("data") or "").casefold() == "failed"
+        or str(statuses.get("structure") or "").casefold() == "failed"
+        or exit_class in {
+            "manifest_mismatch",
+            "data_mismatch",
+            "structure_invalid",
+            "manifest_invalid",
+        }
+        or any(
+            marker in code
+            for code in issue_codes
+            for marker in ("manifest", "mismatch", "binding", "dataset", "source_hash")
+        )
+    ):
+        return OFFICE_EXIT_MANIFEST_MISMATCH
+
+    if (
+        str(statuses.get("visual") or "").casefold() in {"failed", "unavailable"}
+        or exit_class in {
+            "visual_unavailable",
+            "render_unavailable",
+            "render_failure",
+            "render_failed",
+            "visual_issue",
+        }
+        or any(
+            marker in code
+            for code in issue_codes
+            for marker in ("render", "visual", "backend", "conversion")
+        )
+    ):
+        return OFFICE_EXIT_RENDER_FAILURE
+
+    # Validation reports do not have a renderer status.  A non-OK result from
+    # validation is therefore a manifest/data class by definition.
+    if payload.get("ok") is False:
+        return OFFICE_EXIT_MANIFEST_MISMATCH if action == "validate" else OFFICE_EXIT_RENDER_FAILURE
+    return OFFICE_EXIT_SUCCESS
+
+
+def _office_exception_payload(exc: BaseException, *, action: str) -> tuple[dict[str, Any], int]:
+    name = type(exc).__name__.casefold()
+    message = str(exc) or name
+    lowered_message = message.casefold()
+    if any(marker in name or marker in lowered_message for marker in ("layout", "overlap", "conflict")):
+        code = OFFICE_EXIT_LAYOUT_CONFLICT
+        exit_class = "layout_conflict"
+    elif any(
+        marker in name or marker in lowered_message
+        for marker in ("manifest", "mismatch", "dataset", "binding", "structure")
+    ):
+        code = OFFICE_EXIT_MANIFEST_MISMATCH
+        exit_class = "manifest_mismatch"
+    else:
+        code = OFFICE_EXIT_RENDER_FAILURE
+        exit_class = "render_failure"
+    return (
+        {
+            "ok": False,
+            "exit_class": exit_class,
+            "error": {"type": type(exc).__name__, "message": message},
+        },
+        code,
+    )
+
+
+def _office_usage_payload(message: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "exit_class": "usage_error",
+        "error": {"type": "ArgumentError", "message": message},
+    }
+
+
+def _office_write_report(report_path: Path | None, payload: Mapping[str, Any]) -> None:
+    if report_path is None:
+        return
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _office_service_operation(action: str) -> Any:
+    """Load the Office Skills companion runtime only when a command executes."""
+
+    from lamtools_core.skill_runtime import builtin_core_skill_roots
+
+    runtime_root: Path | None = None
+    searched: list[str] = []
+    for skill_root in builtin_core_skill_roots():
+        candidates = (
+            Path(skill_root) / "office-renderer" / "scripts",
+            # Compatibility with pre-0.2 development bundles. Remove after
+            # existing local installations have migrated to the standard
+            # Skill layout.
+            Path(skill_root) / "_shared" / "office_renderer",
+        )
+        for candidate in candidates:
+            searched.append(str(candidate))
+            if (candidate / "lamtools_office_renderer" / "__init__.py").is_file():
+                runtime_root = candidate.resolve()
+                break
+        if runtime_root is not None:
+            break
+    if runtime_root is None:
+        locations = ", ".join(searched) or "<no built-in skill roots>"
+        raise RuntimeError(f"Office Skills renderer runtime was not found; searched: {locations}")
+
+    runtime_path = str(runtime_root)
+    if runtime_path not in sys.path:
+        sys.path.insert(0, runtime_path)
+        importlib.invalidate_caches()
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        module = importlib.import_module("lamtools_office_renderer")
+    finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
+    names = {
+        "check": ("check_office", "check"),
+        "validate": ("validate_office", "validate"),
+        "render": ("render_office", "render"),
+    }[action]
+    for name in names:
+        operation = getattr(module, name, None)
+        if callable(operation):
+            return operation
+    raise RuntimeError(f"office {action} service is unavailable")
+
+
+def _office_operation_kwargs(
+    operation: Any,
+    *,
+    action: str,
+    source: Path,
+    manifest: Path,
+    output_dir: Path | None,
+    backend: str,
+    timeout: float,
+    dpi: int,
+    report_path: Path | None,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Adapt the CLI vocabulary to the service's evolving function signature."""
+
+    try:
+        signature = inspect.signature(operation)
+        parameters = signature.parameters
+    except (TypeError, ValueError):
+        parameters = {}
+
+    positional = [
+        parameter
+        for parameter in parameters.values()
+        if parameter.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    accepts_var_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+    args: list[Any] = []
+    kwargs: dict[str, Any] = {}
+
+    # The canonical service API takes manifest (and output_dir for render) as
+    # leading positional values.  Keep keyword-only and test-double variants
+    # working by falling back to aliases when those parameters are named.
+    leading = [manifest] if action == "validate" else [manifest, output_dir]
+    canonical_aliases = (
+        ("manifest", ("manifest", "manifest_path", "manifest_file", "manifest_value")),
+        ("output_dir", ("output_dir", "output", "destination", "destination_dir", "target_dir")),
+    )
+    consumed: set[str] = set()
+    for index, value in enumerate(leading):
+        if index < len(positional):
+            args.append(value)
+            consumed.add(positional[index].name)
+            continue
+        canonical, aliases = canonical_aliases[index]
+        match = next((name for name in aliases if name in parameters), None)
+        if match is not None:
+            kwargs[match] = value
+            consumed.add(match)
+        elif accepts_var_kwargs:
+            kwargs[canonical] = value
+
+    option_values: tuple[tuple[str, tuple[str, ...], Any, bool], ...] = (
+        ("source", ("source", "source_path", "input", "input_path"), source, True),
+        ("backend", ("backend", "backend_name"), backend, action == "render"),
+        ("timeout", ("timeout", "timeout_seconds", "render_timeout"), timeout, action == "render"),
+        ("dpi", ("dpi", "resolution"), dpi, action == "render"),
+        ("report_path", ("report_path", "report", "report_file"), report_path, report_path is not None),
+    )
+    for canonical, aliases, value, enabled in option_values:
+        if not enabled:
+            continue
+        match = next((name for name in aliases if name in parameters and name not in consumed), None)
+        if match is not None:
+            kwargs[match] = value
+        elif accepts_var_kwargs:
+            kwargs[canonical] = value
+    return args, kwargs
+
+
+async def _invoke_office_service(
+    *,
+    action: str,
+    source: Path,
+    manifest: Path,
+    output_dir: Path | None = None,
+    backend: str = "auto",
+    timeout: float = 120.0,
+    dpi: int = 144,
+    report_path: Path | None = None,
+) -> Any:
+    operation = _office_service_operation(action)
+    args, kwargs = _office_operation_kwargs(
+        operation,
+        action=action,
+        source=source,
+        manifest=manifest,
+        output_dir=output_dir,
+        backend=backend,
+        timeout=timeout,
+        dpi=dpi,
+        report_path=report_path,
+    )
+    result = operation(*args, **kwargs)
+    if inspect.isawaitable(result):
+        result = await result
+    return result
+
+
+def _office_paths(args: argparse.Namespace, *, require_output: bool) -> tuple[Path, Path, Path | None]:
+    """Resolve positional and option aliases accepted by the Office CLI."""
+
+    source_option = (
+        getattr(args, "source_path", None)
+        or getattr(args, "input_path", None)
+        or getattr(args, "source", None)
+        or getattr(args, "input", None)
+    )
+    manifest_option = getattr(args, "manifest_path", None) or getattr(args, "manifest", None)
+    output_option = (
+        getattr(args, "output_dir_path", None)
+        or getattr(args, "output_dir", None)
+        or getattr(args, "output", None)
+    )
+    positionals = [
+        value
+        for value in (
+            getattr(args, "source_pos", None),
+            getattr(args, "manifest_pos", None),
+            getattr(args, "output_pos", None),
+        )
+        if value is not None
+    ]
+    if source_option and manifest_option:
+        source_value = source_option
+        manifest_value = manifest_option
+        # With both named paths present argparse still assigns any trailing
+        # positional values to ``source_pos``/``manifest_pos``.  The final
+        # value is therefore the only sensible positional output directory.
+        output_value = output_option or (positionals[-1] if positionals else None)
+    elif source_option:
+        source_value = source_option
+        manifest_value = manifest_option or (positionals[0] if positionals else None)
+        output_value = output_option or (positionals[1] if len(positionals) > 1 else None)
+    elif manifest_option:
+        source_value = positionals[0] if positionals else None
+        manifest_value = manifest_option
+        output_value = output_option or (positionals[1] if len(positionals) > 1 else None)
+    else:
+        source_value = positionals[0] if positionals else None
+        manifest_value = positionals[1] if len(positionals) > 1 else None
+        output_value = output_option or (positionals[2] if len(positionals) > 2 else None)
+    if not source_value or not manifest_value or (require_output and not output_value):
+        expected = "source/input, manifest, and output directory" if require_output else "source/input and manifest"
+        raise ValueError(f"office {getattr(args, 'office_command', 'command')} requires {expected}")
+    return Path(source_value), Path(manifest_value), Path(output_value) if output_value else None
+
+
+async def _cmd_office(args: argparse.Namespace, *, action: str) -> int:
+    try:
+        source, manifest, output_dir = _office_paths(args, require_output=action == "render")
+    except (TypeError, ValueError) as exc:
+        payload, code = _office_usage_payload(str(exc)), 1
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+        return code
+    report_path_value = getattr(args, "report_path", None)
+    report_path = Path(report_path_value) if report_path_value else None
+    try:
+        result = await _invoke_office_service(
+            action=action,
+            source=source,
+            manifest=manifest,
+            output_dir=output_dir,
+            backend=str(getattr(args, "backend", "auto") or "auto"),
+            timeout=float(getattr(args, "timeout", 120.0)),
+            dpi=int(getattr(args, "dpi", 144)),
+            report_path=report_path,
+        )
+        payload = _office_jsonable(result)
+        if not isinstance(payload, dict):
+            payload = {"ok": True, "result": payload}
+        _office_write_report(report_path, payload)
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+        return _office_payload_exit_code(payload, action=action)
+    except Exception as exc:  # service failures become stable JSON classes
+        payload, code = _office_exception_payload(exc, action=action)
+        try:
+            _office_write_report(report_path, payload)
+        except OSError:
+            # Preserve the renderer's stable exit class when an optional
+            # report path itself is not writable.
+            pass
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+        return code
+
+
+async def cmd_office_validate(args: argparse.Namespace) -> int:
+    return await _cmd_office(args, action="validate")
+
+
+async def cmd_office_render(args: argparse.Namespace) -> int:
+    return await _cmd_office(args, action="render")
+
+
+async def cmd_office_check(args: argparse.Namespace) -> int:
+    report_path_value = getattr(args, "report_path", None)
+    report_path = Path(report_path_value) if report_path_value else None
+    try:
+        operation = _office_service_operation("check")
+        result = operation(
+            backend=str(getattr(args, "backend", "auto") or "auto"),
+            timeout=float(getattr(args, "timeout", 15.0)),
+        )
+        if inspect.isawaitable(result):
+            result = await result
+        payload = _office_jsonable(result)
+        if not isinstance(payload, dict):
+            raise TypeError("Office readiness check returned a non-object report")
+        code = OFFICE_EXIT_SUCCESS if payload.get("ok") is True else OFFICE_EXIT_RENDER_FAILURE
+    except Exception as exc:
+        payload, code = _office_exception_payload(exc, action="render")
+        payload.update(
+            {
+                "message": "Office 应用未就绪 · Test Passed 0/3",
+                "passed": 0,
+                "total": 3,
+            }
+        )
+    try:
+        _office_write_report(report_path, payload)
+    except OSError:
+        pass
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, OSError):
+        pass
+    print(str(payload.get("message") or "Office 应用未就绪 · Test Passed 0/3"), flush=True)
+    if code != OFFICE_EXIT_SUCCESS:
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+    return code
 
 
 async def _invoke_live(args: argparse.Namespace, operation: Any) -> dict[str, Any]:
@@ -2928,6 +3624,31 @@ async def cmd_arrange_edit(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_subagent_lifecycle(args: argparse.Namespace) -> int:
+    command = str(args.subagent_command)
+    payload: dict[str, Any] = {"thread_id": args.thread_id}
+    if command != "list":
+        payload.update({"type": args.type, "name": args.name})
+    if command in {"create", "close"}:
+        payload.update({"model": args.model, "reasoning_level": args.reasoning_level})
+    if command == "message":
+        payload["prompt"] = args.prompt
+    result = await _invoke_live(
+        args, lambda client: client.request(f"sub_agent.{command}", payload)
+    )
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+    elif command == "list":
+        for item in result.get("items", []):
+            print(
+                f"{item.get('name')} {item.get('type')} {item.get('status')} "
+                f"{item.get('model_id')} {item.get('reasoning_level')}", flush=True
+            )
+    else:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+    return 0
+
+
 async def cmd_subagent_guide_show(args: argparse.Namespace) -> int:
     from lamtools_core.config.subagent_prompt import (
         DEFAULT_SUBAGENT_GUIDE,
@@ -2935,7 +3656,7 @@ async def cmd_subagent_guide_show(args: argparse.Namespace) -> int:
         resolve_subagent_guide_path,
     )
 
-    work_root = args.work_root or None
+    work_root = str(args.work_root or "").strip() or None
     if args.scope == "project" and not work_root:
         print("error: --work-root is required for --scope project", file=sys.stderr)
         return 1
@@ -2963,14 +3684,15 @@ async def cmd_subagent_guide_show(args: argparse.Namespace) -> int:
 async def cmd_subagent_guide_set(args: argparse.Namespace) -> int:
     from lamtools_core.config.subagent_prompt import write_subagent_guide
 
-    if args.scope == "project" and not args.work_root:
+    work_root = str(args.work_root or "").strip() or None
+    if args.scope == "project" and not work_root:
         print("error: --work-root is required for --scope project", file=sys.stderr)
         return 1
     if args.source_file == "-":
         content = sys.stdin.read()
     else:
         content = Path(args.source_file).read_text(encoding="utf-8")
-    path = write_subagent_guide(content, scope=args.scope, work_root=args.work_root or None)
+    path = write_subagent_guide(content, scope=args.scope, work_root=work_root)
     print(f"[subagent] guide written to {path} (scope={args.scope})")
     return 0
 
@@ -2978,10 +3700,11 @@ async def cmd_subagent_guide_set(args: argparse.Namespace) -> int:
 async def cmd_subagent_guide_edit(args: argparse.Namespace) -> int:
     from lamtools_core.config.subagent_prompt import guide_path_for_scope
 
-    if args.scope == "project" and not args.work_root:
+    work_root = str(args.work_root or "").strip() or None
+    if args.scope == "project" and not work_root:
         print("error: --work-root is required for --scope project", file=sys.stderr)
         return 1
-    path = guide_path_for_scope(args.scope, args.work_root or None)
+    path = guide_path_for_scope(args.scope, work_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         from lamtools_core.config.subagent_prompt import DEFAULT_SUBAGENT_GUIDE
@@ -2997,6 +3720,230 @@ async def cmd_subagent_guide_edit(args: argparse.Namespace) -> int:
     exe = shutil.which(editor) or editor
     subprocess.run([exe, str(path)], check=False)
     print(f"[subagent] edited {path} (scope={args.scope})")
+    return 0
+
+
+def _subagent_roles_require_project_root(args: argparse.Namespace) -> bool:
+    args.work_root = str(args.work_root or "").strip()
+    if args.scope == "project" and not args.work_root:
+        print("error: --work-root is required for --scope project", file=sys.stderr)
+        return False
+    return True
+
+
+async def cmd_subagent_roles_show(args: argparse.Namespace) -> int:
+    from lamtools_core.config.subagent_prompt import (
+        ROLE_ASSIGNMENTS_KEY,
+        load_effective_role_assignments,
+        load_local_subagent_settings,
+        normalize_role_assignments,
+    )
+
+    if not _subagent_roles_require_project_root(args):
+        return 1
+    work_root = str(args.work_root or "").strip() or None
+    try:
+        if args.scope == "effective":
+            roles = load_effective_role_assignments(work_root)
+        else:
+            settings = load_local_subagent_settings(args.scope, work_root)
+            roles = normalize_role_assignments(settings.get(ROLE_ASSIGNMENTS_KEY, []))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {"scope": args.scope, "role_assignments": roles},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+async def cmd_subagent_roles_set(args: argparse.Namespace) -> int:
+    from lamtools_core.config.subagent_prompt import (
+        ROLE_ASSIGNMENTS_KEY,
+        load_local_subagent_settings,
+        normalize_role_assignment,
+        normalize_role_assignments,
+        write_subagent_settings,
+    )
+
+    if not _subagent_roles_require_project_root(args):
+        return 1
+    work_root = str(args.work_root or "").strip() or None
+    try:
+        rule = normalize_role_assignment(
+            {
+                "task_type": args.task_type,
+                "type": args.type,
+                "model": args.model,
+                "reasoning_min": args.reasoning_min,
+                "reasoning_max": args.reasoning_max,
+            }
+        )
+        local = load_local_subagent_settings(args.scope, work_root)
+        roles = normalize_role_assignments(local.get(ROLE_ASSIGNMENTS_KEY, []))
+        key = rule["task_type"].strip().casefold()
+        for index, current in enumerate(roles):
+            if current["task_type"].strip().casefold() == key:
+                roles[index] = rule
+                break
+        else:
+            roles.append(rule)
+        path = write_subagent_settings(
+            {ROLE_ASSIGNMENTS_KEY: roles},
+            scope=args.scope,
+            work_root=work_root,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {"scope": args.scope, "path": str(path), "role_assignment": rule},
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+async def cmd_subagent_roles_delete(args: argparse.Namespace) -> int:
+    from lamtools_core.config.subagent_prompt import (
+        ROLE_ASSIGNMENTS_KEY,
+        load_local_subagent_settings,
+        normalize_role_assignments,
+        write_subagent_settings,
+    )
+
+    if not _subagent_roles_require_project_root(args):
+        return 1
+    work_root = args.work_root or None
+    key = str(args.task_type or "").strip().casefold()
+    if not key:
+        print("error: task_type must not be empty", file=sys.stderr)
+        return 1
+    try:
+        local = load_local_subagent_settings(args.scope, work_root)
+        roles = normalize_role_assignments(local.get(ROLE_ASSIGNMENTS_KEY, []))
+        remaining = [
+            rule
+            for rule in roles
+            if rule["task_type"].strip().casefold() != key
+        ]
+        deleted = len(remaining) != len(roles)
+        path = write_subagent_settings(
+            {ROLE_ASSIGNMENTS_KEY: remaining},
+            scope=args.scope,
+            work_root=work_root,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {"scope": args.scope, "path": str(path), "deleted": deleted},
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+async def cmd_subagent_strategy_show(args: argparse.Namespace) -> int:
+    from lamtools_core.config.subagent_prompt import (
+        DELEGATION_STRATEGY_KEY,
+        load_effective_delegation_strategy,
+        load_global_delegation_strategy,
+        load_local_subagent_settings,
+        normalize_delegation_strategy,
+    )
+
+    if not _subagent_roles_require_project_root(args):
+        return 1
+    work_root = args.work_root or None
+    effective = load_effective_delegation_strategy(work_root)
+    global_strategy = load_global_delegation_strategy()
+    local_strategy: str | None = None
+    inherited = False
+    if args.scope in {"global", "project"}:
+        local = load_local_subagent_settings(args.scope, work_root)
+        inherited = DELEGATION_STRATEGY_KEY not in local
+        if not inherited:
+            try:
+                local_strategy = normalize_delegation_strategy(
+                    local[DELEGATION_STRATEGY_KEY]
+                )
+            except ValueError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+    print(
+        json.dumps(
+            {
+                "scope": args.scope,
+                "delegation_strategy": local_strategy if args.scope != "effective" else effective,
+                "effective_delegation_strategy": effective,
+                "global_delegation_strategy": global_strategy,
+                "delegation_strategy_inherited": inherited,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+async def cmd_subagent_strategy_set(args: argparse.Namespace) -> int:
+    from lamtools_core.config.subagent_prompt import (
+        DELEGATION_STRATEGY_KEY,
+        normalize_delegation_strategy,
+        write_subagent_settings,
+    )
+
+    if not _subagent_roles_require_project_root(args):
+        return 1
+    try:
+        strategy = normalize_delegation_strategy(args.strategy)
+        path = write_subagent_settings(
+            {DELEGATION_STRATEGY_KEY: strategy},
+            scope=args.scope,
+            work_root=args.work_root or None,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {"scope": args.scope, "path": str(path), "delegation_strategy": strategy},
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+async def cmd_subagent_strategy_unset(args: argparse.Namespace) -> int:
+    from lamtools_core.config.subagent_prompt import (
+        DELEGATION_STRATEGY_KEY,
+        write_subagent_settings,
+    )
+
+    if not _subagent_roles_require_project_root(args):
+        return 1
+    try:
+        path = write_subagent_settings(
+            {DELEGATION_STRATEGY_KEY: None},
+            scope=args.scope,
+            work_root=args.work_root or None,
+        )
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {"scope": args.scope, "path": str(path), "delegation_strategy": None},
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
@@ -3157,6 +4104,41 @@ async def cmd_permissions_config(args: argparse.Namespace) -> int:
         f"default_approval={controls['permission_preset']} "
         f"outside_workdir={'yes' if controls['base_allow_access_outside_workdir'] else 'no'}"
     )
+    return 0
+
+
+def _context_compaction_settings() -> dict[str, Any]:
+    """Read the effective structural context-compaction settings."""
+    value = get_setting(CONTEXT_COMPACTION_NAMESPACE)
+    return dict(value) if isinstance(value, dict) else {}
+
+
+async def cmd_context_compaction_show(args: argparse.Namespace) -> int:
+    del args
+    # Always print the resolved value so missing/invalid settings visibly use
+    # the documented default.
+    retained_steps = load_retained_steps()
+    print(f"retained_steps: {retained_steps}")
+    print("retained_user_messages: 20")
+    print("说明:     默认完整汇总历史，再追加最近 20 条用户指令原文；预算不足时静默丢弃最旧条目")
+    return 0
+
+
+async def cmd_context_compaction_config(args: argparse.Namespace) -> int:
+    retained_steps = args.retained_steps
+    if retained_steps is None:
+        print("error: nothing to change (pass --retained-steps)", file=sys.stderr)
+        return 1
+    if isinstance(retained_steps, bool) or not 0 <= retained_steps <= MAX_RETAINED_STEPS:
+        print(
+            f"error: --retained-steps must be an integer between 0 and {MAX_RETAINED_STEPS}",
+            file=sys.stderr,
+        )
+        return 1
+    value = _context_compaction_settings()
+    value["retained_steps"] = retained_steps
+    set_setting(CONTEXT_COMPACTION_NAMESPACE, value)
+    print(f"[context compaction] saved: retained_steps={retained_steps}")
     return 0
 
 
@@ -3359,15 +4341,19 @@ async def cmd_update_check(args: argparse.Namespace) -> int:
     return 1
 
 
-def _artifact_registry_for_cli(work_root: str) -> ArtifactRegistry:
-    from lamtools_core.artifact import ArtifactRegistry
-
-    root = Path(work_root).resolve() if work_root else Path.cwd().resolve()
-    return ArtifactRegistry(root)
-
-
 def _artifact_work_root(args: argparse.Namespace) -> str:
     return str(getattr(args, "work_root", "") or "")
+
+
+async def _artifact_store_for_cli(args: argparse.Namespace) -> tuple[Any, Any, Path]:
+    root = Path(_artifact_work_root(args) or Path.cwd()).resolve()
+    db = await open_core_app_db(_resolve_core_db(getattr(args, "core_db", "") or None))
+    project = next((item for item in await db.project_store.list() if Path(item.work_root).resolve() == root), None)
+    if project is None:
+        await db.close()
+        raise LookupError(f"Project not found for work_root: {root}")
+    await db.artifact_store.migrate_legacy(project_id=project.id, work_root=root)
+    return db, project, root
 
 
 def _format_artifact(record: Any, *, with_prompt: bool = False) -> str:
@@ -3384,67 +4370,150 @@ def _format_artifact(record: Any, *, with_prompt: bool = False) -> str:
 
 
 async def cmd_artifact_list(args: argparse.Namespace) -> int:
-    registry = _artifact_registry_for_cli(_artifact_work_root(args))
-    records = registry.list(include_deleted=bool(args.include_deleted))
-    if not records:
-        print(f"[artifact] 无任何 artifact（registry: {registry.root}）")
+    try:
+        db, project, root = await _artifact_store_for_cli(args)
+    except LookupError as exc:
+        print(f"[artifact] {exc}", file=sys.stderr)
+        return 1
+    try:
+        records = await db.artifact_store.list(project.id, include_deleted=bool(args.include_deleted))
+        print(f"[artifact] {len(records)} 个（{root}）")
+        for record in records:
+            print(_format_artifact(record, with_prompt=True))
         return 0
-    print(f"[artifact] {len(records)} 个（{registry.root}）")
-    for record in records:
-        print(_format_artifact(record, with_prompt=True))
-    return 0
+    finally:
+        await db.close()
 
 
 async def cmd_artifact_show(args: argparse.Namespace) -> int:
-    registry = _artifact_registry_for_cli(_artifact_work_root(args))
-    record = registry.get(args.artifact_id)
-    if record is None:
-        print(f"[artifact] not found: {args.artifact_id}", file=sys.stderr)
+    try:
+        db, project, _root = await _artifact_store_for_cli(args)
+    except LookupError as exc:
+        print(f"[artifact] {exc}", file=sys.stderr)
         return 1
-    print(f"artifact_id: {record.artifact_id}")
-    print(f"kind:        {record.kind}")
-    print(f"mime_type:   {record.mime_type}")
-    print(f"name:        {record.name}")
-    print(f"path:        {record.path}")
-    print(f"source:      {record.source}")
-    print(f"prompt:      {record.prompt or '-'}")
-    print(f"parent_ids:  {', '.join(record.parent_ids) or '-'}")
-    print(f"children_ids:{', '.join(record.children_ids) or '-'}")
-    print(f"created_at:  {record.created_at or '-'}")
-    print(f"deleted:     {record.deleted}")
-    return 0
+    try:
+        record = await db.artifact_store.get(args.artifact_id)
+        if record is None or record.project_id != project.id:
+            print(f"[artifact] not found: {args.artifact_id}", file=sys.stderr)
+            return 1
+        for key in ("artifact_id", "kind", "mime_type", "name", "path", "source", "role", "latest_revision_id", "revision_count", "created_at", "deleted"):
+            print(f"{key}: {getattr(record, key)}")
+        return 0
+    finally:
+        await db.close()
 
 
 async def cmd_artifact_open(args: argparse.Namespace) -> int:
     from lamtools_core.attachment import open_with_default_app
 
-    registry = _artifact_registry_for_cli(_artifact_work_root(args))
-    record = registry.get(args.artifact_id)
-    if record is None:
-        print(f"[artifact] not found: {args.artifact_id}", file=sys.stderr)
-        return 1
-    if record.path.startswith("attachment://"):
-        print("[artifact] attachment-backed artifacts must use attachment open", file=sys.stderr)
-        return 1
-    relative_path = record.path.removeprefix("workspace://")
-    candidate = (registry.work_root / relative_path).resolve()
     try:
-        candidate.relative_to(registry.work_root)
+        db, project, root = await _artifact_store_for_cli(args)
+    except LookupError as exc:
+        print(f"[artifact] {exc}", file=sys.stderr)
+        return 1
+    try:
+        record = await db.artifact_store.get(args.artifact_id)
+        if record is None or record.project_id != project.id:
+            raise FileNotFoundError(args.artifact_id)
+        if record.path.startswith("attachment://"):
+            raise ValueError("attachment-backed artifacts must use attachment open")
+        candidate = (root / record.path.removeprefix("workspace://")).resolve()
+        candidate.relative_to(root)
         if not candidate.is_file():
             raise FileNotFoundError(candidate)
         open_with_default_app(candidate)
+        print(f"[artifact] opened: {record.name}")
+        return 0
     except (FileNotFoundError, OSError, ValueError) as exc:
         print(f"[artifact] open failed: {exc}", file=sys.stderr)
         return 1
-    print(f"[artifact] opened: {record.name}")
-    return 0
+    finally:
+        await db.close()
+
+
+async def cmd_artifact_preview(args: argparse.Namespace) -> int:
+    """Read an artifact through the same workspace boundary as GUI text preview."""
+
+    try:
+        db, project, root = await _artifact_store_for_cli(args)
+    except LookupError as exc:
+        print(f"[artifact] {exc}", file=sys.stderr)
+        return 1
+    try:
+        record = await db.artifact_store.get(args.artifact_id)
+        if record is None or record.project_id != project.id:
+            raise FileNotFoundError(args.artifact_id)
+        if record.path.startswith("attachment://"):
+            raise ValueError("attachment-backed artifacts must use attachment preview")
+        candidate = (root / record.path.removeprefix("workspace://")).resolve()
+        candidate.relative_to(root)
+        if not candidate.is_file():
+            raise FileNotFoundError(candidate)
+        if b"\0" in candidate.read_bytes()[:8192]:
+            raise ValueError(f"not a plain-text artifact: {record.name}")
+        limit = max(1, int(getattr(args, "max_chars", 200000) or 200000))
+        text = candidate.read_text(encoding="utf-8", errors="replace")
+        print(text[:limit], end="" if text[:limit].endswith("\n") else "\n")
+        if len(text) > limit:
+            print(f"[artifact] preview truncated at {limit} characters", file=sys.stderr)
+        return 0
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        print(f"[artifact] preview failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        await db.close()
 
 
 async def cmd_artifact_delete(args: argparse.Namespace) -> int:
-    registry = _artifact_registry_for_cli(_artifact_work_root(args))
-    deleted = registry.soft_delete(args.artifact_ids)
-    print(f"[artifact] 已软删 {deleted} 个（manifest 保留，id 不清理）")
-    return 0
+    db, project, _root = await _artifact_store_for_cli(args)
+    try:
+        deleted = await db.artifact_store.soft_remove(args.artifact_ids, project_id=project.id)
+        print(f"[artifact] 已软删 {deleted} 个（内容与历史保留）")
+        return 0
+    finally:
+        await db.close()
+
+
+async def cmd_artifact_restore(args: argparse.Namespace) -> int:
+    db, project, _root = await _artifact_store_for_cli(args)
+    try:
+        restored = await db.artifact_store.soft_remove(
+            args.artifact_ids,
+            deleted=False,
+            project_id=project.id,
+        )
+        print(f"[artifact] 已恢复 {restored} 个")
+        return 0
+    finally:
+        await db.close()
+
+
+async def cmd_artifact_revisions(args: argparse.Namespace) -> int:
+    db, project, _root = await _artifact_store_for_cli(args)
+    try:
+        record = await db.artifact_store.get(args.artifact_id)
+        if record is None or record.project_id != project.id:
+            print(f"[artifact] not found: {args.artifact_id}", file=sys.stderr)
+            return 1
+        for revision in await db.artifact_store.revisions(record.artifact_id):
+            print(f"{revision.ordinal:>4} {revision.revision_id} {revision.sha256} {revision.size}")
+        return 0
+    finally:
+        await db.close()
+
+
+async def cmd_artifact_restore_revision(args: argparse.Namespace) -> int:
+    db, project, _root = await _artifact_store_for_cli(args)
+    try:
+        record = await db.artifact_store.restore_revision(
+            args.artifact_id,
+            args.revision_id,
+            project_id=project.id,
+        )
+        print(f"[artifact] restored {record.artifact_id} -> {record.latest_revision_id}")
+        return 0
+    finally:
+        await db.close()
 
 
 async def cmd_loadtools_show(args: argparse.Namespace) -> int:
@@ -3978,6 +5047,26 @@ def _resolve_thread_id(value: str | None) -> str:
 def _positive_timeout_or_none(value: str) -> float | None:
     timeout = float(value)
     return timeout if timeout > 0 else None
+
+
+def _office_positive_float(value: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("must be a positive number") from exc
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive number")
+    return number
+
+
+def _office_positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
 
 
 def _repo_root() -> Path:

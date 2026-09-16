@@ -1,0 +1,6 @@
+interface:
+  display_name: "Office Files"
+  short_description: "Inventory and organize office files with safe previews"
+  default_prompt: "Use $office-files to review and organize these office files safely."
+policy:
+  allow_implicit_invocation: true

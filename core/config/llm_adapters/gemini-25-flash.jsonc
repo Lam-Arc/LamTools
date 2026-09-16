@@ -16,7 +16,9 @@
       "presets": {
         "off": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 0 } },
         "light": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 2048 } },
+        "medium": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 8192 } },
         "high": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 8192 } },
+        "xhigh": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 24576 } },
         "max": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 24576 } }
       }
     }

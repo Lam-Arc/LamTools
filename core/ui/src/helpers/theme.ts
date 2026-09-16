@@ -53,11 +53,170 @@ export function themeForMode(preset: ThemePreset, mode: Exclude<ThemeMode, 'syst
 }
 
 // ---------------------------------------------------------------------------
-// Sunday defaults. DEFAULT_THEME stays the dark-compatible legacy alias used
-// by callers that only understand a single theme object.
+// Sunday defaults. The palette is deliberately flat: warm ivory in light
+// mode, neutral graphite in dark mode, with high-contrast control surfaces
+// pairing graphite with ivory in light mode and ivory with graphite in dark.
+//
+// These representatives come from the supplied 1254px reference marks. We
+// sampled only opaque interior/frame regions, then used the median (rather
+// than a single anti-aliased pixel): dark graphite #1d1f24, light ivory
+// #fdfbf6, dark frame #818289, and light frame #d2d8e6. The light backdrop
+// uses the sampled frame solid; the dark backdrop uses the user-selected
+// graphite #3a3b3f. Chat surfaces use the sampled ivory/graphite
+// solids, and controls use the paired brand solids so each area remains flat
+// while retaining the reference's contrast hierarchy.
+// DEFAULT_THEME stays the dark-compatible alias used by single-theme callers.
 // ---------------------------------------------------------------------------
 
 export const SUNDAY_DARK_THEME: ThemeData = {
+  backdropAngle: 180,
+  backdropStops: [{ color: '#3A3B3F', position: 0 }],
+  backdropText: '#FBF7F0',
+  mainAngle: 180,
+  mainStops: [{ color: '#1B1D22', position: 0 }],
+  mainText: '#FBF7F0',
+  mainOpacity: 1,
+  composerAngle: 180,
+  composerStops: [{ color: '#22242A', position: 0 }],
+  composerText: '#FBF7F0',
+  composerOpacity: 1,
+  controlAngle: 180,
+  controlStops: [{ color: '#FBF7F0', position: 0 }],
+  controlText: '#2E3138',
+  controlOpacity: 1,
+  processIconColor: '#888990',
+}
+
+export const SUNDAY_LIGHT_THEME: ThemeData = {
+  backdropStops: [{ color: '#D2D8E6', position: 0 }],
+  backdropAngle: 180,
+  backdropText: '#2E3138',
+  mainStops: [{ color: '#FDFBF7', position: 0 }],
+  mainAngle: 180,
+  mainText: '#2E3138',
+  mainOpacity: 1,
+  composerStops: [{ color: '#F7F4EE', position: 0 }],
+  composerAngle: 180,
+  composerText: '#2E3138',
+  composerOpacity: 1,
+  controlStops: [{ color: '#2E3138', position: 0 }],
+  controlAngle: 180,
+  controlText: '#FBF7F0',
+  controlOpacity: 1,
+  processIconColor: '#C9D0DF',
+}
+
+/** Previous frame-gray dark backdrop, retained for exact migration. */
+export const LEGACY_SUNDAY_FRAME_DARK_THEME: ThemeData = {
+  backdropAngle: 180,
+  backdropStops: [{ color: '#818289', position: 0 }],
+  backdropText: '#FBF7F0',
+  mainAngle: 180,
+  mainStops: [{ color: '#1B1D22', position: 0 }],
+  mainText: '#FBF7F0',
+  mainOpacity: 1,
+  composerAngle: 180,
+  composerStops: [{ color: '#1B1D22', position: 0 }],
+  composerText: '#FBF7F0',
+  composerOpacity: 1,
+  controlAngle: 180,
+  controlStops: [{ color: '#FBF7F0', position: 0 }],
+  controlText: '#2E3138',
+  controlOpacity: 1,
+  processIconColor: '#888990',
+}
+
+/** Previous Sunday defaults with composer and chat on the same solid. */
+export const LEGACY_SUNDAY_UNIFIED_COMPOSER_DARK_THEME: ThemeData = {
+  ...SUNDAY_DARK_THEME,
+  composerStops: [{ color: '#1B1D22', position: 0 }],
+}
+
+export const LEGACY_SUNDAY_UNIFIED_COMPOSER_LIGHT_THEME: ThemeData = {
+  ...SUNDAY_LIGHT_THEME,
+  composerStops: [{ color: '#FDFBF7', position: 0 }],
+}
+
+/** Immediately previous sampled flat Sunday defaults, retained for exact migration. */
+export const LEGACY_SUNDAY_FLAT_DARK_THEME: ThemeData = {
+  backdropAngle: 180,
+  backdropStops: [{ color: '#121419', position: 0 }],
+  backdropText: '#FBF7F0',
+  mainAngle: 180,
+  mainStops: [{ color: '#1B1D22', position: 0 }],
+  mainText: '#FBF7F0',
+  mainOpacity: 1,
+  composerAngle: 180,
+  composerStops: [{ color: '#1B1D22', position: 0 }],
+  composerText: '#FBF7F0',
+  composerOpacity: 1,
+  controlAngle: 180,
+  controlStops: [{ color: '#35383F', position: 0 }],
+  controlText: '#FBF7F0',
+  controlOpacity: 1,
+  processIconColor: '#888990',
+}
+
+export const LEGACY_SUNDAY_FLAT_LIGHT_THEME: ThemeData = {
+  backdropAngle: 180,
+  backdropStops: [{ color: '#FCF9F5', position: 0 }],
+  backdropText: '#2E3138',
+  mainAngle: 180,
+  mainStops: [{ color: '#FDFBF7', position: 0 }],
+  mainText: '#2E3138',
+  mainOpacity: 1,
+  composerAngle: 180,
+  composerStops: [{ color: '#FDFBF7', position: 0 }],
+  composerText: '#2E3138',
+  composerOpacity: 1,
+  controlAngle: 180,
+  controlStops: [{ color: '#D6DCEA', position: 0 }],
+  controlText: '#2E3138',
+  controlOpacity: 1,
+  processIconColor: '#C9D0DF',
+}
+
+/** Immediately previous inverted-control defaults, retained for exact migration. */
+export const LEGACY_SUNDAY_INVERTED_DARK_THEME: ThemeData = {
+  backdropAngle: 180,
+  backdropStops: [{ color: '#121419', position: 0 }],
+  backdropText: '#FBF7F0',
+  mainAngle: 180,
+  mainStops: [{ color: '#1B1D22', position: 0 }],
+  mainText: '#FBF7F0',
+  mainOpacity: 1,
+  composerAngle: 180,
+  composerStops: [{ color: '#1B1D22', position: 0 }],
+  composerText: '#FBF7F0',
+  composerOpacity: 1,
+  controlAngle: 180,
+  controlStops: [{ color: '#FBF7F0', position: 0 }],
+  controlText: '#2E3138',
+  controlOpacity: 1,
+  processIconColor: '#888990',
+}
+
+export const LEGACY_SUNDAY_INVERTED_LIGHT_THEME: ThemeData = {
+  backdropAngle: 180,
+  backdropStops: [{ color: '#FCF9F5', position: 0 }],
+  backdropText: '#2E3138',
+  mainAngle: 180,
+  mainStops: [{ color: '#FDFBF7', position: 0 }],
+  mainText: '#2E3138',
+  mainOpacity: 1,
+  composerAngle: 180,
+  composerStops: [{ color: '#FDFBF7', position: 0 }],
+  composerText: '#2E3138',
+  composerOpacity: 1,
+  controlAngle: 180,
+  controlStops: [{ color: '#2E3138', position: 0 }],
+  controlText: '#FBF7F0',
+  controlOpacity: 1,
+  processIconColor: '#C9D0DF',
+}
+
+/** Previous colorful Sunday defaults, retained only for exact migration. */
+export const LEGACY_SUNDAY_DARK_THEME: ThemeData = {
   backdropAngle: 112,
   backdropStops: [
     { color: '#171926', position: 0 },
@@ -89,7 +248,7 @@ export const SUNDAY_DARK_THEME: ThemeData = {
   processIconColor: '#a693ff',
 }
 
-export const SUNDAY_LIGHT_THEME: ThemeData = {
+export const LEGACY_SUNDAY_LIGHT_THEME: ThemeData = {
   backdropStops: [
     { color: '#fff0df', position: 0 },
     { color: '#f7efff', position: 58 },
@@ -265,7 +424,65 @@ function isSolidStops(stops: ThemeStop[], color: string): boolean {
     && stops.every((stop) => stop.color.toLowerCase() === color.toLowerCase())
 }
 
+function themesEqual(left: ThemeData, right: ThemeData): boolean {
+  const scalarKeys = [
+    'backdropAngle', 'backdropText',
+    'mainAngle', 'mainText', 'mainOpacity',
+    'composerAngle', 'composerText', 'composerOpacity',
+    'controlAngle', 'controlText', 'controlOpacity',
+    'processIconColor',
+  ] as const
+  if (scalarKeys.some((key) => left[key] !== right[key])) return false
+  return (['backdrop', 'main', 'composer', 'control'] as ThemeArea[]).every((area) => {
+    const leftStops = left[`${area}Stops`]
+    const rightStops = right[`${area}Stops`]
+    return leftStops.length === rightStops.length && leftStops.every((stop, index) => (
+      stop.color === rightStops[index].color && stop.position === rightStops[index].position
+    ))
+  })
+}
+
+function cloneTheme(theme: ThemeData): ThemeData {
+  return {
+    ...theme,
+    backdropStops: theme.backdropStops.map((stop) => ({ ...stop })),
+    mainStops: theme.mainStops.map((stop) => ({ ...stop })),
+    composerStops: theme.composerStops.map((stop) => ({ ...stop })),
+    controlStops: theme.controlStops.map((stop) => ({ ...stop })),
+  }
+}
+
+/** Replace only exact previous Sunday defaults; preserve every custom theme. */
+export function migrateSundayThemeDefaults(
+  theme: ThemeData,
+  mode?: Exclude<ThemeMode, 'system'>,
+): ThemeData {
+  const legacyMode = themesEqual(theme, LEGACY_SUNDAY_UNIFIED_COMPOSER_LIGHT_THEME)
+    ? 'light'
+    : themesEqual(theme, LEGACY_SUNDAY_UNIFIED_COMPOSER_DARK_THEME)
+      ? 'dark'
+      : themesEqual(theme, LEGACY_SUNDAY_INVERTED_LIGHT_THEME)
+        ? 'light'
+        : themesEqual(theme, LEGACY_SUNDAY_INVERTED_DARK_THEME)
+          ? 'dark'
+          : themesEqual(theme, LEGACY_SUNDAY_FLAT_LIGHT_THEME)
+            ? 'light'
+            : themesEqual(theme, LEGACY_SUNDAY_FLAT_DARK_THEME)
+              ? 'dark'
+              : themesEqual(theme, LEGACY_SUNDAY_LIGHT_THEME)
+                ? 'light'
+                : themesEqual(theme, LEGACY_SUNDAY_DARK_THEME)
+                  ? 'dark'
+                  : themesEqual(theme, LEGACY_SUNDAY_FRAME_DARK_THEME)
+                    ? 'dark'
+                    : null
+  if (!legacyMode) return theme
+  return cloneTheme((mode || legacyMode) === 'dark' ? SUNDAY_DARK_THEME : SUNDAY_LIGHT_THEME)
+}
+
 export function migrateThemeDefaults(theme: ThemeData): ThemeData {
+  const migratedSunday = migrateSundayThemeDefaults(theme)
+  if (migratedSunday !== theme) return migratedSunday
   if (
     theme.backdropAngle === 180
     && isSolidStops(theme.backdropStops, '#000000')
@@ -325,6 +542,11 @@ export function themeToCSSVars(theme: ThemeData): ThemeCSSVars {
   const lightMain = relativeLuminance(theme.mainText) < 0.45
   const lightComposer = relativeLuminance(theme.composerText) < 0.45
   const lightControl = relativeLuminance(theme.controlText) < 0.45
+  const mainBorder = themesEqual(theme, SUNDAY_LIGHT_THEME)
+    ? '#D2D8E6'
+    : themesEqual(theme, SUNDAY_DARK_THEME)
+      ? '#818289'
+      : lightMain ? 'rgba(31, 31, 31, 0.10)' : 'rgba(255, 255, 255, 0.10)'
   return {
     '--theme-backdrop-background': gradientFromStops(theme.backdropAngle, theme.backdropStops, 1),
     '--theme-backdrop-text': theme.backdropText,
@@ -335,7 +557,7 @@ export function themeToCSSVars(theme: ThemeData): ThemeCSSVars {
     '--theme-main-soft-background': lightMain ? 'rgba(255, 254, 250, 0.78)' : 'rgba(255, 255, 255, 0.045)',
     '--theme-main-subtle-background': lightMain ? 'rgba(255, 254, 250, 0.52)' : 'rgba(255, 255, 255, 0.028)',
     '--theme-main-sunken-background': lightMain ? 'rgba(31, 31, 31, 0.06)' : 'rgba(0, 0, 0, 0.32)',
-    '--theme-main-border': lightMain ? 'rgba(31, 31, 31, 0.10)' : 'rgba(255, 255, 255, 0.10)',
+    '--theme-main-border': mainBorder,
     '--theme-composer-background': gradientFromStops(theme.composerAngle, theme.composerStops, theme.composerOpacity),
     '--theme-composer-text': theme.composerText,
     '--theme-composer-soft-background': lightComposer ? 'rgba(255, 254, 250, 0.70)' : 'rgba(255, 255, 255, 0.045)',

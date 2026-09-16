@@ -40,6 +40,7 @@ def build_kernel_audit(*, policy: Any, kernel_module_path: str) -> dict[str, Any
             "compact_limit_ratio": policy.compact_limit_ratio,
             "compact_trigger_tokens": policy.compact_trigger_tokens,
             "compact_limit_tokens": policy.compact_limit_tokens,
+            "compact_retained_steps": policy.compact_retained_steps,
             "compact_summary_output_tokens": policy.compact_summary_output_tokens,
             "compact_safety_margin_tokens": policy.compact_safety_margin_tokens,
         },

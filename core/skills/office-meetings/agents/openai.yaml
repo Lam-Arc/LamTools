@@ -1,0 +1,6 @@
+interface:
+  display_name: "Office Meetings"
+  short_description: "Create faithful meeting minutes and trackable action items"
+  default_prompt: "Use $office-meetings to turn these notes into meeting minutes and actions."
+policy:
+  allow_implicit_invocation: true

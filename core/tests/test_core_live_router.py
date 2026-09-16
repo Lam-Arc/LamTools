@@ -1220,6 +1220,39 @@ def test_core_live_connection_skips_snapshot_for_plain_run_item() -> None:
     asyncio.run(run())
 
 
+def test_core_live_connection_skips_sync_journal_lookup_for_transient_deltas() -> None:
+    async def run() -> None:
+        class RecordingJournal:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def get_change(self, event_id: str):
+                self.calls.append(event_id)
+                return None
+
+        journal = RecordingJournal()
+        connection = CoreLiveConnection(
+            DummyWebSocket(),
+            context=SimpleNamespace(host=SimpleNamespace(sync_journal=journal)),
+        )
+        connection.subscription = asyncio.Queue()
+        connection._run_item_flush_interval = 0.0
+        await connection.subscription.put(_run_item_event("transient-1", "chunk"))
+        reader = asyncio.create_task(connection._hub_reader())
+        try:
+            notification = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert notification["method"] == "core/runItem"
+            assert journal.calls == []
+        finally:
+            reader.cancel()
+            if connection._run_item_flush_task is not None:
+                connection._run_item_flush_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+
+    asyncio.run(run())
+
+
 def test_core_live_reader_follows_subscription_when_connection_switches_threads() -> None:
     async def run() -> None:
         hub = CoreAppEventHub()

@@ -95,60 +95,6 @@
       <p v-else class="wf-right-empty">暂无节点</p>
     </section>
 
-    <section class="wf-runtime-panel wf-inspector-section" aria-live="polite">
-      <header class="wf-runtime-head">
-        <h3>运行详情</h3>
-        <span v-if="workflowRun" class="wf-runtime-status" :class="`status-${workflowRun.status}`">
-          {{ workflowRunStatusLabel(workflowRun.status) }}
-        </span>
-      </header>
-      <template v-if="workflowRun">
-        <div class="wf-runtime-meta">
-          <span>运行 {{ workflowRun.run_id || '—' }}</span>
-          <span>剩余 {{ workflowRun.steps_remaining }}</span>
-        </div>
-        <div class="wf-runtime-time">
-          <span>开始 {{ formatTimestamp(workflowRun.started_at) }}</span>
-          <span>结束 {{ formatTimestamp(workflowRun.finished_at) }}</span>
-        </div>
-        <div v-if="workflowRun.error" class="wf-runtime-error" role="alert">{{ workflowRun.error }}</div>
-        <div class="wf-runtime-block">
-          <span>输出</span>
-          <pre>{{ formatRuntimeValue(workflowRun.output) }}</pre>
-        </div>
-        <details class="wf-runtime-details" open>
-          <summary>节点状态（{{ Object.keys(workflowRun.node_states).length }}）</summary>
-          <ul class="wf-runtime-node-list">
-            <li v-for="state in workflowNodeStateEntries" :key="state.node_id">
-              <span class="wf-runtime-node-title">{{ workflowNodeTitle(state.node_id) }}</span>
-              <span class="wf-runtime-node-status" :class="`status-${state.status}`">{{ nodeStateLabel(state.status) }}</span>
-              <span class="wf-runtime-node-meta">
-                尝试 {{ state.attempts }} · {{ formatTimestamp(state.started_at) }} → {{ formatTimestamp(state.finished_at) }}
-                <template v-if="state.cache_status"> · 缓存 {{ cacheStatusLabel(state.cache_status) }}</template>
-              </span>
-              <pre v-if="state.output !== undefined">{{ formatRuntimeValue(state.output) }}</pre>
-              <p v-if="state.error" class="wf-runtime-node-error">{{ state.error }}</p>
-            </li>
-          </ul>
-        </details>
-        <details v-if="Object.keys(workflowRun.cache).length" class="wf-runtime-details">
-          <summary>缓存（{{ Object.keys(workflowRun.cache).length }}）</summary>
-          <ul class="wf-runtime-cache-list">
-            <li v-for="(fact, nodeId) in workflowRun.cache" :key="nodeId">
-              <span>{{ workflowNodeTitle(String(nodeId)) }}</span>
-              <strong :class="`cache-${cacheStatusLabel(fact.status)}`">{{ cacheStatusLabel(fact.status) }}</strong>
-              <code>{{ fact.key || '—' }}</code>
-            </li>
-          </ul>
-        </details>
-        <details class="wf-runtime-details">
-          <summary>端口值（{{ Object.keys(workflowRun.values).length }}）</summary>
-          <pre>{{ formatRuntimeValue(workflowRun.values) }}</pre>
-        </details>
-      </template>
-      <p v-else class="wf-right-empty">尚无运行记录</p>
-    </section>
-
     <section class="wf-right-info wf-inspector-section">
       <template v-if="selectedNodeId">
         <div class="wf-right-info-head">
@@ -174,7 +120,9 @@
         <div class="wf-convo-card">
           <header class="wf-convo-head">
             <h3>对话</h3>
-            <button type="button" class="text-btn" title="放大" @click="expandConversation">⤢</button>
+            <button type="button" class="text-btn" title="放大" aria-label="放大对话" @click="expandConversation">
+              <Maximize2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </button>
           </header>
           <div class="wf-convo-body">
             <ChatThread
@@ -201,12 +149,34 @@
 </template>
 
 <script setup lang="ts">
-import { Boxes, Command, Cpu, Eye, EyeOff, FileCode2, FileText, ArrowLeft, type LucideIcon } from 'lucide-vue-next'
+import {
+  ArrowDownToLine,
+  ArrowLeft,
+  ArrowUpFromLine,
+  Blocks,
+  Bot,
+  Braces,
+  BrainCircuit,
+  Clock3,
+  Combine,
+  Eye,
+  EyeOff,
+  FileCode2,
+  GitBranch,
+  GitMerge,
+  Maximize2,
+  Sparkles,
+  Terminal,
+  TextQuote,
+  UserCheck,
+  Variable,
+  Workflow,
+  type LucideIcon,
+} from 'lucide-vue-next'
 import type { CorePluginChatContext } from '../../../../../../ui/src/plugins/context'
 import type { LamToolsTransport } from '../../../../../../ui/src/transport'
 import ChatThread from '../../../../../../ui/src/components/ChatThread.vue'
 import type {
-  NodeStateStatus,
   WorkflowDef,
   WorkflowNodeSchema,
   WorkflowNode,
@@ -354,66 +324,28 @@ function workflowNodeTitle(nodeId: string): string {
   return node?.title || nodeId
 }
 
-function nodeStateLabel(status: NodeStateStatus): string {
-  if (status === 'running') return '运行中'
-  if (status === 'waiting') return '等待中'
-  if (status === 'done') return '已完成'
-  if (status === 'error') return '失败'
-  if (status === 'skipped') return '已跳过'
-  if (status === 'cancelled') return '已取消'
-  return '未运行'
-}
-
-function workflowRunStatusLabel(status: WorkflowRunResult['status']): string {
-  if (status === 'running') return '运行中'
-  if (status === 'completed') return '完成'
-  if (status === 'failed') return '失败'
-  if (status === 'paused') return '已暂停'
-  if (status === 'cancelled') return '已取消'
-  return String(status)
-}
-
-function cacheStatusLabel(status: unknown): string {
-  const value = String(status || '').toLowerCase()
-  if (value === 'hit') return '命中'
-  if (value === 'miss') return '未命中'
-  if (value === 'bypass') return '跳过'
-  return value || '未知'
-}
-
-function formatRuntimeValue(value: unknown): string {
-  if (value === undefined) return '—'
-  if (typeof value === 'string') return value || '—'
-  try { return JSON.stringify(value, null, 2) || '—' } catch { return String(value) }
-}
-
-function formatTimestamp(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return parsed.toLocaleString()
-}
-
 function nodeKindIcon(kind: string): LucideIcon {
   const icons: Record<string, LucideIcon> = {
-    model: Cpu,
-    agent: Boxes,
-    command: Command,
+    model: BrainCircuit,
+    agent: Bot,
+    approval: UserCheck,
+    command: Terminal,
     python: FileCode2,
-    constant: FileText,
-    input: ArrowLeft,
-    output: ArrowLeft,
-    template: FileText,
-    condition: Cpu,
-    merge: Boxes,
-    join: Boxes,
-    subgraph: Boxes,
+    constant: Variable,
+    input: ArrowDownToLine,
+    output: ArrowUpFromLine,
+    template: TextQuote,
+    condition: GitBranch,
+    merge: GitMerge,
+    join: Combine,
+    wait_event: Clock3,
+    subgraph: Workflow,
     // Compatibility ids remain visible when they already exist in a graph.
-    ai: Cpu,
+    ai: Sparkles,
     script: FileCode2,
-    content: FileText,
+    content: Braces,
   }
-  return icons[kind] || Command
+  return icons[String(kind || '').trim().toLowerCase()] || Blocks
 }
 </script>
 
@@ -435,32 +367,6 @@ function nodeKindIcon(kind: string): LucideIcon {
 .wf-node-list-item:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 60%, transparent); }
 .wf-node-list-kind { color: color-mix(in srgb, var(--inspector-text) 68%, transparent); display: inline-flex; }
 .wf-node-list-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wf-runtime-panel { flex: 0 0 auto; gap: var(--space-2); padding: var(--space-3); }
-.wf-runtime-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.wf-runtime-head h3 { margin: 0; }
-.wf-runtime-status { font-size: 11px; font-weight: 650; }
-.wf-runtime-status.status-running, .wf-runtime-node-status.status-running { color: var(--blue); }
-.wf-runtime-node-status.status-waiting { color: var(--orange); }
-.wf-runtime-status.status-completed, .wf-runtime-node-status.status-done { color: var(--green); }
-.wf-runtime-status.status-failed, .wf-runtime-node-status.status-error { color: var(--red); }
-.wf-runtime-status.status-paused { color: var(--orange); }
-.wf-runtime-status.status-cancelled, .wf-runtime-node-status.status-cancelled { color: color-mix(in srgb, var(--inspector-text) 60%, transparent); }
-.wf-runtime-meta, .wf-runtime-time { display: flex; flex-wrap: wrap; gap: var(--space-2); color: color-mix(in srgb, var(--inspector-text) 60%, transparent); font-size: 10px; }
-.wf-runtime-block, .wf-runtime-details { display: grid; gap: var(--space-1); }
-.wf-runtime-block > span, .wf-runtime-details > summary { color: color-mix(in srgb, var(--inspector-text) 60%, transparent); font-size: 11px; cursor: pointer; }
-.wf-runtime-block pre, .wf-runtime-details pre { margin: 0; max-height: 180px; overflow: auto; padding: var(--space-2); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-backdrop-background) 82%, var(--theme-main-background)); color: var(--inspector-text); font: 10px/1.4 var(--font-mono, monospace); white-space: pre-wrap; word-break: break-word; }
-.wf-runtime-error, .wf-runtime-node-error { margin: 0; color: var(--red); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
-.wf-runtime-node-list, .wf-runtime-cache-list { display: grid; gap: var(--space-2); max-height: 240px; overflow: auto; margin: 0; padding: 0; list-style: none; }
-.wf-runtime-node-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-2); font-size: 11px; }
-.wf-runtime-node-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wf-runtime-node-status { font-weight: 650; }
-.wf-runtime-node-meta { grid-column: 1 / -1; color: color-mix(in srgb, var(--inspector-text) 55%, transparent); font-size: 10px; }
-.wf-runtime-node-list pre { grid-column: 1 / -1; max-height: 96px; }
-.wf-runtime-cache-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-2); align-items: baseline; font-size: 11px; }
-.wf-runtime-cache-list code { grid-column: 1 / -1; color: color-mix(in srgb, var(--inspector-text) 55%, transparent); font: 10px var(--font-mono, monospace); overflow-wrap: anywhere; }
-.wf-runtime-cache-list strong.cache-命中 { color: var(--green); }
-.wf-runtime-cache-list strong.cache-未命中 { color: var(--orange); }
-.wf-runtime-cache-list strong.cache-跳过 { color: color-mix(in srgb, var(--inspector-text) 60%, transparent); }
 .wf-right-info { flex: 1 1 auto; padding: var(--space-3); overflow: auto; }
 .wf-right-info-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
 .wf-right-info-head h3 { margin: 0; }

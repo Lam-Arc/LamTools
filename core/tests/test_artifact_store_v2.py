@@ -1,0 +1,291 @@
+from __future__ import annotations
+
+import json
+from argparse import Namespace
+from pathlib import Path
+
+import pytest
+
+from lamtools_core.app.core_db import open_core_app_db
+from lamtools_core.checkpoint import CoreCheckpointCoordinator
+from lamtools_core.cli import cmd_artifact_preview
+from lamtools_core.event import RunItemEvent
+
+
+@pytest.mark.asyncio
+async def test_one_logical_file_has_immutable_deduplicated_revisions(tmp_path: Path) -> None:
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    db_path = tmp_path / "core.db"
+    db = await open_core_app_db(db_path)
+    project, _ = await db.project_store.create(work_root)
+    target = work_root / "result.txt"
+
+    ids = []
+    for index, content in enumerate(("one", "two", "three"), 1):
+        target.write_text(content, encoding="utf-8")
+        item = RunItemEvent(
+            kind="tool_result",
+            thread_id="thread-1",
+            turn_id=f"turn-{index}",
+            item_id=f"item-{index}",
+            event_id=f"event-{index}",
+            status="completed",
+            payload={"tool_name": "write_file"},
+            artifacts=[{"kind": "file_change", "uri": "result.txt", "content": "large diff"}],
+        )
+        await db.artifact_store.ingest_run_item(item, project_id=project.id, work_root=work_root)
+        ids.append(item.artifacts[0]["artifact_id"])
+        assert "content" not in item.artifacts[0]
+
+    assert len(set(ids)) == 1
+    artifact = await db.artifact_store.get(ids[0])
+    revisions = await db.artifact_store.revisions(ids[0])
+    assert artifact is not None and artifact.revision_count == 3
+    assert [r.ordinal for r in revisions] == [1, 2, 3]
+    assert [(await db.artifact_store.revision_path(ids[0], r.revision_id)).read_text() for r in revisions] == ["one", "two", "three"]
+
+    # Replaying the exact event is idempotent even if the live file later changed.
+    await db.artifact_store.ingest_run_item(item, project_id=project.id, work_root=work_root)
+    assert len(await db.artifact_store.revisions(ids[0])) == 3
+    await db.close()
+
+    reopened = await open_core_app_db(db_path)
+    persisted = await reopened.artifact_store.get(ids[0])
+    assert persisted is not None and persisted.revision_count == 3
+    await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_inputs_exclusions_legacy_remove_and_revision_restore(tmp_path: Path) -> None:
+    work_root = tmp_path / "work"
+    legacy_root = work_root / ".lam" / "artifact"
+    legacy_root.mkdir(parents=True)
+    (work_root / "legacy.txt").write_text("legacy", encoding="utf-8")
+    (legacy_root / "old-id.json").write_text(json.dumps({
+        "kind": "document", "mime_type": "text/plain", "name": "legacy.txt",
+        "path": "workspace://legacy.txt", "source": "agent_generated",
+    }), encoding="utf-8")
+    db = await open_core_app_db(tmp_path / "core.db")
+    project, _ = await db.project_store.create(work_root)
+    assert await db.artifact_store.migrate_legacy(project_id=project.id, work_root=work_root) == 1
+    legacy = await db.artifact_store.get("old-id")
+    assert legacy is not None and legacy.revision_count == 1
+
+    excluded = RunItemEvent(
+        kind="tool_result", thread_id="t", event_id="read-event",
+        payload={"tool_name": "read_file"}, artifacts=[{"kind": "file_read", "uri": "legacy.txt"}],
+    )
+    await db.artifact_store.ingest_run_item(excluded, project_id=project.id, work_root=work_root)
+    assert len(await db.artifact_store.list(project.id)) == 1
+
+    assert await db.artifact_store.soft_remove([legacy.artifact_id]) == 1
+    assert (work_root / "legacy.txt").is_file()
+    await db.artifact_store.migrate_legacy(project_id=project.id, work_root=work_root)
+    assert (await db.artifact_store.get(legacy.artifact_id)).deleted is True
+    assert await db.artifact_store.soft_remove([legacy.artifact_id], deleted=False) == 1
+    old_revision = (await db.artifact_store.revisions(legacy.artifact_id))[0]
+    (work_root / "legacy.txt").write_text("changed", encoding="utf-8")
+    restored = await db.artifact_store.restore_revision(legacy.artifact_id, old_revision.revision_id)
+    assert (work_root / "legacy.txt").read_text(encoding="utf-8") == "legacy"
+    assert restored.revision_count == 2
+    assert (await db.artifact_store.revisions(legacy.artifact_id))[-1].restored_from_revision_id == old_revision.revision_id
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_keeps_artifact_revision_pointer_and_restores_content(tmp_path: Path) -> None:
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    project, _ = await db.project_store.create(work_root)
+    target = work_root / "checkpoint.txt"
+    target.write_text("before", encoding="utf-8")
+    artifact = await db.artifact_store.register(
+        project_id=project.id, work_root=work_root, path="checkpoint.txt",
+        kind="file_change", provenance={"event_id": "before-event"},
+    )
+    coordinator = CoreCheckpointCoordinator(
+        work_root, db.session_factory, db.persistence.write_coordinator,
+        storage_root=tmp_path / "checkpoint-data",
+    )
+    checkpoint = await coordinator.save(session_id="thread", turn_id="turn")
+    target.write_text("after", encoding="utf-8")
+    await db.artifact_store.register(
+        project_id=project.id, work_root=work_root, path="checkpoint.txt",
+        kind="file_change", provenance={"event_id": "after-event"},
+    )
+    later_path = work_root / "created-later.txt"
+    later_path.write_text("later", encoding="utf-8")
+    later_artifact = await db.artifact_store.register(
+        project_id=project.id, work_root=work_root, path="created-later.txt",
+        kind="file_change", provenance={"event_id": "later-event"},
+    )
+    await coordinator.restore(checkpoint.id, scope="workspace")
+    assert target.read_text(encoding="utf-8") == "before"
+    assert (await db.artifact_store.get(later_artifact.artifact_id)).deleted is True
+    revisions = await db.artifact_store.revisions(artifact.artifact_id)
+    assert len(revisions) == 3
+    assert revisions[-1].restored_from_revision_id == revisions[0].revision_id
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_mutations_reject_artifacts_from_another_project(tmp_path: Path) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    first, _ = await db.project_store.create(first_root)
+    second, _ = await db.project_store.create(second_root)
+    target = first_root / "private.txt"
+    target.write_text("private", encoding="utf-8")
+    artifact = await db.artifact_store.register(
+        project_id=first.id,
+        work_root=first_root,
+        path="private.txt",
+        kind="file_change",
+    )
+    revision = (await db.artifact_store.revisions(artifact.artifact_id))[0]
+
+    assert await db.artifact_store.soft_remove(
+        [artifact.artifact_id],
+        project_id=second.id,
+    ) == 0
+    assert (await db.artifact_store.get(artifact.artifact_id)).deleted is False
+    with pytest.raises(LookupError):
+        await db.artifact_store.restore_revision(
+            artifact.artifact_id,
+            revision.revision_id,
+            project_id=second.id,
+        )
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_upload_is_input_and_generated_image_is_durable_output(tmp_path: Path) -> None:
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    project, _ = await db.project_store.create(work_root)
+    upload = await db.artifact_store.register(
+        project_id=project.id,
+        work_root=work_root,
+        path="attachment://upload-1",
+        kind="image",
+        mime_type="image/png",
+        name="reference.png",
+        source="user_upload",
+        role="input",
+        preferred_id="upload-1",
+        content=b"input-image",
+    )
+    assert upload.role == "input" and upload.revision_count == 1
+
+    image_path = work_root / "generated.png"
+    image_path.write_bytes(b"generated-image")
+    item = RunItemEvent(
+        kind="tool_result", thread_id="thread-image", turn_id="turn-image",
+        item_id="item-image", event_id="event-image", payload={"tool_name": "generate_image"},
+        artifacts=[{"kind": "image", "uri": "generated.png", "metadata": {"mime_type": "image/png"}}],
+    )
+    await db.artifact_store.ingest_run_item(item, project_id=project.id, work_root=work_root)
+    generated = await db.artifact_store.get(item.artifacts[0]["artifact_id"])
+    assert generated is not None and generated.kind == "image" and generated.role == "deliverable"
+    assert generated.revision_count == 1
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_agent_message_registers_existing_workspace_paths(tmp_path: Path) -> None:
+    work_root = tmp_path / "work"
+    output = work_root / "gui-run-01" / "financial-model.xlsx"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"xlsx")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private", encoding="utf-8")
+    db = await open_core_app_db(tmp_path / "core.db")
+    project, _ = await db.project_store.create(work_root)
+    item = RunItemEvent(
+        kind="message",
+        thread_id="thread-final",
+        turn_id="turn-final",
+        item_id="turn-final:model_text",
+        event_id="event-final",
+        status="completed",
+        payload={
+            "type": "agentMessage",
+            "content": (
+                "交付：`gui-run-01/financial-model.xlsx`，重复链接 "
+                "[模型](gui-run-01/financial-model.xlsx)。\n"
+                f"不要挂载项目外文件 `{outside}` 或不存在的 `missing.pdf`。"
+            ),
+        },
+    )
+
+    await db.artifact_store.ingest_run_item(item, project_id=project.id, work_root=work_root)
+
+    assert len(item.artifacts) == 1
+    assert item.artifacts[0]["uri"] == "gui-run-01/financial-model.xlsx"
+    assert item.artifacts[0]["role"] == "deliverable"
+    record = await db.artifact_store.get(item.artifacts[0]["artifact_id"])
+    assert record is not None
+    assert record.path == "workspace://gui-run-01/financial-model.xlsx"
+    assert record.thread_id == "thread-final"
+    assert record.turn_id == "turn-final"
+    assert record.item_id == "turn-final:model_text"
+    assert record.provenance["discovered_from"] == "final_response_path"
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_incomplete_or_child_agent_message_does_not_discover_paths(tmp_path: Path) -> None:
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    (work_root / "draft.txt").write_text("draft", encoding="utf-8")
+    db = await open_core_app_db(tmp_path / "core.db")
+    project, _ = await db.project_store.create(work_root)
+    for item in (
+        RunItemEvent(
+            kind="message", thread_id="t", event_id="running", status="running",
+            payload={"type": "agentMessage", "content": "`draft.txt`"},
+        ),
+        RunItemEvent(
+            kind="message", thread_id="t", event_id="child", status="completed",
+            payload={"type": "agentMessage", "content": "`draft.txt`", "sub_agent_terminal": True},
+        ),
+    ):
+        await db.artifact_store.ingest_run_item(item, project_id=project.id, work_root=work_root)
+        assert item.artifacts == []
+    assert await db.artifact_store.list(project.id) == []
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_artifact_preview_cli_prints_plain_text(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    target = work_root / "report.py"
+    target.write_text("print('hello')\n", encoding="utf-8")
+    db_path = tmp_path / "core.db"
+    db = await open_core_app_db(db_path)
+    project, _ = await db.project_store.create(work_root)
+    artifact = await db.artifact_store.register(
+        project_id=project.id,
+        work_root=work_root,
+        path="report.py",
+        kind="file_change",
+        mime_type="text/x-python",
+    )
+    await db.close()
+
+    result = await cmd_artifact_preview(Namespace(
+        artifact_id=artifact.artifact_id,
+        work_root=str(work_root),
+        core_db=str(db_path),
+        max_chars=200000,
+    ))
+
+    assert result == 0
+    assert capsys.readouterr().out == "print('hello')\n"

@@ -53,13 +53,32 @@ body {
 
 button, input, select, textarea { font: inherit; color: inherit; }
 button { border: 0; cursor: pointer; background: transparent; }
-input, select, textarea {
+/* Text-like input boxes belong to the composer/input-bar area. Native
+   controls (checkboxes, ranges, color pickers, file pickers and input
+   buttons) keep their own control recipes, as do selects below. */
+:where(
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']),
+  textarea
+) {
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text, var(--text)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-composer-background, var(--panel-2)) 70%, transparent);
+  color: var(--theme-composer-text, var(--text));
+  caret-color: var(--theme-composer-text, var(--text));
+  padding: var(--space-2);
+  outline: none;
+}
+select {
   border: 1px solid color-mix(in srgb, var(--theme-control-text, var(--text)) 12%, transparent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-control-background, var(--panel-2)) 70%, transparent);
   color: var(--theme-control-text, var(--text));
   padding: var(--space-2);
   outline: none;
+}
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--theme-composer-text, var(--text)) 45%, transparent);
 }
 /* 输入框不做聚焦态：光标闪动即聚焦指示（select 例外——无光标，键盘用户
    需要可见聚焦指示，audit 19 S4） */

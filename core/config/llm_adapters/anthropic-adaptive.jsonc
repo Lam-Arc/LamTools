@@ -28,10 +28,22 @@
             "output_config.effort": "low"
           }
         },
+        "medium": {
+          "set": {
+            "thinking": { "type": "adaptive" },
+            "output_config.effort": "high"
+          }
+        },
         "high": {
           "set": {
             "thinking": { "type": "adaptive" },
             "output_config.effort": "high"
+          }
+        },
+        "xhigh": {
+          "set": {
+            "thinking": { "type": "adaptive" },
+            "output_config.effort": "max"
           }
         },
         "max": {

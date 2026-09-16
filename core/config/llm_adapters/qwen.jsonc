@@ -9,7 +9,9 @@
       "presets": {
         "off": { "set": { "enable_thinking": false } },
         "light": { "set": { "enable_thinking": true, "reasoning_effort": "low" } },
+        "medium": { "set": { "enable_thinking": true, "reasoning_effort": "medium" } },
         "high": { "set": { "enable_thinking": true, "reasoning_effort": "medium" } },
+        "xhigh": { "set": { "enable_thinking": true, "reasoning_effort": "xhigh" } },
         "max": { "set": { "enable_thinking": true, "reasoning_effort": "xhigh" } }
       }
     }

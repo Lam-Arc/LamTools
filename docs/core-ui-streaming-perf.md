@@ -365,3 +365,14 @@ stash 验证与本改动无关）。
 - 本轮专项 96/96 通过；全套 `npm run test:contract` 为 71 文件 / 502 测试，
   `npm run typecheck`、`npm run build`、71 文件 0 偏离的设计审计均通过；
   `git diff --check` 仅有换行警告。仍未运行 Tauri 人工验证。
+
+### 哨兵吸底阈值竞态修复（2026-09-16）
+
+- 根因：`IntersectionObserver` 使用 `threshold: 1`，但回调只读取
+  `entry.isIntersecting`；哨兵从完全可见变为部分可见时仍被误判在底部，之后完全离开
+  不再跨越阈值，流式内容因此永久脱离自动吸底。
+- 修复：以 99% 可见比例作为底部事实，并同时观察 0/99% 阈值；observer 增加代际令牌，
+  拒绝 `disconnect()` 后排队到达的旧会话回调；哨兵模式下任何非内容收缩导致的向上
+  位移都会立即覆盖陈旧的程序化滚动标记，保证滚动条/键盘操作可抢占吸底。
+- 验证：聚焦滚动测试 20/20、全套 UI contracts 87 文件 / 678 测试、typecheck、UI build
+  均通过；`git diff --check` 仅有换行警告，未运行 Tauri 人工验证。

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 from copy import deepcopy
 
+from lamtools_core.agent import SUB_AGENT_MESSAGE_TOOL_NAME, SUB_AGENT_TOOL_NAME
 from lamtools_core.event import (
     CoreEvent,
     RunItemEvent,
@@ -44,7 +45,12 @@ from lamtools_core.tool.loadtools import mode_prompt_line
 from lamtools_core.tool.workspace import line_count
 from lamtools_core.tool.workspace_files import IMAGE_DATA_URL_METADATA_KEY
 from lamtools_core.app.project_context import ProjectContextLoader
-from lamtools_core.config.subagent_prompt import load_subagent_guide
+from lamtools_core.config.subagent_prompt import (
+    load_effective_delegation_strategy,
+    load_subagent_guide,
+    render_delegation_strategy_prompt,
+    render_role_assignments_prompt,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -216,6 +222,9 @@ class CoreBaseAgentConfig:
     # customization; change this only for member-wide advanced defaults.
     project_context_files: list[tuple[str, int, str]] | None = None
     max_project_context_chars: int = 20000
+    # Ephemeral tail context appended after the complete durable history.
+    # Never copied into RuntimeState/history; used by supervised sub-agents.
+    request_local_late_context: str = ""
 
 
 
@@ -233,24 +242,60 @@ class CoreBaseAgentKit:
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.config = config or CoreBaseAgentConfig()
+        self._delegation_strategy = load_effective_delegation_strategy(self.work_root)
+        forbidden_subagent_tools = (
+            {SUB_AGENT_TOOL_NAME, SUB_AGENT_MESSAGE_TOOL_NAME}
+            if self._delegation_strategy == "forbidden"
+            else set()
+        )
         self.toolbox = toolbox or build_core_toolbox(
             work_root=self.work_root,
             approval_policy=self.config.approval_policy,
             allow_access_outside_workdir=allow_access_outside_workdir,
+            disabled_tools=forbidden_subagent_tools,
         )
+        if forbidden_subagent_tools and isinstance(self.toolbox, CoreToolbox):
+            # An injected toolbox is already fully assembled. Update its hard
+            # runtime boundary as well as model visibility so direct calls and
+            # resumed approvals cannot bypass the forbidden strategy.
+            self.toolbox.disabled_tools.update(forbidden_subagent_tools)
         self.verification_policy = verification_policy or VerificationPolicy()
         self._runtime_controls = self.config.runtime_controls or {}
         self._subagent_guide_cache: str | None = None
+        self._subagent_roles_cache: str | None = None
+        self._subagent_strategy_cache: str | None = None
 
     def _cached_subagent_guide(self) -> str:
         if self._subagent_guide_cache is None:
             self._subagent_guide_cache = load_subagent_guide(self.work_root)
         return self._subagent_guide_cache
 
+    def _cached_subagent_roles(self) -> str:
+        if self._subagent_roles_cache is None:
+            self._subagent_roles_cache = render_role_assignments_prompt(self.work_root)
+        return self._subagent_roles_cache
+
+    def _cached_subagent_strategy(self) -> str:
+        if self._subagent_strategy_cache is None:
+            self._subagent_strategy_cache = render_delegation_strategy_prompt(
+                self.work_root
+            )
+        return self._subagent_strategy_cache
+
     def _capability_prompt_line(self, deferred_attachments: list[str] | None = None) -> str:
         """Build a system-prompt line describing the model's input modality."""
         cap = (self.config.capability or "").strip().lower()
         if cap == "text":
+            if self._delegation_strategy == "forbidden":
+                base = (
+                    "当前模型能力: 文本模型（不支持图片/视频/音频输入；这类附件内容不会发送给你，"
+                    "你无法看到图片）。当前策略禁止委派子代理；需要理解媒体内容时，请明确说明限制并"
+                    "请用户提供文字描述。read_file 读取图片文件时同样只返回文件说明（文件名/大小）。"
+                )
+                if deferred_attachments:
+                    ids = ", ".join(f'"{i}"' for i in deferred_attachments)
+                    base += f"\n当前有以下附件无法直接查看（id: {ids}）。"
+                return base
             # Resolve the default multimodal model from sub-agent settings,
             # falling back to the first multimodal model in the store.
             from lamtools_core.config.subagent_prompt import resolve_default_multimodal_model
@@ -349,7 +394,7 @@ class CoreBaseAgentKit:
             "收到工具结果后，继续下一步或给出最终回复。",
             "将成功的工具结果视为可复用证据。在对同一文件、URL、进程、端口等资源再次使用不同参数查询之前，先说明确缺失的事实以及现有结果为何不能回答；否则直接复用现有结果。",
             "经过多个纯工具步骤后，简要汇报已确认事实、仍存疑点及下一步，再继续调用工具。保持进度摘要简洁，不重复已有证据。",
-            "任务完成后向用户回复简要摘要，最终回复应总结结果并提及重要的保存路径，包括但不限于工作完成情况、范围、产物位置、需用户确认项。",
+            "任务完成后向用户回复简要摘要，包括工作完成情况、范围、产物位置与需用户确认项。最终回复必须逐项列出本轮新建或更新的交付文件路径，并用反引号或 Markdown 文件链接包住每个真实路径；不要把不存在的路径写成已交付。",
         ]
         # Model capability line: tells the agent its input modalities so it
         # does not assume image support that the model lacks.
@@ -360,8 +405,15 @@ class CoreBaseAgentKit:
         # Sub-agent delegation guide (project > global > built-in). Cached on the
         # kit so the markdown file is read at most once per kit lifetime.
         guide = self._cached_subagent_guide()
-        if guide:
-            system_lines.insert(2, guide)  # inject right after the "当前项目" line
+        role_assignments = self._cached_subagent_roles()
+        delegation_strategy = self._cached_subagent_strategy()
+        subagent_instructions = "\n\n".join(
+            part for part in (guide, delegation_strategy, role_assignments) if part
+        )
+        if subagent_instructions:
+            # Keep role assignments directly after the delegation discipline in
+            # the same leading system prompt so their ordering is deterministic.
+            system_lines.insert(2, subagent_instructions)
         mode_line = mode_prompt_line(self.toolbox.load_tools, self.config.active_mode)
         if mode_line:
             system_lines.insert(2, mode_line)  # inject right after "当前项目" line
@@ -427,6 +479,18 @@ class CoreBaseAgentKit:
                 ChatMessage(
                     role="system",
                     content="\n".join(runtime_system_lines),
+                )
+            )
+        if self.config.request_local_late_context:
+            # Keep mutable child identity/summary after durable history at the
+            # provider boundary. Anthropic and Gemini hoist every system
+            # message into a leading field, so this late context must be a
+            # final user message to preserve the reusable cache prefix.
+            messages.append(
+                ChatMessage(
+                    role="user",
+                    content=self.config.request_local_late_context,
+                    metadata={"key": "request_local_late_context", "internal": True},
                 )
             )
         return LLMRequest(

@@ -137,6 +137,9 @@ class CompactionOptions:
     force: bool = False
     target_tokens: int | None = None
     compact_all: bool = False
+    # Optional per-invocation override.  When omitted, the shared planner
+    # resolves ``core.contextCompaction.retained_steps`` (default zero).
+    retained_steps: int | None = None
 
     def __post_init__(self) -> None:
         if self.target_tokens is not None:
@@ -159,6 +162,9 @@ class ContextCompactionRequest:
     on_delta: CompactionDeltaSink | None = None
     on_event: CompactionEventSink | None = None
     preserve_latest_user: bool = True
+    # Resolved structural retention override.  ``None`` means read the global
+    # setting at planning time so long-lived kernels observe config changes.
+    retained_steps: int | None = None
     estimate_tokens: CompactionTokenEstimator | None = None
     estimate_exact_tokens: CompactionTokenEstimator | None = None
     summary_budget: SummaryTokenBudget | None = None
@@ -186,6 +192,10 @@ class ContextCompactionResult:
     limit_tokens: int = 0
     segment_count: int = 0
     display_payload: dict[str, Any] = field(default_factory=dict)
+    # The exact suffix entries that survived bounded fitting.  Keeping this
+    # alongside the rendered summary lets persistence and recursive compaction
+    # avoid re-parsing user-authored text that happens to contain the heading.
+    recent_user_messages: list[str] = field(default_factory=list)
 
     @property
     def compacted_count(self) -> int:
@@ -198,7 +208,7 @@ class ContextCompactionResult:
 
 @dataclass(slots=True)
 class CompactionPlan:
-    """Planner output separating prefix, summarized span, and recent tail."""
+    """Planner output separating prefix, summarized span, and initial tail."""
 
     system_prefix: list[ChatMessage]
     messages_to_summarize: list[ChatMessage]
@@ -228,6 +238,7 @@ class CompactionFitInput:
     summary_message: ChatMessage
     recent_messages: list[ChatMessage]
     target_tokens: int
+    recent_user_messages: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -238,6 +249,7 @@ class CompactionFitResult:
     estimated_tokens: int
     attempts: int
     strategy: str
+    recent_user_messages: list[str] = field(default_factory=list)
 
 
 __all__ = [

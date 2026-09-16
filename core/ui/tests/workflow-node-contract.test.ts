@@ -22,7 +22,7 @@ describe('workflow schema-driven node contract', () => {
       output: { out: { type: 'string' } },
     }, 'echo-1', { x: 30, y: 40 })
 
-    expect(model).toMatchObject({ kind: 'model', type_id: 'model', title: 'Model' })
+    expect(model).toMatchObject({ kind: 'model', type_id: 'model', title: '模型' })
     expect(model.ports).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'prompt', direction: 'in', type: 'string' }),
       expect.objectContaining({ name: 'output', direction: 'out', type: 'string' }),
@@ -41,6 +41,7 @@ describe('workflow schema-driven node contract', () => {
         schemas: {
           model: { name: 'model', display_name: 'Model', category: 'workflow/model', input: {}, output: {} },
           agent: { name: 'agent', display_name: 'Agent', category: 'workflow/agent', input: {}, output: {} },
+          approval: { name: 'approval', display_name: 'Approval', category: 'workflow/control', input: {}, output: {} },
           ai: { name: 'ai', display_name: 'AI (legacy)', category: 'workflow/legacy', hidden: true, legacy: true, input: {}, output: {} },
           script: { name: 'script', display_name: 'Script (legacy)', category: 'workflow/legacy', hidden: true, legacy: true, input: {}, output: {} },
           custom: { name: 'vendor.echo', display_name: 'Vendor Echo', category: 'vendor/test', input: {}, output: {} },
@@ -48,8 +49,9 @@ describe('workflow schema-driven node contract', () => {
         onAdd: add,
       },
     })
-    expect(wrapper.text()).toContain('Model')
-    expect(wrapper.text()).toContain('Agent')
+    expect(wrapper.text()).toContain('模型')
+    expect(wrapper.text()).toContain('智能体')
+    expect(wrapper.text()).toContain('人工审批')
     expect(wrapper.text()).toContain('Vendor Echo')
     expect(wrapper.text()).not.toContain('AI (legacy)')
     expect(wrapper.text()).not.toContain('Script (legacy)')

@@ -15,6 +15,7 @@ from pathlib import Path
 
 _PROJECT_ROOT = Path(".").resolve()
 _BUNDLED_PLUGINS_ROOT = _PROJECT_ROOT / "src" / "lamtools_core" / "plugins" / "bundled"
+_BUILTIN_SKILLS_ROOT = _PROJECT_ROOT / "skills"
 _EXCLUDED_BUNDLED_PLUGINS = {"emotion-ball-pet"}
 
 # ---------------------------------------------------------------------------
@@ -29,6 +30,21 @@ _datas: list[tuple[str, str]] = [
     ("config/command", "config/command"),
     ("config/llm_adapters", "config/llm_adapters"),
 ]
+
+# Built-in Skills and their shared companion runtimes. Add files explicitly so
+# source-tree bytecode caches can never leak into the packaged Skill bundle.
+for _skill_file in sorted(_BUILTIN_SKILLS_ROOT.rglob("*")):
+    if not _skill_file.is_file():
+        continue
+    _relative = _skill_file.relative_to(_BUILTIN_SKILLS_ROOT)
+    if "__pycache__" in _relative.parts or _skill_file.suffix.casefold() in {".pyc", ".pyo"}:
+        continue
+    _datas.append(
+        (
+            str(_skill_file.relative_to(_PROJECT_ROOT)),
+            str(Path("resources") / "skills" / _relative.parent),
+        )
+    )
 
 # Core-owned bundled plugins ship with the backend.  The desktop pet remains
 # an optional source plugin and must not be embedded in the installer.
@@ -56,6 +72,17 @@ _hiddenimports = [
     "sqlite3",
     "docx",
     "pypdf",
+    "openpyxl",
+    "openpyxl.cell",
+    "openpyxl.chart",
+    "openpyxl.styles",
+    "openpyxl.utils",
+    "pptx",
+    "pptx.chart",
+    "pptx.enum",
+    "pptx.oxml",
+    "fitz",
+    "pymupdf",
     # HTTP server stack
     "fastapi",
     "starlette",

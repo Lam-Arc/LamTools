@@ -1,0 +1,6 @@
+interface:
+  display_name: "Office Charts"
+  short_description: "Create accurate, editable business data visualizations"
+  default_prompt: "Use $office-charts to create a clear chart from these data."
+policy:
+  allow_implicit_invocation: true

@@ -10,7 +10,7 @@
  */
 export const WORKFLOW_NODE_KINDS = [
   'model', 'agent', 'command', 'python', 'constant', 'input', 'output',
-  'template', 'condition', 'merge', 'join', 'subgraph',
+  'template', 'condition', 'merge', 'join', 'wait_event', 'approval', 'subgraph',
   // Compatibility ids.  They are hidden from the default add catalog.
   'ai', 'script', 'content', 'transform', 'branch',
 ] as const
@@ -314,15 +314,46 @@ export interface WorkflowDocumentCanvas {
 export interface WorkflowNodeState {
   node_id: string
   status: NodeStateStatus
+  /** Input snapshot when the runner exposes one. Never inferred from model reasoning. */
+  input?: unknown
   output?: unknown
   error?: string
   attempts: number
+  attempt_id?: string
+  /** Optional runtime observability fields supplied by a host executor. */
+  duration_ms?: number
+  tool_calls?: unknown
+  logs?: unknown
+  audit?: unknown
   /** Cache decision emitted by the runner (hit/miss/bypass). */
   cache_status?: string
   /** Content-addressed cache key, when a lookup was attempted. */
   cache_key?: string
   started_at?: string | null
   finished_at?: string | null
+}
+
+/** One auditable lifecycle entry for the canvas-side run dock. */
+export interface WorkflowRunTimelineItem {
+  id: string
+  node_id?: string
+  title?: string
+  status?: NodeStateStatus | 'started' | 'completed' | 'failed' | 'progress' | 'paused' | 'cancelled' | string
+  kind?: string
+  occurred_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  input?: unknown
+  output?: unknown
+  error?: string
+  attempts?: number
+  attempt_id?: string
+  duration_ms?: number
+  cache_status?: string
+  cache_key?: string
+  tool_calls?: unknown
+  logs?: unknown
+  audit?: unknown
 }
 
 export interface WorkflowCacheFact {
@@ -421,7 +452,7 @@ export function normalizeNodeStateStatus(value: unknown): NodeStateStatus {
   if (status === 'completed' || status === 'complete' || status === 'success' || status === 'succeeded' || status === 'done') return 'done'
   if (status === 'failed' || status === 'failure' || status === 'error' || status === 'errored') return 'error'
   if (status === 'waiting') return 'waiting'
-  if (status === 'in_progress' || status === 'in-progress' || status === 'queued' || status === 'pending' || status === 'active') return 'running'
+  if (status === 'started' || status === 'progress' || status === 'in_progress' || status === 'in-progress' || status === 'queued' || status === 'pending' || status === 'active') return 'running'
   if (status === 'skipped' || status === 'skip') return 'skipped'
   if (status === 'cancelled' || status === 'canceled' || status === 'aborted') return 'cancelled'
   return 'idle'

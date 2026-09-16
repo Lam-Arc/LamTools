@@ -20,11 +20,19 @@ function installMatchMedia(matches: boolean) {
     removeListener: vi.fn(),
     dispatchEvent: vi.fn(),
   } as unknown as MediaQueryList
+  const setMatches = (next: boolean) => {
+    Object.defineProperty(mediaQuery, 'matches', { configurable: true, value: next })
+    listeners.forEach((listener) => listener({
+      matches: next,
+      media: '(max-width: 640px)',
+    } as MediaQueryListEvent))
+  }
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     writable: true,
     value: vi.fn(() => mediaQuery),
   })
+  return { mediaQuery, setMatches }
 }
 
 function dispatchPointerEvent(
@@ -62,6 +70,51 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(wrapper.find('.drawer-right .drawer-head').exists()).toBe(false)
     expect(wrapper.find('[data-modular-right-panel]').exists()).toBe(true)
     wrapper.unmount()
+  })
+
+  it('keeps workflow composer and conversation hover active across their animated seam', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Sunday', workflowMode: true },
+      slots: { modals: '<section class="wf-convo-float">对话</section>' },
+      attachTo: document.body,
+    })
+    const shell = wrapper.get('.workspace-shell')
+    const composer = wrapper.get('.floating-composer')
+    const conversation = wrapper.get('.wf-convo-float')
+
+    await composer.trigger('pointerover')
+    expect(shell.classes()).toContain('workspace-shell--workflow-interaction-active')
+
+    const composerLeave = new Event('pointerout', { bubbles: true })
+    Object.defineProperty(composerLeave, 'relatedTarget', { value: document.body })
+    composer.element.dispatchEvent(composerLeave)
+    vi.advanceTimersByTime(60)
+    await conversation.trigger('pointerover')
+    vi.advanceTimersByTime(120)
+    await wrapper.vm.$nextTick()
+    expect(shell.classes()).toContain('workspace-shell--workflow-interaction-active')
+
+    await wrapper.setProps({ workflowMode: false })
+    expect(shell.classes()).not.toContain('workspace-shell--workflow-interaction-active')
+    await wrapper.setProps({ workflowMode: true })
+    await composer.trigger('pointerover')
+    expect(shell.classes()).toContain('workspace-shell--workflow-interaction-active')
+    composer.element.dispatchEvent(new Event('pointercancel', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(shell.classes()).not.toContain('workspace-shell--workflow-interaction-active')
+
+    await composer.trigger('pointerover')
+
+    const conversationLeave = new Event('pointerout', { bubbles: true })
+    Object.defineProperty(conversationLeave, 'relatedTarget', { value: document.body })
+    conversation.element.dispatchEvent(conversationLeave)
+    vi.advanceTimersByTime(121)
+    await wrapper.vm.$nextTick()
+    expect(shell.classes()).not.toContain('workspace-shell--workflow-interaction-active')
+
+    wrapper.unmount()
+    vi.useRealTimers()
   })
 
   it('opens the mobile drawers from a horizontal swipe starting anywhere', async () => {
@@ -174,6 +227,7 @@ describe('WorkspaceShell responsive drawers', () => {
   })
 
   it('keeps the mobile sidebar within the viewport and gives actions touch targets', () => {
+    const shellSource = readFileSync(resolve(import.meta.dirname, '../src/components/WorkspaceShell.vue'), 'utf8')
     const shellCss = readFileSync(resolve(import.meta.dirname, '../src/styles/workspace-shell.css'), 'utf8')
     const sidebarCss = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
     const variablesCss = readFileSync(resolve(import.meta.dirname, '../src/styles/variables.css'), 'utf8')
@@ -181,12 +235,18 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(variablesCss).toContain('--sidebar-width: 232px')
     expect(shellCss).toMatch(/--sidebar-width: min\(86vw, 320px\)/)
     expect(shellCss).toContain('--right-panel-gap: 2px')
+    expect(shellCss).toContain('.workspace-shell.right-open.right-pinned')
+    expect(shellCss).toMatch(/\.drawer-right\.open:not\(\.pinned\)\s*\{[\s\S]*?z-index: var\(--z-popover\);/)
     expect(shellCss).toMatch(/\.sidebar-create-project\s*\{[\s\S]*?border-radius: var\(--radius\)/)
     expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?right: 0;[\s\S]*?width: calc\(var\(--right-drawer-width\) - var\(--right-panel-gap\)\);/)
-    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?border: 1px solid color-mix\(in srgb, var\(--theme-backdrop-text\) 18%, transparent\);[\s\S]*?border-radius: var\(--radius-lg\) 0 0 var\(--radius-lg\);[\s\S]*?background: transparent;/)
-    expect(shellCss).toMatch(/\.drawer-right::before\s*\{[\s\S]*?border-radius: inherit;[\s\S]*?-webkit-mask-image:[\s\S]*?linear-gradient\(to right,[\s\S]*?linear-gradient\(to bottom,[\s\S]*?mask-composite: intersect;/)
-    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?transition: transform 240ms var\(--ease-out\), opacity 240ms var\(--ease-out\);/)
-    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\)\s*\{[\s\S]*?transition-duration: var\(--dur-base\), var\(--dur-base\);/)
+    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?border: 0;[\s\S]*?border-radius: var\(--radius-lg\) 0 0 var\(--radius-lg\);/)
+    expect(shellCss).not.toContain('.drawer-right::before')
+    expect(shellSource).toContain('class="workspace-drawer drawer-right optical-glass"')
+    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?transform: none;[\s\S]*?visibility: visible;[\s\S]*?transition: visibility 0s linear 0s;/)
+    expect(shellCss).toMatch(/\.drawer-right > \.drawer-body\s*\{[\s\S]*?transition: transform 240ms var\(--ease-out\), opacity 240ms var\(--ease-out\);/)
+    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\)\s*\{[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none;[\s\S]*?transition-delay: var\(--dur-base\);/)
+    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\) > \.drawer-body\s*\{[\s\S]*?opacity: 0;[\s\S]*?transform: translateX\(10px\);/)
+    expect(shellCss).not.toMatch(/\.drawer-right\s*\{[^}]*will-change:/)
     expect(shellCss).toMatch(/\.workspace-shell \.workspace-drawer,[\s\S]*?transition: none !important;/)
     expect(shellCss).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.drawer-right\s*\{[\s\S]*?left: var\(--space-2\);[\s\S]*?right: var\(--space-2\);[\s\S]*?width: auto;/)
     expect(shellCss).toMatch(/\.sidebar-root \.sidebar-pin-button \{[\s\S]*?width: 44px;[\s\S]*?height: 44px;/)
@@ -228,7 +288,7 @@ describe('WorkspaceShell responsive drawers', () => {
 
     expect(pin.classes()).toContain('is-active')
     expect(pin.attributes('aria-pressed')).toBe('true')
-    expect(wrapper.emitted('update:left-pinned')).toEqual([[true]])
+    expect(wrapper.emitted('update:left-pinned')?.at(-1)).toEqual([true])
   })
 
   it('exposes a mobile drawer opener for host-level controls', async () => {
@@ -247,6 +307,30 @@ describe('WorkspaceShell responsive drawers', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.emitted('update:left-open')?.at(-1)).toEqual([false])
 
+    wrapper.unmount()
+  })
+
+  it('emits both pin states when toggled and when narrow view unpins them', async () => {
+    const media = installMatchMedia(false)
+    const wrapper = mount(WorkspaceShell, { props: { productName: 'Sage' } })
+    const shell = wrapper.vm as unknown as {
+      toggleLeftPinned: () => void
+      toggleRightPinned: () => void
+    }
+
+    await wrapper.get('.sidebar-pin-button').trigger('click')
+    expect(wrapper.emitted('update:left-pinned')?.at(-1)).toEqual([false])
+
+    shell.toggleLeftPinned()
+    shell.toggleRightPinned()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('update:left-pinned')?.at(-1)).toEqual([true])
+    expect(wrapper.emitted('update:right-pinned')?.at(-1)).toEqual([true])
+
+    media.setMatches(true)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('update:left-pinned')?.at(-1)).toEqual([false])
+    expect(wrapper.emitted('update:right-pinned')?.at(-1)).toEqual([false])
     wrapper.unmount()
   })
 
@@ -283,7 +367,7 @@ describe('WorkspaceShell responsive drawers', () => {
     wrapper.unmount()
   })
 
-  it('renders workflow composer as a compact, observable textarea/send pill', async () => {
+  it('renders workflow composer as a compact pill that can restore normal controls', async () => {
     const wrapper = mount(WorkspaceShell, {
       props: { productName: 'Core', workflowMode: true },
       slots: {
@@ -301,7 +385,7 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(composer.attributes('data-workflow-composer-has-value')).toBe('false')
     expect(wrapper.find('[data-workflow-preamble]').exists()).toBe(false)
     expect(wrapper.find('[data-workflow-status]').exists()).toBe(false)
-    expect(wrapper.find('[data-workflow-tool]').exists()).toBe(false)
+    expect(wrapper.find('[data-workflow-tool]').exists()).toBe(true)
     expect(wrapper.find('.floating-composer textarea').exists()).toBe(true)
     expect(wrapper.find('.core-send-stop-button').exists()).toBe(true)
 
@@ -310,10 +394,27 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(composer.attributes('data-workflow-composer-has-value')).toBe('true')
     expect(shell.classes()).toContain('workspace-shell--workflow-composer-has-value')
 
+    await wrapper.get('.floating-composer textarea').setValue('')
+    await wrapper.setProps({ composerHasValue: true })
+    expect(composer.classes()).toContain('composer-root--workflow-has-value')
+    expect(shell.attributes('data-workflow-composer-has-value')).toBe('true')
+
     await wrapper.setProps({ composerActionMode: 'stop' })
     expect(composer.classes()).toContain('composer-root--workflow-stop')
     expect(composer.attributes('data-workflow-composer-state')).toBe('stop')
     expect(shell.classes()).toContain('workspace-shell--workflow-composer-stop')
+
+    const css = readFileSync(resolve(process.cwd(), 'src/styles/layout.css'), 'utf8')
+    expect(css).toContain('.workspace-shell--workflow-interaction-active .floating-composer .composer-main-card')
+    expect(css).toContain('.composer-root--workflow-has-value .tool-row')
+    expect(css).toMatch(/\.composer-root--workflow-has-value \.floating-composer textarea[\s\S]*?min-height:\s*42px/)
+    expect(css).not.toContain('interpolate-size: allow-keywords')
+    expect(css).toContain('--workflow-composer-rest-height: calc(var(--space-6) + var(--space-4))')
+    expect(css).toContain('--workflow-composer-expanded-height: calc(var(--space-6) * 3 + var(--space-2))')
+    expect(css).toMatch(/\.workspace-shell--workflow \.floating-composer\s*\{[\s\S]*?height:\s*var\(--workflow-composer-rest-height\)/)
+    expect(css).toMatch(/\.composer-root--workflow-has-value \.floating-composer,[\s\S]*?height:\s*var\(--workflow-composer-expanded-height\)/)
+    expect(css).not.toMatch(/\.workspace-shell--workflow[\s\S]{0,1600}height:\s*auto/)
+    expect(css).toContain('height var(--dur-morph) var(--ease-inout)')
 
     wrapper.unmount()
   })

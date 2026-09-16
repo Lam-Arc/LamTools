@@ -1,7 +1,7 @@
 <template>
   <div
     ref="panelRef"
-    class="context-menu-panel"
+    class="context-menu-panel optical-glass"
     role="menu"
     tabindex="-1"
     :aria-label="ariaLabel"
@@ -14,35 +14,37 @@
     @click.stop
     @contextmenu.prevent.stop
   >
-    <template v-for="(entry, index) in items" :key="entry.id || `${pathKey}-${index}`">
-      <div v-if="entry.type === 'separator'" class="context-menu-separator" role="separator" />
-      <div v-else-if="entry.type === 'label'" class="context-menu-label" role="presentation">{{ entry.label }}</div>
-      <ContextMenuItem
-        v-else-if="entry.type !== 'submenu'"
-        :entry="entry"
-        :focused="focusedIndex === index"
-        :tabindex="focusedIndex === index ? 0 : -1"
-        :data-index="index"
-        @mounted="setItemRef(index, $event)"
-        @activate="activate(index)"
-        @pointer-enter="focusItem(index, true)"
-        @focus="focusItem(index, false)"
-        @keydown="handleKeydown(index, $event)"
-      />
-      <ContextMenuSubmenu
-        v-else
-        :entry="entry"
-        :focused="focusedIndex === index"
-        :expanded="isSubmenuExpanded(index)"
-        :tabindex="focusedIndex === index ? 0 : -1"
-        :data-index="index"
-        @mounted="setItemRef(index, $event)"
-        @activate="activate(index)"
-        @pointer-enter="focusItem(index, true)"
-        @focus="focusItem(index, false)"
-        @keydown="handleKeydown(index, $event)"
-      />
-    </template>
+    <div class="context-menu-panel-content">
+      <template v-for="(entry, index) in items" :key="entry.id || `${pathKey}-${index}`">
+        <div v-if="entry.type === 'separator'" class="context-menu-separator" role="separator" />
+        <div v-else-if="entry.type === 'label'" class="context-menu-label" role="presentation">{{ entry.label }}</div>
+        <ContextMenuItem
+          v-else-if="entry.type !== 'submenu'"
+          :entry="entry"
+          :focused="focusedIndex === index"
+          :tabindex="focusedIndex === index ? 0 : -1"
+          :data-index="index"
+          @mounted="setItemRef(index, $event)"
+          @activate="activate(index)"
+          @pointer-enter="focusItem(index, true)"
+          @focus="focusItem(index, false)"
+          @keydown="handleKeydown(index, $event)"
+        />
+        <ContextMenuSubmenu
+          v-else
+          :entry="entry"
+          :focused="focusedIndex === index"
+          :expanded="isSubmenuExpanded(index)"
+          :tabindex="focusedIndex === index ? 0 : -1"
+          :data-index="index"
+          @mounted="setItemRef(index, $event)"
+          @activate="activate(index)"
+          @pointer-enter="focusItem(index, true)"
+          @focus="focusItem(index, false)"
+          @keydown="handleKeydown(index, $event)"
+        />
+      </template>
+    </div>
   </div>
 </template>
 
@@ -271,7 +273,7 @@ defineExpose({
 
 <style>
 .context-menu-panel {
-  --text: var(--theme-control-text);
+  --text: var(--theme-main-text);
   position: fixed;
   z-index: var(--z-popover, 60);
   box-sizing: border-box;
@@ -279,15 +281,22 @@ defineExpose({
   min-width: 200px;
   max-width: min(280px, calc(100vw - var(--space-4)));
   max-height: calc(100dvh - var(--space-4));
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--text);
+  box-shadow: var(--shadow-xs);
+  pointer-events: auto;
+}
+
+.context-menu-panel-content {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  max-height: inherit;
   overflow-y: auto;
   padding: var(--space-1);
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  border-radius: var(--radius);
-  background: var(--theme-control-background);
-  color: var(--text);
-  box-shadow: var(--shadow-md);
-  pointer-events: auto;
-  isolation: isolate;
   animation: popover-in var(--dur-base) var(--ease-out);
 }
 
@@ -394,7 +403,7 @@ defineExpose({
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .context-menu-panel {
+  .context-menu-panel-content {
     animation: none;
   }
 }

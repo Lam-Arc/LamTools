@@ -598,9 +598,10 @@
 .width-control input[type="number"],
 .color-field input:not([type="color"]) {
   min-width: 0;
-  border-color: color-mix(in srgb, var(--settings-control-text, var(--theme-control-text)) 12%, transparent);
-  background: color-mix(in srgb, var(--settings-control-background, var(--theme-control-background)) 70%, transparent);
-  color: var(--settings-control-text, var(--theme-control-text));
+  border-color: color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   font-size: 12px;
 }
 

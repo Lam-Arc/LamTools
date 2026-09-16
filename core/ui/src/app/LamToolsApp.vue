@@ -2,6 +2,7 @@
   <TitleBar
     :left-pinned="leftPinned"
     :right-pinned="rightPinned"
+    :effective-theme-mode="effectiveThemeMode"
     :mode-label="activeAppMode.title"
     :mode-title="nextAppModeTitle"
     :can-toggle-mode="appModes.length > 1"
@@ -124,6 +125,7 @@
     :show-right-panel-header="false"
     :main-content-full-bleed="activePluginMode?.pluginId === 'workflow'"
     :workflow-mode="activePluginMode?.pluginId === 'workflow'"
+    :composer-has-value="Boolean(composerText.trim())"
     :composer-disabled="composerInputDisabled"
     :composer-send-disabled="composerSendDisabled"
     :composer-placeholder="composerPlaceholder"
@@ -136,6 +138,7 @@
     @new-session="handleShellNewSession"
     @update:left-open="onLeftDrawerChange"
     @update:left-pinned="syncLeftPinned"
+    @update:right-pinned="syncRightPinned"
     @settings="openSettings"
     @plugins="openPlugins"
     @search="showSearch = true"
@@ -432,6 +435,7 @@
           @keyup="handleComposerKeyup"
           @keydown="handleComposerKeydown"
           @paste="handleComposerPaste"
+          @contextmenu="openComposerContextMenu"
         />
       </div>
     </template>
@@ -501,9 +505,14 @@
         :runtime-status="latestStatus"
         :runtime-mode-label="runtimeModeLabel"
         :stage-open="stageOpen"
+        :mode="rightPanelMode"
+        :artifact-signal="lastWorkbenchEvent"
+        :open-artifact="openArtifactInStage"
         :active-plugin-id="activePluginMode?.pluginId || null"
         :active-mode-id="activePluginMode?.id || null"
         :plugin-contributions="activePluginSidebarContributions"
+        :locate-sub-agent="locateSubAgentRun"
+        @mode-change="handleRightPanelMode"
       >
         <template #stage>
           <FileTreePanel
@@ -545,10 +554,22 @@ import {
   watch,
 } from 'vue'
 import { gsap } from 'gsap'
-import { ArrowDown, CalendarClock, ChevronDown, ChevronUp, LoaderCircle, Upload } from 'lucide-vue-next'
+import {
+  ArrowDown,
+  CalendarClock,
+  ChevronDown,
+  ChevronUp,
+  ClipboardPaste,
+  Copy,
+  LoaderCircle,
+  Scissors,
+  TextSelect,
+  Upload,
+} from 'lucide-vue-next'
 import type {
   CoreAttachment,
   CoreSessionListItem,
+  CoreSubAgentRun,
 } from '../types'
 import { isInternalSession, isPluginOwnedSession } from '../sessions/visibility'
 import {
@@ -563,13 +584,15 @@ import { createCoreProjectWorkspaceActions } from '../projects/workspace'
 import {
   type CoreQueuedInput,
 } from '../appServer'
-import type { LamToolsTransport } from '../transport'
+import type { LamToolsTransport, TransportHttpResponse } from '../transport'
 import type { LamToolsRuntime } from './runtime'
 import { buildCoreComposerHighlightSegments } from '../composer/inputItems'
 import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
 import {
+  CORE_SCROLL_SENTINEL_VISIBLE_RATIO,
   coreApplyHistoryScrollCeiling,
   coreHistoryAutoLoadThreshold,
+  coreIsBottomSentinelVisible,
   coreShouldAutoLoadHistory,
   readUpdateAutoCheck,
   useCoreAutoFollowScroll,
@@ -579,6 +602,7 @@ import {
   useCoreUiPreferences,
   useCoreUpdateState,
   useCheckpoints,
+  createCoreConnectionErrorToastGate,
   showToast,
 } from '../composables'
 
@@ -593,11 +617,14 @@ import CoreGoalStrip from '../components/CoreGoalStrip.vue'
 import HistoryLoadingIndicator from '../components/HistoryLoadingIndicator.vue'
 import FileTreePanel from '../components/FileTreePanel.vue'
 import type { StageResource, StageKind } from '../types'
+import type { ArtifactRevision, ProjectArtifact } from '../types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreProjectPicker from '../components/CoreProjectPicker.vue'
 import CoreStartPage, { type CoreRecentProject } from '../components/CoreStartPage.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import { ContextMenuHost } from '../components/context-menu'
+import { openContextMenu } from '../components/context-menu/context-menu'
+import type { ContextMenuEntry } from '../components/context-menu/types'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import PluginsShell from '../components/PluginsShell.vue'
 import SearchShell from '../components/SearchShell.vue'
@@ -632,6 +659,7 @@ import {
 import type { PluginModeSurface } from '../plugins/context'
 import type { PluginMode } from '../plugins/types'
 import type { CorePermissionPreset } from '../composer/execution'
+import { copyText } from '../helpers/clipboard'
 
 const CoreSettings = defineAsyncComponent(() => import('../components/CoreSettings.vue'))
 const StagePane = defineAsyncComponent(() => import('../components/StagePane.vue'))
@@ -689,6 +717,11 @@ const appRuntime = props.runtime
 const workbench = appRuntime.workbench
 const transport = appRuntime.transport
 const projectClient = appRuntime.projectClient || createCoreProjectClient(transport)
+const connectionErrorToastGate = createCoreConnectionErrorToastGate({
+  isConnected: () => workbench.connectionState.value === 'open',
+})
+watch(workbench.connectionState, (state) => connectionErrorToastGate.onConnectionState(state), { immediate: true })
+onUnmounted(() => connectionErrorToastGate.dispose())
 
 async function requestJson<T = unknown>(
   path: string,
@@ -706,6 +739,7 @@ const sessions = workbench.sessions
 const activeSessionId = workbench.activeSessionId
 const historyLoadingSessionId = ref<string | null>(null)
 const snapshot = workbench.snapshot
+const lastWorkbenchEvent = workbench.lastEvent
 const composerText = workbench.composerText
 const composerCursor = workbench.composerCursor
 const composerTextareaEl = ref<HTMLTextAreaElement | null>(null)
@@ -787,15 +821,16 @@ const rightPinned = ref(false)
 const sendingDisabled = ref(false)
 
 function toggleLeftPinned() {
-  leftPinned.value = !leftPinned.value
   shellRef.value?.toggleLeftPinned()
 }
 function syncLeftPinned(value: boolean) {
   leftPinned.value = value
 }
 function toggleRightPinned() {
-  rightPinned.value = !rightPinned.value
   shellRef.value?.toggleRightPinned()
+}
+function syncRightPinned(value: boolean) {
+  rightPinned.value = value
 }
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
@@ -1204,9 +1239,16 @@ const stageOpen = ref(false)
 const stageTabs = ref<StageResource[]>([])
 const stageActiveId = ref<string | null>(null)
 const stagePaneRef = ref<StagePaneInstance | null>(null)
+const rightPanelMode = ref<'runtime' | 'files' | 'artifacts'>('runtime')
+
+function handleRightPanelMode(mode: 'runtime' | 'files' | 'artifacts'): void {
+  rightPanelMode.value = mode
+  if (mode === 'files' && !stageOpen.value) stageOpen.value = true
+}
 
 function toggleStage() {
   stageOpen.value = !stageOpen.value
+  rightPanelMode.value = stageOpen.value ? 'files' : 'runtime'
 }
 
 function stageActivate(id: string) {
@@ -1305,6 +1347,102 @@ async function openFileInStage(entry: { path: string; name: string; ext: string 
   stageActiveId.value = tabId
   if (!stageOpen.value) stageOpen.value = true
 }
+
+function artifactReferencePath(artifact: ProjectArtifact, revision?: ArtifactRevision): string {
+  return String(revision?.path || revision?.uri || artifact.path || artifact.uri || '')
+}
+
+function artifactStageKind(artifact: ProjectArtifact, revision?: ArtifactRevision): StageKind {
+  const mime = String(revision?.mime_type || artifact.mime_type || '').toLowerCase()
+  if (mime.startsWith('image/')) return 'image'
+  if (mime.startsWith('video/')) return 'video'
+  if (mime.startsWith('audio/')) return 'audio'
+  if (mime === 'application/pdf') return 'pdf'
+  const name = String(revision?.name || artifact.name || artifactReferencePath(artifact, revision)).split(/[?#]/, 1)[0]
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  return inferStageKind(ext)
+}
+
+function artifactHttpPath(projectId: string, artifact: ProjectArtifact, revision?: ArtifactRevision): string {
+  const reference = artifactReferencePath(artifact, revision)
+  const revisionId = String(revision?.revision_id || revision?.id || '')
+  // Artifact V2 revisions are immutable blobs. Always route an identified
+  // revision through the artifact endpoint; using the workspace path here
+  // would silently preview the current file instead of the selected history.
+  if (artifact.artifact_id) {
+    const query = new URLSearchParams()
+    if (revisionId) query.set('revision_id', revisionId)
+    if (reference) query.set('path', reference)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return `/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifact.artifact_id)}/file${suffix}`
+  }
+  if (reference.startsWith('attachment://')) {
+    return `/attachments/${encodeURIComponent(reference.slice('attachment://'.length))}/download`
+  }
+  if (reference.startsWith('workspace://')) {
+    return `/projects/${encodeURIComponent(projectId)}/files/raw?path=${encodeURIComponent(reference.slice('workspace://'.length))}`
+  }
+  return reference
+    ? `/projects/${encodeURIComponent(projectId)}/files/raw?path=${encodeURIComponent(reference)}`
+    : ''
+}
+
+async function openArtifactInStage(artifact: ProjectArtifact, revision?: ArtifactRevision): Promise<void> {
+  const projectId = activeProjectId.value
+  if (!projectId) return
+  rightPanelMode.value = 'artifacts'
+  const revisionId = String(revision?.revision_id || revision?.id || '')
+  const tabId = `artifact:${artifact.artifact_id}${revisionId ? `:${revisionId}` : ''}`
+  const existing = stageTabs.value.find(tab => tab.id === tabId)
+  if (existing) {
+    stageActiveId.value = tabId
+    stageOpen.value = true
+    return
+  }
+  const kind = artifactStageKind(artifact, revision)
+  const reference = artifactReferencePath(artifact, revision)
+  const tab: StageResource = {
+    id: tabId,
+    kind,
+    path: reference,
+    label: String(revision?.name || artifact.name || artifact.artifact_id),
+  }
+  const inlineContent = typeof revision?.content === 'string' ? revision.content : ''
+  if (kind === 'code' || kind === 'markdown') {
+    if (inlineContent) {
+      tab.content = inlineContent
+    } else if (reference && !reference.startsWith('attachment://') && !artifact.artifact_id && reference.startsWith('workspace://')) {
+      try {
+        tab.content = (await projectClient.readFile(projectId, reference.slice('workspace://'.length))).content
+      } catch {
+        tab.content = '// 无法加载成果内容'
+      }
+    } else {
+      try {
+        const path = artifactHttpPath(projectId, artifact, revision)
+        const response = await transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path })
+        if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`)
+        tab.content = new TextDecoder().decode(Uint8Array.from(response.body))
+      } catch {
+        tab.content = '// 无法加载成果内容'
+      }
+    }
+  } else if (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
+    try {
+      const path = artifactHttpPath(projectId, artifact, revision)
+      const response = await transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path })
+      if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`)
+      tab.url = URL.createObjectURL(new Blob([Uint8Array.from(response.body)], {
+        type: response.headers['content-type'] || artifact.mime_type || 'application/octet-stream',
+      }))
+    } catch {
+      tab.url = ''
+    }
+  }
+  stageTabs.value.push(tab)
+  stageActiveId.value = tabId
+  stageOpen.value = true
+}
 // Split key from the shell's — useShellLayout persists stageOpen/stageHeight
 // under 'lamtools.core.ui'; writing the same key from here with a different
 // schema silently dropped those fields on every preference save (audit 19 S3).
@@ -1328,6 +1466,7 @@ const COMPOSER_MAX_ROWS = 5
 let threadBottomObserver: IntersectionObserver | null = null
 let threadBottomObserverRoot: HTMLElement | null = null
 let threadBottomObserverTarget: HTMLElement | null = null
+let threadBottomObserverGeneration = 0
 let latestActivityMotion: gsap.MatchMedia | null = null
 let latestActivityTween: gsap.core.Tween | null = null
 let historyScrollCeiling: number | null = null
@@ -1747,6 +1886,8 @@ provideCorePluginModeContext({
   refreshSessions,
   setRuntimeStatus,
   availableModels,
+  selectedModelId,
+  permissionPreset,
   composerText,
   ensureRightPanelOpen,
   lastEvent,
@@ -1775,10 +1916,10 @@ provideCorePluginModeContext({
 }, pluginModeRuntime)
 // Each error source feeds the toast service via watch; the service handles
 // auto-expiry (8s for errors) and de-duplication, so nothing stays pinned.
-watch(loadError, (value) => { if (value) showToast('error', value, 8000) })
-watch(composerErrorText, (value) => { if (value) showToast('error', value, 8000) })
-watch(() => approvalController.lastError.value, (value) => { if (value) showToast('error', value, 8000) })
-watch(goalError, (value) => { if (value) showToast('error', value, 8000) })
+watch(loadError, (value) => { if (value) connectionErrorToastGate.report(value, 8000) })
+watch(composerErrorText, (value) => { if (value) connectionErrorToastGate.report(value, 8000) })
+watch(() => approvalController.lastError.value, (value) => { if (value) connectionErrorToastGate.report(value, 8000) })
+watch(goalError, (value) => { if (value) connectionErrorToastGate.report(value, 8000) })
 
 const queuedInputs = workbench.queuedInputs
 const editingQueuedInputId = queueController.editingId
@@ -2149,6 +2290,14 @@ async function jumpToSearchedMessage(sessionId: string, messageId: string): Prom
   await locateMessage(messageId)
 }
 
+function locateScrollBehavior(): ScrollBehavior {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ? 'auto'
+    : 'smooth'
+}
+
 /** 定位消息：轮询目标 DOM（窗口未含则逐步加载更早历史），
  * 命中 → scrollIntoView 居中 + 高亮渐隐（2.6s）。找不到给出提示。 */
 async function locateMessage(messageId: string): Promise<void> {
@@ -2156,7 +2305,7 @@ async function locateMessage(messageId: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const el = document.querySelector<HTMLElement>(selector)
     if (el) {
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.scrollIntoView({ block: 'center', behavior: locateScrollBehavior() })
       el.classList.add('rag-hit-highlight')
       window.setTimeout(() => el.classList.remove('rag-hit-highlight'), 2600)
       return
@@ -2170,6 +2319,53 @@ async function locateMessage(messageId: string): Promise<void> {
     break
   }
   showToast('error', '未找到该消息（可能已被删除或属于子会话）', 5000)
+}
+
+/** Locate a Sub Agent's source part, expanding its parent process and child
+ * timeline before centering and focusing the heading for keyboard users. */
+async function locateSubAgentRun(run: CoreSubAgentRun): Promise<void> {
+  const messageId = String(run.sourceMessageId || '').trim()
+  const sourcePartId = String(run.sourcePartId || '').trim()
+  // Remote durable snapshots may only have a source part/call id.  Search the
+  // currently mounted transcript first so these rows remain navigable even
+  // when the parent message id was generated by an older protocol version.
+  if (!messageId && sourcePartId) {
+    const directPart = document.querySelector<HTMLElement>(`[data-part-id="${CSS.escape(sourcePartId)}"]`)
+    if (directPart) {
+      await focusSubAgentSource(directPart)
+      return
+    }
+  }
+  if (!messageId) return
+  await locateMessage(messageId)
+  await nextTick()
+  if (!processExpandedIds.value.has(messageId)) toggleProcess(messageId)
+  await nextTick()
+  const message = document.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`)
+  if (!message) return
+  const part = sourcePartId
+    ? message.querySelector<HTMLElement>(`[data-part-id="${CSS.escape(sourcePartId)}"]`)
+      || document.querySelector<HTMLElement>(`[data-part-id="${CSS.escape(sourcePartId)}"]`)
+    : null
+  if (!part) {
+    message.scrollIntoView({ block: 'center', behavior: locateScrollBehavior() })
+    return
+  }
+  await focusSubAgentSource(part)
+}
+
+async function focusSubAgentSource(part: HTMLElement): Promise<void> {
+  const heading = part.querySelector<HTMLButtonElement>('.sub-line-heading')
+  if (heading && !part.querySelector('.sub-line-body')) {
+    heading.click()
+    await nextTick()
+  }
+  const target = (part.querySelector<HTMLElement>('.sub-line-heading') || part)
+  target.scrollIntoView({ block: 'center', behavior: locateScrollBehavior() })
+  target.classList.remove('sub-agent-source-highlight')
+  target.classList.add('sub-agent-source-highlight')
+  window.setTimeout(() => target.classList.remove('sub-agent-source-highlight'), 1200)
+  if (target instanceof HTMLButtonElement) target.focus({ preventScroll: true })
 }
 
 // Session-scoped model memory: each session remembers its own model choice,
@@ -2454,6 +2650,125 @@ function handleComposerInput() {
 
 function updateComposerCursor() {
   composerCursor.value = composerTextareaEl.value?.selectionStart ?? composerText.value.length
+}
+
+type ComposerSelection = {
+  start: number
+  end: number
+  direction: 'forward' | 'backward' | 'none'
+  value: string
+}
+
+function restoreComposerSelection(selection: ComposerSelection): HTMLTextAreaElement | null {
+  const textarea = composerTextareaEl.value
+  if (!textarea) return null
+  textarea.focus({ preventScroll: true })
+  textarea.setSelectionRange(selection.start, selection.end, selection.direction)
+  return textarea
+}
+
+function replaceComposerSelection(selection: ComposerSelection, replacement: string): void {
+  if (composerText.value !== selection.value) return
+  composerText.value = `${selection.value.slice(0, selection.start)}${replacement}${selection.value.slice(selection.end)}`
+  composerErrorText.value = ''
+  const cursor = selection.start + replacement.length
+  composerCursor.value = cursor
+  void nextTick(() => {
+    const textarea = composerTextareaEl.value
+    if (!textarea) return
+    textarea.focus({ preventScroll: true })
+    textarea.setSelectionRange(cursor, cursor)
+    resizeComposerTextarea()
+  })
+}
+
+async function copyComposerSelection(selection: ComposerSelection): Promise<boolean> {
+  const selectedText = selection.value.slice(selection.start, selection.end)
+  if (!selectedText) return false
+  try {
+    await copyText(selectedText)
+    restoreComposerSelection(selection)
+    return true
+  } catch {
+    showToast('error', '复制失败：当前环境无法访问剪贴板')
+    return false
+  }
+}
+
+async function cutComposerSelection(selection: ComposerSelection): Promise<void> {
+  if (composerInputDisabled.value || !await copyComposerSelection(selection)) return
+  replaceComposerSelection(selection, '')
+}
+
+async function pasteIntoComposer(selection: ComposerSelection): Promise<void> {
+  if (composerInputDisabled.value) return
+  try {
+    if (!navigator.clipboard?.readText) throw new Error('clipboard unavailable')
+    const clipboardText = await navigator.clipboard.readText()
+    replaceComposerSelection(selection, clipboardText)
+  } catch {
+    showToast('error', '粘贴失败：当前环境无法读取剪贴板')
+  }
+}
+
+function selectAllComposerText(selection: ComposerSelection): void {
+  const textarea = restoreComposerSelection(selection)
+  textarea?.select()
+  composerCursor.value = selection.value.length
+}
+
+function openComposerContextMenu(event: MouseEvent): void {
+  const textarea = composerTextareaEl.value
+  if (!textarea) return
+  const selection: ComposerSelection = {
+    start: textarea.selectionStart,
+    end: textarea.selectionEnd,
+    direction: textarea.selectionDirection,
+    value: textarea.value,
+  }
+  const hasSelection = selection.start !== selection.end
+  const items: ContextMenuEntry[] = [
+    {
+      id: 'composer-cut',
+      label: '剪切',
+      icon: Scissors,
+      shortcut: 'Ctrl+X',
+      disabled: composerInputDisabled.value || !hasSelection,
+      action: () => cutComposerSelection(selection),
+    },
+    {
+      id: 'composer-copy',
+      label: '复制',
+      icon: Copy,
+      shortcut: 'Ctrl+C',
+      disabled: !hasSelection,
+      action: () => copyComposerSelection(selection),
+    },
+    {
+      id: 'composer-paste',
+      label: '粘贴',
+      icon: ClipboardPaste,
+      shortcut: 'Ctrl+V',
+      disabled: composerInputDisabled.value,
+      action: () => pasteIntoComposer(selection),
+    },
+    { type: 'separator', id: 'composer-edit-separator' },
+    {
+      id: 'composer-select-all',
+      label: '全选',
+      icon: TextSelect,
+      shortcut: 'Ctrl+A',
+      disabled: !selection.value,
+      action: () => selectAllComposerText(selection),
+    },
+  ]
+  openContextMenu({
+    event,
+    items,
+    ownerId: 'composer-input',
+    ariaLabel: '输入框编辑操作',
+    panelAttributes: { 'data-composer-context-menu': true },
+  })
 }
 
 function focusComposer(cursor: number) {
@@ -2964,6 +3279,7 @@ function syncThreadBottomObserver() {
     && threadBottomObserverTarget === target
   ) return
 
+  const observerGeneration = ++threadBottomObserverGeneration
   threadBottomObserver?.disconnect()
   threadBottomObserver = null
   threadBottomObserverRoot = root
@@ -2971,17 +3287,26 @@ function syncThreadBottomObserver() {
   if (typeof IntersectionObserver === 'undefined' || !root || !target) return
 
   threadBottomObserver = new IntersectionObserver((entries) => {
+    if (
+      observerGeneration !== threadBottomObserverGeneration
+      || root !== threadScrollEl.value
+      || target !== threadBottomSentinel.value
+    ) return
     const entry = entries.find(item => item.target === target)
     if (!entry) return
     const wasFollowing = threadScroll.autoFollow.value
-    threadScroll.handleSentinelVisibility(entry.isIntersecting)
-    if (!entry.isIntersecting && wasFollowing) {
+    const sentinelVisible = coreIsBottomSentinelVisible(entry)
+    threadScroll.handleSentinelVisibility(sentinelVisible)
+    if (!sentinelVisible && wasFollowing) {
       void threadScroll.scrollToBottom()
     }
   }, {
     root,
     rootMargin: '0px',
-    threshold: 1,
+    // Observe both entry/exit and the almost-fully-visible boundary. Reading
+    // only isIntersecting with threshold: 1 loses the partial-visibility
+    // transition and can leave streaming content permanently detached.
+    threshold: [0, CORE_SCROLL_SENTINEL_VISIBLE_RATIO],
   })
   threadBottomObserver.observe(target)
 }
@@ -3113,6 +3438,7 @@ onUnmounted(() => {
   cancelHistoryCapMotion()
   historyScrollCeiling = null
   restoringHistoryAnchor = false
+  threadBottomObserverGeneration++
   threadBottomObserver?.disconnect()
   threadBottomObserver = null
   threadBottomObserverRoot = null
@@ -3241,17 +3567,18 @@ onUnmounted(() => {
   width: 100%;
   height: 30px;
   box-sizing: border-box;
-  border: 1px solid var(--theme-main-border);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: 7px;
-  background: var(--theme-main-subtle-background);
-  color: var(--theme-main-text);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
   padding: 0 8px;
   font: inherit;
   font-size: 13px;
   outline: 0;
 }
 .wf-create-input:focus {
-  border-color: color-mix(in srgb, var(--blue) 60%, transparent);
+  border-color: color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
 }
 .wf-create-error {
   margin: 0;

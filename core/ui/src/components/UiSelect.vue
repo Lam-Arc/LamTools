@@ -124,14 +124,15 @@ onUnmounted(() => {
 .ui-select-trigger {
   width: 100%;
   min-height: 32px;
-  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #f4f1ec)) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, currentColor var(--alpha-hover), transparent);
-  color: inherit;
+  background: color-mix(in srgb, var(--settings-control-solid, var(--theme-control-solid, #242424)) 70%, transparent);
+  color: var(--settings-control-text, var(--theme-control-text, #f4f1ec));
   padding: 0 var(--space-3) 0 var(--space-2);
   display: inline-flex;
   align-items: center;
   text-align: left;
+  font-size: 13px;
 }
 
 .ui-select-trigger:disabled {
@@ -156,6 +157,7 @@ onUnmounted(() => {
   border-bottom: 1.5px solid currentColor;
   opacity: .7;
   transform: translateY(-65%) rotate(45deg);
+  transition: transform var(--dur-fast) var(--ease-out);
 }
 
 .ui-select.open .ui-select-arrow {
@@ -172,10 +174,10 @@ onUnmounted(() => {
   overflow: auto;
   border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
   border-radius: var(--radius);
-  /* 菜单 = control area 实色面板：settings 上下文用 --settings-control-solid（实色），
-     工作区保持原 composer 兜底不变。文字须配 control 文字，避免深底深字/浅底浅字。 */
-  background: var(--settings-control-solid, var(--theme-composer-background, #242424));
-  color: var(--settings-control-text, var(--settings-card-text, var(--theme-composer-text, #f4f1ec)));
+  /* 菜单是 control area；settings 预览优先使用作用域内实色 token，
+     其他上下文回退到 control 主题，不跨用 main/composer 文字色。 */
+  background: var(--settings-control-solid, var(--theme-control-background, #242424));
+  color: var(--settings-control-text, var(--theme-control-text, #f4f1ec));
   box-shadow: var(--shadow-md);
   padding: 6px;
   display: grid;
@@ -267,6 +269,10 @@ onUnmounted(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .ui-select-arrow {
+    transition: none;
+  }
+
   .ui-select-menu {
     animation: none;
   }

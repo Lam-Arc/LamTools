@@ -88,8 +88,10 @@ export {
 export {
   CORE_HISTORY_AUTO_LOAD_THRESHOLD_PX,
   CORE_SCROLL_BOTTOM_THRESHOLD_PX,
+  CORE_SCROLL_SENTINEL_VISIBLE_RATIO,
   coreApplyHistoryScrollCeiling,
   coreHistoryAutoLoadThreshold,
+  coreIsBottomSentinelVisible,
   coreIsScrollNearBottom,
   coreShouldAutoLoadHistory,
   useCoreAutoFollowScroll,
@@ -111,10 +113,14 @@ export {
 } from './useRightSidebarLayout'
 
 export {
+  createCoreConnectionErrorToastGate,
   useCoreToast,
   showToast,
   dismissToast,
   dismissAllToasts,
+  isTransientCoreConnectionError,
+  TRANSIENT_CONNECTION_ERROR_GRACE_MS,
+  type CoreConnectionErrorToastGate,
   type CoreToast,
   type CoreToastKind,
 } from './useCoreToast'
