@@ -1665,3 +1665,52 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
 - Limitation and next milestone: no Tauri/Computer Use visual validation was
   run. The Tester noted older unrelated dead CSS in CoreSettings, with no
   blocker. Next milestone is user/Tauri visual acceptance if required.
+
+## Website self-hosted distribution implementation handoff (2026-09-17)
+
+- Task ID/deployment: `website_self_hosted_distribution_closure` /
+  `website_self_hosted_distribution_20260917`; implementation state:
+  `complete`; server-distribution follow-up remains pending user confirmation.
+- Active goal/progress: the public website preview is implemented and tracked
+  in `website/`. `website/src/App.vue` now contains SiteNav/Hero/Showcase/
+  Features/Download/SiteFooter; the Architecture section was removed to keep
+  the page focused. Showcase mounts the complete real `LamToolsApp` through a
+  typed in-memory `MockTransport`, with zero real API/XHR/WebSocket calls.
+- Design/result: ivory-white and graphite-black themes are synchronized, with
+  only a restrained fine rainbow spectrum used for emphasis. Downloads default
+  to the same-origin path `/downloads/Sunday-latest-x64-setup.exe`.
+- Preview containment repair: the former inline mount let Core's
+  `position:fixed`/`100vw`/`100vh`, settings cards, and composer resolve
+  against the host page. It now uses a same-origin `preview.html` iframe with
+  an independent viewport while still directly importing the complete
+  `LamToolsApp` and `MockTransport`; the parent page no longer loads Core's
+  global CSS. Vite's multi-page build emits both `index.html` and
+  `preview.html`.
+- Theme synchronization uses a fixed iframe URL and same-origin
+  `postMessage`; the iframe remounts the real `LamToolsApp` so theme changes do
+  not depend on parent-page scrolling or inline Core state.
+- Verification: the independent Tester passed `npm run build` and
+  `scripts/verify-preview.mjs` at 1440px and 390px. The checks reported
+  `pageScrollY=0`, no horizontal page overflow, and no console errors.
+- Extended containment verification also passed at 2277x1362, 1440x1000, and
+  390x844, covering shell/main/composer/settings containment, no Core overlay
+  leakage into the parent page, and no API/XHR/WebSocket calls, console
+  errors, or horizontal overflow.
+- Final independent Tester verification passed in the production preview on
+  port 5200 (`verify-preview` exit 0): both graphite and ivory reported
+  `pageScrollY=0`; the settings rect was
+  `107.7/74.6/1330.3/798.5`, fully inside the `1438x819` viewport; and there
+  were no API/XHR/WebSocket calls, console errors, or page errors.
+- Distribution boundary: server hosting, DNS, update-source migration, and
+  deployment have not been executed. The current GitHub-based update/release
+  path remains until the user confirms the canonical HTTPS domain and the
+  upload/deployment method. The installer naming remains
+  `Sunday_<version>_x64-setup.exe`.
+- Next milestone: after confirmation, deploy the tracked website and
+  versioned installer/manifest assets to the owned server, configure DNS and
+  same-origin download/update URLs, then verify the live website and desktop
+  update check. Do not treat the completed local preview as evidence of live
+  hosting.
+- Git handoff: preserve unrelated dirty/untracked work; this documentation
+  correction changes only the two assigned documents. No stage, commit,
+  revert, cleanup, or `project_diary.md` edit was performed here.

@@ -1,0 +1,29 @@
+{
+  "name": "lamtools-website",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24.17.0 <25",
+    "npm": ">=11.17.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "animejs": "^4.0.0",
+    "dompurify": "^3.4.11",
+    "katex": "^0.17.0",
+    "lucide-vue-next": "^1.0.0",
+    "marked": "^18.0.5",
+    "mermaid": "^11.15.0",
+    "vue": "^3.5.38"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
+  }
+}

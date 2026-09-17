@@ -134,8 +134,14 @@ core/scripts/
 /shimmer-*.png
 /workflow-canvas-state.png
 
-# Website — not ready, not uploaded
-/website/
+# Website build and local visual-verification artifacts
+/website/node_modules/
+/website/dist/
+/website/.vite/
+/website/artifacts/
+/website/shots/
+/website/test-results/
+/website/playwright-report/
 
 # Legacy playwright test workspace (archived test fixtures, not e2e/)
 .playwright-test/
