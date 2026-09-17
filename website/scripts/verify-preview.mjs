@@ -85,13 +85,24 @@ async function inspect(page, label) {
     const shell = document.querySelector('.workspace-shell')
     const main = document.querySelector('.workspace-main')
     const composer = document.querySelector('.floating-composer')
+    const titlebar = document.querySelector('.titlebar')
     const thread = document.querySelector('.thread')
     const style = shell ? getComputedStyle(shell) : null
+    const titlebarStyle = titlebar ? getComputedStyle(titlebar) : null
     return {
       viewport: { width: window.innerWidth, height: window.innerHeight },
       shell: toRect(shell),
       main: toRect(main),
       composer: toRect(composer),
+      titlebar: toRect(titlebar),
+      titlebarVisible: Boolean(
+        titlebar
+        && titlebarStyle
+        && titlebar.getClientRects().length > 0
+        && titlebarStyle.display !== 'none'
+        && titlebarStyle.visibility !== 'hidden'
+        && Number.parseFloat(titlebarStyle.opacity) > 0
+      ),
       thread: thread ? {
         rect: toRect(thread),
         childCount: thread.children.length,
@@ -130,6 +141,12 @@ async function inspect(page, label) {
       && rectInside(embedded.shell, embedded.viewport)
       && rectInside(embedded.main, embedded.viewport)
       && rectInside(embedded.composer, embedded.viewport)
+    ),
+    titlebarVisible: embedded.titlebarVisible,
+    titlebarContained: Boolean(
+      embedded.titlebarVisible
+      && embedded.titlebar
+      && rectInside(embedded.titlebar, embedded.viewport)
     ),
     embedded,
   }
@@ -203,6 +220,7 @@ try {
   const failed = [
     snapshots.some((snapshot) => !snapshot.productAppMounted),
     snapshots.some((snapshot) => !snapshot.previewContained),
+    snapshots.some((snapshot) => !snapshot.titlebarVisible || !snapshot.titlebarContained),
     snapshots.some((snapshot) => snapshot.parentHasCoreOverlay),
     snapshots.some((snapshot) => snapshot.pageScrollY > 1),
     snapshots.some((snapshot) => snapshot.horizontalOverflow),

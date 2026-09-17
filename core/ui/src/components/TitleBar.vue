@@ -1,5 +1,5 @@
 <template>
-  <div v-if="isTauri" class="titlebar" data-tauri-drag-region>
+  <div v-if="shouldDisplayTitleBar" class="titlebar" data-tauri-drag-region>
     <div class="titlebar-left">
       <SundayLogo :size="24" surface :surface-theme="props.effectiveThemeMode" decorative />
       <span class="brand">
@@ -125,7 +125,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { Smartphone } from 'lucide-vue-next'
 import type { MobileControlAccountDevice, MobileControlAccountStatus } from './MobileControlPanel.vue'
 import SundayLogo from './SundayLogo.vue'
@@ -142,6 +142,7 @@ const props = defineProps<{
   mobilePairingLoading?: boolean
   accountStatus?: MobileControlAccountStatus | null
   accountDevices?: MobileControlAccountDevice[]
+  showInPreview?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -159,6 +160,7 @@ const tauriWindow = typeof window === 'undefined'
   ? null
   : window as Window & { __TAURI_INTERNALS__?: TauriInternals }
 const isTauri = ref(Boolean(tauriWindow?.__TAURI_INTERNALS__?.invoke))
+const shouldDisplayTitleBar = computed(() => isTauri.value || props.showInPreview === true)
 const mobilePairingOpen = ref(false)
 const mobilePairingAnchor = ref<HTMLElement | null>(null)
 const maximizeButton = ref<HTMLButtonElement | null>(null)
@@ -227,15 +229,25 @@ function handleMaximizeNativePress(event: Event): void {
   maximizeNativeActive.value = Boolean((event as CustomEvent<boolean>).detail)
 }
 
+function syncTitlebarOffset(): void {
+  if (shouldDisplayTitleBar.value) {
+    document.documentElement.style.setProperty('--titlebar-offset', '36px')
+  } else {
+    document.documentElement.style.removeProperty('--titlebar-offset')
+  }
+}
+
+watch(shouldDisplayTitleBar, syncTitlebarOffset)
+
 onMounted(() => {
   const tauri = tauriWindow?.__TAURI_INTERNALS__
   if (tauri && tauri.invoke) {
     isTauri.value = true
     const invoke = tauri.invoke
     tauriInvoke = (cmd: string, args?: Record<string, unknown>) => invoke(cmd, args)
-    document.documentElement.style.setProperty('--titlebar-offset', '36px')
     scheduleMaximizeButtonBoundsSync()
   }
+  syncTitlebarOffset()
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   document.addEventListener('keydown', handleDocumentKeydown)
   window.addEventListener('resize', scheduleMaximizeButtonBoundsSync)

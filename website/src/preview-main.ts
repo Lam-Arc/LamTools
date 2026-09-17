@@ -81,7 +81,10 @@ function mountPreview(theme: PreviewTheme) {
 
   applyDocumentTheme(theme)
   activeRuntime = createWebsiteMockRuntime()
-  activeApp = createApp(LamToolsApp, { runtime: activeRuntime })
+  activeApp = createApp(LamToolsApp, {
+    runtime: activeRuntime,
+    showPreviewTitleBar: true,
+  })
   activeApp.mount(root)
   activeTheme = theme
 }

@@ -1,5 +1,6 @@
 <template>
   <TitleBar
+    :show-in-preview="props.showPreviewTitleBar"
     :left-pinned="leftPinned"
     :right-pinned="rightPinned"
     :effective-theme-mode="effectiveThemeMode"
@@ -703,6 +704,7 @@ type RawProvider = {
 const props = defineProps<{
   runtime: LamToolsRuntime
   accountContext?: MobileControlAccountContext
+  showPreviewTitleBar?: boolean
 }>()
 const emit = defineEmits<{
   'left-drawer-change': [value: boolean]
