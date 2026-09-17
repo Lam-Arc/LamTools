@@ -53,19 +53,21 @@ try {
         exit 1
     }
     $BundledPluginsDir = "$Root\core\dist\LamCore\_internal\resources\plugins\bundled"
-    $BundledPetDir = "$BundledPluginsDir\emotion-ball-pet"
-    if (Test-Path -LiteralPath $BundledPetDir) {
-        Write-Host "[FAIL] Optional desktop pet was embedded in the backend bundle: $BundledPetDir" -ForegroundColor Red
-        exit 1
+    foreach ($ExcludedPlugin in @("emotion-ball-pet", "workflow")) {
+        $ExcludedPluginDir = "$BundledPluginsDir\$ExcludedPlugin"
+        if (Test-Path -LiteralPath $ExcludedPluginDir) {
+            Write-Host "[FAIL] Excluded bundled plugin was embedded in the backend bundle: $ExcludedPluginDir" -ForegroundColor Red
+            exit 1
+        }
     }
-    foreach ($RequiredPlugin in @("git", "websearch", "imagegen", "workflow")) {
+    foreach ($RequiredPlugin in @("git", "imagegen", "websearch")) {
         $RequiredPluginDir = "$BundledPluginsDir\$RequiredPlugin"
         if (-not (Test-Path -LiteralPath $RequiredPluginDir)) {
             Write-Host "[FAIL] Required bundled plugin is missing: $RequiredPluginDir" -ForegroundColor Red
             exit 1
         }
     }
-    Write-Host "  Plugin boundary verified (desktop pet excluded)." -ForegroundColor Green
+    Write-Host "  Plugin boundary verified (desktop pet and workflow excluded)." -ForegroundColor Green
     Write-Host "  Backend -> core/dist/LamCore/" -ForegroundColor Green
 } finally {
     Pop-Location

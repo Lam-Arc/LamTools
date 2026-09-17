@@ -111,19 +111,21 @@ jobs:
         shell: pwsh
         run: |
           $plugins = "core/dist/LamCore/_internal/resources/plugins/bundled"
-          $pet = "$plugins/emotion-ball-pet"
-          if (Test-Path -LiteralPath $pet) {
-            Write-Error "Optional desktop pet must not be embedded in the installer: $pet"
-            exit 1
+          foreach ($name in @("emotion-ball-pet", "workflow")) {
+            $excluded = "$plugins/$name"
+            if (Test-Path -LiteralPath $excluded) {
+              Write-Error "Excluded bundled plugin must not be embedded in the installer: $excluded"
+              exit 1
+            }
           }
-          foreach ($name in @("git", "websearch", "imagegen", "workflow")) {
+          foreach ($name in @("git", "imagegen", "websearch")) {
             $required = "$plugins/$name"
             if (-not (Test-Path -LiteralPath $required)) {
               Write-Error "Required bundled plugin is missing: $required"
               exit 1
             }
           }
-          Write-Host "Bundled plugin boundary OK (desktop pet excluded)"
+          Write-Host "Bundled plugin boundary OK (desktop pet and workflow excluded)"
 
       - name: Smoke-test backend binary
         # desktop_backend.py 不解析参数（--help 会被忽略直接起 uvicorn），所以

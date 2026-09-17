@@ -1643,3 +1643,25 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
   Core CLI and standalone runs passed 3/3 on the current machine. Focused
   renderer/CLI/prompt tests passed 33 tests, and all 11 Office Skills passed the
   standard Skill validator under UTF-8.
+
+## Model/provider and tool-mode settings entry cleanup (2026-09-17)
+
+- Task ID/deployment: `model_provider_page_entry_refresh_archive` /
+  `model_provider_page_entry_refresh_20260917`; closure state: `complete`.
+- Active goal and overall progress: simplify the model/provider and tool-mode
+  settings surfaces by removing redundant top statistics and duplicate add
+  actions while keeping clear local entry points. The implementation is
+  complete in the shared Core UI.
+- Current position: `CoreSettings` retains its title/subtitle, provider-rail
+  footer and provider empty-state CTA, plus the model-section header and model
+  empty-state CTA. `CoreLoadToolsEditor` retains title/subtitle,
+  dirty/refresh/save controls, and mode-rail footer and empty-state CTA while
+  removing the loadtools overview metrics and duplicate top add action.
+- Verification: focused CoreSettings coverage passed 16 tests; combined focused
+  coverage passed 19 tests; typecheck, build, LamTools audit (84 files / 0
+  deviations), and scoped diff checks passed. Independent Tester also passed
+  focused 19/19, full UI 88 files / 687 tests, typecheck, `npm run build`, and
+  Git diff checks. Build output contained only existing dynamic-import warnings.
+- Limitation and next milestone: no Tauri/Computer Use visual validation was
+  run. The Tester noted older unrelated dead CSS in CoreSettings, with no
+  blocker. Next milestone is user/Tauri visual acceptance if required.

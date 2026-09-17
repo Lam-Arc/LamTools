@@ -22,11 +22,14 @@ const providers = [{
   has_api_key: true,
 }]
 
-function mountSettings(requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>) {
+function mountSettings(
+  requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>,
+  overrides: { models?: typeof models; providers?: typeof providers } = {},
+) {
   return mount(CoreSettings, {
     props: {
-      models,
-      providers,
+      models: overrides.models ?? models,
+      providers: overrides.providers ?? providers,
       density: 'standard',
       theme: structuredClone(DEFAULT_THEME),
       requestRpc,
@@ -57,11 +60,12 @@ describe('CoreSettings', () => {
     expect(wrapper.text()).not.toContain('Writer')
   })
 
-  it('shows the resource overview and filters providers and models', async () => {
+  it('keeps contextual create actions and filters providers and models', async () => {
     const wrapper = mountSettings()
 
-    expect(wrapper.get('.models-overview-bar').text()).toContain('可用模型')
-    expect(wrapper.get('.models-overview-bar').text()).toContain('1')
+    expect(wrapper.find('.models-overview-bar').exists()).toBe(false)
+    expect(wrapper.find('.provider-rail-footer [data-provider-create]').exists()).toBe(true)
+    expect(wrapper.find('.model-section-head [data-model-create]').exists()).toBe(true)
 
     await wrapper.get('.provider-search input').setValue('missing')
     expect(wrapper.text()).toContain('没有匹配的供应商')
@@ -70,6 +74,20 @@ describe('CoreSettings', () => {
 
     await wrapper.get('.model-search input').setValue('missing')
     expect(wrapper.text()).toContain('没有匹配的模型')
+  })
+
+  it('keeps provider and model empty-state create actions', () => {
+    const emptyProviders = mountSettings(undefined, { providers: [] })
+    expect(emptyProviders.find('.models-overview-bar').exists()).toBe(false)
+    expect(emptyProviders.find('.models-empty-state--full [data-provider-create]').exists()).toBe(true)
+    emptyProviders.unmount()
+
+    const emptyModels = mountSettings(undefined, { models: [] })
+    expect(emptyModels.find('.models-overview-bar').exists()).toBe(false)
+    expect(emptyModels.find('.provider-rail-footer [data-provider-create]').exists()).toBe(true)
+    expect(emptyModels.find('.model-section-head [data-model-create]').exists()).toBe(true)
+    expect(emptyModels.find('.model-empty .small-btn').exists()).toBe(true)
+    emptyModels.unmount()
   })
 
   it('emits provider create and update contracts without replaying a stored API key', async () => {

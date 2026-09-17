@@ -1998,3 +1998,31 @@ mobile UI.
   `quick_validate.py` with UTF-8 enabled.
 - The shared worktree remains dirty; no staging, commit, cleanup, or unrelated
   attribution was performed.
+
+## Model/provider and tool-mode settings entry cleanup (2026-09-17)
+
+- Task ID/deployment: `model_provider_page_entry_refresh_archive` /
+  `model_provider_page_entry_refresh_20260917`; closure state: `complete`.
+- Production scope: `core/ui/src/components/CoreSettings.vue` removes the
+  `.models-overview-bar` statistics and duplicate create buttons while keeping
+  the page title/subtitle, provider-rail footer and provider empty-state CTA,
+  and model-section header and model empty-state CTA. `CoreLoadToolsEditor.vue`
+  removes `.loadtools-overview-bar` metrics and the duplicate top add action
+  while keeping title/subtitle, dirty/refresh/save controls, mode-rail footer,
+  and the empty-state CTA.
+- Tests: `core/ui/tests/core-settings.test.ts` was updated and
+  `core/ui/tests/core-loadtools-editor.test.ts` was added.
+- Verification evidence: executor focused CoreSettings passed 16 tests;
+  combined focused coverage passed 19 tests; typecheck, build, LamTools audit
+  (84 files / 0 deviations), and scoped diff check passed. Independent Tester
+  PASS included focused 19/19, full UI 88 files / 687 tests, typecheck,
+  `npm run build`, and Git diff checks. Build output contained only existing
+  dynamic-import warnings.
+- Limitations: no Tauri/Computer Use visual validation was performed. The
+  Tester observed older pre-existing dead CSS in CoreSettings unrelated to the
+  removed active overview selectors; no blocker was found.
+- Git handoff and exact next entry point: the shared worktree remains dirty and
+  uncommitted, with unrelated files preserved. No stage, commit, revert,
+  cleanup, or attribution was performed. If visual acceptance is requested,
+  open the model/provider settings page and tool-mode editor in Tauri and check
+  the retained local add/empty-state entry points.

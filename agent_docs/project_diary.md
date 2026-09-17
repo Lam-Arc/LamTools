@@ -419,3 +419,9 @@ logs.
 - Office 全量预览声明必须绑定到最后一次源文件变更后的渲染批次。源文件修订并重新渲染后，
   之前看过的旧预览不能继续支撑 `scope=full`；应重新查看受影响的全部页面，或如实降级为
   sampled。Checklist 状态也不得重复提交或先于该证据完成。
+- Sunday 安装包的内置插件边界固定为仅携带 `git`、`imagegen`、`websearch`；
+  `emotion-ball-pet` 与 `workflow` 保留源码但不得进入 PyInstaller 后端资源、显式 hidden
+  imports 或安装包，且本地打包脚本与 GitHub Release 流程必须使用同一拒绝/必需清单。
+- DeepSeek 直连官方预设以官方 API 文档为准：当前模型为 `deepseek-flash` 与
+  `deepseek-v4-pro`，上下文均为 1M，最大输出上限均为 393216 tokens；Flash 支持视觉，
+  Pro 官方明确不支持视觉，不能仅凭产品命名把两者都标为多模态。

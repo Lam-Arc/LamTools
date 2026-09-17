@@ -30,31 +30,6 @@
     </div>
 
     <div v-else class="settings-surface loadtools-workspace">
-      <div class="loadtools-overview-bar">
-        <dl class="loadtools-overview-metrics" aria-label="工具模式概览">
-          <div>
-            <dt>工作模式</dt>
-            <dd>{{ orderedModes.length }}</dd>
-            <span>已配置工作方式</span>
-          </div>
-          <div>
-            <dt>基础工具</dt>
-            <dd>{{ catalog.length }}</dd>
-            <span>可供模式选择</span>
-          </div>
-          <div>
-            <dt>配置来源</dt>
-            <dd>{{ sourceLabel }}</dd>
-            <span>{{ loading ? '正在同步…' : '当前已加载' }}</span>
-          </div>
-        </dl>
-
-        <button class="small-btn quiet loadtools-add-top" type="button" :disabled="loading || saving" @click="addMode">
-          <Plus :size="15" :stroke-width="2" aria-hidden="true" />
-          <span>新增模式</span>
-        </button>
-      </div>
-
       <div class="loadtools-workspace-body">
         <aside class="mode-rail" aria-label="工作模式列表">
           <div class="mode-rail-head">
@@ -616,7 +591,6 @@ onMounted(fetchModes)
 }
 
 .loadtools-title-actions .small-btn,
-.loadtools-add-top,
 .mode-empty .small-btn {
   display: inline-flex;
   align-items: center;
@@ -664,65 +638,6 @@ onMounted(fetchModes)
   border-color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
   border-radius: var(--radius);
   background: var(--settings-card-background, var(--settings-main-background, var(--theme-main-background, #111111)));
-}
-
-.loadtools-overview-bar {
-  flex: 0 0 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-5);
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
-}
-
-.loadtools-overview-metrics {
-  min-width: 0;
-  flex: 1 1 auto;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-5);
-  margin: 0;
-}
-
-.loadtools-overview-metrics > div {
-  min-width: 0;
-  display: grid;
-  gap: var(--space-1);
-}
-
-.loadtools-overview-metrics dt {
-  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 50%, transparent);
-  font-size: 10px;
-}
-
-.loadtools-overview-metrics dd {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--settings-main-text, var(--theme-main-text, #fff));
-  font-size: 15px;
-  font-weight: 720;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.loadtools-overview-metrics span {
-  min-width: 0;
-  overflow: hidden;
-  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 42%, transparent);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.loadtools-add-top {
-  flex: 0 0 auto;
-  min-width: 112px;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
-  background: color-mix(in srgb, var(--settings-control-background, var(--theme-control-background)) 78%, transparent);
-  color: var(--settings-control-text, var(--theme-control-text, #fff));
 }
 
 .loadtools-workspace-body {
@@ -1315,12 +1230,6 @@ onMounted(fetchModes)
     overflow: visible;
   }
 
-  .loadtools-overview-bar {
-    align-items: stretch;
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-
   .loadtools-workspace-body {
     grid-template-columns: 1fr;
     overflow: visible;
@@ -1363,12 +1272,6 @@ onMounted(fetchModes)
 }
 
 @media (max-width: 600px) {
-  .loadtools-overview-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-3) var(--space-4);
-  }
-
-  .loadtools-add-top,
   .tool-search {
     width: 100%;
   }
@@ -1406,10 +1309,6 @@ onMounted(fetchModes)
 
   .loadtools-dirty {
     width: 100%;
-  }
-
-  .loadtools-overview-metrics {
-    grid-template-columns: 1fr 1fr;
   }
 
   .mode-name-line {

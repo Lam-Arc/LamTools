@@ -23,31 +23,6 @@
         <div v-if="noticeText" class="settings-notice">{{ noticeText }}</div>
 
         <div v-if="providers.length" class="models-workspace settings-surface">
-          <section class="models-overview-bar" aria-label="模型资源概览">
-            <dl class="models-overview-metrics">
-              <div>
-                <dt>默认模型</dt>
-                <dd>{{ defaultModel?.display_name || defaultModel?.model_id || defaultModel?.id || '未设置' }}</dd>
-              </div>
-              <div>
-                <dt>当前供应商</dt>
-                <dd>{{ selectedProvider?.name || selectedProvider?.id || '未选择' }}</dd>
-              </div>
-              <div>
-                <dt>已就绪供应商</dt>
-                <dd>{{ configuredProviderCount }} / {{ providerCount }}</dd>
-              </div>
-              <div>
-                <dt>可用模型</dt>
-                <dd>{{ models.length }}</dd>
-              </div>
-            </dl>
-            <div class="models-overview-actions">
-              <button class="small-btn quiet" type="button" data-provider-create @click="startProviderCreate">＋ 新增供应商</button>
-              <button class="small-btn primary" type="button" data-model-create :disabled="!selectedProvider" @click="startSelectedModelCreate">＋ 新增模型</button>
-            </div>
-          </section>
-
           <div class="models-workspace-body">
           <aside class="provider-rail" aria-label="供应商列表">
             <div class="provider-rail-head">
@@ -1352,14 +1327,12 @@ function selectPermissionPreset(preset: CorePermissionPreset) {
 const providerPresets = PROVIDER_PRESETS
 
 const providerCount = computed(() => props.providers.length)
-const configuredProviderCount = computed(() => props.providers.filter(provider => provider.has_api_key).length)
 const selectedProviderId = ref<string | null>(null)
 const providerQuery = ref('')
 const modelQuery = ref('')
 const selectedProvider = computed(() =>
   props.providers.find(provider => provider.id === selectedProviderId.value) || props.providers[0] || null,
 )
-const defaultModel = computed(() => props.models.find(model => model.is_default) || null)
 const selectedProviderModels = computed(() =>
   selectedProvider.value
     ? props.models.filter(model => model.provider_id === selectedProvider.value?.id)
@@ -4260,64 +4233,6 @@ onUnmounted(() => {
   background: var(--settings-card-background, var(--settings-main-background, var(--theme-main-background, #111111)));
 }
 
-.models-overview-bar {
-  flex: 0 0 auto;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
-}
-
-.models-overview-metrics {
-  flex: 0 1 auto;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(4, max-content);
-  justify-content: start;
-  gap: var(--space-6);
-  margin: 0;
-}
-
-.models-overview-metrics > div {
-  min-width: 0;
-  display: grid;
-  gap: var(--space-1);
-}
-
-.models-overview-metrics dt {
-  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 50%, transparent);
-  font-size: 10px;
-}
-
-.models-overview-metrics dd {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--settings-main-text, var(--theme-main-text, #fff));
-  font-size: 13px;
-  font-weight: 680;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.models-overview-actions {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.models-overview-actions .small-btn {
-  min-height: 36px;
-  padding-inline: var(--space-3);
-  white-space: nowrap;
-}
-
 .models-workspace-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -4380,26 +4295,7 @@ onUnmounted(() => {
   width: min(220px, 30vw);
 }
 
-@media (max-width: 1199px) {
-  .models-overview-bar {
-    grid-template-columns: 1fr;
-  }
-
-  .models-overview-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .models-overview-actions {
-    justify-content: flex-start;
-  }
-}
-
 @media (max-width: 959px) {
-  .models-overview-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-3) var(--space-5);
-  }
-
   .models-workspace-body {
     grid-template-columns: 1fr;
     overflow: visible;
@@ -4430,18 +4326,15 @@ onUnmounted(() => {
 }
 
 @media (max-width: 600px) {
-  .models-overview-bar,
   .provider-detail {
     padding: var(--space-4);
   }
 
-  .models-overview-actions,
   .model-section-tools {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .models-overview-actions .small-btn,
   .model-section-tools .small-btn,
   .model-search {
     width: 100%;

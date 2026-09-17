@@ -16,7 +16,7 @@ from pathlib import Path
 _PROJECT_ROOT = Path(".").resolve()
 _BUNDLED_PLUGINS_ROOT = _PROJECT_ROOT / "src" / "lamtools_core" / "plugins" / "bundled"
 _BUILTIN_SKILLS_ROOT = _PROJECT_ROOT / "skills"
-_EXCLUDED_BUNDLED_PLUGINS = {"emotion-ball-pet"}
+_EXCLUDED_BUNDLED_PLUGINS = {"emotion-ball-pet", "workflow"}
 
 # ---------------------------------------------------------------------------
 # Bundled data files
@@ -46,8 +46,9 @@ for _skill_file in sorted(_BUILTIN_SKILLS_ROOT.rglob("*")):
         )
     )
 
-# Core-owned bundled plugins ship with the backend.  The desktop pet remains
-# an optional source plugin and must not be embedded in the installer.
+# Core-owned bundled plugins ship with the backend.  The desktop pet and
+# workflow remain optional source plugins and must not be embedded in the
+# installer.
 for _plugin_dir in sorted(_BUNDLED_PLUGINS_ROOT.iterdir()):
     if not _plugin_dir.is_dir() or _plugin_dir.name in _EXCLUDED_BUNDLED_PLUGINS:
         continue
@@ -205,16 +206,6 @@ _hiddenimports = [
     "lamtools_core.plugins.operations_loader",
     "lamtools_core.plugins.registry",
     "lamtools_core.plugins.trust",
-    "lamtools_core.plugins.bundled.workflow",
-    "lamtools_core.plugins.bundled.workflow.backend",
-    "lamtools_core.plugins.bundled.workflow.backend.build_tools",
-    "lamtools_core.plugins.bundled.workflow.backend.cli",
-    "lamtools_core.plugins.bundled.workflow.backend.operations",
-    "lamtools_core.plugins.bundled.workflow.backend.runtime",
-    "lamtools_core.plugins.bundled.workflow.backend.store",
-    "lamtools_core.plugins.bundled.workflow.backend.tools",
-    "lamtools_core.plugins.bundled.workflow.backend.watcher",
-
     # === project/ submodules ===
 
     # === run_event/ submodules ===
