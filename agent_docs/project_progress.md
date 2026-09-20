@@ -2580,3 +2580,26 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
   `test_skill_runtime.py`, `test_tool_result_model_evidence.py`, and
   `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`, `docs.7z`. No commit or
   cleanup was performed.
+
+## Mobile Tunnel protocol/transport refactor closure (2026-09-20)
+
+- Task ID/deployment/state: `mobile_tunnel_protocol_archive_20260920` /
+  `mobile_tunnel_protocol_refactor_20260920` / **complete**. The external
+  Tunnel v1 wire schema is unchanged; TypeScript protocol responsibilities are
+  split from transport orchestration, with one shared golden fixture consumed
+  by both TypeScript and Rust.
+  Limits and chunk boundaries are UTF-8 byte based, sequence values remain
+  JavaScript-safe, and continuation frames must preserve the first frame's
+  version/type/stream/request envelope. Unknown channels remain rejected.
+- LAN, Relay, and Noise behavior remains compatible; Relay continues to carry
+  opaque encrypted tunnel traffic. No P0-P2 issue was found in the reviewed
+  scope.
+- Verification: mobile coverage passed 17 files / 90 tests; mobile typecheck
+  and build passed; Rust format and `cargo check` passed; all Rust tests passed
+  59/59, including remote tunnel 8/8 and gateway 12/12; Android
+  `assembleDebug` and `git diff --check` passed.
+- No real-device installation or runtime test was performed in this deployment.
+  Read-only Git handoff: unrelated pre-existing backend/context-compaction
+  modifications and untracked `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`,
+  and `docs.7z` remain untouched. Exact next entry point is real-device and
+  LAN/Relay acceptance of pairing, reconnect/resume, and remote control.

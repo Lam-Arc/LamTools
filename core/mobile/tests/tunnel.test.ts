@@ -1,10 +1,18 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import {
   MultiplexedTunnelTransport,
+  TUNNEL_FRAME_TYPES,
+  TUNNEL_LIMITS,
+  TUNNEL_PROTOCOL_VERSION,
+  TUNNEL_STREAMS,
   TunnelFrameDecoder,
   type TunnelWire,
   decodeTunnelFrames,
   encodeTunnelFrame,
+  splitTunnelPayload,
+  utf8ByteLength,
   type TunnelFrame,
 } from '../src/connection/TunnelTransport'
 import type {
@@ -40,15 +48,39 @@ class FakeWire implements TunnelWire {
 
 function frame(sequence: number, payload = '你好，LamTools'): TunnelFrame {
   return {
-    version: 1,
-    type: 'rpc.data',
-    stream_id: 'rpc',
+    version: TUNNEL_PROTOCOL_VERSION,
+    type: TUNNEL_FRAME_TYPES.rpc,
+    stream_id: TUNNEL_STREAMS.rpc,
     payload,
     sequence,
   }
 }
 
+type TunnelGoldenFixture = {
+  name: string
+  frame: TunnelFrame
+  json_line: string
+}
+
+const tunnelGoldenFixture = JSON.parse(readFileSync(
+  fileURLToPath(new URL('../../protocol/tunnel-v1-fixtures.json', import.meta.url)),
+  'utf8',
+)) as TunnelGoldenFixture
+
+function rawFrameBytes(frame: Record<string, unknown>): Uint8Array {
+  return new TextEncoder().encode(`${JSON.stringify(frame)}\n`)
+}
+
 describe('mobile tunnel framing', () => {
+  it('matches the shared Rust v1 golden fixture on the wire', () => {
+    const encoded = encodeTunnelFrame(tunnelGoldenFixture.frame)
+    expect(new TextDecoder().decode(encoded)).toBe(tunnelGoldenFixture.json_line)
+    expect(decodeTunnelFrames(new TextEncoder().encode(tunnelGoldenFixture.json_line))).toEqual({
+      frames: [tunnelGoldenFixture.frame],
+      remainder: new Uint8Array(),
+    })
+  })
+
   it('keeps an incomplete UTF-8 frame as raw remainder', () => {
     const bytes = encodeTunnelFrame(frame(1))
     const split = bytes.length - 4
@@ -89,6 +121,72 @@ describe('mobile tunnel framing', () => {
   it('rejects malformed protocol frames', () => {
     const decoder = new TunnelFrameDecoder()
     expect(() => decoder.push(new TextEncoder().encode('{"version":2}\n'))).toThrow(/无效/)
+  })
+
+  it('splits by UTF-8 bytes without breaking multi-byte code points', () => {
+    const payload = '你'.repeat(Math.ceil(TUNNEL_LIMITS.chunkPayloadBytes / 3) + 11)
+    const chunks = splitTunnelPayload(payload)
+    expect(chunks.length).toBeGreaterThan(1)
+    expect(chunks.join('')).toBe(payload)
+    expect(chunks.every((chunk) => utf8ByteLength(chunk) <= TUNNEL_LIMITS.chunkPayloadBytes)).toBe(true)
+    expect(utf8ByteLength(chunks[0])).toBeLessThanOrEqual(TUNNEL_LIMITS.chunkPayloadBytes)
+    expect(chunks[0].endsWith('\ud800')).toBe(false)
+    expect(chunks[0].endsWith('\udc00')).toBe(false)
+  })
+
+  it('applies Rust-compatible UTF-8 byte limits to envelope identifiers', () => {
+    const valid = frame(1)
+    valid.type = '你'.repeat(21) // 63 UTF-8 bytes, despite 21 JS code points.
+    expect(() => encodeTunnelFrame(valid)).not.toThrow()
+
+    const oversized = { ...valid, type: '你'.repeat(22) } // 66 UTF-8 bytes.
+    expect(() => encodeTunnelFrame(oversized)).toThrow(/无效/)
+  })
+
+  it.each([
+    ['type', { type: TUNNEL_FRAME_TYPES.event }],
+    ['stream_id', { stream_id: TUNNEL_STREAMS.event }],
+    ['request_id', { request_id: 'tampered-request' }],
+    ['version', { version: 2 }],
+  ])('rejects continuation envelope tampering in %s', (_field, change) => {
+    const decoder = new TunnelFrameDecoder()
+    const first: TunnelFrame = {
+      ...frame(1, 'a'),
+      request_id: 'request-1',
+      message_id: 'message-1',
+      chunk_index: 0,
+      chunk_final: false,
+    }
+    decoder.push(encodeTunnelFrame(first))
+    const continuation = {
+      ...first,
+      ...change,
+      sequence: 2,
+      payload: 'b',
+      chunk_index: 1,
+      chunk_final: true,
+    }
+    expect(() => decoder.push(rawFrameBytes(continuation))).toThrow()
+  })
+
+  it('rejects a reassembled message once the narrowed UTF-8 byte limit is exceeded', () => {
+    expect(() => new TunnelFrameDecoder({
+      maxMessageBytes: TUNNEL_LIMITS.messageBytes + 1,
+    })).toThrow(/limit/)
+
+    const decoder = new TunnelFrameDecoder({ maxMessageBytes: 6 })
+    decoder.push(encodeTunnelFrame({
+      ...frame(1, '你'),
+      message_id: 'message-limit',
+      chunk_index: 0,
+      chunk_final: false,
+    }))
+    expect(() => decoder.push(encodeTunnelFrame({
+      ...frame(2, '你好'),
+      message_id: 'message-limit',
+      chunk_index: 1,
+      chunk_final: true,
+    }))).toThrow(/过大/)
   })
 
   it('multiplexes RPC and HTTP over one tunnel wire', async () => {
@@ -228,4 +326,5 @@ describe('mobile tunnel framing', () => {
     }))
     await transport.close()
   })
+
 })

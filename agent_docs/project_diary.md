@@ -629,3 +629,14 @@ logs.
 - 悬浮位置使用 GSAP Draggable、限制在视口内并本地持久化；拖动后必须抑制同一手势产生的点击。展开
   卡片依据实际宽高夹取到 12px 视口边距内，不能只按左右二选一，否则控件位于屏幕中部或窄屏时会溢出。
   模式列表使用 `listbox` / `option` / `aria-selected`，并遵循 reduced-motion。
+
+## 移动端 Tunnel v1 协议边界（2026-09-20）
+
+- Tunnel v1 的外部 JSON-line 线格式保持不变；Noise XX 继续负责认证和加密，LAN/Relay 仅选择物理路径，
+  Relay 不解释明文业务消息。移动端协议编解码、验证、重放保护和分片重组集中在独立协议模块，传输层只
+  负责会话、多路复用和业务消息映射。
+- 帧、消息、分片和标识符限制统一按 UTF-8 字节解释；分片只能落在合法 UTF-8 边界。续片除 message id、
+  index、final 和递增 sequence 外，version、type、stream id、request id 必须与首片一致；sequence 的跨语言
+  上限固定为 JavaScript safe integer。未知业务通道仍按既有契约拒绝，不借重构扩展协议。
+- TypeScript 与 Rust 必须共同消费 `core/protocol/tunnel-v1-fixtures.json` 的 golden fixture，并分别验证精确
+  编码和解码；任何后续 Tunnel v1 字段、顺序、限制或空白行语义变更都必须同步更新双端测试，避免协议漂移。

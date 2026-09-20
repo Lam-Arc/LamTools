@@ -7,19 +7,31 @@ import type {
   TransportRequest,
 } from '@lamtools/ui/transport'
 import { TransportRpcError } from '@lamtools/ui/transport'
+import {
+  TUNNEL_FRAME_TYPES,
+  TUNNEL_LIMITS,
+  TUNNEL_PROTOCOL_VERSION,
+  TUNNEL_STREAMS,
+  TunnelFrameDecoder,
+  encodeTunnelFrame,
+  splitTunnelPayload,
+  utf8ByteLength,
+  type TunnelFrame,
+} from './TunnelProtocol'
 
-/** Wire envelope used by the LAN/relay tunnel implementation. */
-export interface TunnelFrame {
-  version: 1
-  type: string
-  stream_id: string
-  request_id?: string
-  payload?: string
-  message_id?: string
-  chunk_index?: number
-  chunk_final?: boolean
-  sequence: number
-}
+export {
+  TUNNEL_FRAME_TYPES,
+  TUNNEL_LIMITS,
+  TUNNEL_PROTOCOL_VERSION,
+  TUNNEL_STREAMS,
+  TunnelFrameDecoder,
+  decodeTunnelFrames,
+  encodeTunnelFrame,
+  splitTunnelPayload,
+  utf8ByteLength,
+  type TunnelFrame,
+  type TunnelFrameDecoderOptions,
+} from './TunnelProtocol'
 
 /** Payload-free trace records used to follow a request through the remote tunnel. */
 export interface RemoteDiagnosticEvent {
@@ -47,117 +59,6 @@ export function defaultRemoteDiagnosticSink(event: RemoteDiagnosticEvent): void 
   // and log collectors preserve the correlation fields instead of collapsing
   // the object to an unhelpful "Object" placeholder.
   if (typeof console !== 'undefined') console.info('[lamtools-remote]', JSON.stringify(event))
-}
-
-const MAX_FRAME_BYTES = 4 * 1024 * 1024
-const MAX_MESSAGE_BYTES = 128 * 1024 * 1024
-const MAX_CHUNK_PAYLOAD_CHARS = 256 * 1024
-const MAX_INFLIGHT_MESSAGES = 16
-
-export function encodeTunnelFrame(frame: TunnelFrame): Uint8Array {
-  validateTunnelFrame(frame)
-  const encoded = new TextEncoder().encode(JSON.stringify(frame))
-  if (encoded.length > MAX_FRAME_BYTES) throw new Error('tunnel frame is too large')
-  const line = new Uint8Array(encoded.length + 1)
-  line.set(encoded)
-  line[encoded.length] = 0x0a
-  return line
-}
-
-export function decodeTunnelFrames(buffer: Uint8Array): { frames: TunnelFrame[]; remainder: Uint8Array } {
-  const frames: TunnelFrame[] = []
-  let start = 0
-  for (let index = 0; index < buffer.length; index += 1) {
-    if (buffer[index] !== 0x0a) continue
-    if (index - start > MAX_FRAME_BYTES) throw new Error('tunnel frame is too large')
-    const line = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(start, index))
-    start = index + 1
-    if (!line.trim()) continue
-    const parsed = JSON.parse(line) as TunnelFrame
-    validateTunnelFrame(parsed)
-    frames.push(parsed)
-  }
-  const remainder = buffer.slice(start)
-  // A network read may contain many complete frames. Limit only the
-  // unfinished frame, otherwise a valid coalesced batch would be rejected
-  // merely because its aggregate size exceeds the per-frame limit.
-  if (remainder.length > MAX_FRAME_BYTES) throw new Error('tunnel frame is too large')
-  return { frames, remainder }
-}
-
-/** Incremental decoder shared by native LAN and relay sockets. */
-export class TunnelFrameDecoder {
-  private buffered: Uint8Array<ArrayBufferLike> = new Uint8Array()
-  private lastSequence = 0
-  private readonly partials = new Map<string, {
-    frame: TunnelFrame
-    nextChunkIndex: number
-    payloadChars: number
-  }>()
-
-  push(chunk: Uint8Array): TunnelFrame[] {
-    const merged = new Uint8Array(this.buffered.length + chunk.length)
-    merged.set(this.buffered)
-    merged.set(chunk, this.buffered.length)
-    const { frames, remainder } = decodeTunnelFrames(merged)
-    const complete: TunnelFrame[] = []
-    for (const frame of frames) {
-      if (frame.sequence <= this.lastSequence) throw new Error('tunnel frame sequence replay detected')
-      this.lastSequence = frame.sequence
-      const assembled = this.pushFrame(frame)
-      if (assembled) complete.push(assembled)
-    }
-    this.buffered = remainder
-    if (this.buffered.length > MAX_FRAME_BYTES) throw new Error('tunnel frame is too large')
-    return complete
-  }
-
-  sequence(): number { return this.lastSequence }
-
-  reset(): void {
-    this.buffered = new Uint8Array()
-    this.lastSequence = 0
-    this.partials.clear()
-  }
-
-  private pushFrame(frame: TunnelFrame): TunnelFrame | null {
-    if (frame.message_id === undefined) {
-      if (frame.chunk_index !== undefined || frame.chunk_final !== undefined) {
-        throw new Error('无效的 tunnel 分片元数据')
-      }
-      return frame
-    }
-    if (frame.chunk_index === undefined || frame.chunk_final === undefined || typeof frame.payload !== 'string') {
-      throw new Error('无效的 tunnel 分片元数据')
-    }
-    const messageId = frame.message_id
-    const chunkIndex = frame.chunk_index
-    if (chunkIndex === 0) {
-      if (this.partials.size >= MAX_INFLIGHT_MESSAGES || this.partials.has(messageId)) {
-        throw new Error('tunnel 分片消息过多或重复')
-      }
-      if (frame.payload.length > MAX_MESSAGE_BYTES) throw new Error('tunnel 消息过大')
-      if (frame.chunk_final) return withoutChunkMetadata(frame)
-      this.partials.set(messageId, {
-        frame: withoutChunkMetadata(frame),
-        nextChunkIndex: 1,
-        payloadChars: frame.payload.length,
-      })
-      return null
-    }
-    const partial = this.partials.get(messageId)
-    if (!partial || chunkIndex !== partial.nextChunkIndex) {
-      throw new Error('tunnel 分片顺序无效')
-    }
-    const payloadChars = partial.payloadChars + frame.payload.length
-    if (payloadChars > MAX_MESSAGE_BYTES) throw new Error('tunnel 消息过大')
-    partial.payloadChars = payloadChars
-    partial.nextChunkIndex += 1
-    partial.frame.payload = `${partial.frame.payload || ''}${frame.payload}`
-    if (!frame.chunk_final) return null
-    this.partials.delete(messageId)
-    return partial.frame
-  }
 }
 
 /** A byte-oriented authenticated connection used by the tunnel multiplexer. */
@@ -214,8 +115,8 @@ class TunnelSession {
 
   sendRpc(message: string, requestId?: string): number {
     return this.sendFrame({
-      type: 'rpc.data',
-      stream_id: 'rpc',
+      type: TUNNEL_FRAME_TYPES.rpc,
+      stream_id: TUNNEL_STREAMS.rpc,
       ...(requestId ? { request_id: requestId } : {}),
       payload: message,
     })
@@ -255,7 +156,11 @@ class TunnelSession {
         this.pendingHttp.delete(requestId)
         input.signal?.removeEventListener('abort', abort)
         try {
-          this.sendFrame({ type: 'http.cancel', stream_id: `http:${requestId}`, request_id: requestId })
+          this.sendFrame({
+            type: TUNNEL_FRAME_TYPES.httpCancel,
+            stream_id: `http:${requestId}`,
+            request_id: requestId,
+          })
         } catch {
           // Cancellation is best-effort. The caller must still receive the
           // AbortError even when the wire closed at the same time.
@@ -274,7 +179,7 @@ class TunnelSession {
       input.signal?.addEventListener('abort', abort, { once: true })
       try {
         const bytes = this.sendFrame({
-          type: 'http.request',
+          type: TUNNEL_FRAME_TYPES.httpRequest,
           stream_id: `http:${requestId}`,
           request_id: requestId,
           payload: JSON.stringify({
@@ -319,8 +224,13 @@ class TunnelSession {
 
   private sendFrame(input: Omit<TunnelFrame, 'version' | 'sequence'>): number {
     const nextSequence = this.sequence + 1
-    if (!input.payload || input.payload.length <= MAX_CHUNK_PAYLOAD_CHARS) {
-      const encoded = encodeTunnelFrame({ version: 1, sequence: nextSequence, ...input })
+    const payloadBytes = input.payload === undefined ? 0 : utf8ByteLength(input.payload)
+    if (input.payload === undefined || payloadBytes <= TUNNEL_LIMITS.chunkPayloadBytes) {
+      const encoded = encodeTunnelFrame({
+        version: TUNNEL_PROTOCOL_VERSION,
+        sequence: nextSequence,
+        ...input,
+      })
       this.sequence = nextSequence
       this.wire.send(encoded)
       this.report({
@@ -333,14 +243,14 @@ class TunnelSession {
       })
       return encoded.byteLength
     }
-    if (input.payload.length > MAX_MESSAGE_BYTES) throw new Error('tunnel 消息过大')
+    if (payloadBytes > TUNNEL_LIMITS.messageBytes) throw new Error('tunnel 消息过大')
     const messageId = `message-${nextSequence}`
     const chunks = splitTunnelPayload(input.payload)
     let bytes = 0
     for (const [index, payload] of chunks.entries()) {
       this.sequence += 1
       const encoded = encodeTunnelFrame({
-        version: 1,
+        version: TUNNEL_PROTOCOL_VERSION,
         sequence: this.sequence,
         ...input,
         payload,
@@ -377,11 +287,13 @@ class TunnelSession {
       return
     }
     for (const frame of frames) {
-      if (frame.type === 'rpc.data' && frame.stream_id === 'rpc' && typeof frame.payload === 'string') {
+      if (frame.type === TUNNEL_FRAME_TYPES.rpc
+        && frame.stream_id === TUNNEL_STREAMS.rpc
+        && typeof frame.payload === 'string') {
         for (const listener of this.rpcListeners) listener(frame.payload, frame)
         continue
       }
-      if (frame.type === 'http.response' && frame.request_id) {
+      if (frame.type === TUNNEL_FRAME_TYPES.httpResponse && frame.request_id) {
         const pending = this.pendingHttp.get(frame.request_id)
         if (!pending) continue
         this.pendingHttp.delete(frame.request_id)
@@ -392,7 +304,7 @@ class TunnelSession {
             event: 'http_received',
             request_id: frame.request_id,
             status: payload.status,
-            bytes: frame.payload?.length || 0,
+            bytes: frame.payload ? utf8ByteLength(frame.payload) : 0,
           })
           pending.resolve({
             status: payload.status,
@@ -544,15 +456,22 @@ export class MultiplexedTunnelTransport implements LamToolsTransport {
       const data = message.data
         || (message.payload instanceof Uint8Array ? message.payload : undefined)
       if (!data) throw new Error('binary transport message has no data')
-      this.session.sendData('binary.data', 'binary', bytesToBase64(data))
+      this.session.sendData(TUNNEL_FRAME_TYPES.binary, TUNNEL_STREAMS.binary, bytesToBase64(data))
       return
     }
 
     if (message.channel === 'control' || message.channel === 'event') {
+      const channel = message.channel
       const payload = typeof message.payload === 'string'
         ? message.payload
         : JSON.stringify(message.payload ?? message)
-      this.session.sendData(`${message.channel}.data`, message.channel, payload)
+      const frameType = channel === 'control'
+        ? TUNNEL_FRAME_TYPES.control
+        : TUNNEL_FRAME_TYPES.event
+      const stream = channel === 'control'
+        ? TUNNEL_STREAMS.control
+        : TUNNEL_STREAMS.event
+      this.session.sendData(frameType, stream, payload)
       return
     }
 
@@ -631,7 +550,7 @@ export class MultiplexedTunnelTransport implements LamToolsTransport {
   }
 
   private handleFrame(frame: TunnelFrame): void {
-    if (frame.type === 'binary.data' && frame.stream_id === 'binary') {
+    if (frame.type === TUNNEL_FRAME_TYPES.binary && frame.stream_id === TUNNEL_STREAMS.binary) {
       this.emit({
         type: 'binary',
         channel: 'binary',
@@ -640,7 +559,7 @@ export class MultiplexedTunnelTransport implements LamToolsTransport {
       })
       return
     }
-    if (frame.type === 'control.data' && frame.stream_id === 'control') {
+    if (frame.type === TUNNEL_FRAME_TYPES.control && frame.stream_id === TUNNEL_STREAMS.control) {
       this.emit({
         type: 'control',
         channel: 'control',
@@ -649,7 +568,7 @@ export class MultiplexedTunnelTransport implements LamToolsTransport {
       })
       return
     }
-    if (frame.type === 'event.data' && frame.stream_id === 'event') {
+    if (frame.type === TUNNEL_FRAME_TYPES.event && frame.stream_id === TUNNEL_STREAMS.event) {
       this.emit({
         type: 'event',
         channel: 'event',
@@ -724,57 +643,4 @@ function isStreamingRunItemDelta(message: Record<string, unknown>): boolean {
   const payload = message.params.payload
   if (!isRecord(payload) || !isRecord(payload.payload)) return false
   return typeof payload.payload.delta === 'string'
-}
-
-function splitTunnelPayload(payload: string): string[] {
-  const chunks: string[] = []
-  let start = 0
-  let characters = 0
-  for (let index = 0; index < payload.length;) {
-    const code = payload.charCodeAt(index)
-    const width = code >= 0xd800 && code <= 0xdbff && index + 1 < payload.length ? 2 : 1
-    index += width
-    characters += 1
-    if (characters === MAX_CHUNK_PAYLOAD_CHARS) {
-      chunks.push(payload.slice(start, index))
-      start = index
-      characters = 0
-    }
-  }
-  chunks.push(payload.slice(start))
-  return chunks
-}
-
-function withoutChunkMetadata(frame: TunnelFrame): TunnelFrame {
-  const { message_id: _messageId, chunk_index: _chunkIndex, chunk_final: _chunkFinal, ...complete } = frame
-  return complete
-}
-
-function validateTunnelFrame(frame: TunnelFrame): void {
-  if (
-    frame.version !== 1
-    || typeof frame.type !== 'string'
-    || frame.type.length === 0
-    || frame.type.length > 64
-    || typeof frame.stream_id !== 'string'
-    || frame.stream_id.length === 0
-    || frame.stream_id.length > 256
-    || !Number.isSafeInteger(frame.sequence)
-    || frame.sequence <= 0
-    || (frame.request_id !== undefined
-      && (typeof frame.request_id !== 'string' || frame.request_id.length === 0 || frame.request_id.length > 256))
-    || (frame.payload !== undefined && typeof frame.payload !== 'string')
-    || (frame.message_id !== undefined
-      && (typeof frame.message_id !== 'string' || frame.message_id.length === 0 || frame.message_id.length > 256))
-    || (frame.chunk_index !== undefined
-      && (!Number.isSafeInteger(frame.chunk_index) || frame.chunk_index < 0 || frame.chunk_index > 524_288))
-    || (frame.chunk_final !== undefined && typeof frame.chunk_final !== 'boolean')
-  ) {
-    throw new Error('无效的 tunnel frame')
-  }
-  const hasMessageId = frame.message_id !== undefined
-  if (hasMessageId !== (frame.chunk_index !== undefined)
-    || hasMessageId !== (frame.chunk_final !== undefined)) {
-    throw new Error('无效的 tunnel 分片元数据')
-  }
 }

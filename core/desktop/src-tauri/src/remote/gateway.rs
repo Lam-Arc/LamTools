@@ -27,7 +27,7 @@ use super::{
         DesktopAccountSession, PlatformSecureStore, SecureStore, DESKTOP_ACCOUNT_SESSION_KEY,
     },
     tunnel::{
-        TunnelCodec, TunnelFrame, TunnelStreamDecoder, MAX_CHUNK_PAYLOAD_CHARS,
+        TunnelCodec, TunnelFrame, TunnelStreamDecoder, MAX_CHUNK_PAYLOAD_BYTES,
         MAX_MESSAGE_PAYLOAD_BYTES,
     },
     REMOTE_PROTOCOL, REMOTE_PROTOCOL_VERSION,
@@ -1201,7 +1201,7 @@ impl SecureTunnelWriter {
         let Some(payload) = payload else {
             return self.send_tunnel_frame_locked(frame);
         };
-        if payload.len() <= MAX_CHUNK_PAYLOAD_CHARS {
+        if payload.len() <= MAX_CHUNK_PAYLOAD_BYTES {
             frame.payload = Some(payload);
             return self.send_tunnel_frame_locked(frame);
         }
@@ -2139,16 +2139,16 @@ fn is_streaming_run_item(method: &Option<String>, payload: Option<&str>) -> bool
 fn split_tunnel_payload(payload: &str) -> Vec<&str> {
     let mut chunks = Vec::new();
     let mut start = 0;
-    let mut characters = 0;
-    for (index, _) in payload.char_indices() {
-        if characters == MAX_CHUNK_PAYLOAD_CHARS {
-            chunks.push(&payload[start..index]);
-            start = index;
-            characters = 0;
+    while start < payload.len() {
+        let mut end = start
+            .saturating_add(MAX_CHUNK_PAYLOAD_BYTES)
+            .min(payload.len());
+        while !payload.is_char_boundary(end) {
+            end -= 1;
         }
-        characters += 1;
+        chunks.push(&payload[start..end]);
+        start = end;
     }
-    chunks.push(&payload[start..]);
     chunks
 }
 
@@ -2386,8 +2386,8 @@ fn query_value<'a>(target: &'a str, key: &str) -> Option<&'a str> {
 mod tests {
     use super::{
         parse_loopback_http_base, read_http_head, read_tunnel_ws_payload, read_ws_frame,
-        strip_token_query, websocket_accept, write_ws_frame, write_ws_pong, BufferedStream,
-        GatewayStartOptions, RemoteGateway, SecureTunnelWriter, WsFrame,
+        split_tunnel_payload, strip_token_query, websocket_accept, write_ws_frame, write_ws_pong,
+        BufferedStream, GatewayStartOptions, RemoteGateway, SecureTunnelWriter, WsFrame,
     };
     use crate::remote::secure_store::MemorySecureStore;
     use crate::remote::{
@@ -2414,6 +2414,27 @@ mod tests {
         let mut response = String::new();
         stream.read_to_string(&mut response).expect("read response");
         response
+    }
+
+    #[test]
+    fn tunnel_payload_split_uses_utf8_bytes_and_valid_boundaries() {
+        let ascii = "a".repeat(super::MAX_CHUNK_PAYLOAD_BYTES + 1);
+        let ascii_chunks = split_tunnel_payload(&ascii);
+        assert_eq!(
+            ascii_chunks
+                .iter()
+                .map(|chunk| chunk.len())
+                .collect::<Vec<_>>(),
+            vec![super::MAX_CHUNK_PAYLOAD_BYTES, 1,]
+        );
+
+        let unicode = format!("{}你🙂", "a".repeat(super::MAX_CHUNK_PAYLOAD_BYTES - 2));
+        let unicode_chunks = split_tunnel_payload(&unicode);
+        assert_eq!(unicode_chunks.concat(), unicode);
+        assert_eq!(unicode_chunks[0].len(), super::MAX_CHUNK_PAYLOAD_BYTES - 2);
+        assert!(unicode_chunks
+            .iter()
+            .all(|chunk| chunk.len() <= super::MAX_CHUNK_PAYLOAD_BYTES));
     }
 
     #[test]

@@ -3046,3 +3046,24 @@ mobile UI.
   `test_kernel.py`, `test_project_context.py`, `test_skill_runtime.py`,
   `test_tool_result_model_evidence.py`, plus `.tmp_glass_rg.txt`, `MyProject/`,
   `artifacts/`, and `docs.7z`. No commit or cleanup was performed.
+
+## Mobile Tunnel protocol/transport refactor closure (2026-09-20)
+
+- Task ID/deployment/state: `mobile_tunnel_protocol_archive_20260920` /
+  `mobile_tunnel_protocol_refactor_20260920` / **complete**. The external
+  Tunnel v1 wire schema stayed unchanged while protocol representation and
+  transport orchestration were separated. One golden fixture consumed by both
+  TypeScript and Rust covers the shared frame contract; UTF-8 limits and
+  boundaries are byte based, sequence values are JavaScript-safe, and
+  continuation frames must match the initial
+  version/type/stream/request envelope. Unknown channels are still rejected.
+- LAN, Relay, and Noise compatibility was preserved, including opaque Relay
+  forwarding. No P0-P2 issue was found.
+- Verification recorded by the deployment: mobile 17 files / 90 tests,
+  typecheck, build; Rust format, `cargo check`, and all tests 59/59 (remote
+  tunnel 8/8, gateway 12/12); Android `assembleDebug`; and
+  `git diff --check`. No real-device install or runtime test was run.
+- Git handoff is read-only: unrelated pre-existing backend/context-compaction
+  changes and untracked `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`, and
+  `docs.7z` remain untouched. Next entry point: real-device and LAN/Relay
+  acceptance for pairing, reconnect/resume, and remote control.

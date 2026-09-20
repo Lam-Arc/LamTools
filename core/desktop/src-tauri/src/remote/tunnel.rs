@@ -6,7 +6,8 @@ use std::collections::HashMap;
 /// below this boundary and reassembled by `TunnelStreamDecoder`.
 pub const MAX_FRAME_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MESSAGE_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
-pub const MAX_CHUNK_PAYLOAD_CHARS: usize = 256 * 1024;
+pub const MAX_CHUNK_PAYLOAD_BYTES: usize = 256 * 1024;
+pub const MAX_SEQUENCE: u64 = 9_007_199_254_740_991;
 const MAX_INFLIGHT_MESSAGES: usize = 16;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -81,7 +82,10 @@ impl TunnelStreamDecoder {
             }
             let line = &self.buffer[consumed..end];
             consumed = end + 1;
-            if line.is_empty() {
+            if line
+                .iter()
+                .all(|byte| matches!(*byte, b' ' | b'\t' | b'\r'))
+            {
                 continue;
             }
             let decoded = self.codec.decode_line(line)?;
@@ -155,7 +159,7 @@ impl TunnelStreamDecoder {
             .partials
             .get_mut(&message_id)
             .ok_or_else(|| "tunnel chunk sequence started out of order".to_string())?;
-        if chunk_index != partial.next_chunk_index {
+        if chunk_index != partial.next_chunk_index || !same_chunk_envelope(&partial.frame, &frame) {
             return Err("tunnel chunk sequence is invalid".to_string());
         }
         partial.payload_bytes = partial
@@ -191,6 +195,13 @@ impl TunnelStreamDecoder {
         self.codec = TunnelCodec::default();
         self.partials.clear();
     }
+}
+
+fn same_chunk_envelope(initial: &TunnelFrame, continuation: &TunnelFrame) -> bool {
+    initial.version == continuation.version
+        && initial.frame_type == continuation.frame_type
+        && initial.stream_id == continuation.stream_id
+        && initial.request_id == continuation.request_id
 }
 
 impl TunnelCodec {
@@ -230,6 +241,7 @@ fn validate_frame(frame: &TunnelFrame) -> Result<(), String> {
         || frame.stream_id.trim().is_empty()
         || frame.stream_id.len() > 256
         || frame.sequence == 0
+        || frame.sequence > MAX_SEQUENCE
         || frame
             .request_id
             .as_ref()
@@ -256,8 +268,8 @@ fn validate_frame(frame: &TunnelFrame) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TunnelCodec, TunnelFrame, TunnelStreamDecoder, MAX_CHUNK_PAYLOAD_CHARS,
-        MAX_FRAME_PAYLOAD_BYTES,
+        same_chunk_envelope, TunnelCodec, TunnelFrame, TunnelStreamDecoder,
+        MAX_CHUNK_PAYLOAD_BYTES, MAX_FRAME_PAYLOAD_BYTES,
     };
 
     #[test]
@@ -272,6 +284,30 @@ mod tests {
             frame
         );
         assert!(codec.decode_line(&encoded[..encoded.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn codec_matches_tunnel_v1_golden_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../protocol/tunnel-v1-fixtures.json"))
+                .expect("golden fixture");
+        let frame: TunnelFrame =
+            serde_json::from_value(fixture["frame"].clone()).expect("fixture frame");
+        let encoded = TunnelCodec::encode(&frame).expect("encode fixture frame");
+        assert_eq!(
+            encoded,
+            fixture["json_line"]
+                .as_str()
+                .expect("fixture json line")
+                .as_bytes()
+        );
+        let mut codec = TunnelCodec::default();
+        assert_eq!(
+            codec
+                .decode_line(&encoded[..encoded.len() - 1])
+                .expect("decode fixture line"),
+            frame
+        );
     }
 
     #[test]
@@ -297,6 +333,19 @@ mod tests {
         assert_eq!(decoder.last_sequence(), 2);
         decoder.reset();
         assert_eq!(decoder.last_sequence(), 0);
+    }
+
+    #[test]
+    fn stream_decoder_skips_json_whitespace_only_lines() {
+        let frame = TunnelFrame::new("ping", "control", 1);
+        let mut input = b" \t\r\n\n".to_vec();
+        input.extend_from_slice(&TunnelCodec::encode(&frame).expect("encode"));
+        assert_eq!(
+            TunnelStreamDecoder::default()
+                .push(&input)
+                .expect("whitespace lines"),
+            vec![frame]
+        );
     }
 
     #[test]
@@ -328,6 +377,11 @@ mod tests {
         let zero = TunnelFrame::new("rpc.data", "rpc", 0);
         assert!(TunnelCodec::encode(&zero).is_err());
 
+        let max_sequence = TunnelFrame::new("rpc.data", "rpc", super::MAX_SEQUENCE);
+        assert!(TunnelCodec::encode(&max_sequence).is_ok());
+        let unsafe_sequence = TunnelFrame::new("rpc.data", "rpc", super::MAX_SEQUENCE + 1);
+        assert!(TunnelCodec::encode(&unsafe_sequence).is_err());
+
         let long_type = TunnelFrame::new("x".repeat(65), "rpc", 1);
         assert!(TunnelCodec::encode(&long_type).is_err());
 
@@ -337,10 +391,15 @@ mod tests {
 
     #[test]
     fn stream_decoder_reassembles_large_logical_payload() {
-        let payload = "你好".repeat(MAX_CHUNK_PAYLOAD_CHARS / 2 + 17);
-        let mut characters = payload.chars();
-        let first_payload: String = characters.by_ref().take(MAX_CHUNK_PAYLOAD_CHARS).collect();
-        let second_payload: String = characters.collect();
+        let payload = "你".repeat(MAX_CHUNK_PAYLOAD_BYTES / 3 + 17);
+        let split = payload
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= MAX_CHUNK_PAYLOAD_BYTES)
+            .last()
+            .expect("UTF-8 boundary");
+        let first_payload = payload[..split].to_string();
+        let second_payload = payload[split..].to_string();
         let mut first = TunnelFrame::new("rpc.data", "rpc", 1);
         first.payload = Some(first_payload);
         first.message_id = Some("message-1".to_string());
@@ -361,5 +420,39 @@ mod tests {
         assert!(frames[0].message_id.is_none());
         assert!(frames[0].chunk_index.is_none());
         assert!(frames[0].chunk_final.is_none());
+    }
+
+    #[test]
+    fn stream_decoder_rejects_changed_continuation_envelope() {
+        fn chunk(sequence: u64, index: u32, final_chunk: bool) -> TunnelFrame {
+            let mut frame = TunnelFrame::new("rpc.data", "rpc", sequence);
+            frame.request_id = Some("request-1".to_string());
+            frame.payload = Some("payload".to_string());
+            frame.message_id = Some("message-1".to_string());
+            frame.chunk_index = Some(index);
+            frame.chunk_final = Some(final_chunk);
+            frame
+        }
+
+        let initial = chunk(1, 0, false);
+        let mutations: [fn(&mut TunnelFrame); 4] = [
+            |frame| frame.version = 2,
+            |frame| frame.frame_type = "event.data".to_string(),
+            |frame| frame.stream_id = "event".to_string(),
+            |frame| frame.request_id = Some("request-2".to_string()),
+        ];
+        for mutate in mutations {
+            let mut continuation = chunk(2, 1, true);
+            mutate(&mut continuation);
+            assert!(!same_chunk_envelope(&initial, &continuation));
+        }
+
+        let mut decoder = TunnelStreamDecoder::default();
+        let first = TunnelCodec::encode(&initial).expect("first chunk");
+        assert!(decoder.push(&first).expect("first push").is_empty());
+        let mut continuation = chunk(2, 1, true);
+        continuation.stream_id = "event".to_string();
+        let encoded = TunnelCodec::encode(&continuation).expect("continuation frame");
+        assert!(decoder.push(&encoded).is_err());
     }
 }

@@ -1,0 +1,12 @@
+{
+  "name": "tunnel-v1-basic-unicode-frame",
+  "frame": {
+    "version": 1,
+    "type": "rpc.data",
+    "stream_id": "rpc",
+    "request_id": "请求-1",
+    "payload": "你好, LamTools",
+    "sequence": 7
+  },
+  "json_line": "{\"version\":1,\"type\":\"rpc.data\",\"stream_id\":\"rpc\",\"request_id\":\"请求-1\",\"payload\":\"你好, LamTools\",\"sequence\":7}\n"
+}
