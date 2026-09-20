@@ -41,7 +41,9 @@ import {
   closeContextMenu,
   contextMenuState,
   installContextMenuGuard,
+  installLongPressContextMenu,
   removeContextMenuGuard,
+  removeLongPressContextMenu,
 } from './context-menu'
 import type { ContextMenuAnchor, ContextMenuEntry } from './types'
 
@@ -63,6 +65,7 @@ const expandedPath = computed(() => submenuPanels.value.at(-1)?.path || [])
 
 onMounted(() => {
   installContextMenuGuard()
+  installLongPressContextMenu()
 })
 
 watch(() => contextMenuState.revision, () => {
@@ -78,6 +81,7 @@ watch(() => contextMenuState.open, (open) => {
 })
 
 onUnmounted(() => {
+  removeLongPressContextMenu()
   removeContextMenuGuard()
   closeContextMenu()
 })

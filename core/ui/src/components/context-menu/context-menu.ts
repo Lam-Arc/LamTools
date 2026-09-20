@@ -89,6 +89,164 @@ export function removeContextMenuGuard(): void {
   document.removeEventListener('contextmenu', handleDocumentContextMenu, true)
 }
 
+export const LONG_PRESS_CONTEXT_MENU_DELAY_MS = 500
+const LONG_PRESS_MOVE_TOLERANCE_PX = 10
+const LONG_PRESS_DUPLICATE_WINDOW_MS = 750
+
+let longPressConsumers = 0
+let longPressInstalled = false
+let longPressTimer: ReturnType<typeof setTimeout> | null = null
+let longPressPointerId: number | null = null
+let longPressTarget: Element | null = null
+let longPressOrigin = { x: 0, y: 0 }
+let suppressClickTarget: Element | null = null
+let suppressClickUntil = 0
+let suppressNativeContextMenuTarget: Element | null = null
+let suppressNativeContextMenuUntil = 0
+let longPressSuppressionTimer: ReturnType<typeof setTimeout> | null = null
+const syntheticContextMenuEvents = new WeakSet<Event>()
+
+function clearLongPressCandidate(): void {
+  if (longPressTimer !== null) clearTimeout(longPressTimer)
+  longPressTimer = null
+  longPressPointerId = null
+  longPressTarget = null
+}
+
+function clearLongPressSuppression(): void {
+  if (longPressSuppressionTimer !== null) clearTimeout(longPressSuppressionTimer)
+  longPressSuppressionTimer = null
+  suppressClickTarget = null
+  suppressClickUntil = 0
+  suppressNativeContextMenuTarget = null
+  suppressNativeContextMenuUntil = 0
+}
+
+function targetsOverlap(left: EventTarget | null, right: Element | null): boolean {
+  return typeof Node !== 'undefined'
+    && left instanceof Node
+    && Boolean(right && (left === right || right.contains(left) || left.contains(right)))
+}
+
+function handleLongPressPointerDown(event: PointerEvent): void {
+  if (event.pointerType !== 'touch' || !event.isPrimary || event.button !== 0) return
+  if (!(event.target instanceof Element) || isContextMenuElement(event.target)) return
+
+  clearLongPressCandidate()
+  longPressPointerId = event.pointerId
+  longPressTarget = event.target
+  longPressOrigin = { x: event.clientX, y: event.clientY }
+  longPressTimer = setTimeout(() => {
+    const target = longPressTarget
+    if (!target?.isConnected) {
+      clearLongPressCandidate()
+      return
+    }
+
+    const contextEvent = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: longPressOrigin.x,
+      clientY: longPressOrigin.y,
+      button: 2,
+      buttons: 0,
+    })
+    syntheticContextMenuEvents.add(contextEvent)
+    target.dispatchEvent(contextEvent)
+
+    // Native targets without a LamTools right-click handler keep the platform
+    // selection/copy menu. Only suppress the following native event and click
+    // when the synthetic desktop-equivalent context menu was actually handled.
+    if (contextEvent.defaultPrevented) {
+      const now = Date.now()
+      clearLongPressSuppression()
+      suppressClickTarget = target
+      suppressClickUntil = now + LONG_PRESS_DUPLICATE_WINDOW_MS
+      suppressNativeContextMenuTarget = target
+      suppressNativeContextMenuUntil = now + LONG_PRESS_DUPLICATE_WINDOW_MS
+      longPressSuppressionTimer = setTimeout(clearLongPressSuppression, LONG_PRESS_DUPLICATE_WINDOW_MS)
+    }
+    longPressTimer = null
+  }, LONG_PRESS_CONTEXT_MENU_DELAY_MS)
+}
+
+function handleLongPressPointerMove(event: PointerEvent): void {
+  if (event.pointerId !== longPressPointerId) return
+  const deltaX = event.clientX - longPressOrigin.x
+  const deltaY = event.clientY - longPressOrigin.y
+  if (deltaX * deltaX + deltaY * deltaY > LONG_PRESS_MOVE_TOLERANCE_PX ** 2) {
+    clearLongPressCandidate()
+  }
+}
+
+function handleLongPressPointerEnd(event: PointerEvent): void {
+  if (event.pointerId !== longPressPointerId) return
+  clearLongPressCandidate()
+}
+
+function handleLongPressClick(event: MouseEvent): void {
+  const now = Date.now()
+  if (now > suppressClickUntil) {
+    suppressClickTarget = null
+    return
+  }
+  if (!targetsOverlap(event.target, suppressClickTarget)) return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  suppressClickTarget = null
+  suppressClickUntil = 0
+}
+
+function handleLongPressNativeContextMenu(event: MouseEvent): void {
+  if (syntheticContextMenuEvents.has(event)) return
+  if (targetsOverlap(event.target, longPressTarget)) clearLongPressCandidate()
+  if (Date.now() > suppressNativeContextMenuUntil) {
+    suppressNativeContextMenuTarget = null
+    return
+  }
+  if (!targetsOverlap(event.target, suppressNativeContextMenuTarget)) return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  suppressNativeContextMenuTarget = null
+  suppressNativeContextMenuUntil = 0
+}
+
+function handleLongPressScroll(): void {
+  clearLongPressCandidate()
+}
+
+/** Make a stationary touch long-press behave like a desktop right-click. */
+export function installLongPressContextMenu(): void {
+  if (typeof document === 'undefined') return
+  longPressConsumers += 1
+  if (longPressInstalled) return
+  longPressInstalled = true
+  document.addEventListener('pointerdown', handleLongPressPointerDown, true)
+  document.addEventListener('pointermove', handleLongPressPointerMove, true)
+  document.addEventListener('pointerup', handleLongPressPointerEnd, true)
+  document.addEventListener('pointercancel', handleLongPressPointerEnd, true)
+  document.addEventListener('click', handleLongPressClick, true)
+  document.addEventListener('contextmenu', handleLongPressNativeContextMenu, true)
+  document.addEventListener('scroll', handleLongPressScroll, true)
+}
+
+export function removeLongPressContextMenu(): void {
+  if (typeof document === 'undefined' || longPressConsumers === 0) return
+  longPressConsumers -= 1
+  if (longPressConsumers > 0 || !longPressInstalled) return
+  longPressInstalled = false
+  clearLongPressCandidate()
+  clearLongPressSuppression()
+  document.removeEventListener('pointerdown', handleLongPressPointerDown, true)
+  document.removeEventListener('pointermove', handleLongPressPointerMove, true)
+  document.removeEventListener('pointerup', handleLongPressPointerEnd, true)
+  document.removeEventListener('pointercancel', handleLongPressPointerEnd, true)
+  document.removeEventListener('click', handleLongPressClick, true)
+  document.removeEventListener('contextmenu', handleLongPressNativeContextMenu, true)
+  document.removeEventListener('scroll', handleLongPressScroll, true)
+}
+
 let restoreFocusTarget: HTMLElement | null = null
 let closeCallback: (() => void) | undefined
 let listenersInstalled = false

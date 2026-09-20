@@ -9,6 +9,7 @@ import {
   closeContextMenu,
   contextMenuState,
   isNativeContextTarget,
+  LONG_PRESS_CONTEXT_MENU_DELAY_MS,
   openContextMenu,
 } from '../src/components/context-menu/context-menu'
 import type { ContextMenuEntry } from '../src/components/context-menu/types'
@@ -38,6 +39,27 @@ function contextEvent(clientX = 40, clientY = 48): MouseEvent {
     clientX,
     clientY,
   })
+}
+
+function touchPointerEvent(
+  type: string,
+  clientX: number,
+  clientY: number,
+  pointerId = 1,
+): PointerEvent {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX,
+    clientY,
+    button: 0,
+  })
+  Object.defineProperties(event, {
+    pointerId: { configurable: true, value: pointerId },
+    pointerType: { configurable: true, value: 'touch' },
+    isPrimary: { configurable: true, value: true },
+  })
+  return event as unknown as PointerEvent
 }
 
 function menuPanel(level = 0): HTMLElement | null {
@@ -127,6 +149,100 @@ describe('ContextMenuHost', () => {
     expect(isNativeContextTarget(editable)).toBe(true)
     expect(isNativeContextTarget(codeMirror)).toBe(true)
     expect(isNativeContextTarget(text)).toBe(false)
+  })
+
+  it('turns a stationary touch long-press into a desktop contextmenu at the held point', () => {
+    vi.useFakeTimers()
+    const target = document.createElement('button')
+    const contextHandler = vi.fn((event: MouseEvent) => event.preventDefault())
+    const clickHandler = vi.fn()
+    target.addEventListener('contextmenu', contextHandler)
+    target.addEventListener('click', clickHandler)
+    document.body.appendChild(target)
+
+    try {
+      target.dispatchEvent(touchPointerEvent('pointerdown', 72, 96))
+      vi.advanceTimersByTime(LONG_PRESS_CONTEXT_MENU_DELAY_MS - 1)
+      expect(contextHandler).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(1)
+      expect(contextHandler).toHaveBeenCalledTimes(1)
+      const event = contextHandler.mock.calls[0]![0]
+      expect(event.clientX).toBe(72)
+      expect(event.clientY).toBe(96)
+      expect(event.button).toBe(2)
+
+      target.dispatchEvent(touchPointerEvent('pointerup', 72, 96))
+      target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      expect(clickHandler).not.toHaveBeenCalled()
+
+      const duplicateNativeEvent = contextEvent(72, 96)
+      target.dispatchEvent(duplicateNativeEvent)
+      expect(duplicateNativeEvent.defaultPrevented).toBe(true)
+      expect(contextHandler).toHaveBeenCalledTimes(1)
+    } finally {
+      target.remove()
+      vi.runOnlyPendingTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels the touch long-press when the pointer moves away from its fixed point', () => {
+    vi.useFakeTimers()
+    const target = document.createElement('button')
+    const contextHandler = vi.fn((event: MouseEvent) => event.preventDefault())
+    target.addEventListener('contextmenu', contextHandler)
+    document.body.appendChild(target)
+
+    try {
+      target.dispatchEvent(touchPointerEvent('pointerdown', 20, 30))
+      target.dispatchEvent(touchPointerEvent('pointermove', 40, 30))
+      vi.advanceTimersByTime(LONG_PRESS_CONTEXT_MENU_DELAY_MS)
+      expect(contextHandler).not.toHaveBeenCalled()
+    } finally {
+      target.remove()
+      vi.runOnlyPendingTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not duplicate a native contextmenu that arrives before the long-press timer', () => {
+    vi.useFakeTimers()
+    const target = document.createElement('button')
+    const contextHandler = vi.fn((event: MouseEvent) => event.preventDefault())
+    target.addEventListener('contextmenu', contextHandler)
+    document.body.appendChild(target)
+
+    try {
+      target.dispatchEvent(touchPointerEvent('pointerdown', 52, 68))
+      vi.advanceTimersByTime(250)
+      target.dispatchEvent(contextEvent(52, 68))
+      vi.advanceTimersByTime(LONG_PRESS_CONTEXT_MENU_DELAY_MS)
+      expect(contextHandler).toHaveBeenCalledTimes(1)
+    } finally {
+      target.remove()
+      vi.runOnlyPendingTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the native long-press menu when no LamTools context handler accepts it', () => {
+    vi.useFakeTimers()
+    const target = document.createElement('input')
+    document.body.appendChild(target)
+
+    try {
+      target.dispatchEvent(touchPointerEvent('pointerdown', 32, 44))
+      vi.advanceTimersByTime(LONG_PRESS_CONTEXT_MENU_DELAY_MS)
+
+      const nativeEvent = contextEvent(32, 44)
+      target.dispatchEvent(nativeEvent)
+      expect(nativeEvent.defaultPrevented).toBe(false)
+    } finally {
+      target.remove()
+      vi.runOnlyPendingTimers()
+      vi.useRealTimers()
+    }
   })
 
   it('suppresses the WebView default menu outside native targets and selected text', () => {
