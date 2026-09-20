@@ -25,6 +25,8 @@ describe('MobileTopBar', () => {
     const wrapper = mount(MobileTopBar, { props: { syncing: true } })
 
     expect(wrapper.get('[role="status"]').text()).toBe('正在同步')
+    expect(wrapper.get('[data-mobile-sidebar-button]').classes()).toContain('mobile-top-bar__sidebar-button')
+    expect(wrapper.get('[data-mobile-sidebar-button]').classes()).not.toContain('optical-glass')
     await wrapper.get('[data-mobile-sidebar-button]').trigger('click')
     expect(wrapper.emitted('open-sidebar')).toHaveLength(1)
 
@@ -52,6 +54,7 @@ describe('MobileTopBar', () => {
     await trigger.trigger('click')
     expect(trigger.attributes('aria-expanded')).toBe('true')
     expect(wrapper.get('[data-mobile-command-panel]').attributes('style')).not.toContain('display: none')
+    expect(wrapper.get('[data-mobile-command-panel]').classes()).toContain('optical-glass')
     expect(wrapper.get('[data-mobile-mode-option="workflow"]').attributes('aria-selected')).toBe('true')
 
     await wrapper.get('[data-mobile-mode-option="agent"]').trigger('click')

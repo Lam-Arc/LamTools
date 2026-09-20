@@ -990,7 +990,12 @@ onUnmounted(() => {
 }
 
 @media (max-width: 640px) {
-  .mobile-host .workspace-main { padding-top: calc(var(--space-6) + var(--space-1)); }
+  .mobile-host .workspace-main {
+    padding-top: calc(var(--space-6) + var(--space-1));
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
   .mobile-host .workspace-shell--full-bleed .workspace-main { padding-top: 0; }
   .mobile-host .drawer-left { padding-top: var(--space-4); }
 }

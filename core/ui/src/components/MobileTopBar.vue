@@ -1,7 +1,7 @@
 <template>
   <nav v-show="!hidden" ref="root" class="mobile-top-bar" aria-label="移动端快捷操作">
     <button
-      class="mobile-top-bar__button optical-glass"
+      class="mobile-top-bar__button mobile-top-bar__sidebar-button"
       type="button"
       aria-label="打开左侧会话栏"
       title="会话与项目"
@@ -44,9 +44,8 @@
         :aria-label="`打开快捷操作，当前模式 ${activeModeLabel}`"
         title="快捷操作（可拖动）"
         data-mobile-command-button
-        @click="togglePanel"
       >
-        <Puzzle :size="17" :stroke-width="1.9" aria-hidden="true" />
+        <Blocks :size="18" :stroke-width="1.9" aria-hidden="true" />
       </button>
 
       <section
@@ -100,7 +99,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Check, PanelLeft, Puzzle, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
+import { Blocks, Check, PanelLeft, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
 import { gsap } from 'gsap'
 import { Draggable } from 'gsap/Draggable'
 
@@ -150,7 +149,6 @@ let syncTween: gsap.core.Tween | null = null
 let panelTween: gsap.core.Tween | null = null
 let draggable: Draggable | null = null
 let motionAllowed = false
-let suppressNextClick = false
 const activeModeLabel = computed(() => (
   props.modeOptions.find((option) => option.id === props.activeModeId)?.label || '默认'
 ))
@@ -202,7 +200,6 @@ function updatePanelDirection(): void {
 }
 
 function togglePanel(): void {
-  if (suppressNextClick) return
   panelOpen.value = !panelOpen.value
 }
 
@@ -296,12 +293,11 @@ onMounted(() => {
       edgeResistance: 0.82,
       dragClickables: true,
       minimumMovement: 4,
+      onClick: togglePanel,
       onDragStart: () => closePanel(),
       onDragEnd: () => {
-        suppressNextClick = true
         persistDockPosition()
         updatePanelDirection()
-        window.setTimeout(() => { suppressNextClick = false }, 0)
       },
     })
     draggable = instances[0] || null
@@ -330,7 +326,7 @@ onUnmounted(() => {
 
 <style scoped>
 .mobile-top-bar {
-  --text: var(--theme-control-text);
+  --text: var(--theme-main-text);
   position: fixed;
   inset: 0;
   z-index: var(--z-popover);
@@ -361,6 +357,12 @@ onUnmounted(() => {
 
 .mobile-top-bar__button:active {
   transform: scale(.98);
+}
+
+.mobile-top-bar__sidebar-button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .mobile-top-bar__button:focus-visible,
@@ -412,7 +414,7 @@ onUnmounted(() => {
   width: min(286px, calc(100vw - var(--space-6)));
   box-sizing: border-box;
   padding: var(--space-3);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   color: var(--text);
   pointer-events: auto;
   transform-origin: top right;

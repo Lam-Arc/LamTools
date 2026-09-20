@@ -113,7 +113,7 @@ describe('PairingScreen account entry', () => {
     expect(appSource).toContain("'mobile-host--left-drawer-open': leftDrawerOpen")
     expect(appSource).toContain('.mobile-host--left-drawer-open::before')
     expect(appSource).toContain('background: var(--theme-backdrop-background)')
-    expect(appSource).toContain('.mobile-host .workspace-main { padding-top: calc(var(--space-6) + var(--space-1)); }')
+    expect(appSource).toMatch(/\.mobile-host \.workspace-main \{[\s\S]*?padding-top: calc\(var\(--space-6\) \+ var\(--space-1\)\);[\s\S]*?border: 0;/)
     expect(appSource).toContain('.mobile-host .drawer-left { padding-top: var(--space-4); }')
   })
 })

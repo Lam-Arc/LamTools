@@ -19,4 +19,8 @@ describe('mobile command dock host contract', () => {
     expect(appSource).toContain("accountClient.value?.session?.username || '登录 / 账号'")
     expect(appSource).toContain('accessPanelOpen.value = false')
   })
+
+  it('removes the desktop main-card frame on the mobile viewport', () => {
+    expect(appSource).toMatch(/\.mobile-host \.workspace-main \{[\s\S]*?border: 0;[\s\S]*?border-radius: 0;[\s\S]*?box-shadow: none;/)
+  })
 })
