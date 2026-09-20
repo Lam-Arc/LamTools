@@ -128,6 +128,7 @@ struct GatewayRuntime {
     advertised_host: String,
     lan_publisher: Option<LanPublisher>,
     relay_client: Option<RelayClient>,
+    active_sessions: Arc<Mutex<HashMap<u64, TcpStream>>>,
 }
 
 /// A secure HTTP/WebSocket gateway for the local Core server.
@@ -161,6 +162,9 @@ impl RemoteGateway {
             .map_err(|error| format!("无法读取手机控制网关端口：{error}"))?;
         let stop = Arc::new(AtomicBool::new(false));
         let active_connections = Arc::new(AtomicU64::new(0));
+        let active_sessions = Arc::new(Mutex::new(HashMap::new()));
+        let next_session_id = Arc::new(AtomicU64::new(1));
+        let relay_capability = super::identity::random_token(32)?;
         let advertised_host = if bind_ip.is_loopback() {
             bind_ip.to_string()
         } else {
@@ -180,6 +184,7 @@ impl RemoteGateway {
             options.relay_config,
             identity.device_id.clone(),
             listener_addr.port(),
+            relay_capability.clone(),
         )?;
         let runtime = GatewayRuntime {
             stop: stop.clone(),
@@ -191,6 +196,7 @@ impl RemoteGateway {
             advertised_host: advertised_host.clone(),
             lan_publisher,
             relay_client,
+            active_sessions: active_sessions.clone(),
         };
 
         let thread_runtime = ListenerRuntime {
@@ -204,6 +210,9 @@ impl RemoteGateway {
             pairings: runtime.pairings.clone(),
             identity: identity.clone(),
             advertised_host: advertised_host.clone(),
+            relay_capability,
+            active_sessions,
+            next_session_id,
         };
         let join = thread::Builder::new()
             .name("lamtools-remote-gateway".to_string())
@@ -277,6 +286,11 @@ impl RemoteGateway {
             join.join()
                 .map_err(|_| "gateway thread did not exit cleanly".to_string())?;
         }
+        if let Ok(mut sessions) = self.runtime.active_sessions.lock() {
+            for (_, stream) in sessions.drain() {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+        }
         if let Some(publisher) = self.runtime.lan_publisher.as_ref() {
             publisher.stop();
         }
@@ -304,6 +318,9 @@ struct ListenerRuntime {
     pairings: Arc<PairingManager>,
     identity: DeviceIdentity,
     advertised_host: String,
+    relay_capability: String,
+    active_sessions: Arc<Mutex<HashMap<u64, TcpStream>>>,
+    next_session_id: Arc<AtomicU64>,
 }
 
 impl ListenerRuntime {
@@ -327,7 +344,15 @@ impl ListenerRuntime {
                         identity: self.identity.clone(),
                         advertised_host: self.advertised_host.clone(),
                         peer,
+                        relay_capability: self.relay_capability.clone(),
+                        active_sessions: self.active_sessions.clone(),
+                        session_id: self.next_session_id.fetch_add(1, Ordering::Relaxed),
                     };
+                    if let Ok(stream) = runtime.stream.try_clone() {
+                        if let Ok(mut sessions) = self.active_sessions.lock() {
+                            sessions.insert(runtime.session_id, stream);
+                        }
+                    }
                     self.active_connections.fetch_add(1, Ordering::Relaxed);
                     thread::spawn(move || {
                         runtime.run();
@@ -356,6 +381,9 @@ struct ConnectionRuntime {
     identity: DeviceIdentity,
     advertised_host: String,
     peer: SocketAddr,
+    relay_capability: String,
+    active_sessions: Arc<Mutex<HashMap<u64, TcpStream>>>,
+    session_id: u64,
 }
 
 impl ConnectionRuntime {
@@ -375,6 +403,9 @@ impl ConnectionRuntime {
             serde_json::json!({"peer": self.peer.to_string()}),
         );
         let _ = self.stream.shutdown(Shutdown::Both);
+        if let Ok(mut sessions) = self.active_sessions.lock() {
+            sessions.remove(&self.session_id);
+        }
         self.active_connections.fetch_sub(1, Ordering::Relaxed);
     }
 
@@ -546,11 +577,15 @@ impl ConnectionRuntime {
             .write_all(response.as_bytes())
             .map_err(|error| error.to_string())?;
         let pairing_id = query_value(&request.target, "pairing").map(str::to_string);
-        // A Relay ticket has already been authorized by the server before it
-        // reaches this loopback bridge. The marker is intentionally scoped to
-        // a per-tunnel UUID supplied by this desktop's RelayClient; it is not
-        // a reusable application credential.
-        let relay_tunnel = query_value(&request.target, "relay_tunnel").map(str::to_string);
+        // Relay tickets are authorized by the server, but the public gateway
+        // must also prove that this connection came through our loopback
+        // bridge. The per-process capability never leaves this process or the
+        // loopback request and cannot be forged by a LAN client.
+        let relay_capability = query_value(&request.target, "relay_capability");
+        let relay_authorized = self.peer.ip().is_loopback()
+            && relay_capability.is_some_and(|value| {
+                constant_time_eq(value.as_bytes(), self.relay_capability.as_bytes())
+            });
         if let Some(id) = pairing_id.as_deref() {
             if !self.pairings.pairing_exists(id)? {
                 return Err("配对已失效或不存在".to_string());
@@ -601,7 +636,7 @@ impl ConnectionRuntime {
             self.listener_addr.port()
         );
         let (access_token, ack, relay_authorized) =
-            match (pairing_id.as_deref(), relay_tunnel, auth) {
+            match (pairing_id.as_deref(), relay_authorized, auth) {
                 (
                     Some(id),
                     _,
@@ -636,7 +671,7 @@ impl ConnectionRuntime {
                 }
                 (
                     None,
-                    Some(_),
+                    true,
                     TunnelAuth::Connect {
                         access_token,
                         device_id: _,
@@ -648,7 +683,7 @@ impl ConnectionRuntime {
                 ),
                 (
                     None,
-                    None,
+                    false,
                     TunnelAuth::Connect {
                         access_token,
                         device_id,
@@ -2382,6 +2417,18 @@ fn query_value<'a>(target: &'a str, key: &str) -> Option<&'a str> {
     })
 }
 
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2808,6 +2855,78 @@ mod tests {
         );
         assert!(response.starts_with("HTTP/1.1 404"));
         gateway.stop().expect("stop gateway");
+    }
+
+    #[test]
+    fn spoofed_relay_marker_does_not_bypass_device_authentication() {
+        let core_listener = TcpListener::bind("127.0.0.1:0").expect("core listener");
+        let gateway = test_gateway(core_listener.local_addr().expect("core addr"));
+        let endpoint = format!(
+            "ws://127.0.0.1:{}/_lamtools/tunnel?relay_tunnel=attacker-controlled",
+            gateway.status().port.unwrap()
+        );
+        let (mut socket, _) = tungstenite::connect(endpoint).expect("websocket upgrade");
+        let mobile = snow::Builder::new("Noise_XX_25519_ChaChaPoly_BLAKE2b".parse().unwrap())
+            .generate_keypair()
+            .expect("mobile key");
+        let mut handshake =
+            snow::Builder::new("Noise_XX_25519_ChaChaPoly_BLAKE2b".parse().unwrap())
+                .local_private_key(&mobile.private)
+                .prologue(b"LamTools Remote Tunnel v1")
+                .build_initiator()
+                .expect("initiator");
+        let mut bytes = vec![0_u8; 65_535];
+        let mut scratch = vec![0_u8; 65_535];
+        let length = handshake.write_message(&[], &mut bytes).expect("msg1");
+        socket
+            .send(tungstenite::Message::Binary(
+                bytes[..length].to_vec().into(),
+            ))
+            .expect("send msg1");
+        let msg2 = socket.read().expect("msg2").into_data();
+        handshake
+            .read_message(&msg2, &mut scratch)
+            .expect("read msg2");
+        let auth = serde_json::json!({
+            "mode":"connect",
+            "access_token":"forged-token",
+            "device_id":"untrusted-device"
+        });
+        let length = handshake
+            .write_message(auth.to_string().as_bytes(), &mut bytes)
+            .expect("msg3");
+        socket
+            .send(tungstenite::Message::Binary(
+                bytes[..length].to_vec().into(),
+            ))
+            .expect("send msg3");
+
+        assert!(
+            socket.read().is_err(),
+            "forged relay marker received an auth ack"
+        );
+        gateway.stop().expect("stop gateway");
+    }
+
+    #[test]
+    fn gateway_stop_closes_active_sessions() {
+        let core_listener = TcpListener::bind("127.0.0.1:0").expect("core listener");
+        let gateway = test_gateway(core_listener.local_addr().expect("core addr"));
+        let mut stream = TcpStream::connect(("127.0.0.1", gateway.status().port.unwrap()))
+            .expect("connect gateway");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        for _ in 0..100 {
+            if gateway.status().active_connections == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(gateway.status().active_connections, 1);
+        gateway.stop().expect("stop gateway");
+        let mut byte = [0_u8; 1];
+        assert_eq!(stream.read(&mut byte).expect("session closed"), 0);
     }
 
     #[test]

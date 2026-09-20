@@ -119,6 +119,157 @@ describe('SyncEngine', () => {
     await engine.close()
   })
 
+  it('commits the initial snapshot before applying a live push received during sync', async () => {
+    const repository = createLocalRepository(new FakeDatabase())
+    let resolveSync!: (value: Record<string, unknown>) => void
+    const syncResponse = new Promise<Record<string, unknown>>((resolve) => { resolveSync = resolve })
+    let resolveRequestStarted!: () => void
+    const requestStarted = new Promise<void>((resolve) => { resolveRequestStarted = resolve })
+    const transport = new FakeTransport(async () => {
+      resolveRequestStarted()
+      return await syncResponse
+    })
+    const engine = new SyncEngine({
+      transport,
+      repository,
+      requestRpc: (method, params) => transport.request({ kind: 'rpc', method, params }),
+    })
+
+    const start = engine.start()
+    await requestStarted
+    transport.emit({
+      type: 'notification',
+      channel: 'rpc',
+      method: 'sync/change',
+      params: {
+        seq: 4,
+        type: 'project',
+        operation: 'upsert',
+        entity_id: 'project-1',
+        entity: { id: 'project-1', name: 'Live push', path: '/workspace' },
+      },
+    })
+    resolveSync({
+      ok: true,
+      mode: 'snapshot',
+      cursor: 3,
+      snapshotVersion: 3,
+      projects: [{ id: 'project-1', name: 'Initial snapshot', path: '/workspace' }],
+    })
+
+    await start
+    expect(repository.state.value.cursor).toBe(4)
+    expect((await repository.listProjects())[0]?.name).toBe('Live push')
+    await engine.close()
+  })
+
+  it('defers a buffered rollback resync until the current sync releases its barrier', async () => {
+    const repository = createLocalRepository(new FakeDatabase())
+    await repository.applySyncSnapshot({
+      cursor: 3,
+      snapshotVersion: 3,
+      threads: [{ id: 'thread-1', title: 'Before', status: 'idle' }],
+    })
+    let resolveSync!: (value: Record<string, unknown>) => void
+    const syncResponse = new Promise<Record<string, unknown>>((resolve) => { resolveSync = resolve })
+    let resolveRequestStarted!: () => void
+    const requestStarted = new Promise<void>((resolve) => { resolveRequestStarted = resolve })
+    const transport = new FakeTransport(async () => {
+      resolveRequestStarted()
+      return await syncResponse
+    })
+    const engine = new SyncEngine({
+      transport,
+      repository,
+      reconnectDelaysMs: [60_000],
+      requestRpc: (method, params) => transport.request({ kind: 'rpc', method, params }),
+    })
+
+    const start = engine.start()
+    await requestStarted
+    transport.emit({
+      type: 'notification',
+      channel: 'rpc',
+      method: 'sync/change',
+      params: {
+        seq: 4,
+        type: 'thread.event',
+        operation: 'upsert',
+        entity_id: 'thread-1',
+        snapshot_required: true,
+        entity: {
+          snapshot_required: true,
+          event: { method: 'session/rollback', thread_id: 'thread-1', payload: {} },
+        },
+      },
+    })
+    resolveSync({ ok: true, mode: 'delta', cursor: 3, has_more: false, changes: [] })
+
+    await start
+    expect(engine.state.value).toBe('offline')
+    expect(repository.state.value.snapshotRequired).toBe(true)
+    await engine.close()
+  })
+
+  it('routes live repository failures through the engine state', async () => {
+    const repository = createLocalRepository(new FakeDatabase())
+    repository.applyTransientEvent = async () => { throw new Error('live write failed') }
+    const errors: string[] = []
+    const transport = new FakeTransport(async () => ({
+      ok: true,
+      mode: 'snapshot',
+      cursor: 1,
+      snapshotVersion: 1,
+      projects: [],
+    }))
+    const engine = new SyncEngine({
+      transport,
+      repository,
+      reconnectDelaysMs: [60_000],
+      onError: (message) => errors.push(message),
+      requestRpc: (method, params) => transport.request({ kind: 'rpc', method, params }),
+    })
+
+    await engine.start()
+    transport.emit({
+      type: 'notification',
+      channel: 'rpc',
+      method: 'core/runItem',
+      params: {},
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(engine.state.value).toBe('error')
+    expect(engine.lastError.value).toBe('live write failed')
+    expect(errors).toEqual(['live write failed'])
+    await engine.close()
+  })
+
+  it.each([
+    { label: 'unknown mode', response: { ok: true, mode: 'future', cursor: 1 } },
+    {
+      label: 'non-progressing page',
+      response: { ok: true, mode: 'delta', cursor: 0, has_more: true, changes: [] },
+    },
+  ])('rejects a $label sync response', async ({ response }) => {
+    const repository = createLocalRepository(new FakeDatabase())
+    if (response.mode === 'delta') {
+      await repository.applySyncSnapshot({ cursor: 0, snapshotVersion: 0 })
+    }
+    const transport = new FakeTransport(async () => response)
+    const engine = new SyncEngine({
+      transport,
+      repository,
+      reconnectDelaysMs: [60_000],
+      requestRpc: (method, params) => transport.request({ kind: 'rpc', method, params }),
+    })
+
+    await engine.start()
+    expect(engine.state.value).toBe('offline')
+    expect(engine.lastError.value).toMatch(/未知模式|未推进/)
+    await engine.close()
+  })
+
   it('restarts from a snapshot when the stored cursor expires', async () => {
     const database = new FakeDatabase()
     const repository = createLocalRepository(database)

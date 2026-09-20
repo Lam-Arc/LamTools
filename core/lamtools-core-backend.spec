@@ -213,6 +213,10 @@ _hiddenimports = [
     "lamtools_core.plugins.engine",
     "lamtools_core.plugins.hook_config",
     "lamtools_core.plugins.context",
+    # Manifest-declared plugin handlers are imported dynamically and therefore
+    # must be explicit PyInstaller roots. Copying plugin data alone does not
+    # make this Python module importable from the frozen application.
+    "lamtools_core.plugins.bundled.websearch.backend.operations",
     "lamtools_core.plugins.bundled.study",
     "lamtools_core.plugins.bundled.study.backend",
     "lamtools_core.plugins.bundled.study.store",

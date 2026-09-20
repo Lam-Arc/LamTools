@@ -1,5 +1,5 @@
 import { saveTrustedDevice, type TrustedDevice } from './TrustedDevices'
-import { loadOrCreateDeviceIdentity } from './DeviceIdentity'
+import { loadOrCreateDeviceIdentity, type DeviceIdentity } from './DeviceIdentity'
 import { pairSecure } from '../connection/NoiseSecureWire'
 import { createLanDiscovery, type LanDevice, type LanDiscovery } from '../connection/LanDiscovery'
 import type { AccountConnectionProvider } from '../account/AccountClient'
@@ -61,7 +61,14 @@ export class PairingClient {
     if (!isPairingCode(code)) throw new Error('配对码必须是六位数字')
 
     const pairing = await this.resolve(code)
-    const identity = await loadOrCreateDeviceIdentity()
+    // Relay tickets are issued for the account-scoped mobile node identity.
+    // Using the installation-wide anonymous identity here makes the ticket
+    // look valid during resolution but fail at the Relay/Noise handshake.
+    // Anonymous LAN pairing has no Relay ticket and keeps its existing local
+    // identity path.
+    const identity = pairing.relayTicket
+      ? await this.loadRelayIdentity()
+      : await loadOrCreateDeviceIdentity()
     const relayEndpoint = pairing.relayTicket
       ? pairing.relayUrl || this.account?.getRelayEndpoint()
       : ''
@@ -113,6 +120,12 @@ export class PairingClient {
     }
     await saveTrustedDevice(device)
     return device
+  }
+
+  private async loadRelayIdentity(): Promise<DeviceIdentity> {
+    const getDeviceIdentity = this.account?.getDeviceIdentity
+    if (!getDeviceIdentity) throw new Error('账号设备身份不可用，请重新登录')
+    return await getDeviceIdentity.call(this.account)
   }
 
   private async resolve(code: string): Promise<PairingResolution> {

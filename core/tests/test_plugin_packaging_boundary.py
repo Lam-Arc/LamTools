@@ -29,6 +29,10 @@ def test_spec_excludes_optional_plugins_and_drops_workflow_hidden_imports() -> N
     assert not re.search(r'"lamtools_core\.plugins\.bundled\.workflow(?:\.|")', SPEC)
 
 
+def test_spec_embeds_manifest_declared_websearch_python_handler() -> None:
+    assert '"lamtools_core.plugins.bundled.websearch.backend.operations"' in SPEC
+
+
 def test_local_packaging_boundary_checks_excluded_and_required_plugins() -> None:
     assert 'foreach ($ExcludedPlugin in @("emotion-ball-pet", "workflow"))' in PACKAGE_SCRIPT
     assert 'foreach ($RequiredPlugin in @("git", "imagegen", "websearch"))' in PACKAGE_SCRIPT

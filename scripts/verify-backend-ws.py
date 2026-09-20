@@ -35,7 +35,7 @@ def wait_health(port: int, timeout_s: int = 60) -> bool:
 
 
 def verify_ws(port: int) -> tuple[bool, str]:
-    """Verify the packaged WebSocket transport and the Study RPC surface."""
+    """Verify packaged WebSocket, Study, and dynamic plugin RPC surfaces."""
     import asyncio
 
     async def _run() -> tuple[bool, str]:
@@ -83,6 +83,24 @@ def verify_ws(port: int) -> tuple[bool, str]:
             if not isinstance(result, dict) or not result.get("session_id"):
                 error = data.get("error") if isinstance(data.get("error"), dict) else {}
                 return False, str(error.get("message") or "study.session returned no session_id")
+
+            await ws.send(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "websearch.widget.snapshot",
+                        "params": {},
+                    }
+                )
+            )
+            data = await receive_response(ws, 3)
+            result = data.get("result") if data.get("id") == 3 else None
+            if not isinstance(result, dict) or result.get("schema_version") != 1:
+                error = data.get("error") if isinstance(data.get("error"), dict) else {}
+                return False, str(
+                    error.get("message") or "websearch.widget.snapshot handler is unavailable"
+                )
             return True, ""
 
     return asyncio.run(_run())
@@ -117,7 +135,10 @@ def main() -> int:
 
         ws_ok, ws_error = verify_ws(args.port)
         if ws_ok:
-            print("[OK] WebSocket initialize + study.session round-trip succeeded")
+            print(
+                "[OK] WebSocket initialize + study.session + "
+                "websearch.widget.snapshot round-trip succeeded"
+            )
             return 0
         print(f"[FAIL] packaged WebSocket/Study RPC smoke failed: {ws_error}")
         return 1

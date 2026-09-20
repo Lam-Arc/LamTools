@@ -29,6 +29,13 @@ export class SyncEngine {
   private reconnectAttempt = 0
   private lifecycleGeneration = 0
   private readonly repositoryWrites = new Set<Promise<unknown>>()
+  /**
+   * A sync response is a replacement/delta boundary.  Live notifications
+   * received while that boundary is being committed must not mutate the old
+   * state and then get discarded by an incoming snapshot replacement.
+   */
+  private synchronizationBarrier = false
+  private readonly bufferedMessages: TransportMessage[] = []
 
   constructor(private readonly options: SyncEngineOptions) {}
 
@@ -39,13 +46,15 @@ export class SyncEngine {
     await this.options.repository.init()
     if (!this.isCurrent(generation)) return
     this.removeMessages = this.options.transport.subscribe((message) => {
-      void this.handleMessage(message, generation)
+      void this.handleMessage(message, generation).catch((error) => {
+        this.reportLiveError(error, generation)
+      })
     })
     this.removeTransportState = this.options.transport.onState((connectionState) => {
       if (!this.isCurrent(generation)) return
       if (connectionState === 'connected') {
         this.clearReconnect()
-        void this.syncNow()
+        void this.syncNow().catch((error) => this.reportLiveError(error, generation))
       }
       if (connectionState === 'disconnected') {
         this.state.value = 'offline'
@@ -80,6 +89,8 @@ export class SyncEngine {
     this.started = false
     this.syncing = null
     this.clearReconnect()
+    this.synchronizationBarrier = false
+    this.bufferedMessages.length = 0
     this.state.value = 'idle'
     // A repository update may already have passed the generation check when
     // close starts. Wait for those writes before the owner closes the
@@ -91,6 +102,7 @@ export class SyncEngine {
     if (!this.isCurrent(generation)) return
     this.state.value = 'syncing'
     this.lastError.value = ''
+    this.synchronizationBarrier = true
     try {
       let cursor: number | null = this.options.repository.state.value.snapshotRequired
         ? null
@@ -136,18 +148,38 @@ export class SyncEngine {
             // The next request is an atomic full snapshot.
             cursor = null
           }
+        } else {
+          throw new Error('同步响应包含未知模式')
         }
         if (!this.isCurrent(generation)) return
         if (this.options.repository.state.value.snapshotRequired) {
           cursor = null
           continue
         }
-        cursor = integerCursor(result.cursor) ?? this.options.repository.state.value.cursor
+        const previousCursor = cursor
+        const nextCursor = integerCursor(result.cursor)
+        cursor = nextCursor ?? this.options.repository.state.value.cursor
         if (result.has_more !== true) break
+        if (nextCursor == null || (previousCursor !== null && nextCursor <= previousCursor)) {
+          throw new Error('同步响应游标未推进')
+        }
+      }
+      await this.flushBufferedMessages(generation)
+      if (!this.isCurrent(generation)) return
+      if (this.options.repository.state.value.snapshotRequired) {
+        // A buffered rollback/branch event arrived after the bootstrap was
+        // committed. Defer the replacement sync until this run has released
+        // `syncing`; calling syncNow here would await this same Promise.
+        this.synchronizationBarrier = false
+        this.state.value = 'offline'
+        this.scheduleReconnect()
+        return
       }
       this.state.value = 'synced'
       this.clearReconnect()
     } catch (error) {
+      this.synchronizationBarrier = false
+      this.bufferedMessages.length = 0
       if (!this.isCurrent(generation)) return
       this.lastError.value = error instanceof Error ? error.message : String(error)
       // A route/account change intentionally invalidates the previous
@@ -162,7 +194,7 @@ export class SyncEngine {
       // perspective, regardless of whether the transport surfaced `failed`
       // or remained nominally connected while the RPC timed out.
       this.state.value = 'offline'
-      this.options.onError?.(this.lastError.value)
+      this.notifyError(this.lastError.value)
       this.scheduleReconnect()
     }
   }
@@ -176,7 +208,7 @@ export class SyncEngine {
     this.reconnectAttempt += 1
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      void this.syncNow()
+      void this.syncNow().catch((error) => this.reportLiveError(error, this.lifecycleGeneration))
     }, delay)
   }
 
@@ -188,6 +220,19 @@ export class SyncEngine {
 
   private async handleMessage(message: TransportMessage, generation: number): Promise<void> {
     if (!this.isCurrent(generation)) return
+    if (this.synchronizationBarrier) {
+      this.bufferedMessages.push(message)
+      return
+    }
+    await this.applyLiveMessage(message, generation)
+  }
+
+  private async applyLiveMessage(
+    message: TransportMessage,
+    generation: number,
+    allowResync = true,
+  ): Promise<void> {
+    if (!this.isCurrent(generation)) return
     if (message.channel !== 'rpc' || !message.method || !message.params) return
     if (message.method === 'sync/change') {
       if (isRecord(message.params)) {
@@ -195,7 +240,7 @@ export class SyncEngine {
           this.options.repository.applySyncChange(message.params as unknown as LocalSyncChange),
         )
         if (!this.isCurrent(generation)) return
-        if (this.options.repository.state.value.snapshotRequired) await this.syncNow()
+        if (allowResync && this.options.repository.state.value.snapshotRequired) await this.syncNow()
       }
       return
     }
@@ -213,6 +258,38 @@ export class SyncEngine {
     if (message.method === 'session/created' || message.method === 'session/updated' || message.method === 'session/deleted') {
       await this.trackRepositoryWrite(this.options.repository.applySessionEvent(message.method, message.params))
     }
+  }
+
+  private reportLiveError(error: unknown, generation: number): void {
+    if (!this.isCurrent(generation)) return
+    const message = error instanceof Error ? error.message : String(error)
+    this.lastError.value = message
+    this.state.value = 'error'
+    this.notifyError(message)
+    this.scheduleReconnect()
+  }
+
+  private notifyError(message: string): void {
+    try {
+      this.options.onError?.(message)
+    } catch {
+      // Error reporting must not turn a handled sync failure into an
+      // unhandled Promise rejection.
+    }
+  }
+
+  private async flushBufferedMessages(generation: number): Promise<void> {
+    // Keep the barrier armed while draining. Notifications delivered while a
+    // repository write is in flight are appended and handled in arrival order
+    // on the next pass instead of racing the current item.
+    while (this.bufferedMessages.length) {
+      const messages = this.bufferedMessages.splice(0)
+      for (const message of messages) {
+        if (!this.isCurrent(generation)) return
+        await this.applyLiveMessage(message, generation, false)
+      }
+    }
+    this.synchronizationBarrier = false
   }
 
   private isCurrent(generation: number): boolean {

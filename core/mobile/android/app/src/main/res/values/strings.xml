@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">LamTool</string>
-    <string name="title_activity_main">LamTool</string>
+    <string name="app_name">Sunday</string>
+    <string name="title_activity_main">Sunday</string>
     <string name="package_name">com.lamtools.mobile</string>
     <string name="custom_url_scheme">com.lamtools.mobile</string>
 </resources>

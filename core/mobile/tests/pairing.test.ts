@@ -6,8 +6,16 @@ import {
   pairingResolveEndpoint,
   trustedGatewayUrl,
 } from '../src/pairing/PairingClient'
+import { pairSecure } from '../src/connection/NoiseSecureWire'
+
+vi.mock('../src/connection/NoiseSecureWire', () => ({
+  pairSecure: vi.fn(),
+}))
+
+const pairSecureMock = vi.mocked(pairSecure)
 
 afterEach(() => {
+  pairSecureMock.mockReset()
   vi.unstubAllGlobals()
 })
 
@@ -62,5 +70,46 @@ describe('numeric pairing', () => {
     expect(trustedGatewayUrl(pairing, {
       gatewayUrl: 'ws://26.225.255.49:55791/_lamtools/tunnel',
     })).toBe('ws://192.168.31.220:55791/_lamtools/tunnel')
+  })
+
+  it('uses the account device identity for Relay ticket pairing', async () => {
+    const identity = {
+      deviceId: 'account-mobile-1',
+      publicKey: 'account-public-key',
+      privateKey: 'account-private-key',
+      createdAt: '2026-09-20T00:00:00.000Z',
+    }
+    const account = {
+      resolvePairing: vi.fn(async () => ({
+        pairingId: 'pair-1',
+        desktopDeviceId: 'desktop-1',
+        desktopPublicKey: 'desktop-public-key',
+        gatewayUrl: 'ws://desktop.example.test/_lamtools/tunnel',
+        relayUrl: 'wss://relay.example.test/v1/relay/connect',
+        relayTicket: 'relay-ticket-1',
+        expiresAtMs: Date.now() + 60_000,
+        protocol: 'lamtools-remote',
+        version: 1,
+      })),
+      getRelayEndpoint: vi.fn(() => 'wss://relay.example.test/v1/relay/connect'),
+      getDeviceIdentity: vi.fn(async () => identity),
+    }
+    pairSecureMock.mockResolvedValue({
+      desktopDeviceId: 'desktop-1',
+      desktopPublicKey: 'desktop-public-key',
+      accessToken: 'device-token',
+    })
+
+    await new PairingClient({ account }).redeem('123456')
+
+    expect(account.getDeviceIdentity).toHaveBeenCalledOnce()
+    expect(pairSecureMock).toHaveBeenCalledWith(expect.objectContaining({
+      identity,
+      relay: {
+        ticket: 'relay-ticket-1',
+        mobileDeviceId: 'account-mobile-1',
+        targetDeviceId: 'desktop-1',
+      },
+    }))
   })
 })

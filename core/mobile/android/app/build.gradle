@@ -1,5 +1,16 @@
 apply plugin: 'com.android.application'
 
+// Release signing is intentionally opt-in.  The keystore and all passwords
+// live outside the repository; the packaging script injects these values only
+// for the Gradle process that creates the release APK.
+def releaseSigningValues = [
+    keystorePath: System.getenv('LAMTOOLS_ANDROID_KEYSTORE_PATH')?.trim(),
+    keystorePassword: System.getenv('LAMTOOLS_ANDROID_KEYSTORE_PASSWORD')?.trim(),
+    keyAlias: System.getenv('LAMTOOLS_ANDROID_KEY_ALIAS')?.trim(),
+    keyPassword: System.getenv('LAMTOOLS_ANDROID_KEY_PASSWORD')?.trim(),
+]
+def releaseSigningReady = releaseSigningValues.values().every { value -> value }
+
 android {
     namespace "com.lamtools.mobile"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +18,8 @@ android {
         applicationId "com.lamtools.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 32
-        versionName "0.1.1"
+        versionCode 33
+        versionName "0.1.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +27,28 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (releaseSigningReady) {
+            release {
+                storeFile file(releaseSigningValues.keystorePath)
+                storePassword releaseSigningValues.keystorePassword
+                keyAlias releaseSigningValues.keyAlias
+                keyPassword releaseSigningValues.keyPassword
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (releaseSigningReady) {
+                signingConfig signingConfigs.release
+            } else {
+                // Never silently fall back to the debug certificate.  A
+                // direct assembleRelease without credentials is unsigned and
+                // the repository packaging script fails before reaching it.
+                logger.lifecycle('Release signing credentials are incomplete; assembleRelease will remain unsigned.')
+            }
         }
     }
 }

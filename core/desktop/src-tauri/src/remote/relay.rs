@@ -215,6 +215,7 @@ impl RelayClient {
         config: RelayConfig,
         device_id: String,
         gateway_port: u16,
+        gateway_capability: String,
     ) -> Result<Option<Self>, String> {
         let (Some(session), Some(secure_store)) = (config.session, config.secure_store) else {
             return Ok(None);
@@ -261,6 +262,7 @@ impl RelayClient {
                         &access_token,
                         &device_id,
                         gateway_port,
+                        &gateway_capability,
                         &thread_stop,
                         &thread_connected,
                         &thread_pairing,
@@ -355,6 +357,7 @@ fn run_relay_connection(
     access_token: &str,
     device_id: &str,
     gateway_port: u16,
+    gateway_capability: &str,
     stop: &AtomicBool,
     connected: &AtomicBool,
     pairing: &Arc<Mutex<Option<PairingRegistration>>>,
@@ -475,6 +478,7 @@ fn run_relay_connection(
                         id.clone(),
                         gateway_port,
                         pairing_id,
+                        gateway_capability.to_string(),
                         input,
                         outgoing.clone(),
                     );
@@ -499,16 +503,21 @@ fn run_relay_connection(
                 let Ok(id) = std::str::from_utf8(&packet[..TUNNEL_ID_BYTES]) else {
                     continue;
                 };
-                let disconnected = bridges.get(id).is_some_and(|bridge| {
-                    matches!(
-                        bridge.sender.try_send(packet[TUNNEL_ID_BYTES..].to_vec()),
-                        Err(mpsc::TrySendError::Disconnected(_))
-                    )
+                let failed = bridges.get(id).is_some_and(|bridge| {
+                    deliver_bridge_packet(&bridge.sender, packet[TUNNEL_ID_BYTES..].to_vec())
+                        .is_err()
                 });
-                if disconnected {
+                if failed {
                     if let Some(bridge) = bridges.remove(id) {
                         bridge.stop();
                     }
+                    relay
+                        .send(Message::Text(
+                            serde_json::json!({"type":"close","tunnel_id":id})
+                                .to_string()
+                                .into(),
+                        ))
+                        .map_err(|error| format!("relay close send failed: {error}"))?;
                 }
             }
             Message::Close(_) => break Ok(()),
@@ -529,6 +538,7 @@ fn spawn_local_bridge(
     id: String,
     gateway_port: u16,
     pairing_id: Option<String>,
+    gateway_capability: String,
     input: mpsc::Receiver<Vec<u8>>,
     outgoing: mpsc::SyncSender<RelayEvent>,
 ) -> (Arc<AtomicBool>, JoinHandle<()>) {
@@ -544,8 +554,9 @@ fn spawn_local_bridge(
             })
             .unwrap_or_else(|| {
                 format!(
-                    "ws://127.0.0.1:{gateway_port}/_lamtools/tunnel?relay_tunnel={}",
-                    urlencoding::encode(&id)
+                    "ws://127.0.0.1:{gateway_port}/_lamtools/tunnel?relay_tunnel={}&relay_capability={}",
+                    urlencoding::encode(&id),
+                    urlencoding::encode(&gateway_capability)
                 )
             });
         let Ok((mut gateway, _)) = connect(target) else {
@@ -596,6 +607,16 @@ fn spawn_local_bridge(
     (stop, join)
 }
 
+fn deliver_bridge_packet(
+    sender: &mpsc::SyncSender<Vec<u8>>,
+    packet: Vec<u8>,
+) -> Result<(), &'static str> {
+    sender.try_send(packet).map_err(|error| match error {
+        mpsc::TrySendError::Full(_) => "relay bridge queue is full",
+        mpsc::TrySendError::Disconnected(_) => "relay bridge is disconnected",
+    })
+}
+
 fn send_bridge_event(
     outgoing: &mpsc::SyncSender<RelayEvent>,
     mut event: RelayEvent,
@@ -637,7 +658,8 @@ fn set_read_timeout(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>, timeout: 
 #[cfg(test)]
 mod tests {
     use super::{
-        refresh_account_session, refresh_endpoint, relay_host_endpoint, DesktopAccountSession,
+        deliver_bridge_packet, refresh_account_session, refresh_endpoint, relay_host_endpoint,
+        DesktopAccountSession,
     };
     use crate::remote::secure_store::{
         MemorySecureStore, SecureStore, DESKTOP_ACCOUNT_SESSION_KEY,
@@ -645,6 +667,7 @@ mod tests {
     use std::{
         io::{Read, Write},
         net::TcpListener,
+        sync::mpsc,
         thread,
     };
 
@@ -657,6 +680,16 @@ mod tests {
         assert_eq!(
             refresh_endpoint("wss://relay.example/v1/relay/host").unwrap(),
             "https://relay.example/v1/auth/refresh"
+        );
+    }
+
+    #[test]
+    fn full_bridge_queue_is_reported_as_failure() {
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        deliver_bridge_packet(&sender, vec![1]).expect("first packet");
+        assert_eq!(
+            deliver_bridge_packet(&sender, vec![2]),
+            Err("relay bridge queue is full")
         );
     }
 
