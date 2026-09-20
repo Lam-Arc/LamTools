@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
+from lamtools_core.config.defaults import DEFAULT_AGENTS_MD, DEFAULT_MEMORY_MD
+from lamtools_core.config.root import core_config_dir
 from lamtools_core.kernel import KernelStep, KernelTurn, VerificationResult
 from lamtools_core.llm import ChatMessage, LLMResponse, LLMToolCall
 from lamtools_core.runtime import RuntimeState, RuntimeToolStep, RuntimeTurnInput
@@ -66,6 +68,60 @@ async def test_base_agent_system_prompt_names_current_command_shell(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_base_agent_system_prompt_concentrates_tool_safety_rules(tmp_path):
+    toolbox = _CapturingToolbox()
+    toolbox.mcp_caller = type("MCPCaller", (), {"server_names": ["docs"]})()
+    kit = CoreBaseAgentKit(work_root=tmp_path, toolbox=toolbox)  # type: ignore[arg-type]
+
+    request = await kit.build_model_request(
+        RuntimeState(session_id="tool-prompt"),
+        PromptContext(session_id="tool-prompt"),
+    )
+    content = str(request.messages[0].content)
+
+    assert CoreBaseAgentConfig().instructions == "你是 Sunday Agent。"
+    for phrase in (
+        "Shell：",
+        "read_file 先读",
+        "write_file",
+        "edit_file",
+        "search_files",
+        "search_content",
+        "不可信外部数据",
+        "mcp_activate",
+        "docs",
+    ):
+        assert phrase in content
+
+
+@pytest.mark.asyncio
+async def test_base_agent_skips_seeded_global_context_templates(tmp_path):
+    config_dir = core_config_dir()
+    config_dir.mkdir(parents=True)
+    (config_dir / "AGENTS.md").write_text(DEFAULT_AGENTS_MD, encoding="utf-8")
+    (config_dir / "memory.md").write_text(DEFAULT_MEMORY_MD, encoding="utf-8")
+
+    kit = CoreBaseAgentKit(work_root=tmp_path, toolbox=_CapturingToolbox())  # type: ignore[arg-type]
+    request = await kit.build_model_request(
+        RuntimeState(session_id="global-template-prompt"),
+        PromptContext(session_id="global-template-prompt"),
+    )
+    content = str(request.messages[0].content)
+    assert "GLOBAL_AGENTS.md" not in content
+    assert "GLOBAL_MEMORY.md" not in content
+
+    (config_dir / "AGENTS.md").write_text(DEFAULT_AGENTS_MD + "\n\nPrefer concise answers.\n", encoding="utf-8")
+    (config_dir / "memory.md").write_text(DEFAULT_MEMORY_MD + "\n\nUse UTF-8.\n", encoding="utf-8")
+    request = await kit.build_model_request(
+        RuntimeState(session_id="global-custom-prompt"),
+        PromptContext(session_id="global-custom-prompt"),
+    )
+    content = str(request.messages[0].content)
+    assert "Prefer concise answers." in content
+    assert "Use UTF-8." in content
+
+
+@pytest.mark.asyncio
 async def test_active_plan_is_appended_after_history_without_changing_cached_prefix(tmp_path):
     kit = CoreBaseAgentKit(work_root=tmp_path, toolbox=_CapturingToolbox())  # type: ignore[arg-type]
     history = [
@@ -99,10 +155,11 @@ async def test_active_plan_is_appended_after_history_without_changing_cached_pre
     assert first.messages[0].role == "system"
     assert "[当前计划" not in str(first.messages[0].content)
     assert first.messages[1:3] == history
-    assert first.messages[-1].role == "system"
-    assert "Summary: Prepare the quarterly report" in str(first.messages[-1].content)
-    assert "Planned files: report.docx" in str(first.messages[-1].content)
-    assert "[step-1] (pending) Draft report" in str(first.messages[-1].content)
+    assert first.messages[-1].role == "user"
+    assert first.messages[-1].metadata == {"key": "active_plan_snapshot", "internal": True}
+    assert "目标：Prepare the quarterly report" in str(first.messages[-1].content)
+    assert "文件：report.docx" in str(first.messages[-1].content)
+    assert "step-1 · pending · Draft report" in str(first.messages[-1].content)
     assert sum("[当前计划" in str(message.content) for message in first.messages) == 1
 
     # A checklist-only update changes only the trailing runtime context, leaving

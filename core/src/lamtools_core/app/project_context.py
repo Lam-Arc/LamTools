@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lamtools_core.config.agents_md import global_agents_md_path
+from lamtools_core.config.defaults import DEFAULT_AGENTS_MD, DEFAULT_MEMORY_MD
 from lamtools_core.config.root import core_config_dir
 from lamtools_core.prompt import PromptPart, PromptPartKind
 
@@ -115,7 +116,7 @@ class ProjectContextLoader:
         global_path = global_agents_md_path()
         if global_path.is_file():
             content = self._read(global_path, self._max_chars_per_file)
-            if content:
+            if content and content.strip() != DEFAULT_AGENTS_MD.strip():
                 results.append(
                     ProjectContextFile(
                         name="GLOBAL_AGENTS.md",
@@ -130,7 +131,7 @@ class ProjectContextLoader:
         global_memory_path = core_config_dir() / "memory.md"
         if global_memory_path.is_file():
             content = self._read(global_memory_path, self._max_chars_per_file)
-            if content.strip():
+            if content.strip() and content.strip() != DEFAULT_MEMORY_MD.strip():
                 results.append(
                     ProjectContextFile(
                         name="GLOBAL_MEMORY.md",

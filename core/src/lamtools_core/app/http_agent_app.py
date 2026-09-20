@@ -45,7 +45,7 @@ from lamtools_core.plugins.registry import PluginStateStore, bundled_plugins_dir
 from lamtools_core.plugins.session_visibility import PluginSessionVisibility
 from lamtools_core.config.root import core_plugins_root
 
-from .base_agent import default_core_agent_plugin_roots
+from .base_agent import DEFAULT_CORE_INSTRUCTIONS, default_core_agent_plugin_roots
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
 from .desktop_plugin_session_store import DesktopPluginSessionStore
@@ -235,7 +235,7 @@ def create_core_agent_http_app(
     )
     runtime_spec = agent_spec or CoreAgentSpec(
         default_model=config.model_id,
-        instructions="You are LamTools Core Agent, a standalone general-purpose agent runtime.",
+        instructions=DEFAULT_CORE_INSTRUCTIONS,
     )
     runtime_spec = replace(
         runtime_spec,

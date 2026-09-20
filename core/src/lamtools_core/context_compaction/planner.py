@@ -132,7 +132,7 @@ def _select_layout(
         (
             index
             for index in range(len(body) - 1, -1, -1)
-            if body[index].role == "user"
+            if body[index].role == "user" and not body[index].metadata.get("internal")
         ),
         None,
     )
@@ -234,7 +234,10 @@ def _semantic_message_groups(messages: list[ChatMessage]) -> list[list[ChatMessa
     groups: list[list[ChatMessage]] = []
     current: list[ChatMessage] = []
     for message in messages:
-        starts_group = message.role == "user" or message.metadata.get("key") == "compaction_segment_summary"
+        starts_group = (
+            (message.role == "user" and not message.metadata.get("internal"))
+            or message.metadata.get("key") == "compaction_segment_summary"
+        )
         if starts_group and current:
             groups.append(current)
             current = []

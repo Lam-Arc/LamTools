@@ -867,12 +867,13 @@ class CoreLoopKernel:
                         )
                 if input_error_warnings:
                     history.append(ChatMessage(
-                        role="system",
+                        role="user",
                         content=(
                             "[DUPLICATE_INPUT_ERROR] Some tool calls match previous input errors. "
                             "Ensure the arguments below are corrected before retrying:\n"
                             + "\n".join(input_error_warnings)
                         ),
+                        metadata={"key": "duplicate_input_error", "internal": True},
                     ))
                 approval_calls = [
                     call
@@ -1022,13 +1023,14 @@ class CoreLoopKernel:
                 if payload_reassessment_required:
                     tool_progress_pending = True
                     history.append(ChatMessage(
-                        role="system",
+                        role="user",
                         content=(
                             "[SUBSTANTIVE_PAYLOAD_REASSESSMENT_REQUIRED] A successful tool call reused a "
                             "materially identical large payload under different arguments. Reuse the existing "
                             "artifact or result, or explain what genuinely new evidence another call would add "
                             "before choosing a materially different action."
                         ),
+                        metadata={"key": "substantive_payload_reassessment", "internal": True},
                     ))
                     step.metadata["substantive_payload_reassessment_required"] = True
                     await self._save_checkpoint(state)
@@ -1112,7 +1114,11 @@ class CoreLoopKernel:
                     break
                 recovery_prompt = repeat_observation.get("recovery_prompt")
                 if isinstance(recovery_prompt, str) and recovery_prompt:
-                    history.append(ChatMessage(role="system", content=recovery_prompt))
+                    history.append(ChatMessage(
+                        role="user",
+                        content=recovery_prompt,
+                        metadata={"key": "no_progress_recovery", "internal": True},
+                    ))
                     step.metadata["no_progress_recovery_required"] = True
                     state.metadata["no_progress_recovery"] = {
                         "status": "required",
@@ -1137,11 +1143,12 @@ class CoreLoopKernel:
                     await self._save_checkpoint(state)
                 elif tool_progress_incomplete:
                     history.append(ChatMessage(
-                        role="system",
+                        role="user",
                         content=(
                             "[TOOL_PROGRESS_INCOMPLETE] Respond with these three headings before more tools: "
                             "[已确认事实] [剩余不确定性] [下一步]. Keep it concise and reuse existing evidence."
                         ),
+                        metadata={"key": "tool_progress_incomplete", "internal": True},
                     ))
                     step.metadata["tool_progress_incomplete"] = True
                     await self._save_checkpoint(state)
@@ -1150,12 +1157,13 @@ class CoreLoopKernel:
                     limit = self.policy.max_tool_only_rounds_without_progress
                     if limit is not None and limit > 0 and tool_only_rounds >= limit:
                         history.append(ChatMessage(
-                            role="system",
+                            role="user",
                             content=(
                                 "[TOOL_PROGRESS_REQUIRED] Before using more tools, briefly report "
                                 "[已确认事实] [剩余不确定性] [下一步]. Do not repeat prior evidence, and do not "
                                 "claim a result that has not been observed."
                             ),
+                            metadata={"key": "tool_progress_required", "internal": True},
                         ))
                         step.metadata["tool_progress_required"] = True
                         state.metadata["tool_progress"] = {
@@ -1178,7 +1186,11 @@ class CoreLoopKernel:
                     if threshold and threshold > 0 and consecutive_failure_rounds >= threshold:
                         consecutive_failure_rounds = 0
                         prompt = self._failure_diagnosis_prompt(failed_pairs)
-                        history.append(ChatMessage(role="system", content=prompt))
+                        history.append(ChatMessage(
+                            role="user",
+                            content=prompt,
+                            metadata={"key": "failure_diagnosis_required", "internal": True},
+                        ))
                         step.metadata["failure_diagnosis_hint"] = True
                         state.metadata["failure_diagnosis"] = {
                             "status": "hint",
@@ -1286,8 +1298,9 @@ class CoreLoopKernel:
                                         "then provide a new final response."
                                     )
                                 history.append(ChatMessage(
-                                    role="system",
+                                    role="user",
                                     content=f"[GOAL_INCOMPLETE] {repair_instruction}",
+                                    metadata={"key": "goal_incomplete", "internal": True},
                                 ))
                                 await self._save_checkpoint(state)
                                 decision = "continue"

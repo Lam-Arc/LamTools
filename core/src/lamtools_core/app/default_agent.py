@@ -53,6 +53,7 @@ from .base_agent import (
     build_core_plugin_operation_catalog,
     CoreBaseAgentConfig,
     CoreBaseAgentKit,
+    DEFAULT_CORE_INSTRUCTIONS,
     core_events_to_run_items,
     core_events_to_snapshot,
 )
@@ -77,7 +78,7 @@ class CoreAgentSpec:
     id: str = "core-agent"
     member_id: str = "core"
     name: str = "Core Agent"
-    instructions: str = "你是 LamTools 通用 Core Agent。大道至简，按需使用可用工具。"
+    instructions: str = DEFAULT_CORE_INSTRUCTIONS
     default_model: str = ""
     prompt_fragments: list[PromptFragment] = field(default_factory=list)
     tool_specs: list[ToolSpec] = field(default_factory=list)

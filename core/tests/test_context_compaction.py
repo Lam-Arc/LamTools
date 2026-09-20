@@ -16,6 +16,7 @@ from lamtools_core.context_compaction import (
     ContextCompactor,
     ContextCompactionRequest,
     compact_context,
+    fallback_structured_compaction_summary,
     parse_compaction_summary,
     recent_user_message_text,
     select_context_compaction_layout,
@@ -23,6 +24,7 @@ from lamtools_core.context_compaction import (
     truncate_text_to_tokens,
 )
 from lamtools_core.context_compaction_budget import SummaryTokenBudget, TokenBudget
+from lamtools_core.context_compaction.planner import _semantic_message_groups
 from lamtools_core.llm import ChatMessage, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
@@ -765,7 +767,7 @@ async def test_internal_late_context_is_not_promoted_to_recent_user_suffix():
             ChatMessage(
                 role="user",
                 content="request-local late context must stay internal",
-                metadata={"key": "request_local_late_context"},
+                metadata={"key": "request_local_late_context", "internal": True},
             ),
             ChatMessage(role="assistant", content="assistant result " + ("x" * 2000)),
             ChatMessage(role="user", content="latest real request"),
@@ -787,6 +789,40 @@ async def test_internal_late_context_is_not_promoted_to_recent_user_suffix():
     assert "request-local late context must stay internal" not in result.recent_user_messages
     assert result.recent_user_messages[-1] == "latest real request"
     assert result.summary.endswith("1. earlier user\n\n2. latest real request")
+
+
+def test_internal_user_guidance_does_not_start_a_new_semantic_group():
+    messages = [
+        ChatMessage(role="user", content="real request"),
+        ChatMessage(role="assistant", content="first step"),
+        ChatMessage(
+            role="user",
+            content="internal runtime guidance",
+            metadata={"key": "tool_progress_required", "internal": True},
+        ),
+        ChatMessage(role="assistant", content="second step"),
+        ChatMessage(role="user", content="next real request"),
+    ]
+
+    groups = _semantic_message_groups(messages)
+
+    assert groups == [messages[:4], messages[4:]]
+
+
+def test_fallback_summary_does_not_promote_internal_guidance_to_user_instruction():
+    summary = fallback_structured_compaction_summary([
+        ChatMessage(role="user", content="real requirement"),
+        ChatMessage(
+            role="user",
+            content="internal runtime guidance",
+            metadata={"key": "tool_progress_required", "internal": True},
+        ),
+    ])
+
+    active_section = summary.split("3. External Action Authorization", 1)[0]
+    assert "real requirement" in active_section
+    assert "internal runtime guidance" not in active_section
+    assert "- internal: internal runtime guidance" in summary
 
 
 def test_typed_media_user_content_uses_a_safe_placeholder_without_leaking_payload_fields():
@@ -1522,6 +1558,27 @@ def test_fitter_preserves_latest_user_turn():
 
     assert result.messages[-1].role == "user"
     assert result.messages[-1].content == "latest user instruction"
+
+
+def test_fitter_preserves_latest_real_user_instead_of_internal_guidance():
+    result = CompactionFitter(_estimate).fit(
+        CompactionFitInput(
+            system_prefix=[],
+            summary_message=ChatMessage(role="system", content="summary" + ("x" * 400)),
+            recent_messages=[
+                ChatMessage(role="user", content="latest real user instruction"),
+                ChatMessage(role="assistant", content="old result" + ("y" * 400)),
+                ChatMessage(
+                    role="user",
+                    content="internal guidance" + ("z" * 400),
+                    metadata={"key": "tool_progress_required", "internal": True},
+                ),
+            ],
+            target_tokens=600,
+        )
+    )
+
+    assert any(message.content == "latest real user instruction" for message in result.messages)
 
 
 def test_fitter_raises_when_required_messages_exceed_budget():

@@ -21,7 +21,12 @@ from typing import Any, Mapping
 
 import httpx
 
-from lamtools_core.app.base_agent import assemble_core_agent_plugins, CoreBaseAgentConfig, CoreBaseAgentKit
+from lamtools_core.app.base_agent import (
+    assemble_core_agent_plugins,
+    CoreBaseAgentConfig,
+    CoreBaseAgentKit,
+    DEFAULT_CORE_INSTRUCTIONS,
+)
 from lamtools_core.app.base_agent import core_events_to_run_items
 from lamtools_core.app.cli_live import (
     CliLiveFormatter,
@@ -690,7 +695,7 @@ async def run_core_cli_task(
             )
         ],
     )
-    core_instructions = "You are Sunday, a standalone general-purpose AI software agent."
+    core_instructions = DEFAULT_CORE_INSTRUCTIONS
     if options.instructions:
         core_instructions = options.instructions
     context_window_tokens = int(getattr(llm_client, "context_window", 0) or 0) or context_window_tokens

@@ -805,7 +805,7 @@ class TestKernelToolFailure:
             str(message.content)
             for history in kit.context_histories
             for message in history
-            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+            if message.role == "user" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
         ]
         assert not diagnosis_prompts
 
@@ -832,7 +832,7 @@ class TestKernelToolFailure:
             str(message.content)
             for history in kit.context_histories
             for message in history
-            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+            if message.role == "user" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
         ]
         assert not diagnosis_prompts
 
@@ -862,7 +862,7 @@ class TestKernelToolFailure:
             str(message.content)
             for history in kit.context_histories
             for message in history
-            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+            if message.role == "user" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
         ]
         assert not diagnosis_prompts
 
@@ -2135,10 +2135,19 @@ class TestKernelStateSave:
         diagnosis_prompts = [
             str(message.content)
             for message in final_history
-            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+            if message.role == "user" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
         ]
         assert len(diagnosis_prompts) == 1
         assert "exit 1" in diagnosis_prompts[0]
+        diagnosis_message = next(
+            message
+            for message in final_history
+            if "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+        )
+        assert diagnosis_message.metadata == {
+            "key": "failure_diagnosis_required",
+            "internal": True,
+        }
 
     @pytest.mark.asyncio
     async def test_single_failure_does_not_trigger_diagnosis(self):
@@ -2158,7 +2167,7 @@ class TestKernelStateSave:
             str(message.content)
             for history in kit.context_histories
             for message in history
-            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+            if message.role == "user" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
         ]
         assert not diagnosis_prompts
 
@@ -2194,7 +2203,7 @@ class TestKernelStateSave:
             str(message.content)
             for history in kit.context_histories
             for message in history
-            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+            if message.role == "user" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
         ]
         assert not diagnosis_prompts
 
@@ -2241,7 +2250,7 @@ class TestKernelStateSave:
         diagnosis_prompts = [
             str(message.content)
             for message in final_history
-            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+            if message.role == "user" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
         ]
         assert len(diagnosis_prompts) == 2
 

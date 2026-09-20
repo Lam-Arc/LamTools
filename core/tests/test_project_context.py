@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from lamtools_core.app.project_context import ProjectContextLoader
+from lamtools_core.config.defaults import DEFAULT_AGENTS_MD, DEFAULT_MEMORY_MD
 
 
 def test_global_agents_md_is_injected_before_project_files(tmp_path, isolated_config_root):
@@ -40,6 +41,22 @@ def test_global_memory_md_is_injected_before_workspace_memory(tmp_path, isolated
     assert names.index("project_global_memory") < names.index("project_memory")
     content = {p.key: p.content for p in parts}
     assert "cross-project facts" in str(content["project_global_memory"])
+
+
+def test_seeded_global_templates_are_not_injected(tmp_path, isolated_config_root):
+    isolated_config_root.mkdir(parents=True)
+    (isolated_config_root / "AGENTS.md").write_text(DEFAULT_AGENTS_MD, encoding="utf-8")
+    (isolated_config_root / "memory.md").write_text(DEFAULT_MEMORY_MD, encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "AGENTS.md").write_text("project rules", encoding="utf-8")
+
+    parts = ProjectContextLoader().to_prompt_parts(work)
+    keys = {part.key for part in parts}
+
+    assert "project_global_agents" not in keys
+    assert "project_global_memory" not in keys
+    assert "project_agents" in keys
 
 
 def test_global_load_context_merges_with_workspace_load_context(tmp_path, isolated_config_root):

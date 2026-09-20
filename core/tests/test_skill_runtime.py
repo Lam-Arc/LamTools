@@ -124,6 +124,22 @@ def test_openai_yaml_policy_change_invalidates_registry_cache(tmp_path: Path):
     assert "toggle" in registry.prompt_index(tmp_path / "workspace")
 
 
+def test_prompt_index_keeps_only_compact_trigger_and_loads_full_skill_on_demand(tmp_path: Path):
+    root = tmp_path / "skills"
+    marker = "Use for focused document work. " + ("detail " * 40) + "FULL_SKILL_TAIL"
+    _write_skill(root, "compact-skill", marker)
+    registry = skill_runtime.SkillRegistry(explicit_roots=[root])
+
+    index = registry.prompt_index(tmp_path / "workspace")
+
+    assert "- compact-skill:" in index
+    assert "FULL_SKILL_TAIL" not in index
+    assert len(index) < len(marker)
+    assert "FULL_SKILL_TAIL" in registry.load_prompt_content(
+        tmp_path / "workspace", "compact-skill"
+    )
+
+
 def test_builtin_core_skill_roots_uses_frozen_bundle_resources(monkeypatch, tmp_path: Path):
     bundled = tmp_path / "resources" / "skills"
     bundled.mkdir(parents=True)

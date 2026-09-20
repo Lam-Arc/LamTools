@@ -198,7 +198,7 @@ class ScriptedLoadSkillLLM:
             tool_names = {tool["function"]["name"] for tool in request.tools or []}
             assert "load_skill" in tool_names
             assert "Available skills:" in request.messages[0].content
-            assert f"<name>{self.skill_name}</name>" in request.messages[0].content
+            assert f"- {self.skill_name}:" in request.messages[0].content
             yield LLMStreamEvent(
                 kind="done",
                 tool_calls=[

@@ -31,8 +31,9 @@ def fallback_structured_compaction_summary(
         text = " ".join(content.split())
         if not text:
             continue
-        snippets.append(f"- {message.role}: {text[:500]}")
-        if message.role == "user":
+        role = "internal" if message.metadata.get("internal") else message.role
+        snippets.append(f"- {role}: {text[:500]}")
+        if message.role == "user" and not message.metadata.get("internal"):
             user_snippets.append(f"- {text[:500]}")
     body = "\n".join(snippets) if snippets else "- No compactable details captured."
     user_body = "\n".join(user_snippets) if user_snippets else "- No prior user instructions in compacted span."

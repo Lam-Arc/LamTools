@@ -61,6 +61,14 @@ class SkillRegistry:
     def _visible(skill: Skill, active_mode: str | None) -> bool:
         return not skill.modes or (bool(active_mode) and active_mode in skill.modes)
 
+    @staticmethod
+    def _prompt_description(value: str, *, limit: int = 180) -> str:
+        """Return a compact trigger hint; full instructions stay behind load_skill."""
+        text = " ".join(value.split())
+        if len(text) <= limit:
+            return text
+        return text[: limit - 1].rstrip() + "…"
+
     def get(self, work_root: str | Path | None, name: str, *, active_mode: str | None = None) -> Skill | None:
         target = name.strip()
         if not target:
@@ -89,19 +97,10 @@ class SkillRegistry:
             return ""
         lines = [
             "Available skills:",
-            "Use load_skill only when the current task matches a skill description.",
-            "<available_skills>",
+            "Use load_skill only when the task matches a trigger below; full instructions load on demand.",
         ]
         for skill in skills:
-            lines.extend(
-                [
-                    "  <skill>",
-                    f"    <name>{skill.name}</name>",
-                    f"    <description>{skill.description}</description>",
-                    "  </skill>",
-                ]
-            )
-        lines.append("</available_skills>")
+            lines.append(f"- {skill.name}: {self._prompt_description(skill.description)}")
         result = "\n".join(lines)
         if state_store is None and active_mode is None:
             self._cached_index = result

@@ -281,7 +281,11 @@ class CompactionFitter:
     @staticmethod
     def _required_recent_messages(recent: list[ChatMessage]) -> list[ChatMessage]:
         latest_user = next(
-            (message for message in reversed(recent) if message.role == "user"),
+            (
+                message
+                for message in reversed(recent)
+                if message.role == "user" and not message.metadata.get("internal")
+            ),
             None,
         )
         return [latest_user] if latest_user is not None else []
