@@ -296,8 +296,6 @@ jobs:
         with:
           files: core/desktop/src-tauri/target/release/bundle/inno/Sunday_*_x64-setup.exe
           generate_release_notes: true
-          # 同一 tag 重复构建时更新资产但不重复追加 notes
-          update_release_body: false
           fail_on_unmatched_files: true
 
       - name: Upload installer as build artifact (manual run)
@@ -365,7 +363,6 @@ jobs:
             core/desktop/src-tauri/target/release/bundle/appimage/Sunday_*_amd64.AppImage
             core/desktop/src-tauri/target/release/bundle/deb/Sunday_*_amd64.deb
           generate_release_notes: false
-          update_release_body: false
           fail_on_unmatched_files: true
 
       - name: Upload Linux bundles as build artifact (manual run)

@@ -640,3 +640,14 @@ logs.
   上限固定为 JavaScript safe integer。未知业务通道仍按既有契约拒绝，不借重构扩展协议。
 - TypeScript 与 Rust 必须共同消费 `core/protocol/tunnel-v1-fixtures.json` 的 golden fixture，并分别验证精确
   编码和解码；任何后续 Tunnel v1 字段、顺序、限制或空白行语义变更都必须同步更新双端测试，避免协议漂移。
+
+## 多平台发布与官网下载合同（2026-09-21）
+
+- Sunday Desktop `0.3.6` 与 Android `0.1.2` 首次作为同一轮官网交付：Windows 官网入口继续使用
+  `/downloads/Sunday-latest-x64-setup.exe`，Android 使用 `/downloads/Sunday-mobile-latest.apk`；官网静态站点
+  按版本发布目录部署并由 `/var/www/lamtools/site` 原子切换，上一版本目录和被替换的 Windows latest 文件保留以便回滚。
+- Android 正式包必须由 `scripts/package-mobile.ps1` 生成并验证 release 签名、单 signer、`Sunday` 应用标签、
+  versionName/versionCode 以及非 debuggable、非 testOnly；不能把开发 APK 或仅能安装但未核验签名身份的包挂到官网。
+- Tauri 的 `bundle.icon` 是 Linux `generate_context!` 的编译输入，即使仓库全局忽略 `*.png` 也必须精确放行并跟踪
+  配置引用的图标。Linux 打包脚本须在 checkout 与 staging 两处按配置动态校验所有图标，避免本地有文件而 CI checkout
+  缺文件的隐性发布失败。

@@ -3067,3 +3067,32 @@ mobile UI.
   changes and untracked `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`, and
   `docs.7z` remain untouched. Next entry point: real-device and LAN/Relay
   acceptance for pairing, reconnect/resume, and remote control.
+
+## Desktop 0.3.6 / Android 0.1.2 release and website deployment
+
+- Task ID/deployment/state: `close_release_036_website_20260921` /
+  `release_036_mobile_012_website_20260921` / **complete**. Desktop `0.3.6`
+  and Android `0.1.2` (`versionCode 33`) are released. The website is live at
+  `https://47.114.43.99.nip.io/`.
+- Website downloads were verified as HTTP 200 with matching lengths and hashes:
+  Windows `/downloads/Sunday-latest-x64-setup.exe` — 94,081,829 bytes,
+  SHA256 `2C0F61C0D613DC0C5313E393DE87A6202C3C7D12EC1327A83EFA1B37AE68934A`;
+  Android `/downloads/Sunday-mobile-latest.apk` — 31,701,668 bytes, SHA256
+  `5E60F49BBC7280E849CAB89A0B620AA67719CB3652B63E6F420CACBA92F1A3F2`.
+- GitHub Release:
+  `https://github.com/Lam-Arc/LamTools/releases/tag/v0.3.6`. Release CI run
+  `35524142986` is all green; Windows took 10m47s and Linux 9m24s. Its three
+  desktop assets are Windows setup 57,333,030 bytes, AppImage 186,640,888
+  bytes, and `.deb` 120,141,358 bytes. Do not compare these CI sizes with the
+  separately built website Windows package.
+- Local acceptance installed the Windows setup under `E:\setuptest\0.3.6` and
+  passed startup, health, WebSocket, Study, and websearch-snapshot checks.
+  The application update check returned `up_to_date`. The Android release APK
+  passed V2/single-signer, version, non-debuggable, and non-test-only checks;
+  the mobile suite passed 18 files / 97 tests. The service and relay were
+  active during online verification.
+- Known non-blocking warnings: existing frontend chunk/dynamic-import build
+  warnings and the intentional local-package/CI-package size difference. No
+  release blocker remains. The pre-existing untracked `.tmp_glass_rg.txt`,
+  `MyProject/`, `artifacts/`, and `docs.7z` were preserved. Exact next entry
+  point: continue development from the published `v0.3.6` baseline.

@@ -2603,3 +2603,37 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
   modifications and untracked `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`,
   and `docs.7z` remain untouched. Exact next entry point is real-device and
   LAN/Relay acceptance of pairing, reconnect/resume, and remote control.
+
+## Desktop 0.3.6 / Android 0.1.2 release and website deployment (2026-09-21)
+
+- Task ID/deployment/state: `close_release_036_website_20260921` /
+  `release_036_mobile_012_website_20260921` / **complete**. Desktop `0.3.6`
+  and Android `0.1.2` (`versionCode 33`) were built, released, and linked from
+  the website at `https://47.114.43.99.nip.io/`.
+- The website's Windows download is
+  `/downloads/Sunday-latest-x64-setup.exe` (94,081,829 bytes, SHA256
+  `2C0F61C0D613DC0C5313E393DE87A6202C3C7D12EC1327A83EFA1B37AE68934A`), and
+  the Android download is `/downloads/Sunday-mobile-latest.apk`
+  (31,701,668 bytes, SHA256
+  `5E60F49BBC7280E849CAB89A0B620AA67719CB3652B63E6F420CACBA92F1A3F2`).
+- GitHub Release `v0.3.6` is published at
+  `https://github.com/Lam-Arc/LamTools/releases/tag/v0.3.6` with the three
+  desktop assets: Windows setup 57,333,030 bytes, Linux AppImage
+  186,640,888 bytes, and Linux `.deb` 120,141,358 bytes. These CI artifacts
+  are from a separate build pipeline and intentionally do not share the local
+  website Windows package's size or hash.
+- Release CI run `35524142986` completed green. The Windows job took 10m47s
+  and the Linux job 9m24s. The application update check returned
+  `up_to_date`; the installed Windows package at `E:\setuptest\0.3.6` passed
+  startup, health, WebSocket, Study, and websearch-snapshot checks.
+- The Android release APK passed V2/signature, single-signer, version,
+  non-debuggable, and non-test-only checks; the mobile release suite passed
+  18 files / 97 tests. Website HTTP, content-length, and hash checks matched
+  the local Windows and Android artifacts; the web service and relay were
+  active.
+- Known non-blocking warnings are limited to existing frontend chunk and
+  dynamic-import build warnings and the expected difference between local
+  website packages and GitHub CI assets. No release blocker remains. The
+  untracked `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`, and `docs.7z`
+  remain preserved; no cleanup was performed by this closure. Next entry
+  point is ordinary development from the published `v0.3.6` baseline.
