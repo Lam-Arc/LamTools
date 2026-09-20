@@ -38,7 +38,7 @@ describe('MobileTopBar', () => {
     wrapper.unmount()
   })
 
-  it('expands a glass command card and selects a mode directly', async () => {
+  it('expands a glass command card from a fixed transparent trigger and selects a mode directly', async () => {
     const wrapper = mount(MobileTopBar, {
       props: {
         activeModeId: 'workflow',
@@ -50,6 +50,7 @@ describe('MobileTopBar', () => {
     })
 
     const trigger = wrapper.get('[data-mobile-command-button]')
+    expect(trigger.classes()).not.toContain('optical-glass')
     expect(trigger.attributes('aria-expanded')).toBe('false')
     await trigger.trigger('click')
     expect(trigger.attributes('aria-expanded')).toBe('true')
@@ -90,7 +91,7 @@ describe('MobileTopBar', () => {
     wrapper.unmount()
   })
 
-  it('clamps the expanded card inside a narrow viewport after dragging the dock', async () => {
+  it('clamps the expanded card inside a narrow viewport', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 844 })
     const wrapper = mount(MobileTopBar, {

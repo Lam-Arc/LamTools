@@ -37,13 +37,14 @@
     >
       <button
         ref="dockTrigger"
-        class="mobile-top-bar__button mobile-command-dock__trigger optical-glass"
+        class="mobile-top-bar__button mobile-command-dock__trigger"
         type="button"
         :aria-expanded="panelOpen"
         aria-controls="mobile-command-panel"
         :aria-label="`打开快捷操作，当前模式 ${activeModeLabel}`"
-        title="快捷操作（可拖动）"
+        title="快捷操作"
         data-mobile-command-button
+        @click="togglePanel"
       >
         <Blocks :size="18" :stroke-width="1.9" aria-hidden="true" />
       </button>
@@ -58,7 +59,6 @@
       >
         <div class="mobile-command-dock__heading">
           <span>切换模式</span>
-          <span class="mobile-command-dock__drag-hint">拖动圆点可移动</span>
         </div>
         <div class="mobile-command-dock__modes" role="listbox" aria-label="可用模式">
           <button
@@ -101,16 +101,11 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Blocks, Check, PanelLeft, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
 import { gsap } from 'gsap'
-import { Draggable } from 'gsap/Draggable'
 
 export interface MobileModeOption {
   id: string
   label: string
 }
-
-const DOCK_POSITION_KEY = 'lamtools.mobile.command-dock-position-v1'
-
-gsap.registerPlugin(Draggable)
 
 const props = withDefaults(defineProps<{
   hidden?: boolean
@@ -147,31 +142,10 @@ const panelOffsetY = ref(52)
 let motion: ReturnType<typeof gsap.matchMedia> | null = null
 let syncTween: gsap.core.Tween | null = null
 let panelTween: gsap.core.Tween | null = null
-let draggable: Draggable | null = null
 let motionAllowed = false
 const activeModeLabel = computed(() => (
   props.modeOptions.find((option) => option.id === props.activeModeId)?.label || '默认'
 ))
-
-function readDockPosition(): { x: number; y: number } | null {
-  try {
-    const parsed = JSON.parse(globalThis.localStorage?.getItem(DOCK_POSITION_KEY) || 'null')
-    return parsed && Number.isFinite(parsed.x) && Number.isFinite(parsed.y)
-      ? { x: parsed.x, y: parsed.y }
-      : null
-  } catch {
-    return null
-  }
-}
-
-function persistDockPosition(): void {
-  if (!draggable) return
-  try {
-    globalThis.localStorage?.setItem(DOCK_POSITION_KEY, JSON.stringify({ x: draggable.x, y: draggable.y }))
-  } catch {
-    // Storage denial only disables position persistence for this device.
-  }
-}
 
 function updatePanelDirection(): void {
   const trigger = dockTrigger.value
@@ -229,7 +203,6 @@ function handleDocumentKeydown(event: KeyboardEvent): void {
 }
 
 function handleViewportResize(): void {
-  draggable?.applyBounds(window)
   updatePanelDirection()
 }
 
@@ -283,27 +256,6 @@ onMounted(() => {
     }
   }, root.value || undefined)
 
-  if (dock.value && dockTrigger.value) {
-    const saved = readDockPosition()
-    if (saved) gsap.set(dock.value, saved)
-    const instances = Draggable.create(dock.value, {
-      type: 'x,y',
-      trigger: dockTrigger.value,
-      bounds: window,
-      edgeResistance: 0.82,
-      dragClickables: true,
-      minimumMovement: 4,
-      onClick: togglePanel,
-      onDragStart: () => closePanel(),
-      onDragEnd: () => {
-        persistDockPosition()
-        updatePanelDirection()
-      },
-    })
-    draggable = instances[0] || null
-    draggable?.applyBounds(window)
-  }
-
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   document.addEventListener('keydown', handleDocumentKeydown)
   window.addEventListener('resize', handleViewportResize)
@@ -313,8 +265,6 @@ onUnmounted(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   document.removeEventListener('keydown', handleDocumentKeydown)
   window.removeEventListener('resize', handleViewportResize)
-  draggable?.kill()
-  draggable = null
   panelTween?.kill()
   panelTween = null
   syncTween?.kill()
@@ -405,6 +355,10 @@ onUnmounted(() => {
 .mobile-command-dock__trigger {
   position: relative;
   inset: auto;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  touch-action: manipulation;
 }
 
 .mobile-command-dock__panel {
@@ -442,12 +396,6 @@ onUnmounted(() => {
   color: var(--text);
   font-size: 13px;
   font-weight: 700;
-}
-
-.mobile-command-dock__drag-hint {
-  color: color-mix(in srgb, var(--text) 48%, transparent);
-  font-size: 10px;
-  font-weight: 500;
 }
 
 .mobile-command-dock__modes,

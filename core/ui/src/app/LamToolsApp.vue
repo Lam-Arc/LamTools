@@ -172,7 +172,7 @@
             aria-label="同步项目"
             data-sidebar-sync-project
             @click="emit('sync-request')"
-          ><RefreshCw :size="17" :stroke-width="1.9" aria-hidden="true" /></button>
+          ><MonitorSmartphone :size="17" :stroke-width="1.9" aria-hidden="true" /></button>
         </div>
         <CoreProjectCreate
           v-if="showProjectCreate && !activePluginMode"
@@ -604,7 +604,7 @@ import {
   ClipboardPaste,
   Copy,
   LoaderCircle,
-  RefreshCw,
+  MonitorSmartphone,
   Scissors,
   TextSelect,
   Upload,
@@ -3511,6 +3511,7 @@ defineExpose({
   openLeftSidebar,
   cycleAppMode,
   selectAppModeByKey,
+  refreshPluginModes,
   openSearch,
   openSettings,
   openProject,

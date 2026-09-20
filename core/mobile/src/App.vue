@@ -555,6 +555,7 @@ async function confirmProjectSync(payload: { deviceId: string; projectId: string
       activeRuntimeMode.value = 'remote'
       await syncEngine.start()
       if (syncEngine.state.value !== 'synced') throw new Error(syncEngine.lastError.value || '设备已下线，无法远控')
+      await lamToolsAppRef.value?.refreshPluginModes()
       await runtime.workbench.refreshSessions()
       window.dispatchEvent(new CustomEvent('lamtools:projects-synced'))
       if (!remoteRepository.state.value.projects[projectId]) throw new Error('未能从设备同步所选项目')
@@ -580,6 +581,7 @@ async function confirmProjectSync(payload: { deviceId: string; projectId: string
       runtime.workbench.disconnect()
       await transport.use(standaloneTransport)
       activeRuntimeMode.value = 'local'
+      await lamToolsAppRef.value?.refreshPluginModes()
     }
     await runtime.workbench.refreshSessions()
     window.dispatchEvent(new CustomEvent('lamtools:projects-synced'))
@@ -596,6 +598,7 @@ async function confirmProjectSync(payload: { deviceId: string; projectId: string
           runtime.workbench.disconnect()
           await transport.use(standaloneTransport)
           activeRuntimeMode.value = 'local'
+          await lamToolsAppRef.value?.refreshPluginModes()
           await runtime.workbench.refreshSessions()
         }
       }
@@ -626,6 +629,7 @@ async function restoreRemoteSession(previous: Omit<PreparedSyncDevice, 'online'>
     activeRuntimeMode.value = 'remote'
     await syncEngine.start()
     if (syncEngine.state.value !== 'synced') return false
+    await lamToolsAppRef.value?.refreshPluginModes()
     await runtime.workbench.refreshSessions()
     return true
   } catch {
@@ -662,6 +666,7 @@ async function forgetDevice(deviceId: string): Promise<void> {
         runtime.workbench.disconnect()
         await transport.use(standaloneTransport)
         activeRuntimeMode.value = 'local'
+        await lamToolsAppRef.value?.refreshPluginModes()
         await runtime.workbench.refreshSessions()
       }
     }
@@ -788,6 +793,7 @@ async function logoutAccount(): Promise<void> {
       runtime.workbench.disconnect()
       await transport.use(standaloneTransport)
       activeRuntimeMode.value = 'local'
+      await lamToolsAppRef.value?.refreshPluginModes()
       await runtime.workbench.refreshSessions()
     }
     await remoteRepository.setAccountScope('', '')
