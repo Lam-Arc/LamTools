@@ -70,9 +70,10 @@ describe('ContextMenuHost', () => {
   it('keeps every root and submenu card on the stable liquid-glass substrate', () => {
     expect(contextMenuPanelSource).toContain('class="context-menu-panel optical-glass"')
     expect(opticalGlassCss).toMatch(/\.optical-glass\s*\{[\s\S]*?blur\(var\(--optical-glass-blur\)\)[\s\S]*?saturate\(var\(--optical-glass-saturation\)\)[\s\S]*?brightness\(var\(--optical-glass-brightness\)\)[\s\S]*?contrast\(var\(--optical-glass-contrast\)\)/)
-    expect(opticalGlassCss).toMatch(/\.optical-glass::before\s*\{[\s\S]*?radial-gradient[\s\S]*?linear-gradient[\s\S]*?box-shadow:/)
-    expect(opticalGlassCss).toMatch(/\.optical-glass::after\s*\{[\s\S]*?conic-gradient[\s\S]*?mask-composite: exclude;/)
-    expect(opticalGlassCss).not.toContain('mask-image')
+    expect(opticalGlassCss).toMatch(/\.optical-glass::before\s*\{[\s\S]*?radial-gradient[\s\S]*?box-shadow:/)
+    expect(opticalGlassCss).toMatch(/\.optical-glass::after\s*\{[\s\S]*?radial-gradient[\s\S]*?optical-glass-refraction-color/)
+    expect(opticalGlassCss).not.toContain('conic-gradient')
+    expect(opticalGlassCss).not.toContain('mask-composite')
     expect(contextMenuPanelSource).toMatch(/\.context-menu-panel-content\s*\{[\s\S]*?animation: popover-in var\(--dur-base\) var\(--ease-out\);/)
     expect(contextMenuPanelSource).not.toMatch(/\.context-menu-panel\s*\{[^}]*animation:/)
   })

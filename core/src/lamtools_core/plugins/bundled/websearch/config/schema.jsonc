@@ -5,7 +5,7 @@
       "type": "string",
       "enum": ["baidu", "bing", "ddg", "custom"],
       "description": "搜索提供方",
-      "default": "baidu"
+      "default": "ddg"
     },
     "limit": {
       "type": "integer",
@@ -24,7 +24,7 @@
         "enum": ["baidu", "bing", "ddg"]
       },
       "description": "默认内核失败时按顺序尝试的备用内核",
-      "default": ["ddg", "bing"]
+      "default": ["ddg", "baidu", "bing"]
     },
     "proxy_port": {
       "type": "integer",

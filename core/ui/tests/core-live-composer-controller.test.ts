@@ -82,6 +82,42 @@ describe('useCoreLiveComposerController', () => {
     }])
   })
 
+  it('reports an async turn-options failure and releases the submit guard', async () => {
+    const errors: string[] = []
+    let attempts = 0
+    let starts = 0
+    const text = ref('study this')
+    const controller = useCoreLiveComposerController({
+      activeThreadId: ref<string | null>('study:main'),
+      connectedThreadId: ref('study:main'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(text.value.length),
+      status: ref('idle'),
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async () => { starts += 1 },
+      interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
+      queueInput: async () => undefined,
+      listCommands: async () => [],
+      getWorkRoot: () => '',
+      turnOptions: async () => {
+        attempts += 1
+        if (attempts === 1) throw new Error('Study context unavailable')
+        return { active_mode: 'study:study' }
+      },
+      executeCommand: async () => true,
+      onError: (message) => errors.push(message),
+    })
+
+    expect(await controller.submit()).toBeNull()
+    expect(errors).toEqual(['Study context unavailable'])
+    await controller.submit()
+    expect(attempts).toBe(2)
+    expect(starts).toBe(1)
+  })
+
   it('keeps a successful turn successful when the post-start callback fails', async () => {
     const text = ref('write a test')
     const attachments = ref<CoreInputItem[]>([{ type: 'attachment', attachment_id: 'a-1' }])

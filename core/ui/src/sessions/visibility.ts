@@ -9,4 +9,6 @@ export function isPluginOwnedSession(session: CoreSessionListItem | undefined): 
 export function isInternalSession(session: CoreSessionListItem | undefined): boolean {
   return isPluginOwnedSession(session)
     || Boolean(session?.id.startsWith('workflow_thread_'))
+    || Boolean(session?.id.startsWith('workflow:'))
+    || session?.id === 'study:main'
 }

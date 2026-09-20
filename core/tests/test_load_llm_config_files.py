@@ -137,6 +137,35 @@ def test_load_llm_config_strips_trailing_slash_from_base_url(isolated_config_roo
     assert not config.base_url.endswith("/")
 
 
+@pytest.mark.parametrize("base_url", ["", "localhost:11434/v1", "ftp://example.test/v1"])
+def test_load_llm_config_rejects_non_http_provider_url(
+    isolated_config_root: Path,
+    base_url: str,
+):
+    _write_provider(
+        isolated_config_root,
+        "broken-provider",
+        "Broken Provider",
+        api_key="",
+        base_url=base_url,
+    )
+    _write_model(
+        isolated_config_root,
+        "broken-model",
+        provider="Broken Provider",
+        provider_id="broken-provider",
+        display_name="Broken Model",
+        context_window=128000,
+        max_output_tokens=4096,
+        temperature=0.2,
+        thinking_supported=False,
+        thinking_budget=0,
+    )
+
+    with pytest.raises(ValueError, match="provider base_url must be an absolute HTTP"):
+        load_llm_config(model_ref="broken-model")
+
+
 def test_list_llm_model_configs_resolves_provider_id_from_provider_store(isolated_config_root: Path):
     """jsonc model files store ``provider`` (a name) and optionally
     ``provider_id``. ``list_llm_model_configs`` must resolve the provider_id /
@@ -174,6 +203,31 @@ def test_list_llm_model_configs_survives_missing_provider(isolated_config_root: 
     assert len(models) == 1
     assert models[0]["provider_id"] == ""
     assert models[0]["provider_name"] == "Nonexistent"
+
+
+def test_load_llm_config_does_not_rebind_missing_provider_to_default(isolated_config_root: Path):
+    _write_provider(
+        isolated_config_root,
+        "default-provider",
+        "Default Provider",
+        api_key="sk-default",
+        base_url="https://default.example.test/v1",
+    )
+    _write_model(
+        isolated_config_root,
+        "orphan",
+        provider="Missing Provider",
+        provider_id="missing-provider",
+        display_name="Orphan",
+        context_window=1000,
+        max_output_tokens=4096,
+        temperature=0.2,
+        thinking_supported=False,
+        thinking_budget=0,
+    )
+
+    with pytest.raises(ValueError, match="provider not found for model: orphan"):
+        load_llm_config(model_ref="orphan")
 
 
 def test_unified_config_dir_overrides_legacy_models(isolated_config_root: Path, monkeypatch) -> None:

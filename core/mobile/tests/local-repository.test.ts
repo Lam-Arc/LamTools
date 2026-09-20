@@ -109,7 +109,13 @@ describe('LocalRepository', () => {
     await first.applySyncSnapshot({
       cursor: 4,
       snapshotVersion: 4,
-      projects: [{ id: 'project-1', name: 'Workspace', path: '/workspace' }],
+      projects: [{
+        id: 'project-1',
+        name: 'Workspace',
+        path: '/workspace',
+        icon_key: 'rocket',
+        color_key: 'aurora',
+      }],
     })
     await first.close()
 
@@ -118,6 +124,8 @@ describe('LocalRepository', () => {
     expect((await second.listProjects())[0]).toMatchObject({
       id: 'project-1',
       name: 'Workspace',
+      iconKey: 'rocket',
+      colorKey: 'aurora',
     })
     expect(second.state.value.cursor).toBe(4)
   })

@@ -1,4 +1,4 @@
-import { nextTick, ref, type Ref } from 'vue'
+import { getCurrentScope, nextTick, onScopeDispose, ref, watch, type Ref } from 'vue'
 
 /**
  * Core 自动跟随滚动 —— 容器级控制器（单通道统一实现）
@@ -23,8 +23,8 @@ import { nextTick, ref, type Ref } from 'vue'
  *  - reset()：切会话/重开对话框统一重置 intent/位置/自动滚动 token。
  *
  * C. 哨兵
- *  - 消费方用 IntersectionObserver 观察底部哨兵；哨兵离开视口且跟随意图仍在时，
- *    只需调用 scrollToBottom()。内容高度、虚拟布局和容器 padding 不再参与底部推算。
+ *  - 控制器统一用 IntersectionObserver 观察传入的底部哨兵；哨兵离开视口且跟随意图仍在时，
+ *    自动调用 scrollToBottom()。内容高度、虚拟布局和容器 padding 不再参与底部推算。
  *
  * D. 程序化滚动防误伤（易错点 16）
  *  - force/正常滚动写 scrollTop 会同步触发 scroll 事件；若 handleScroll 在"不在底部"
@@ -294,6 +294,45 @@ export function useCoreAutoFollowScroll(
     lastScrollHeight = elementRef.value?.scrollHeight ?? 0
     autoFollow.value = true
     atBottom.value = true
+  }
+
+  // The controller owns the one canonical bottom-sentinel observer. Consumers
+  // only render a sentinel and pass its ref; plugin chat surfaces therefore
+  // cannot drift into a second observer implementation.
+  let sentinelObserver: IntersectionObserver | null = null
+  let observerGeneration = 0
+  const stopSentinelWatch = sentinelRef
+    ? watch([elementRef, sentinelRef], ([root, target]) => {
+      const generation = ++observerGeneration
+      sentinelObserver?.disconnect()
+      sentinelObserver = null
+      if (typeof IntersectionObserver === 'undefined' || !root || !target) return
+      sentinelObserver = new IntersectionObserver((entries) => {
+        if (generation !== observerGeneration
+          || root !== elementRef.value
+          || target !== sentinelRef.value) return
+        const entry = entries.find(item => item.target === target)
+        if (!entry) return
+        const wasFollowing = autoFollow.value
+        const visible = coreIsBottomSentinelVisible(entry)
+        handleSentinelVisibility(visible)
+        if (!visible && wasFollowing) void scrollToBottom()
+      }, {
+        root: root as Element,
+        rootMargin: '0px',
+        threshold: [0, CORE_SCROLL_SENTINEL_VISIBLE_RATIO],
+      })
+      sentinelObserver.observe(target as Element)
+    }, { immediate: true, flush: 'post' })
+    : undefined
+
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      observerGeneration++
+      sentinelObserver?.disconnect()
+      sentinelObserver = null
+      stopSentinelWatch?.()
+    })
   }
 
   return {

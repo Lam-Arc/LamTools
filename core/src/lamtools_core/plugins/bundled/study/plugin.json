@@ -1,0 +1,117 @@
+{
+  "id": "study",
+  "name": "study",
+  "version": "1.0.0",
+  "description": "Global learning workspace and text annotations",
+  "builtin": true,
+  "backend": "./backend.py",
+  "skills": [
+    "./skills",
+    "./future"
+  ],
+  "skillModes": {
+    "./skills": [
+      "study:study"
+    ],
+    "./future": [
+      "study:study"
+    ]
+  },
+  "tools": [
+    "./tools.jsonc"
+  ],
+  "operations": [
+    "./operations.jsonc"
+  ],
+  "session": {
+    "legacyPrefixes": [
+      "study:"
+    ]
+  },
+  "ui": {
+    "modes": [
+      {
+        "id": "study",
+        "title": "Study",
+        "entry": "./ui/index.ts",
+        "icon": "book-open",
+        "tools": [
+          "get_knowledge_net",
+          "build_knowledge_net",
+          "sign",
+          "exam",
+          "notes",
+          "read_file",
+          "list_dir",
+          "search_files",
+          "search_content",
+          "load_skill",
+          "web_search",
+          "web_fetch"
+        ]
+      }
+    ]
+  },
+  "cli": {
+    "commands": [
+      {
+        "name": "study",
+        "help": "Study knowledge, exams, layout and annotations via shared RPC",
+        "handler": "lamtools_core.plugins.bundled.study.backend:cli",
+        "arguments": [
+          {
+            "flags": [
+              "operation"
+            ],
+            "choices": [
+              "session",
+              "context",
+              "get",
+              "build",
+              "sign",
+              "exam",
+              "layout",
+              "current",
+              "marks",
+              "text",
+              "notes",
+              "search",
+              "pin",
+              "outbox"
+            ]
+          },
+          {
+            "flags": [
+              "--params"
+            ],
+            "default": "{}"
+          },
+          {
+            "flags": [
+              "--from-file"
+            ],
+            "default": ""
+          },
+          {
+            "flags": [
+              "--base-url"
+            ],
+            "default": ""
+          },
+          {
+            "flags": [
+              "--ws-path"
+            ],
+            "default": ""
+          },
+          {
+            "flags": [
+              "--token"
+            ],
+            "default": ""
+          }
+        ]
+      }
+    ]
+  }
+}

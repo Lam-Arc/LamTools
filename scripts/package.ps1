@@ -68,6 +68,14 @@ try {
         }
     }
     Write-Host "  Plugin boundary verified (desktop pet and workflow excluded)." -ForegroundColor Green
+    & py -3.14 "$Root\scripts\verify-backend-ws.py" `
+        --exe "$Root\core\dist\LamCore\LamCore.exe" `
+        --port (Get-Random -Minimum 5901 -Maximum 65000)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[FAIL] Packaged backend WebSocket/Study RPC smoke failed." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  Packaged backend Study RPC verified." -ForegroundColor Green
     Write-Host "  Backend -> core/dist/LamCore/" -ForegroundColor Green
 } finally {
     Pop-Location

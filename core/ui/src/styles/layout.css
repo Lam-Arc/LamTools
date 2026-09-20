@@ -324,15 +324,15 @@
 }
 
 .core-goal-area {
-  background: color-mix(in srgb, var(--theme-main-text) 4%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  --text: var(--theme-composer-text);
+  --optical-glass-overlay: transparent;
+  position: relative;
+  overflow: hidden;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--theme-composer-text) 8%, transparent);
 }
 
 .core-goal-area[data-status='blocked'] {
-  background: color-mix(in srgb, var(--orange) 10%, color-mix(in srgb, var(--theme-main-text) 4%, transparent));
+  --optical-glass-overlay: color-mix(in srgb, var(--orange) 10%, transparent);
 }
 
 .floating-composer.dragover {

@@ -7,6 +7,53 @@
 - Rust stable toolchain
 - Inno Setup 6.6.1（命令行编译器 ISCC.exe）
 
+Linux 原生构建使用 Ubuntu 22.04（含 WSL2）以及 WebKitGTK 4.1。依赖可用
+以下命令安装；apt 缓存和 WSL 发行版应放在非 C 盘：
+
+    sudo apt-get update
+    sudo apt-get install -y build-essential curl wget ca-certificates file \
+      pkg-config patchelf libssl-dev libxdo-dev libdbus-1-dev libgtk-3-dev \
+      libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+      libayatana-appindicator3-dev librsvg2-dev xdg-utils \
+      desktop-file-utils appstream squashfs-tools libfuse2 xvfb xauth dbus-x11
+
+## Linux x64（WSL/Ubuntu 22.04）
+
+Linux sidecar 必须在 Linux 原生 Python 上构建，不能复用 Windows 的
+`LamCore.exe`。`scripts/package-linux.sh` 会在 WSL 文件系统内准备 Node 24、
+uv 管理的 Python 3.14、Rust stable 及其缓存，然后按顺序构建前端、
+Linux sidecar、AppImage 和 `.deb`，并执行后端
+REST/WebSocket/Study smoke 与 `.deb` 内容检查：
+
+脚本先把 `core/` 与 `scripts/`（含未提交源码改动）暂存到 WSL E 盘发行版的
+`$HOME/.cache/lamtools-linux/build/source`，在该 ext4 工作区安装 Linux
+`core/ui` 与 `core/desktop` 的 npm 依赖并编译，完成后只把 sidecar 与两个
+发行包复制回仓库标准输出目录，不会把 Windows `node_modules` 改成 Linux 版本。
+
+验收会在临时 WSL 目录执行 AppImage `--appimage-extract`，断言
+`lamcore-backend/LamCore` 存在且可执行；若启用 Xvfb，还会在
+`dbus-run-session` 中启动 GUI，只有超时保持存活才算通过。
+
+    cd /mnt/e/LamTools
+    bash scripts/package-linux.sh
+
+也可从 Windows 调用（路径应指向 E 盘上的 Ubuntu-22.04 发行版）：
+
+    wsl.exe -d Ubuntu-22.04 -- bash -lc \
+      'cd /mnt/e/LamTools && bash scripts/package-linux.sh'
+
+默认工具链缓存位于 WSL `$HOME/.cache/lamtools-linux`，可用
+`LAMTOOLS_LINUX_TOOL_ROOT` 改到另一个非 `/mnt/c` 路径。构建输出位于：
+
+    artifacts/linux-x64/sidecar/LamCore
+    core/desktop/src-tauri/target/release/bundle/appimage/Sunday_<版本>_amd64.AppImage
+    core/desktop/src-tauri/target/release/bundle/deb/Sunday_<版本>_amd64.deb
+
+Tauri Linux bundle 通过 `tauri.conf.json` 的 `bundle.resources` 将
+`core/dist/LamCore` 放入 `lamcore-backend/`；Rust shell 在 Linux 上从该资源
+目录启动无扩展名的 `LamCore`。需要跳过可选的 Xvfb GUI smoke 时设置
+`LAMTOOLS_SKIP_XVFB_SMOKE=1`。该脚本仅生成 Linux 产物，不升版本、不发布。
+
 scripts/package.ps1 会从 PATH、INNO_SETUP_ISCC、机器级或当前用户的标准
 Inno Setup 6 安装目录中查找编译器。也可直接向
 core/desktop/installer/build-installer.ps1 传入 -IsccPath。
@@ -28,9 +75,10 @@ core/desktop/installer/build-installer.ps1 传入 -IsccPath。
 
     core/desktop/src-tauri/target/release/bundle/inno/Sunday_<版本>_x64-setup.exe
 
-Tauri 的 bundle.active 固定为 false；不要把 NSIS target、template 或 resource
-复制重新加回 tauri.conf.json。安装器 payload 的组装由 package.ps1 和
-build-installer.ps1 负责。
+Windows 流程显式使用 `--no-bundle`，不要在 Windows 上调用 Linux 的
+AppImage/.deb targets；Windows 安装器 payload 的组装由 package.ps1 和
+build-installer.ps1 负责。Linux 构建则使用上面的 `bundle.active`、
+`appimage`/`deb` targets 与 sidecar resource 配置。
 
 CI 固定使用 Inno Setup 6.6.1，避免编译器版本漂移导致产物或
 授权条款变化；本地发布验证也应传入同版本的 `-IsccPath`。

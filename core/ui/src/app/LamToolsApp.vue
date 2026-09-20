@@ -98,6 +98,8 @@
     :request-rpc="requestConfigOperation"
     :sessions="sessions"
     :on-jump="jumpToSearchedMessage"
+    :active-mode-id="activeAppModeKey"
+    :on-study-hit="jumpToStudySearchHit"
     :theme="theme"
     @close="showSearch = false"
   />
@@ -177,7 +179,13 @@
     </template>
 
     <template #sidebar-body>
+      <component
+        :is="activePluginSurface.sidebar.component"
+        v-if="activePluginSurface?.sidebar?.component"
+        v-bind="readPluginSurface(activePluginSurface.sidebar.componentProps, {})"
+      />
       <SessionSidebar
+        v-else
         :project-groups="sidebarGroups"
         :has-projects="sidebarHasProjects"
         :project-session-limit="8"
@@ -236,13 +244,18 @@
     </template>
 
     <template #main-content>
-      <PluginModeHost
+      <div
         v-if="activePluginMode"
-        :plugin-id="activePluginMode.pluginId"
-        :mode-id="activePluginMode.id"
-      />
+        v-show="!pluginUsesCoreThread"
+        class="plugin-mode-surface"
+      >
+        <PluginModeHost
+          :plugin-id="activePluginMode.pluginId"
+          :mode-id="activePluginMode.id"
+        />
+      </div>
       <CoreStartPage
-        v-else-if="showCoreStartPage"
+        v-if="!activePluginMode && showCoreStartPage"
         :has-project="projects.length > 0"
         :recent-projects="recentCoreProjects"
         @new-project="openProjectCreate()"
@@ -250,14 +263,23 @@
         @new-session="createStartPageSession"
         @open-recent-project="openRecentProject"
       />
-      <section
-        v-else
-        ref="threadScrollEl"
-        class="thread"
-        :class="{ 'thread--empty-session': isEmptySession }"
-        @scroll.passive="handleThreadScroll"
-        @wheel="handleThreadWheel"
-      >
+      <template v-else-if="!activePluginMode || pluginUsesCoreThread">
+        <ChatOutlineNavigator
+          v-if="!isEmptySession"
+          ref="outlineNavigator"
+          :session-id="activeSessionId"
+          :messages="messages"
+          :request-rpc="appRuntime.requestRpc"
+          :scroll-container="threadScrollEl"
+          @select="locateMessage"
+        />
+        <section
+          ref="threadScrollEl"
+          class="thread"
+          :class="{ 'thread--empty-session': isEmptySession }"
+          @scroll.passive="handleThreadScroll"
+          @wheel="handleThreadWheel"
+        >
         <div class="thread-history-cap-slot">
           <Transition
             :css="false"
@@ -295,11 +317,12 @@
           :process-expanded-ids="processExpandedIds"
           :message-actions="true"
           :transport="transport"
-          :project-id="activeProjectId ?? selectedProjectId"
-          :work-root="activeProject?.workRoot"
+          :project-id="activePluginMode ? undefined : (activeProjectId ?? selectedProjectId)"
+          :work-root="activePluginMode ? undefined : activeProject?.workRoot"
           :active-turn-id="activeTurnId"
           :turn-active="activeTurnRunning"
           :checkpoint-turn-ids="checkpointTurnIds"
+          :auto-plot-math="activeAppModeKey === 'study:study'"
           @toggle-process="toggleProcess"
           @decision-select="approvalController.handleDecision"
           @fork-message="handleForkMessage"
@@ -315,7 +338,7 @@
           <button
             v-if="!isEmptySession && !threadScroll.autoFollow.value"
             type="button"
-            class="thread-jump-latest"
+            class="thread-jump-latest optical-glass"
             aria-label="回到最新消息"
             title="回到最新消息"
             @click="threadScroll.scrollToBottom(true)"
@@ -337,7 +360,8 @@
           class="thread-bottom-sentinel"
           aria-hidden="true"
         ></div>
-      </section>
+        </section>
+      </template>
     </template>
 
     <template #modals>
@@ -375,7 +399,7 @@
     </template>
 
     <template #composer-preamble>
-      <div v-if="activeGoal" class="core-goal-area" :data-status="activeGoal.status">
+      <div v-if="activeGoal" class="core-goal-area optical-glass" :data-status="activeGoal.status">
         <CoreGoalStrip :goal="activeGoal" @cancel="handleCancelGoal" />
         <CoreQueuedInputTray
           v-model:draft="queuedInputDraft"
@@ -528,6 +552,12 @@
   </WorkspaceShell>
 
   <ContextMenuHost />
+  <SelectionAssistant
+    :session-id="activeSessionId"
+    :mode="activeAppModeKey"
+    :theme-mode="effectiveThemeMode"
+    :jump="jumpToStudyMark"
+  />
 
   <!-- 全窗口拖拽上传遮罩：拖入文件时亮起，松开即上传到当前会话 -->
   <div
@@ -573,6 +603,7 @@ import type {
   CoreSubAgentRun,
 } from '../types'
 import { isInternalSession, isPluginOwnedSession } from '../sessions/visibility'
+import { createModeSessionState } from '../sessions/mode-state'
 import {
   buildCoreProjectGroups,
   type CoreProject,
@@ -590,10 +621,8 @@ import type { LamToolsRuntime } from './runtime'
 import { buildCoreComposerHighlightSegments } from '../composer/inputItems'
 import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
 import {
-  CORE_SCROLL_SENTINEL_VISIBLE_RATIO,
   coreApplyHistoryScrollCeiling,
   coreHistoryAutoLoadThreshold,
-  coreIsBottomSentinelVisible,
   coreShouldAutoLoadHistory,
   readUpdateAutoCheck,
   useCoreAutoFollowScroll,
@@ -609,6 +638,7 @@ import {
 
 import AttachmentTray from '../components/AttachmentTray.vue'
 import ChatThread from '../components/ChatThread.vue'
+import ChatOutlineNavigator from '../components/ChatOutlineNavigator.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreWorkspaceMenu from '../components/CoreWorkspaceMenu.vue'
@@ -624,11 +654,14 @@ import CoreProjectPicker from '../components/CoreProjectPicker.vue'
 import CoreStartPage, { type CoreRecentProject } from '../components/CoreStartPage.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import { ContextMenuHost } from '../components/context-menu'
+import SelectionAssistant from '../study/SelectionAssistant.vue'
+import type { MarkAnchor } from '../study/types'
+import { selectionEvents } from '../study/annotations'
 import { openContextMenu } from '../components/context-menu/context-menu'
 import type { ContextMenuEntry } from '../components/context-menu/types'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import PluginsShell from '../components/PluginsShell.vue'
-import SearchShell from '../components/SearchShell.vue'
+import SearchShell, { type StudySearchHit } from '../components/SearchShell.vue'
 import type {
   CoreSettingsModelPayload,
   CoreSettingsProviderPayload,
@@ -1196,6 +1229,10 @@ const activePluginSurface = computed<PluginModeSurface | undefined>(() => {
   const mode = activePluginMode.value
   return mode ? pluginModeRuntime.get(mode.pluginId + ':' + mode.id) : undefined
 })
+const pluginUsesCoreThread = computed(() => (
+  Boolean(activePluginMode.value)
+  && readPluginSurface(activePluginSurface.value?.useCoreThread, false)
+))
 const activePluginSidebarContributions = computed(() => (
   readPluginSurface(activePluginSurface.value?.rightSidebar, [])
 ))
@@ -1230,7 +1267,10 @@ const composerInputDisabled = computed(() => {
 })
 
 const composerSendDisabled = computed(() => {
-  if (activePluginMode.value) return composerInputDisabled.value || !composerText.value.trim()
+  if (activePluginMode.value) {
+    const attachmentOnly = readPluginSurface(activePluginSurface.value?.allowAttachmentOnlySubmit, false)
+    return composerInputDisabled.value || (!composerText.value.trim() && !(attachmentOnly && pendingAttachments.value.length))
+  }
   return composerInputDisabled.value
     || !activeSessionId.value
     || (!composerText.value.trim() && pendingAttachments.value.length === 0)
@@ -1457,18 +1497,21 @@ const permissionMode = ref<'read_only' | 'limited_edit' | 'full_edit'>('full_edi
 const defaultPermissionPreset = ref<CorePermissionPreset>('ask')
 const allowAccessOutsideWorkdir = ref(false)
 const { pendingAttachments, attachmentInputItems, addUploaded, markFailed, removeAttachment, clearAttachments } = usePendingAttachments()
+watch(attachmentInputItems, (items) => {
+  workbench.attachments.value = items
+}, { immediate: true })
+watch(workbench.attachments, (items) => {
+  if (items.length === 0 && pendingAttachments.value.length > 0) clearAttachments()
+})
 const threadScrollEl = ref<HTMLElement | null>(null)
 const threadBottomSentinel = ref<HTMLElement | null>(null)
+const outlineNavigator = ref<{ updateScroll: () => void } | null>(null)
 const latestActivityIndicator = ref<HTMLElement | null>(null)
 const historyCapEl = ref<HTMLElement | null>(null)
 const threadScroll = useCoreAutoFollowScroll(threadScrollEl, { sentinelRef: threadBottomSentinel })
 const historyPageLoading = ref(false)
 const historyPageNetworkLoading = ref(false)
 const COMPOSER_MAX_ROWS = 5
-let threadBottomObserver: IntersectionObserver | null = null
-let threadBottomObserverRoot: HTMLElement | null = null
-let threadBottomObserverTarget: HTMLElement | null = null
-let threadBottomObserverGeneration = 0
 let latestActivityMotion: gsap.MatchMedia | null = null
 let latestActivityTween: gsap.core.Tween | null = null
 let historyScrollCeiling: number | null = null
@@ -1575,6 +1618,7 @@ async function loadEarlierMessages(): Promise<void> {
         restoreThreadHistoryAnchor(el, anchor)
         historyScrollCeiling = el.scrollTop
         threadScroll.handleScroll()
+        outlineNavigator.value?.updateScroll()
       } finally {
         restoringHistoryAnchor = false
       }
@@ -1604,10 +1648,14 @@ function handleThreadScroll(): void {
     )
     if (cappedScrollTop !== el.scrollTop) {
       el.scrollTop = cappedScrollTop
+      outlineNavigator.value?.updateScroll()
       return
     }
   }
   threadScroll.handleScroll()
+  // Share the existing passive thread scroll channel with the outline rail;
+  // the navigator coalesces geometry work into one animation frame.
+  outlineNavigator.value?.updateScroll()
   if (!el || !coreShouldAutoLoadHistory(
     el.scrollTop,
     hasMoreHistory.value,
@@ -1708,7 +1756,7 @@ watch([activeTurnRunning, latestActivityIndicator], syncLatestActivityMotion, { 
 const coreSessions = computed(() => sessions.value.filter((session) => !isInternalSession(session)))
 const coreProjectGroups = computed(() => buildCoreProjectGroups(projects.value, coreSessions.value))
 const showCoreStartPage = computed(() => !activePluginMode.value && !activeSessionId.value)
-const shouldHideComposer = computed(() => showCoreStartPage.value)
+const shouldHideComposer = computed(() => showCoreStartPage.value || readPluginSurface(activePluginSurface.value?.hideComposer, false))
 const recentCoreProjects = computed<CoreRecentProject[]>(() => {
   const projectsById = new Map(projects.value.map((project) => [project.id, project]))
   return recentProjectOpenings.value.flatMap((entry): CoreRecentProject[] => {
@@ -1807,8 +1855,8 @@ const {
   paletteVisible: commandPaletteVisible,
 } = liveComposerController
 workbench.setShallowThinking(shallowThinkingEnabled.value)
-workbench.setTurnOptionsProvider(() => {
-  const pluginOptions = activePluginSurface.value?.turnOptions?.() || {}
+workbench.setTurnOptionsProvider(async () => {
+  const pluginOptions = await activePluginSurface.value?.turnOptions?.() || {}
   const {
     permission_preset: _permissionPreset,
     active_tier: _activeTier,
@@ -1874,6 +1922,7 @@ const checkpointTurnIds = checkpointController.checkpointTurnIds
 provideCorePluginModeContext({
   transport,
   requestRpc: requestConfigOperation,
+  requestDirectRpc: (method, params) => appRuntime.requestRpc(method, params || {}),
   projectClient,
   projects,
   sessions,
@@ -1894,6 +1943,8 @@ provideCorePluginModeContext({
   ensureRightPanelOpen,
   lastEvent,
   chat: {
+    hasMoreHistory,
+    loadMoreHistory,
     messages,
     processExpandedIds,
     toggleProcess,
@@ -2274,14 +2325,19 @@ async function selectSession(id: string) {
   } finally {
     if (historyLoadingSessionId.value === id) historyLoadingSessionId.value = null
   }
-  await liveComposerController.loadCommandCatalog(id)
-  await refreshGoal(id, true)
+  const sessionMetadataReady = Promise.all([
+    liveComposerController.loadCommandCatalog(id),
+    refreshGoal(id, true),
+  ])
   checkpointController.reset()
   checkpointController.beginLoading()
   // Legacy user-message editing still uses a pre-turn checkpoint.  Failure
   // here is deliberately isolated from assistant Fork/Rollback.
   void checkpointController.load(id)
-  await threadScroll.scrollToBottom(true)
+  await Promise.all([
+    sessionMetadataReady,
+    threadScroll.scrollToBottom(true),
+  ])
 }
 
 // ── 全局搜索跳转（SearchShell 会话命中 → 打开会话 + 消息锚点定位）──
@@ -2290,6 +2346,41 @@ async function jumpToSearchedMessage(sessionId: string, messageId: string): Prom
     await selectSession(sessionId)
   }
   await locateMessage(messageId)
+}
+
+/** Study entities share the global SearchShell. The Study mode owns only the
+ * entity-specific resolution after the host has switched modes. */
+async function jumpToStudySearchHit(hit: StudySearchHit): Promise<void> {
+  if (hit.session_id && hit.message_id) {
+    await jumpToSearchedMessage(hit.session_id, hit.message_id)
+    return
+  }
+  const mode = appModes.value.find(candidate => candidate.pluginId === 'study')
+  if (!mode) return
+  await selectAppMode(mode)
+  await nextTick()
+  window.dispatchEvent(new CustomEvent('lamtools:study-search-hit', { detail: hit }))
+}
+
+function isStudyOwnedSessionId(sessionId: string): boolean {
+  if (sessionId === 'study:main') return true
+  const session = sessions.value.find(item => item.id === sessionId)
+  return session?.metadata?.owner_plugin === 'study'
+}
+
+async function jumpToStudyMark(anchor: MarkAnchor): Promise<void> {
+  if (anchor.session_id && isStudyOwnedSessionId(anchor.session_id)) {
+    const mode = appModes.value.find(m => m.pluginId === 'study')
+    if (!mode) throw new Error('Study 未启用')
+    await selectAppMode(mode)
+    await nextTick()
+    selectionEvents.dispatchEvent(new Event('study-chat'))
+  } else if (anchor.session_id) {
+    await selectAppMode(coreAppMode)
+  }
+  if (anchor.session_id && anchor.source_type === 'message') {
+    await jumpToSearchedMessage(anchor.session_id, anchor.document_id)
+  }
 }
 
 function locateScrollBehavior(): ScrollBehavior {
@@ -2498,7 +2589,10 @@ async function submitComposer() {
     return
   }
   const text = composerText.value.trim()
-  if (!text) return
+  const attachmentOnly = activePluginMode.value
+    ? readPluginSurface(activePluginSurface.value?.allowAttachmentOnlySubmit, false)
+    : true
+  if (!text && !(attachmentOnly && pendingAttachments.value.length)) return
 
   sendingDisabled.value = true
 
@@ -2521,7 +2615,7 @@ async function uploadFiles(files: FileList | File[]) {
   for (const file of Array.from(files)) {
     const failedId = `failed:${file.name}:${Date.now()}`
     try {
-      const projectQuery = activeProjectId.value
+      const projectQuery = !activePluginMode.value && activeProjectId.value
         ? `?project_id=${encodeURIComponent(activeProjectId.value)}`
         : ''
       const multipart = await encodeMultipartFile(file)
@@ -3151,15 +3245,18 @@ async function applyCommandEffects(result: Record<string, unknown>): Promise<voi
   }
 }
 
+const switchModeSession = createModeSessionState({
+  mode: activeAppModeKey,
+  session: activeSessionId,
+  draft: composerText,
+  sessions: () => sessions.value,
+  reset: () => liveComposerController.resetForThreadChange(),
+  select: selectSession,
+})
+
 async function selectAppMode(mode: PluginMode): Promise<void> {
   if (!appModes.value.some((candidate) => modeKey(candidate) === modeKey(mode))) return
-  activeAppModeKey.value = modeKey(mode)
-  if (mode.pluginId === 'core' && isActivePluginSession()) {
-    workbench.disconnect()
-    liveComposerController.resetForThreadChange()
-    activeSessionId.value = null
-    if (coreSessions.value[0]) await selectSession(coreSessions.value[0].id)
-  }
+  await switchModeSession(modeKey(mode))
 }
 
 function cycleAppMode(): void {
@@ -3272,47 +3369,6 @@ async function loadModelOptions() {
   }
 }
 
-function syncThreadBottomObserver() {
-  const root = threadScrollEl.value
-  const target = threadBottomSentinel.value
-  if (
-    threadBottomObserver
-    && threadBottomObserverRoot === root
-    && threadBottomObserverTarget === target
-  ) return
-
-  const observerGeneration = ++threadBottomObserverGeneration
-  threadBottomObserver?.disconnect()
-  threadBottomObserver = null
-  threadBottomObserverRoot = root
-  threadBottomObserverTarget = target
-  if (typeof IntersectionObserver === 'undefined' || !root || !target) return
-
-  threadBottomObserver = new IntersectionObserver((entries) => {
-    if (
-      observerGeneration !== threadBottomObserverGeneration
-      || root !== threadScrollEl.value
-      || target !== threadBottomSentinel.value
-    ) return
-    const entry = entries.find(item => item.target === target)
-    if (!entry) return
-    const wasFollowing = threadScroll.autoFollow.value
-    const sentinelVisible = coreIsBottomSentinelVisible(entry)
-    threadScroll.handleSentinelVisibility(sentinelVisible)
-    if (!sentinelVisible && wasFollowing) {
-      void threadScroll.scrollToBottom()
-    }
-  }, {
-    root,
-    rootMargin: '0px',
-    // Observe both entry/exit and the almost-fully-visible boundary. Reading
-    // only isIntersecting with threshold: 1 loses the partial-visibility
-    // transition and can leave streaming content permanently detached.
-    threshold: [0, CORE_SCROLL_SENTINEL_VISIBLE_RATIO],
-  })
-  threadBottomObserver.observe(target)
-}
-
 function toSession(raw: RawSession): CoreSessionListItem {
   return {
     id: raw.id,
@@ -3395,6 +3451,10 @@ function openLeftSidebar(): void {
   shellRef.value?.openLeftDrawer()
 }
 
+function handleStudyOpenSearch(): void {
+  showSearch.value = true
+}
+
 defineExpose({ openLeftSidebar })
 
 onMounted(() => {
@@ -3405,10 +3465,11 @@ onMounted(() => {
   window.addEventListener('drop', handleWindowDrop)
   // Ctrl+K 全局搜索（与侧边栏「搜索」同一个 SearchShell——统一入口）
   window.addEventListener('keydown', handleGlobalSearchKeydown)
+  window.addEventListener('lamtools:open-search', handleStudyOpenSearch)
   window.addEventListener('lamtools:projects-synced', handleProjectsSynced)
-  // 底部哨兵是吸底的唯一事实来源；元素切换时重建 observer。
+  // The scroll composable owns the sentinel observer; the host only resets
+  // per-session intent and lands the canonical surface at the latest message.
   watch([threadScrollEl, threadBottomSentinel], () => {
-    syncThreadBottomObserver()
     threadScroll.reset()
     void threadScroll.scrollToBottom(true)
   }, { immediate: true })
@@ -3435,16 +3496,12 @@ onUnmounted(() => {
   window.removeEventListener('dragleave', handleWindowDragLeave)
   window.removeEventListener('drop', handleWindowDrop)
   window.removeEventListener('keydown', handleGlobalSearchKeydown)
+  window.removeEventListener('lamtools:open-search', handleStudyOpenSearch)
   window.removeEventListener('lamtools:projects-synced', handleProjectsSynced)
   stopLatestActivityMotion()
   cancelHistoryCapMotion()
   historyScrollCeiling = null
   restoringHistoryAnchor = false
-  threadBottomObserverGeneration++
-  threadBottomObserver?.disconnect()
-  threadBottomObserver = null
-  threadBottomObserverRoot = null
-  threadBottomObserverTarget = null
   workbench.disconnect()
 })
 </script>
@@ -3454,6 +3511,16 @@ onUnmounted(() => {
 @import '../styles/base.css';
 @import '../styles/layout.css';
 @import '../styles/theme-editor.css';
+
+.plugin-mode-surface {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.plugin-mode-surface > .plugin-mode-host {
+  height: 100%;
+}
 
 .runtime-checklist-mobile {
   display: none;
@@ -3703,6 +3770,7 @@ onUnmounted(() => {
    control-area surface recipe per the design spec. */
 .thread-jump-latest {
   --text: var(--theme-control-text);
+  --optical-glass-overlay: transparent;
   position: sticky;
   bottom: var(--space-2, 8px);
   justify-self: center;
@@ -3715,60 +3783,19 @@ onUnmounted(() => {
   padding: 0;
   overflow: hidden;
   isolation: isolate;
-  border: 1px solid color-mix(in srgb, var(--text) 24%, transparent);
   border-radius: 50%;
-  background:
-    linear-gradient(
-      145deg,
-      color-mix(in srgb, var(--text) 18%, transparent),
-      color-mix(in srgb, var(--theme-control-solid) 58%, transparent)
-    );
   color: var(--text);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--text) 38%, transparent),
-    inset 0 calc(-1 * var(--space-1)) var(--space-2) color-mix(in srgb, var(--theme-control-solid) 28%, transparent),
-    var(--shadow-sm);
-  -webkit-backdrop-filter: blur(var(--space-3)) saturate(1.2);
-  backdrop-filter: blur(var(--space-3)) saturate(1.2);
   cursor: pointer;
   transition:
-    border-color var(--dur-base) var(--ease-out),
-    box-shadow var(--dur-base) var(--ease-out),
+    filter var(--dur-base) var(--ease-out),
     transform var(--dur-base) var(--ease-out);
 }
-.thread-jump-latest::after {
-  content: "";
-  position: absolute;
-  pointer-events: none;
-}
-.thread-jump-latest::after {
-  z-index: 0;
-  inset: 0;
-  border-radius: inherit;
-  background: transparent;
-  transition: background-color var(--dur-base) var(--ease-out);
-}
-.thread-jump-latest > svg,
-.thread-jump-latest-spinner {
-  position: relative;
-  z-index: 1;
-}
 .thread-jump-latest:hover {
-  border-color: color-mix(in srgb, var(--text) 38%, transparent);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--text) 46%, transparent),
-    inset 0 calc(-1 * var(--space-1)) var(--space-2) color-mix(in srgb, var(--theme-control-solid) 28%, transparent),
-    var(--shadow-sm);
+  filter: brightness(1.015);
   transform: translateY(-1px);
 }
-.thread-jump-latest:hover::after {
-  background: color-mix(in srgb, var(--text) var(--alpha-hover, 8%), transparent);
-}
 .thread-jump-latest:active {
-  transform: translateY(1px);
-}
-.thread-jump-latest:active::after {
-  background: color-mix(in srgb, var(--text) var(--alpha-active, 12%), transparent);
+  transform: translateY(1px) scale(.98);
 }
 .thread-jump-latest:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--text) 72%, transparent);
@@ -3802,9 +3829,6 @@ onUnmounted(() => {
   .thread-jump-latest-leave-active {
     transition: opacity .18s ease;
     transform: none;
-  }
-  .thread-jump-latest::after {
-    transition: none;
   }
   .thread-jump-latest-enter-from,
   .thread-jump-latest-leave-to {

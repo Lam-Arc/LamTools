@@ -21,6 +21,7 @@ memory store and the MEMORY.md file, matching the style of
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
@@ -30,7 +31,7 @@ from typing import Any
 
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest
 from lamtools_core.llm.retry import complete_with_retry
-from lamtools_core.mem import MemoryEntry, MemoryQuery, MemoryStoreProtocol
+from lamtools_core.mem import MemoryEntry, MemoryQuery, MemoryScope, MemoryStoreProtocol
 from lamtools_core.mem.memory_file import merge_into_memory_md, parse_memory_md
 from lamtools_core.runtime import RuntimeState
 
@@ -39,7 +40,13 @@ try:
 except ImportError:  # pragma: no cover - policy is optional at import time
     LoopPolicy = None  # type: ignore[assignment, misc]
 
-__all__ = ["DreamResult", "DreamCandidate", "dream_session", "DREAM_PROMPT"]
+__all__ = [
+    "DreamResult",
+    "DreamCandidate",
+    "DreamingCheckpoint",
+    "dream_session",
+    "DREAM_PROMPT",
+]
 
 
 # ── prompt ───────────────────────────────────────────────────────
@@ -76,8 +83,26 @@ class DreamCandidate:
     content: str
     confidence: float = 0.5
     source: str = ""
+    origin: str = "inferred"
+    source_metadata: dict[str, Any] = field(default_factory=dict)
+    source_refs: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_entry(self, *, session_id: str, work_root: str) -> MemoryEntry:
+    def to_entry(
+        self,
+        *,
+        session_id: str,
+        work_root: str,
+        scope: MemoryScope | None = None,
+        status: str = "active",
+    ) -> MemoryEntry:
+        canonical_scope = scope or MemoryScope.local_legacy(work_root)
+        metadata = {
+            "session_id": session_id,
+            "thread_id": session_id,
+            "work_root": work_root,
+        }
+        if self.source_refs:
+            metadata["source_refs"] = [dict(item) for item in self.source_refs]
         return MemoryEntry(
             id="",
             kind=self.kind,
@@ -86,7 +111,12 @@ class DreamCandidate:
             source=self.source or f"session#{session_id}",
             layer="hot",
             confidence=self.confidence,
-            metadata={"session_id": session_id, "work_root": work_root},
+            metadata=metadata,
+            scope=canonical_scope,
+            status=status,  # type: ignore[arg-type]
+            origin=self.origin if self.origin in {"explicit", "observed", "inferred", "legacy", "teaching_hint"} else "inferred",  # type: ignore[arg-type]
+            source_metadata=dict(self.source_metadata),
+            source_refs=[dict(item) for item in self.source_refs],
         )
 
 
@@ -102,6 +132,30 @@ class DreamResult:
     summary: str = ""
     candidates: list[DreamCandidate] = field(default_factory=list)
     error: str = ""
+
+
+@dataclass
+class DreamingCheckpoint:
+    """Serializable progress marker for a durable Dreaming/Arrange run."""
+
+    job_id: str = ""
+    batch_index: int = 0
+    extracted: int = 0
+    settled: int = 0
+    status: str = "pending"
+    fencing_token: int = 0
+    last_source: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "batch_index": self.batch_index,
+            "extracted": self.extracted,
+            "settled": self.settled,
+            "status": self.status,
+            "fencing_token": self.fencing_token,
+            "last_source": self.last_source,
+        }
 
 
 # ── main entry ───────────────────────────────────────────────────
@@ -121,6 +175,12 @@ async def dream_session(
     on_event: DreamEventSink | None = None,
     policy: Any | None = None,
     min_confidence: float = 0.5,
+    scope: MemoryScope | None = None,
+    memory_service: Any | None = None,
+    checkpoint: DreamingCheckpoint | None = None,
+    checkpoint_callback: Callable[[DreamingCheckpoint], Awaitable[None] | None] | None = None,
+    cancel_event: asyncio.Event | None = None,
+    lease_guard: Callable[[], bool | Awaitable[bool]] | None = None,
 ) -> DreamResult:
     """Distil a session into short-term store + MEMORY.md.
 
@@ -135,6 +195,39 @@ async def dream_session(
     Stop hook, which must not kill the run) can simply log it.
     """
     work_root_str = str(work_root) if work_root else ""
+    # Existing project callers get an explicit compatibility scope.  Study
+    # must pass a library scope (project_id is None), which also prevents the
+    # compatibility MEMORY.md export below.
+    effective_scope = scope or MemoryScope.local_legacy(work_root_str)
+    if checkpoint is None:
+        checkpoint = DreamingCheckpoint(status="running")
+    else:
+        checkpoint.status = "running"
+
+    async def checkpoint_now(*, status: str | None = None, last_source: str = "") -> None:
+        checkpoint.batch_index = max(0, checkpoint.batch_index)
+        checkpoint.last_source = last_source or checkpoint.last_source
+        if status:
+            checkpoint.status = status
+        if checkpoint_callback is not None:
+            result = checkpoint_callback(checkpoint)
+            if hasattr(result, "__await__"):
+                await result
+
+    async def cancelled() -> bool:
+        if cancel_event is not None and cancel_event.is_set():
+            return True
+        if lease_guard is not None:
+            result = lease_guard()
+            if hasattr(result, "__await__"):
+                result = await result
+            if not result:
+                return True
+        return False
+
+    if await cancelled():
+        await checkpoint_now(status="cancelled")
+        return DreamResult(status="cancelled", summary="Dreaming was cancelled before extraction.")
 
     if not history and not compaction_summary:
         return DreamResult(status="skipped", summary="No session content to dream.")
@@ -170,7 +263,11 @@ async def dream_session(
             )
 
     # Filter by confidence.
-    candidates = [c for c in candidates if c.confidence >= min_confidence]
+    # Model output is untrusted.  Discard ability/grade/mastery labels rather
+    # than allowing one mark or one mistake to become durable identity.  A
+    # knowledge teaching hint is retained as a separate kind/origin and is
+    # never returned by personal-memory queries by default.
+    candidates = [c for c in candidates if _safe_candidate(c) and c.confidence >= min_confidence]
     if not candidates:
         await _emit(on_event, {"status": "done", "phase": "done", "label": "无可沉淀记忆"})
         no_llm = llm_client is None
@@ -189,11 +286,37 @@ async def dream_session(
     added = 0
     updated = 0
     settled: list[MemoryEntry] = []
-    for candidate in candidates:
-        entry = candidate.to_entry(session_id=session_id, work_root=work_root_str)
+    for index, candidate in enumerate(candidates):
+        if await cancelled():
+            await checkpoint_now(status="cancelled")
+            return DreamResult(
+                status="cancelled",
+                extracted=len(candidates),
+                added=added,
+                updated=updated,
+                summary="Dreaming was cancelled before the next memory write.",
+                candidates=candidates,
+            )
+        entry = candidate.to_entry(
+            session_id=session_id,
+            work_root=work_root_str,
+            scope=effective_scope,
+        )
+        if await _source_is_suppressed(memory_store, effective_scope, entry.source):
+            checkpoint.batch_index = index + 1
+            await checkpoint_now(last_source=entry.source)
+            continue
         # Search for an existing entry with overlapping content.
         existing = await memory_store.search(
-            MemoryQuery(query=candidate.content, kinds=[candidate.kind], limit=3)
+            MemoryQuery(
+                query=candidate.content,
+                kinds=[candidate.kind],
+                limit=3,
+                scope=effective_scope,
+                work_root=work_root_str or None,
+                statuses=["active"],
+                include_teaching_hints=True,
+            )
         )
         if existing.hits:
             # Merge: bump confidence, refresh content if the new one is richer.
@@ -215,6 +338,10 @@ async def dream_session(
             await memory_store.add(entry)
             added += 1
             settled.append(entry)
+        checkpoint.batch_index = index + 1
+        checkpoint.extracted = len(candidates)
+        checkpoint.settled = len(settled)
+        await checkpoint_now(last_source=entry.source)
 
     await _emit(
         on_event,
@@ -224,7 +351,15 @@ async def dream_session(
     # ── 3. settle high-confidence entries into MEMORY.md ──
     memory_md_updated = False
     merge_report = {"added": 0, "updated": 0, "total": 0}
-    if work_root_str:
+    # ``MEMORY.md`` is only a project compatibility export.  A projectless
+    # Study scope remains authoritative in the shared store and never creates
+    # or reads a project file.
+    allow_memory_file = bool(
+        work_root_str
+        and (effective_scope.compatibility_fallback or effective_scope.project_id)
+        and not effective_scope.library_id
+    )
+    if allow_memory_file:
         memory_md_path = Path(work_root_str) / "MEMORY.md"
         # Only settle entries that are confident enough for the long-term file.
         to_settle = [e for e in settled if e.confidence >= 0.6]
@@ -249,6 +384,7 @@ async def dream_session(
     )
     await _emit(on_event, {"status": "done", "phase": "done", "label": summary})
 
+    await checkpoint_now(status="completed")
     return DreamResult(
         status="dreamed",
         extracted=len(candidates),
@@ -385,7 +521,26 @@ def _parse_candidates(raw: str) -> list[DreamCandidate]:
     for item in data:
         if not isinstance(item, dict):
             continue
-        kind = str(item.get("kind", "fact")).strip().lower()
+        raw_kind = str(item.get("kind", "fact")).strip().lower()
+        # Keep the public vocabulary small.  The model may call a knowledge
+        # hint by either spelling, but ability/grade labels are never valid
+        # durable personal-memory kinds.
+        if raw_kind in {"knowledge.teaching_hint", "knowledge_teaching_hint", "teaching-hint"}:
+            kind = "teaching_hint"
+            origin = "teaching_hint"
+        elif raw_kind in {
+            "ability",
+            "global_ability",
+            "mastery",
+            "score",
+            "grade",
+            "exam_result",
+            "exam-score",
+        }:
+            continue
+        else:
+            kind = raw_kind or "fact"
+            origin = "inferred"
         content = str(item.get("content", "")).strip()
         if not content:
             continue
@@ -393,9 +548,16 @@ def _parse_candidates(raw: str) -> list[DreamCandidate]:
             confidence = float(item.get("confidence", 0.5))
         except (TypeError, ValueError):
             confidence = 0.5
-        candidates.append(
-            DreamCandidate(kind=kind, content=content, confidence=max(0.0, min(1.0, confidence)))
-        )
+        raw_refs = item.get("source_refs") or item.get("sources") or []
+        refs = [dict(ref) for ref in raw_refs if isinstance(ref, dict)] if isinstance(raw_refs, list) else []
+        candidates.append(DreamCandidate(
+            kind=kind,
+            content=content,
+            confidence=max(0.0, min(1.0, confidence)),
+            origin=origin,
+            source_metadata={"model_origin": "dreaming"},
+            source_refs=refs,
+        ))
     return candidates
 
 
@@ -408,6 +570,40 @@ async def _emit(sink: DreamEventSink | None, payload: dict[str, Any]) -> None:
     result = sink(payload)
     if hasattr(result, "__await__"):
         await result
+
+
+def _safe_candidate(candidate: DreamCandidate) -> bool:
+    """Return whether a model candidate is eligible for consolidation."""
+
+    kind = str(candidate.kind or "").strip().lower()
+    if kind in {
+        "ability",
+        "global_ability",
+        "mastery",
+        "score",
+        "grade",
+        "exam_result",
+        "exam-score",
+    }:
+        return False
+    # A model cannot promote an inferred row to an explicit user claim.
+    if candidate.origin == "explicit":
+        candidate.origin = "inferred"
+    return bool(candidate.content.strip())
+
+
+async def _source_is_suppressed(
+    memory_store: MemoryStoreProtocol,
+    scope: MemoryScope,
+    source: str,
+) -> bool:
+    source = str(source or "").strip()
+    if not source:
+        return False
+    checker = getattr(memory_store, "is_source_suppressed", None)
+    if callable(checker):
+        return bool(await checker(scope, source))
+    return False
 
 
 def should_dream(

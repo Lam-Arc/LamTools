@@ -479,12 +479,27 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     },
     {
         "name": "web_search",
-        "description": "Search the web.",
+        "description": "Search web pages or image results. Image results include an HTTPS image URL and its source page for verification and attribution.",
         "input_schema": _schema(
             {
-                "query": {"type": "string", "description": "Search query"},
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Precise search query. For images, name the exact subject, concept, artifact type, "
+                        "and useful domain/standard terms; result relevance is judged by the model."
+                    ),
+                },
                 "limit": {"type": "integer", "description": "Maximum result count"},
                 "domains": {"type": "array", "items": {"type": "string"}, "description": "Domain filter"},
+                "search_type": {
+                    "type": "string",
+                    "enum": ["web", "image"],
+                    "description": (
+                        "Use 'image' for source-backed picture candidates; the provider does not "
+                        "semantically filter them, so inspect title, source page, and image URL. Defaults to 'web'."
+                    ),
+                },
+                "provider": {"type": "string", "description": "Optional search provider override"},
             },
             ["query"],
         ),
@@ -1346,7 +1361,13 @@ class CoreToolbox:
         return core_model_tools(self.tool_specs(), include_tools=include_tools, exclude_tools=effective_exclude or None)
 
     def skill_index(self) -> str:
-        return self.skill_registry.prompt_index(self.work_root, self.skill_state_store)
+        try:
+            return self.skill_registry.prompt_index(
+                self.work_root, self.skill_state_store, active_mode=self.active_mode
+            )
+        except TypeError:
+            # Backward-compatible seam for injected third-party registries.
+            return self.skill_registry.prompt_index(self.work_root, self.skill_state_store)
 
     def _mode_block_reason(self, name: str) -> str | None:
         """Return the fixed mode-enforcement error when ``name`` is not allowed
@@ -1690,10 +1711,18 @@ class CoreToolbox:
                     content=f'Skill "{name}" is disabled. Enable it in settings (skills) before loading.',
                 )
 
-            content = self.skill_registry.load_prompt_content(self.work_root, name)
+            try:
+                content = self.skill_registry.load_prompt_content(
+                    self.work_root, name, active_mode=self.active_mode
+                )
+            except TypeError:
+                content = self.skill_registry.load_prompt_content(self.work_root, name)
             found = not content.startswith(f'Skill "{name}" not found.')
             if found:
-                skill = self.skill_registry.get(self.work_root, name)
+                try:
+                    skill = self.skill_registry.get(self.work_root, name, active_mode=self.active_mode)
+                except TypeError:
+                    skill = self.skill_registry.get(self.work_root, name)
                 if skill is not None:
                     base = skill.location.parent.resolve()
                     self.loaded_skill_roots.add(base)

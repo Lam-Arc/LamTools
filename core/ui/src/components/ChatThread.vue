@@ -10,7 +10,7 @@
       v-for="msg in messages"
       :key="msg.id"
       :data-message-id="msg.id"
-      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, turnActive, activeTurnId, checkpointTurnIds]"
+      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, turnActive, activeTurnId, checkpointTurnIds, autoPlotMath]"
       :motion-enter="!initialMessageIds.has(msg.id)"
       :msg="msg"
         :assistant-label="assistantLabelForMessage(msg)"
@@ -22,6 +22,7 @@
       :active-turn-id="activeTurnId"
       :turn-active="turnActive"
       :checkpoint-turn-ids="checkpointTurnIds"
+      :auto-plot-math="autoPlotMath"
       @toggle-process="onToggleProcess"
         @decision-select="onDecisionSelect"
         @fork-message="onForkMessage"
@@ -86,6 +87,8 @@ const props = withDefaults(
     turnActive?: boolean
     /** 有 checkpoint 的 turn ids：回退/分叉/编辑按钮依赖 checkpoint，无节点时不显示 */
     checkpointTurnIds?: Set<string>
+    /** Automatically plot supported display-math formulas in final answers. */
+    autoPlotMath?: boolean
   }>(),
   {
     showEmptyState: true,
@@ -98,6 +101,7 @@ const props = withDefaults(
     activeTurnId: null,
     turnActive: false,
     checkpointTurnIds: () => new Set(),
+    autoPlotMath: false,
   },
 )
 

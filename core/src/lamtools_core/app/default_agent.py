@@ -329,6 +329,7 @@ def create_core_agent_operations(
                 *resolved_command_member_roots,
                 *plugin_assembly.get("skill_roots", []),
             ],
+            plugin_skill_modes=plugin_assembly.get("skill_modes") or {},
             builtin_skill_roots=resolved_command_core_roots,
         ).registry
 
@@ -368,10 +369,13 @@ def create_core_agent_operations(
                 records.append(record)
         if not records:
             return None, []
-        index_text, content_blocks, deferred = build_capability_aware_attachment_input(
-            records, attachment_ids, capability
+        index_text, content_blocks, deferred = await asyncio.to_thread(
+            build_capability_aware_attachment_input,
+            records,
+            attachment_ids,
+            capability,
         )
-        if not content_blocks and not deferred:
+        if not index_text and not content_blocks and not deferred:
             return None, []
         # Build a multimodal user_content: the message + index text, then matching content blocks.
         parts: list[dict[str, Any]] = [{"type": "text", "text": message + index_text}]
@@ -512,6 +516,9 @@ def create_core_agent_operations(
             # Optional per-turn instructions override (for a plugin mode or
             # another host-provided context).
             turn_instructions = str(request.payload.get("instructions") or "").strip() or None
+            request_local_late_context = str(
+                request.payload.get("request_local_late_context") or ""
+            ).strip()
             allow_access_outside_workdir = bool(
                 (runtime_snapshot or {}).get(
                     "allow_access_outside_workdir",
@@ -615,6 +622,7 @@ def create_core_agent_operations(
                             approval_policy=approval_policy,  # type: ignore[arg-type]
                             active_mode=active_mode,
                             capability=runtime_options.capability,
+                            request_local_late_context=request_local_late_context,
                         ),
                         toolbox=toolbox,
                         verification_policy=kit.verification_policy(),
@@ -804,6 +812,9 @@ def create_core_agent_operations(
         # it is defined in turn_start but not in this scope, so re-resolve it
         # from the request payload (same source as turn_start line ~332).
         turn_instructions = str(request.payload.get("instructions") or "").strip() or None
+        request_local_late_context = str(
+            request.payload.get("request_local_late_context") or ""
+        ).strip()
         # Re-resolve approval policy from payload (injected by live_operations
         # via _resolve_turn_approval_policy) so the continuation kernel inherits
         # the same tier as the original turn_start — not a hardcoded "require".
@@ -1336,6 +1347,7 @@ def create_core_agent_operations(
                                 temperature=runtime_options.temperature,
                                 max_tokens=runtime_options.max_tokens,
                                 capability=runtime_options.capability,
+                                request_local_late_context=request_local_late_context,
                             ),
                             toolbox=toolbox,
                             verification_policy=kit.verification_policy(),
@@ -1659,6 +1671,7 @@ def create_core_agent_operations(
                             temperature=runtime_options.temperature,
                             max_tokens=runtime_options.max_tokens,
                             capability=runtime_options.capability,
+                            request_local_late_context=request_local_late_context,
                         ),
                         toolbox=toolbox,
                         verification_policy=kit.verification_policy(),
@@ -1994,7 +2007,8 @@ def create_core_agent_operations(
             plugin_runtimes=getattr(plugin_operations, "plugin_runtimes", []),
         )
         skill_runtime = create_skill_runtime(
-            plugin_skill_roots=plugin_assembly.get("skill_roots") or []
+            plugin_skill_roots=plugin_assembly.get("skill_roots") or [],
+            plugin_skill_modes=plugin_assembly.get("skill_modes") or {},
         )
         plugin_tooling = _plugin_toolbox_contributions(plugin_assembly)
 
@@ -2605,7 +2619,8 @@ async def _build_core_runtime_toolbox(
         hook_engine.set_mcp_caller(registry if mcp_tool_specs else None)
     normalized_policy = approval_policy if approval_policy in {"require", "auto_approve"} else "require"
     skill_runtime = create_skill_runtime(
-        plugin_skill_roots=plugin_assembly.get("skill_roots") or []
+        plugin_skill_roots=plugin_assembly.get("skill_roots") or [],
+        plugin_skill_modes=plugin_assembly.get("skill_modes") or {},
     )
     skill_roots = set(skill_runtime.roots)
     # Load tools configuration — prefer config dir, then member override, fallback to Core default
@@ -2652,6 +2667,7 @@ async def _build_core_runtime_toolbox(
             parent_event_sink=sub_agent_event_sink,
             checkpoint_coordinator=checkpoint_coordinator,
             activated_mcp_servers=activated_mcp_servers,
+            active_mode=active_mode,
             load_tools=load_tools,
             attachment_service=attachment_service,
             allow_access_outside_workdir=allow_access_outside_workdir,

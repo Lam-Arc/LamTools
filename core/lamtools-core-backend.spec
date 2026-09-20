@@ -11,24 +11,37 @@ Requires the frontend to be built first (optional — for SPA fallback):
     cd core/desktop && npm run build
 """
 
+import os
+import shutil
 from pathlib import Path
 
-_PROJECT_ROOT = Path(".").resolve()
+_SPEC_ROOT = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+_PROJECT_ROOT = _SPEC_ROOT
 _BUNDLED_PLUGINS_ROOT = _PROJECT_ROOT / "src" / "lamtools_core" / "plugins" / "bundled"
 _BUILTIN_SKILLS_ROOT = _PROJECT_ROOT / "skills"
 _EXCLUDED_BUNDLED_PLUGINS = {"emotion-ball-pet", "workflow"}
+_IS_WINDOWS = os.name == "nt"
+_BACKEND_NAME = "LamCore.exe" if _IS_WINDOWS else "LamCore"
+# PyInstaller only embeds executable icons on Windows/macOS.  Passing a PNG
+# on Linux makes older bootloader versions attempt an unsupported conversion;
+# the Linux Tauri icon is configured separately in tauri.conf.json.
+_BACKEND_ICON = "desktop/app-icon.ico" if _IS_WINDOWS else None
+# UPX is optional.  The native Linux build must not depend on a Windows-only
+# compressor being present, while retaining the existing optimization when it
+# is installed on Windows.
+_USE_UPX = shutil.which("upx") is not None
 
 # ---------------------------------------------------------------------------
 # Bundled data files
 # ---------------------------------------------------------------------------
 _datas: list[tuple[str, str]] = [
     # Frontend SPA (built by Vite) — optional, for SPA fallback
-    ("desktop/dist", "frontend"),
+    (str(_PROJECT_ROOT / "desktop" / "dist"), "frontend"),
     # Bundled default resources — seeded into the user config directory on
     # first run (config/defaults.py) and read as fallbacks at runtime.
-    ("config/resources", "config/resources"),
-    ("config/command", "config/command"),
-    ("config/llm_adapters", "config/llm_adapters"),
+    (str(_PROJECT_ROOT / "config" / "resources"), "config/resources"),
+    (str(_PROJECT_ROOT / "config" / "command"), "config/command"),
+    (str(_PROJECT_ROOT / "config" / "llm_adapters"), "config/llm_adapters"),
 ]
 
 # Built-in Skills and their shared companion runtimes. Add files explicitly so
@@ -41,7 +54,7 @@ for _skill_file in sorted(_BUILTIN_SKILLS_ROOT.rglob("*")):
         continue
     _datas.append(
         (
-            str(_skill_file.relative_to(_PROJECT_ROOT)),
+            str(_skill_file),
             str(Path("resources") / "skills" / _relative.parent),
         )
     )
@@ -54,7 +67,7 @@ for _plugin_dir in sorted(_BUNDLED_PLUGINS_ROOT.iterdir()):
         continue
     _datas.append(
         (
-            str(_plugin_dir.relative_to(_PROJECT_ROOT)),
+            str(_plugin_dir),
             f"resources/plugins/bundled/{_plugin_dir.name}",
         )
     )
@@ -200,6 +213,12 @@ _hiddenimports = [
     "lamtools_core.plugins.engine",
     "lamtools_core.plugins.hook_config",
     "lamtools_core.plugins.context",
+    "lamtools_core.plugins.bundled.study",
+    "lamtools_core.plugins.bundled.study.backend",
+    "lamtools_core.plugins.bundled.study.store",
+    "lamtools_core.plugins.bundled.study.exams",
+    "lamtools_core.plugins.bundled.study.marks",
+    "lamtools_core.plugins.bundled.study.lexicon",
     "lamtools_core.plugins.lifecycle",
     "lamtools_core.plugins.models",
     "lamtools_core.plugins.operations",
@@ -286,8 +305,8 @@ _hiddenimports = [
 # Analysis
 # ---------------------------------------------------------------------------
 a = Analysis(
-    ["desktop_backend.py"],
-    pathex=["src"],
+    [str(_PROJECT_ROOT / "desktop_backend.py")],
+    pathex=[str(_PROJECT_ROOT / "src")],
     binaries=[],
     datas=_datas,
     hiddenimports=_hiddenimports,
@@ -306,18 +325,18 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="LamCore",
+    name=_BACKEND_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=_USE_UPX,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="desktop/app-icon.ico",
+    icon=_BACKEND_ICON,
 )
 
 coll = COLLECT(
@@ -325,7 +344,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=_USE_UPX,
     upx_exclude=[],
     name="LamCore",
 )

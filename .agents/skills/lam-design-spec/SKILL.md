@@ -83,6 +83,13 @@ version: 0.1.0
 
 **Composer send/stop action exception**：`CoreSendStopButton` is a composer-area action surface even though it is a button. Its outer key surface uses `--theme-composer-text`; its paper-plane/stop glyph and motion trail use `--theme-composer-background`. Send and stop share this inversion. This explicit recipe supersedes the generic control-area button colors for this component; do not introduce control tokens or semantic red for its action colors.
 
+### 光学液态玻璃（true glass surface）
+统一复用 `core/ui/src/styles/optical-glass.css` 的 `.optical-glass`，不得另建 `.liquid-glass` 或在消费者中重复 `backdrop-filter`、主体背景和悬浮阴影。材质 token 位于 `variables.css`：blur 8px、saturate 1.14、brightness 1.02；主体使用所在 theme area 的 `--text` 以约 16% 透明度混合，保持高透射，不用组件级 `opacity`。
+
+玻璃边缘由原语统一提供 1px 低对比度物理边、左上局部 radial specular、顶部 inset 高光、灰绿色下缘折射，以及短的双层阴影。消费者只负责几何、`--text` area 映射和语义 modifier；交互玻璃 hover 只可轻微增亮，active 使用 0.97–0.98 缩放。原语必须同时提供 `-webkit-backdrop-filter`、不支持 backdrop 时的半透明 fallback，并在 `prefers-reduced-motion: reduce` 下不引入持续运动。
+
+true glass surface 清单：右侧 rail、上下文菜单 root/submenu、Study selection card、Workflow catalog popover/runtime dock、回到最新按钮、移动端顶栏按钮/同步状态、goal 区。模态 dimmer、opaque panel、左侧 drawer、Workflow node card 不得套用该原语。
+
 ### 悬停 / 选中态
 统一规则 + `--alpha-*` token，hover → active 恒 +4pp。部分组件（settings-nav）当前把 hover 与 active 合并为同值——规范后须区分。
 

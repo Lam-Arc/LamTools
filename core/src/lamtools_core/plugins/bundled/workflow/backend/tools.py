@@ -197,6 +197,7 @@ def _make_workflow_handler(
             "runtime_permissions", "lineage", "parent_lineage", "workflow_stack",
             "active_workflows", "depth", "nesting_depth", "max_depth",
             "max_nesting_depth", "execution_context", "_runtime_session_metadata",
+            "_runtime_model_id",
         }
         forwarded = {key: metadata[key] for key in inherited_keys if key in metadata}
         metadata = {

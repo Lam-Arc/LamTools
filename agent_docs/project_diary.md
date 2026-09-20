@@ -416,6 +416,21 @@ logs.
   模型供应商和业务错误不进入该宽限。`seq=0` 的瞬时流式事件从不进入 sync journal，live
   reader 不得为每个 delta 查询 SQLite，否则突发输出会阻塞 reader、填满 256 项订阅队列并
   触发 `1013 Event stream overflow`。
+- 插件模式若自行渲染聊天滚动容器，必须复用 Core 的 `useCoreAutoFollowScroll` 与底部哨兵
+  契约；模式切换导致容器重新挂载时要重置跟随状态并强制落到最新位置，用户向上滚动后则
+  暂停跟随并提供“回到最新消息”入口。插件标题进入宿主 `.workspace-plugin-header`，不得在
+  内容流中另放一套错位标题。
+- Study 知识图谱使用一次性、确定性的关系力导向布局，而不是持续物理模拟：首次布局按稳定
+  ID、关系强度与名称宽度分散节点，已保存或用户拖动的位置始终优先，避免每次进入时漂移。
+  节点保持轻量圆点与文字形态，悬停/聚焦只强化直接关系并压低其余连线。Vue Flow 视口必须
+  通过实例的 `setViewport` 与 `moveEnd.flowTransform` 同步和持久化；当前版本不支持
+  `v-model:viewport`，不得用本地 ref 冒充实际画布缩放状态。
+- 全局选中文本的轻量模型调用必须把精确 `quote` 放在每次请求开头的独立主要目标区，
+  `prefix/suffix` 只能作为明确标注的消歧上下文，避免长段附近文本抢占回答目标；
+  translate/explain/ask 的输出预算分别为 256/600/1200 tokens。提示词契约升级只失效缓存的
+  解释/翻译结果，不得清空用户的标记问答历史；本地词典翻译继续保持无模型调用。选文助手的
+  模型回复统一复用 `MarkdownRenderer` 并关闭 Mermaid，用户问题与词典字段保持纯文本；
+  紧凑卡片正文行高固定为 1.35。
 - Office 全量预览声明必须绑定到最后一次源文件变更后的渲染批次。源文件修订并重新渲染后，
   之前看过的旧预览不能继续支撑 `scope=full`；应重新查看受影响的全部页面，或如实降级为
   sampled。Checklist 状态也不得重复提交或先于该证据完成。
@@ -425,3 +440,148 @@ logs.
 - DeepSeek 直连官方预设以官方 API 文档为准：当前模型为 `deepseek-flash` 与
   `deepseek-v4-pro`，上下文均为 1M，最大输出上限均为 393216 tokens；Flash 支持视觉，
   Pro 官方明确不支持视觉，不能仅凭产品命名把两者都标为多模态。
+- 需要标准对话的插件模式通过 `PluginModeSurface.useCoreThread` 复用 Core 的
+  `ChatThread`、历史分页、消息操作、附件托盘/上传/拖放/粘贴/发送和历史附件渲染；
+  不再在插件内重复实现对话面。`useCoreAutoFollowScroll` 自身拥有唯一的底部
+  sentinel `IntersectionObserver`，宿主和插件只提供容器与 sentinel ref。Study 使用
+  `study:main` 作为全局知识图谱构建会话，每个知识节点对应独立会话；非 ASCII
+  节点 ID 以稳定 SHA-256 摘要映射到会话 ID，真实 ID 始终保留在 metadata。
+  插件会话常用的冒号不直接进入附件目录名，附件存储层将这类逻辑会话 ID
+  稳定哈希为文件系统安全目录，数据库和运行时仍保留原会话 ID。
+- Study v2 继续复用同一 Agent Loop、Core 会话/附件/流式/取消与既有工具 ID，不建立第二套
+  Agent 基座。Study 数据的授权边界固定为宿主提供的 `user/environment/library` scope；本地
+  单用户兼容必须显式落入 legacy/local/default scope，任何模型或业务 payload 都不能自报 scope
+  或 capability。知识、考试、标记、笔记、会话绑定、幂等回执和 outbox 均按该 scope 隔离。
+- Study 的会话语义固定为 `map`、`notes`、`node` 三类 binding；同 scope/类型/节点只有一个当前
+  primary，替换 primary 只保留历史、不删除旧会话。节点首次创建会话只返回一次空草稿预填，
+  不自动发送且不覆盖已有草稿。图谱与笔记各有管理会话，课程/分组展开不再等同于打开网图。
+- Study 知识层以 SQLite 单事务写源为准，Markdown 仅作为内容/导出表示。结构和学习状态使用独立
+  revision；包含与前置分别检环，关联允许环；分页游标绑定 scope、查询与结构 revision。课程移除
+  采用可恢复的软分离，保留共享节点、会话、笔记与考试证据。P4 教材/PDF/RAG/向量库和 P5 远期
+  功能继续只保留接口，不形成文件/数据库双主或第二个图数据库。
+- Study 考试由当前 Agent 一次生成题面、每题分值、参考答案和评分点并持久化；参考答案是上下文压缩
+  或长间隔后的恢复依据，不触发另一套隔离出题/判卷模型。普通 `get/list` 不返回参考答案，Agent 仅在
+  需要恢复依据时显式调用 `reference`。判卷由当前 Agent 提交逐题得分、部分得分、步骤反馈和掌握建议；
+  服务端不比较答案原始字符串，只校验结构、分数范围、节点/题号归属、版本和幂等。`sign` 仍只能完全
+  匹配已保存的当前评分建议；受助、未覆盖、uncertain/不可读证据不得升级或判失败，同一签名重试不得
+  增加 state revision 或重复 outbox。
+- 全局长期学习记忆复用共享 MemoryService/Dreaming，以 scope-keyed 内部身份隔离相同公开 memory ID；
+  Study 不写项目 `MEMORY.md`。显式记住、纠正、遗忘和来源抑制是权威状态，遗忘内容不得从缓存、
+  派生摘要或候选重放复活；一般教学说明留在 `knowledge.teaching_hint`，不能据一次错误或标记生成
+  全局能力标签。Arrange/Dreaming 的持久任务使用 checkpoint、lease fencing 与可取消恢复语义。
+- Study 会话绑定只调用 operation catalog 中真实注册的 `study.session`；不得把未注册的兼容别名交给
+  通用指数退避 RPC，否则永久错误会被放大为秒级首屏卡顿。已有 binding 不刷新全量会话列表，
+  同一 active session 不重复 resume。模式切换保留 connection-scoped App Server 客户端并使用既有
+  `switchThread`，不要为 Agent/插件切换主动断线重连。
+- Study 首屏只加载会话、概览和置顶所需数据：绑定与概览并行，课程树必须点击后逐层读取，不在挂载
+  时展开所有课程。Vue Flow 及图谱控件属于按需 `StudyGraph` chunk，进入聊天不得提前加载。插件导入和
+  首次绑定统一复用 `HistoryLoadingIndicator`；首次 ready 后的节点会话切换保留 Core thread DOM，
+  继续由宿主同一加载动画接管，避免为 loading 重挂整棵消息树。
+- Study 不再提供独立“总览”页面；原入口固定为“管理你的知识”，显式清除节点选择并恢复既有 `map`
+  primary binding，因此无论此前位于哪个节点会话都回到默认知识管理主会话，不能创建平行会话体系。
+  顶层图谱直接复用 `study.get view=overview` 的课程聚合，每门课程以大圆球展示原始全名，并以外圈
+  `passed / total` 环形进度和可访问百分比替代旧列表进度；该聚合进度与节点 mastery 保持独立，深入
+  课程后的模块和知识节点仍使用紧凑节点配方。
+- Study v3 教学技能沿用 bundled plugin 的 `skills` 根和 `study:study` mode gate：系统提示词只替换
+  Study 业务身份，宿主继续追加公共工具协议；模型上下文的技能索引只含 name/description，正文由
+  `load_skill` 按任务送入，references 再经受限 `read_file` 按需读取。build-map、teach、answer、
+  take-exam 使用现有知识图、考试、文件和 Web 工具 ID，不新增同义工具或 UI。
+- `curate-notes` 在 `study.notes` 已有事务存储和 UI/RPC 合同基础上，通过 Study 专属 `notes` Agent tool
+  接通；为保持模型请求的工具前缀稳定，工具从首轮起可见，只有技能正文按需加载。Agent 写入被规范为
+  AI 未锁定块，不能传 UI 专用的 `user_edit` 覆盖用户锁定块；笔记继续使用同一 `StudyStore`，不另建写源。
+- NoteBlock 是内部修订、来源和锁定单位，不是默认阅读界面的视觉卡片。Study 笔记默认把有序块连续合成为
+  一篇 Markdown 文档；只有进入编辑态才显示分块编辑器。这样保留块级并发与来源能力，同时避免把完整
+  学习笔记呈现成“AI 建议”碎片列表。
+- Study 技能静态宿主验证与真实教学行为评测必须分开：宿主检查可证明模式隔离、工具声明、引用和
+  fixtures 可读，但不能证明输出质量。无可用生产模型/固定工具快照时，40 个场景一律保留
+  `NOT_RUN`，`expected_output` 不能写入 actual output；准确、桥梁、密度、资源选择、自主性和硬失败
+  只能在真实轨迹产生后评分。
+- `thread.resume` 的 snapshot 与 journal delta 是互补合同：`include_snapshot=true` 不能清空
+  `events`，否则会破坏断线续传、分页游标和去重连续性。localhost 生命周期探测必须显式禁用系统
+  代理，避免本机后台服务被用户代理配置误路由后产生假超时。共享 UI 动画模块不得在模块顶层访问
+  `window`/`matchMedia`；无浏览器环境要在调用时安全降级，确保移动端 Node 测试和 SSR 可导入。
+- Setup 安装版启动验收受 Tauri 全局单实例锁约束。开发版正在运行时，新安装版会正常以退出码 0
+  结束；验收脚本不得把旧进程当成新版本，也不得为此关闭其他目录或开发环境。此时安装/版本/哈希
+  可独立验证，但主程序与打包后端双进程冒烟必须明确记为受阻并在开发实例关闭后重跑。
+- Core 的真实玻璃材质统一复用 `.optical-glass`：右侧 rail、上下文菜单、Study 选区卡、Workflow
+  catalog/runtime dock、回到最新按钮、移动顶栏和 Goal 区只能通过共享 token/伪元素配方获得透射、
+  高光、边缘、折射与阴影，不再维护局部 `backdrop-filter` 配方；启动 Acrylic 在 Vue 挂载前以同参数
+  手工镜像。模态 dimmer、普通不透明面板、左侧 drawer 和 Workflow node card 不是玻璃表面，不得
+  为了视觉统一套用玻璃。共享配方必须同时覆盖 WebKit、无滤镜 fallback 和 reduced-motion 边界。
+- 远程 PDF 与本地 PDF 必须复用 `document_normalize` 的同一条受限解析路径；`web_fetch` 不得对
+  `application/pdf` 或 `%PDF-` 内容访问 `response.text`。PDF 提取和附件文件读取要移出事件循环，
+  并保留文件/页数/文本预算、加密拒绝、扫描页警告和不可信内容边界。模型仅收到可提取文本；
+  当前内容块合同不支持的 PDF 不得伪装为多模态附件，也不得因没有图片块而静默丢弃附件索引。
+- 图片搜索不得用本地关键词交集替模型做语义裁决；准确性优先由精确查询、可用 provider 和可核验
+  来源保证，结果标题、最终来源页与图片 URL 完整交给模型判断。图片分支必须尊重显式/默认 provider，
+  不得静默强制切换 Bing。DuckDuckGo 是缺省搜索内核；其非公开图片 JSON 接口不可用时，先用准确
+  网页结果发现来源页，再提取页面声明的 HTTPS 图片候选，百度/Bing 仅按统一 fallback 合同降级。
+- 任何从主 Agent 转入隔离、排队或延期执行的模型调用，都必须在工具边界由宿主从当前 runtime
+  snapshot 写入私有 `_runtime_model_id`，并在持久化前归一为明确的 `model_id`；显式授权的模型覆盖
+  优先，随后才是当前回合模型和静态宿主默认。审批恢复、Arrange 与 Workflow queue 都遵循该合同，
+  不能因跨 operation/plugin 边界静默切换模型。Study 出题/判卷现已回归主 Agent Loop，不适用隔离
+  模型路由。未知模型、缺失路由/provider、
+  非绝对 HTTP(S) provider URL 属于确定性配置错误：立即失败、不得指数重试，也不得偷偷回退到另一
+  默认模型。
+- Core 对话的用户指令导航以 `thread.outline` 作为轻量只读索引：仅投影完整 snapshot 中可定位的
+  顶层 `userMessage`，每项保留 message/turn/seq、最多 240 字符的指令和对应回复摘要，不为 queue、
+  steer 或 pending placeholder 合成不可定位锚点。前端用单个 Canvas 按全历史索引等距绘制刻度，
+  当前项由已挂载用户消息靠近视口 38% 激活线的位置决定，点击继续复用既有 `locateMessage` 与历史
+  分页；预览卡统一使用 `.optical-glass`，窄屏（≤640px）隐藏，且不新增滚动 Observer。
+- Study 的 Obsidian 式笔记继续以 SQLite NoteBlock 为唯一写源：阅读/预览把有序块投影为连续 Markdown，
+  编辑时只原位更新既有可编辑块，不合并、删除或另存 `.md` 双主。`[[target]]`/`[[target|label]]` 在
+  当前 scope 内按“笔记优先、知识节点其次”动态解析，未解析链接允许保留；反向链接同样由当前 Markdown
+  读时计算，首版不建立易漂移的 link 表。文档级保存通过 `study.notes update_blocks` 单事务校验现有
+  revision/锁定状态并原子批写，重复 block ID 必须在写入前拒绝；客户端不得降级为逐块写入而产生半保存。
+- PyInstaller 中可导入的插件 Python 模块与插件数据资源不在同一路径：Study 业务提示词必须先读源码旁
+  路径，再通过 `bundled_plugins_dir()` 解析 frozen `resources/plugins/bundled/study`。打包验收不能只测
+  `/api/health` 或 WebSocket initialize，必须真实调用 `study.session`，否则动态 operation 导入失败会被
+  健康检查漏掉并在 UI 中表现为 `Unsupported method: study.session`。
+- Study 笔记写入者身份由宿主调用边界提供，不能来自 `study.notes` payload：Agent 创建/追加只能得到
+  `author=ai, locked=false`，更新也只能触及现有 AI 未锁定块；用户 RPC 保存会把被编辑块归属为用户并
+  锁定。Agent tool schema 不暴露 `user_edit` 等提权字段，后续新增调用路径也必须显式选择可信 writer。
+- Study 笔记阅读投影不得对 NoteBlock 内容做 `trim` 或其他 Markdown 归一化；块间只加安全段落边界，
+  保留缩进代码和行尾硬换行。保存成功后以详情接口重新读取派生 links/backlinks/node labels，陈旧详情
+  响应不得覆盖已提交内容；本地草稿按 note/block 保留，内部导航必须先提示且不得丢弃草稿。
+- Study wikilink 解析继续兼容 `[[target]]`，并以 `[[note:<id>]]` / `[[node:<id>]]` 处理重名消歧；
+  fenced code 和 inline code 内的字面量不形成链接。未解析链接在 UI 明确标识为不可导航，节点反链同时
+  返回来源关联与正文 wikilink 关联，所有笔记变更广播 `study/changed`，纯读取不广播。
+
+## Study 三层笔记架构（2026-09-20）
+
+- 此决策取代本文件中早期“NoteBlock/SQLite 正文单一写源”的 Study 笔记方案。新合同固定为
+  Raw → Resource → Note：Raw 是宿主从 Study 会话、标记、考试和节点生成的不可变真实快照，
+  Agent 只读；Resource 是 Agent 基于真实 Raw 形成的可追溯、CAS 更新且历史版本可读的素材；
+  Note 才是用户阅读和编辑的最终知识库，每篇必须引用至少一个 Resource。
+- Note 的正文真源是 scope 隔离 vault 中的真实 UTF-8 `.md` 文件；SQLite 只维护索引、Resource、
+  关系、锁和版本。宿主管理 frontmatter 与文末轻量来源链接/机器哨兵，API 只读写正文，不能让
+  用户或 Agent 覆盖来源尾注。旧 AI block 迁移为 Resource，旧用户 block 同时保留 Raw 依据、
+  Note 正文与锁区；旧块表迁移后只读，不再双写。
+- Note 写入采用全文 `body_md + resource_ids + expected_revision + expected_content_hash` CAS。
+  用户和 Agent 均可编辑，但用户框选锁定仅阻止 Agent；浏览器和后端统一使用 UTF-16 code-unit
+  区间。Agent 与锁重叠时整次写入原子失败并返回 reason、lock id、quote 与重合范围；用户编辑后
+  尽力重锚，失锚锁进入保守阻断状态。
+- Note 工作区左侧固定为真实 Markdown 路径文件树，顶部提供返回/对话，主区为单文档编辑/预览、
+  Markdown 原生块模板和论文式来源；Notes 对话复用既有 Study Agent 会话维护文档。总体关系图
+  归属 Note 并放在右侧栏，只包含 Note 节点及 wikilink/父子边；Raw、Resource 不进入该图，也
+  不另建图谱实体、独立页面或后台整理任务。
+- Note 的 `path` 是左侧物理文件目录的唯一结构来源；`parent_id` 只表达语义子文档并产生右栏父子边，
+  不能把父 Note 伪装成目录。所有离开或替换当前 Note 的入口（文件树、图、链接、搜索、置顶、返回、
+  对话）统一通过同一脏草稿门禁；旧 NoteBlock CRUD 与前端 blocks 投影仅用于一次性迁移读取，不再是
+  可调用或可回退的运行时笔记合同。
+
+## Linux 桌面发行合同（2026-09-20）
+
+- 当前桌面发行新增 Linux x64，交付格式固定为 AppImage 与 `.deb`；macOS 暂不提供。Linux 后端必须在
+  Linux 原生 Python 上由 PyInstaller 生成无扩展名 `LamCore`，不能复用 Windows `LamCore.exe`；两个
+  Linux 包都必须把完整 sidecar 放入 `lamcore-backend/LamCore`。
+- Windows 继续使用应用目录旁的绿色/便携数据布局；Linux AppImage/`.deb` 的可变状态必须写入 Tauri
+  `app_data_dir()` 对应的 XDG 用户数据目录，hooks 默认遵循 `XDG_CONFIG_HOME`，敏感凭据使用 Linux
+  Secret Service 持久后端，不能回退为进程内存存储。
+- Linux 原生打包统一由 `scripts/package-linux.sh` 驱动：工具链、缓存与 staging 必须位于 Linux 文件系统
+  且拒绝 `/mnt/c`；GTK helper 固定到已修复版本，其他 helper 采用原子重试缓存，打包器重试只清理残缺
+  AppDir 并保留 Cargo target 避免重复编译。验收至少覆盖后端 REST/WebSocket/Study smoke、包内 sidecar、AppImage 解包和
+  Xvfb + 独立 D-Bus 启动存活。CI/release 不得绕过该脚本直接运行裸 `tauri build`。
+- Linux 后端必须进入专属进程组：正常退出先向整组发送 SIGTERM、超时后 SIGKILL；桌面进程异常死亡时
+  通过竞态检查后的 `PDEATHSIG=SIGKILL` 保证直接 sidecar 不残留。AppImage 冒烟必须真实捕获包内
+  `LamCore` 的 PID 与 starttime，并在 launcher 超时退出后断言其消失，不能只把 timeout 124 当作成功。

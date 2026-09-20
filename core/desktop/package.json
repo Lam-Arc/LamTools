@@ -1,12 +1,13 @@
 {
   "name": "lamtools-core-desktop",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.3.5",
   "type": "module",
   "scripts": {
     "dev": "vite --port 5173",
     "build": "vite build",
     "build:app": "tauri build --no-bundle",
+    "package:linux": "bash ../../scripts/package-linux.sh",
     "package:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ../../scripts/package.ps1",
     "test:pet": "node --test tests/pet-logic.test.mjs",
     "tauri": "tauri"

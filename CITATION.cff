@@ -23,7 +23,7 @@ keywords:
   - multimodal agents
   - persistent runtime
   - software infrastructure
-license: MIT
+license: GPL-3.0-only
 repository-code: "https://github.com/Lam-Arc/LamTools"
 url: "https://github.com/Lam-Arc/LamTools"
 identifiers:

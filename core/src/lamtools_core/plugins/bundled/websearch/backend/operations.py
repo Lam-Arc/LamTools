@@ -17,7 +17,7 @@ async def widget_snapshot(
 ) -> OperationResult:
     del request
     config = _default_config(str(work_root) if work_root else None, data_dir=data_dir)
-    provider = str(config.get("provider") or "baidu")
+    provider = str(config.get("provider") or "ddg")
     fallbacks = config.get("fallback_providers")
     fallbacks = [str(item) for item in fallbacks] if isinstance(fallbacks, list) else []
     return OperationResult(
@@ -42,7 +42,7 @@ async def widget_health(
     request: OperationRequest, *, work_root: Path | None, data_dir: Path | None
 ) -> OperationResult:
     config = _default_config(str(work_root) if work_root else None, data_dir=data_dir)
-    provider = get_provider(str(config.get("provider") or "baidu"), config)
+    provider = get_provider(str(config.get("provider") or "ddg"), config)
     query = str(request.payload.get("query") or "OpenAI").strip()
     if not query or len(query) > 200:
         return OperationResult(

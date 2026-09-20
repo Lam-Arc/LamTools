@@ -9,6 +9,7 @@ import type { PluginModeLoader, PluginWidgetLoader } from './types'
  * table and are compiled with the main UI bundle.
  */
 export const bundledPluginModeLoaders: Record<string, PluginModeLoader> = {
+  'study:study': () => import('../study/StudyView.vue'),
   // Official bundled plugins are compiled with the Core UI bundle.  The
   // backend still owns discovery and enable/disable state; this table only
   // resolves the trusted local component after the descriptor is returned.

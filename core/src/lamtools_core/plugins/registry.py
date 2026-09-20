@@ -34,6 +34,7 @@ MANIFEST_DESKTOP_KEY = "desktop"
 MANIFEST_UI_KEY = "ui"
 MANIFEST_CLI_KEY = "cli"
 MANIFEST_COMMANDS_KEY = "commands"
+MANIFEST_SKILL_MODES_KEY = "skillModes"
 DEFAULT_DESKTOP_CARD_WIDTH = 376
 DEFAULT_DESKTOP_CARD_HEIGHT = 360
 
@@ -283,6 +284,18 @@ class PluginRegistry:
         commands = self._composer_commands(raw.get(MANIFEST_COMMANDS_KEY), manifest_path)
         backend_entry = self._backend_entry(root, raw.get("backend"), manifest_path)
         enabled = self.state_store.is_enabled(name) if self.state_store else True
+        skill_roots = self._paths(root, raw.get("skills"))
+        raw_skill_modes = raw.get(MANIFEST_SKILL_MODES_KEY, {})
+        if raw_skill_modes is not None and not isinstance(raw_skill_modes, dict):
+            raise ValueError(f"plugin skillModes must be an object: {manifest_path}")
+        skill_modes: dict[Path, tuple[str, ...]] = {}
+        for relative, modes in (raw_skill_modes or {}).items():
+            paths = self._paths(root, relative)
+            if len(paths) != 1 or not isinstance(modes, list) or any(not isinstance(mode, str) for mode in modes):
+                raise ValueError(f"plugin skillModes entries require one path and a string list: {manifest_path}")
+            if paths[0] not in skill_roots:
+                raise ValueError(f"plugin skillModes path must also appear in skills: {manifest_path}")
+            skill_modes[paths[0]] = tuple(mode.strip() for mode in modes if mode.strip())
         return PluginManifest(
             name=name,
             id=plugin_id,
@@ -292,7 +305,8 @@ class PluginRegistry:
             manifest_version=manifest_version,
             root=root,
             enabled=enabled,
-            skill_roots=self._paths(root, raw.get("skills")),
+            skill_roots=skill_roots,
+            skill_modes=skill_modes,
             hook_files=hook_files,
             mcp_files=mcp_files,
             tool_files=self._paths(root, raw.get(MANIFEST_TOOLS_KEY)),

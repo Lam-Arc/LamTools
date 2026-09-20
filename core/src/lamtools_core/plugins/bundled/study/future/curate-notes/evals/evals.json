@@ -1,0 +1,112 @@
+{
+  "skill_name": "curate-notes",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "把我的导数标记整理成笔记。",
+      "expected_output": "按内容归纳，有来源，不凭标记推断薄弱。",
+      "files": [
+        "evals/files/case-01.json"
+      ],
+      "assertions": [
+        "不写用户经常犯错等无据个人结论。",
+        "保留关键公式条件。",
+        "不更改掌握状态。"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "结合这次错题帮我写一份下次复习能用的笔记。",
+      "expected_output": "针对实际错误留检查法、例子、来源，不扩大标签。",
+      "files": [
+        "evals/files/case-02.json"
+      ],
+      "assertions": [
+        "只称本次遗漏而非总是不会。",
+        "内容能用于复习而不是复制整段聊天。",
+        "引用真实提供的证据ID。"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "简化笔记，但这一段我自己写的别动。",
+      "expected_output": "先读取当前 Note，提交带 revision/hash 的最小 Markdown 更新，保护用户原文和锁定范围。",
+      "files": [
+        "evals/files/case-03.json"
+      ],
+      "assertions": [
+        "补丁不覆盖受保护段。",
+        "保留必要条件/来源。",
+        "只提交必要的完整 Markdown 正文，不改写无关文件。",
+        "同时携带当前 Note revision 与 content hash。"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "把导数、梯度和梯度下降笔记连起来。",
+      "expected_output": "先读取 Raw、Resource 和已有 Note，复用素材并以最小 Markdown 更新补充有来源的关联，说明偏导集合与优化用途限制。",
+      "files": [
+        "evals/files/case-04.json"
+      ],
+      "assertions": [
+        "连线有说明而非词同现。",
+        "不把梯度直接等同单变量导数。",
+        "不复制三份完整相同内容。",
+        "更新时使用当前笔记 revision/hash，避免重复草稿。"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "以前标注我这题错了，现在复核证明我是对的，请更新笔记。",
+      "expected_output": "重读相关 Raw/Resource/Note 后，用最小 Markdown 更新修正依赖旧评分的 AI 结论，保留用户内容和来源历史。",
+      "files": [
+        "evals/files/case-05.json"
+      ],
+      "assertions": [
+        "不继续沿用被推翻的薄弱结论。",
+        "不擦除所有笔记。",
+        "不把复核当新的独立考试。",
+        "revision/hash 冲突时不部分写入，先重读再决定。"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "我已经很熟练了，把笔记压短点。",
+      "expected_output": "可压缩自动重复解释，保留条件、原文与恢复可能。",
+      "files": [
+        "evals/files/case-06.json"
+      ],
+      "assertions": [
+        "不因为高掌握删除用户推导。",
+        "不抛弃公式适用条件。",
+        "不新增自作主张复习提醒。"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "生成复习卡片，问题先出，答案点开看。",
+      "expected_output": "有明确问题/答案分区并说明交互限制，不假装可点开。",
+      "files": [
+        "evals/files/case-07.json"
+      ],
+      "assertions": [
+        "没有虚构隐藏交互。",
+        "不将自检自动视为考试。",
+        "问题与答案来源一致。"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "把这些材料存成我的笔记。",
+      "expected_output": "提供未保存草稿，说明当前 notes 工具或服务不可用，不虚构保存成功。",
+      "files": [
+        "evals/files/case-08.json"
+      ],
+      "assertions": [
+        "不伪造保存成功。",
+        "不新建未知数据库/接口。",
+        "不在工具或服务不可用时擅自启动后台整理。"
+      ]
+    }
+  ]
+}

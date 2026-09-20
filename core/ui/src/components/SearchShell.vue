@@ -86,6 +86,13 @@
               </li>
             </template>
 
+            <!-- Study：节点、笔记和 Study 会话由现有宿主搜索承载 -->
+            <template v-else-if="activeTab === 'study'">
+              <li v-for="(hit, idx) in results" :key="'study-' + (hit.entity_id || hit.note_id || hit.session_id || idx)" class="search-hit" :class="{ 'is-active': idx === cursor }" @mousedown.prevent="cursor = idx; jumpStudy(hit as StudySearchHit)" @mouseenter="cursor = idx">
+                <div class="search-hit-head"><span class="search-hit-title">{{ hit.title || hit.path || hit.entity_id || hit.note_id }}</span><span class="search-hit-role">{{ hit.entity_type || 'Study' }}</span></div>
+                <p class="search-hit-snippet" v-html="highlight(hit.snippet || hit.content)" />
+              </li>
+            </template>
             <!-- 文档：RAG 语义命中 -->
             <template v-else>
               <li v-for="(hit, idx) in results" :key="'d' + idx" class="search-hit">
@@ -137,6 +144,9 @@ const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   sessions: CoreSessionListItem[]
   onJump: (sessionId: string, messageId: string) => void
+  /** Study reuses this host search surface; it does not render a parallel search UI. */
+  activeModeId?: string | null
+  onStudyHit?: (hit: StudySearchHit) => void | Promise<void>
   theme?: ThemeData | null
 }>()
 
@@ -144,7 +154,7 @@ const emit = defineEmits<{ close: [] }>()
 const settingsOverlayEl = ref<HTMLElement | null>(null)
 const settingsCardEl = ref<HTMLElement | null>(null)
 
-type SearchTabId = 'files' | 'content' | 'sessions' | 'docs'
+type SearchTabId = 'files' | 'content' | 'sessions' | 'docs' | 'study'
 interface SearchHit {
   path?: string
   line?: number
@@ -157,6 +167,16 @@ interface SearchHit {
   title?: string
   heading?: string
   score?: number
+  entity_type?: string
+  entity_id?: string
+  node_id?: string
+  note_id?: string
+}
+export interface StudySearchHit extends SearchHit {
+  entity_type?: 'node' | 'note' | 'session' | string
+  entity_id?: string
+  session_id?: string
+  message_id?: string
 }
 
 const TAB_DEFS: { id: SearchTabId; label: string; icon: Component }[] = [
@@ -164,6 +184,7 @@ const TAB_DEFS: { id: SearchTabId; label: string; icon: Component }[] = [
   { id: 'content', label: '内容', icon: FileText },
   { id: 'sessions', label: '会话', icon: MessageSquareText },
   { id: 'docs', label: '文档', icon: Search },
+  { id: 'study', label: 'Study', icon: Search },
 ]
 
 const activeTab = ref<SearchTabId>('files')
@@ -184,9 +205,10 @@ const composing = ref(false)
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let searchSeq = 0
 
-const pluginTabs = computed<{ id: SearchTabId; label: string; icon: Component }[]>(
-  () => (ragEnabled.value ? TAB_DEFS : TAB_DEFS.filter((t) => t.id !== 'sessions' && t.id !== 'docs')),
-)
+const pluginTabs = computed<{ id: SearchTabId; label: string; icon: Component }[]>(() => {
+  const base = ragEnabled.value ? TAB_DEFS : TAB_DEFS.filter((t) => t.id !== 'sessions' && t.id !== 'docs')
+  return props.activeModeId?.startsWith('study:') ? base : base.filter(tab => tab.id !== 'study')
+})
 const availableTabs = computed(() => pluginTabs.value)
 
 const inputPlaceholder = computed(() => {
@@ -197,6 +219,8 @@ const inputPlaceholder = computed(() => {
       return '搜索工作区文件内容…'
     case 'sessions':
       return '搜索历史会话消息…'
+    case 'study':
+      return '搜索 Study 节点、笔记和已创建会话…'
     default:
       return '语义搜索已索引文档…'
   }
@@ -211,6 +235,8 @@ const hintText = computed(() => {
         : '会话搜索需要 lamtools-rag 插件'
     case 'docs':
       return '输入关键词语义检索已索引的工作区文档'
+    case 'study':
+      return '只搜索当前 Study 工作环境内可访问的节点、笔记和会话'
     default:
       return '输入关键词搜索工作区文件'
   }
@@ -340,6 +366,10 @@ async function callForTab(tab: SearchTabId, q: string): Promise<SearchHit[]> {
     case 'sessions':
       return ((await props.requestRpc('rag.sessions.search', { query: q, top: 12 })).hits ||
         []) as SearchHit[]
+    case 'study': {
+      const result = await props.requestRpc('study.search', { query: q, scope: 'study', limit: 50 })
+      return (result.results || result.hits || []) as SearchHit[]
+    }
     default: {
       const hits = (await props.requestRpc('rag.docs.search', { query: q, top: 12 }))
         .hits as SearchHit[]
@@ -354,6 +384,11 @@ function jumpSession(hit: SearchHit): void {
     emit('close')
     props.onJump(hit.session_id, hit.message_id)
   }
+}
+
+function jumpStudy(hit: StudySearchHit): void {
+  emit('close')
+  void props.onStudyHit?.(hit)
 }
 
 function titleOf(sessionId: string | undefined): string {

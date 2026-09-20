@@ -84,7 +84,7 @@ impl TunnelStreamDecoder {
             if line.is_empty() {
                 continue;
             }
-            let decoded = self.codec.decode_line(&line)?;
+            let decoded = self.codec.decode_line(line)?;
             if let Some(frame) = self.push_frame(decoded)? {
                 frames.push(frame);
             }

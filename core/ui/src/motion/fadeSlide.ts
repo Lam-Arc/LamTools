@@ -9,12 +9,19 @@
  */
 import { gsap } from 'gsap'
 
-const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)')
-
 const DURATION_ENTER = 0.22
 
+function shouldSkipMotion(): boolean {
+  return (
+    typeof window === 'undefined'
+    || typeof window.matchMedia !== 'function'
+    || window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || typeof requestAnimationFrame !== 'function'
+  )
+}
+
 export function fadeSlideEnter(el: Element, done: () => void): void {
-  if (REDUCED_MOTION.matches || typeof requestAnimationFrame !== 'function') {
+  if (shouldSkipMotion()) {
     done()
     return
   }

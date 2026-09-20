@@ -67,6 +67,7 @@ def create_skill_runtime(
     builtin_skill_roots: Iterable[str | Path] = (),
     max_content_chars: int = 30_000,
     sample_files: int = 10,
+    plugin_skill_modes: dict[str | Path, Iterable[str]] | None = None,
 ) -> SkillRuntime:
     """Create the authoritative registry used by every Core Agent entrypoint."""
     roots = assemble_skill_roots(
@@ -79,6 +80,7 @@ def create_skill_runtime(
             explicit_roots=roots,
             max_content_chars=max_content_chars,
             sample_files=sample_files,
+            root_modes=plugin_skill_modes,
         ),
     )
 

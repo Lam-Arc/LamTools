@@ -459,11 +459,14 @@ class KernelSubAgentRunner:
         from lamtools_core.config.model_store import resolve_model_capability
 
         capability = resolve_model_capability(model_id or self.model_id, work_root=str(self.work_root))
-        index_text, content_blocks, _deferred = build_capability_aware_attachment_input(
-            records, [r.id for r in records], capability
+        index_text, content_blocks, _deferred = await asyncio.to_thread(
+            build_capability_aware_attachment_input,
+            records,
+            [r.id for r in records],
+            capability,
         )
         if not content_blocks:
-            return task
+            return task + (index_text or "")
         # Text block first (the task + attachment index), then content blocks.
         return [{"type": "text", "text": task + (index_text or "")}, *content_blocks]
 

@@ -79,7 +79,6 @@ const composerTitle = computed(() => summary.value?.hasContext
 // 流式热路径保护：live 消息存在时（每 tick 数值都在变）不启动 tween、不写额外 DOM；
 // 回合结束/会话切换等离散变化才播动画。watcher 用 flush:'pre'（DOM 仍是上一目标值），
 // 播完后 textContent 交给 Vue 的最终渲染。
-const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)')
 const widgetEl = ref<HTMLElement | null>(null)
 const statTweens = new Map<HTMLElement, gsap.core.Tween>()
 const isLiveStreaming = computed(() => props.messages.some((m) => m.metadata?.live))
@@ -110,7 +109,13 @@ function formatNumber(p: ParsedNum): string {
 
 function animateStat(el: HTMLElement, nextText: string) {
   const next = parseNumeric(nextText)
-  if (!next || REDUCED_MOTION.matches || typeof requestAnimationFrame !== 'function') {
+  const shouldSkipMotion = (
+    typeof window === 'undefined'
+    || typeof window.matchMedia !== 'function'
+    || window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || typeof requestAnimationFrame !== 'function'
+  )
+  if (!next || shouldSkipMotion) {
     el.textContent = nextText
     return
   }

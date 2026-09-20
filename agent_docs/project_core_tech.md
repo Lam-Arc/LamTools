@@ -31,7 +31,8 @@ dependency inventories belong to the package manifests and module documents.
   snapshots and schema-driven actions; trusted Vue contributions are loaded
   in-process only from registered modules.
 - Tauri `2.x` provides the desktop shell and native bridge; the configured
-  Windows bundle target is NSIS. The website uses anime.js `4.x` for motion.
+  Windows bundle target is NSIS; Linux targets AppImage and Debian bundles.
+  The website uses anime.js `4.x` for motion.
 
 ## Build, Test, and Development Tools
 
@@ -40,6 +41,12 @@ dependency inventories belong to the package manifests and module documents.
   and builds are defined in `core/ui/package.json`.
 - Desktop development/build uses `npm run tauri dev` and `tauri build` from
   `core/desktop/`; its Vite dev server is configured for port `5173`.
+- Linux distribution builds use `scripts/package-linux.sh` on native Linux
+  (including WSL2). The script keeps Node, Python, Rust, Cargo, package
+  caches, and staging on the Linux filesystem, rejects `/mnt/c`, builds an
+  extensionless PyInstaller `LamCore`, and injects it into both Tauri bundles
+  as `lamcore-backend/LamCore`. CI and release jobs call this script instead of
+  treating a Windows or bare Tauri build as Linux evidence.
 - Website development/build uses `npm run dev` and `npm run build` from
   `website/`. Repository scripts provide Core startup, packaging, versioning,
   and release automation.
@@ -51,8 +58,11 @@ dependency inventories belong to the package manifests and module documents.
 - MCP is an optional integration surface for external tools.
 - Update checking queries GitHub's latest-release API; downloading/installing
   remains user-guided.
-- The desktop packages the backend for Windows so the installed app does not
-  require a separate Python or Node runtime.
+- The desktop packages the backend for Windows and Linux so the installed app
+  does not require a separate Python or Node runtime. Linux mutable state uses
+  Tauri `app_data_dir()`/XDG paths, hooks use `XDG_CONFIG_HOME`, and the
+  keyring uses the persistent Linux Secret Service backend. macOS packaging is
+  not currently provided.
 
 ## Important Technical Constraints
 

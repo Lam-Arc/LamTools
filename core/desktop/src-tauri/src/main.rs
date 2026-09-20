@@ -16,6 +16,8 @@ use std::{
 };
 
 use base64::Engine;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
@@ -74,6 +76,20 @@ const MAX_DESKTOP_DROP_FILE_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_DESKTOP_DROP_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
 const DESKTOP_PLUGIN_DOCK_THRESHOLD: i32 = 40;
 static NEXT_DESKTOP_DROP_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(target_os = "linux")]
+const PR_SET_PDEATHSIG: i32 = 1;
+#[cfg(target_os = "linux")]
+const SIGTERM: i32 = 15;
+#[cfg(target_os = "linux")]
+const SIGKILL: i32 = 9;
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    fn getppid() -> i32;
+    fn kill(pid: i32, signal: i32) -> i32;
+    fn prctl(option: i32, arg2: usize, arg3: usize, arg4: usize, arg5: usize) -> i32;
+}
 
 struct BackendState {
     api_base: Mutex<Option<String>>,
@@ -1466,6 +1482,7 @@ fn start_backend(
     } else {
         prod_backend_command(app, port)?
     };
+    configure_backend_process(&mut cmd)?;
 
     let child = cmd.spawn()?;
     #[cfg(windows)]
@@ -1567,19 +1584,24 @@ fn prod_backend_command(
         .ok_or("cannot locate backend directory")?
         .to_path_buf();
 
-    // Green/portable mode: keep every user data file (core.db, workspace,
-    // logs, ~/.lam jsonc configs) beside the app under {app}/.lam so nothing
-    // is written outside the install root (no %APPDATA%, no ~).
+    // Windows keeps its established green/portable app-side layout. Linux
+    // AppImages may be mounted read-only, so all mutable state is rooted in
+    // Tauri's XDG-backed per-user application data directory.
     let app_dir = env::current_exe()?
         .parent()
         .ok_or("cannot locate app directory")?
         .to_path_buf();
-    let lam_home = app_dir.join(".lam");
+    #[cfg(target_os = "linux")]
+    let storage_root = app.path().app_data_dir()?;
+    #[cfg(not(target_os = "linux"))]
+    let storage_root = app_dir.clone();
+    let paths = prod_backend_storage_paths(&app_dir, &storage_root, cfg!(target_os = "linux"));
 
     let mut cmd = Command::new(&backend_exe);
     cmd.env("LAMCORE_PORT", port.to_string())
-        .env("LAMTOOLS_HOME", &lam_home)
-        .env("LAMTOOLS_PROJECTS_ROOT", app_dir.join("lam_projects"))
+        .env("LAMTOOLS_HOME", &paths.lam_home)
+        .env("LAMTOOLS_CORE_DATA_DIR", &paths.data_dir)
+        .env("LAMTOOLS_PROJECTS_ROOT", &paths.projects_root)
         .current_dir(&backend_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1589,13 +1611,49 @@ fn prod_backend_command(
     Ok(cmd)
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct ProdBackendStoragePaths {
+    lam_home: PathBuf,
+    data_dir: PathBuf,
+    projects_root: PathBuf,
+}
+
+fn prod_backend_storage_paths(
+    app_dir: &std::path::Path,
+    standard_data_dir: &std::path::Path,
+    use_standard_data_dir: bool,
+) -> ProdBackendStoragePaths {
+    if use_standard_data_dir {
+        ProdBackendStoragePaths {
+            lam_home: standard_data_dir.join(".lam"),
+            data_dir: standard_data_dir.join("data"),
+            projects_root: standard_data_dir.join("lam_projects"),
+        }
+    } else {
+        ProdBackendStoragePaths {
+            lam_home: app_dir.join(".lam"),
+            data_dir: app_dir.join(".lam"),
+            projects_root: app_dir.join("lam_projects"),
+        }
+    }
+}
+
+fn backend_executable_name(windows: bool) -> &'static str {
+    if windows {
+        "LamCore.exe"
+    } else {
+        "LamCore"
+    }
+}
+
 fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let executable_name = backend_executable_name(cfg!(windows));
     // 1) Tauri resource directory (bundled flat)
     let resource = app
         .path()
         .resource_dir()?
         .join("lamcore-backend")
-        .join("LamCore.exe");
+        .join(executable_name);
     if resource.exists() {
         return Ok(resource);
     }
@@ -1605,7 +1663,7 @@ fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Err
         .parent()
         .ok_or("cannot locate app directory")?
         .join("LamCore")
-        .join("LamCore.exe");
+        .join(executable_name);
     if adjacent.exists() {
         return Ok(adjacent);
     }
@@ -1618,13 +1676,13 @@ fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Err
         .ok_or("cannot locate project root")?
         .join("dist")
         .join("LamCore")
-        .join("LamCore.exe");
+        .join(executable_name);
     if project_dist.exists() {
         return Ok(project_dist);
     }
 
     Err(format!(
-        "Sunday backend executable (LamCore.exe) not found at any of:\n  {}\n  {}\n  {}",
+        "Sunday backend executable ({executable_name}) not found at any of:\n  {}\n  {}\n  {}",
         resource.display(),
         adjacent.display(),
         project_dist.display(),
@@ -1653,10 +1711,8 @@ fn wait_for_health(port: u16) -> Result<(), Box<dyn std::error::Error>> {
                 b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
             if stream.write_all(request).is_ok() {
                 let mut response = String::new();
-                if stream.read_to_string(&mut response).is_ok() {
-                    if response.contains("200") {
-                        return Ok(());
-                    }
+                if stream.read_to_string(&mut response).is_ok() && response.contains("200") {
+                    return Ok(());
                 }
             }
         }
@@ -1677,10 +1733,63 @@ fn stop_backend(state: &BackendState) {
     close_backend_job(state);
     if let Ok(mut guard) = state.child.lock() {
         if let Some(mut child) = guard.take() {
+            #[cfg(target_os = "linux")]
+            {
+                // The backend owns a dedicated process group, so terminate any
+                // subprocesses it created before escalating to SIGKILL.
+                let process_group = -(child.id() as i32);
+                unsafe {
+                    let _ = kill(process_group, SIGTERM);
+                }
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < deadline {
+                    match child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) => thread::sleep(Duration::from_millis(25)),
+                        Err(_) => break,
+                    }
+                }
+                // The direct child can exit before one of its descendants.
+                // Finish cleanup of the still-owned dedicated process group.
+                unsafe {
+                    let _ = kill(process_group, SIGKILL);
+                }
+            }
             let _ = child.kill();
             let _ = child.wait();
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn configure_backend_process(cmd: &mut Command) -> std::io::Result<()> {
+    let expected_parent = std::process::id() as i32;
+    cmd.process_group(0);
+    unsafe {
+        cmd.pre_exec(move || {
+            // Ensure an abrupt desktop exit (including SIGKILL) cannot leave
+            // the direct sidecar alive. Normal shutdown still uses the
+            // graceful process-group SIGTERM path in stop_backend. Checking
+            // the parent after prctl closes
+            // the race where the desktop exits between fork and prctl.
+            if prctl(PR_SET_PDEATHSIG, SIGKILL as usize, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if getppid() != expected_parent {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "desktop parent exited before backend startup",
+                ));
+            }
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_backend_process(_cmd: &mut Command) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -2470,17 +2579,47 @@ fn anchored_position(
 #[cfg(test)]
 mod desktop_window_tests {
     use super::{
-        anchored_position, checked_desktop_drop_total, clamp_desktop_plugin_position,
-        desktop_plugin_dock_zone_for_geometry, desktop_plugin_position_from_placement,
-        desktop_window_size_matches, desktop_window_target_geometry,
-        desktop_window_target_geometry_with_size, horizontal_anchor_for_geometry,
-        measured_view_mode_dimensions, normalize_desktop_plugin_position, normalized_dock,
-        physical_window_size, prepare_desktop_drop_paths, saved_monitor_index,
+        anchored_position, backend_executable_name, checked_desktop_drop_total,
+        clamp_desktop_plugin_position, desktop_plugin_dock_zone_for_geometry,
+        desktop_plugin_position_from_placement, desktop_window_size_matches,
+        desktop_window_target_geometry, desktop_window_target_geometry_with_size,
+        horizontal_anchor_for_geometry, measured_view_mode_dimensions,
+        normalize_desktop_plugin_position, normalized_dock, physical_window_size,
+        prepare_desktop_drop_paths, prod_backend_storage_paths, saved_monitor_index,
         scaled_viewport_dimension, viewport_cursor_position, DesktopPluginPlacement,
         DesktopPluginViewMode, DesktopWindowGeometry, DesktopWindowSpec, DesktopWorkArea,
-        HorizontalAnchor, VerticalAnchor, MAX_DESKTOP_DROP_FILES, MAX_DESKTOP_DROP_FILE_BYTES,
-        MAX_DESKTOP_DROP_TOTAL_BYTES,
+        HorizontalAnchor, ProdBackendStoragePaths, VerticalAnchor, MAX_DESKTOP_DROP_FILES,
+        MAX_DESKTOP_DROP_FILE_BYTES, MAX_DESKTOP_DROP_TOTAL_BYTES,
     };
+    use std::path::Path;
+
+    #[test]
+    fn backend_executable_name_is_platform_aware() {
+        assert_eq!(backend_executable_name(true), "LamCore.exe");
+        assert_eq!(backend_executable_name(false), "LamCore");
+    }
+
+    #[test]
+    fn production_storage_keeps_portable_windows_and_uses_linux_user_data() {
+        let app_dir = Path::new("/opt/sunday");
+        let data_dir = Path::new("/home/user/.local/share/com.lamtools.lamcore");
+        assert_eq!(
+            prod_backend_storage_paths(app_dir, data_dir, false),
+            ProdBackendStoragePaths {
+                lam_home: app_dir.join(".lam"),
+                data_dir: app_dir.join(".lam"),
+                projects_root: app_dir.join("lam_projects"),
+            }
+        );
+        assert_eq!(
+            prod_backend_storage_paths(app_dir, data_dir, true),
+            ProdBackendStoragePaths {
+                lam_home: data_dir.join(".lam"),
+                data_dir: data_dir.join("data"),
+                projects_root: data_dir.join("lam_projects"),
+            }
+        );
+    }
 
     #[test]
     fn enforces_desktop_drop_count_and_byte_limits() {

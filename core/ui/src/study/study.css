@@ -1,0 +1,244 @@
+.study-view { --text: var(--theme-main-text); color: var(--text); display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; }
+.study-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); }
+.study-header {
+  width: min(var(--content-width), 100%);
+  min-height: 46px;
+  margin: 0 auto var(--space-3);
+  padding: 0 0 var(--space-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text) 8%, transparent);
+  color: var(--theme-main-text);
+}
+.study-header-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+  overflow: hidden;
+  color: var(--theme-main-text);
+  font-size: 17px;
+  font-weight: 760;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.study-breadcrumbs { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: var(--space-1); overflow: hidden; }
+.study-breadcrumbs .text-btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.study-header-loading {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
+  font-size: 12px;
+}
+@media (min-width: 641px) {
+  .study-header {
+    height: calc(var(--space-6) * 2 + var(--space-4) - var(--space-1) - 1px);
+    min-height: 0;
+    margin-top: calc(-1 * var(--space-6) - var(--space-4) + var(--space-1));
+    margin-bottom: 0;
+    padding: 0;
+  }
+}
+.study-view .text-btn, .selection-card .text-btn, .study-marks .text-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); border-radius: var(--radius-sm); }
+.study-view .text-btn, .selection-card .text-btn { color: color-mix(in srgb, var(--theme-main-text) 65%, transparent); }
+.study-view .text-btn:hover:not(:disabled), .selection-card .text-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
+.study-view .text-btn:active:not(:disabled), .selection-card .text-btn:active:not(:disabled) { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent); }
+.study-marks .text-btn { color: color-mix(in srgb, var(--theme-backdrop-text) 65%, transparent); }
+.study-error { color: var(--red); padding: var(--space-2); overflow-wrap: anywhere; }
+.study-graph { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.study-graph .vue-flow { flex: 1; background: var(--theme-main-background); }
+.study-graph-meta { position: absolute; left: var(--space-3); top: var(--space-2); z-index: var(--z-background-info); display: flex; align-items: center; gap: var(--space-2); color: color-mix(in srgb, var(--theme-main-text) 65%, transparent); font-size: 11px; pointer-events: none; }
+.study-graph-controls { display: flex; gap: var(--space-1); position: absolute; right: var(--space-3); top: var(--space-2); z-index: var(--z-background-info); }
+.study-graph-legend { position: absolute; right: var(--space-3); bottom: var(--space-3); z-index: var(--z-stage); display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); max-width: min(440px, calc(100% - var(--space-6))); padding: var(--space-2) var(--space-3); border: 1px solid var(--theme-main-border); border-radius: var(--radius); background: var(--theme-main-background); color: var(--theme-main-text); box-shadow: var(--shadow-sm); font-size: 12px; }
+.study-graph-legend strong { font-weight: 700; }
+.study-graph-legend-item { display: inline-flex; align-items: center; gap: var(--space-1); color: color-mix(in srgb, var(--theme-main-text) 72%, transparent); }
+.study-edge-swatch { display: inline-block; width: var(--space-4); border-top: 1px solid currentColor; }
+.study-edge-swatch--advanced { border-top-style: dashed; }
+.study-edge-swatch--contains { border-top-style: dotted; }
+.study-edge-swatch--related { border-top-style: dashed; }
+.study-node {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: min(240px, 28vw);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text) 82%, transparent);
+  cursor: pointer;
+  text-align: left;
+}
+.study-node:hover,
+.study-node.is-focused,
+.study-node.is-selected {
+  border-color: color-mix(in srgb, var(--theme-main-text) 28%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
+  color: var(--theme-main-text);
+}
+.study-node:focus-visible { outline: 2px solid color-mix(in srgb, var(--theme-main-text) 76%, transparent); outline-offset: var(--space-1); }
+.study-node-label { min-width: 0; max-width: min(200px, 24vw); overflow-wrap: anywhere; }
+.study-node--course {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: calc(var(--space-6) * 3);
+  height: calc(var(--space-6) * 3);
+  max-width: none;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--theme-main-text);
+  text-align: center;
+}
+.study-node--course:hover,
+.study-node--course.is-focused,
+.study-node--course.is-selected { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
+.study-course-ring { position: absolute; inset: calc(-1 * var(--space-2)); width: calc(var(--space-6) * 3 + var(--space-4)); height: calc(var(--space-6) * 3 + var(--space-4)); overflow: visible; pointer-events: none; transform: rotate(-90deg); }
+.study-course-ring-track,
+.study-course-ring-value { fill: none; stroke-width: var(--space-1); }
+.study-course-ring-track { stroke: color-mix(in srgb, var(--theme-main-text) 18%, transparent); }
+.study-course-ring-value { stroke: var(--blue); stroke-linecap: round; }
+.study-course-sphere { display: grid; place-items: center; width: calc(var(--space-6) * 3); height: calc(var(--space-6) * 3); padding: var(--space-2); border: 1px solid color-mix(in srgb, var(--theme-main-text) 28%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--theme-main-text) 8%, transparent); box-shadow: var(--shadow-sm); }
+.study-course-name { max-width: calc(100% - var(--space-2)); overflow-wrap: anywhere; font-weight: 760; line-height: 1.2; }
+.study-course-percentage { color: color-mix(in srgb, var(--theme-main-text) 72%, transparent); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 1; }
+.study-node-dot {
+  display: grid;
+  flex: 0 0 var(--space-4);
+  place-items: center;
+  width: var(--space-4);
+  height: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 54%, transparent);
+  border-radius: 50%;
+  color: color-mix(in srgb, var(--theme-main-text) 68%, transparent);
+}
+.study-node--module .study-node-dot {
+  flex-basis: var(--space-5);
+  width: var(--space-5);
+  height: var(--space-5);
+  border-color: color-mix(in srgb, var(--theme-main-text) 80%, transparent);
+  color: var(--theme-main-text);
+}
+.study-node--passed .study-node-dot { border-color: color-mix(in srgb, var(--green) 72%, var(--theme-main-text) 28%); }
+.study-node--mastery-low .study-node-dot { color: color-mix(in srgb, var(--red) 78%, var(--theme-main-text) 22%); }
+.study-node--mastery-medium .study-node-dot { color: color-mix(in srgb, var(--yellow) 78%, var(--theme-main-text) 22%); }
+.study-node--mastery-high .study-node-dot { color: color-mix(in srgb, var(--green) 78%, var(--theme-main-text) 22%); }
+.study-node--incomplete .study-node-dot { border-style: dashed; color: color-mix(in srgb, var(--theme-main-text) 46%, transparent); }
+.study-graph .study-edge .vue-flow__edge-path { stroke: color-mix(in srgb, var(--theme-main-text) 38%, transparent); stroke-width: 1; }
+.study-graph .study-edge--muted { opacity: .2; }
+.study-graph .study-edge--emphasized { opacity: 1; }
+.study-graph .study-edge--emphasized .vue-flow__edge-path { stroke: color-mix(in srgb, var(--theme-main-text) 82%, transparent); stroke-width: 1.5; }
+.study-graph .study-edge--advanced .vue-flow__edge-path { stroke-dasharray: var(--space-3) var(--space-2); }
+.study-graph .study-edge--contains .vue-flow__edge-path { stroke-dasharray: var(--space-1) var(--space-2); }
+.study-graph .study-edge--related .vue-flow__edge-path { stroke-dasharray: var(--space-1) var(--space-2); stroke-linecap: round; }
+.study-graph .vue-flow__handle { width: var(--space-1); height: var(--space-1); border: 0; border-radius: 50%; background: var(--theme-main-text); opacity: .32; }
+.study-graph .vue-flow__edge-text { fill: var(--theme-main-text); font-size: 11px; }
+.study-graph .vue-flow__edge-textbg { fill: var(--theme-main-soft-background); }
+.mastery-low { color: var(--red); }
+.mastery-medium { color: var(--yellow); }
+.mastery-high { color: var(--green); }
+.study-incomplete { color: color-mix(in srgb, var(--theme-main-text) 45%, transparent); }
+.study-empty { position: absolute; top: 64px; left: var(--space-3); right: var(--space-3); }
+.study-related { position: absolute; left: var(--space-2); bottom: var(--space-2); display: flex; flex-direction: column; gap: var(--space-1); max-width: min(280px, 70%); max-height: 35%; overflow: auto; padding: var(--space-2); border-radius: var(--radius); background: var(--theme-main-background); box-shadow: var(--shadow-sm); font-size: 12px; }
+.study-related .text-btn { justify-content: flex-start; text-align: left; }
+.study-related span { opacity: .65; flex-shrink: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .study-node,
+  .study-node-dot,
+  .study-edge,
+  .study-edge .vue-flow__edge-path { transition: none; animation: none; }
+}
+
+@media (max-width: 640px) {
+  .study-breadcrumbs { display: none; }
+}
+
+/* Three-layer Markdown notes workspace. Keep the tree and relation rail in
+   their host areas; the document itself remains a quiet paper-like surface. */
+.study-note-tree { --text: var(--theme-backdrop-text); display: flex; flex-direction: column; min-height: 0; gap: var(--space-2); padding: var(--space-2); color: var(--text); }
+.study-note-tree-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-1) var(--space-2); }
+.study-note-tree-title { color: var(--text); font-size: 12px; font-weight: 700; }
+.study-sidebar-icon-button { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; min-height: 26px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--text) 58%, transparent); cursor: pointer; }
+.study-sidebar-icon-button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.study-sidebar-icon-button:active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); }
+.study-sidebar-icon-button:disabled { opacity: .45; }
+.study-note-tree-list { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.study-note-tree-list--nested { margin-inline-start: var(--space-3); }
+.study-note-tree-row { display: flex; align-items: center; gap: var(--space-1); width: 100%; min-width: 0; min-height: 29px; padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--text) 76%, transparent); cursor: pointer; text-align: left; }
+.study-note-tree-row:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.study-note-tree-row:active, .study-note-tree-row.is-active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); color: var(--text); }
+.study-note-tree-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--blue) 72%, transparent); outline-offset: 1px; }
+.study-note-tree-toggle { display: inline-flex; flex: 0 0 13px; align-items: center; justify-content: center; color: color-mix(in srgb, var(--text) 54%, transparent); }
+.study-note-tree-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.study-note-tree-status, .study-note-tree-error { margin: var(--space-2); color: color-mix(in srgb, var(--text) 58%, transparent); font-size: 12px; line-height: 1.5; }
+.study-note-tree-error { color: var(--red); overflow-wrap: anywhere; }
+.study-note-workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: 36px; padding: var(--space-1) 0 var(--space-2); border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent); }
+.study-note-workspace-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); min-width: 0; }
+.study-note-workspace-actions .text-btn { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); color: color-mix(in srgb, var(--theme-main-text) 68%, transparent); }
+.study-note-workspace-actions .text-btn:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
+.study-note-workspace-actions .text-btn:active { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent); }
+.study-note-detail-state, .study-note-empty-state { display: grid; justify-items: center; gap: var(--space-2); padding: var(--space-5) var(--space-3); color: color-mix(in srgb, var(--theme-main-text) 60%, transparent); font-size: 13px; text-align: center; }
+.study-note-empty-state p { margin: 0; }
+.study-note-detail { min-height: 0; }
+.study-note-detail-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) 0 var(--space-2); }
+.study-note-detail-head h2 { min-width: 0; margin: 0; color: var(--theme-main-text); font-size: 18px; font-weight: 760; overflow-wrap: anywhere; }
+.study-note-detail-head .text-btn { display: inline-flex; align-items: center; gap: var(--space-1); }
+.study-note-path { margin: var(--space-1) 0 0; color: color-mix(in srgb, var(--theme-main-text) 48%, transparent); font: 11px var(--font-mono); overflow-wrap: anywhere; }
+.study-note-document-layout { display: grid; grid-template-columns: minmax(136px, 180px) minmax(0, 1fr); align-items: start; gap: var(--space-4); }
+.study-note-main { min-width: 0; }
+.study-note-outline { position: sticky; top: var(--space-2); display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; padding: var(--space-2) 0; border-right: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent); }
+.study-note-outline h3, .study-note-locks h3, .study-note-references h3 { display: flex; align-items: center; gap: var(--space-1); margin: 0 0 var(--space-1); color: color-mix(in srgb, var(--theme-main-text) 56%, transparent); font-size: 11px; font-weight: 700; }
+.study-note-outline-link { width: 100%; padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--theme-main-text) 66%, transparent); cursor: pointer; font: inherit; font-size: 12px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
+.study-note-outline-link:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
+.study-note-outline-link:active { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent); }
+.study-note-reading { min-height: 260px; padding: var(--space-3) 0 var(--space-5); }
+.study-note-reading .markdown-body { color: var(--theme-main-text); line-height: 1.78; }
+.study-note-reading .markdown-body h1, .study-note-reading .markdown-body h2, .study-note-reading .markdown-body h3 { scroll-margin-top: var(--space-4); }
+.study-note-editor-shell { min-width: 0; padding: var(--space-3) 0 var(--space-5); }
+.study-note-full-editor { display: block; width: 100%; min-height: min(68vh, 720px); padding: var(--space-3); border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent); border-radius: var(--radius); background: var(--theme-main-sunken-background); color: var(--theme-main-text); font: 14px/1.72 var(--font-mono); resize: vertical; outline: 0; white-space: pre-wrap; tab-size: 2; }
+.study-note-full-editor:focus { border-color: color-mix(in srgb, var(--blue) 38%, var(--theme-main-border)); }
+.study-note-detail-error { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-2) 0; color: var(--red); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.study-note-detail-error .text-btn { color: var(--orange); }
+.study-note-locks { margin: var(--space-3) 0 0; padding: var(--space-2) 0; border-top: 1px solid color-mix(in srgb, var(--theme-main-text) 9%, transparent); }
+.study-note-locks ul { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.study-note-locks li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-width: 0; padding: var(--space-1) var(--space-2); border-left: 2px solid color-mix(in srgb, var(--orange) 60%, transparent); color: color-mix(in srgb, var(--theme-main-text) 68%, transparent); font-size: 12px; }
+.study-note-lock-quote { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.study-note-locks .text-btn { display: inline-flex; align-items: center; gap: var(--space-1); flex: 0 0 auto; }
+.study-note-references { margin-top: var(--space-5); padding-top: var(--space-2); border-top: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent); color: color-mix(in srgb, var(--theme-main-text) 54%, transparent); font-size: 11px; }
+.study-note-references ol { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.study-note-references li { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1); line-height: 1.45; }
+.study-note-reference-index { color: color-mix(in srgb, var(--theme-main-text) 42%, transparent); font-variant-numeric: tabular-nums; }
+.study-note-reference-title { color: color-mix(in srgb, var(--theme-main-text) 66%, transparent); }
+.study-note-reference-type, .study-note-reference-locator { color: color-mix(in srgb, var(--theme-main-text) 42%, transparent); }
+.study-note-relation-graph { --text: var(--theme-backdrop-text); display: flex; flex-direction: column; min-height: 0; padding: var(--space-2); color: var(--text); }
+.study-note-relation-graph-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-1) var(--space-2) var(--space-2); color: var(--text); font-size: 12px; font-weight: 700; }
+.study-note-relation-graph-head span { display: inline-flex; align-items: center; gap: var(--space-1); }
+.study-note-graph-loading { animation: study-note-spin .8s linear infinite; }
+.study-note-graph-body { display: flex; flex-direction: column; gap: var(--space-3); min-height: 0; overflow: auto; }
+.study-note-graph-svg { display: block; width: 100%; min-height: 104px; overflow: visible; color: var(--text); }
+.study-note-graph-svg-edge line { stroke: color-mix(in srgb, var(--text) 30%, transparent); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.study-note-graph-svg-node { cursor: pointer; outline: 0; }
+.study-note-graph-svg-node circle { fill: color-mix(in srgb, var(--text) 12%, transparent); stroke: color-mix(in srgb, var(--text) 52%, transparent); stroke-width: 1.2; }
+.study-note-graph-svg-node text { fill: color-mix(in srgb, var(--text) 70%, transparent); font: 10px var(--font-sans); pointer-events: none; }
+.study-note-graph-svg-node:hover circle, .study-note-graph-svg-node:focus-visible circle, .study-note-graph-svg-node.is-active circle { fill: color-mix(in srgb, var(--blue) 24%, transparent); stroke: var(--blue); }
+.study-note-graph-svg-node:hover text, .study-note-graph-svg-node:focus-visible text, .study-note-graph-svg-node.is-active text { fill: var(--text); }
+.study-note-graph-nodes, .study-note-graph-edges { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.study-note-graph-node, .study-note-graph-edge { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); width: 100%; min-width: 0; padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--text) 72%, transparent); cursor: pointer; font: inherit; font-size: 12px; text-align: left; overflow-wrap: anywhere; }
+.study-note-graph-node:hover, .study-note-graph-edge:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.study-note-graph-node:active, .study-note-graph-edge:active, .study-note-graph-node.is-active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); color: var(--text); }
+.study-note-graph-edge small { flex: 0 0 auto; color: color-mix(in srgb, var(--text) 44%, transparent); font-size: 10px; }
+.study-note-graph-empty, .study-note-graph-error { margin: var(--space-2); color: color-mix(in srgb, var(--text) 56%, transparent); font-size: 12px; line-height: 1.5; }
+.study-note-graph-error { color: var(--red); }
+.study-note-header-chat { flex: 0 0 auto; }
+.study-note-header-path { max-width: 20vw; overflow: hidden; color: color-mix(in srgb, var(--theme-main-text) 48%, transparent); font: 11px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+@keyframes study-note-spin { to { transform: rotate(360deg); } }
+@media (max-width: 720px) {
+  .study-note-document-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+  .study-note-outline { position: static; display: flex; flex-direction: row; overflow: auto; border-right: 0; border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent); }
+  .study-note-outline h3 { flex: 0 0 auto; }
+  .study-note-outline-link { width: auto; flex: 0 0 auto; }
+  .study-note-header-path { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .study-note-graph-loading { animation: none; }
+  .study-note-tree-row, .study-note-outline-link, .study-note-graph-node, .study-note-graph-edge { transition: none; }
+}

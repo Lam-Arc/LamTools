@@ -43,7 +43,7 @@ class CoreDbBase(DeclarativeBase):
     pass
 
 
-CORE_SCHEMA_VERSION = 1
+CORE_SCHEMA_VERSION = 2
 
 
 class CoreDbMetadata(CoreDbBase):
@@ -229,6 +229,8 @@ class CoreArrangeJob(CoreDbBase):
     occurrence_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     lease_owner: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fencing_token: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    checkpoint_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     last_error: Mapped[str] = mapped_column(String, nullable=False, default="")
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -1136,10 +1138,11 @@ class SqlAlchemyArrangeStore:
                     signal=deepcopy(occurrence.signal),
                     lease_owner=worker_id,
                     lease_expires_at=claim_time + timedelta(seconds=lease_seconds),
+                    fencing_token=current.fencing_token + 1,
                     revision=current.revision + 1,
                     updated_at=claim_time,
                 )
-                await db.execute(
+                claim_result = await db.execute(
                     update(CoreArrangeJob)
                     .where(
                         CoreArrangeJob.id == current.id,
@@ -1148,28 +1151,42 @@ class SqlAlchemyArrangeStore:
                     )
                     .values(**_arrange_values(claimed_job))
                 )
-                claimed.append(claimed_job)
+                if claim_result.rowcount == 1:
+                    claimed.append(claimed_job)
             return claimed
 
         return await self.write_coordinator.run(write)
 
     async def renew_lease(
-        self, *, job_id: str, worker_id: str, now: datetime, lease_seconds: float
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: float,
+        fencing_token: int | None = None,
     ) -> bool:
         when = _utc_datetime(now)
 
         async def write(db):
             row = await db.get(CoreArrangeJob, job_id)
-            if row is None or row.status != "running" or row.lease_owner != worker_id:
+            if (
+                row is None
+                or row.status != "running"
+                or row.lease_owner != worker_id
+                or (fencing_token is not None and row.fencing_token != fencing_token)
+            ):
                 return False
+            statement = update(CoreArrangeJob).where(
+                CoreArrangeJob.id == job_id,
+                CoreArrangeJob.revision == row.revision,
+                CoreArrangeJob.status == "running",
+                CoreArrangeJob.lease_owner == worker_id,
+            )
+            if fencing_token is not None:
+                statement = statement.where(CoreArrangeJob.fencing_token == fencing_token)
             result = await db.execute(
-                update(CoreArrangeJob)
-                .where(
-                    CoreArrangeJob.id == job_id,
-                    CoreArrangeJob.revision == row.revision,
-                    CoreArrangeJob.status == "running",
-                    CoreArrangeJob.lease_owner == worker_id,
-                )
+                statement
                 .values(
                     lease_expires_at=when + timedelta(seconds=lease_seconds),
                     revision=row.revision + 1,
@@ -1180,6 +1197,47 @@ class SqlAlchemyArrangeStore:
 
         return await self.write_coordinator.run(write)
 
+    async def checkpoint_run(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        checkpoint: dict[str, Any],
+        fencing_token: int | None = None,
+    ) -> ArrangeJob:
+        if not isinstance(checkpoint, dict):
+            raise ValueError("checkpoint must be an object")
+        when = _utc_datetime(now)
+
+        async def write(db):
+            current = await self._owned_running(
+                db,
+                job_id,
+                worker_id,
+                fencing_token=fencing_token,
+            )
+            updated = replace(
+                current,
+                checkpoint=_json_safe(checkpoint),
+                revision=current.revision + 1,
+                updated_at=when,
+            )
+            statement = update(CoreArrangeJob).where(
+                CoreArrangeJob.id == job_id,
+                CoreArrangeJob.revision == current.revision,
+                CoreArrangeJob.status == "running",
+                CoreArrangeJob.lease_owner == worker_id,
+            )
+            if fencing_token is not None:
+                statement = statement.where(CoreArrangeJob.fencing_token == fencing_token)
+            job_update = await db.execute(statement.values(**_arrange_values(updated)))
+            if job_update.rowcount != 1:
+                raise RuntimeError(f"Arrange job lease lost: {job_id}")
+            return updated
+
+        return await self.write_coordinator.run(write)
+
     async def complete_run(
         self,
         *,
@@ -1187,11 +1245,17 @@ class SqlAlchemyArrangeStore:
         worker_id: str,
         now: datetime,
         result: dict[str, Any] | None = None,
+        fencing_token: int | None = None,
     ) -> ArrangeJob:
         when = _utc_datetime(now)
 
         async def write(db):
-            current = await self._owned_running(db, job_id, worker_id)
+            current = await self._owned_running(
+                db,
+                job_id,
+                worker_id,
+                fencing_token=fencing_token,
+            )
             occurrence_row = await db.get(CoreArrangeOccurrence, current.occurrence_id)
             if occurrence_row is not None:
                 occurrence = _occurrence_from_row(occurrence_row)
@@ -1236,26 +1300,38 @@ class SqlAlchemyArrangeStore:
                 revision=current.revision + 1,
                 updated_at=when,
             )
-            await db.execute(
-                update(CoreArrangeJob)
-                .where(
-                    CoreArrangeJob.id == job_id,
-                    CoreArrangeJob.revision == current.revision,
-                    CoreArrangeJob.lease_owner == worker_id,
-                )
-                .values(**_arrange_values(updated))
+            statement = update(CoreArrangeJob).where(
+                CoreArrangeJob.id == job_id,
+                CoreArrangeJob.revision == current.revision,
+                CoreArrangeJob.lease_owner == worker_id,
             )
+            if fencing_token is not None:
+                statement = statement.where(CoreArrangeJob.fencing_token == fencing_token)
+            job_update = await db.execute(statement.values(**_arrange_values(updated)))
+            if job_update.rowcount != 1:
+                raise RuntimeError(f"Arrange job lease lost: {job_id}")
             return updated
 
         return await self.write_coordinator.run(write)
 
     async def fail_run(
-        self, *, job_id: str, worker_id: str, now: datetime, error: str
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        error: str,
+        fencing_token: int | None = None,
     ) -> ArrangeJob:
         when = _utc_datetime(now)
 
         async def write(db):
-            current = await self._owned_running(db, job_id, worker_id)
+            current = await self._owned_running(
+                db,
+                job_id,
+                worker_id,
+                fencing_token=fencing_token,
+            )
             occurrence_row = await db.get(CoreArrangeOccurrence, current.occurrence_id)
             retry = False
             if occurrence_row is not None:
@@ -1284,15 +1360,16 @@ class SqlAlchemyArrangeStore:
                 revision=current.revision + 1,
                 updated_at=when,
             )
-            await db.execute(
-                update(CoreArrangeJob)
-                .where(
-                    CoreArrangeJob.id == job_id,
-                    CoreArrangeJob.revision == current.revision,
-                    CoreArrangeJob.lease_owner == worker_id,
-                )
-                .values(**_arrange_values(updated))
+            statement = update(CoreArrangeJob).where(
+                CoreArrangeJob.id == job_id,
+                CoreArrangeJob.revision == current.revision,
+                CoreArrangeJob.lease_owner == worker_id,
             )
+            if fencing_token is not None:
+                statement = statement.where(CoreArrangeJob.fencing_token == fencing_token)
+            result = await db.execute(statement.values(**_arrange_values(updated)))
+            if result.rowcount != 1:
+                raise RuntimeError(f"Arrange job lease lost: {job_id}")
             return updated
 
         return await self.write_coordinator.run(write)
@@ -1445,11 +1522,21 @@ class SqlAlchemyArrangeStore:
         return row is not None
 
     @staticmethod
-    async def _owned_running(db: Any, job_id: str, worker_id: str) -> ArrangeJob:
+    async def _owned_running(
+        db: Any,
+        job_id: str,
+        worker_id: str,
+        *,
+        fencing_token: int | None = None,
+    ) -> ArrangeJob:
         row = await db.get(CoreArrangeJob, job_id)
         if row is None:
             raise LookupError(f"Arrange job not found: {job_id}")
-        if row.status != "running" or row.lease_owner != worker_id:
+        if (
+            row.status != "running"
+            or row.lease_owner != worker_id
+            or (fencing_token is not None and row.fencing_token != fencing_token)
+        ):
             raise RuntimeError(f"Arrange job lease lost: {job_id}")
         return _arrange_from_row(row)
 
@@ -1884,6 +1971,16 @@ async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -
             "ALTER TABLE core_arrange_jobs "
             "ADD COLUMN model_id VARCHAR(256) NOT NULL DEFAULT ''"
         ))
+    if "fencing_token" not in arrange_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_arrange_jobs "
+            "ADD COLUMN fencing_token INTEGER NOT NULL DEFAULT 0"
+        ))
+    if "checkpoint_json" not in arrange_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_arrange_jobs "
+            "ADD COLUMN checkpoint_json JSON NOT NULL DEFAULT '{}'"
+        ))
     restore_columns = {
         row["name"]
         for row in (await connection.execute(text("PRAGMA table_info(core_restore_operations)"))).mappings()
@@ -1986,6 +2083,8 @@ def _arrange_values(job: ArrangeJob) -> dict[str, Any]:
         "occurrence_id": job.occurrence_id,
         "lease_owner": job.lease_owner,
         "lease_expires_at": _utc_datetime(job.lease_expires_at) if job.lease_expires_at else None,
+        "fencing_token": int(job.fencing_token or 0),
+        "checkpoint_json": _json_safe(job.checkpoint),
         "last_error": job.last_error,
         "revision": job.revision,
         "created_at": _utc_datetime(job.created_at),
@@ -2018,6 +2117,8 @@ def _arrange_from_row(row: CoreArrangeJob) -> ArrangeJob:
         occurrence_id=row.occurrence_id or "",
         lease_owner=row.lease_owner or "",
         lease_expires_at=_utc_datetime(row.lease_expires_at) if row.lease_expires_at else None,
+        fencing_token=int(row.fencing_token or 0),
+        checkpoint=_json_safe(row.checkpoint_json or {}),
         last_error=row.last_error or "",
         revision=int(row.revision or 1),
         created_at=_utc_datetime(row.created_at),

@@ -20,6 +20,7 @@ from lamtools_core.app import (
     OperationResult,
 )
 from lamtools_core.app.default_agent import CoreAgentPaths, create_core_agent_operations
+from lamtools_core.app.core_db import CoreDbBase
 from lamtools_core.app.event_store import SqlAlchemyAppEventStore
 from lamtools_core.app.live_hub import CoreAppEventHub
 from lamtools_core.app.live_operations import (
@@ -94,6 +95,9 @@ async def _context(tmp_path) -> tuple[object, CoreLiveContext]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core-live.db'}", future=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Core operations also construct ArtifactStore, which expects the
+        # canonical project table alongside these focused test tables.
+        await conn.run_sync(CoreDbBase.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1")
     snapshot_store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow, projector=CoreAppSnapshotProjector(member_defaults={"queue": []}))
@@ -904,10 +908,53 @@ class GuidedCoreLLM(BlockingCoreLLM):
         yield LLMStreamEvent(kind="done")
 
 
+@pytest.mark.asyncio
+async def test_live_and_queue_forward_instructions_and_request_local_late_context(tmp_path):
+    engine, context = await _context(tmp_path)
+    captured = []
+    called = asyncio.Event()
+
+    async def turn_start(request):
+        captured.append(dict(request.payload))
+        called.set()
+        return OperationResult(name='turn.start', payload={'ok': True})
+
+    context.operations.register('turn.start', turn_start)
+    options = {'instructions': 'Study static identity', 'request_local_late_context': '[Study latest context] {"node":"n1"}'}
+    try:
+        direct = await handle_turn_start_operation(
+            request_id=1,
+            params={'thread_id': 'study:main', 'client_message_id': 'direct',
+                    'input': [{'type': 'text', 'text': 'learn'}], **options},
+            context=context,
+        )
+        assert direct.response['result']['runtime_start']['instructions'] == options['instructions']
+        assert direct.response['result']['runtime_start']['request_local_late_context'] == options['request_local_late_context']
+        await asyncio.wait_for(called.wait(), 2); called.clear()
+
+        queued = await handle_queue_create_operation(
+            request_id=2,
+            params={'thread_id': 'study:queue', 'client_message_id': 'queued',
+                    'input': [{'type': 'text', 'text': 'next'}], **options},
+            context=context,
+        )
+        assert queued.response['result']['queue_item']['runtime_snapshot']['instructions'] == options['instructions']
+        await live_operations_module._dispatch_next_queue_item(
+            context=context, thread_id='study:queue', work_root=str(tmp_path), completed_turn_id=''
+        )
+        await asyncio.wait_for(called.wait(), 2)
+        assert captured[-1]['instructions'] == options['instructions']
+        assert captured[-1]['request_local_late_context'] == options['request_local_late_context']
+    finally:
+        context.runtime_task_registry.clear()
+        await engine.dispose()
+
+
 async def _live_core_context(tmp_path, llm: BlockingCoreLLM) -> tuple[object, CoreLiveContext]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core-live-kernel.db'}", future=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(CoreDbBase.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1")
     snapshot_store = SqlAlchemyThreadSnapshotStore(

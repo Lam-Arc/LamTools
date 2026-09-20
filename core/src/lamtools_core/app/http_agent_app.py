@@ -116,14 +116,11 @@ class CoreConfigRoutingLLMClient:
 
     def _client_for_request(self, request: LLMRequest) -> tuple[Any, CoreHttpLLMClient]:
         model_ref = str(request.model or self.default_model_ref or "").strip()
-        try:
-            config = load_llm_config(model_ref=model_ref)
-        except ValueError:
-            # Unknown model_ref — fall back to empty ref so the config
-            # resolves the default model from the current config (not the
-            # startup-cached default_model_ref). This prevents 100x retry
-            # storms on a bad model parameter.
-            config = load_llm_config(model_ref="")
+        # An explicit model is part of the caller's routing contract.  Never
+        # hide an invalid/misconfigured selection by silently switching to a
+        # different default model; fatal config errors are already excluded
+        # from the shared retry loop.
+        config = load_llm_config(model_ref=model_ref)
         profile = _resolve_adapter_profile(config, self.adapter_dirs)
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         thinking_enabled = (
@@ -399,6 +396,7 @@ def create_core_agent_http_app(
             spec=runtime_spec,
             member_kit=member_kit,
             paths=CoreAgentPaths(data_dir=resolved_data_dir, work_root=resolved_work_root),
+            session_store=session_store,
             model_provider=llm_client,
             plugin_roots=[Path(item) for item in plugin_roots],
             db_session_factory=core_db_handle.session_factory,

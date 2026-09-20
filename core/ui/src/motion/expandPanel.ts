@@ -9,8 +9,6 @@
  */
 import { gsap } from 'gsap'
 
-const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)')
-
 const DURATION_OPEN = 0.24
 const DURATION_CLOSE = 0.2
 
@@ -22,6 +20,15 @@ interface PanelMetrics {
   marginBottom: number
   transition: string
   overflow: string
+}
+
+function shouldSkipMotion(): boolean {
+  return (
+    typeof window === 'undefined'
+    || typeof window.matchMedia !== 'function'
+    || window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || typeof requestAnimationFrame !== 'function'
+  )
 }
 
 function readMetrics(el: HTMLElement): PanelMetrics {
@@ -62,7 +69,7 @@ function restore(el: HTMLElement, metrics: PanelMetrics) {
 
 export function panelEnter(el: Element, done: () => void) {
   const target = el as HTMLElement
-  if (REDUCED_MOTION.matches || typeof requestAnimationFrame !== 'function') {
+  if (shouldSkipMotion()) {
     done()
     return
   }
@@ -92,7 +99,7 @@ export function panelEnter(el: Element, done: () => void) {
 
 export function panelLeave(el: Element, done: () => void) {
   const target = el as HTMLElement
-  if (REDUCED_MOTION.matches || typeof requestAnimationFrame !== 'function') {
+  if (shouldSkipMotion()) {
     done()
     return
   }

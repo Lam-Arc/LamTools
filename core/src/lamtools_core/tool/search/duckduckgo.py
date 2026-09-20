@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from html import unescape
+from urllib.parse import urlsplit
 
 import httpx
 
 from .protocol import SearchResult
+from .image_candidates import extract_image_candidates
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -96,6 +99,71 @@ class DuckDuckGoSearchProvider:
                     "source": "ddg",
                 }
             )
+        return results
+
+    async def search_images(
+        self,
+        query: str,
+        limit: int = 5,
+        domains: list[str] | None = None,
+    ) -> list[SearchResult]:
+        """Find image candidates on accurate DuckDuckGo source results.
+
+        DuckDuckGo's undocumented image JSON endpoint is not a stable public
+        contract and currently rejects this client.  Use the working HTML web
+        search to discover source pages, then extract source-backed image
+        metadata without applying semantic filters; the model judges which
+        candidate actually helps the task.
+        """
+        source_limit = min(max(limit * 2, 6), 12)
+        sources = await self.search(query, limit=source_limit, domains=domains)
+        client = await self._session()
+
+        async def from_source(source: SearchResult) -> SearchResult | None:
+            source_url = str(source.get("url") or "").strip()
+            if urlsplit(source_url).scheme not in {"http", "https"}:
+                return None
+            try:
+                response = await client.get(
+                    source_url,
+                    headers={"Range": "bytes=0-2097151"},
+                    timeout=min(self.timeout, 8.0),
+                )
+            except Exception:
+                return None
+            content_type = response.headers.get("content-type", "").lower()
+            if response.status_code >= 400 or "html" not in content_type:
+                return None
+            candidates = extract_image_candidates(
+                response.text[:2_097_152],
+                str(response.url),
+                limit=1,
+            )
+            if not candidates:
+                return None
+            candidate = candidates[0]
+            return {
+                "title": candidate.get("alt") or source.get("title") or query,
+                "url": str(response.url),
+                "snippet": source.get("snippet") or "",
+                "source": "ddg_images",
+                "image_url": candidate["url"],
+                "thumbnail_url": "",
+            }
+
+        discovered = await asyncio.gather(*(from_source(source) for source in sources))
+        results: list[SearchResult] = []
+        seen_images: set[str] = set()
+        for item in discovered:
+            if item is None:
+                continue
+            image_url = str(item.get("image_url") or "")
+            if image_url in seen_images:
+                continue
+            seen_images.add(image_url)
+            results.append(item)
+            if len(results) >= limit:
+                break
         return results
 
 

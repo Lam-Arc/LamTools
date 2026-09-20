@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import lamtools_core
+import pytest
 from lamtools_core.update.checker import (
     RELEASES_PAGE_URL,
     check_update,
     compare_versions,
 )
+
+
+@pytest.fixture(autouse=True)
+def _windows_runtime_by_default(monkeypatch) -> None:
+    """Keep legacy asset tests deterministic on every CI host OS."""
+    monkeypatch.setattr("lamtools_core.update.checker.platform.system", lambda: "Windows")
+    monkeypatch.setattr("lamtools_core.update.checker.platform.machine", lambda: "AMD64")
 
 
 def _release(
@@ -84,6 +92,57 @@ def test_legacy_nsis_asset_is_not_selected(monkeypatch) -> None:
             ],
         ),
     )
+    result = check_update()
+    assert result["status"] == "up_to_date"
+
+
+def test_linux_prefers_appimage_over_deb(monkeypatch) -> None:
+    monkeypatch.setattr("lamtools_core.update.checker.platform.system", lambda: "Linux")
+    monkeypatch.setattr("lamtools_core.update.checker.platform.machine", lambda: "x86_64")
+    _stub_http(
+        monkeypatch,
+        _release(
+            tag="v9.9.9",
+            assets=[
+                {
+                    "name": "Sunday_9.9.9_amd64.deb",
+                    "browser_download_url": "https://example.test/Sunday_9.9.9_amd64.deb",
+                },
+                {
+                    "name": "Sunday_9.9.9_amd64.AppImage",
+                    "browser_download_url": "https://example.test/Sunday_9.9.9_amd64.AppImage",
+                },
+            ],
+        ),
+    )
+    result = check_update()
+    assert result["status"] == "update_available"
+    assert result["download_url"].endswith("Sunday_9.9.9_amd64.AppImage")
+
+
+def test_linux_falls_back_to_deb(monkeypatch) -> None:
+    monkeypatch.setattr("lamtools_core.update.checker.platform.system", lambda: "Linux")
+    monkeypatch.setattr("lamtools_core.update.checker.platform.machine", lambda: "amd64")
+    _stub_http(
+        monkeypatch,
+        _release(
+            tag="v9.9.9",
+            assets=[
+                {
+                    "name": "Sunday_9.9.9_amd64.deb",
+                    "browser_download_url": "https://example.test/Sunday_9.9.9_amd64.deb",
+                }
+            ],
+        ),
+    )
+    result = check_update()
+    assert result["status"] == "update_available"
+    assert result["download_url"].endswith("Sunday_9.9.9_amd64.deb")
+
+
+def test_unsupported_platform_does_not_offer_foreign_asset(monkeypatch) -> None:
+    monkeypatch.setattr("lamtools_core.update.checker.platform.system", lambda: "Darwin")
+    _stub_http(monkeypatch, _release(tag="v9.9.9"))
     result = check_update()
     assert result["status"] == "up_to_date"
 

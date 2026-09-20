@@ -22,6 +22,12 @@ feature-level inventories belong in their module documentation.
 - `docs/`, `scripts/`, and `.github/workflows/` contain repository-level
   documentation, maintenance/build scripts, and CI/release workflows.
 - `data/core.db` is the documented Core session/runtime data location.
+- `scripts/package-linux.sh` is the Linux-native distribution entry point. It
+  stages the source and toolchain in an E-backed WSL2 filesystem, builds the
+  Linux PyInstaller sidecar and Tauri bundles, and validates packaged startup.
+  Generated Linux artifacts are written under
+  `core/desktop/src-tauri/target/release/bundle/`; the standalone sidecar
+  verification copy is `artifacts/linux-x64/sidecar/LamCore`.
 
 ## Modules and Responsibilities
 
@@ -85,3 +91,6 @@ feature-level inventories belong in their module documentation.
   UI contracts are under `core/ui/tests/workflow-*.test.ts`.
 - Desktop pet logic has a Node test script; native Rust tests are colocated
   with the Tauri source. End-to-end material is under `e2e/`.
+- Linux package acceptance includes REST/WebSocket/Study backend smoke,
+  AppImage extraction, Debian contents inspection, and an Xvfb plus isolated
+  D-Bus launch that records the bundled sidecar PID and checks for survivors.

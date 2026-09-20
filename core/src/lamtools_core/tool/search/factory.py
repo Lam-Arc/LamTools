@@ -3,7 +3,7 @@
 配置来源（优先级从高到低）:
 1. 显式传入的 provider 名（调用侧 web_search 工具参数 provider=...）
 2. websearch.jsonc 配置（可选，位于 .lam/core/config/ 或 work_root）
-3. 内置默认：baidu（inproc 自研）
+3. 内置默认：DuckDuckGo（inproc）；不可用时按配置降级
 
 外部内核（subprocess/http）在配置中显式声明 command/url，不内置任何第三方代码。
 """
@@ -18,8 +18,8 @@ from typing import Awaitable, Callable
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult, ToolResultStatus
 from lamtools_core.tool.search.protocol import SearchProvider, SearchResult
 
-DEFAULT_PROVIDER = "baidu"
-DEFAULT_FALLBACK_PROVIDERS = ("ddg", "bing")
+DEFAULT_PROVIDER = "ddg"
+DEFAULT_FALLBACK_PROVIDERS = ("ddg", "baidu", "bing")
 
 _MAX_RESULT_COUNT = 20
 _MAX_CONTENT_LEN = 8000
@@ -165,6 +165,14 @@ def build_web_search_handler(
             if isinstance(raw_domains, list)
             else []
         )
+        search_type = str(args.get("search_type") or "web").strip().lower()
+        if search_type not in {"web", "image"}:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error="'search_type' must be 'web' or 'image'",
+            )
         requested_provider = str(args.get("provider") or "").strip() or None
         providers: list[SearchProvider] = [default_provider]
         if requested_provider:
@@ -196,7 +204,13 @@ def build_web_search_handler(
             provider = candidate
             attempted_providers.append(candidate.name)
             try:
-                results = await candidate.search(query, limit=limit, domains=domains)
+                if search_type == "image":
+                    search_images = getattr(candidate, "search_images", None)
+                    if not callable(search_images):
+                        raise ValueError(f"搜索内核 {candidate.name} 不支持图片搜索")
+                    results = await search_images(query, limit=limit, domains=domains)
+                else:
+                    results = await candidate.search(query, limit=limit, domains=domains)
             except Exception as exc:
                 provider_errors[candidate.name] = str(exc)
                 continue
@@ -211,6 +225,7 @@ def build_web_search_handler(
                 error=f"web_search failed ({errors})",
                 metadata={
                     "query": query,
+                    "search_type": search_type,
                     "provider": provider.name,
                     "attempted_providers": attempted_providers,
                     "provider_errors": provider_errors,
@@ -226,15 +241,22 @@ def build_web_search_handler(
             return ToolResult(
                 call_id=call.id, name=call.name, status="ok",
                 content=f"[web_search] No results found for query: {query}",
-                metadata={"query": query, "domains": domains, "provider": provider.name,
+                metadata={"query": query, "search_type": search_type, "domains": domains, "provider": provider.name,
                           "attempted_providers": attempted_providers,
                           "provider_errors": provider_errors,
                           "result_count": 0, "results": []},
             )
 
-        lines = [
-            f"{i+1}. {r['title']}\n   URL: {r['url']}\n   {r['snippet']}" for i, r in enumerate(results)
-        ]
+        if search_type == "image":
+            lines = [
+                f"{i+1}. {r['title']}\n   Image URL: {r.get('image_url', '')}\n"
+                f"   Source page: {r['url']}\n   {r['snippet']}"
+                for i, r in enumerate(results)
+            ]
+        else:
+            lines = [
+                f"{i+1}. {r['title']}\n   URL: {r['url']}\n   {r['snippet']}" for i, r in enumerate(results)
+            ]
         content = f"[web_search results for '{query}']\n\n" + "\n\n".join(lines)
         if len(content) > _MAX_CONTENT_LEN:
             content = content[:_MAX_CONTENT_LEN] + "\n[... truncated]"
@@ -245,6 +267,7 @@ def build_web_search_handler(
             content=content,
             metadata={
                 "query": query,
+                "search_type": search_type,
                 "domains": domains,
                 "provider": provider.name,
                 "attempted_providers": attempted_providers,
@@ -257,7 +280,7 @@ def build_web_search_handler(
                     kind="web_search_result",
                     uri=provider.name,
                     content=[dict(r) for r in results],
-                    metadata={"query": query, "domains": domains,
+                    metadata={"query": query, "search_type": search_type, "domains": domains,
                               "result_count": len(results)},
                 )
             ],

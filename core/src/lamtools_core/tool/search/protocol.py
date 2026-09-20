@@ -6,7 +6,7 @@ that satisfies SearchProvider can be plugged in without changing callers.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol, TypedDict, runtime_checkable
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, runtime_checkable
 
 # transport 形态：
 # - inproc:     同进程内自研轻量内核（无许可证风险）
@@ -22,6 +22,10 @@ class SearchResult(TypedDict):
     url: str
     snippet: str
     source: str  # 固定为内核名（provider.name）
+    # 图片搜索沿用同一 web_search 工具与结果合同；以下字段只在
+    # search_type=image 时出现，url 仍是可核验的来源页。
+    image_url: NotRequired[str]
+    thumbnail_url: NotRequired[str]
 
 
 @runtime_checkable

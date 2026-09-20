@@ -512,7 +512,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     queueInput,
     respondApproval,
     loadCommandCatalog,
-    setTurnOptionsProvider: (provider: () => Record<string, unknown>) => {
+    setTurnOptionsProvider: (provider: () => Record<string, unknown> | Promise<Record<string, unknown>>) => {
       turnOptionsProvider = provider
     },
     setShallowThinking: (value: boolean) => {

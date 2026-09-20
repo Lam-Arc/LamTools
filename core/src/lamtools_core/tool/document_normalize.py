@@ -97,6 +97,24 @@ def normalize_document(
     return None  # pragma: no cover - guarded above
 
 
+def normalize_pdf_bytes(
+    data: bytes,
+    *,
+    max_text_length: int = 50_000,
+    limits: DocumentNormalizationLimits = DEFAULT_DOCUMENT_LIMITS,
+) -> NormalizedDocument:
+    """Normalize an in-memory PDF with the same limits as a workspace PDF."""
+    if len(data) > limits.max_file_bytes:
+        raise DocumentNormalizationError(
+            f"Document size {len(data)} bytes exceeds the {limits.max_file_bytes} byte limit"
+        )
+    return _normalize_pdf_source(
+        BytesIO(data),
+        max_text_length=max_text_length,
+        limits=limits,
+    )
+
+
 def _validate_document_preflight(
     path: Path,
     *,
@@ -254,6 +272,19 @@ def _normalize_pdf(
     max_text_length: int,
     limits: DocumentNormalizationLimits,
 ) -> NormalizedDocument:
+    return _normalize_pdf_source(
+        path,
+        max_text_length=max_text_length,
+        limits=limits,
+    )
+
+
+def _normalize_pdf_source(
+    source: Path | BytesIO,
+    *,
+    max_text_length: int,
+    limits: DocumentNormalizationLimits,
+) -> NormalizedDocument:
     try:
         from pypdf import PdfReader
     except ImportError as exc:  # pragma: no cover - packaging failure, not a document behavior
@@ -262,7 +293,7 @@ def _normalize_pdf(
         ) from exc
 
     try:
-        reader = PdfReader(path, strict=False)
+        reader = PdfReader(source, strict=False)
         if reader.is_encrypted:
             raise DocumentNormalizationError(
                 "Encrypted PDF requires a password and cannot be normalized"
@@ -878,4 +909,5 @@ __all__ = [
     "DocumentNormalizationError",
     "NormalizedDocument",
     "normalize_document",
+    "normalize_pdf_bytes",
 ]

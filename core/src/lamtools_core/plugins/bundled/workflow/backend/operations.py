@@ -124,6 +124,30 @@ def _provided_mapping(
     return True, dict(raw)
 
 
+def _resolved_model_id(
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+    context: PluginContext | None,
+) -> str:
+    """Resolve one model identity before workflow work becomes durable."""
+    explicit = str(payload.get("model_id") or payload.get("modelId") or "").strip()
+    if explicit:
+        return explicit
+    runtime_model = str(metadata.get("_runtime_model_id") or "").strip()
+    if runtime_model:
+        return runtime_model
+    for key in ("runtime_snapshot", "snapshot"):
+        snapshot = metadata.get(key)
+        if isinstance(snapshot, dict):
+            snapshot_model = str(snapshot.get("model_id") or snapshot.get("modelId") or "").strip()
+            if snapshot_model:
+                return snapshot_model
+    metadata_model = str(metadata.get("model_id") or metadata.get("modelId") or "").strip()
+    if metadata_model:
+        return metadata_model
+    return str(context.model_id if context is not None else "").strip()
+
+
 def _execution_context(
     request: OperationRequest,
     context: PluginContext | None,
@@ -183,14 +207,7 @@ def _execution_context(
     )
     environment = metadata.get("environment", payload.get("environment", {}))
     capabilities = metadata.get("capabilities", payload.get("capabilities", {}))
-    model_id = str(
-        payload.get("model_id")
-        or payload.get("modelId")
-        or metadata.get("model_id")
-        or metadata.get("modelId")
-        or (context.model_id if context is not None else "")
-        or ""
-    ).strip()
+    model_id = _resolved_model_id(payload, metadata, context)
     return WorkflowExecutionContext(
         parent_session_id=str(metadata.get("session_id") or metadata.get("thread_id") or thread_id),
         parent_run_id=str(metadata.get("run_id") or run_id),
@@ -1298,9 +1315,9 @@ async def workflow_queue_enqueue(
             "single_node": str(payload.get("single_node") or payload.get("singleNode") or "") or None,
             "metadata": {**dict(request.metadata or {}), **dict(payload.get("metadata") or {})},
         }
-        requested_model_id = str(payload.get("model_id") or payload.get("modelId") or "").strip()
-        if requested_model_id:
-            queue_kwargs["metadata"]["model_id"] = requested_model_id
+        resolved_model_id = _resolved_model_id(payload, dict(request.metadata or {}), context)
+        if resolved_model_id:
+            queue_kwargs["metadata"]["model_id"] = resolved_model_id
         if prior_values_provided:
             queue_kwargs["prior_values"] = prior_values
         if prior_states_provided:

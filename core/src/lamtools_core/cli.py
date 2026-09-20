@@ -936,10 +936,16 @@ def load_llm_config(*, model_ref: str = "") -> LLMConfig:
         raise ValueError(
             f"provider not found for model: {ref} (provider={model.provider or model.provider_id or '?'})"
         )
+    base_url = (provider.base_url or "").strip().rstrip("/")
+    parsed_base_url = urlsplit(base_url)
+    if parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.netloc:
+        raise ValueError(
+            f"provider base_url must be an absolute HTTP(S) URL for model: {ref}"
+        )
     return LLMConfig(
         provider_name=provider.name,
         provider_api_type=provider.api_type or "openai",
-        base_url=(provider.base_url or "").rstrip("/"),
+        base_url=base_url,
         api_key=provider.api_key,
         model_record_id=model.model_id,
         model_id=model.model_id,
@@ -966,7 +972,12 @@ def _provider_extra(provider: ProviderConfig) -> dict[str, Any]:
 
 
 def _resolve_provider_for_model(model: ModelConfig) -> ProviderConfig | None:
-    """Look up a provider by the model's provider_id then by name."""
+    """Look up a provider by the model's provider_id then by name.
+
+    A model with an explicit provider reference must never be rebound to an
+    unrelated default provider.  The default is only a compatibility fallback
+    for legacy model records that contain no provider identity at all.
+    """
     store = ProviderStore()
     if model.provider_id:
         provider = store.get_sync(model.provider_id, work_root=_model_store_work_root)
@@ -976,7 +987,9 @@ def _resolve_provider_for_model(model: ModelConfig) -> ProviderConfig | None:
         provider = store.get_sync(model.provider, work_root=_model_store_work_root)
         if provider is not None:
             return provider
-    # Last resort: the single configured / default provider.
+    if model.provider_id or model.provider:
+        return None
+    # Last resort for legacy records with no provider identity.
     return store.default_sync(work_root=_model_store_work_root)
 
 
@@ -1573,6 +1586,13 @@ def build_parser(
     session_show.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     session_show.add_argument("--raw", action="store_true")
     session_show.set_defaults(func=cmd_session_show)
+    session_outline = session_sub.add_parser(
+        "outline", help="Show a compact conversation outline"
+    )
+    session_outline.add_argument("thread_id")
+    _add_live_connection_arguments(session_outline)
+    session_outline.add_argument("--raw", action="store_true")
+    session_outline.set_defaults(func=cmd_session_outline)
     session_export = session_sub.add_parser("export", help="Export a Sunday session")
     session_export.add_argument("thread_id")
     session_export.add_argument(
@@ -3252,6 +3272,31 @@ async def cmd_session_show(args: argparse.Namespace) -> int:
         print(f"[session] {detail['thread_id']}", flush=True)
         print(f"[status] {snapshot.get('status') or '-'} seq={snapshot.get('snapshot_seq') or 0}", flush=True)
         print(f"[events] {len(detail.get('events') or [])}", flush=True)
+    return 0
+
+
+async def cmd_session_outline(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args,
+        lambda client: client.request(
+            "thread.outline",
+            {"thread_id": args.thread_id},
+        ),
+    )
+    items = result.get("items") if isinstance(result.get("items"), list) else []
+    lines = [f"[session outline] {args.thread_id} ({len(items)} messages)"]
+    for index, item in enumerate(items, 1):
+        if not isinstance(item, dict):
+            continue
+        timestamp = str(item.get("timestamp") or "-")
+        turn_id = str(item.get("turn_id") or "-")
+        prompt = " ".join(str(item.get("prompt") or "").split()) or "-"
+        response = " ".join(str(item.get("response_excerpt") or "").split()) or "-"
+        lines.append(
+            f"{index}. seq={item.get('seq', '-')} turn={turn_id} time={timestamp} "
+            f"{prompt} -> {response}"
+        )
+    _print_live_result(args, result, "\n".join(lines))
     return 0
 
 

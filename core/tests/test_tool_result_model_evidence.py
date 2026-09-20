@@ -4,7 +4,7 @@ import pytest
 
 from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
 from lamtools_core.kernel import KernelStep, KernelTurn, VerificationResult
-from lamtools_core.llm import ChatMessage
+from lamtools_core.llm import ChatMessage, LLMResponse, LLMToolCall
 from lamtools_core.runtime import RuntimeState, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.prompt import PromptContext
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
@@ -18,6 +18,9 @@ class _CapturingToolbox:
     async def execute(self, call: ToolCall, context=None) -> ToolResult:
         self.call = call
         return ToolResult(call_id=call.id, name=call.name, status="ok")
+
+    def prepare_call(self, call: ToolCall) -> ToolCall:
+        return call
 
     def tool_specs(self):
         return []
@@ -122,6 +125,32 @@ async def test_base_agent_attaches_runtime_ownership_to_every_tool_call(tmp_path
     assert toolbox.call is not None
     assert toolbox.call.metadata["_runtime_session_id"] == "parent:sub:worker"
     assert toolbox.call.metadata["_runtime_run_id"] == "child-run"
+
+
+@pytest.mark.asyncio
+async def test_base_agent_attaches_active_model_before_approval_can_suspend(tmp_path):
+    toolbox = _CapturingToolbox()
+    kit = CoreBaseAgentKit(work_root=tmp_path, toolbox=toolbox)  # type: ignore[arg-type]
+    state = RuntimeState(
+        session_id="study-runtime-model",
+        metadata={
+            "model_id": "stale-state-model",
+            "runtime_snapshot": {"model_id": "turn-model"},
+        },
+    )
+
+    turn = await kit.parse_model_output(
+        state,
+        LLMResponse(
+            tool_calls=[LLMToolCall(id="exam-call", name="exam", arguments={})],
+            finish_reason="tool_calls",
+        ),
+    )
+
+    assert turn.tool_calls[0].metadata["_runtime_model_id"] == "turn-model"
+    # The pending approval stores ToolCall.to_dict(), so the internal routing
+    # value must already be present before execute_tool is reached.
+    assert turn.tool_calls[0].to_dict()["metadata"]["_runtime_model_id"] == "turn-model"
 
 
 @pytest.mark.asyncio

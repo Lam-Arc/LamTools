@@ -1,7 +1,7 @@
 <template>
   <aside
     v-if="visible"
-    class="wf-node-runtime"
+    class="wf-node-runtime optical-glass"
     :class="[`state-${state}`, { 'is-collapsed': collapsed }]"
     :aria-label="`${title}运行详情`"
     @pointerdown.stop
@@ -234,19 +234,16 @@ function collectArtifacts(value: unknown): RuntimeArtifact[] {
 
 <style scoped>
 .wf-node-runtime {
+  --text: var(--theme-main-text);
+  --optical-glass-overlay: transparent;
   position: absolute;
   top: 0;
   left: calc(100% + var(--space-2));
   width: min(360px, 42vw);
   max-height: min(520px, 66vh);
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
   border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
-  background: color-mix(in srgb, var(--theme-main-background) 62%, transparent);
   color: var(--theme-main-text);
-  box-shadow: var(--shadow-sm);
-  -webkit-backdrop-filter: blur(var(--space-4)) saturate(1.24);
-  backdrop-filter: blur(var(--space-4)) saturate(1.24);
 }
 .wf-node-runtime.is-collapsed { width: auto; max-width: 240px; }
 .wf-node-runtime-summary { display: flex; align-items: center; width: 100%; min-height: 34px; gap: var(--space-1); padding: var(--space-1) var(--space-2); border: 0; background: transparent; color: inherit; font-size: 11px; font-weight: 650; text-align: left; cursor: pointer; }

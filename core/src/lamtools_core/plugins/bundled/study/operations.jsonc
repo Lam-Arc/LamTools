@@ -1,0 +1,74 @@
+{
+  "operations": [
+    {
+      "name": "study.context",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.session",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.search",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.pin",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.get",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.build",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.sign",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.exam",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.layout",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.current",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.marks",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.text",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.notes",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    },
+    {
+      "name": "study.outbox",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.plugins.bundled.study.backend:operation"
+    }
+  ]
+}

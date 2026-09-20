@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 import uuid
 
 import pytest
 
 from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
 from lamtools_core.app.operation_catalog import OperationRequest, OperationResult
-from lamtools_core.plugins.bundled.workflow.backend.operations import workflow_tools_list
+from lamtools_core.plugins.bundled.workflow.backend.operations import (
+    _resolved_model_id,
+    workflow_queue_enqueue,
+    workflow_tools_list,
+)
 from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowDef,
     WorkflowEdge,
@@ -40,6 +45,61 @@ def _definition(name: str = "demo") -> WorkflowDef:
             )
         ],
     )
+
+
+def test_workflow_model_resolution_preserves_runtime_model_and_explicit_override(tmp_path: Path) -> None:
+    context = PluginContext(work_root=tmp_path, model_id="context-model")
+    metadata = {
+        "_runtime_model_id": "turn-model",
+        "runtime_snapshot": {"model_id": "snapshot-model"},
+        "model_id": "metadata-model",
+    }
+
+    assert _resolved_model_id({}, metadata, context) == "turn-model"
+    assert _resolved_model_id({"model_id": "explicit-model"}, metadata, context) == "explicit-model"
+    assert _resolved_model_id({}, {"runtime_snapshot": {"model_id": "snapshot-model"}}, context) == "snapshot-model"
+    assert _resolved_model_id({}, {}, context) == "context-model"
+
+
+@pytest.mark.asyncio
+async def test_workflow_queue_persists_runtime_model_as_top_level_metadata(tmp_path: Path) -> None:
+    definition = _definition("queued-model")
+
+    class Manager:
+        async def get(self, name: str, *, work_root=None):
+            return definition if name == definition.name else None
+
+    class Queue:
+        kwargs: dict[str, Any] = {}
+
+        async def enqueue(self, queued_definition, **kwargs):
+            assert queued_definition is definition
+            self.kwargs = kwargs
+            return SimpleNamespace(
+                queue_id="queue-1",
+                run_id="run-1",
+                to_dict=lambda: {"queue_id": "queue-1", "run_id": "run-1", "metadata": kwargs["metadata"]},
+            )
+
+    queue = Queue()
+    context = PluginContext(
+        work_root=tmp_path,
+        services={"workflow": SimpleNamespace(manager=Manager(), queue=queue)},
+    )
+    result = await workflow_queue_enqueue(
+        OperationRequest(
+            name="workflow.queue.enqueue",
+            payload={"name": definition.name},
+            metadata={
+                "_runtime_model_id": "turn-model",
+                "runtime_snapshot": {"model_id": "snapshot-model"},
+            },
+        ),
+        context=context,
+    )
+
+    assert result.status == "ok"
+    assert queue.kwargs["metadata"]["model_id"] == "turn-model"
 
 
 @pytest.mark.asyncio
@@ -571,7 +631,8 @@ async def test_workflow_disabled_at_start_can_reenable_and_restart_watcher(
 
     assert manager.get("workflow") is None
     assert not catalog.has("workflow.run")
-    assert (await catalog.execute("plugin.ui.list")).payload["modes"] == []
+    modes = (await catalog.execute("plugin.ui.list")).payload["modes"]
+    assert {mode["pluginId"] for mode in modes} == {"study"}
 
     enabled = await catalog.execute("plugin.enable", {"name": "workflow"})
     assert enabled.payload["enabled"] is True

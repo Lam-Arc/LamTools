@@ -191,9 +191,12 @@ class PluginManifest:
     raw: dict[str, Any] = field(default_factory=dict)
     # Stable manifest identity. Older manifests used ``name`` as their
     # identity, so discovery falls back to that value when ``id`` is omitted.
-    # Keep this field at the end to preserve positional construction of the
-    # pre-id manifest model for third-party integrations.
+    # Keep extension fields at the end to preserve positional construction of
+    # the pre-id manifest model for third-party integrations.
     id: str = ""
+    # Optional mode scopes keyed by declared skill root. Kept at the end so
+    # older positional manifest construction remains stable.
+    skill_modes: dict[Path, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

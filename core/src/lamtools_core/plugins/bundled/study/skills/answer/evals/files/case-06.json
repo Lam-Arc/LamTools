@@ -1,0 +1,7 @@
+{
+  "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力和可读上下文。字段不是生产工具API。",
+  "case_id": "answer-06",
+  "question": "连续是否一定可导",
+  "previous_answer": "一定",
+  "search_available": true
+}

@@ -1,7 +1,7 @@
 <template>
   <section
     class="wf-catalog"
-    :class="{ 'wf-catalog-popover': variant === 'popover' }"
+    :class="{ 'wf-catalog-popover': variant === 'popover', 'optical-glass': variant === 'popover' }"
     data-workflow-node-catalog
     aria-label="工作流节点目录"
   >
@@ -300,9 +300,9 @@ onMounted(() => {
   gap: var(--space-2);
   overflow: hidden;
   padding: var(--space-3);
-  border-bottom: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
   color: var(--theme-backdrop-text);
 }
+.wf-catalog:not(.wf-catalog-popover) { border-bottom: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent); }
 .wf-catalog-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .wf-catalog-head-actions { display: flex; align-items: center; gap: var(--space-1); }
 .wf-catalog-head h3 { margin: 0; font-size: 12px; font-weight: 700; }
@@ -331,16 +331,14 @@ onMounted(() => {
 .wf-catalog-empty { margin: 0; color: color-mix(in srgb, var(--theme-backdrop-text) 44%, transparent); font-size: 11px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .wf-catalog-popover {
+  --text: var(--theme-main-text);
+  --optical-glass-overlay: transparent;
+  position: relative;
   min-width: min(340px, calc(100vw - var(--space-4)));
   max-width: min(380px, calc(100vw - var(--space-4)));
   max-height: min(620px, calc(100dvh - var(--titlebar-offset, 0px) - var(--composer-height, 120px) - var(--composer-bottom-offset, 0px) - var(--composer-rest-bottom, var(--space-2)) - var(--space-4)));
-  border: 1px solid var(--theme-main-border);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--theme-main-background) 90%, transparent);
   color: var(--theme-main-text);
-  box-shadow: var(--shadow-md);
-  -webkit-backdrop-filter: blur(var(--space-2)) saturate(1.2);
-  backdrop-filter: blur(var(--space-2)) saturate(1.2);
 }
 .wf-catalog-popover .wf-catalog-count,
 .wf-catalog-popover .wf-catalog-copy small,

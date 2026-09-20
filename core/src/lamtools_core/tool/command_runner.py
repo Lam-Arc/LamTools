@@ -395,6 +395,11 @@ def _wait_for_background_http_probe(
     import urllib.error
     import urllib.request
 
+    # Readiness URLs are restricted to localhost by the caller.  Bypass
+    # machine/user proxy configuration explicitly: a loopback probe routed to
+    # a stale or overloaded proxy can hang even though the spawned server is
+    # already listening, producing a false startup failure.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + probe.timeout_seconds
     last_error = ""
     last_error_type = "LocalServerUnreachable"
@@ -414,7 +419,7 @@ def _wait_for_background_http_probe(
                 metadata={"error_kind": "cancelled", "retryable": False},
             )
         try:
-            with urllib.request.urlopen(probe.url, timeout=0.75) as response:
+            with opener.open(probe.url, timeout=0.75) as response:
                 body = response.read().decode("utf-8", errors="replace")
                 if not probe.expected_text or probe.expected_text in body:
                     return _BackgroundProbeResult(ok=True)

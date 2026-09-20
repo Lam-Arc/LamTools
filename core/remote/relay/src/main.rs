@@ -1752,7 +1752,7 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200"));
         assert!(response.contains("access-control-allow-origin: *"));
         assert!(response.contains("\"pairingId\":\"pairing-resolve\""));
-        assert!(response.contains("\"code\"") == false);
+        assert!(!response.contains("\"code\""));
         assert!(response.contains("\"desktopDeviceId\":\"desktop-test\""));
         assert!(response.contains("\"desktopPublicKey\":\"desktop-public-key\""));
         assert!(response.contains("\"relayTicket\":"));
@@ -1972,7 +1972,7 @@ mod tests {
         };
         let mut request = format!(
             "{method} {target} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Length: {}\r\n",
-            body.as_bytes().len()
+            body.len()
         );
         for (name, value) in headers {
             request.push_str(&format!("{name}: {value}\r\n"));

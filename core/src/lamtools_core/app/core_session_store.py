@@ -93,7 +93,10 @@ class CoreDbSessionStore:
         db = self._db_provider()
         if not self._is_visible(session.id, session.metadata):
             raise ValueError("Session owner plugin is disabled or unavailable")
-        if self._fallback_work_root:
+        # Trusted plugin resources may explicitly own a global conversation.
+        # Ordinary Agent sessions retain the existing fallback-project rule.
+        project_independent = bool(session.metadata.get("owner_plugin")) and session.metadata.get("project_independent") is True
+        if self._fallback_work_root and not project_independent:
             requested_root = str(session.metadata.get("work_root") or "").strip()
             project_exists = False
             if requested_root:

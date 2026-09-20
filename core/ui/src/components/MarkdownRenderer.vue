@@ -13,6 +13,7 @@ import DOMPurify from 'dompurify'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { isExternalUrl, openExternalUrl } from '../helpers/openUrl'
+import { renderAutoMathPlot } from './mathAutoPlot'
 
 defineOptions({ name: 'MarkdownRenderer' })
 
@@ -26,6 +27,26 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     anchor.setAttribute('target', '_blank')
     anchor.setAttribute('rel', 'noopener noreferrer')
   }
+  if (node.tagName === 'IMG' && node instanceof HTMLElement) {
+    const image = node as HTMLImageElement
+    const src = image.getAttribute('src')?.trim() ?? ''
+    if (/^http:\/\//i.test(src)) {
+      image.removeAttribute('src')
+      image.setAttribute('data-image-blocked', 'insecure-source')
+      return
+    }
+    if (/^https:\/\//i.test(src)) {
+      if (image.dataset.studyRemoteImage !== 'true') {
+        image.removeAttribute('src')
+        image.setAttribute('data-image-blocked', 'remote-disabled')
+        return
+      }
+      image.setAttribute('loading', 'lazy')
+      image.setAttribute('decoding', 'async')
+      image.setAttribute('referrerpolicy', 'no-referrer')
+      if (!image.getAttribute('alt')?.trim()) image.setAttribute('alt', '教学配图')
+    }
+  }
 })
 
 const props = withDefaults(
@@ -33,6 +54,8 @@ const props = withDefaults(
     content: string
     /** Whether to auto-render mermaid diagrams */
     mermaid?: boolean
+    /** Render safe deterministic plots after supported display-math formulas. */
+    autoPlotMath?: boolean
     /** When true, use lightweight rendering (plain text + soft line breaks) to
      *  avoid jitter from incomplete Markdown during streaming. Full Markdown
      *  rendering is applied when streaming ends. */
@@ -40,6 +63,7 @@ const props = withDefaults(
   }>(),
   {
     mermaid: true,
+    autoPlotMath: false,
     streaming: false,
   },
 )
@@ -77,10 +101,18 @@ async function ensureMermaid() {
 // placeholder divs that get rendered after mount.
 const mermaidBlocks: { id: string; code: string }[] = []
 let mermaidSeq = 0
+const inlineMathPlots: { id: string; html: string }[] = []
+let inlineMathPlotSeq = 0
 // Content → rendered HTML cache (see renderedHtml for rationale). Entries keep
 // the mermaid blocks captured during parsing so cached hits still render
 // diagrams.
-const markdownCache = new Map<string, { html: string; blocks: { id: string; code: string }[]; seq: number }>()
+const markdownCache = new Map<string, {
+  html: string
+  blocks: { id: string; code: string }[]
+  seq: number
+  inlinePlots: { id: string; html: string }[]
+  inlinePlotSeq: number
+}>()
 
 // ── Code block copy button ──
 // Inline lucide Copy / Check icons (same geometry as the <Copy>/<Check>
@@ -94,6 +126,134 @@ const COPY_ICON =
 const DONE_ICON =
   '<svg class="code-copy-icon code-copy-icon--done" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   '<path d="M20 6 9 17l-5-5"></path></svg>'
+
+const STUDY_SVG_MAX_LENGTH = 100_000
+const STUDY_SVG_MAX_ELEMENTS = 1_000
+const STUDY_SVG_STYLE_PROPERTIES = new Set([
+  'dominant-baseline',
+  'fill',
+  'fill-opacity',
+  'font-family',
+  'font-size',
+  'font-weight',
+  'opacity',
+  'stroke',
+  'stroke-dasharray',
+  'stroke-linecap',
+  'stroke-linejoin',
+  'stroke-opacity',
+  'stroke-width',
+  'text-anchor',
+])
+
+// Diagrams authored for a white page commonly hard-code near-black paint.
+// The Study surface is dark by default, so those paths technically render but
+// become indistinguishable from the card.  Treat only the conventional black
+// foreground spellings as semantic text color; real accent colors are kept.
+const STUDY_SVG_THEME_FOREGROUND = /^(?:#0{3}(?:000)?|#1{3}(?:111)?|black|rgb\(\s*(?:0\s*,\s*){2}0\s*\)|rgb\(\s*(?:17\s*,\s*){2}17\s*\))$/i
+
+function adaptStudySvgPaintToTheme(elements: Element[]): void {
+  for (const element of elements) {
+    for (const name of ['color', 'fill', 'stroke']) {
+      const value = element.getAttribute(name)?.trim() ?? ''
+      if (STUDY_SVG_THEME_FOREGROUND.test(value)) element.setAttribute(name, 'currentColor')
+    }
+  }
+}
+
+function inlineSafeSvgStyles(source: string): string | null {
+  const documentNode = new DOMParser().parseFromString(source, 'image/svg+xml')
+  const svg = documentNode.documentElement
+  if (svg.localName !== 'svg' || documentNode.querySelector('parsererror')) return null
+  for (const style of Array.from(svg.querySelectorAll('style'))) {
+    const css = style.textContent ?? ''
+    for (const rule of css.split('}')) {
+      const separator = rule.indexOf('{')
+      if (separator < 0) continue
+      const selectors = rule.slice(0, separator).split(',').map((value) => value.trim())
+      const declarations = rule.slice(separator + 1).split(';')
+      const safeSelectors = selectors.filter((selector) => /^(?:[a-z][\w-]*|\.[\w-]+|#[\w-]+)$/i.test(selector))
+      if (safeSelectors.length === 0) continue
+      const safeDeclarations: Array<[string, string]> = []
+      for (const declaration of declarations) {
+        const declarationSeparator = declaration.indexOf(':')
+        if (declarationSeparator < 0) continue
+        const property = declaration.slice(0, declarationSeparator).trim().toLowerCase()
+        const value = declaration.slice(declarationSeparator + 1).trim()
+        if (property === 'font') {
+          const font = value.match(/^([0-9.]+(?:px|pt|em|rem|%))\s+([\w\s,'"-]+)$/i)
+          if (font) safeDeclarations.push(['font-size', font[1]], ['font-family', font[2]])
+          continue
+        }
+        if (
+          STUDY_SVG_STYLE_PROPERTIES.has(property)
+          && value
+          && !/[<>{}]/.test(value)
+          && !/(?:url\s*\(|javascript:|data:|https?:|@import|expression\s*\()/i.test(value)
+        ) safeDeclarations.push([property, value])
+      }
+      for (const selector of safeSelectors) {
+        const matches = [
+          ...(svg.matches(selector) ? [svg] : []),
+          ...Array.from(svg.querySelectorAll(selector)),
+        ]
+        for (const element of matches) {
+          for (const [property, value] of safeDeclarations) element.setAttribute(property, value)
+        }
+      }
+    }
+    style.remove()
+  }
+  return new XMLSerializer().serializeToString(svg)
+}
+
+function sanitizeStudySvg(source: string): string | null {
+  if (!props.autoPlotMath || !source.trim() || source.length > STUDY_SVG_MAX_LENGTH) return null
+  const normalized = inlineSafeSvgStyles(source)
+  if (!normalized) return null
+  const sanitized = DOMPurify.sanitize(normalized, {
+    USE_PROFILES: { svg: true },
+    FORBID_TAGS: [
+      'a',
+      'animate',
+      'animateMotion',
+      'animateTransform',
+      'foreignObject',
+      'image',
+      'script',
+      'set',
+      'style',
+      'use',
+    ],
+    FORBID_ATTR: ['href', 'src', 'style', 'xlink:href'],
+  })
+  const documentNode = new DOMParser().parseFromString(sanitized, 'image/svg+xml')
+  const svg = documentNode.documentElement
+  if (svg.localName !== 'svg' || documentNode.querySelector('parsererror')) return null
+  const elements = [svg, ...Array.from(svg.querySelectorAll('*'))]
+  if (elements.length > STUDY_SVG_MAX_ELEMENTS) return null
+  for (const element of elements) {
+    for (const attribute of Array.from(element.attributes)) {
+      const name = attribute.name.toLowerCase()
+      const value = attribute.value.trim()
+      if (
+        name.startsWith('on')
+        || /(?:javascript|data|file|blob|https?):/i.test(value)
+        || (/url\s*\(/i.test(value) && !/^url\s*\(\s*#[^)]+\s*\)$/i.test(value))
+      ) {
+        element.removeAttribute(attribute.name)
+      }
+    }
+  }
+  adaptStudySvgPaintToTheme(elements)
+  svg.setAttribute('class', `${svg.getAttribute('class') ?? ''} study-inline-svg__graphic`.trim())
+  svg.setAttribute('role', 'img')
+  if (!svg.getAttribute('aria-label')) {
+    const title = svg.querySelector('title')?.textContent?.trim()
+    svg.setAttribute('aria-label', title || '教学示意图')
+  }
+  return new XMLSerializer().serializeToString(svg)
+}
 
 function copyButtonHtml(source: string): string {
   // The raw source rides in a hidden sibling element: DOMPurify drops
@@ -128,6 +288,16 @@ function renderMarkdownDocument(source: string): string {
 function createMermaidRenderer(): Renderer {
   const renderer = new marked.Renderer()
 
+  renderer.image = function ({ href, title, text }: { href: string; title?: string | null; text: string }): string {
+    const remote = /^https?:\/\//i.test(href)
+    if (remote && !props.autoPlotMath) {
+      return `<span class="markdown-image-fallback" role="status">远程图片仅在 Study 中显示：${escapeHtml(text || '配图')}</span>`
+    }
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : ''
+    const studyAttr = /^https:\/\//i.test(href) ? ' data-study-remote-image="true"' : ''
+    return `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}"${titleAttr}${studyAttr}>`
+  }
+
   renderer.code = function ({ text, lang }: { text: string; lang?: string }): string {
     if (props.mermaid && lang === 'mermaid') {
       const id = `mermaid-${mermaidSeq++}`
@@ -138,6 +308,10 @@ function createMermaidRenderer(): Renderer {
     }
     if (lang === 'markdown' || lang === 'md') {
       return `<div class="code-block"><div class="nested-markdown">${renderMarkdownDocument(text)}</div>${copyButtonHtml(text)}</div>`
+    }
+    if (lang?.toLowerCase() === 'svg' && props.autoPlotMath) {
+      const svg = sanitizeStudySvg(text)
+      if (svg) return `<figure class="study-inline-svg">${svg}</figure>`
     }
     // Default code block
     const langAttr = lang ? ` class="language-${lang}"` : ''
@@ -197,7 +371,14 @@ function protectMath(content: string): { content: string; tokens: MathToken[] } 
   let index = 0
   const protect = (source: string, expression: string, displayMode: boolean) => {
     const token = `@@LAM_MATH_${index++}@@`
-    tokens.push({ token, html: renderLatex(expression, displayMode) })
+    const plot = props.autoPlotMath ? renderAutoMathPlot(expression, { allowStandalone: displayMode }) : ''
+    let plotHtml = plot
+    if (plot && !displayMode) {
+      const id = `math-inline-plot-${inlineMathPlotSeq++}`
+      inlineMathPlots.push({ id, html: plot })
+      plotHtml = `<span class="math-auto-plot-anchor" data-math-auto-plot-id="${id}"></span>`
+    }
+    tokens.push({ token, html: renderLatex(expression, displayMode) + plotHtml })
     return token
   }
   const transformed = splitFencedCode(content).map((segment) => {
@@ -352,15 +533,21 @@ const renderedHtml = computed(() => {
   // toggles and re-renders (part auto-collapse, process groups) re-run this
   // computed with unchanged content; re-parsing marked + sanitizing on every
   // toggle made those interactions produce ~60ms long tasks on large messages.
-  const cached = markdownCache.get(props.content)
+  const cacheKey = `${props.mermaid ? 'm1' : 'm0'}:${props.autoPlotMath ? 'p1' : 'p0'}:${props.content}`
+  const cached = markdownCache.get(cacheKey)
   if (cached) {
     mermaidBlocks.length = 0
     mermaidBlocks.push(...cached.blocks)
     mermaidSeq = cached.seq
+    inlineMathPlots.length = 0
+    inlineMathPlots.push(...cached.inlinePlots)
+    inlineMathPlotSeq = cached.inlinePlotSeq
     return cached.html
   }
   mermaidBlocks.length = 0
   mermaidSeq = 0
+  inlineMathPlots.length = 0
+  inlineMathPlotSeq = 0
   let html: string
   try {
     const math = protectMath(props.content)
@@ -375,7 +562,13 @@ const renderedHtml = computed(() => {
   } catch {
     html = `<p>${escapeHtml(props.content)}</p>`
   }
-  markdownCache.set(props.content, { html, blocks: [...mermaidBlocks], seq: mermaidSeq })
+  markdownCache.set(cacheKey, {
+    html,
+    blocks: [...mermaidBlocks],
+    seq: mermaidSeq,
+    inlinePlots: [...inlineMathPlots],
+    inlinePlotSeq: inlineMathPlotSeq,
+  })
   if (markdownCache.size > 100) {
     const oldest = markdownCache.keys().next().value
     if (oldest !== undefined) markdownCache.delete(oldest)
@@ -388,7 +581,31 @@ function renderStaticHtml(html: string): void {
   clearStreamedSegments()
   clearTableEnhancements()
   contentRoot.value.innerHTML = html
+  renderInlineMathPlots()
   enhanceTables()
+}
+
+function renderInlineMathPlots(): void {
+  const root = contentRoot.value
+  if (!root || inlineMathPlots.length === 0) return
+  const lastInserted = new Map<Element, Element>()
+  for (const block of inlineMathPlots) {
+    const anchor = root.querySelector<HTMLElement>(`[data-math-auto-plot-id="${block.id}"]`)
+    if (!anchor) continue
+    const container = anchor.closest('li, p, blockquote, td, th')
+    const template = document.createElement('template')
+    template.innerHTML = DOMPurify.sanitize(block.html)
+    const figure = template.content.querySelector<HTMLElement>('.math-auto-plot')
+    anchor.remove()
+    if (!container || !figure) continue
+    if (container.matches('li, td, th, blockquote')) container.appendChild(figure)
+    else {
+      const previous = lastInserted.get(container)
+      if (previous) previous.after(figure)
+      else container.after(figure)
+      lastInserted.set(container, figure)
+    }
+  }
 }
 
 // Keep a real <table> intact so the browser calculates one shared column grid.
@@ -558,8 +775,21 @@ function onRootClick(event: MouseEvent) {
   openExternalUrl(href)
 }
 
+function onRootImageError(event: Event) {
+  const image = event.target
+  if (!(image instanceof HTMLImageElement) || image.dataset.fallbackShown === 'true') return
+  image.dataset.fallbackShown = 'true'
+  image.hidden = true
+  const fallback = document.createElement('span')
+  fallback.className = 'markdown-image-fallback'
+  fallback.setAttribute('role', 'status')
+  fallback.textContent = `图片加载失败：${image.alt || '教学配图'}`
+  image.after(fallback)
+}
+
 onMounted(async () => {
   contentRoot.value?.addEventListener('click', onRootClick, true)
+  contentRoot.value?.addEventListener('error', onRootImageError, true)
   if (props.streaming) renderStreamingIncremental(props.content)
   else renderStaticHtml(renderedHtml.value)
   await renderMermaidDiagrams()
@@ -567,6 +797,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   contentRoot.value?.removeEventListener('click', onRootClick, true)
+  contentRoot.value?.removeEventListener('error', onRootImageError, true)
   clearTableEnhancements()
   clearStreamedSegments()
 })
@@ -735,6 +966,32 @@ defineExpose({ renderStreaming })
   text-decoration: underline;
 }
 
+/* Source-backed instructional images. Remote requests are constrained by the
+   sanitizer hook and desktop CSP; source attribution stays as normal prose. */
+.markdown-body :deep(img) {
+  display: block;
+  width: auto;
+  max-width: min(100%, 720px);
+  max-height: min(62vh, 720px);
+  margin: var(--space-3) 0 var(--space-2);
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius);
+  object-fit: contain;
+  background: var(--theme-main-soft-background);
+}
+.markdown-body :deep(img[data-image-blocked]) {
+  display: none;
+}
+.markdown-body :deep(.markdown-image-fallback) {
+  display: block;
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius-sm);
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
+  background: var(--theme-main-soft-background);
+}
+
 /* Tables render as self-contained cards. The card viewport owns vertical
    scrolling, so its header can stick without interacting with the thread's
    top fade mask. */
@@ -827,6 +1084,94 @@ defineExpose({ renderStreaming })
   color: color-mix(in srgb, var(--red) 55%, var(--theme-main-text, #f2efeb));
   background: color-mix(in srgb, var(--red) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--red) 20%, transparent);
+}
+
+/* Study-only fenced SVG diagrams are sanitized before entering the document.
+   They reuse the main content surface and remain responsive like Mermaid. */
+.markdown-body :deep(.study-inline-svg) {
+  width: min(100%, 720px);
+  margin: var(--space-3) auto;
+  color: var(--theme-main-text, #f2efeb);
+}
+.markdown-body :deep(.study-inline-svg__graphic) {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: min(62vh, 720px);
+  overflow: hidden;
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-soft-background);
+}
+
+/* Deterministic Study plots generated from supported display-math formulas. */
+.markdown-body :deep(.math-auto-plot-anchor) { display: none; }
+.markdown-body :deep(.math-auto-plot) {
+  width: min(100%, 720px);
+  margin: var(--space-3) auto;
+  color: var(--theme-main-text, #f2efeb);
+}
+.markdown-body :deep(.math-auto-plot svg) {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 1;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 10%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 2%, transparent);
+}
+.markdown-body :deep(.math-auto-plot-grid) {
+  stroke: color-mix(in srgb, var(--theme-main-text, #f2efeb) 10%, transparent);
+  stroke-width: 1;
+}
+.markdown-body :deep(.math-auto-plot-axis) {
+  stroke: color-mix(in srgb, var(--theme-main-text, #f2efeb) 45%, transparent);
+  stroke-width: 1.2;
+}
+.markdown-body :deep(.math-auto-plot-limit-guide) {
+  stroke: color-mix(in srgb, var(--theme-main-text, #f2efeb) 34%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 5 5;
+}
+.markdown-body :deep(.math-auto-plot-limit-point) {
+  fill: var(--theme-main-background, #111);
+  stroke: var(--blue);
+  stroke-width: 2.2;
+  vector-effect: non-scaling-stroke;
+}
+.markdown-body :deep(.math-auto-plot-limit-label) {
+  fill: var(--theme-main-text, #f2efeb);
+  font-weight: 650;
+}
+.markdown-body :deep(.math-auto-plot-label) {
+  fill: color-mix(in srgb, var(--theme-main-text, #f2efeb) 62%, transparent);
+  font: 10px var(--font-mono);
+}
+.markdown-body :deep(.math-auto-plot-series) {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.markdown-body :deep(.math-auto-plot-series--1) { stroke: var(--orange); }
+.markdown-body :deep(.math-auto-plot-series--2) { stroke: var(--green); }
+.markdown-body :deep(circle.math-auto-plot-series),
+.markdown-body :deep(.math-auto-plot-series circle) {
+  fill: currentColor;
+  stroke: var(--theme-main-background, #111);
+  stroke-width: 1.2;
+}
+.markdown-body :deep(.math-auto-plot-series--0 circle) { color: var(--blue); }
+.markdown-body :deep(.math-auto-plot-series--1 circle) { color: var(--orange); }
+.markdown-body :deep(.math-auto-plot-series--2 circle) { color: var(--green); }
+.markdown-body :deep(.math-auto-plot figcaption) {
+  margin-top: var(--space-1);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 62%, transparent);
+  font-size: 11px;
+  text-align: center;
 }
 </style>
 

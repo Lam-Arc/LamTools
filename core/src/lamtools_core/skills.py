@@ -14,6 +14,7 @@ class Skill:
     location: Path
     content: str
     allow_implicit_invocation: bool = True
+    modes: tuple[str, ...] = ()
 
 
 class SkillRegistry:
@@ -25,10 +26,15 @@ class SkillRegistry:
         explicit_roots: Iterable[str | Path] = (),
         max_content_chars: int = 30_000,
         sample_files: int = 10,
+        root_modes: dict[str | Path, Iterable[str]] | None = None,
     ) -> None:
         self._explicit_roots = tuple(Path(item).resolve() for item in explicit_roots)
         self._max_content_chars = max_content_chars
         self._sample_files = sample_files
+        self._root_modes = {
+            Path(root).resolve(): tuple(str(mode).strip() for mode in modes if str(mode).strip())
+            for root, modes in (root_modes or {}).items()
+        }
         # Caching: avoid repeated filesystem scans on every prompt_index call.
         # signature() yields a hashable tuple of (path, mtime_ns, size) per file;
         # we compare signatures to detect changes and invalidate accordingly.
@@ -51,12 +57,16 @@ class SkillRegistry:
         self._cached_index = None  # invalidate prompt_index cache
         return result
 
-    def get(self, work_root: str | Path | None, name: str) -> Skill | None:
+    @staticmethod
+    def _visible(skill: Skill, active_mode: str | None) -> bool:
+        return not skill.modes or (bool(active_mode) and active_mode in skill.modes)
+
+    def get(self, work_root: str | Path | None, name: str, *, active_mode: str | None = None) -> Skill | None:
         target = name.strip()
         if not target:
             return None
         for skill in self.available(work_root):
-            if skill.name == target:
+            if skill.name == target and self._visible(skill, active_mode):
                 return skill
         return None
 
@@ -64,13 +74,15 @@ class SkillRegistry:
         self,
         work_root: str | Path | None,
         state_store: SkillStateStore | None = None,
+        active_mode: str | None = None,
     ) -> str:
-        if state_store is None and self._cached_index is not None:
+        if state_store is None and active_mode is None and self._cached_index is not None:
             return self._cached_index
         skills = [
             skill
             for skill in self.available(work_root)
             if skill.allow_implicit_invocation
+            and self._visible(skill, active_mode)
             and (state_store is None or state_store.is_enabled(skill.name))
         ]
         if not skills:
@@ -86,20 +98,19 @@ class SkillRegistry:
                     "  <skill>",
                     f"    <name>{skill.name}</name>",
                     f"    <description>{skill.description}</description>",
-                    f"    <location>{skill.location}</location>",
                     "  </skill>",
                 ]
             )
         lines.append("</available_skills>")
         result = "\n".join(lines)
-        if state_store is None:
+        if state_store is None and active_mode is None:
             self._cached_index = result
         return result
 
-    def load_prompt_content(self, work_root: str | Path | None, name: str) -> str:
-        skill = self.get(work_root, name)
+    def load_prompt_content(self, work_root: str | Path | None, name: str, *, active_mode: str | None = None) -> str:
+        skill = self.get(work_root, name, active_mode=active_mode)
         if not skill:
-            available = ", ".join(item.name for item in self.available(work_root))
+            available = ", ".join(item.name for item in self.available(work_root) if self._visible(item, active_mode))
             return f'Skill "{name}" not found. Available skills: {available or "none"}'
 
         base = skill.location.parent
@@ -184,12 +195,22 @@ class SkillRegistry:
         if not description:
             first_line = next((line.strip() for line in content.splitlines() if line.strip()), "")
             description = first_line[:200] if first_line else "Specialized capability."
+        modes: tuple[str, ...] = ()
+        resolved = path.resolve()
+        for root, scoped_modes in self._root_modes.items():
+            try:
+                resolved.relative_to(root)
+            except ValueError:
+                continue
+            modes = scoped_modes
+            break
         return Skill(
             name=name.strip(),
             description=description,
             location=path,
             content=content,
             allow_implicit_invocation=self._allow_implicit_invocation(path.parent),
+            modes=modes,
         )
 
     @staticmethod

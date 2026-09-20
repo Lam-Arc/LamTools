@@ -1005,6 +1005,35 @@ async def test_sub_agent_runner_strips_image_when_jsonc_is_text(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_sub_agent_runner_keeps_text_only_attachment_context(tmp_path):
+    text_path = tmp_path / "evidence.txt"
+    text_path.write_text("attachment evidence survives", encoding="utf-8")
+    att = _FakeAttachment("att-text", text_path, mime="text/plain")
+    att.filename = "evidence.txt"
+    att.preview_type = "text"
+    service = _FakeAttachmentService({"att-text": att})
+    _write_project_model(tmp_path, "text-model", "text")
+    llm = AttachmentInspectingLLM(expected_model="text-model")
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=llm,
+        model_id="text-model",
+        attachment_service=service,
+    )
+
+    result = await runner.run(
+        task="read the attachment",
+        agent="reader",
+        attachments=["att-text"],
+    )
+
+    assert result.succeeded is True
+    user_msg = llm.requests[0].messages[-1]
+    assert isinstance(user_msg.content, str)
+    assert "attachment evidence survives" in user_msg.content
+
+
+@pytest.mark.asyncio
 async def test_sub_agent_runner_resolves_display_name_for_multimodal(tmp_path, monkeypatch):
     """A display_name (e.g. "Kimi-K2.6") must be resolved to model_id so
     capability lookup works — this is the 治本 fix for the display_name bug."""

@@ -98,6 +98,25 @@ def test_core_agent_http_app_exposes_live_app_server(tmp_path: Path, isolated_co
     assert initialized["result"]["protocolVersion"] == "core.app_server.v1"
 
 
+def test_study_session_is_persisted_and_resumable(tmp_path: Path, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
+    app = create_core_agent_http_app(
+        model_id="model-record", core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data", work_root=tmp_path / "workspace",
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            websocket.send_json({"id": 0, "method": "initialize", "params": {"clientInfo": {"name": "study-test"}}})
+            _receive_rpc_response(websocket, 0)
+            websocket.send_json({"id": 1, "method": "study.session", "params": {}})
+            result = _receive_rpc_response(websocket, 1)
+            assert "result" in result, result
+            assert result["result"]["session_id"] == "study:main"
+            websocket.send_json({"id": 2, "method": "thread/resume", "params": {"thread_id": "study:main"}})
+            resumed = _receive_rpc_response(websocket, 2)
+            assert resumed["result"]["thread"]["id"] == "study:main"
+
+
 def test_core_agent_http_app_keeps_myproject_in_configured_project_roots(
     tmp_path: Path,
     isolated_config_root: Path,
@@ -433,9 +452,18 @@ def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path, isolated_co
         attachment = uploaded.json()
         preview = client.get(f"/api/core/attachments/{attachment['id']}/preview")
         listed = client.get("/api/core/sessions/thread-attachment/attachments")
+        study_uploaded = client.post(
+            "/api/core/sessions/study:main/attachments",
+            files={"file": ("study.txt", b"study attachment", "text/plain")},
+        )
+        study_listed = client.get("/api/core/sessions/study:main/attachments")
 
     assert preview.json()["text"] == "line one\nline two"
     assert [item["id"] for item in listed.json()["attachments"]] == [attachment["id"]]
+    assert study_uploaded.status_code == 200
+    assert [item["id"] for item in study_listed.json()["attachments"]] == [study_uploaded.json()["id"]]
+    assert study_uploaded.json()["session_id"] == "study:main"
+    assert list((tmp_path / "core-data" / "attachments").glob("session-*/study.txt"))
     assert (tmp_path / "core-data" / "attachments" / "thread-attachment" / "notes.md").is_file()
 
 
@@ -1221,6 +1249,16 @@ async def test_core_config_routing_llm_client_uses_selected_model_output_limit_b
 
     assert [event.kind for event in events] == ["done"]
     assert captured == [8192]
+
+
+def test_core_config_routing_llm_client_does_not_hide_invalid_explicit_model(
+    isolated_config_root: Path,
+) -> None:
+    _write_two_model_jsonc_config(isolated_config_root)
+    client = CoreConfigRoutingLLMClient(default_model_ref="model-record")
+
+    with pytest.raises(ValueError, match="model not found: missing-model"):
+        client._client_for_request(LLMRequest(model="missing-model"))
 
 
 def test_core_http_serves_enabled_desktop_plugin_assets(

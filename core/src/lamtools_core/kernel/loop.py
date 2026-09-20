@@ -2674,6 +2674,27 @@ class CoreLoopKernel:
 
             work_root = str(metadata.get("work_root") or "")
             active_model = str(metadata.get("model_id") or "")
+            # Session metadata is host-owned (loaded from the session store),
+            # unlike arbitrary model/payload fields.  Study is projectless:
+            # give it a library scope so shared memory is isolated without
+            # ever exporting a Study dream into ``<project>/MEMORY.md``.
+            memory_scope = None
+            session_metadata = metadata.get("session_metadata")
+            if isinstance(session_metadata, dict) and str(session_metadata.get("owner_plugin") or "") == "study":
+                from lamtools_core.mem import MemoryScope
+
+                raw_scope = session_metadata.get("memory_scope")
+                if isinstance(raw_scope, dict):
+                    try:
+                        memory_scope = MemoryScope.from_dict(raw_scope)
+                    except ValueError:
+                        memory_scope = None
+                if memory_scope is None:
+                    memory_scope = MemoryScope.for_study(
+                        str(session_metadata.get("user_id") or "local-user"),
+                        str(session_metadata.get("environment_id") or "local-environment"),
+                        str(session_metadata.get("library_id") or "default"),
+                    )
 
             await dream_session(
                 session_id=state.session_id,
@@ -2684,6 +2705,7 @@ class CoreLoopKernel:
                 llm_client=self.llm_client,
                 model=active_model,
                 policy=self.policy,
+                scope=memory_scope,
             )
             record_dream_turn(state)
             # Persist the updated last_dream_turn marker.

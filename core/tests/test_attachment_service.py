@@ -77,6 +77,40 @@ def _video_record(att_id: str = "vid-1") -> AttachmentRecord:
     )
 
 
+def _pdf_record(tmp_path: Path, att_id: str = "pdf-1") -> AttachmentRecord:
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    path = tmp_path / f"{att_id}.pdf"
+    writer = PdfWriter()
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    font_reference = writer._add_object(font)
+    page = writer.add_blank_page(width=612, height=792)
+    page[NameObject("/Resources")] = DictionaryObject(
+        {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_reference})}
+    )
+    content = DecodedStreamObject()
+    content.set_data(b"BT /F1 12 Tf 72 720 Td (Uploaded PDF evidence) Tj ET")
+    page[NameObject("/Contents")] = writer._add_object(content)
+    with path.open("wb") as output:
+        writer.write(output)
+    return AttachmentRecord(
+        id=att_id,
+        session_id="s",
+        filename=path.name,
+        mime_type="application/pdf",
+        size=path.stat().st_size,
+        storage_path=str(path),
+        preview_type="pdf",
+    )
+
+
 def test_capability_split_multimodal_receives_image_text_defers_video(tmp_path):
     img = _image_record(tmp_path, "img-1")
     txt = _text_record(tmp_path, "txt-1")
@@ -121,6 +155,21 @@ def test_capability_split_text_model_still_inlines_text(tmp_path):
     assert deferred == []
 
 
+def test_capability_split_parses_pdf_as_untrusted_text_without_deferring(tmp_path):
+    pdf = _pdf_record(tmp_path)
+
+    index_text, blocks, deferred = build_capability_aware_attachment_input(
+        [pdf], [pdf.id], "text"
+    )
+
+    assert blocks == []
+    assert deferred == []
+    assert "PDF 已解析" in index_text
+    assert "[UNTRUSTED DOCUMENT CONTENT]" in index_text
+    assert "Uploaded PDF evidence" in index_text
+    assert "需委派" not in index_text
+
+
 def test_capability_split_empty_when_no_current_attachments(tmp_path):
     img = _image_record(tmp_path, "img-1")
     records = [img]
@@ -142,11 +191,18 @@ async def test_repository_rejects_path_traversal_session_id(tmp_path):
     from lamtools_core.attachment.store import _CoreAttachmentRepository
 
     repo = _CoreAttachmentRepository(None, tmp_path / "data")
-    for bad in ("../escape", "a/b", "a\b", "..", "", "x" * 65):
+    for bad in ("../escape", "a/b", "a\b", "..", "", "x" * 257):
         with pytest.raises(LookupError):
             await repo.session(bad)
     ok = await repo.session("session-abc_1.2")
     assert ok.storage_root == tmp_path / "data" / "attachments" / "session-abc_1.2"
+    study = await repo.session("study:node:vector")
+    repeated = await repo.session("study:node:vector")
+    assert study.id == "study:node:vector"
+    assert study.storage_root == repeated.storage_root
+    assert study.storage_root.parent == tmp_path / "data" / "attachments"
+    assert study.storage_root.name.startswith("session-")
+    assert ":" not in study.storage_root.name
 
 
 @pytest.mark.asyncio

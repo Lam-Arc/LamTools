@@ -134,6 +134,13 @@ class ArrangeJob:
     revision: int = 1
     created_at: datetime = field(default_factory=_utcnow)
     updated_at: datetime = field(default_factory=_utcnow)
+    # Monotonically increasing claim generation.  Every successful claim gets
+    # a new token so an old worker cannot mutate a job after lease takeover,
+    # even when the worker id is reused.
+    fencing_token: int = 0
+    # Last durable execution checkpoint.  A reclaimed run keeps this value so
+    # an executor can resume from its confirmed progress.
+    checkpoint: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -157,6 +164,8 @@ class ArrangeJob:
             "signal": deepcopy(self.signal),
             "lease_owner": self.lease_owner,
             "lease_expires_at": self.lease_expires_at.isoformat() if self.lease_expires_at else None,
+            "fencing_token": self.fencing_token,
+            "checkpoint": deepcopy(self.checkpoint),
             "last_error": self.last_error,
             "revision": self.revision,
             "created_at": self.created_at.isoformat(),
@@ -224,8 +233,24 @@ class ArrangeStore(Protocol):
         self, *, now: datetime, worker_id: str, lease_seconds: float, limit: int
     ) -> list[ArrangeJob]: ...
     async def renew_lease(
-        self, *, job_id: str, worker_id: str, now: datetime, lease_seconds: float
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: float,
+        fencing_token: int | None = None,
     ) -> bool: ...
+
+    async def checkpoint_run(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        checkpoint: dict[str, Any],
+        fencing_token: int | None = None,
+    ) -> ArrangeJob: ...
     async def complete_run(
         self,
         *,
@@ -233,8 +258,17 @@ class ArrangeStore(Protocol):
         worker_id: str,
         now: datetime,
         result: dict[str, Any] | None = None,
+        fencing_token: int | None = None,
     ) -> ArrangeJob: ...
-    async def fail_run(self, *, job_id: str, worker_id: str, now: datetime, error: str) -> ArrangeJob: ...
+    async def fail_run(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        error: str,
+        fencing_token: int | None = None,
+    ) -> ArrangeJob: ...
     async def recover_running(self, *, now: datetime) -> int: ...
     async def emit_signal(
         self,
@@ -369,6 +403,7 @@ class InMemoryArrangeStore:
                     signal=deepcopy(running_occurrence.signal),
                     lease_owner=worker_id,
                     lease_expires_at=now + timedelta(seconds=lease_seconds),
+                    fencing_token=current.fencing_token + 1,
                     revision=current.revision + 1,
                     updated_at=now,
                 )
@@ -377,11 +412,22 @@ class InMemoryArrangeStore:
         return claimed
 
     async def renew_lease(
-        self, *, job_id: str, worker_id: str, now: datetime, lease_seconds: float
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: float,
+        fencing_token: int | None = None,
     ) -> bool:
         async with self._lock:
             current = self._jobs.get(job_id)
-            if current is None or current.status != "running" or current.lease_owner != worker_id:
+            if (
+                current is None
+                or current.status != "running"
+                or current.lease_owner != worker_id
+                or (fencing_token is not None and current.fencing_token != fencing_token)
+            ):
                 return False
             self._jobs[job_id] = replace(
                 current,
@@ -391,6 +437,32 @@ class InMemoryArrangeStore:
             )
             return True
 
+    async def checkpoint_run(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        checkpoint: dict[str, Any],
+        fencing_token: int | None = None,
+    ) -> ArrangeJob:
+        if not isinstance(checkpoint, dict):
+            raise ValueError("checkpoint must be an object")
+        async with self._lock:
+            current = self._owned_running(
+                job_id,
+                worker_id,
+                fencing_token=fencing_token,
+            )
+            updated = replace(
+                current,
+                checkpoint=deepcopy(checkpoint),
+                revision=current.revision + 1,
+                updated_at=now,
+            )
+            self._jobs[job_id] = updated
+            return deepcopy(updated)
+
     async def complete_run(
         self,
         *,
@@ -398,9 +470,14 @@ class InMemoryArrangeStore:
         worker_id: str,
         now: datetime,
         result: dict[str, Any] | None = None,
+        fencing_token: int | None = None,
     ) -> ArrangeJob:
         async with self._lock:
-            current = self._owned_running(job_id, worker_id)
+            current = self._owned_running(
+                job_id,
+                worker_id,
+                fencing_token=fencing_token,
+            )
             occurrence = self._occurrences.get(current.occurrence_id)
             if occurrence is not None:
                 self._occurrences[occurrence.id] = replace(
@@ -440,9 +517,21 @@ class InMemoryArrangeStore:
             self._jobs[job_id] = updated
             return deepcopy(updated)
 
-    async def fail_run(self, *, job_id: str, worker_id: str, now: datetime, error: str) -> ArrangeJob:
+    async def fail_run(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        error: str,
+        fencing_token: int | None = None,
+    ) -> ArrangeJob:
         async with self._lock:
-            current = self._owned_running(job_id, worker_id)
+            current = self._owned_running(
+                job_id,
+                worker_id,
+                fencing_token=fencing_token,
+            )
             occurrence = self._occurrences.get(current.occurrence_id)
             retry = occurrence is not None and occurrence.attempt_count < 3
             if occurrence is not None:
@@ -589,11 +678,21 @@ class InMemoryArrangeStore:
             for item in self._occurrences.values()
         )
 
-    def _owned_running(self, job_id: str, worker_id: str) -> ArrangeJob:
+    def _owned_running(
+        self,
+        job_id: str,
+        worker_id: str,
+        *,
+        fencing_token: int | None = None,
+    ) -> ArrangeJob:
         current = self._jobs.get(job_id)
         if current is None:
             raise LookupError(f"Arrange job not found: {job_id}")
-        if current.status != "running" or current.lease_owner != worker_id:
+        if (
+            current.status != "running"
+            or current.lease_owner != worker_id
+            or (fencing_token is not None and current.fencing_token != fencing_token)
+        ):
             raise RuntimeError(f"Arrange job lease lost: {job_id}")
         return current
 
@@ -755,6 +854,11 @@ class ArrangeManager:
             next_run_at=next_run_at,
             lease_owner="",
             lease_expires_at=None,
+            fencing_token=(
+                current.fencing_token + 1
+                if current.status == "running" and status in {"paused", "cancelled"}
+                else current.fencing_token
+            ),
             revision=current.revision + 1,
             updated_at=when,
         )
@@ -952,6 +1056,7 @@ class ArrangeRunner:
         self._stopping = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._active_tasks: dict[str, asyncio.Task[None]] = {}
+        self._active_fences: dict[str, int] = {}
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -971,6 +1076,7 @@ class ArrangeRunner:
         if active:
             await asyncio.gather(*active, return_exceptions=True)
         self._active_tasks.clear()
+        self._active_fences.clear()
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
 
@@ -992,6 +1098,7 @@ class ArrangeRunner:
                         status="cancelled",
                         lease_owner="",
                         lease_expires_at=None,
+                        fencing_token=current.fencing_token + 1,
                         revision=current.revision + 1,
                         updated_at=self.clock(),
                     ),
@@ -1016,12 +1123,41 @@ class ArrangeRunner:
         # the poll loop and newly due jobs could not be claimed until it
         # finished (audit 07 S3).  Done-callbacks clean up _active_tasks.
         for job in jobs:
+            self._active_fences[job.id] = job.fencing_token
             task = asyncio.create_task(self._execute(job), name=f"arrange-job:{job.id}")
             self._active_tasks[job.id] = task
             task.add_done_callback(
-                lambda _task, job_id=job.id: self._active_tasks.pop(job_id, None)
+                lambda _task, job_id=job.id: (
+                    self._active_tasks.pop(job_id, None),
+                    self._active_fences.pop(job_id, None),
+                )
             )
         return len(jobs)
+
+    async def checkpoint(self, job_id: str, checkpoint: dict[str, Any]) -> ArrangeJob:
+        """Persist progress for the runner's currently claimed execution.
+
+        The helper deliberately obtains the fence captured at claim time rather
+        than re-reading the job.  Re-reading would let a stale task adopt a
+        newer lease after takeover and defeat the fencing contract.
+        """
+        clean_job_id = str(job_id or "").strip()
+        if not clean_job_id:
+            raise ValueError("job_id is required")
+        fencing_token = self._active_fences.get(clean_job_id)
+        if fencing_token is None:
+            raise RuntimeError(f"Arrange job is not active: {clean_job_id}")
+        return await self.store.checkpoint_run(
+            job_id=clean_job_id,
+            worker_id=self.worker_id,
+            now=self.clock(),
+            checkpoint=checkpoint,
+            fencing_token=fencing_token,
+        )
+
+    async def checkpoint_run(self, job_id: str, checkpoint: dict[str, Any]) -> ArrangeJob:
+        """Compatibility alias for callers that use the store operation name."""
+        return await self.checkpoint(job_id, checkpoint)
 
     async def _run(self) -> None:
         while not self._stopping.is_set():
@@ -1046,7 +1182,7 @@ class ArrangeRunner:
                     effective_job = replace(job, thread_id=new_thread, updated_at=self.clock())
             except Exception:
                 pass  # fall through with original thread_id
-        renewer = asyncio.create_task(self._renew(effective_job.id))
+        renewer = asyncio.create_task(self._renew(effective_job.id, job.fencing_token))
         try:
             # Run the executor off the event loop: a blocking executor would
             # starve the lease renewer, the lease would expire mid-run and the
@@ -1074,21 +1210,31 @@ class ArrangeRunner:
                 worker_id=self.worker_id,
                 now=self.clock(),
                 result=_execution_result(result),
+                fencing_token=job.fencing_token,
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            await self.store.fail_run(
-                job_id=effective_job.id,
-                worker_id=self.worker_id,
-                now=self.clock(),
-                error=str(exc) or type(exc).__name__,
-            )
+            # A lease takeover is a normal recovery boundary.  The stale
+            # worker must not turn its rejected completion into a second
+            # failure (or an unhandled task exception).
+            if not _is_lease_lost(exc):
+                try:
+                    await self.store.fail_run(
+                        job_id=effective_job.id,
+                        worker_id=self.worker_id,
+                        now=self.clock(),
+                        error=str(exc) or type(exc).__name__,
+                        fencing_token=job.fencing_token,
+                    )
+                except Exception as failure_exc:
+                    if not _is_lease_lost(failure_exc):
+                        raise
         finally:
             renewer.cancel()
             await asyncio.gather(renewer, return_exceptions=True)
 
-    async def _renew(self, job_id: str) -> None:
+    async def _renew(self, job_id: str, fencing_token: int) -> None:
         while True:
             await asyncio.sleep(max(0.5, self.lease_seconds / 3))
             renewed = await self.store.renew_lease(
@@ -1096,6 +1242,7 @@ class ArrangeRunner:
                 worker_id=self.worker_id,
                 now=self.clock(),
                 lease_seconds=self.lease_seconds,
+                fencing_token=fencing_token,
             )
             if not renewed:
                 return
@@ -1110,6 +1257,10 @@ def _execution_result(result: Any) -> dict[str, Any]:
         if value is not None and value != "":
             normalized[name] = deepcopy(value)
     return normalized
+
+
+def _is_lease_lost(error: BaseException) -> bool:
+    return isinstance(error, RuntimeError) and "lease lost" in str(error).lower()
 
 
 __all__ = [

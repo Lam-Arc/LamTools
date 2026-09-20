@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import re
 from typing import Awaitable, Callable
@@ -8,6 +9,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult, ToolResultStatus
+from lamtools_core.tool.document_normalize import DocumentNormalizationError, normalize_pdf_bytes
+from lamtools_core.tool.search.image_candidates import extract_image_candidates
 
 _WEB_SEARCH_URL = "https://html.duckduckgo.com/html/"
 _DEFAULT_FETCH_TIMEOUT = 30
@@ -88,10 +91,110 @@ def make_web_fetch_handler(work_root: str) -> Callable[[ToolCall], Awaitable[Too
         except Exception as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"web_fetch error: {exc}")
 
-        text = resp.text
         content_type = resp.headers.get("content-type", "")
+        normalized_type = content_type.split(";", 1)[0].strip().lower()
+
+        if normalized_type.startswith("image/"):
+            metadata = {
+                "url": str(resp.url),
+                "status_code": resp.status_code,
+                "content_type": content_type,
+                "content_length": len(resp.content),
+                "verified_image": resp.status_code < 400,
+                "image_candidates": [
+                    {
+                        "url": str(resp.url),
+                        "alt": "",
+                        "kind": "direct_image",
+                        "source_url": url,
+                    }
+                ] if resp.status_code < 400 and str(resp.url).startswith("https://") else [],
+            }
+            status: ToolResultStatus = "ok" if resp.status_code < 400 else "failed"
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status=status,
+                content=(
+                    f"[web_fetch {url}] HTTP {resp.status_code}\n\n"
+                    f"Verified image response: {content_type}; {len(resp.content)} bytes"
+                ),
+                error="" if status == "ok" else f"HTTP {resp.status_code}",
+                metadata=metadata,
+                artifacts=[ToolArtifact(kind="web_fetch_content", uri=url, content="", metadata=metadata)],
+            )
+
+        is_pdf = normalized_type == "application/pdf" or resp.content.startswith(b"%PDF-")
+        if is_pdf:
+            metadata = {
+                "url": str(resp.url),
+                "status_code": resp.status_code,
+                "content_type": content_type,
+                "content_length": len(resp.content),
+                "document_format": "pdf",
+                "content_trust": "untrusted",
+                "expect": expect,
+                "expect_found": None,
+                "warnings": [],
+                "image_candidates": [],
+            }
+            if resp.status_code >= 400:
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="failed",
+                    content=f"[web_fetch {url}] HTTP {resp.status_code}\n\nPDF response was not parsed.",
+                    error=f"HTTP {resp.status_code}",
+                    metadata=metadata,
+                    artifacts=[ToolArtifact(kind="web_fetch_content", uri=url, content="", metadata=metadata)],
+                )
+            try:
+                normalized = await asyncio.to_thread(
+                    normalize_pdf_bytes,
+                    resp.content,
+                    max_text_length=30_000,
+                )
+            except DocumentNormalizationError as exc:
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="failed",
+                    content=f"[web_fetch {url}] HTTP {resp.status_code}\n\nPDF parsing failed: {exc}",
+                    error=f"PDF parsing failed: {exc}",
+                    metadata=metadata,
+                    artifacts=[ToolArtifact(kind="web_fetch_content", uri=url, content="", metadata=metadata)],
+                )
+
+            clean = normalized.markdown
+            expect_found = expect in clean if expect else None
+            metadata.update(
+                {
+                    "text_length": len(clean),
+                    "truncated": any("text limit" in warning for warning in normalized.warnings),
+                    "expect_found": expect_found,
+                    "warnings": list(normalized.warnings),
+                }
+            )
+            info = f"[web_fetch {url}] HTTP {resp.status_code}\n\n{clean}"
+            if expect:
+                info += f"\n\nexpect: {expect}\nexpect_found: {str(expect_found).lower()}"
+            status: ToolResultStatus = "ok" if not expect or expect_found else "failed"
+            error = "" if status == "ok" else f"Expected text not found: {expect}"
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status=status,
+                content=info,
+                error=error,
+                metadata=metadata,
+                artifacts=[ToolArtifact(kind="web_fetch_content", uri=url, content=clean, metadata=metadata)],
+            )
+
+        text = resp.text
+        image_candidates: list[dict[str, str]] = []
 
         if "text/html" in content_type or url.endswith((".html", ".htm")) or "<html" in text[:200].lower():
+            image_candidates = extract_image_candidates(text, str(resp.url))
             clean = _extract_readable_text(text, url)
         else:
             clean = text
@@ -104,6 +207,12 @@ def make_web_fetch_handler(work_root: str) -> Callable[[ToolCall], Awaitable[Too
             expect_found = expect in text
 
         info = f"[web_fetch {url}] HTTP {resp.status_code}\n\n{clean}"
+        if image_candidates:
+            info += "\n\n[image candidates from this source page]\n" + "\n".join(
+                f"- {item['url']}"
+                + (f" — {item['alt']}" if item.get("alt") else "")
+                for item in image_candidates
+            )
         if expect:
             info += f"\n\nexpect: {expect}\nexpect_found: {str(expect_found).lower()}"
         metadata = {
@@ -114,6 +223,7 @@ def make_web_fetch_handler(work_root: str) -> Callable[[ToolCall], Awaitable[Too
             "truncated": "[... truncated" in clean,
             "expect": expect,
             "expect_found": expect_found,
+            "image_candidates": image_candidates,
         }
 
         status: ToolResultStatus = "ok"

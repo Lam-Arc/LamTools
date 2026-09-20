@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from lamtools_core.tool.document_normalize import DocumentNormalizationError, normalize_document
+
 from .files import assert_safe_default_open, attachment_modality, detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
 
 # Uploads are read fully into memory and written to disk; bound the size so a
@@ -157,6 +159,9 @@ def build_attachment_runtime_input(
         marker = "本条消息附件" if record.id in current else "历史附件"
         path = Path(record.storage_path)
         is_image = record.preview_type == "image" or record.mime_type.startswith("image/")
+        if record.id in current and _is_pdf_attachment(record):
+            lines.append(_pdf_attachment_runtime_text(record, path, marker))
+            continue
         if record.id in current and is_image:
             if path.exists():
                 encoded = base64.b64encode(path.read_bytes()).decode("ascii")
@@ -234,6 +239,9 @@ def build_capability_aware_attachment_input(
         path = Path(record.storage_path)
         modality = attachment_modality(record.mime_type, record.preview_type)
         is_current = record.id in current
+        if is_current and _is_pdf_attachment(record):
+            lines.append(_pdf_attachment_runtime_text(record, path, marker))
+            continue
         # Decide whether this attachment can be sent directly to the model.
         can_send = (
             is_current
@@ -270,6 +278,31 @@ def build_capability_aware_attachment_input(
         else:
             lines.append(f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes | {modality}")
     return ("\n".join(lines) if records else ""), content_blocks, deferred
+
+
+def _is_pdf_attachment(record: AttachmentRecord) -> bool:
+    return record.preview_type == "pdf" or record.mime_type == "application/pdf"
+
+
+def _pdf_attachment_runtime_text(
+    record: AttachmentRecord,
+    path: Path,
+    marker: str,
+) -> str:
+    prefix = f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes"
+    if not path.exists():
+        return f"{prefix} | PDF 文件缺失，未能解析"
+    try:
+        normalized = normalize_document(
+            path,
+            workspace_root=path.parent,
+            max_text_length=50_000,
+        )
+    except DocumentNormalizationError as exc:
+        return f"{prefix} | PDF 解析失败：{exc}"
+    if normalized is None:  # pragma: no cover - guarded by attachment type
+        return f"{prefix} | PDF 解析失败：不支持的文档格式"
+    return f"{prefix} | PDF 已解析，正文如下：\n{normalized.markdown}"
 
 
 def _existing_path(record: AttachmentRecord) -> Path:

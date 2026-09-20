@@ -531,7 +531,12 @@ a {
 }
 
 .download-action {
-  min-width: 260px;
+  min-width: 280px;
+}
+
+.download-buttons {
+  display: grid;
+  gap: 10px;
 }
 
 .site-btn-download {
@@ -556,6 +561,23 @@ a {
   opacity: 0.66;
   font-size: 11px;
   font-weight: 650;
+}
+
+.download-linux-alt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 10px 2px 0;
+  color: var(--site-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.download-linux-alt a {
+  color: var(--site-ink);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 
 .download-action > p {

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 import uvicorn
@@ -28,6 +29,24 @@ logging.basicConfig(
     format="%(levelname)s [%(name)s] %(message)s",
 )
 _log = logging.getLogger("lamcore.backend")
+
+
+def _default_data_dir(
+    *,
+    platform: str | None = None,
+    environ: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
+    """Return the native per-user data directory when no shell override exists."""
+    current_platform = platform or sys.platform
+    current_environ = os.environ if environ is None else environ
+    current_home = Path.home() if home is None else home
+    if current_platform.startswith("linux"):
+        xdg_data_home = current_environ.get("XDG_DATA_HOME", "").strip()
+        root = Path(xdg_data_home) if xdg_data_home else current_home / ".local" / "share"
+        return root / "LamTools"
+    appdata = current_environ.get("APPDATA", "").strip()
+    return (Path(appdata) if appdata else current_home) / "LamCore"
 
 
 # ---------------------------------------------------------------------------
@@ -48,8 +67,6 @@ def main() -> None:
 
 
 def _run() -> None:
-    import sys
-
     # PyInstaller windows mode: sys.stdout/stderr may be None — redirect to devnull
     if sys.stdout is None:
         sys.stdout = open(os.devnull, "w")
@@ -60,10 +77,9 @@ def _run() -> None:
     host = os.environ.get("LAMCORE_HOST", "127.0.0.1")
 
     # --- data directory ------------------------------------------------
-    # Green/portable mode: LAMTOOLS_HOME (set by the Tauri shell to the app
-    # directory's .lam/) keeps core.db / config / logs beside the app, so
-    # nothing is written outside the install root. LAMTOOLS_CORE_DATA_DIR is
-    # an exact override; otherwise fall back to %APPDATA%\LamCore.
+    # Windows green/portable mode sets LAMTOOLS_HOME to the app-side .lam.
+    # Linux desktop builds pass their XDG-backed Tauri app-data directory.
+    # LAMTOOLS_CORE_DATA_DIR remains the exact override for both platforms.
     data_dir_env = os.environ.get("LAMTOOLS_CORE_DATA_DIR")
     lam_home_env = os.environ.get("LAMTOOLS_HOME")
     if data_dir_env:
@@ -71,7 +87,7 @@ def _run() -> None:
     elif lam_home_env:
         data_dir = Path(lam_home_env)
     else:
-        data_dir = Path(os.environ.get("APPDATA", "") or Path.home()) / "LamCore"
+        data_dir = _default_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
 
     core_db = Path(

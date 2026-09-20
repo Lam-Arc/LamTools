@@ -48,7 +48,7 @@ export interface UseCoreLiveComposerControllerOptions {
   executeCommand(threadId: string, command: string, workRoot?: string, argumentsText?: string): Promise<boolean>
   canExecuteCommand?(): boolean
   commandUnavailableMessage?: string
-  turnOptions?(): Record<string, unknown>
+  turnOptions?(): Record<string, unknown> | Promise<Record<string, unknown>>
   clearComposer?(submittedText: string): void
   clearAttachments?(): void
   focusComposer?(cursor: number): void
@@ -276,10 +276,22 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     }
     const submittedText = options.text.value.trim()
     const workRoot = options.getWorkRoot()
-    const turnOptions = options.turnOptions?.() || {}
     const parsedCommand = (options.attachments.value || []).length === 0
       ? parseComposerInput(submittedText, commandCatalog.value)
       : null
+    // Resolve plugin turn options at submit time for actual model turns.
+    // Action commands never use these options; keeping that path synchronous
+    // preserves the command palette's immediate clear/stop behavior.
+    let turnOptions: Record<string, unknown> = {}
+    if (parsedCommand?.kind !== 'action' && (submittedText || (options.attachments.value || []).length)) {
+      try {
+        turnOptions = await options.turnOptions?.() || {}
+      } catch (error) {
+        reportError(errorMessage(error) || options.messages?.sendFailed || 'Unable to prepare message context')
+        submitting.value = false
+        return null
+      }
+    }
     // Show a placeholder bubble before the async round-trip so the user sees
     // immediate feedback even when turn/start takes hundreds of ms. Only
     // fire when there is actual content to send — an empty submit would

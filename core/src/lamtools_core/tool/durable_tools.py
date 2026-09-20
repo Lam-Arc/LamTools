@@ -155,7 +155,14 @@ def durable_tool_handlers(
                 "trigger": trigger,
                 "title": str(args.get("title") or "").strip(),
                 "session_strategy": strategy,
-                "model_id": str(args.get("model_id") or "").strip(),
+                # An explicit user-selected model wins.  Otherwise retain the
+                # host-stamped model from the active turn so a scheduled run
+                # does not silently switch to the application default.
+                "model_id": str(
+                    args.get("model_id")
+                    or call.metadata.get("_runtime_model_id")
+                    or ""
+                ).strip(),
             }
             observer_entry = str(args.get("observer_entry") or "").strip()
             if observer_entry:

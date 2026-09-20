@@ -1255,7 +1255,7 @@ impl Default for RemoteGatewayManager {
                 gateway: None,
                 identity: None,
                 pairings: None,
-                secure_store: Arc::new(PlatformSecureStore::default()),
+                secure_store: Arc::new(PlatformSecureStore),
                 status: GatewayStatus::default(),
             })),
         }

@@ -741,6 +741,7 @@ def _normalize_method(method: str) -> str:
         "thread/resume": "thread.resume",
         "thread/read": "thread.read",
         "thread/history": "thread.history",
+        "thread/outline": "thread.outline",
         "turn/start": "turn.start",
         "turn/cancel": "turn.cancel",
         "turn/interrupt": "turn.cancel",

@@ -622,6 +622,7 @@
                             :assistant-label="agentTitle(group.part)"
                             :process-expanded-ids="agentProcessExpandedIds(group.part)"
                             :suppress-artifacts-panel="artifactsPanelSuppressed"
+                            :auto-plot-math="autoPlotMath"
                             @toggle-process="toggleAgentProcess"
                             @decision-select="emit('decision-select', $event)"
                           >
@@ -631,6 +632,7 @@
                                   class="part-text-content"
                                   :content="slotProps.content"
                                   :streaming="Boolean(slotProps.live)"
+                                  :auto-plot-math="autoPlotMath"
                                 />
                               </slot>
                             </template>
@@ -722,14 +724,14 @@
 
             <div v-if="answerContent(msg)" class="assistant-answer">
               <slot name="assistant-content" :content="answerContent(msg)" :live="isLiveMessage(msg)">
-                <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" />
+                <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" />
               </slot>
             </div>
           </template>
 
           <!-- Fallback: no parts → render flat content -->
           <slot v-else name="assistant-content" :content="answerContent(msg)">
-            <MarkdownRenderer class="assistant-answer" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" />
+            <MarkdownRenderer class="assistant-answer" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" />
           </slot>
 
           <!-- 本轮 artifact 产出统一挂到消息结尾；父级抑制避免子代理嵌套重复。 -->
@@ -969,6 +971,8 @@ const props = withDefaults(
     /** 「本轮产出」面板抑制（由父消息向下传播）：本轮运行中，子代理 sub-line 段
         的面板同样隐藏，轮次结束才出现 */
     suppressArtifactsPanel?: boolean
+    /** Automatically plot supported display-math formulas in final answers. */
+    autoPlotMath?: boolean
   }>(),
   {
     assistantLabel: 'Assistant',
@@ -981,6 +985,7 @@ const props = withDefaults(
     checkpointTurnIds: () => new Set(),
     motionEnter: false,
     suppressArtifactsPanel: false,
+    autoPlotMath: false,
   },
 )
 

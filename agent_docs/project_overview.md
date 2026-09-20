@@ -75,6 +75,16 @@ without sharing implicit runtime state.
   keep session/event truth in Core while desktop and mobile act as parallel
   clients.
 
+## Desktop Distribution
+
+Linux x64 is supported as a native PyInstaller/Tauri distribution through
+`scripts/package-linux.sh`, producing an AppImage and a Debian package. The
+Linux sidecar is an extensionless `LamCore` executable and is stored inside
+both packages at `lamcore-backend/LamCore`. Linux mutable state follows the
+Tauri XDG data/config roots and Linux Secret Service provides persistent
+credential storage. Windows keeps its existing portable layout. macOS is
+deferred and is not a supported artifact in the current distribution scope.
+
 ## Major Decisions
 
 - Core is the only active product surface; archived members remain for

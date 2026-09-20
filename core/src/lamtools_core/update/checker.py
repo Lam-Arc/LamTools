@@ -3,7 +3,7 @@
 The desktop app (设置 → 关于与更新) and the CLI both call :func:`check_update`
 to learn whether a newer release exists and where to download it. Only the
 *check* is automated: installing stays a manual step (the user runs the
-downloaded setup.exe), so no signing infrastructure is involved.
+downloaded platform installer), so no signing infrastructure is involved.
 
 The update source is the GitHub Releases API of the Lam-Arc/LamTools repo —
 the same channel the ``release.yml`` workflow publishes to. Network/parse
@@ -14,6 +14,7 @@ temporary outage never breaks the app or the CLI.
 from __future__ import annotations
 
 import logging
+import platform
 import re
 from typing import Any
 
@@ -33,6 +34,20 @@ SETUP_ASSET_PATTERN = re.compile(
     r"^Sunday_\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?_x64-setup\.exe$",
     re.IGNORECASE,
 )
+
+# Tauri's default Linux bundle names (e.g. Sunday_0.3.5_amd64.AppImage and
+# Sunday_0.3.5_amd64.deb). AppImage is preferred below because it is portable
+# across distributions; the Debian package remains a useful native fallback.
+LINUX_APPIMAGE_ASSET_PATTERN = re.compile(
+    r"^Sunday_\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?_(?:amd64|x86_64)\.AppImage$",
+    re.IGNORECASE,
+)
+LINUX_DEB_ASSET_PATTERN = re.compile(
+    r"^Sunday_\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?_(?:amd64|x86_64)\.deb$",
+    re.IGNORECASE,
+)
+
+_X64_MACHINE_NAMES = frozenset({"amd64", "x86_64", "x64"})
 
 #: Release notes are trimmed to this many characters for the settings UI.
 NOTES_MAX_CHARS = 800
@@ -88,17 +103,59 @@ def _setup_asset(release: dict[str, Any]) -> str:
     return ""
 
 
+def _matching_asset(release: dict[str, Any], pattern: re.Pattern[str]) -> str:
+    """Return the first non-empty download URL matching ``pattern``."""
+    for asset in release.get("assets") or []:
+        name = str(asset.get("name") or "")
+        if pattern.search(name):
+            url = str(asset.get("browser_download_url") or "")
+            if url:
+                return url
+    return ""
+
+
+def _runtime_platform() -> str:
+    """Return the supported update target for this process.
+
+    Windows keeps the historical setup.exe path. Linux is intentionally
+    limited to x86_64 because no other Linux architecture is published yet;
+    unsupported platforms receive no installer URL rather than a misleading
+    foreign binary.
+    """
+    system = platform.system().lower()
+    if system == "windows":
+        return "windows-x64"
+    if system == "linux" and platform.machine().lower() in _X64_MACHINE_NAMES:
+        return "linux-x64"
+    return "unsupported"
+
+
+def _runtime_asset(release: dict[str, Any]) -> str:
+    """Return the download URL suitable for this runtime, or empty."""
+    target = _runtime_platform()
+    if target == "windows-x64":
+        return _setup_asset(release)
+    if target == "linux-x64":
+        appimage = _matching_asset(release, LINUX_APPIMAGE_ASSET_PATTERN)
+        if appimage:
+            return appimage
+        deb = _matching_asset(release, LINUX_DEB_ASSET_PATTERN)
+        if deb:
+            return deb
+    return ""
+
+
 def check_update() -> dict[str, Any]:
     """Check GitHub Releases for a newer Sunday than the running one.
 
     Returns one of:
 
     - ``{"status": "update_available", "current_version", "latest_version",
-      "release_notes", "download_url", "release_url"}`` — a newer release with
-      a downloadable installer exists.
+      "release_notes", "download_url", "release_url"}`` — a newer release
+      with a target-specific installer exists.
     - ``{"status": "up_to_date", "current_version", "latest_version"}`` —
       the running version is the newest (or the newest release cannot be
-      downloaded, e.g. it carries no installer asset).
+      downloaded, e.g. it carries no target-specific asset).
     - ``{"status": "check_failed", "current_version", "error"}`` —
       network error, rate limit, or unparseable response. Never raises.
     """
@@ -114,11 +171,12 @@ def check_update() -> dict[str, Any]:
     latest = str(release.get("tag_name") or "").lstrip("v").strip() or __version__
     base["latest_version"] = latest
 
-    download_url = _setup_asset(release)
+    download_url = _runtime_asset(release)
     if not download_url:
-        # A release without an installer asset is not downloadable — treat as
-        # up-to-date so the UI never offers an install it cannot perform.
-        _log.info("Update check: latest release %s has no setup.exe asset", latest)
+        # A release without a target-specific installer asset is not
+        # downloadable — treat as up-to-date so the UI never offers an install
+        # it cannot perform.
+        _log.info("Update check: latest release %s has no target-specific asset", latest)
         base["status"] = "up_to_date"
         return base
 

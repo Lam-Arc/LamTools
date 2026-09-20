@@ -283,10 +283,8 @@ defineExpose({
   max-height: calc(100dvh - var(--space-4));
   overflow: hidden;
   padding: 0;
-  border: 0;
   border-radius: var(--radius);
   color: var(--text);
-  box-shadow: var(--shadow-xs);
   pointer-events: auto;
 }
 

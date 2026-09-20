@@ -34,12 +34,19 @@ def wait_health(port: int, timeout_s: int = 60) -> bool:
     return False
 
 
-def verify_ws(port: int) -> bool:
-    """Real WebSocket handshake + initialize round-trip using the websockets lib."""
+def verify_ws(port: int) -> tuple[bool, str]:
+    """Verify the packaged WebSocket transport and the Study RPC surface."""
     import asyncio
 
-    async def _run() -> bool:
+    async def _run() -> tuple[bool, str]:
         import websockets
+
+        async def receive_response(ws, request_id: int) -> dict:
+            while True:
+                raw = await asyncio.wait_for(ws.recv(), timeout=8)
+                message = json.loads(raw)
+                if message.get("id") == request_id:
+                    return message
 
         url = f"ws://127.0.0.1:{port}/api/core/app-server"
         async with websockets.connect(url, open_timeout=8) as ws:
@@ -57,9 +64,26 @@ def verify_ws(port: int) -> bool:
                     }
                 )
             )
-            resp = await asyncio.wait_for(ws.recv(), timeout=8)
-            data = json.loads(resp)
-            return data.get("id") == 1 and "result" in data
+            data = await receive_response(ws, 1)
+            if data.get("id") != 1 or "result" not in data:
+                return False, "WebSocket initialize failed"
+
+            await ws.send(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "study.session",
+                        "params": {"scope": "builder"},
+                    }
+                )
+            )
+            data = await receive_response(ws, 2)
+            result = data.get("result") if data.get("id") == 2 else None
+            if not isinstance(result, dict) or not result.get("session_id"):
+                error = data.get("error") if isinstance(data.get("error"), dict) else {}
+                return False, str(error.get("message") or "study.session returned no session_id")
+            return True, ""
 
     return asyncio.run(_run())
 
@@ -91,10 +115,11 @@ def main() -> int:
             return 1
         print("[OK] REST /api/health reachable")
 
-        if verify_ws(args.port):
-            print("[OK] WebSocket handshake + initialize round-trip succeeded")
+        ws_ok, ws_error = verify_ws(args.port)
+        if ws_ok:
+            print("[OK] WebSocket initialize + study.session round-trip succeeded")
             return 0
-        print("[FAIL] WebSocket handshake/initialize failed (missing websockets dep?)")
+        print(f"[FAIL] packaged WebSocket/Study RPC smoke failed: {ws_error}")
         return 1
     finally:
         proc.terminate()

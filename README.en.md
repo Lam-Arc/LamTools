@@ -8,7 +8,7 @@ Local-first AI Agent framework. DeepSeek-compatible, multi-model (OpenAI / Claud
 
 **[简体中文](README.md) | English**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.14-blue.svg)](https://www.python.org/)
 [![Stars](https://img.shields.io/github/stars/Lam-Arc/LamTools.svg?style=social)](https://github.com/Lam-Arc/LamTools)
 
@@ -132,4 +132,4 @@ LamTools/
 
 ## License
 
-MIT, Copyright (c) 2026 Lam (Laaaaaaaam)
+GNU General Public License v3.0 only (GPL-3.0-only), Copyright (c) 2026 Lam (Laaaaaaaam)

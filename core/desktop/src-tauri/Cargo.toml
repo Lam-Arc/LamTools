@@ -1,6 +1,6 @@
 [package]
 name = "lamcore"
-version = "0.3.3"
+version = "0.3.5"
 description = "Sunday desktop app"
 authors = ["Lam"]
 edition = "2021"
@@ -48,3 +48,6 @@ windows-sys = { version = "0.61", features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["linux-native-sync-persistent"] }

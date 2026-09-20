@@ -53,6 +53,7 @@ __all__ = [
     "parse_memory_md",
     "write_memory_md",
     "merge_into_memory_md",
+    "suppress_memory_md_entries",
 ]
 
 MemorySection = Literal["preferences", "facts", "decisions", "todo", "deprecated"]
@@ -420,6 +421,42 @@ def merge_into_memory_md(
 
     write_memory_md(path, snapshot)
     return {"added": added, "updated": updated, "total": len(snapshot.entries)}
+
+
+def suppress_memory_md_entries(
+    path: Path | str,
+    *,
+    source: str = "",
+    content: str = "",
+) -> int:
+    """Remove matching machine entries from the compatibility export.
+
+    The structured store is authoritative, but legacy ``MEMORY.md`` is still
+    loaded by older project prompt paths.  Forgetting a row therefore removes
+    its machine-authored compatibility line as well; human-authored lines are
+    never touched.  Matching is exact by source when supplied, otherwise by
+    normalized content.
+    """
+
+    source = str(source or "").strip()
+    content_key = str(content or "").strip().casefold()
+    snapshot = parse_memory_md(path)
+    targets = [
+        entry
+        for entry in snapshot.entries
+        if not entry.is_human
+        and ((source and entry.source == source) or (not source and content_key and entry.content.casefold() == content_key))
+    ]
+    if not targets:
+        return 0
+    # Remove from the raw representation in reverse order so line indices stay
+    # valid while preserving all unrelated prose/sections/comments.
+    for entry in sorted(targets, key=lambda item: item.line_index, reverse=True):
+        if 0 <= entry.line_index < len(snapshot.raw_lines):
+            del snapshot.raw_lines[entry.line_index]
+    snapshot.entries = [entry for entry in snapshot.entries if entry not in targets]
+    write_memory_md(path, snapshot)
+    return len(targets)
 
 
 def _kind_to_section(kind: str) -> MemorySection:

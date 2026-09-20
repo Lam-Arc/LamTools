@@ -127,9 +127,6 @@
   z-index: var(--z-background-info, 10);
   width: var(--left-card-width);
   max-width: calc(100vw - 28px);
-  border: 0;
-  background: transparent;
-  box-shadow: none;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -168,7 +165,6 @@
   right: 0;
   width: calc(var(--right-drawer-width) - var(--right-panel-gap));
   max-height: none;
-  border: 0;
   /* The rail meets the viewport on the right; only the exposed left edge is
      rounded. Keep the 2px main-panel gap intact via its width calculation. */
   border-radius: var(--radius-lg) 0 0 var(--radius-lg);
@@ -179,6 +175,10 @@
   /* The backdrop-filter ancestor must remain untransformed and fully opaque;
      otherwise WebView2 creates a new backdrop root and the blur disappears. */
   transition: visibility 0s linear 0s;
+}
+.workspace-drawer.optical-glass {
+  --text: var(--theme-backdrop-text);
+  --optical-glass-overlay: transparent;
 }
 .drawer-right:not(.open) {
   visibility: hidden;

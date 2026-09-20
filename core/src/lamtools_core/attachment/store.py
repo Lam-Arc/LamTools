@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -9,10 +10,19 @@ from sqlalchemy import select
 from lamtools_core.app.core_db import CoreAttachment
 from .service import AttachmentRecord, AttachmentService, AttachmentSession, attachment_to_dict
 
-# session_id becomes a directory name under data_dir/attachments, so it must
-# be a plain identifier — no path separators, no ``..`` (audit 11 S2: the raw
-# join allowed writing outside the storage root).
-_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+# Session ids are logical identifiers and plugin-owned threads commonly use
+# colons (for example ``study:main``). Only legacy plain ids are used directly
+# as directory names; every other accepted id gets a stable filesystem-safe
+# key. Path separators and control characters remain invalid.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,256}$")
+_PLAIN_STORAGE_KEY_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _session_storage_key(session_id: str) -> str:
+    if _PLAIN_STORAGE_KEY_RE.fullmatch(session_id) and ".." not in session_id:
+        return session_id
+    digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:32]
+    return f"session-{digest}"
 
 
 class _CoreAttachmentRepository:
@@ -22,10 +32,12 @@ class _CoreAttachmentRepository:
 
     async def session(self, session_id: str) -> AttachmentSession:
         value = str(session_id or "")
-        # ``..`` alone would resolve one level up from the storage root.
-        if not _SESSION_ID_RE.match(value) or ".." in value:
+        if not _SESSION_ID_RE.fullmatch(value) or value == "..":
             raise LookupError("Invalid attachment session id")
-        return AttachmentSession(id=value, storage_root=self.data_dir / "attachments" / value)
+        return AttachmentSession(
+            id=value,
+            storage_root=self.data_dir / "attachments" / _session_storage_key(value),
+        )
 
     async def create(self, record: AttachmentRecord) -> AttachmentRecord:
         row = CoreAttachment(

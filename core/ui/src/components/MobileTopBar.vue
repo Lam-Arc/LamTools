@@ -1,7 +1,7 @@
 <template>
   <nav v-show="!hidden" ref="root" class="mobile-top-bar" aria-label="移动端快捷操作">
     <button
-      class="mobile-top-bar__button"
+      class="mobile-top-bar__button optical-glass"
       type="button"
       aria-label="打开左侧会话栏"
       title="会话与项目"
@@ -13,7 +13,7 @@
 
     <div
       v-show="syncing"
-      class="mobile-top-bar__sync"
+      class="mobile-top-bar__sync optical-glass"
       role="status"
       aria-live="polite"
     >
@@ -24,7 +24,7 @@
     </div>
 
     <button
-      class="mobile-top-bar__button mobile-top-bar__button--account"
+      class="mobile-top-bar__button mobile-top-bar__button--account optical-glass"
       type="button"
       aria-label="打开账号与连接"
       title="账号与连接"
@@ -116,19 +116,17 @@ onUnmounted(() => {
 }
 
 .mobile-top-bar__button {
+  position: relative;
   display: grid;
   place-items: center;
   width: 44px;
   height: 44px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
   color: var(--text);
-  box-shadow: var(--shadow-sm);
   cursor: pointer;
   pointer-events: auto;
-  backdrop-filter: blur(12px);
+  transition: filter var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -137,11 +135,11 @@ onUnmounted(() => {
 }
 
 .mobile-top-bar__button:hover {
-  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  filter: brightness(1.015);
 }
 
 .mobile-top-bar__button:active {
-  background: color-mix(in srgb, var(--text) var(--alpha-press), transparent);
+  transform: scale(.98);
 }
 
 .mobile-top-bar__button:focus-visible {
@@ -150,21 +148,18 @@ onUnmounted(() => {
 }
 
 .mobile-top-bar__sync {
+  position: relative;
   justify-self: center;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   min-height: 32px;
   padding: 0 var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: var(--theme-control-soft-background);
   color: color-mix(in srgb, var(--text) 72%, transparent);
-  box-shadow: var(--shadow-sm);
   font-size: 12px;
   font-weight: 650;
   pointer-events: none;
-  backdrop-filter: blur(12px);
 }
 
 .mobile-top-bar__sync-icon {
@@ -173,6 +168,10 @@ onUnmounted(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .mobile-top-bar__button {
+    transition: none;
+    transform: none !important;
+  }
   .mobile-top-bar__sync-icon {
     transform: none !important;
   }

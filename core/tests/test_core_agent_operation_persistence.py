@@ -20,6 +20,7 @@ from lamtools_core.app import (
 from lamtools_core.app.live_hub import CoreAppEventHub
 from lamtools_core.app.default_agent import _persist_core_event_live, _persist_run_items
 from lamtools_core.app.base_agent import core_events_to_run_items
+from lamtools_core.app.core_db import CoreDbBase
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.event import CoreEvent
 
@@ -159,6 +160,9 @@ async def _persistence(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core-operation.db'}", future=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # ArtifactStore resolves a work root through the canonical Core DB
+        # project table even when the event/snapshot stores use test models.
+        await conn.run_sync(CoreDbBase.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="test.v1")
     snapshot_store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow, projector=CoreAppSnapshotProjector())

@@ -55,6 +55,7 @@ from .snapshot_store import SqlAlchemyThreadSnapshotStore
 from .session_actor import SessionActorBusyError, SessionActorRegistry
 from .sync_store import SYNC_CURSOR_EXPIRED
 from .session_autotitle import generate_session_title, is_default_title
+from .thread_outline import build_thread_outline, normalize_thread_outline_char_limit
 from .turn_acceptance import (
     QUEUE_ITEM_ACCEPTED_METHODS,
     TURN_ACCEPTED_METHODS,
@@ -513,7 +514,11 @@ async def handle_thread_resume_operation(
     include_snapshot = params.get("include_snapshot") is not False
     page_limit = max(1, min(_int_param(params.get("limit"), default=500), 500))
     async with context.session_factory() as db:
-        events = [] if include_snapshot else await context.persistence.list_after(
+        # Resume is a journal catch-up operation.  A snapshot is an optional
+        # convenience projection, not a replacement for the ordered event
+        # delta: clients use the delta for paging, deduplication and live
+        # continuity even when they also request the latest snapshot.
+        events = await context.persistence.list_after(
             db, thread_id=thread_id, after_seq=after_seq, limit=page_limit
         )
         snapshot = await context.persistence.load(db, thread_id)
@@ -658,6 +663,40 @@ async def handle_thread_history_operation(
             },
         )
     )
+
+
+async def handle_thread_outline_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    """Return a bounded conversation outline without exposing transcript bodies."""
+
+    thread_id = str(params.get("thread_id") or params.get("threadId") or "").strip()
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+    # Keep existence and access behavior identical to thread.history/read.  In
+    # the production host the session store is the authoritative thread
+    # namespace; focused operation tests may construct a host without one.
+    session_store = getattr(getattr(context, "host", None), "session_store", None)
+    if session_store is not None and await session_store.get(thread_id) is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
+        )
+    limit = normalize_thread_outline_char_limit(
+        params.get("char_limit") or params.get("charLimit")
+    )
+    async with context.session_factory() as db:
+        snapshot = await context.persistence.load(db, thread_id)
+    outline = build_thread_outline(
+        snapshot,
+        thread_id=thread_id,
+        char_limit=limit,
+    )
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, outline))
 
 
 def _history_char_limit(params: dict[str, Any]) -> int:
@@ -1094,6 +1133,8 @@ async def handle_turn_start_operation(
         "active_tier": turn_runtime_snapshot["active_tier"],
         "tier_tools": resolved["tier_tools"],
         "active_mode": resolved["active_mode"],
+        "instructions": str(params.get("instructions") or ""),
+        "request_local_late_context": str(params.get("request_local_late_context") or ""),
         "allow_access_outside_workdir": turn_runtime_snapshot["allow_access_outside_workdir"],
         "permission_preset": turn_runtime_snapshot["permission_preset"],
         "runtime_snapshot": turn_runtime_snapshot,
@@ -1313,6 +1354,8 @@ def _runtime_snapshot_with_turn_options(
         "temperature",
         "compact_trigger_tokens",
         "compact_limit_tokens",
+        "instructions",
+        "request_local_late_context",
     )
     for key in scalar_keys:
         value = params.get(key)
@@ -1355,6 +1398,8 @@ def _queue_runtime_snapshot(item: dict[str, Any]) -> dict[str, Any]:
                 "temperature",
                 "compact_trigger_tokens",
                 "compact_limit_tokens",
+                "instructions",
+                "request_local_late_context",
             ):
                 if key in raw and raw[key] is not None:
                     snapshot[key] = deepcopy(raw[key])
@@ -2848,6 +2893,10 @@ async def _dispatch_next_queue_item(
                 "active_tier": runtime_snapshot.get("active_tier"),
                 "tier_tools": runtime_snapshot.get("tier_tools"),
                 "active_mode": runtime_snapshot.get("active_mode"),
+                "instructions": str(runtime_snapshot.get("instructions") or ""),
+                "request_local_late_context": str(
+                    runtime_snapshot.get("request_local_late_context") or ""
+                ),
                 "allow_access_outside_workdir": bool(
                     runtime_snapshot.get("allow_access_outside_workdir", False)
                 ),
@@ -3652,6 +3701,7 @@ _CORE_LIVE_OPERATION_EXECUTORS = {
     "thread.read": handle_thread_read_operation,
     "thread.resume": handle_thread_resume_operation,
     "thread.history": handle_thread_history_operation,
+    "thread.outline": handle_thread_outline_operation,
     "turn.start": handle_turn_start_operation,
     "turn.cancel": handle_turn_cancel_operation,
     "turn.force_reset": handle_turn_force_reset_operation,
@@ -3683,6 +3733,7 @@ __all__ = [
     "handle_session_permissions_set_operation",
     "handle_thread_read_operation",
     "handle_thread_history_operation",
+    "handle_thread_outline_operation",
     "handle_thread_start_operation",
     "handle_thread_resume_operation",
     "handle_sync_start_operation",

@@ -1,4 +1,4 @@
-"""S3 内置插件化测试：bundled 插件根 / 装配全链（基础 15 + 内置 4）/
+"""内置插件化测试：bundled 插件根 / 装配全链（含 Workflow 与 Study）/
 禁用即消失 / 不可卸载。
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ from lamtools_core.tool.default_toolbox import (
     build_core_toolbox,
     default_core_tool_specs,
 )
+from lamtools_core.tool.loadtools import default_load_tools
 
 
 def test_bundled_plugins_dir_has_three_plugins():
@@ -27,9 +28,10 @@ def test_bundled_plugins_dir_has_three_plugins():
 def test_bundled_core_tool_specs_four_tools():
     names = {spec.name for spec in bundled_core_tool_specs()}
     assert names == {"git_status", "git_diff", "web_search", "generate_image"}
-    # 基础集 15（D1 共识定界）
+    # Includes the existing mcp_activate tool in the current base set.
     base = {spec.name for spec in default_core_tool_specs()}
-    assert len(base) == 15
+    assert len(base) == 16
+    assert 'mcp_activate' in base
     assert not (base & names)  # 互斥
 
 
@@ -45,6 +47,45 @@ def test_assemble_discovers_bundled_plugins(tmp_path):
     assert {"git", "websearch", "imagegen"} <= names
     group_names = {group["name"] for group in assembly["plugin_tool_groups"]}
     assert {"git", "websearch", "imagegen"} <= group_names
+
+
+def test_study_skills_are_scoped_by_the_real_plugin_assembly(tmp_path):
+    from lamtools_core.app.base_agent import assemble_core_agent_plugins
+    from lamtools_core.skill_runtime import create_skill_runtime
+
+    assembly = assemble_core_agent_plugins(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[],
+    )
+    study = next(plugin for plugin in assembly["plugins"] if plugin.id == "study")
+    assert len(study.skill_roots) == 2
+    assert all(study.skill_modes[root] == ("study:study",) for root in study.skill_roots)
+    study_mode = next(mode for mode in study.ui.modes if mode.id == "study")
+    assert "load_skill" in study_mode.tools
+
+    runtime = create_skill_runtime(
+        plugin_skill_roots=assembly["skill_roots"],
+        plugin_skill_modes=assembly["skill_modes"],
+    )
+    assert "build-map" not in runtime.registry.prompt_index(tmp_path, active_mode="execute")
+    assert runtime.registry.load_prompt_content(
+        tmp_path, "teach", active_mode="execute"
+    ).startswith('Skill "teach" not found')
+    assert "build-map" in runtime.registry.prompt_index(tmp_path, active_mode="study:study")
+    assert "curate-notes" in runtime.registry.prompt_index(tmp_path, active_mode="study:study")
+    toolbox = build_core_toolbox(
+        work_root=tmp_path,
+        active_mode="study:study",
+        load_tools=default_load_tools(),
+        plugin_mode_tool_sets=assembly["plugin_mode_tool_sets"],
+        skill_registry=runtime.registry,
+    )
+    exposed = {
+        tool["function"]["name"]
+        for tool in toolbox.model_tools(active_mode="study:study")
+    }
+    assert "load_skill" in exposed
 
 
 def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
@@ -69,9 +110,9 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
         )
     toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=plugin_specs)
     names = {spec.name for spec in toolbox.tool_specs()}
-    # Workflow contributes its five declarative build tools in addition to
-    # the four git/websearch/imagegen tools.
-    assert len(names) == 24
+    # 16 base + 4 bundled + 5 Workflow + 5 Study tools.
+    assert len(names) == 30
+    assert {'get_knowledge_net', 'build_knowledge_net', 'exam', 'sign', 'notes'} <= names
     assert {"git_status", "git_diff", "web_search", "generate_image"} <= names
     assert {
         "workflow_graph",
@@ -80,6 +121,11 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
         "workflow_delete_node",
         "workflow_update_node",
     } <= names
+    study_build = next(spec for spec in toolbox.tool_specs() if spec.name == "build_knowledge_net")
+    operations_schema = study_build.input_schema["properties"]["operations"]
+    assert operations_schema["minItems"] == 1
+    assert operations_schema["maxItems"] == 100
+    assert "build-map" in study_build.description
     # 半声明式补全：内置插件工具描述从 core 常量来
     git_spec = next(spec for spec in toolbox.tool_specs() if spec.name == "git_status")
     assert "git status" in git_spec.description.lower()

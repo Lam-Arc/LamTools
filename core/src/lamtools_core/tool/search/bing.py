@@ -11,6 +11,7 @@ GET https://cn.bing.com/search?q=<kw>&mkt=zh-CN
 from __future__ import annotations
 
 import base64
+import json
 import re
 from html import unescape
 from urllib.parse import parse_qs, urlparse
@@ -26,10 +27,10 @@ DEFAULT_UA = (
 
 DEFAULT_CONFIG: dict = {
     "endpoint": "https://cn.bing.com/search",
+    "image_endpoint": "https://cn.bing.com/images/search",
     "market": "zh-CN",
     "timeout": 15,
 }
-
 
 def _decode_bing_redirect(href: str) -> str:
     """把 Bing /ck/a 跳转链接还原为真实 URL。"""
@@ -59,6 +60,7 @@ class BingSearchProvider:
     def __init__(self, config: dict | None = None) -> None:
         cfg = {**DEFAULT_CONFIG, **(config or {})}
         self.endpoint = str(cfg["endpoint"])
+        self.image_endpoint = str(cfg.get("image_endpoint") or "https://cn.bing.com/images/search")
         self.market = str(cfg.get("market") or "zh-CN")
         self.timeout = float(cfg.get("timeout") or 15)
         self._client: httpx.AsyncClient | None = None
@@ -144,6 +146,71 @@ class BingSearchProvider:
                 raise BingSearchBlocked(
                     f"Bing 中文分词异常：查询 {query!r} 被误判（首条结果 '{first_title[:20]}...' 与查询无公共词元），请换用 baidu 内核或调整措辞"
                 )
+        return results
+
+    async def search_images(
+        self,
+        query: str,
+        limit: int = 5,
+        domains: list[str] | None = None,
+    ) -> list[SearchResult]:
+        """Return factual image URLs together with their source pages.
+
+        Bing exposes each image result as JSON in the ``m`` attribute of an
+        ``iusc`` result node.  We keep the source page as ``url`` so callers
+        can open and verify context before embedding ``image_url``.
+        """
+        client = await self._session()
+        search_query = query
+        if domains:
+            search_query = f"{query} " + " ".join(f"site:{d}" for d in domains)
+        has_cjk = bool(re.search(r"[\u3400-\u9fff]", query))
+        image_market = self.market if has_cjk else "en-US"
+        resp = await client.get(
+            self.image_endpoint,
+            params={
+                "q": search_query,
+                "mkt": image_market,
+                "setlang": "zh-hans" if has_cjk else "en-us",
+                "count": max(limit * 4, 20),
+            },
+        )
+        if resp.status_code != 200:
+            raise BingSearchBlocked(f"Bing 图片搜索返回 HTTP {resp.status_code}")
+
+        results: list[SearchResult] = []
+        payloads = re.findall(
+            r'class="[^"]*\biusc\b[^"]*"[^>]*\sm="([^"]+)"',
+            resp.text,
+            re.IGNORECASE,
+        )
+        for encoded in payloads:
+            try:
+                item = json.loads(unescape(encoded))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            image_url = str(item.get("murl") or "").strip()
+            source_url = str(item.get("purl") or "").strip()
+            thumbnail_url = str(item.get("turl") or "").strip()
+            if not image_url.startswith("https://") or not source_url.startswith(("http://", "https://")):
+                continue
+            raw_title = str(item.get("t") or "").strip()
+            description = str(item.get("desc") or "").strip()
+            title = raw_title or description or query
+            results.append(
+                {
+                    "title": title,
+                    "url": source_url,
+                    "snippet": description,
+                    "source": "bing_images",
+                    "image_url": image_url,
+                    "thumbnail_url": thumbnail_url if thumbnail_url.startswith("https://") else "",
+                }
+            )
+            if len(results) >= limit:
+                break
+        if not results and any(marker in resp.text.lower() for marker in ("captcha", "challenge", "verify")):
+            raise BingSearchBlocked("Bing 图片搜索触发验证码/挑战")
         return results
 
 

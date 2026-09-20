@@ -54,6 +54,8 @@ def classify_model_error(exc: Exception) -> str:
     remains only as a fallback for untyped errors (audit 10 S2).
     """
     name = type(exc).__name__
+    if name in {"InvalidURL", "UnsupportedProtocol"}:
+        return "fatal"
     if name == "TokenOverflowError":
         return "token_overflow"
     if name == "RateLimitError":
@@ -84,7 +86,23 @@ def classify_model_error(exc: Exception) -> str:
     if any(marker in msg for marker in ("rate limit", "rate_limit", "429", "too many requests")):
         return "rate_limit"
     # Configuration errors — retrying is pointless and causes retry storms
-    if any(marker in msg for marker in ("model not found", "unknown model", "model not available", "provider unavailable", "provider not available")):
+    if any(
+        marker in msg
+        for marker in (
+            "model not found",
+            "unknown model",
+            "model not available",
+            "model id is required",
+            "model is required",
+            "configure a model first",
+            "no routing setting is available",
+            "provider not found",
+            "provider unavailable",
+            "provider not available",
+            "provider base_url",
+            "request url is missing an 'http://' or 'https://' protocol",
+        )
+    ):
         return "fatal"
     return "retryable"
 

@@ -4,6 +4,9 @@
  * Both products were already byte-identical; this is the canonical copy.
  */
 :root {
+  --yellow: #d2ab00; /* Study: passed, medium mastery. */
+  --study-mark-light: #002fa7; /* Klein blue: persistent mark text/icon on light themes. */
+  --study-mark-dark: #ffea00; /* Bright yellow: persistent mark text/icon on dark themes. */
   --bg: #111111;
   --panel: #262625;
   --panel-2: #1d1e1e;
@@ -45,9 +48,17 @@
   --optical-glass-saturation: 1.14;
   --optical-glass-brightness: 1.02;
   --optical-glass-contrast: 1.03;
-  --optical-glass-tint: 2%;
-  --optical-glass-reflection: 8%;
-  --optical-glass-dispersion: 3%;
+  --optical-glass-tint: 16%;
+  --optical-glass-fallback-tint: 22%;
+  --optical-glass-highlight-color: rgb(255 255 255);
+  --optical-glass-reflection: 10%;
+  --optical-glass-refraction-color: rgb(82 104 91);
+  --optical-glass-refraction: 13%;
+  --optical-glass-edge-color: rgb(115 132 121);
+  --optical-glass-edge: 15%;
+  --optical-glass-inset-top: 56%;
+  --optical-glass-inset-bottom: 14%;
+  --optical-glass-shadow: 0 7px 14px rgba(30, 40, 35, .12), 0 1px 4px rgba(30, 40, 35, .06);
 
   /* —— 交互态 alpha（替代 4%–18% 的随机取值；hover→active 恒 +4pp）—— */
   --alpha-hover: 8%;

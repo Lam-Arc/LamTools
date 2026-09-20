@@ -265,6 +265,8 @@ class CoreProjectStore:
                 ).scalars().all()
                 for row in rows:
                     session = session_record_from_snapshot(row)
+                    if session.metadata.get("owner_plugin") and session.metadata.get("project_independent") is True:
+                        continue
                     current_root = str(session.metadata.get("work_root") or "").strip()
                     if current_root in project_roots:
                         continue

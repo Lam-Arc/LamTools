@@ -1,5 +1,7 @@
 """Tests for lamtools_core.llm module."""
 
+import asyncio
+
 from lamtools_core.llm import (
     ChatMessage,
     LLMClient,
@@ -12,7 +14,7 @@ from lamtools_core.llm import (
     merge_system_messages,
     sum_usage,
 )
-from lamtools_core.llm.retry import classify_model_error
+from lamtools_core.llm.retry import classify_model_error, run_with_model_retry
 
 
 class TestLLMTypes:
@@ -146,6 +148,39 @@ class TestClassifyModelError:
     def test_unknown_model_is_fatal(self):
         exc = ValueError("unknown model: some-bogus-id")
         assert classify_model_error(exc) == "fatal"
+
+    def test_missing_model_routing_is_fatal(self):
+        exc = ValueError("model id is required when no routing setting is available")
+        assert classify_model_error(exc) == "fatal"
+
+    def test_missing_provider_is_fatal(self):
+        exc = ValueError("provider not found for model: deepseek-v4-flash")
+        assert classify_model_error(exc) == "fatal"
+
+    def test_invalid_provider_url_is_fatal(self):
+        class UnsupportedProtocol(RuntimeError):
+            pass
+
+        exc = UnsupportedProtocol("Request URL is missing an 'http://' or 'https://' protocol")
+        assert classify_model_error(exc) == "fatal"
+
+    def test_missing_model_routing_stops_after_first_attempt(self):
+        calls = 0
+
+        async def scenario():
+            async def fail():
+                nonlocal calls
+                calls += 1
+                raise ValueError("model id is required when no routing setting is available")
+
+            try:
+                await run_with_model_retry(fail, max_attempts=10)
+            except ValueError:
+                return
+            raise AssertionError("fatal model configuration error should escape directly")
+
+        asyncio.run(scenario())
+        assert calls == 1
 
     def test_token_overflow_not_retried(self):
         exc = RuntimeError("context length exceeded")

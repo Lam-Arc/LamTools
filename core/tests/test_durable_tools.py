@@ -116,6 +116,31 @@ class TestArrangeTool:
         assert payload["trigger"] == {"type": "interval", "every_seconds": 1800}
         assert payload["session_strategy"] == "new"
 
+    async def test_create_inherits_active_model_and_explicit_override_wins(self):
+        calls: list[tuple[str, dict, dict]] = []
+        handlers = durable_tool_handlers(_executor(calls))
+        inherited = _call("arrange", {
+            "action": "create",
+            "instruction": "继续学习",
+            "schedule_type": "interval",
+            "every_seconds": 3600,
+        })
+        inherited.metadata["_runtime_model_id"] = "turn-model"
+        await handlers["arrange"](inherited)
+
+        explicit = _call("arrange", {
+            "action": "create",
+            "instruction": "继续学习",
+            "schedule_type": "interval",
+            "every_seconds": 3600,
+            "model_id": "explicit-model",
+        })
+        explicit.metadata["_runtime_model_id"] = "turn-model"
+        await handlers["arrange"](explicit)
+
+        assert calls[0][1]["model_id"] == "turn-model"
+        assert calls[1][1]["model_id"] == "explicit-model"
+
     async def test_create_with_observer_entry_forces_work_root(self):
         calls: list[tuple[str, dict, dict]] = []
         handlers = durable_tool_handlers(_executor(calls))

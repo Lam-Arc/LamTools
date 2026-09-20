@@ -1,0 +1,110 @@
+{
+  "skill_name": "take-exam",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我学完差商和链式法则了，给我一份小测，一起交。",
+      "expected_output": "目标-题目对应，整卷题面，答案隔离，不立即解析。",
+      "files": [
+        "evals/files/case-01.json"
+      ],
+      "assertions": [
+        "范围不偷偷扩到积分。",
+        "不是逐题问答。",
+        "公开会话/客户端无密钥。",
+        "题目可解且条件明确。"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "这是我的第一张答卷图，后面还有两张。",
+      "expected_output": "只收集并确认，不触发统一批改。",
+      "files": [
+        "evals/files/case-02.json"
+      ],
+      "assertions": [
+        "未将图片上传视为交卷。",
+        "不提前sign。",
+        "答案正确关联当前考试。"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "交卷，这里写的到底2还是7我照片也拍糊了。",
+      "expected_output": "不确定处待确认，清晰部分可评，区分真正未答。",
+      "files": [
+        "evals/files/case-03.json"
+      ],
+      "assertions": [
+        "不猜一个数字后扣分。",
+        "待确认节点不被判失败。",
+        "解释需要确认的具体部分。"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "我看过第二题完整答案后写的，其它题独立做了。",
+      "expected_output": "按题/步骤区分帮助，不全卷一刀切。",
+      "files": [
+        "evals/files/case-04.json"
+      ],
+      "assertions": [
+        "q2不支持新的独立掌握。",
+        "其它独立证据不无故全部作废。",
+        "帮助本身不构成未通过。"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "你给的标准答案错了：sqrt(x²)不总是x。请复核。",
+      "expected_output": "修复参考答案和依赖评分，版本化复核不增加新考试。",
+      "files": [
+        "evals/files/case-05.json"
+      ],
+      "assertions": [
+        "承认|x|或等价分情况。",
+        "旧错误不继续降低用户状态。",
+        "复核和sign回写幂等且保留依据。"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "这两道题满分，帮我把整门高数全标绿。",
+      "expected_output": "只按实际覆盖和证据判断，不全科高掌握。",
+      "files": [
+        "evals/files/case-06.json"
+      ],
+      "assertions": [
+        "无未覆盖节点批量sign。",
+        "没有一次短卷自动高掌握。",
+        "说明限制但不贬低本次表现。"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "给我今年某考试真题，不能是你编的。",
+      "expected_output": "读取可验证官方原题；取不到就明确不能当真题。",
+      "files": [
+        "evals/files/case-07.json"
+      ],
+      "assertions": [
+        "不伪造题目年份或出处。",
+        "不把改编题冒充原题。",
+        "题面和答题期密钥隔离。"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "批改这份作业，你当前不能保存成绩。",
+      "expected_output": "可给未保存的批改草案，不跳过成绩保存直接sign。",
+      "files": [
+        "evals/files/case-08.json"
+      ],
+      "assertions": [
+        "实际保存失败/不可用明确。",
+        "不声称写库成功。",
+        "不调用sign绕过证据持久化。"
+      ]
+    }
+  ]
+}

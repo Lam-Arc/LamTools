@@ -1,12 +1,18 @@
 /**
  * Shared optical liquid-glass substrate.
  *
- * The host remains stable so WebView2 can sample its real backdrop. Motion
- * belongs to an inner content layer. Reflection and dispersion are localized
- * overlays; there is intentionally no uniform border or edge-opacity fade.
+ * `--text` is intentionally supplied by each surface's theme area. The
+ * substrate stays translucent so the real backdrop remains visible; the
+ * pseudo-elements only add the small physical cues that make the surface read
+ * as glass. Keep motion and component geometry on the host consumer.
  */
 .optical-glass {
-  background: color-mix(in srgb, var(--text) var(--optical-glass-tint), transparent);
+  background:
+    var(--optical-glass-overlay, transparent),
+    color-mix(in srgb, var(--text, var(--theme-main-text, #f2efeb)) var(--optical-glass-tint), transparent);
+  border: 1px solid color-mix(in srgb, var(--optical-glass-edge-color) var(--optical-glass-edge), transparent);
+  box-shadow: var(--optical-glass-shadow);
+  overflow: hidden;
   -webkit-backdrop-filter:
     blur(var(--optical-glass-blur))
     saturate(var(--optical-glass-saturation))
@@ -20,41 +26,53 @@
   isolation: isolate;
 }
 
+/* Unsupported WebView fallback: preserve a visible, translucent surface even
+   when backdrop sampling is unavailable. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .optical-glass {
+    background:
+      var(--optical-glass-overlay, transparent),
+      color-mix(in srgb, var(--text, var(--theme-main-text, #f2efeb)) var(--optical-glass-fallback-tint), transparent);
+  }
+}
+
 .optical-glass::before,
 .optical-glass::after {
   content: '';
   position: absolute;
-  inset: 0;
   border-radius: inherit;
   pointer-events: none;
 }
 
+/* Localized top-left specular light plus the restrained inset edge. */
 .optical-glass::before {
   z-index: 0;
-  background:
-    radial-gradient(120% 32% at 14% -8%, color-mix(in srgb, var(--text) var(--optical-glass-reflection), transparent), transparent 58%),
-    linear-gradient(112deg, transparent 28%, color-mix(in srgb, var(--blue) var(--optical-glass-dispersion), transparent) 46%, color-mix(in srgb, var(--purple) var(--optical-glass-tint), transparent) 52%, transparent 68%),
-    radial-gradient(72% 28% at 92% 104%, color-mix(in srgb, var(--text) var(--optical-glass-dispersion), transparent), transparent 64%);
+  inset: 0;
+  background: radial-gradient(
+    54% 24% at 12% 0%,
+    color-mix(in srgb, var(--optical-glass-highlight-color) var(--optical-glass-reflection), transparent),
+    transparent 70%
+  );
   box-shadow:
-    inset var(--space-1) 0 var(--space-4) color-mix(in srgb, var(--text) var(--optical-glass-dispersion), transparent),
-    inset 0 var(--space-1) var(--space-5) color-mix(in srgb, var(--text) var(--optical-glass-tint), transparent);
+    inset 0 1px 0 color-mix(in srgb, var(--optical-glass-highlight-color) var(--optical-glass-inset-top), transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--optical-glass-refraction-color) var(--optical-glass-inset-bottom), transparent),
+    inset 1px 0 0 color-mix(in srgb, var(--optical-glass-highlight-color) 20%, transparent),
+    inset -1px 0 0 color-mix(in srgb, var(--optical-glass-refraction-color) 8%, transparent);
 }
 
+/* A small gray-green lower refraction keeps the glass from reading as plastic. */
 .optical-glass::after {
-  z-index: 2;
-  padding: 1px;
-  background: conic-gradient(
-    from 205deg,
-    transparent 0 16%,
-    color-mix(in srgb, var(--text) var(--optical-glass-reflection), transparent) 22%,
-    transparent 31% 58%,
-    color-mix(in srgb, var(--text) var(--optical-glass-dispersion), transparent) 66%,
-    transparent 75% 100%
+  z-index: 0;
+  right: 8%;
+  bottom: -2px;
+  left: 8%;
+  height: 22%;
+  background: radial-gradient(
+    90% 100% at 50% 100%,
+    color-mix(in srgb, var(--optical-glass-refraction-color) var(--optical-glass-refraction), transparent),
+    transparent 72%
   );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
+  filter: blur(var(--space-2));
 }
 
 .optical-glass > * {

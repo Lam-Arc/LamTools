@@ -1714,3 +1714,715 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
 - Git handoff: preserve unrelated dirty/untracked work; this documentation
   correction changes only the two assigned documents. No stage, commit,
   revert, cleanup, or `project_diary.md` edit was performed here.
+
+## Study plugin UI repair (2026-09-17)
+
+- Task ID/deployment: `study_plugin_style_archive` /
+  `study_plugin_style_20260917`; closure state: `complete`.
+- Active goal/progress: Study UI styling and session continuity repairs are
+  implemented. The title is teleported into `.workspace-plugin-header` and
+  aligned with the standard header band; overview rows/progress use main-area
+  tokens; selection-assistant readability fills use theme tokens instead of
+  hardcoded dark/light colors.
+- Current position: the actual VueFlow graph remains strictly driven by
+  backend `net.relations`; theme-derived dot grid, relationship styles/legend,
+  and node/relationship counts make the graph contract explicit. Study chat
+  reuses `useCoreAutoFollowScroll`, an IntersectionObserver bottom sentinel,
+  jump-to-latest, and remount reset/forced-bottom behavior.
+- Verification: focused Study 7/7; related scroll/plugin 31/31; full UI 92
+  files / 698 tests; backend Study 10/10; typecheck and build passed; LamTools
+  audit 84 files / 0 deviations plus a manual Study token scan with no
+  off-scale literals; scoped diff check passed. Build retained the existing
+  `::highlight` lightningcss warning.
+- Limitation and next milestone: no Computer Use or pixel-level visual
+  acceptance was performed. Exact next entry point is user visual acceptance
+  in the now-open Tauri Study mode, including confirming title placement,
+  overview tokens, graph relationships, and sentinel return position.
+- Git handoff: Study UI/test files are untracked within the broader dirty
+  tree; `project_diary.md` and these two documents are modified. No stage,
+  commit, revert, cleanup, or unrelated attribution was performed.
+
+## Study graph layout closure (2026-09-18)
+
+- Task ID/deployment: `study_obsidian_graph_archive` /
+  `study_obsidian_graph_20260918`; closure state: `complete`.
+- Active goal/overall progress: the Study knowledge graph now has a compact,
+  Obsidian-like dot/label presentation with deterministic one-shot,
+  relation-aware force layout. Label-aware spacing, saved/manual positions,
+  graph navigation/inspection/pagination, theme-derived edges, and
+  hover/focus/selection emphasis of direct edges are implemented.
+- Current position: VueFlow viewport persistence uses the supported `@init`
+  `store/setViewport` path and `moveEnd.flowTransform`; unsupported
+  `v-model:viewport` was removed. Manual positions remain authoritative after
+  layout, and relation edges remain the source for direct-edge emphasis.
+- Verification: focused Study 7/7; full UI 92 files / 698 tests; UI typecheck,
+  production build, and LamTools audit (84 files / 0 deviations) passed.
+  Independent Tester returned PASS after the viewport repair. Scoped diff /
+  whitespace checks passed; the existing `::highlight` build warning remains.
+- Pending/next milestone: no deployment-specific blocker is known. No
+  Tauri/Computer Use or pixel-level visual acceptance was performed. Exact
+  next entry point is user-owned visual acceptance in Tauri Study mode,
+  checking graph layout, saved viewport/positions, and direct-edge states.
+- Git handoff: the shared tree remains heavily dirty with concurrent and
+  untracked Study changes; this closure does not attribute them. No stage,
+  commit, revert, cleanup, or `project_diary.md` edit was performed.
+
+## Selection assistant target grounding closure (2026-09-18)
+
+- Task ID/deployment: `selection_target_grounding_archive` /
+  `selection_target_grounding_20260917`; closure state: `complete`.
+- Active goal/progress: the exact selected quote is now the primary target for
+  lightweight selection-assistant calls. Prefix and suffix text are used only
+  for disambiguation, and every Ask follow-up re-anchors to that quote.
+- Current position: the prompt version invalidates old explain/translate cache
+  entries while preserving per-mark Q&A history. The local dictionary remains
+  model-free.
+- Verification: backend Study coverage passed 11 tests; focused frontend
+  coverage passed 13 tests; the full UI contract passed 92 files / 698 tests;
+  typecheck passed; and the independent Tester returned PASS with no P0, P1,
+  or P2 findings.
+- Limitation and next milestone: no real-model semantic exercise or Tauri
+  visual exercise was run. If further acceptance is requested, start with a
+  real selected-term translation/explanation in Tauri and confirm that the
+  answer stays grounded in the quoted target.
+- Git handoff: the shared tree remains dirty and uncommitted; unrelated and
+  concurrent work was preserved. No stage, commit, revert, cleanup, or
+  unrelated attribution was performed.
+
+## Study Markdown translation and response rendering (2026-09-18)
+
+- Task ID/deployment: `study_markdown_translation_archive` /
+  `study_markdown_translation_20260917`; closure state: `complete`.
+- Active goal/progress: Study SelectionAssistant now renders explain answers,
+  model-translation fallbacks, and Ask-assistant replies through
+  `MarkdownRenderer` with `mermaid=false`. User questions and dictionary
+  entries remain plain text; card bodies use `line-height: 1.35` and tighter
+  Markdown spacing.
+- Current position: backend quote, prefix, and suffix are explicit sections;
+  translate/explain/ask limits are 256/600/1200 characters. Prompt-version
+  invalidation clears only explain/translate/dictionary caches and preserves
+  thread history. The dictionary fast path remains model-free.
+- Verification: `study.test.ts` 7/7; `test_study.py` 11/11; full UI 92 files /
+  698 tests; typecheck and build passed. Build output contains only the
+  existing `::highlight` lightningcss warning.
+- Limitation and next milestone: Tauri session 13230 remains running and its
+  application RPC is active, but no Computer Use or pixel-level visual
+  acceptance was performed. Exact next entry point is user visual acceptance
+  in the open Tauri Study mode, including Markdown response rendering and
+  plain-text question/dictionary behavior.
+- Git handoff: the shared tree remains dirty and uncommitted; Study files may
+  remain untracked. No stage, commit, revert, cleanup, or unrelated
+  attribution was performed.
+
+## Study shared chat primitives and node sessions (2026-09-18)
+
+- Deployment `study_shared_primitives_20260918` is complete. Study now keeps
+  `study:main` as the global knowledge-graph builder and creates one isolated
+  session per knowledge node; safe legacy IDs stay readable and Unicode or
+  punctuation-heavy node IDs use a stable hash while retaining the original
+  ID in session metadata.
+- Study delegates its conversation surface to Core: message history,
+  pagination, actions, the bottom sentinel, composer, upload button, pending
+  attachment tray, drag/drop, paste upload, attachment-only submission, and
+  historical attachment rendering all use the canonical implementation.
+  Course navigation, graph layout, marks, and anchors remain Study-owned.
+- Mode-session isolation restores the Agent conversation after returning from
+  Workflow or Study. Clicking a node selects its session and only prefills the
+  teaching prompt. The builder title is `知识图谱`; legacy default title
+  `学习` migrates while user-defined titles remain unchanged.
+- Verification passed: backend Study/attachment HTTP 22/22, focused Study/mode/scroll 9/9,
+  attachment and composer coverage 35/35, full UI 92 files / 698 tests,
+  typecheck, production build, design audit 84 files / 0 deviations, and
+  `git diff --check`. The build retains the known `::highlight` minifier
+  warning. Per instruction, no Computer Use validation was performed.
+
+## Study skill-pack integration closure (2026-09-18)
+
+- Task ID/deployment: `study_skills_integration_20260918`; closure state:
+  `complete` for the requested Study integration. The four supplied skills
+  (`build-map`, `teach`, `answer`, and `take-exam`) and `study-system.md` are
+  installed under the bundled Study plugin and remain isolated behind the
+  existing SkillRegistry/`load_skill` path for active mode `study:study`.
+- The Study system prompt is automatically added by the backend, while the
+  public safety, permission, tool, and verification protocols remain shared.
+  Generic project/programming/business workflow prompts are excluded from the
+  Study prompt path. Existing tool IDs, Agent Loop interfaces, live/queue late
+  context forwarding, `study:main`/node sessions, and the existing UI/right-
+  click lightweight calls are reused; no parallel UI architecture was added.
+- Persistence and exam behavior now cover notes/content/metadata, shared-node
+  per-course notes and evaluation state, current learning context, exam help
+  records, private answer/rubric storage, batch save versus explicit submit,
+  isolated generation/grading, review evidence, and idempotent score writeback.
+  Answer/rubric data is not returned through ordinary public reads or grading
+  output. Deferred textbook, PDF, knowledge-base, and RAG work remains out of
+  scope.
+- Verification evidence: focused backend Study/plugin plus the corrected
+  Workflow regression passed `33 passed` (two existing datetime-adapter
+  deprecation warnings); focused Study/composer UI passed `19 passed`;
+  `npm run typecheck`, `npm run build`, and the full UI contract (`699
+  passed`) passed. The build retains existing LightningCSS `::highlight` and
+  ineffective dynamic-import warnings. The latest full Core run recorded
+  `2077 passed, 9 failed, 2 skipped`; after the unrelated Workflow assertion
+  correction, the eight known baseline failures were rerun directly and
+  yielded `57 passed, 8 failed`.
+- The eight remaining failures are outside Study: three persistence tests
+  (`test_core_operation_persists_run_items_and_snapshot`,
+  `test_core_operation_publishes_run_items_while_turn_is_running`,
+  `test_core_approval_continuation_persists_approved_tool_and_final_snapshot`),
+  three live tests (`test_live_turn_reuses_accepted_id_for_core_events_terminal_and_task_registry`,
+  `test_live_turn_steer_reaches_the_next_model_call_before_a_no_tool_final`,
+  `test_live_queue_guidance_reaches_the_next_model_call`), the live client E2E
+  matrix, and the live resume page-cursor test. The first six fail with
+  `sqlite3.OperationalError: no such table: core_projects`; the last two
+  return no resume events where the tests expect them. The full Core suite was
+  not rerun after the Workflow correction, so no newer aggregate is claimed.
+- No Computer Use/Tauri manual or pixel-level acceptance was executed. The
+  exact next entry point is user-owned Study acceptance in Tauri, followed by
+  a separately scoped repair of the eight existing Core baseline failures if
+  a green full suite is required. The worktree remains dirty/uncommitted;
+  this closure did not stage, commit, revert, clean, or change production
+  state.
+
+## Study v2 knowledge workspace closure (2026-09-18)
+
+- Task ID/deployment: `study_v2_closure` /
+  `study_complete_v2_20260918`; closure state: **paused at a stable,
+  tested boundary**. The requested Study upgrade is implemented through the
+  P0–P3b boundary: scoped knowledge data, map/notes/node sessions, exams and
+  evidence-backed mastery, marks/quick assist, note blocks and curation
+  control records, and shared Dreaming/Memory policy seams.
+- Current position: Study uses the existing Core Agent Loop, SkillRegistry,
+  Tool Gateway, session/message/attachment persistence, ModelGateway entry
+  points, and Arrange runtime. The bundled Study plugin maps the existing
+  tool IDs `get_knowledge_net`, `build_knowledge_net`, `exam`, and `sign` to
+  `study.get`, `study.build`, `study.exam`, and `study.sign`; it loads
+  `build-map`, `teach`, `answer`, and `take-exam` only for `study:study`, and
+  injects `prompts/study-system.md` while retaining shared safety/tool
+  protocol. The UI keeps the existing shell and chat primitives, with
+  Overview/Graph/Notes/Subject Tree, scoped pins/search, local graph layout,
+  node-bound sessions, marks, and note management layered on them.
+- Data protection/migration: the Study store is the single SQLite write
+  source. It creates scoped records, revisions, idempotency receipts,
+  transactional outbox, session bindings, notes/blocks, curation tasks, and
+  soft-delete/restore-compatible records. Startup migration copies the
+  legacy JSON entity/meta tables into the explicit local compatibility scope
+  and upgrades the note-block foreign key idempotently. Before first use,
+  retain a SQLite `.backup`; the audit backups are in
+  `E:\LamTools\.tmp\study-v2-backup-20260918-0158` for
+  `core/data/core.db` and `core/core.db`, both with `integrity_check=ok`.
+  No real `study.db` existed at audit time; migration evidence is synthetic
+  and test-backed, not a claim of migrating a user library.
+- Verification: the recorded full Core run is `2113 passed, 2 failed,
+  2 skipped`; both failures are the pre-existing
+  `thread.resume` snapshot-only protocol mismatch. The shared UI run is
+  92 files / 702 tests, with typecheck and production build passing. Current
+  independent checks are `tests/test_study.py` 36 passed,
+  `tests/test_memory_v2.py` 12 passed, and `tests/test_arrange_fencing.py`
+  3 passed. Build output retains the known LightningCSS `::highlight`
+  warning (and ineffective dynamic-import warnings).
+- Not complete/verified: Study operation declarations still use
+  `auto_allow`, so action-level Study approval/policy is not a completed
+  security boundary. Exam/quick-assist isolated calls still need the shared
+  Direct ModelGateway retry/cancel/usage path. The runtime SQLite is
+  Python 3.50.4 / CLI 3.50.6, below the design-required 3.51.3 WAL-fix
+  floor; the newer engine is not installed. No real model, Tauri/mobile
+  visual, or performance-budget run was executed. P4 textbook/PDF/knowledge
+  base/RAG and P5 features remain interfaces/placeholders only.
+- Exact next milestone: add and verify action-level Study approval, unified
+  Direct ModelGateway cancellation/retry/usage accounting, and the supported
+  SQLite engine/connection policy; then run real-model, Tauri, migration-copy,
+  and performance acceptance. Keep the existing UI and Core loop as the
+  integration points.
+- Git handoff: baseline was `56d45e4e9257ec1be9c98a948783b23ff598183d`
+  on `codex/multiplatform-dev` with a pre-existing heavily dirty worktree;
+  most Study source/tests/docs are untracked. Cross-cutting tracked edits
+  overlap concurrent work and cannot be attributed safely. This closure
+  changed only the assigned progress/latest-session documentation; no stage,
+  commit, reset, checkout, clean, database deletion, push, or release was
+  performed.
+
+## Study reset and performance closure (2026-09-18)
+
+- Task ID/deployment/state: `study_perf_reset_closure_20260918` /
+  `study_perf_reset_20260918` / **complete**. Study content data was backed
+  up before reset, then cleared: `E:\LamTools\.tmp\study-reset-20260918-111814`
+  contains `study.db` and `core.db`. After Tauri startup, only one empty
+  `study:main` shell snapshot/binding was regenerated; knowledge, notes,
+  exams, marks, receipts, outbox, history, and runtime rows were zero.
+- Performance fixes: removed the unsupported `study.session.binding` alias
+  that caused five global retries and roughly 6.2 s worst-case backoff;
+  canonical `study.session` is now used. Duplicate refresh/select work was
+  removed, known bindings skip session refresh, binding and overview load in
+  parallel, the sidebar avoids eager course fan-out, and graph get/layout run
+  in parallel. VueFlow is split into an async `StudyGraph` chunk. Shared
+  `HistoryLoadingIndicator` is reused, later switches retain the Core thread,
+  mode changes preserve the connection-scoped App Server client, and command
+  catalog/goal/scroll work is parallelized.
+- Runtime evidence: Tauri was restarted with frontend `5173` and backend
+  `59690`. Empty-DB RPC timings were 58.7 ms for `study.session` and 41.7 ms
+  for `study.get`; CLI wall time was about 1 s including process/WebSocket
+  startup and is not an RPC latency claim.
+- Verification: focused UI 18/18; full UI 92 files / 706 tests; typecheck;
+  `build:app`; backend 48 passed with 2 deprecation warnings; LamTools design
+  audit 84 files / 0 deviations; and `git diff --check` with line-ending
+  warnings only. Independent Tester passed 3 files / 17 tests.
+- Limitations: no Computer Use/perceptual timing run was performed. Real
+  Tauri visual/interaction timing remains user acceptance. The shared tree
+  remains heavily dirty; preserve unrelated changes and do not infer this
+  closure as a commit or release.
+
+## Study graph primary-progress closure (2026-09-18)
+
+- Task ID/deployment/state: `study_graph_primary_progress_20260918_closure` /
+  `study_graph_primary_progress_20260918` / **complete**.
+- The old Study overview UI/page was removed. Its sidebar location is now
+  `管理你的知识`; `图谱` remains. The explicit `manage` action clears the
+  selected node and restores the existing `map` primary binding/default main
+  session without issuing a duplicate `study.session` request when the
+  binding is cached. No backend, schema, or database changes were made.
+- Top-level course nodes reuse the existing overview aggregate. They render
+  exact course names as large circular spheres with an external SVG progress
+  ring and readable/clamped percentages (`total <= 0` renders 0%); deeper
+  nodes retain their existing rendering. Ring bounds were aligned with the
+  existing 112px layout spacing.
+- Verification: focused Study 15/15; full UI 92 files / 708 tests; UI
+  typecheck and `build:app` passed; backend Study 38 passed with 2
+  deprecation warnings; design audit 84 files / 0 deviations; independent
+  Tester PASS. Build output contains only existing `::highlight`,
+  dynamic-import, and chunk warnings. DOM/CSS/mock-RPC contracts were
+  verified.
+- Limitation/Git handoff: computer-use and live Tauri visual/perceptual
+  inspection were intentionally not run; visual and interaction timing remain
+  user acceptance. The worktree remains heavily dirty with unrelated and
+  concurrent changes preserved; no production/test files, diary, commit,
+  reset, cleanup, push, or release was performed by this closure.
+
+## Glass material unification pause (2026-09-18)
+
+- Task ID/deployment/state: `glass_material_unification_archive` /
+  `glass_material_unification` / `paused`. The deployment stopped before
+  implementation pending required user consensus on the proposed scope.
+- Verified context: the supplied Liquid Glass standard requires high
+  transmission, low blur, restrained localized highlights, subtle gray-green
+  edge refraction, and short soft shadows; the existing shared optical-glass
+  primitive is the intended starting point. The read-only inventory covers
+  current glass-like surfaces and the worktree already contains unrelated and
+  concurrent dirty/untracked changes.
+- No production or test files changed for this deployment. No tests, build,
+  Tauri visual acceptance, or Computer Use were run. `project_diary.md` was
+  intentionally left unchanged.
+- Exact continuation point: after the user confirms scope, unify the true
+  glass-material surfaces against the supplied standard, while excluding mere
+  modal dimmer backdrops and opaque panels. Preserve unrelated work and keep
+  shape/layout behavior separate from the shared material primitive.
+
+## Study skill v3 refactor closure (2026-09-18)
+
+- Task ID/deployment/state: `study_skill_refactor_v3_20260918_docs` /
+  `study_skill_refactor_v3_20260918` / **complete**. The package snapshot is
+  preserved at `E:\LamTools\.tmp\study-skill-v3-snapshot-20260918-135315`.
+  The exact v3 files for `build-map`, `teach`, `answer`, `take-exam`, and
+  `prompts/study-system.md` were copied into the bundled Study plugin.
+- `curate-notes` remains under
+  `core/src/lamtools_core/plugins/bundled/study/future/curate-notes` and was
+  deliberately not registered: the Agent Loop has no callable notes tool or
+  capability gate for it. Added evaluation manifest tooling at
+  `core/src/lamtools_core/plugins/bundled/study/eval_manifest.py` and expanded Study coverage.
+- Verification: host smoke PASS for 4 active skills plus 1 future-gated skill;
+  14 references; 40 evaluations with `run=0` / `NOT_RUN=40`; focused Python
+  coverage 50 passed; UI 708 tests, typecheck, UI build and desktop build
+  passed; package validation PASS; examples 14/14 passed under Python 3.9
+  because Python 3.14 lacks sympy. The stable Core full suite result is 2116
+  passed / 2 skipped / 2 failed; both failures are the unrelated existing
+  `thread.resume` event-page tests.
+- Limitations: `quick_validate` cannot accept the package's standard
+  compatibility frontmatter. Audit gaps remain for source version/archive
+  service, verified technical image generation, strict schema limitations,
+  and `study.text.cancel`. These are not claimed as implemented by this
+  closure. The dirty worktree remains preserved; no unrelated files, diary,
+  commit, reset, cleanup, push, or release was changed by documentation.
+
+## Glass material unification implementation closure (2026-09-18)
+
+- Task ID/deployment/state: `glass_material_unification_impl_archive` /
+  `glass_material_unification_impl` / **complete**. This user-confirmed
+  implementation supersedes the earlier paused planning deployment.
+- Outcome/current position: the shared `.optical-glass` primitive now owns the
+  tokenized transmission, blur, saturation/brightness/contrast, fallback,
+  localized highlight, gray-green refraction, inset edge, and soft-shadow
+  recipe. Confirmed consumers are the WorkspaceShell right drawer, shared
+  context-menu root/submenus, Study selection card, Workflow node catalog
+  popover and runtime dock, jump-to-latest control, Goal area, and MobileTopBar
+  button/sync/account controls. Startup `index.html` mirrors the treatment
+  before Vue mounts, with native Acrylic configured in the desktop shell.
+- Scope boundary: modal dimmer backdrops, ordinary opaque panels, the left
+  drawer, and Workflow node cards remain outside the glass surface contract.
+  The startup blue refraction and 48% inset were repaired to gray-green and
+  56%; the independent Tester then returned PASS.
+- Verification: shared UI coverage passed 93 files / 712 tests; focused
+  glass/startup recheck passed 21 tests; UI typecheck/build, desktop Vite
+  build, `cargo check`, LamTools design audit (84 files / 0 deviations), and
+  scoped/full diff checks passed. No Computer Use or Tauri visual validation
+  was run per user instruction.
+- Read-only Git handoff: the worktree remains heavily dirty with concurrent
+  and untracked changes. Archivist changed only the assigned documentation;
+  no stage, commit, revert, cleanup, or unrelated attribution was performed.
+
+## Glass specular quieting closure (2026-09-18)
+
+- Task ID/deployment/state: `glass_specular_quieting_archive` /
+  `glass_specular_quieting` / **complete**. This is a focused visual-material
+  correction following the glass unification.
+- Verified delta: the shared upper-left reflection was reduced from 26% to 10%
+  and its footprint from 92×42 to 54×24. Startup light/dark optics and edge
+  layers were reduced to 38×20 at `.06/.05` and 26×4 at `.09/.08`;
+  all other material parameters remain unchanged.
+- Verification: focused glass/startup coverage passed 2 files / 21 tests;
+  LamTools design audit passed 84 files / 0 deviations; the relevant diff
+  check passed; and the independent Tester returned PASS. No Computer Use or
+  Tauri visual validation was run per user instruction.
+- Git handoff: preserve the heavily dirty tree and unrelated/untracked work.
+  No diary, production/test, stage, commit, revert, or cleanup operation was
+  performed by this documentation closure.
+
+## 0.3.4 repository audit, fixes, and package build (2026-09-18)
+
+- Deployment `audit_fix_bump_20260918` completed the code audit and package
+  build. Fixed `thread.resume` event loss, proxy-sensitive localhost health
+  probing, mobile project visual-field persistence, and browser-global access
+  during shared UI module import. Applied bounded Rust cleanup without changing
+  the desktop/relay protocols.
+- Version is `0.3.4` in all five sources plus npm/Cargo lockfiles. The Windows
+  installer was built at
+  `core/desktop/src-tauri/target/release/bundle/inno/Sunday_0.3.4_x64-setup.exe`
+  (93,961,819 bytes) and installed to `E:\setuptest\0.3.4`.
+- Verification passed: backend 2122 passed / 2 skipped; UI 725/725 plus
+  typecheck/build; mobile 46/46 plus typecheck/build; desktop Rust 53/53 plus
+  fmt/check/clippy; relay 11/11 plus fmt/clippy; dependency audits reported zero
+  vulnerabilities; design audit reported 84 files / 0 deviations.
+- Installed main-process smoke remains blocked by the already-running Tauri dev
+  instance `target/debug/lamcore.exe` (PID 7000), which owns the global
+  single-instance lock. The installed executable exited cleanly with code 0;
+  project policy forbids closing the development instance. Re-run the setup
+  helper after that instance is closed to obtain installed main/backend PIDs.
+  No commit, tag, push, or release was performed.
+
+## PDF ingestion correction (2026-09-18)
+
+- Fixed remote `web_fetch` PDF responses being decoded as binary text. Remote bytes and local/uploaded PDFs now share the existing bounded `pypdf` normalizer, including untrusted-content labeling, encryption/page/text limits, and scanned-page warnings.
+- Current uploaded PDFs are extracted into model text context instead of being deferred to an unsupported multimodal content block. Main-agent and sub-agent paths retain text-only attachment context and perform parsing/file I/O in a worker thread.
+- Verification passed: real TI `SLVA477` fetched as 8 pages / 22,044 normalized characters with no `%PDF-` leakage; focused PDF/attachment/default/sub-agent coverage passed; full Core suite passed 2128 / 2 skipped; UI passed typecheck, 93 files / 727 tests, and build; desktop Vite build passed. Existing deprecation/CSS Highlight warnings remain non-blocking. Version remains 0.3.4.
+
+## Study exam model-routing correction (2026-09-18)
+
+- Task ID/deployment/state: `study_exam_model_routing_fix_docs` /
+  `study_exam_model_routing_fix` / **complete**. This closure follows the
+  Study exam failure where the isolated authoring call did not receive the
+  active turn model and raised `model id is required when no routing setting
+  is available` after unnecessary retries.
+- Outcome: isolated Study exam authoring, grading, and review now inherit the
+  active runtime model across approval boundaries. An explicit operation model
+  remains authoritative. Arrange and Workflow queue records inherit and
+  persist the runtime model, with explicit overrides taking precedence. Missing
+  model, provider, or base-URL routing is deterministic configuration failure:
+  it stops immediately and cannot silently fall back or consume retry budget.
+- Modified/covered surfaces: Study backend/exam/marks routing, live runtime
+  model stamping, Arrange persistence, Workflow operation/queue/runtime model
+  resolution, and the shared retry classification; focused coverage includes
+  `core/tests/test_study.py`, `core/tests/test_workflow_operations.py`,
+  `core/tests/test_llm.py`, and related runtime/provider tests.
+- Verification: targeted suites passed; the full Core run recorded `2142
+  passed, 2 skipped, 1 unrelated localhost HTTP probe timeout`, followed by an
+  isolated rerun of that probe with `1 passed`. A later focused provider/routing
+  run passed `67 passed, 1 skipped`; the independent verifier returned PASS.
+  This is not reported as one clean all-green full run.
+- Limits and handoff: no network or UI/Tauri testing and no database migration
+  were performed for this correction. Existing dirty/untracked work was
+  preserved; no unrelated UI, deployment, or migration behavior is implied by
+  this closure. Git state remains uncommitted and requires normal maintainer
+  review before release.
+
+## Study agent grading correction handoff (2026-09-19)
+
+- Study exam grading now stays with the current Agent flow. The Agent creates
+  the exam and, when needed after context loss, reads the persisted reference
+  answer on demand before grading; grading no longer uses a separate isolated
+  model call and no longer compares a choice response to the reference text as
+  an exact string. The persisted reference remains a recovery aid for the
+  case where intervening help or compaction has displaced the original grading
+  context.
+- Grading supports partial credit and step-level scores (`step_scores`) while
+  retaining grading `version` and idempotent write semantics. The program
+  preserves record identity, score bounds, version, and idempotency guarantees;
+  the Agent supplies the semantic judgment and score.
+- Verification: the focused Study grading set passed 50 tests. The recorded
+  full Core run passed 2143 tests with 2 skipped and had 1 temporary
+  `PermissionError`; rerunning that affected test passed. UI and desktop builds
+  passed, and the independent Tester returned PASS.
+- Not yet verified: no real production-model request and no Tauri/UI manual
+  retest has been run. The next milestone is the user's live retest of the
+  formal exam in the 极限 node, followed by recording any model or UI behavior
+  observed there.
+
+## Study note curation connection (2026-09-19)
+
+- Root cause from the real 极限-node trace: the note tables, `study.notes` RPC,
+  and Notes UI existed, but the Agent had no callable note tool and
+  `curate-notes` remained future-gated. It therefore produced an unsaved draft.
+- The existing store is now exposed as the Study-only `notes` Agent tool and
+  `curate-notes` is registered through the existing mode-scoped SkillRegistry.
+  The tool schema stays stable from the first Study request; only skill text is
+  loaded on demand, preserving prompt-cache prefix stability.
+- Agent-created blocks are attributed to AI and cannot use the UI-only
+  `user_edit` override. Existing title-required, locked-block, and revision
+  conflict behavior remains; proposed extra size/count validation was removed
+  per the user's preference to avoid premature strictness.
+- Focused Study/bundled-plugin verification passed 50 tests and compileall.
+  The full Core run was intentionally interrupted after the design was changed
+  from on-load tool exposure to a stable Study tool set; do not report it as a
+  completed full-suite result. Live user acceptance remains pending.
+
+## Chat instruction navigator design pause (2026-09-19)
+
+- Task ID/deployment/state: `chat_turn_navigator_design_20260919_archive` /
+  `chat_turn_navigator_design_20260919` / **paused** pending user consensus.
+  This was a read-only design/code audit; no production or test files changed.
+- Verified seams: `LamToolsApp.vue` owns the `.thread` scroll surface and
+  existing `locateMessage`/history-pagination flow; `ChatThread.vue` places
+  `data-message-id` on every rendered message; the initial history projection
+  uses a 10-turn page; shared `.optical-glass` is available; and the narrow
+  layout has a 640px breakpoint.
+- Proposed direction: a ChatGPT-style, left-edge instruction navigator keyed
+  only by user messages, with the selected marker longest and other markers
+  progressively weaker. Hover/focus previews should use shared optical glass;
+  clicks should reuse `locateMessage`, without introducing a second scroll
+  observer. The attached screenshot is visual reference only.
+- Pending decisions: whether markers represent all historical instructions or
+  only the loaded window; whether preview cards show user text only or a paired
+  response summary; and whether mobile hides the navigator or uses a compact
+  overlay. No Computer Use or Tauri run was performed. Preserve the existing
+  dirty/concurrent UI work. Exact next entry point is user confirmation of
+  those three decisions, followed by scoped implementation and Tauri-owned
+  visual acceptance.
+
+## Chat instruction navigator implementation closure (2026-09-19)
+
+- Task ID/deployment/state: `chat_turn_navigator_impl_archive` /
+  `chat_turn_navigator_impl_20260919` / **complete**. The Core chat now has a
+  left-edge user-instruction navigator backed by `thread.outline`; the backend
+  includes only top-level renderable `userMessage` rows and caps prompt/response
+  excerpts at 240 characters. CLI access is available through `session outline`.
+- The Canvas uses evenly indexed full-history markers. The active marker follows
+  the mounted user message nearest 38% of the viewport. Preview cards use the
+  shared `.optical-glass` material, and click navigation reuses `locateMessage`
+  plus the existing history pagination. Keyboard access, reduced-motion rules,
+  DPR-aware sizing, and explicit RAF/ResizeObserver cleanup are included; the
+  navigator is hidden at `<=640px` and adds no second scroll observer.
+- Verification: backend focused coverage passed 50 tests; the broader executor
+  set passed 181 tests. Final frontend focused coverage passed 27 tests;
+  typecheck and `build:app` passed with existing warnings; the design audit
+  covered 85 files with 0 deviations. The independent Tester passed after an
+  earlier RAF S3 finding was fixed and the navigator follow-up (7 tests plus
+  typecheck) passed.
+- No Computer Use or Tauri visual validation was run by user request. The
+  heavily dirty/concurrent worktree was preserved; no commit or cleanup was
+  performed. Future visual acceptance should begin in Tauri at the navigator
+  and narrow-layout behavior.
+
+## Study Obsidian notes phase 1 closure (2026-09-19)
+
+- Task ID/deployment/state: `study_obsidian_phase1_archive` /
+  `study_obsidian_phase1` / **complete**. Study notes now present one
+  continuous Markdown document in read mode, with edit/preview switching,
+  h1-h6 outline navigation, and scoped `[[wikilink]]` resolution for notes
+  and knowledge nodes. Backlinks are derived within the active Study scope.
+- Stable note/node IDs drive navigation; unresolved links remain visible and
+  saveable. Whole-document edits use the existing `update_blocks` path as one
+  atomic write while retaining block and source rows, and duplicate block IDs
+  are rejected. No `.md` mirror, link table, new Agent Loop, or replacement UI
+  architecture was introduced.
+- Verification: focused backend coverage passed 53 tests; focused UI coverage
+  passed 21 tests; final UI typecheck and build passed; the LamTools design
+  audit covered 85 files with 0 deviations; and an independent Tester returned
+  PASS. Full UI (739 tests) and full Core (2152 passed / 2 skipped) were run
+  before the final narrow atomic-boundary fixes; focused final rechecks then
+  passed. Build output retains only the existing `::highlight` and
+  dynamic-import warnings.
+- No Computer Use/manual Tauri acceptance, data migration or deletion,
+  commit, push, or release was performed. Exact next entry point: retest the
+  existing 极限 note under Study > 笔记 by editing, previewing, and saving,
+  then try `[[another note]]` and `[[knowledge node|label]]`. Preserve the
+  heavily dirty worktree and treat visual/perceptual behavior as user-owned
+  acceptance.
+
+## Study packaged RPC hotfix closure (2026-09-19)
+
+- Task ID/deployment/state: `study_rpc_packaged_hotfix_archive` /
+  `study_rpc_packaged_hotfix_20260919` / **complete**. The packaged-only
+  failure was traced to the canonical Study backend import looking for
+  `study-system.md` beside the PyInstaller module, while frozen plugin data
+  lives under the bundled resource root. The fix adds the existing
+  `bundled_plugins_dir()` fallback without changing the Agent Loop or Study
+  RPC contract.
+- Packaging smoke now performs WebSocket initialization and a real
+  `study.session` call. Source focused coverage passed 55 tests; independent
+  verification passed Study 44 and bundled-boundary 10; the PyInstaller
+  packaged smoke passed. Installed `E:\setuptest\0.3.5` backend PID 29728 on
+  port 49758 returned non-empty session ID `study:main`.
+- The rebuilt installer is 93,990,114 bytes with SHA256
+  `5E26B6F280DC5E8D8A4B20338569488A036E370E34695840493B592C3111BE5A`.
+  The public download was replaced and the redownload hash matched. Server
+  backups are
+  `/var/www/lamtools/Sunday_0.3.5_x64-setup.exe.before-study-rpc-hotfix-20260919T143333Z`
+  and the corresponding `Sunday-latest...` backup. The temporary SSH key and
+  upload directory were removed.
+- No full repository test result is claimed. No commit, tag, or push was made;
+  the heavily dirty worktree and unrelated changes remain preserved. Exact
+  next entry point: launch the installed 0.3.5 build and exercise Study; if a
+  packaged-only regression appears, inspect the frozen resource path through
+  `bundled_plugins_dir()` before changing the RPC or prompt contract.
+
+## Study notes UX optimization closure (2026-09-20)
+
+- Task ID/deployment/state: `study_notes_ux_20260920` /
+  `study_notes_ux_20260920` / **complete**. The notes surface now enforces a
+  trusted host writer boundary and AI/user ownership, broadcasts precise
+  `study/changed` updates, resolves code-safe typed wikilinks and node
+  backlinks, and keeps Study CLI `search`/`pin` parity. The UI preserves
+  Markdown losslessly, exposes detail loading/error/retry states, refetches
+  after save while rejecting stale responses, protects note-scoped draft
+  navigation, reports provenance and unresolved links, derives setext/DOM
+  outlines, and honors reduced motion. The `curate-notes` Skill is 3.1.0 and
+  the Study system prompt now states the corresponding read-first, minimal
+  increment, ownership, conflict, and receipt rules.
+- Verification: the backend Study trio passed 59 tests; focused frontend
+  coverage passed 31 tests; `npm run typecheck` and `npm run build` passed;
+  compileall and the scoped whitespace check passed; the LamTools design audit
+  scanned 85 files with 0 deviations. Build output retains the existing
+  `::highlight` and ineffective dynamic-import warnings. Independent Tester
+  review concluded there were no P0-P2 defects after the CommonMark indented
+  code/wikilink fix.
+- No auto-save or delete/restore workflow was added. No Computer Use or Tauri
+  visual acceptance was run. Read-only Git inspection found the expected
+  heavily dirty workspace, with Study files among concurrent and untracked
+  changes; no stage, commit, reset, revert, cleanup, or release was performed.
+  If visual acceptance is later requested, begin at Study > 笔记 and exercise
+  read/edit/preview/save, draft navigation, typed links, backlinks, search,
+  pinning, and retry states.
+
+## Linux/macOS desktop distribution planning closure (2026-09-20)
+
+- Task ID/deployment: `multiplatform_planning_archive` /
+  `linux_macos_desktop_20260920`; state: **paused** pending user consensus.
+  This was a read-only Heavy audit for adding Linux and macOS desktop
+  distributions. No lasting product decision has been approved.
+- Current Windows-only blockers are verified: packaged `LamCore.exe`
+  discovery is embedded in the current desktop/package handoff; the supported
+  package flow is PowerShell + PyInstaller + Tauri `--no-bundle` + Inno Setup;
+  release/update selection only recognizes `Sunday_*_x64-setup.exe`; Linux
+  secure storage currently falls back to in-memory behavior; install-adjacent
+  user data is incompatible with the desired signed macOS app/AppImage
+  locations; hook path fallback still assumes Windows `APPDATA`/`AppData`; and
+  native Linux/macOS desktop CI is absent.
+- Already-portable foundation: shared Vue `LamToolsApp`/Workbench and
+  `LamToolsTransport`, the Rust/Tauri desktop shell, the Python Core backend,
+  JSONC configuration and CLI boundaries. The official packaging constraint
+  is that PyInstaller and Tauri artifacts must be built on native runners for
+  their target operating systems; Windows cross-build output is not evidence
+  of Linux/macOS packages.
+- Recommended but not approved scope: Linux x64 AppImage plus `.deb`; separate
+  Intel and Apple Silicon macOS DMGs; standard Linux/macOS data roots while
+  preserving Windows behavior; Secret Service and Keychain-backed secrets;
+  native packaged smoke checks; and platform-aware update selection plus
+  website download assets.
+- Mandatory user decisions before implementation: whether Apple Developer ID
+  signing/notarization credentials are available and in scope, and whether
+  this deployment only implements/tests or also bumps versions, tags, and
+  releases. Until confirmed, do not implement, package, run CI, sign,
+  notarize, release, or change Windows behavior.
+- Verification/disposition: only read-only source/document/Git inspection was
+  performed. No implementation, package build, CI run, signing,
+  notarization, release, or Computer Use occurred. The heavily dirty and
+  untracked worktree was preserved; no production/test file, `project_diary.md`,
+  stage, commit, reset, revert, cleanup, push, or attribution was performed.
+  Evidence: `core/desktop/PACKAGING.md`, `scripts/package.ps1`,
+  `.github/workflows/release.yml`,
+  `core/src/lamtools_core/update/checker.py`,
+  `core/src/lamtools_core/plugins/hook_config.py`, and the shared
+  `core/ui`/`core/desktop` transport and shell paths.
+- Exact next milestone: obtain the two user decisions, then define the
+  per-platform data/secret/package/update contracts and native-runner CI
+  matrix before making production changes. Do not treat this audit as package
+  or release acceptance.
+
+## Study three-layer notes closure (2026-09-20)
+
+- Deployment `study_notes_three_layer_20260920` is complete. Study notes now
+  use three explicit layers: trusted host-captured immutable Raw from sessions,
+  marks, exams, and nodes; Agent-authored, versioned Resource entries that must
+  cite real Raw IDs; and user-visible Note documents whose real source is a
+  scope-specific Markdown vault. SQLite stores the index, relations, source
+  references, revisions/hashes, and locks rather than the Note body.
+- Each Note requires at least one Resource and keeps a low-key, host-managed
+  source footer. The Note workspace switches the left rail to the physical
+  Markdown path tree, keeps `parent_id` as a semantic parent relation only,
+  provides top return/Notes-chat controls, and places a Note-only overall
+  wikilink/parent graph in the right rail. Users and the Agent can edit the
+  full Markdown body; user-selected UTF-16 ranges can be locked against Agent
+  edits, with `NOTE_REGION_LOCKED`, reason, and overlap returned on conflict.
+- Verification: Study backend focused coverage passed 66 tests with 2 SQLite
+  datetime deprecation warnings; Study frontend focused coverage passed 31;
+  `npm run typecheck`, `npm run build`, Study compileall, and UTF-8
+  `curate-notes` quick validation passed; the LamTools design audit covered
+  85 files with 0 deviations; and the independent Tester passed. Build output
+  retains only the existing `::highlight` and ineffective dynamic-import
+  warnings.
+- No Computer Use/Tauri visual acceptance, complete-repository run, real-model
+  semantic acceptance, real-user-library migration, package, commit, or
+  release was performed. The heavily dirty and untracked worktree remains
+  preserved. Historical `study_note_blocks` is migration input only and is not
+  the current Note contract. If visual acceptance is requested, start at
+  Study > 笔记 and exercise the file tree, Note chat, right-rail graph, source
+  footer, full Markdown edit/preview, CAS conflict, and user-lock conflict.
+
+## Linux x64 desktop distribution implementation closure (2026-09-20)
+
+- Task ID/deployment/state: `linux_desktop_closure_20260920` /
+  `linux_desktop_implementation_20260920` / **complete**. The approved scope
+  is Linux x64 only: native AppImage and Debian artifacts are implemented and
+  verified. macOS is deferred and has no artifact or release claim.
+- Runtime contract: Linux packages carry a native, extensionless PyInstaller
+  `LamCore` at `lamcore-backend/LamCore`. Tauri mutable state uses
+  `app_data_dir()`/XDG data paths, hooks use `XDG_CONFIG_HOME`, and credentials
+  use the persistent Linux Secret Service keyring backend. Windows keeps its
+  existing `LamCore.exe` and portable data behavior.
+- Build/release contract: `scripts/package-linux.sh` performs the native build
+  in Ubuntu 22.04 WSL2 whose filesystem is backed by `E:\WSL\Ubuntu-22.04`;
+  toolchains, caches, and staging remain on the WSL ext4 filesystem and the
+  script rejects `/mnt/c`. It builds the frontend, Linux sidecar, AppImage,
+  and `.deb`, then performs package-content and packaged-startup checks. CI
+  and release jobs invoke this script. Update selection prefers the versioned
+  AppImage and falls back to the versioned `.deb`; the website exposes both
+  versioned `latest/download` links.
+- Final artifacts (version `0.3.5`, not published):
+  `core/desktop/src-tauri/target/release/bundle/appimage/Sunday_0.3.5_amd64.AppImage`;
+  186,821,112 bytes, SHA256
+  `9A714A659577D6DBBC5DBF28B05ECB7FA6EDD4EABF607F6E1652E2879C47C345`.
+  `core/desktop/src-tauri/target/release/bundle/deb/Sunday_0.3.5_amd64.deb`;
+  120,093,070 bytes, SHA256
+  `B869BF672284EA32F08FA9DAA8EB9DD8C9CFE428867F3B6E08FE63A32BB6B0C7`.
+  `artifacts/linux-x64/sidecar/LamCore`; 17,551,704 bytes, SHA256
+  `77545A21C1BF49674043DCC2354BD662EB5F1FF004DA76371AAB5FAC6088ED8F`.
+- Verification: 15 Linux/update Python tests passed; website build passed;
+  workflow YAML parsing, Bash syntax, and `git diff --check` passed; Rust
+  release `cargo check` passed; packaged REST/WebSocket/Study smoke passed;
+  AppImage and Debian format/content checks passed. Independent AppImage
+  smoke observed bundled `LamCore` PID 3883 and exit code 124, with no
+  surviving sidecar processes. A broader 55-test run was 50/55 because five
+  pre-existing concurrent-network tests failed; those failures were unrelated
+  to this Linux distribution delta.
+- Git/release disposition: read-only inspection found the heavily dirty,
+  concurrently edited worktree and preserved it. No version bump, stage,
+  commit, tag, push, GitHub release, or publication occurred. The next
+  milestone is an explicitly authorized versioned release; macOS requires a
+  separate native/signing implementation before it can be supported.

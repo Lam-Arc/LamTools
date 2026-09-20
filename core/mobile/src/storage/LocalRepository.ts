@@ -9,6 +9,8 @@ export interface LocalProject {
   name: string
   path: string
   workRoot: string
+  iconKey: string
+  colorKey: string
   revision: number
   createdAt: string
   updatedAt: string
@@ -528,6 +530,8 @@ function toProject(value: Record<string, unknown>): LocalProject | null {
     name: String(value.name || id),
     path: String(value.path || value.work_root || ''),
     workRoot: String(value.work_root || value.path || ''),
+    iconKey: String(value.icon_key || value.iconKey || ''),
+    colorKey: String(value.color_key || value.colorKey || ''),
     revision: numberOrZero(value.revision || value.project_revision),
     createdAt: String(value.created_at || value.createdAt || ''),
     updatedAt: String(value.updated_at || value.updatedAt || ''),
@@ -621,7 +625,18 @@ function emptySnapshot(threadId: string): CoreAppSnapshot {
 }
 
 function emptyProject(id: string): LocalProject {
-  return { id, name: id, path: '', workRoot: '', revision: 0, createdAt: '', updatedAt: '', deleted: false }
+  return {
+    id,
+    name: id,
+    path: '',
+    workRoot: '',
+    iconKey: '',
+    colorKey: '',
+    revision: 0,
+    createdAt: '',
+    updatedAt: '',
+    deleted: false,
+  }
 }
 
 function emptyThread(id: string): LocalThread {
@@ -639,6 +654,8 @@ function normalizeState(value: LocalState | null | undefined): LocalState {
   const projects = normalizeRecord(value.projects, (raw, id) => ({
     ...raw,
     id: stringValue(raw.id || id),
+    iconKey: stringValue(raw.iconKey || raw.icon_key),
+    colorKey: stringValue(raw.colorKey || raw.color_key),
     revision: numberOrZero(raw.revision || raw.project_revision),
   })) as Record<string, LocalProject>
   const threads = normalizeRecord(value.threads, (raw, id) => ({

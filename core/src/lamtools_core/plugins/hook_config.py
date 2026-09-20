@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 
 from .models import HookDefinition, HookHandler, HookSource, PluginManifest
@@ -18,6 +19,10 @@ def default_user_hooks_path() -> Path:
     home = os.environ.get("LAMTOOLS_HOME")
     if home:
         return Path(home) / "hooks.json"
+    if sys.platform.startswith("linux"):
+        xdg_config_home = os.environ.get("XDG_CONFIG_HOME", "").strip()
+        root = Path(xdg_config_home) if xdg_config_home else Path.home() / ".config"
+        return root / "LamTools" / "hooks.json"
     appdata = os.environ.get("APPDATA")
     root = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
     return root / "LamTools" / "hooks.json"

@@ -9,13 +9,19 @@
  */
 import { gsap } from 'gsap'
 
-const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)')
+function shouldSkipMotion(): boolean {
+  return (
+    typeof window === 'undefined'
+    || typeof window.matchMedia !== 'function'
+    || window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || typeof requestAnimationFrame !== 'function'
+  )
+}
 
 export const motionEnterDirective = {
   mounted(el: HTMLElement, binding: { value?: unknown }) {
     if (binding.value === false) return
-    if (REDUCED_MOTION.matches) return
-    if (typeof requestAnimationFrame !== 'function') return
+    if (shouldSkipMotion()) return
     gsap.fromTo(
       el,
       { autoAlpha: 0, y: 8 },

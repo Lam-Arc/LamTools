@@ -38,9 +38,10 @@ impl DesktopAccountSession {
 
 /// Storage boundary used by device identity and trusted peers.
 ///
-/// Windows uses Credential Manager and macOS uses Keychain; tests and
-/// unsupported targets use the in-memory implementation. Keeping the trait
-/// here prevents callers from falling back to plaintext configuration.
+/// Windows uses Credential Manager, macOS uses Keychain, and Linux uses the
+/// persistent Secret Service backend. Tests and unsupported targets use the
+/// in-memory implementation. Keeping the trait here prevents callers from
+/// falling back to plaintext configuration.
 pub trait SecureStore: Send + Sync {
     fn load(&self, key: &str) -> Result<Option<Vec<u8>>, String>;
     fn save(&self, key: &str, value: &[u8]) -> Result<(), String>;
@@ -52,18 +53,18 @@ pub struct MemorySecureStore {
     values: Mutex<HashMap<String, Vec<u8>>>,
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 #[derive(Default)]
 pub struct PlatformSecureStore;
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 impl PlatformSecureStore {
     fn entry(key: &str) -> Result<keyring::Entry, String> {
         keyring::Entry::new("com.lamtools.desktop.remote", key).map_err(|error| error.to_string())
     }
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 impl SecureStore for PlatformSecureStore {
     fn load(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
         match Self::entry(key)?.get_password() {
@@ -90,13 +91,13 @@ impl SecureStore for PlatformSecureStore {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 #[derive(Default)]
 pub struct PlatformSecureStore {
     fallback: MemorySecureStore,
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 impl SecureStore for PlatformSecureStore {
     fn load(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
         self.fallback.load(key)

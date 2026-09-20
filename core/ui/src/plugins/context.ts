@@ -7,6 +7,7 @@ import {
   type InjectionKey,
   type MaybeRefOrGetter,
   type Ref,
+  type Component,
 } from 'vue'
 import type { CoreAppEvent } from '../appServer'
 import type { CoreMessage, CoreSessionListItem, ProjectGroup } from '../types'
@@ -17,6 +18,8 @@ import type { PluginRpc } from './types'
 import type { RightSidebarPluginContribution } from '../right-sidebar/types'
 
 export interface PluginSidebarSurface {
+  component?: Component
+  componentProps?: MaybeRefOrGetter<Record<string, unknown>>
   groups: MaybeRefOrGetter<ProjectGroup[]>
   hasProjects?: MaybeRefOrGetter<boolean>
   activeSessionId?: MaybeRefOrGetter<string | undefined>
@@ -40,9 +43,18 @@ export interface PluginSidebarSurface {
 }
 
 export interface PluginModeSurface {
+  /** Render the canonical Core conversation surface while keeping the plugin mounted. */
+  useCoreThread?: MaybeRefOrGetter<boolean>
+  hideComposer?: MaybeRefOrGetter<boolean>
   composerPlaceholder?: MaybeRefOrGetter<string>
   composerDisabled?: MaybeRefOrGetter<boolean>
-  turnOptions?: () => Record<string, unknown>
+  allowAttachmentOnlySubmit?: MaybeRefOrGetter<boolean>
+  /**
+   * Per-turn options are allowed to be asynchronous so a plugin can refresh
+   * its bounded persisted context immediately before a turn is accepted.
+   * Synchronous providers remain valid for existing modes.
+   */
+  turnOptions?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   sidebar?: PluginSidebarSurface
   /** Optional trusted/in-process right-rail modules for this plugin mode. */
   rightSidebar?: MaybeRefOrGetter<RightSidebarPluginContribution[]>
@@ -55,6 +67,8 @@ export interface PluginModeRuntime {
 }
 
 export interface CorePluginChatContext {
+  hasMoreHistory?: Readonly<Ref<boolean>>
+  loadMoreHistory?: () => void | Promise<unknown>
   messages: Readonly<Ref<CoreMessage[]>>
   processExpandedIds: Ref<Set<string>>
   toggleProcess: (id: string) => void
@@ -70,6 +84,8 @@ export interface CorePluginChatContext {
 export interface CorePluginModeContext {
   transport: LamToolsTransport
   requestRpc: PluginRpc
+  /** Single attempt for non-idempotent light model calls. */
+  requestDirectRpc?: PluginRpc
   projectClient: CoreProjectClient
   projects: Ref<CoreProject[]>
   sessions: Ref<CoreSessionListItem[]>

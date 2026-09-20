@@ -7,6 +7,7 @@ import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 from copy import deepcopy
@@ -53,6 +54,19 @@ from lamtools_core.config.subagent_prompt import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _bundled_study_system_prompt() -> str:
+    """Resolve the packaged Study identity for every Study-mode entrypoint."""
+    try:
+        from lamtools_core.plugins.registry import bundled_plugins_dir
+
+        return (
+            bundled_plugins_dir() / "study" / "prompts" / "study-system.md"
+        ).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 _MODEL_TOOL_EVIDENCE_LIMIT = 12_000
@@ -383,19 +397,39 @@ class CoreBaseAgentKit:
         return loader.to_prompt_parts(self.work_root)
 
     async def build_model_request(self, state: RuntimeState, context: PromptContext) -> LLMRequest:
-        system_lines = [
-            self.config.instructions,
-            f"当前项目: {state.metadata.get('work_root', '')}, 当前会话: {state.session_id}, 当前模型: {self.config.model_display_name or self.config.model_id}",
-            command_shell_prompt(),
+        study_mode = self.config.active_mode == "study:study"
+        effective_instructions = self.config.instructions
+        if study_mode:
+            effective_instructions = _bundled_study_system_prompt() or effective_instructions
+        common_tool_protocol = [
             "在有助于完成用户请求时使用可用工具。",
-            "创建或修改文件时使用 write_file 或 edit_file。",
-            "工作过程中不要破坏项目目录的结构性与整洁度。",
             "当可用技能与任务匹配时使用 load_skill。",
             "收到工具结果后，继续下一步或给出最终回复。",
             "将成功的工具结果视为可复用证据。在对同一文件、URL、进程、端口等资源再次使用不同参数查询之前，先说明确缺失的事实以及现有结果为何不能回答；否则直接复用现有结果。",
             "经过多个纯工具步骤后，简要汇报已确认事实、仍存疑点及下一步，再继续调用工具。保持进度摘要简洁，不重复已有证据。",
-            "任务完成后向用户回复简要摘要，包括工作完成情况、范围、产物位置与需用户确认项。最终回复必须逐项列出本轮新建或更新的交付文件路径，并用反引号或 Markdown 文件链接包住每个真实路径；不要把不存在的路径写成已交付。",
         ]
+        if study_mode:
+            # Study replaces the generic project/coding workflow, while still
+            # inheriting the host's tool, permission and verification rules.
+            # In particular, do not load workspace AGENTS/MEMORY or demand
+            # file-oriented delivery summaries for a learning conversation.
+            system_lines = [
+                effective_instructions,
+                f"当前会话: {state.session_id}, 当前模型: {self.config.model_display_name or self.config.model_id}",
+                *common_tool_protocol,
+                "任务完成后直接回复学习结果、实际记录情况与需要用户确认的事项。",
+            ]
+        else:
+            system_lines = [
+                effective_instructions,
+                f"当前项目: {state.metadata.get('work_root', '')}, 当前会话: {state.session_id}, 当前模型: {self.config.model_display_name or self.config.model_id}",
+                command_shell_prompt(),
+                common_tool_protocol[0],
+                "创建或修改文件时使用 write_file 或 edit_file。",
+                "工作过程中不要破坏项目目录的结构性与整洁度。",
+                *common_tool_protocol[1:],
+                "任务完成后向用户回复简要摘要，包括工作完成情况、范围、产物位置与需用户确认项。最终回复必须逐项列出本轮新建或更新的交付文件路径，并用反引号或 Markdown 文件链接包住每个真实路径；不要把不存在的路径写成已交付。",
+            ]
         # Model capability line: tells the agent its input modalities so it
         # does not assume image support that the model lacks.
         deferred = list(state.metadata.get("deferred_attachments") or [])
@@ -404,9 +438,9 @@ class CoreBaseAgentKit:
             system_lines.insert(1, cap_line)  # right after the instructions
         # Sub-agent delegation guide (project > global > built-in). Cached on the
         # kit so the markdown file is read at most once per kit lifetime.
-        guide = self._cached_subagent_guide()
-        role_assignments = self._cached_subagent_roles()
-        delegation_strategy = self._cached_subagent_strategy()
+        guide = "" if study_mode else self._cached_subagent_guide()
+        role_assignments = "" if study_mode else self._cached_subagent_roles()
+        delegation_strategy = "" if study_mode else self._cached_subagent_strategy()
         subagent_instructions = "\n\n".join(
             part for part in (guide, delegation_strategy, role_assignments) if part
         )
@@ -426,7 +460,7 @@ class CoreBaseAgentKit:
             servers = mcp_caller.server_names
             if servers:
                 system_lines.extend(["", f"Available MCP servers (use mcp_activate to load): {', '.join(servers)}"])
-        context_parts = self._build_project_context_parts()
+        context_parts = [] if study_mode else self._build_project_context_parts()
         for part in context_parts:
             system_lines.extend(["", part.content])
         # Keep the mutable checklist out of the leading system message. Provider
@@ -541,16 +575,20 @@ class CoreBaseAgentKit:
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {}
-                calls.append(
-                    self.toolbox.prepare_call(
-                        ToolCall(
-                            id=raw.id or uuid.uuid4().hex,
-                            name=raw.name,
-                            arguments=args if isinstance(args, dict) else {},
-                            raw=raw.raw,
-                        )
+                call = self.toolbox.prepare_call(
+                    ToolCall(
+                        id=raw.id or uuid.uuid4().hex,
+                        name=raw.name,
+                        arguments=args if isinstance(args, dict) else {},
+                        raw=raw.raw,
                     )
                 )
+                # Attach the host-owned model identity before the kernel can
+                # persist a pending approval.  Approval continuations execute
+                # the serialized call directly, so doing this only in
+                # ``execute_tool`` would lose the active model on resume.
+                self._attach_runtime_model_id(state, call)
+                calls.append(call)
         elif response.finish_reason == "stop":
             content = (response.content or "").strip()
             if not content:
@@ -626,6 +664,10 @@ class CoreBaseAgentKit:
         if routed is not None:
             return routed
 
+        # Keep direct tool dispatches and calls restored from older checkpoints
+        # on the same host-owned model routing path as fresh model output.
+        self._attach_runtime_model_id(state, call)
+
         # Rehydrate the workflow envelope from durable state at the tool
         # boundary.  Dynamic workflow tools only receive ToolCall metadata;
         # without this copy a child runner would silently lose its parent's
@@ -661,6 +703,31 @@ class CoreBaseAgentKit:
         )
         await self._post_dispatch(state, call, result)
         return result
+
+    def _attach_runtime_model_id(self, state: RuntimeState, call: ToolCall) -> None:
+        """Stamp a tool call with the model selected for its active turn.
+
+        The durable runtime snapshot is authoritative when present; the flat
+        state field and kit config are compatibility fallbacks for older or
+        direct callers.  This value is host metadata, never a model argument,
+        and is therefore available to operation-backed tools after approval
+        suspension/resume as well.
+        """
+        metadata = state.metadata if isinstance(state.metadata, Mapping) else {}
+        snapshot = metadata.get("runtime_snapshot")
+        runtime_model_id = ""
+        if isinstance(snapshot, Mapping):
+            runtime_model_id = str(
+                snapshot.get("model_id") or snapshot.get("modelId") or ""
+            ).strip()
+        if not runtime_model_id:
+            runtime_model_id = str(
+                metadata.get("model_id") or metadata.get("modelId") or ""
+            ).strip()
+        if not runtime_model_id:
+            runtime_model_id = str(self.config.model_id or "").strip()
+        if runtime_model_id:
+            call.metadata["_runtime_model_id"] = runtime_model_id
 
     async def _pre_dispatch(self, state: RuntimeState, call: ToolCall) -> ToolResult | None:
         if call.name == "invalid_tool_call":
@@ -1126,6 +1193,12 @@ def assemble_core_agent_plugins(
         for root in plugin.skill_roots
         if root.exists()
     ]
+    skill_modes = {
+        root: modes
+        for plugin in enabled_plugins
+        for root, modes in plugin.skill_modes.items()
+        if root.exists()
+    }
     # 原生工具声明（manifest tools 字段 → PluginToolSpec 列表，按插件
     # 分组保留归属，供装配层补全 spec 时标注 plugin 来源）；
     # 清单解析失败不阻断其他插件，错误随装配结果返回（plugin.list 报状态）。
@@ -1173,6 +1246,7 @@ def assemble_core_agent_plugins(
         "plugin_roots": roots,
         "data_dir": str(data_dir),
         "skill_roots": skill_roots,
+        "skill_modes": skill_modes,
         "plugin_tool_groups": plugin_tool_groups,
         "plugin_tool_errors": plugin_tool_errors,
         "plugin_context": plugin_context,

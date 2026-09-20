@@ -306,3 +306,73 @@ jobs:
         with:
           name: sunday-installer
           path: core/desktop/src-tauri/target/release/bundle/inno/Sunday_*_x64-setup.exe
+
+  build-linux:
+    # package-linux.sh builds the native x64 sidecar and Tauri bundles. Windows
+    # remains in the separate job above, including its repository-owned Inno path.
+    # Waiting for it also gives the two tag uploads one deterministic Release
+    # creator and preserves the existing Windows release sequence.
+    needs: build-windows
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            wget \
+            ca-certificates \
+            file \
+            pkg-config \
+            patchelf \
+            libxdo-dev \
+            libssl-dev \
+            libdbus-1-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            xdg-utils \
+            desktop-file-utils \
+            appstream \
+            squashfs-tools \
+            libfuse2 \
+            xvfb \
+            xauth \
+            dbus-x11
+
+      - name: Build Linux sidecar and bundles
+        run: |
+          bash scripts/package-linux.sh
+
+      - name: Verify standard Linux artifact paths and sidecar
+        run: |
+          test -x artifacts/linux-x64/sidecar/LamCore
+          test -n "$(find core/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name 'Sunday_*_amd64.AppImage' -print -quit)"
+          test -n "$(find core/desktop/src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name 'Sunday_*_amd64.deb' -print -quit)"
+
+      # Tag runs add both Linux assets to the same release created by the
+      # Windows job. Manual runs remain validation-only and upload artifacts.
+      - name: Upload Linux bundles to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            core/desktop/src-tauri/target/release/bundle/appimage/Sunday_*_amd64.AppImage
+            core/desktop/src-tauri/target/release/bundle/deb/Sunday_*_amd64.deb
+          generate_release_notes: false
+          update_release_body: false
+          fail_on_unmatched_files: true
+
+      - name: Upload Linux bundles as build artifact (manual run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sunday-linux-x64
+          path: |
+            core/desktop/src-tauri/target/release/bundle/appimage/Sunday_*_amd64.AppImage
+            core/desktop/src-tauri/target/release/bundle/deb/Sunday_*_amd64.deb
