@@ -66,7 +66,9 @@ export class ConnectionManager {
   private workspaceId = ''
   private readonly networkMonitor: NetworkPlugin
   private networkListener: PluginListenerHandle | null = null
+  private networkMonitorGeneration = 0
   private removeTransportState: (() => void) | null = null
+  private contextGeneration = 0
 
   constructor(private readonly options: ConnectionManagerOptions) {
     this.lanDiscovery = options.lanDiscovery || createLanDiscovery()
@@ -86,19 +88,24 @@ export class ConnectionManager {
   setTrustedDevice(device: TrustedDevice | null): void {
     const changed = !sameConnectionCredentials(this.trustedDevice, device)
     this.trustedDevice = device
-    if (changed) void this.transport.close()
+    if (changed) {
+      this.contextGeneration += 1
+      void this.transport.close()
+    }
   }
 
   setWorkspace(workspaceId: string): void {
     const next = workspaceId.trim()
     if (this.workspaceId === next) return
     this.workspaceId = next
+    this.contextGeneration += 1
     void this.transport.close()
   }
 
   setAccount(account: AccountConnectionProvider | null): void {
     if (this.account === account) return
     this.account = account
+    this.contextGeneration += 1
     void this.transport.close()
   }
 
@@ -111,7 +118,10 @@ export class ConnectionManager {
     this.account = context.account
     this.workspaceId = workspaceId
     this.trustedDevice = context.trustedDevice
-    if (changed) await this.transport.close()
+    if (changed) {
+      this.contextGeneration += 1
+      await this.transport.close()
+    }
   }
 
   snapshot(): ConnectionSnapshot {
@@ -131,6 +141,13 @@ export class ConnectionManager {
   prepareForResume(): void {
     this.lanFailed = false
     this.lastError.value = ''
+    if (this.trustedDevice) {
+      // A foreground transition can leave a WebSocket-looking transport in a
+      // stale connected state after the OS suspended its socket. Force a new
+      // route/handshake so the next RPC cannot silently reuse that dead wire.
+      this.contextGeneration += 1
+      void this.transport.close()
+    }
     if (this.trustedDevice && this.state.value !== 'offline') {
       this.state.value = 'reconnecting'
       this.message.value = CONNECTION_LABELS.reconnecting
@@ -139,7 +156,9 @@ export class ConnectionManager {
 
   async startNetworkMonitoring(): Promise<void> {
     if (this.networkListener) return
-    this.networkListener = await this.networkMonitor.addListener('networkStatusChange', ({ connected }) => {
+    const generation = ++this.networkMonitorGeneration
+    const listener = await this.networkMonitor.addListener('networkStatusChange', ({ connected }) => {
+      if (generation !== this.networkMonitorGeneration) return
       if (!connected) {
         this.state.value = 'offline'
         this.message.value = CONNECTION_LABELS.offline
@@ -153,7 +172,13 @@ export class ConnectionManager {
         void this.transport.close()
       }
     })
+    if (generation !== this.networkMonitorGeneration) {
+      await listener.remove()
+      return
+    }
+    this.networkListener = listener
     const status = await this.networkMonitor.getStatus()
+    if (generation !== this.networkMonitorGeneration) return
     if (!status.connected) {
       this.state.value = 'offline'
       this.message.value = CONNECTION_LABELS.offline
@@ -161,6 +186,8 @@ export class ConnectionManager {
   }
 
   close(): void {
+    this.contextGeneration += 1
+    this.networkMonitorGeneration += 1
     void this.networkListener?.remove()
     this.networkListener = null
     this.removeTransportState?.()
@@ -172,6 +199,7 @@ export class ConnectionManager {
   }
 
   private async createWire(): Promise<TunnelWire> {
+    const generation = this.contextGeneration
     const trusted = this.trustedDevice
     if (!trusted?.publicKey) {
       throw new Error('请先配对一台 LamTools 电脑')
@@ -181,6 +209,7 @@ export class ConnectionManager {
     const identity = this.account?.getDeviceIdentity && this.workspaceId
       ? await this.account.getDeviceIdentity()
       : await loadOrCreateDeviceIdentity()
+    this.assertCurrent(generation)
     this.path.value = null
     this.state.value = 'discovering'
     this.message.value = CONNECTION_LABELS.discovering
@@ -188,36 +217,38 @@ export class ConnectionManager {
     try {
       devices = await this.lanDiscovery.discover()
     } catch (error) {
+      this.assertCurrent(generation)
       this.lastError.value = error instanceof Error ? error.message : String(error)
     }
+    this.assertCurrent(generation)
     // Discovery is only a locator.  Never connect to an arbitrary first
     // advertisement: the paired desktop identity is the trust boundary.
     const lan = devices.find((device) => device.deviceId === trusted.deviceId)
     if (lan && canUseDirectTrust) {
-      this.path.value = 'lan'
-      this.state.value = 'connecting_lan'
-      this.message.value = CONNECTION_LABELS.connecting_lan
+      this.setRouteState(generation, 'lan', 'connecting_lan')
       try {
         return await this.buildWire(
           { path: 'lan', identity, trustedDevice: trusted, lanDevice: lan },
           () => createTrustedSecureWire(`ws://${lan.host}:${lan.port}/_lamtools/tunnel`, trusted, identity),
+          generation,
         )
       } catch (error) {
+        if (generation !== this.contextGeneration) throw error
         this.lanFailed = true
         this.lastError.value = error instanceof Error ? error.message : String(error)
       }
     }
 
     if (trusted.gatewayUrl && canUseDirectTrust) {
-      this.path.value = 'lan'
-      this.state.value = 'connecting_lan'
-      this.message.value = CONNECTION_LABELS.connecting_lan
+      this.setRouteState(generation, 'lan', 'connecting_lan')
       try {
         return await this.buildWire(
           { path: 'lan', identity, trustedDevice: trusted },
           () => createTrustedSecureWire(trusted.gatewayUrl!, trusted, identity, this.options.diagnosticSink),
+          generation,
         )
       } catch (error) {
+        if (generation !== this.contextGeneration) throw error
         this.lanFailed = true
         this.lastError.value = error instanceof Error ? error.message : String(error)
       }
@@ -228,36 +259,60 @@ export class ConnectionManager {
       throw new Error('局域网/手动地址不可用；官方 Relay 需要先登录并选择工作环境')
     }
     const ticket = await account.getConnectionTicket(this.workspaceId)
+    this.assertCurrent(generation)
     if (ticket.targetHostNodeId !== trusted.deviceId) {
       throw new Error('工作环境 Host 与连接目标不一致')
     }
-    const relayEndpoint = account.getRelayEndpoint() || this.options.relayEndpoint
+    const relayEndpoint = account.getRelayEndpoint() || trusted.relayUrl || this.options.relayEndpoint
     if (!relayEndpoint) throw new Error('账号未配置 Relay 地址')
-    this.path.value = 'relay'
-    this.state.value = 'connecting_remote'
-    this.message.value = CONNECTION_LABELS.connecting_remote
+    this.setRouteState(generation, 'relay', 'connecting_remote')
     return await this.buildWire(
       { path: 'relay', identity, trustedDevice: trusted },
       () => createRelaySecureWire(relayEndpoint, ticket.ticket, trusted, identity, this.options.diagnosticSink),
+      generation,
     )
   }
 
   private async buildWire(
     context: ConnectionWireContext,
     fallback: () => TunnelWire,
+    generation: number,
   ): Promise<TunnelWire> {
     const wire = await (this.options.wireFactory?.(context) || fallback())
+    if (generation !== this.contextGeneration) {
+      wire.close()
+      throw new Error('连接已取消')
+    }
     try {
       // Route selection must include the actual socket + Noise handshake.
       // Merely constructing a wire cannot prove that a LAN/direct endpoint is
       // reachable, and would prevent this method from falling through to the
       // Relay candidate in the same connection attempt.
       await wire.connect()
+      if (generation !== this.contextGeneration) {
+        wire.close()
+        throw new Error('连接已取消')
+      }
       return wire
     } catch (error) {
       wire.close()
       throw error
     }
+  }
+
+  private assertCurrent(generation: number): void {
+    if (generation !== this.contextGeneration) throw new Error('连接已取消')
+  }
+
+  private setRouteState(
+    generation: number,
+    path: Exclude<ConnectionPath, null>,
+    state: ConnectionState,
+  ): void {
+    this.assertCurrent(generation)
+    this.path.value = path
+    this.state.value = state
+    this.message.value = CONNECTION_LABELS[state]
   }
 
   private handleTransportState(state: TransportConnectionState): void {

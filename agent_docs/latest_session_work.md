@@ -2871,3 +2871,30 @@ mobile UI.
   Exact next entry point is an explicitly authorized release review using the
   three hashes above. Any macOS work must begin with a separate native runner,
   data/secret-root contract, and signing/notarization decision.
+
+## Mobile code review, refactor, and bug-fix closure (2026-09-20)
+
+- Task ID/deployment/state: `mobile_review_refactor_closure_20260920` /
+  `mobile_review_refactor_20260920` / **complete**. The mobile review fixed
+  account refresh single-flight and logout/session-generation races, serialized
+  account/workspace transitions, and fenced initialization after unmount.
+  Connection/resume generations now reject stale results; Noise handshake
+  message waits are bounded, cancellable, and cleaned up; SyncEngine close is
+  fenced against started repository writes; and scoped memory-cache recovery
+  restores the active bucket.
+- The non-native credential default is memory-only. Tunnel cancellation and
+  frame/type validation are hardened, and Capacitor identifies the app as
+  `Sunday`. These changes preserve the mobile boundary around pairing,
+  lifecycle, trusted devices, connection/wire, native capabilities, and local
+  cache behavior.
+- Independent Tester verification: `npm test -- --reporter=dot` passed 12
+  files / 54 tests; `npm run typecheck`, `npm run build`, `npm run cap:sync`,
+  and `git diff --check -- core/mobile` passed. Capacitor sync produced no
+  visible native Git diff; build output contained only chunk/dynamic-import
+  warnings.
+- Limitations: no real Android/iOS device, LAN, Relay, or Tauri visual runtime
+  acceptance was run; Windows CocoaPods/xcodebuild checks were skipped. Git
+  handoff before this documentation amend was commit `bae53c33`; only
+  `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`, and `docs.7z` remain
+  intentionally untracked. Next entry point: real device/network acceptance
+  of pairing, reconnect/resume, workspace switching, and cache recovery.

@@ -455,7 +455,9 @@ class MemoryLocalDatabase<TState> implements LocalDatabase<TState> {
   constructor(private readonly name: string) {}
   async open(): Promise<void> {}
   async read(): Promise<TState | null> {
-    return (MemoryLocalDatabase.values.get(this.name) as TState | undefined) ?? null
+    const value = MemoryLocalDatabase.values.get(this.name)
+    if (isScopedBucket<TState>(value)) return value.active
+    return (value as TState | undefined) ?? null
   }
   async write(state: TState): Promise<void> {
     await this.writeScope(localStateScope(state), state)

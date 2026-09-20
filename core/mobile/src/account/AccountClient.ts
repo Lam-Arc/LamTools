@@ -100,6 +100,10 @@ export class AccountClient implements AccountConnectionProvider {
   private readonly storage: SecureStorage
   private identity: DeviceIdentity | null
   private sessionValue: AccountSession | null
+  private sessionGeneration = 0
+  private refreshPromise: Promise<AccountSession> | null = null
+  private refreshPromiseGeneration = -1
+  private refreshPromiseSession: AccountSession | null = null
 
   constructor(options: AccountClientOptions) {
     this.profile = normalizeProfile(options.profile)
@@ -147,26 +151,57 @@ export class AccountClient implements AccountConnectionProvider {
     const stored = await this.storage.get<AccountSession>(ACCOUNT_SESSION_KEY)
     if (!isAccountSession(stored)) return null
     if (stored.serverId !== this.profile.serverId && this.profile.serverId) return null
+    // A restore can race an earlier refresh on an instance that is reused by
+    // an embedding shell. Invalidate that refresh before replacing the
+    // session, otherwise its response could overwrite the restored account.
+    this.sessionGeneration += 1
     this.sessionValue = stored
     return stored
   }
 
   async refresh(): Promise<AccountSession> {
     const current = this.requireSession()
-    const tokens = parseTokens(await this.requestPublic('/v1/auth/refresh', {
-      method: 'POST',
-      body: { refreshToken: current.refreshToken },
-    }))
-    this.sessionValue = {
-      ...current,
-      ...tokens,
+    if (
+      this.refreshPromise
+      && this.refreshPromiseGeneration === this.sessionGeneration
+      && this.refreshPromiseSession === current
+    ) {
+      return await this.refreshPromise
     }
-    await this.persist()
-    return this.sessionValue
+
+    const generation = this.sessionGeneration
+    const promise = (async (): Promise<AccountSession> => {
+      const tokens = parseTokens(await this.requestPublic('/v1/auth/refresh', {
+        method: 'POST',
+        body: { refreshToken: current.refreshToken },
+      }))
+      // Logout or a newer authentication must win over an older refresh
+      // response. Do not resurrect the signed-out session in secure storage.
+      if (this.sessionGeneration !== generation || this.sessionValue !== current) {
+        throw new Error('账号会话已结束')
+      }
+      const next = { ...current, ...tokens }
+      this.sessionValue = next
+      await this.persist()
+      return next
+    })()
+    this.refreshPromise = promise
+    this.refreshPromiseGeneration = generation
+    this.refreshPromiseSession = current
+    try {
+      return await promise
+    } finally {
+      if (this.refreshPromise === promise) {
+        this.refreshPromise = null
+        this.refreshPromiseGeneration = -1
+        this.refreshPromiseSession = null
+      }
+    }
   }
 
   async logout(): Promise<void> {
     const current = this.sessionValue
+    this.sessionGeneration += 1
     this.sessionValue = null
     await this.storage.remove(ACCOUNT_SESSION_KEY)
     if (!current) return
@@ -263,6 +298,7 @@ export class AccountClient implements AccountConnectionProvider {
       publicKey: node.publicKey,
     }
     this.sessionValue = session
+    this.sessionGeneration += 1
     await this.persist()
     return session
   }

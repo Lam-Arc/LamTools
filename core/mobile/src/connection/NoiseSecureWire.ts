@@ -10,6 +10,7 @@ import type { RemoteDiagnosticSink, TunnelWire } from './TunnelTransport'
 const PROLOGUE = new TextEncoder().encode('LamTools Remote Tunnel v1')
 const MAX_NOISE_PLAINTEXT = 60_000
 const WEBSOCKET_OPEN_TIMEOUT_MS = 5_000
+export const NOISE_HANDSHAKE_MESSAGE_TIMEOUT_MS = 5_000
 export const REMOTE_PROTOCOL = 'lamtools-remote'
 export const REMOTE_PROTOCOL_VERSION = 1
 
@@ -45,16 +46,23 @@ export class NoiseSecureWire implements TunnelWire {
   private connectionGeneration = 0
   private pairingResult: Record<string, unknown> | null = null
   private tunnelId = ''
+  private handshakeAbort: AbortController | null = null
 
   constructor(
     private readonly options: SecureWireOptions,
     private readonly diagnosticSink: RemoteDiagnosticSink = () => {},
+    private readonly handshakeTimeoutMs = NOISE_HANDSHAKE_MESSAGE_TIMEOUT_MS,
   ) {}
 
   connect(): Promise<void> {
     if (!this.connectPromise) {
       const generation = ++this.connectionGeneration
-      this.connectPromise = this.open(generation)
+      const controller = new AbortController()
+      this.handshakeAbort = controller
+      const promise = this.open(generation, controller).finally(() => {
+        if (this.handshakeAbort === controller) this.handshakeAbort = null
+      })
+      this.connectPromise = promise
     }
     return this.connectPromise
   }
@@ -82,6 +90,8 @@ export class NoiseSecureWire implements TunnelWire {
 
   close(): void {
     this.connectionGeneration += 1
+    this.handshakeAbort?.abort()
+    this.handshakeAbort = null
     const socket = this.socket
     this.socket = null
     this.sendCipher = null
@@ -93,7 +103,8 @@ export class NoiseSecureWire implements TunnelWire {
     this.emitState('disconnected')
   }
 
-  private async open(generation: number): Promise<void> {
+  private async open(generation: number, controller: AbortController): Promise<void> {
+    const signal = controller.signal
     this.emitState('connecting')
     let socket: WebSocket | null = null
     try {
@@ -117,17 +128,28 @@ export class NoiseSecureWire implements TunnelWire {
       socket = new WebSocket(url.toString())
       socket.binaryType = 'arraybuffer'
       this.socket = socket
+      // Arm the relay-ready listener before waiting for the WebSocket open
+      // event. A relay can have the bridge ready by the time the client sees
+      // its open callback, and WebSocket events are not replayed for listeners
+      // attached after delivery.
+      const relayReadyPromise = this.options.relay
+        ? nextTextMessage(socket, this.handshakeTimeoutMs, signal)
+        : null
+      // If opening fails before the relay-ready phase is awaited, the catch
+      // path aborts this shared controller. Mark the pre-armed promise as
+      // handled so that cleanup does not create an unhandled rejection.
+      if (relayReadyPromise) void relayReadyPromise.catch(() => undefined)
       const isCurrent = () => this.socket === socket && this.connectionGeneration === generation
-      await waitForOpen(socket)
+      await waitForOpen(socket, signal)
       if (!isCurrent()) throw new Error('安全隧道连接已取消')
       if (this.options.relay) {
-        const ready = JSON.parse(await nextTextMessage(socket)) as { tunnel_id?: string }
+        const ready = JSON.parse(await relayReadyPromise!) as { tunnel_id?: string }
         if (!isCurrent()) throw new Error('安全隧道连接已取消')
         if (!ready.tunnel_id || ready.tunnel_id.length !== 36) throw new Error('远程隧道路由失败')
         this.tunnelId = ready.tunnel_id
       }
       this.sendPacket(noise.send())
-      noise.recv(await nextBinaryMessage(socket, this.tunnelId))
+      noise.recv(await nextBinaryMessage(socket, this.tunnelId, this.handshakeTimeoutMs, signal))
       if (!isCurrent()) throw new Error('安全隧道连接已取消')
       const expectedDesktopKey = fromBase64Url(
         this.options.mode === 'pair' ? this.options.desktopPublicKey : this.options.trustedDevice.publicKey || '',
@@ -153,7 +175,7 @@ export class NoiseSecureWire implements TunnelWire {
       // k1 (`tx`) and reads with k2 (`rx`).
       this.sendCipher = new NoiseCipher(noise.tx)
       this.receiveCipher = new NoiseCipher(noise.rx)
-      const ack = this.receiveCipher.decrypt(await nextBinaryMessage(socket, this.tunnelId))
+      const ack = this.receiveCipher.decrypt(await nextBinaryMessage(socket, this.tunnelId, this.handshakeTimeoutMs, signal))
       if (!isCurrent()) throw new Error('安全隧道连接已取消')
       const result = JSON.parse(new TextDecoder().decode(ack)) as Record<string, unknown>
       if (result.protocol !== REMOTE_PROTOCOL || result.version !== REMOTE_PROTOCOL_VERSION) {
@@ -187,6 +209,7 @@ export class NoiseSecureWire implements TunnelWire {
       }
       this.emitState('connected')
     } catch (error) {
+      controller.abort()
       if (socket && socket.readyState < WebSocket.CLOSING) socket.close()
       if (this.connectionGeneration === generation) {
         if (this.socket === socket) this.socket = null
@@ -259,8 +282,13 @@ export function createTrustedSecureWire(
   trustedDevice: TrustedDevice,
   identity: DeviceIdentity,
   diagnosticSink?: RemoteDiagnosticSink,
+  handshakeTimeoutMs?: number,
 ): NoiseSecureWire {
-  return new NoiseSecureWire({ mode: 'connect', url, trustedDevice, identity }, diagnosticSink)
+  return new NoiseSecureWire(
+    { mode: 'connect', url, trustedDevice, identity },
+    diagnosticSink,
+    handshakeTimeoutMs,
+  )
 }
 
 export function createRelaySecureWire(
@@ -269,6 +297,7 @@ export function createRelaySecureWire(
   trustedDevice: TrustedDevice,
   identity: DeviceIdentity,
   diagnosticSink?: RemoteDiagnosticSink,
+  handshakeTimeoutMs?: number,
 ): NoiseSecureWire {
   return new NoiseSecureWire({
     mode: 'connect',
@@ -276,7 +305,7 @@ export function createRelaySecureWire(
     trustedDevice,
     identity,
     relay: { ticket, mobileDeviceId: identity.deviceId, targetDeviceId: trustedDevice.deviceId },
-  }, diagnosticSink)
+  }, diagnosticSink, handshakeTimeoutMs)
 }
 
 function fromBase64Url(value: string): Uint8Array {
@@ -292,21 +321,34 @@ function constantTimeEqual(left: Uint8Array, right: Uint8Array): boolean {
   return difference === 0
 }
 
-function waitForOpen(socket: WebSocket): Promise<void> {
+function waitForOpen(socket: WebSocket, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
+    const onOpen = () => finish(resolve)
+    const onError = () => finish(() => reject(new Error('无法连接电脑安全隧道')))
+    const onClose = () => finish(() => reject(new Error('电脑安全隧道已关闭')))
+    const onAbort = () => finish(() => reject(new Error('安全隧道连接已取消')))
+    const cleanup = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      if (socket.onopen === onOpen) socket.onopen = null
+      if (socket.onerror === onError) socket.onerror = null
+      if (socket.onclose === onClose) socket.onclose = null
+    }
     const finish = (callback: () => void) => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
+      cleanup()
       callback()
     }
     const timer = setTimeout(() => {
       finish(() => reject(new Error('电脑安全隧道连接超时')))
     }, WEBSOCKET_OPEN_TIMEOUT_MS)
-    socket.onopen = () => finish(resolve)
-    socket.onerror = () => finish(() => reject(new Error('无法连接电脑安全隧道')))
-    socket.onclose = () => finish(() => reject(new Error('电脑安全隧道已关闭')))
+    socket.onopen = onOpen
+    socket.onerror = onError
+    socket.onclose = onClose
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
   })
 }
 
@@ -314,36 +356,78 @@ function sendBinary(socket: WebSocket, bytes: Uint8Array): void {
   socket.send(Uint8Array.from(bytes).buffer)
 }
 
-function nextBinaryMessage(socket: WebSocket, tunnelId = ''): Promise<Uint8Array> {
+function nextBinaryMessage(
+  socket: WebSocket,
+  tunnelId = '',
+  timeoutMs = NOISE_HANDSHAKE_MESSAGE_TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
+    let settled = false
+    let messageSeen = false
     const onMessage = (event: MessageEvent) => {
-      cleanup()
-      void binaryValue(event.data).then((packet) => resolve(tunnelId ? stripRelayPrefix(packet, tunnelId) : packet), reject)
+      if (messageSeen) return
+      messageSeen = true
+      void binaryValue(event.data).then((packet) => finish(() => resolve(tunnelId ? stripRelayPrefix(packet, tunnelId) : packet)), (error) => finish(() => reject(error)))
     }
-    const onClose = () => { cleanup(); reject(new Error('安全握手期间连接已关闭')) }
-    const onError = () => { cleanup(); reject(new Error('安全握手失败')) }
+    const onClose = () => finish(() => reject(new Error('安全握手期间连接已关闭')))
+    const onError = () => finish(() => reject(new Error('安全握手失败')))
+    const onAbort = () => finish(() => reject(new Error('安全隧道连接已取消')))
     const cleanup = () => {
+      clearTimeout(timer)
       socket.removeEventListener('message', onMessage)
       socket.removeEventListener('close', onClose)
       socket.removeEventListener('error', onError)
+      signal?.removeEventListener('abort', onAbort)
     }
+    const finish = (callback: () => void) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      callback()
+    }
+    const timer = setTimeout(() => finish(() => reject(new Error('安全握手消息超时'))), timeoutMs)
     socket.addEventListener('message', onMessage)
     socket.addEventListener('close', onClose, { once: true })
     socket.addEventListener('error', onError, { once: true })
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
   })
 }
 
-function nextTextMessage(socket: WebSocket): Promise<string> {
+function nextTextMessage(
+  socket: WebSocket,
+  timeoutMs = NOISE_HANDSHAKE_MESSAGE_TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<string> {
   return new Promise((resolve, reject) => {
+    let settled = false
     const onMessage = (event: MessageEvent) => {
       if (typeof event.data !== 'string') return
-      cleanup()
-      resolve(event.data)
+      finish(() => resolve(event.data))
     }
-    const onClose = () => { cleanup(); reject(new Error('远程服务已关闭连接')) }
-    const cleanup = () => { socket.removeEventListener('message', onMessage); socket.removeEventListener('close', onClose) }
+    const onClose = () => finish(() => reject(new Error('远程服务已关闭连接')))
+    const onError = () => finish(() => reject(new Error('远程服务握手失败')))
+    const onAbort = () => finish(() => reject(new Error('安全隧道连接已取消')))
+    const cleanup = () => {
+      clearTimeout(timer)
+      socket.removeEventListener('message', onMessage)
+      socket.removeEventListener('close', onClose)
+      socket.removeEventListener('error', onError)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const finish = (callback: () => void) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      callback()
+    }
+    const timer = setTimeout(() => finish(() => reject(new Error('远程服务握手超时'))), timeoutMs)
     socket.addEventListener('message', onMessage)
     socket.addEventListener('close', onClose, { once: true })
+    socket.addEventListener('error', onError, { once: true })
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
   })
 }
 

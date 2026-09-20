@@ -85,7 +85,7 @@ describe('ConnectionManager route selection', () => {
   it('only selects a LAN advertisement belonging to the paired desktop', async () => {
     const paths: string[] = []
     const manager = new ConnectionManager({
-      trustedDevice,
+      trustedDevice: { ...trustedDevice, gatewayUrl: 'ws://127.0.0.1:4000/_lamtools/tunnel' },
       lanDiscovery: {
         async discover() {
           return [
@@ -199,6 +199,23 @@ describe('ConnectionManager route selection', () => {
 
     expect(manager.path.value).toBe('relay')
     expect(manager.transport.getState()).toBe('connected')
+    manager.close()
+  })
+
+  it('invalidates a live wire when the app resumes', async () => {
+    const manager = new ConnectionManager({
+      trustedDevice: { ...trustedDevice, gatewayUrl: 'ws://127.0.0.1:4000/_lamtools/tunnel' },
+      lanDiscovery: { async discover() { return [] } },
+      wireFactory: () => new FakeWire(),
+    })
+
+    await manager.transport.connect()
+    expect(manager.transport.getState()).toBe('connected')
+    manager.prepareForResume()
+    await Promise.resolve()
+
+    expect(manager.transport.getState()).toBe('disconnected')
+    expect(manager.state.value).toBe('reconnecting')
     manager.close()
   })
 })

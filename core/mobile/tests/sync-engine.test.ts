@@ -16,6 +16,27 @@ class FakeDatabase {
   async close(): Promise<void> {}
 }
 
+class BlockingDatabase extends FakeDatabase {
+  readonly writeStarted: Promise<void>
+  private readonly resolveWriteStarted!: () => void
+  readonly releaseWrite: Promise<void>
+  private readonly resolveReleaseWrite!: () => void
+
+  constructor() {
+    super()
+    this.writeStarted = new Promise<void>((resolve) => { this.resolveWriteStarted = resolve })
+    this.releaseWrite = new Promise<void>((resolve) => { this.resolveReleaseWrite = resolve })
+  }
+
+  override async write(state: LocalState): Promise<void> {
+    await super.write(state)
+    this.resolveWriteStarted()
+    await this.releaseWrite
+  }
+
+  release(): void { this.resolveReleaseWrite() }
+}
+
 class FakeTransport implements LamToolsTransport {
   private readonly messageListeners = new Set<(message: TransportMessage) => void>()
   private readonly stateListeners = new Set<(state: TransportConnectionState) => void>()
@@ -212,5 +233,62 @@ describe('SyncEngine', () => {
     expect(requests).toBeGreaterThanOrEqual(2)
     expect(engine.state.value).toBe('synced')
     await engine.close()
+  })
+
+  it('does not apply a late sync response after close', async () => {
+    const repository = createLocalRepository(new FakeDatabase())
+    let requestCount = 0
+    let resolveRequest!: (value: unknown) => void
+    const pendingRequest = new Promise<unknown>((resolve) => { resolveRequest = resolve })
+    const transport = new FakeTransport(async () => {
+      requestCount += 1
+      return await pendingRequest
+    })
+    const engine = new SyncEngine({
+      transport,
+      repository,
+      requestRpc: (method, params) => transport.request({ kind: 'rpc', method, params }),
+    })
+
+    const start = engine.start()
+    await new Promise<void>((resolve) => {
+      const check = () => requestCount > 0 ? resolve() : setTimeout(check, 0)
+      check()
+    })
+    await engine.close()
+    resolveRequest({ ok: true, mode: 'snapshot', cursor: 42, snapshotVersion: 42, projects: [] })
+    await start
+
+    expect(repository.state.value.cursor).toBeNull()
+    expect(engine.state.value).toBe('idle')
+  })
+
+  it('waits for an active repository write before close resolves', async () => {
+    const database = new BlockingDatabase()
+    const repository = createLocalRepository(database)
+    const transport = new FakeTransport(async () => ({
+      ok: true,
+      mode: 'snapshot',
+      cursor: 1,
+      snapshotVersion: 1,
+      projects: [],
+    }))
+    const engine = new SyncEngine({
+      transport,
+      repository,
+      requestRpc: (method, params) => transport.request({ kind: 'rpc', method, params }),
+    })
+
+    const start = engine.start()
+    await database.writeStarted
+    let closed = false
+    const close = engine.close().then(() => { closed = true })
+    await Promise.resolve()
+    expect(closed).toBe(false)
+
+    database.release()
+    await close
+    await start
+    expect(closed).toBe(true)
   })
 })

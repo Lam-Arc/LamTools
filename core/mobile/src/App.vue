@@ -54,7 +54,7 @@ import {
 } from './pairing/TrustedDevices'
 import { onMobileResume } from './native/lifecycle'
 import { createMobileFilePicker } from './native/filePicker'
-import { loadOrCreateDeviceIdentity, type DeviceIdentity } from './pairing/DeviceIdentity'
+import { loadOrCreateDeviceIdentity } from './pairing/DeviceIdentity'
 import PairingScreen, {
   type AccountAuthRequest,
 } from './pairing/PairingScreen.vue'
@@ -78,8 +78,11 @@ const accountLoading = ref(false)
 const accountError = ref('')
 const manualGatewayUrl = ref(readManualGatewayUrl())
 const activeWorkspaceId = ref('')
-const activeWorkspaceName = ref('')
-const identity = ref<DeviceIdentity | null>(null)
+let accountOperationGeneration = 0
+let workspaceSelectionGeneration = 0
+let appDisposed = false
+let accountOperationQueue: Promise<void> = Promise.resolve()
+let workspaceSelectionQueue: Promise<void> = Promise.resolve()
 const accountDevices = computed<MobileControlAccountDevice[]>(() => accountNodes.value
   .filter((node) => !node.revokedAtMs)
   .map((node) => {
@@ -170,22 +173,49 @@ const syncEngine = new SyncEngine({
   transport: connectionManager.getTransport(),
   repository,
   requestRpc: (method, params, timeoutMs) => runtime.requestRpc(method, params, timeoutMs),
-  onError: (message) => { statusMessage.value = `同步失败：${message}` },
+  onError: (message) => {
+    if (isAppAlive()) statusMessage.value = `同步失败：${message}`
+  },
 })
 const isSyncing = computed(() => syncEngine.state.value === 'syncing')
 watch(syncEngine.state, (state) => {
-  if (state === 'synced') statusMessage.value = ''
+  if (isAppAlive() && state === 'synced') statusMessage.value = ''
 })
 const removeRepositoryListener = repository.subscribe(() => {
+  if (!isAppAlive()) return
   void Promise.all([
     runtime.workbench.refreshSessions(),
     Promise.resolve().then(() => window.dispatchEvent(new CustomEvent('lamtools:projects-synced'))),
   ])
 })
 
+function isAppAlive(): boolean {
+  return !appDisposed
+}
+
+function isSelectionCurrent(generation: number): boolean {
+  return isAppAlive() && workspaceSelectionGeneration === generation
+}
+
+function isAccountOperationCurrent(generation: number): boolean {
+  return isAppAlive() && accountOperationGeneration === generation
+}
+
+function enqueueWorkspaceSelection(task: () => Promise<void>): Promise<void> {
+  const next = workspaceSelectionQueue.then(task, task)
+  workspaceSelectionQueue = next.catch(() => undefined)
+  return next
+}
+
+function enqueueAccountOperation(task: () => Promise<void>): Promise<void> {
+  const next = accountOperationQueue.then(task, task)
+  accountOperationQueue = next.catch(() => undefined)
+  return next
+}
+
 function startSync(): void {
   void syncEngine.start().catch((error) => {
-    statusMessage.value = error instanceof Error ? error.message : String(error)
+    if (isAppAlive()) statusMessage.value = error instanceof Error ? error.message : String(error)
   })
 }
 
@@ -194,39 +224,56 @@ function openLeftSidebar(): void {
 }
 
 function closeAccessPanel(): void {
-  if (activeTrustedDevice.value) accessPanelOpen.value = false
+  if (accountClient.value?.session || activeTrustedDevice.value) accessPanelOpen.value = false
 }
 
 async function handlePaired(device: TrustedDevice): Promise<void> {
-  activeWorkspaceId.value = ''
-  activeWorkspaceName.value = ''
-  activeTrustedDevice.value = device
-  await connectionManager.setConnectionContext({ account: accountClient.value, workspaceId: '', trustedDevice: device })
-  accessPanelOpen.value = false
-  accountError.value = ''
-  statusMessage.value = ''
-  await repository.setDesktopId(device.deviceId)
-  await repository.setWorkspaceId('')
-  startSync()
+  const selectionGeneration = ++workspaceSelectionGeneration
+  await enqueueWorkspaceSelection(async () => {
+    if (!isSelectionCurrent(selectionGeneration)) return
+    activeWorkspaceId.value = ''
+    trustedDevices.value = [
+      device,
+      ...trustedDevices.value.filter((item) => item.deviceId !== device.deviceId),
+    ]
+    activeTrustedDevice.value = device
+    await connectionManager.setConnectionContext({ account: accountClient.value, workspaceId: '', trustedDevice: device })
+    if (!isSelectionCurrent(selectionGeneration)) return
+    accessPanelOpen.value = false
+    accountError.value = ''
+    statusMessage.value = ''
+    await repository.setDesktopId(device.deviceId)
+    if (!isSelectionCurrent(selectionGeneration)) return
+    await repository.setWorkspaceId('')
+    if (!isSelectionCurrent(selectionGeneration)) return
+    startSync()
+  })
 }
 
 async function selectTrustedDevice(deviceId: string): Promise<void> {
   const device = trustedDevices.value.find((item) => item.deviceId === deviceId)
   if (!device) return
-  activeWorkspaceId.value = ''
-  activeWorkspaceName.value = ''
-  activeTrustedDevice.value = device
-  await connectionManager.setConnectionContext({ account: accountClient.value, workspaceId: '', trustedDevice: device })
-  accessPanelOpen.value = false
-  statusMessage.value = ''
-  await repository.setDesktopId(device.deviceId)
-  await repository.setWorkspaceId('')
-  startSync()
+  const selectionGeneration = ++workspaceSelectionGeneration
+  await enqueueWorkspaceSelection(async () => {
+    if (!isSelectionCurrent(selectionGeneration)) return
+    activeWorkspaceId.value = ''
+    activeTrustedDevice.value = device
+    await connectionManager.setConnectionContext({ account: accountClient.value, workspaceId: '', trustedDevice: device })
+    if (!isSelectionCurrent(selectionGeneration)) return
+    accessPanelOpen.value = false
+    statusMessage.value = ''
+    await repository.setDesktopId(device.deviceId)
+    if (!isSelectionCurrent(selectionGeneration)) return
+    await repository.setWorkspaceId('')
+    if (!isSelectionCurrent(selectionGeneration)) return
+    startSync()
+  })
 }
 
 async function forgetDevice(deviceId: string): Promise<void> {
   try {
     await forgetTrustedDevice(deviceId)
+    if (!isAppAlive()) return
     trustedDevices.value = trustedDevices.value.filter((device) => device.deviceId !== deviceId)
     if (activeTrustedDevice.value?.deviceId === deviceId && !activeWorkspaceId.value) {
       activeTrustedDevice.value = null
@@ -236,7 +283,7 @@ async function forgetDevice(deviceId: string): Promise<void> {
     }
     statusMessage.value = '已忘记这台电脑'
   } catch (error) {
-    statusMessage.value = error instanceof Error ? error.message : String(error)
+    if (isAppAlive()) statusMessage.value = error instanceof Error ? error.message : String(error)
   }
 }
 
@@ -251,28 +298,42 @@ function setManualGatewayUrl(value: string): void {
 }
 
 async function authenticateAccount(request: AccountAuthRequest): Promise<void> {
-  accountLoading.value = true
-  accountError.value = ''
-  try {
-    const profile = normalizeProfile(
-      request.serverUrl || import.meta.env.VITE_LAMTOOLS_RELAY_URL || DEFAULT_SERVER_URL,
-    )
-    const client = new AccountClient({ profile })
-    if (request.mode === 'register') {
-      await client.register(request.username, request.password)
-    } else {
-      await client.login(request.username, request.password)
+  const operationGeneration = ++accountOperationGeneration
+  ++workspaceSelectionGeneration
+  return await enqueueAccountOperation(async () => {
+    if (!isAccountOperationCurrent(operationGeneration)) return
+    accountLoading.value = true
+    accountError.value = ''
+    try {
+      const profile = normalizeProfile(
+        request.serverUrl || import.meta.env.VITE_LAMTOOLS_RELAY_URL || DEFAULT_SERVER_URL,
+      )
+      const client = new AccountClient({ profile })
+      if (request.mode === 'register') {
+        await client.register(request.username, request.password)
+      } else {
+        await client.login(request.username, request.password)
+      }
+      if (!isAccountOperationCurrent(operationGeneration)) {
+        // Account operations are serialized, so removing this stale session
+        // cannot erase credentials from the newer operation queued behind it.
+        await client.logout()
+        return
+      }
+      accountClient.value = client
+      connectionManager.setAccount(client)
+      await loadWorkspaces(client, operationGeneration)
+      if (!isAccountOperationCurrent(operationGeneration) || client !== accountClient.value) return
+      startAccountDiscovery()
+      statusMessage.value = `已登录 ${client.session?.username || request.username}`
+    } catch (error) {
+      if (isAccountOperationCurrent(operationGeneration)) {
+        accountError.value = error instanceof Error ? error.message : String(error)
+      }
+    } finally {
+      if (isAccountOperationCurrent(operationGeneration)) accountLoading.value = false
     }
-    accountClient.value = client
-    connectionManager.setAccount(client)
-    await loadWorkspaces(client)
-    startAccountDiscovery()
-    statusMessage.value = `已登录 ${client.session?.username || request.username}`
-  } catch (error) {
-    accountError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    accountLoading.value = false
-  }
+  })
 }
 
 function authenticateCoreAccount(payload: MobileControlAccountPayload): void {
@@ -284,11 +345,18 @@ function authenticateCoreAccount(payload: MobileControlAccountPayload): void {
   })
 }
 
-async function loadWorkspaces(client: AccountClient): Promise<void> {
+async function loadWorkspaces(client: AccountClient, operationGeneration?: number): Promise<void> {
+  const selectionGeneration = workspaceSelectionGeneration
   const [workspaces, nodes] = await Promise.all([
     client.listWorkspaces(),
     client.listNodes(),
   ])
+  // A logout or a newer login may have replaced the account while the
+  // requests were in flight. Never repopulate the new account with stale
+  // workspace data or activate an old account's host.
+  if (!isAppAlive()
+    || client !== accountClient.value
+    || (operationGeneration !== undefined && operationGeneration !== accountOperationGeneration)) return
   accountWorkspaces.value = workspaces
   accountNodes.value = nodes
   const preferred = client.session?.selectedWorkspaceId
@@ -298,7 +366,9 @@ async function loadWorkspaces(client: AccountClient): Promise<void> {
   if (selected && selected.host?.publicKey) {
     if (activeWorkspaceId.value !== selected.workspaceId
       || activeTrustedDevice.value?.deviceId !== selected.hostNodeId) {
-      await activateWorkspace(selected)
+      await enqueueWorkspaceSelection(() =>
+        activateWorkspace(selected, operationGeneration, selectionGeneration),
+      )
     }
   }
 }
@@ -314,7 +384,7 @@ function startAccountDiscovery(): void {
     accountDiscoveryRunning = true
     void loadWorkspaces(client)
       .catch((error) => {
-        accountError.value = error instanceof Error ? error.message : String(error)
+        if (isAppAlive()) accountError.value = error instanceof Error ? error.message : String(error)
       })
       .finally(() => { accountDiscoveryRunning = false })
   }, 3_000)
@@ -333,13 +403,25 @@ async function selectWorkspace(workspaceId: string): Promise<void> {
     accountError.value = '服务器未返回该工作环境的设备公钥，无法建立安全连接'
     return
   }
-  await activateWorkspace(workspace)
+  const selectionGeneration = ++workspaceSelectionGeneration
+  await enqueueWorkspaceSelection(() =>
+    activateWorkspace(workspace, undefined, selectionGeneration),
+  )
 }
 
-async function activateWorkspace(workspace: AccountWorkspace): Promise<void> {
+async function activateWorkspace(
+  workspace: AccountWorkspace,
+  operationGeneration?: number,
+  selectionGeneration = workspaceSelectionGeneration,
+): Promise<void> {
   const client = accountClient.value
   const host = workspace.host
   if (!client || !host?.publicKey) return
+  const isCurrent = () => isAppAlive()
+    && client === accountClient.value
+    && (operationGeneration === undefined || operationGeneration === accountOperationGeneration)
+    && workspaceSelectionGeneration === selectionGeneration
+  if (!isCurrent()) return
   const device: TrustedDevice = {
     deviceId: workspace.hostNodeId,
     name: workspace.displayName || host.displayName,
@@ -348,16 +430,19 @@ async function activateWorkspace(workspace: AccountWorkspace): Promise<void> {
     relayUrl: client.getRelayEndpoint(),
   }
   await client.selectWorkspace(workspace.workspaceId)
+  if (!isCurrent()) return
   activeWorkspaceId.value = workspace.workspaceId
-  activeWorkspaceName.value = workspace.displayName
   activeTrustedDevice.value = device
   await connectionManager.setConnectionContext({
     account: client,
     workspaceId: workspace.workspaceId,
     trustedDevice: device,
   })
+  if (!isCurrent()) return
   await repository.setWorkspaceId(workspace.workspaceId)
+  if (!isCurrent()) return
   await repository.setDesktopId(device.deviceId)
+  if (!isCurrent()) return
   accessPanelOpen.value = false
   accountError.value = ''
   statusMessage.value = workspace.online ? '' : '工作环境当前离线，已保留本地缓存'
@@ -365,69 +450,93 @@ async function activateWorkspace(workspace: AccountWorkspace): Promise<void> {
 }
 
 async function logoutAccount(): Promise<void> {
+  const operationGeneration = ++accountOperationGeneration
+  workspaceSelectionGeneration += 1
   stopAccountDiscovery()
   const client = accountClient.value
+  accountLoading.value = false
   accountClient.value = null
   accountWorkspaces.value = []
   accountNodes.value = []
   activeWorkspaceId.value = ''
-  activeWorkspaceName.value = ''
   connectionManager.setAccount(null)
   connectionManager.setWorkspace('')
-  await repository.setWorkspaceId('')
-  if (activeTrustedDevice.value && !activeTrustedDevice.value.accessToken) {
-    activeTrustedDevice.value = null
-    connectionManager.setTrustedDevice(null)
-    runtime.close()
-  }
-  if (client) await client.logout()
-  statusMessage.value = '已退出服务器账号'
+  return await enqueueAccountOperation(async () => {
+    // Always finish the requested sign-out before a newer queued login starts.
+    // Skipping this cleanup would leave the old session persisted when the
+    // replacement login later fails.
+    await repository.setWorkspaceId('')
+    if (client) await client.logout()
+    if (!isAccountOperationCurrent(operationGeneration)) return
+    if (!isAppAlive()) return
+    if (activeTrustedDevice.value && !activeTrustedDevice.value.accessToken) {
+      activeTrustedDevice.value = null
+      connectionManager.setTrustedDevice(null)
+      runtime.close()
+    }
+    if (!isAppAlive()) return
+    statusMessage.value = '已退出服务器账号'
+  })
 }
 
 async function restoreActiveConnection(): Promise<void> {
-  if (accessPanelOpen.value) return
+  if (!isAppAlive() || accessPanelOpen.value) return
   connectionManager.prepareForResume()
   try {
     const activeSessionId = runtime.workbench.activeSessionId.value
     if (activeSessionId) await runtime.workbench.connect(activeSessionId)
+    if (!isAppAlive()) return
     await runtime.workbench.refreshSessions()
+    if (!isAppAlive()) return
   } catch (error) {
-    statusMessage.value = error instanceof Error ? error.message : String(error)
+    if (isAppAlive()) statusMessage.value = error instanceof Error ? error.message : String(error)
   }
 }
 
 async function initialize(): Promise<void> {
   try {
     const loadedIdentity = await loadOrCreateDeviceIdentity()
-    identity.value = loadedIdentity
+    if (!isAppAlive()) return
     connectionManager.setDeviceId(loadedIdentity.deviceId)
     await connectionManager.startNetworkMonitoring()
+    if (!isAppAlive()) return
 
+    const restoreGeneration = accountOperationGeneration
     const restoredAccount = await loadStoredAccount()
-    if (restoredAccount) {
+    if (!isAppAlive()) return
+    if (restoredAccount && restoreGeneration === accountOperationGeneration) {
       accountClient.value = restoredAccount
       connectionManager.setAccount(restoredAccount)
       try {
-        await loadWorkspaces(restoredAccount)
-        startAccountDiscovery()
+        await loadWorkspaces(restoredAccount, restoreGeneration)
+        if (!isAppAlive()) return
+        if (restoreGeneration === accountOperationGeneration && restoredAccount === accountClient.value) {
+          startAccountDiscovery()
+        }
       } catch (error) {
-        accountError.value = error instanceof Error ? error.message : String(error)
+        if (isAppAlive() && restoreGeneration === accountOperationGeneration) {
+          accountError.value = error instanceof Error ? error.message : String(error)
+        }
       }
     }
 
+    if (!isAppAlive()) return
     trustedDevices.value = await listTrustedDevices()
+    if (!isAppAlive()) return
     if (!activeTrustedDevice.value && trustedDevices.value[0]) {
       const first = trustedDevices.value[0]
       activeTrustedDevice.value = first
       connectionManager.setWorkspace('')
       connectionManager.setTrustedDevice(first)
       await repository.setDesktopId(first.deviceId)
+      if (!isAppAlive()) return
       await repository.setWorkspaceId('')
+      if (!isAppAlive()) return
     }
     accessPanelOpen.value = !activeTrustedDevice.value
     if (!accessPanelOpen.value) startSync()
   } catch (error) {
-    statusMessage.value = error instanceof Error ? error.message : String(error)
+    if (isAppAlive()) statusMessage.value = error instanceof Error ? error.message : String(error)
   }
 }
 
@@ -443,17 +552,23 @@ let removeResumeListener: (() => void) | null = null
 
 onMounted(async () => {
   await initialize()
+  if (!isAppAlive()) return
   removeResumeListener = onMobileResume(() => { void restoreActiveConnection() })
 })
 
 onUnmounted(() => {
+  appDisposed = true
+  accountOperationGeneration += 1
+  workspaceSelectionGeneration += 1
   stopAccountDiscovery()
   removeResumeListener?.()
   runtime.close()
   removeRepositoryListener()
-  void syncEngine.close()
-  void repository.close()
   connectionManager.close()
+  void (async () => {
+    await syncEngine.close()
+    await repository.close()
+  })()
 })
 </script>
 

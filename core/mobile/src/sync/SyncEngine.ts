@@ -27,17 +27,22 @@ export class SyncEngine {
   private syncing: Promise<void> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempt = 0
+  private lifecycleGeneration = 0
+  private readonly repositoryWrites = new Set<Promise<unknown>>()
 
   constructor(private readonly options: SyncEngineOptions) {}
 
   async start(): Promise<void> {
     if (this.started) return await this.syncNow()
     this.started = true
+    const generation = ++this.lifecycleGeneration
     await this.options.repository.init()
+    if (!this.isCurrent(generation)) return
     this.removeMessages = this.options.transport.subscribe((message) => {
-      void this.handleMessage(message)
+      void this.handleMessage(message, generation)
     })
     this.removeTransportState = this.options.transport.onState((connectionState) => {
+      if (!this.isCurrent(generation)) return
       if (connectionState === 'connected') {
         this.clearReconnect()
         void this.syncNow()
@@ -57,7 +62,7 @@ export class SyncEngine {
   async syncNow(): Promise<void> {
     if (!this.started) return
     if (this.syncing) return await this.syncing
-    const task = this.runSync()
+    const task = this.runSync(this.lifecycleGeneration)
     this.syncing = task
     try {
       await task
@@ -67,6 +72,7 @@ export class SyncEngine {
   }
 
   async close(): Promise<void> {
+    this.lifecycleGeneration += 1
     this.removeMessages?.()
     this.removeMessages = null
     this.removeTransportState?.()
@@ -75,9 +81,14 @@ export class SyncEngine {
     this.syncing = null
     this.clearReconnect()
     this.state.value = 'idle'
+    // A repository update may already have passed the generation check when
+    // close starts. Wait for those writes before the owner closes the
+    // database; later work is fenced by lifecycleGeneration above.
+    await Promise.allSettled([...this.repositoryWrites])
   }
 
-  private async runSync(): Promise<void> {
+  private async runSync(generation: number): Promise<void> {
+    if (!this.isCurrent(generation)) return
     this.state.value = 'syncing'
     this.lastError.value = ''
     try {
@@ -86,11 +97,13 @@ export class SyncEngine {
         : this.options.repository.state.value.cursor
       let retriedAfterExpiry = false
       while (true) {
+        if (!this.isCurrent(generation)) return
         const result = await this.options.requestRpc(
           'sync.start',
           { cursor, limit: 500 },
           60_000,
         )
+        if (!this.isCurrent(generation)) return
         if (result.error === 'SYNC_CURSOR_EXPIRED') {
           if (retriedAfterExpiry) throw new Error('同步游标已过期，重新同步仍失败')
           retriedAfterExpiry = true
@@ -99,11 +112,17 @@ export class SyncEngine {
         }
         if (result.ok === false) throw new Error(String(result.error || '同步失败'))
         if (result.mode === 'snapshot') {
-          await this.options.repository.applySyncSnapshot(result)
+          await this.trackRepositoryWrite(this.options.repository.applySyncSnapshot(result))
+          if (!this.isCurrent(generation)) return
         } else if (result.mode === 'delta') {
           const changes = Array.isArray(result.changes) ? result.changes : []
           for (const value of changes) {
-            if (isRecord(value)) await this.options.repository.applySyncChange(value as unknown as LocalSyncChange)
+            if (!this.isCurrent(generation)) return
+            if (isRecord(value)) {
+              await this.trackRepositoryWrite(
+                this.options.repository.applySyncChange(value as unknown as LocalSyncChange),
+              )
+            }
             if (this.options.repository.state.value.snapshotRequired) {
               // Do not apply the rest of this delta against the stale local
               // branch. The next request is an atomic full snapshot.
@@ -112,6 +131,7 @@ export class SyncEngine {
             }
           }
         }
+        if (!this.isCurrent(generation)) return
         if (this.options.repository.state.value.snapshotRequired) {
           cursor = null
           continue
@@ -122,6 +142,7 @@ export class SyncEngine {
       this.state.value = 'synced'
       this.clearReconnect()
     } catch (error) {
+      if (!this.isCurrent(generation)) return
       this.lastError.value = error instanceof Error ? error.message : String(error)
       // A route/account change intentionally invalidates the previous
       // generation. The connected-state callback immediately starts a fresh
@@ -156,11 +177,15 @@ export class SyncEngine {
     this.reconnectAttempt = 0
   }
 
-  private async handleMessage(message: TransportMessage): Promise<void> {
+  private async handleMessage(message: TransportMessage, generation: number): Promise<void> {
+    if (!this.isCurrent(generation)) return
     if (message.channel !== 'rpc' || !message.method || !message.params) return
     if (message.method === 'sync/change') {
       if (isRecord(message.params)) {
-        await this.options.repository.applySyncChange(message.params as unknown as LocalSyncChange)
+        await this.trackRepositoryWrite(
+          this.options.repository.applySyncChange(message.params as unknown as LocalSyncChange),
+        )
+        if (!this.isCurrent(generation)) return
         if (this.options.repository.state.value.snapshotRequired) await this.syncNow()
       }
       return
@@ -169,12 +194,36 @@ export class SyncEngine {
     // to the cached snapshot keeps the mobile conversation streaming; the
     // next persisted delta or sync boundary remains authoritative.
     if (message.method === 'core/runItem' || message.method === 'turn/accepted' || message.method === 'item/started') {
-      if (isRecord(message.params)) await this.options.repository.applyTransientEvent(message.params as unknown as CoreAppEvent)
+      if (isRecord(message.params)) {
+        await this.trackRepositoryWrite(
+          this.options.repository.applyTransientEvent(message.params as unknown as CoreAppEvent),
+        )
+      }
       return
     }
     if (message.method === 'session/created' || message.method === 'session/updated' || message.method === 'session/deleted') {
-      await this.options.repository.applySessionEvent(message.method, message.params)
+      await this.trackRepositoryWrite(this.options.repository.applySessionEvent(message.method, message.params))
     }
+  }
+
+  private isCurrent(generation: number): boolean {
+    return this.started && this.lifecycleGeneration === generation
+  }
+
+  private trackRepositoryWrite<T>(task: Promise<T>): Promise<T> {
+    let tracked!: Promise<T>
+    tracked = task.then(
+      (value) => {
+        this.repositoryWrites.delete(tracked)
+        return value
+      },
+      (error) => {
+        this.repositoryWrites.delete(tracked)
+        throw error
+      },
+    )
+    this.repositoryWrites.add(tracked)
+    return tracked
   }
 }
 

@@ -4,10 +4,7 @@ export interface SecureStorage {
   remove(key: string): Promise<void>
 }
 
-/**
- * Development fallback. Native Capacitor builds use the Keychain/Keystore
- * adapter below; browser tests deliberately keep credentials in memory only.
- */
+/** In-memory fallback used by tests and non-native builds. */
 export class MemorySecureStorage implements SecureStorage {
   private readonly values = new Map<string, unknown>()
   async get<T>(key: string): Promise<T | null> {
@@ -18,9 +15,9 @@ export class MemorySecureStorage implements SecureStorage {
 }
 
 /**
- * Browser Demo persistence. The native app continues to use the platform
- * Keychain/Keystore adapter; this adapter only keeps the browser Demo signed
- * in across reloads so its reconnect lifecycle can be tested realistically.
+ * Explicit browser persistence adapter for callers that opt into it. The
+ * default non-native adapter below is memory-only so credentials are never
+ * silently written to ordinary localStorage.
  */
 export class BrowserSecureStorage implements SecureStorage {
   private readonly prefix = 'lamtools.mobile.secure.'
@@ -71,7 +68,7 @@ export class CapacitorSecureStorage implements SecureStorage {
 
 let storage: SecureStorage = Capacitor.isNativePlatform()
   ? new CapacitorSecureStorage()
-  : new BrowserSecureStorage()
+  : new MemorySecureStorage()
 
 export function configureSecureStorage(next: SecureStorage): void { storage = next }
 export function secureStorage(): SecureStorage { return storage }

@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
   appId: 'com.lamtools.mobile',
-  appName: 'LamTool',
+  appName: 'Sunday',
   webDir: 'dist',
   server: {
     // Set CAPACITOR_SERVER_URL only for local device development. Release

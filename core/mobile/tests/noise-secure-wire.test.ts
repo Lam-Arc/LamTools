@@ -5,7 +5,7 @@ import NoiseCipher from 'noise-handshake/cipher'
 import { generateKeyPair } from 'noise-handshake/dh'
 import { MemorySecureStorage } from '../src/native/secureStorage'
 import { loadOrCreateAccountDeviceIdentity, loadOrCreateDeviceIdentity } from '../src/pairing/DeviceIdentity'
-import { createTrustedSecureWire } from '../src/connection/NoiseSecureWire'
+import { createRelaySecureWire, createTrustedSecureWire } from '../src/connection/NoiseSecureWire'
 
 const originalWebSocket = globalThis.WebSocket
 const PROLOGUE = new TextEncoder().encode('LamTools Remote Tunnel v1')
@@ -115,6 +115,57 @@ describe('NoiseSecureWire', () => {
     }, identity)
 
     await expect(wire.connect()).rejects.toThrow(/关闭|失败/)
+  })
+
+  it('times out when a relay never sends its ready message', async () => {
+    globalThis.WebSocket = NodeWebSocket as unknown as typeof WebSocket
+    const identity = await loadOrCreateDeviceIdentity(new MemorySecureStorage())
+    server = new WebSocketServer({ port: 0 })
+    await new Promise<void>((resolve) => server!.once('listening', () => resolve()))
+    server.on('connection', () => {})
+    const port = (server.address() as { port: number }).port
+    const wire = createRelaySecureWire(
+      `ws://127.0.0.1:${port}/_lamtools/tunnel`,
+      'relay-ticket',
+      {
+        deviceId: 'desktop-test',
+        name: 'Desktop',
+        publicKey: toBase64Url(generateKeyPair().publicKey),
+        accessToken: 'access-token',
+      },
+      identity,
+      undefined,
+      10,
+    )
+
+    await expect(wire.connect()).rejects.toThrow('握手超时')
+    expect(wire.result()).toBeNull()
+  })
+
+  it('times out when a relay ready message is not followed by Noise data', async () => {
+    globalThis.WebSocket = NodeWebSocket as unknown as typeof WebSocket
+    const identity = await loadOrCreateDeviceIdentity(new MemorySecureStorage())
+    server = new WebSocketServer({ port: 0 })
+    await new Promise<void>((resolve) => server!.once('listening', () => resolve()))
+    server.on('connection', (socket) => {
+      socket.send(JSON.stringify({ tunnel_id: 't'.repeat(36) }))
+    })
+    const port = (server.address() as { port: number }).port
+    const wire = createRelaySecureWire(
+      `ws://127.0.0.1:${port}/_lamtools/tunnel`,
+      'relay-ticket',
+      {
+        deviceId: 'desktop-test',
+        name: 'Desktop',
+        publicKey: toBase64Url(generateKeyPair().publicKey),
+        accessToken: 'access-token',
+      },
+      identity,
+      undefined,
+      10,
+    )
+
+    await expect(wire.connect()).rejects.toThrow('握手消息超时')
   })
 })
 

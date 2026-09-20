@@ -27,6 +27,12 @@ logs.
 - Transport reconnects replace only the physical tunnel. The shared Workbench,
   conversation projection, and composer state remain alive across LAN/Relay
   route changes.
+- Mobile account, workspace, connection, and sync transitions must be fenced by
+  monotonic generations; user-triggered account/workspace operations are
+  serialized so stale async results cannot repopulate credentials, routes, or
+  repository state after logout, replacement, resume, or unmount. Noise
+  handshake waits are bounded and cancellation-safe, and non-native builds use
+  memory-only credential storage unless persistence is explicitly requested.
 - Treat Office/runtime capability discovery as reusable runtime state rather
   than letting each Agent task spend many model rounds searching program paths.
   Model latency dominates these workflows, so eliminating discovery rounds is

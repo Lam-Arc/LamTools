@@ -2426,3 +2426,28 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
   commit, tag, push, GitHub release, or publication occurred. The next
   milestone is an explicitly authorized versioned release; macOS requires a
   separate native/signing implementation before it can be supported.
+
+## Mobile code review, refactor, and bug-fix closure (2026-09-20)
+
+- Deployment `mobile_review_refactor_20260920` is complete. Mobile account
+  refresh now uses single-flight coordination with logout/session-generation
+  safety; account/workspace transitions are serialized and fenced on unmount.
+  Connection and resume generations fence stale results, Noise handshake waits
+  are bounded and cancellable, and SyncEngine close waits for started writes.
+- `MemoryLocalDatabase` now restores the scoped active bucket correctly. The
+  non-native credential default is memory-only; tunnel validation/cancellation
+  and `chunk_final` handling are hardened. Capacitor metadata names the app
+  `Sunday`. The mobile-only code remains scoped to pairing, lifecycle,
+  connection/wire, native capabilities, and local cache concerns.
+- Verification recorded by the independent Tester: `npm test -- --reporter=dot`
+  passed 12 files / 54 tests; `npm run typecheck`, `npm run build`,
+  `npm run cap:sync`, and `git diff --check -- core/mobile` passed. Capacitor
+  sync produced no visible native Git diff; the build emitted only chunk and
+  dynamic-import warnings.
+- No real Android/iOS device, LAN, Relay, or Tauri visual runtime acceptance
+  was performed; Windows CocoaPods/xcodebuild checks were skipped. Read-only
+  Git handoff: implementation commit `bae53c33` precedes the documentation
+  amend; only `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`, and `docs.7z`
+  remain intentionally untracked. Exact next entry point is device/network
+  acceptance of pairing, reconnect/resume, workspace switching, and cache
+  recovery; do not infer it from the static checks above.

@@ -254,7 +254,12 @@ class TunnelSession {
         clearTimeout(timer)
         this.pendingHttp.delete(requestId)
         input.signal?.removeEventListener('abort', abort)
-        this.sendFrame({ type: 'http.cancel', stream_id: `http:${requestId}`, request_id: requestId })
+        try {
+          this.sendFrame({ type: 'http.cancel', stream_id: `http:${requestId}`, request_id: requestId })
+        } catch {
+          // Cancellation is best-effort. The caller must still receive the
+          // AbortError even when the wire closed at the same time.
+        }
         reject(new DOMException('Aborted', 'AbortError'))
       }
       const cleanup = () => {
@@ -471,6 +476,7 @@ export class MultiplexedTunnelTransport implements LamToolsTransport {
 
   async request<TResponse = unknown>(request: TransportRequest): Promise<TResponse> {
     await this.connect()
+    if (this.state !== 'connected') throw new Error('LamTools remote transport is not connected')
     if (request.kind === 'http') return await this.session.request(request) as TResponse
     const id = `remote-${this.nextRpcId++}`
     const timeoutMs = request.timeoutMs ?? 30_000
@@ -762,6 +768,7 @@ function validateTunnelFrame(frame: TunnelFrame): void {
       && (typeof frame.message_id !== 'string' || frame.message_id.length === 0 || frame.message_id.length > 256))
     || (frame.chunk_index !== undefined
       && (!Number.isSafeInteger(frame.chunk_index) || frame.chunk_index < 0 || frame.chunk_index > 524_288))
+    || (frame.chunk_final !== undefined && typeof frame.chunk_final !== 'boolean')
   ) {
     throw new Error('无效的 tunnel frame')
   }
