@@ -125,6 +125,11 @@ current operating system and shell.
 .\scripts\restart.ps1               # 重启 Core 前后端（仅 dev.ps1 体系）
 ```
 
+## 本地开发工具
+
+- Android SDK / ADB：`E:\Environment\AndroidSDK`；`adb.exe` 位于其 `platform-tools`，系统已配置 `ANDROID_HOME`。
+- Android Gradle 使用 JDK 21：`C:\Users\Administrator\AppData\Roaming\.minecraft\runtime\java-runtime-delta`；构建 `core/mobile/android` 前将本次 PowerShell 进程的 `JAVA_HOME` 指向该目录，不要使用现有 Java 8 或 JDK 17。
+
 ## Tauri（唯一观测环境）
 
 - **不要用 `restart.ps1` / dev.ps1 管 Tauri**：`restart.ps1` 杀 5173 会误杀 Tauri dev 的 vite，破坏其加载链（Tauri 窗口 devUrl 写死 `127.0.0.1:5173`，前端由 `core/desktop` 的 vite 服务）。
