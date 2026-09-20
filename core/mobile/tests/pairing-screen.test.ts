@@ -13,7 +13,7 @@ describe('PairingScreen account entry', () => {
     const advancedView = template.slice(moreStart)
 
     expect(defaultView).toContain('autocomplete="username"')
-    expect(defaultView).toContain('autocomplete="current-password"')
+    expect(defaultView).toContain(":autocomplete=\"authMode === 'login' ? 'current-password' : 'new-password'\"")
     expect(defaultView).toContain('确认登录')
     expect(defaultView).toContain('转到注册')
     expect(defaultView).not.toContain('id="pairing-code"')
@@ -35,6 +35,8 @@ describe('PairingScreen account entry', () => {
 
   it('replaces the login card title when registration is selected', () => {
     expect(template).toContain("authMode === 'login' ? '登录 LamTools' : '注册 LamTools'")
+    expect(source).toContain('normalizedUsername.length >= 3')
+    expect(source).toContain('normalizedUsername.length <= 32')
   })
 
   it('shows the signed-in account device topology before advanced pairing controls', () => {

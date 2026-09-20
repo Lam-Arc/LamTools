@@ -168,8 +168,18 @@ class CapacitorLocalDatabase<TState> implements LocalDatabase<TState> {
   constructor(private readonly name: string) {}
 
   async open(): Promise<void> {
-    this.db = await this.connection.createConnection(this.name, false, 'no-encryption', 1, false)
-    await this.db.open()
+    // A WebView reload recreates the JavaScript connection registry while the
+    // native plugin can keep its old connection alive. Reconcile both sides
+    // before creating a connection, otherwise createConnection fails with
+    // "Connection <name> already exists" and the resilient wrapper silently
+    // falls back to volatile memory storage.
+    await this.connection.checkConnectionsConsistency()
+    const existing = await this.connection.isConnection(this.name, false)
+    this.db = existing.result
+      ? await this.connection.retrieveConnection(this.name, false)
+      : await this.connection.createConnection(this.name, false, 'no-encryption', 1, false)
+    const open = await this.db.isDBOpen()
+    if (!open.result) await this.db.open()
     await this.db.execute(SQLITE_SCHEMA)
     await this.migrateSchema()
   }

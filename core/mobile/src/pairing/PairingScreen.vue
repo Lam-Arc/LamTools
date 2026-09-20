@@ -59,7 +59,7 @@
           type="password"
           required
           minlength="8"
-          autocomplete="current-password"
+          :autocomplete="authMode === 'login' ? 'current-password' : 'new-password'"
           placeholder="密码"
         />
         <p v-if="accountError" class="pairing-screen__error" role="alert">{{ accountError }}</p>
@@ -164,7 +164,12 @@ const moreOpen = ref(false)
 
 const loading = computed(() => pairingLoading.value || props.accountLoading)
 const isReady = computed(() => /^\d{6}$/.test(pairingCode.value))
-const accountReady = computed(() => Boolean(username.value.trim() && password.value.length >= 8))
+const accountReady = computed(() => {
+  const normalizedUsername = username.value.trim()
+  return normalizedUsername.length >= 3
+    && normalizedUsername.length <= 32
+    && password.value.length >= 8
+})
 
 const accountDeviceRows = computed(() => props.accountNodes
   .filter((node) => !node.revokedAtMs)
