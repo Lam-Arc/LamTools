@@ -16,12 +16,14 @@
     <MobileTopBar
       :hidden="topBarHidden"
       :syncing="isSyncing"
-      :mode-label="mobileModeState.label"
-      :mode-title="mobileModeState.title"
-      :can-toggle-mode="mobileModeState.canToggle"
+      :mode-options="mobileModeState.options"
+      :active-mode-id="mobileModeState.activeId"
+      :account-label="mobileAccountLabel"
       @open-sidebar="openLeftSidebar"
       @open-account="accessPanelOpen = true"
-      @cycle-mode="lamToolsAppRef?.cycleAppMode()"
+      @open-search="lamToolsAppRef?.openSearch()"
+      @open-settings="lamToolsAppRef?.openSettings()"
+      @select-mode="lamToolsAppRef?.selectAppModeByKey($event)"
     />
     <div v-if="accessPanelOpen" class="mobile-access-overlay">
       <PairingScreen
@@ -96,7 +98,13 @@ const DEFAULT_SERVER_URL = 'wss://47.114.43.99.nip.io/v1/relay'
 
 const statusMessage = ref('')
 const lamToolsAppRef = ref<InstanceType<typeof LamToolsApp> | null>(null)
-const mobileModeState = ref({ label: '', title: '', canToggle: false })
+const mobileModeState = ref({
+  label: '',
+  title: '',
+  canToggle: false,
+  activeId: '',
+  options: [] as Array<{ id: string; label: string }>,
+})
 const syncPanelOpen = ref(false)
 const syncInitialDeviceId = ref('')
 const syncProjects = ref<CoreProject[]>([])
@@ -115,6 +123,7 @@ const accountWorkspaces = ref<AccountWorkspace[]>([])
 const accountNodes = ref<AccountNode[]>([])
 const accountLoading = ref(false)
 const accountError = ref('')
+const mobileAccountLabel = computed(() => accountClient.value?.session?.username || '登录 / 账号')
 const manualGatewayUrl = ref(readManualGatewayUrl())
 const activeWorkspaceId = ref('')
 let accountOperationGeneration = 0

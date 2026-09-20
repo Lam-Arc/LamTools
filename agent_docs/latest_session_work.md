@@ -3008,3 +3008,41 @@ mobile UI.
   not claim a cloud Core Worker, communication/protocol refactor, or physical
   device acceptance beyond the listed vivo checks. Preserve unrelated and
   concurrent worktree changes.
+
+## Mobile floating command dock closure (2026-09-20)
+
+- Task/deployment/state: `mobile_floating_command_dock_20260920` / **complete
+  with install confirmation pending**. The mobile right-side optical-glass
+  command dock directly lists all app/plugin modes and includes search,
+  settings, and account. The left sidebar still owns plugin management and
+  its session/project opener; mobile hides duplicate search/settings actions,
+  while desktop defaults remain unchanged.
+- GSAP Draggable persists and clamps position, separates drag from click, and
+  keeps panel geometry within 12px at 280px and 390px widths. Reduced-motion
+  and ARIA listbox/option behavior are covered. Independent review found and
+  the main agent fixed horizontal overflow and listitem semantics; recheck
+  passed.
+- Verification: UI typecheck passed; UI coverage passed 96 files / 761 tests;
+  mobile typecheck passed; mobile coverage passed 17 files / 79 tests;
+  `npm run cap:sync` and Android `assembleDebug` passed.
+- Wireless ADB installation on vivo reaches OEM package confirmation but
+  cannot complete without confirmation on the device. No real-touch
+  verification is claimed. Next entry point: confirm installation on-device,
+  then test dock drag/click separation, mode selection, search/settings/account,
+  and 280/390px geometry.
+- Read-only Git handoff — intended files:
+  `core/mobile/src/App.vue`,
+  `core/mobile/tests/mobile-command-dock-contract.test.ts`,
+  `core/ui/src/app/LamToolsApp.vue`,
+  `core/ui/src/components/LeftSidebarShell.vue`,
+  `core/ui/src/components/MobileTopBar.vue`,
+  `core/ui/src/components/WorkspaceShell.vue`,
+  `core/ui/tests/left-sidebar-shell.test.ts`,
+  `core/ui/tests/mobile-top-bar.test.ts`, and
+  `core/ui/tests/optical-glass-contract.test.ts`.
+  Unrelated dirty paths to exclude are `agent_docs/project_diary.md`, the
+  modified `core/src/lamtools_core/**` prompt/compaction files and their
+  `core/tests/test_context_compaction.py`, `test_core_default_agent.py`,
+  `test_kernel.py`, `test_project_context.py`, `test_skill_runtime.py`,
+  `test_tool_result_model_evidence.py`, plus `.tmp_glass_rg.txt`, `MyProject/`,
+  `artifacts/`, and `docs.7z`. No commit or cleanup was performed.

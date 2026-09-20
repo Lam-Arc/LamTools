@@ -122,4 +122,24 @@ describe('LeftSidebarShell', () => {
     expect(workspaceShellCss).toMatch(/\.drawer-footer \.settings-entry \{[\s\S]*?min-height: var\(--sidebar-row-height\);[\s\S]*?border-radius: var\(--sidebar-row-radius\);/)
     expect(workspaceShellCss).toMatch(/\.sidebar-action \{[\s\S]*?min-height: var\(--sidebar-row-height\);[\s\S]*?border-radius: var\(--sidebar-row-radius\);/)
   })
+
+  it('can move search and settings out of the mobile sidebar without hiding plugins or slots', () => {
+    const wrapper = mount(LeftSidebarShell, {
+      props: {
+        id: 'left-drawer',
+        open: true,
+        pinned: false,
+        showSearchAction: false,
+        showSettingsAction: false,
+      },
+      slots: {
+        'sidebar-footer': '<div data-footer>长期安排</div>',
+      },
+    })
+
+    expect(wrapper.find('[aria-label="打开搜索"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="打开设置"]').exists()).toBe(false)
+    expect(wrapper.get('[aria-label="打开插件"]').text()).toContain('插件')
+    expect(wrapper.get('[data-footer]').text()).toBe('长期安排')
+  })
 })

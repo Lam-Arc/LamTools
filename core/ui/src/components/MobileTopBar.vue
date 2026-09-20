@@ -11,79 +11,252 @@
       <PanelLeft :size="18" :stroke-width="1.8" aria-hidden="true" />
     </button>
 
-    <div class="mobile-top-bar__center">
-      <button
-        v-if="canToggleMode"
-        class="mobile-top-bar__mode optical-glass"
-        type="button"
-        :title="modeTitle"
-        :aria-label="modeTitle || '切换插件模式'"
-        data-mobile-mode-button
-        @click="emit('cycle-mode')"
-      >
-        <span>· {{ modeLabel }}</span>
-        <ChevronDown :size="13" :stroke-width="2" aria-hidden="true" />
-      </button>
-      <div
-        v-show="syncing"
-        class="mobile-top-bar__sync optical-glass"
-        role="status"
-        aria-live="polite"
-      >
-        <span ref="syncIcon" class="mobile-top-bar__sync-icon" aria-hidden="true">
-          <RefreshCw :size="14" :stroke-width="1.9" />
-        </span>
-        <span>正在同步</span>
-      </div>
+    <div
+      v-show="syncing"
+      class="mobile-top-bar__sync optical-glass"
+      role="status"
+      aria-live="polite"
+    >
+      <span ref="syncIcon" class="mobile-top-bar__sync-icon" aria-hidden="true">
+        <RefreshCw :size="14" :stroke-width="1.9" />
+      </span>
+      <span>正在同步</span>
     </div>
 
-    <button
-      class="mobile-top-bar__button mobile-top-bar__button--account optical-glass"
-      type="button"
-      aria-label="打开账号与连接"
-      title="账号与连接"
-      data-mobile-account-button
-      @click="emit('open-account')"
+    <div
+      ref="dock"
+      class="mobile-command-dock"
+      :style="{
+        '--mobile-command-panel-x': `${panelOffsetX}px`,
+        '--mobile-command-panel-y': `${panelOffsetY}px`,
+      }"
+      :class="{
+        'mobile-command-dock--open-left': panelOpensLeft,
+        'mobile-command-dock--open-up': panelOpensUp,
+      }"
     >
-      <UserRound :size="17" :stroke-width="1.9" aria-hidden="true" />
-    </button>
+      <button
+        ref="dockTrigger"
+        class="mobile-top-bar__button mobile-command-dock__trigger optical-glass"
+        type="button"
+        :aria-expanded="panelOpen"
+        aria-controls="mobile-command-panel"
+        :aria-label="`打开快捷操作，当前模式 ${activeModeLabel}`"
+        title="快捷操作（可拖动）"
+        data-mobile-command-button
+        @click="togglePanel"
+      >
+        <Puzzle :size="17" :stroke-width="1.9" aria-hidden="true" />
+      </button>
+
+      <section
+        id="mobile-command-panel"
+        ref="panel"
+        v-show="panelOpen"
+        class="mobile-command-dock__panel optical-glass"
+        aria-label="快捷操作"
+        data-mobile-command-panel
+      >
+        <div class="mobile-command-dock__heading">
+          <span>切换模式</span>
+          <span class="mobile-command-dock__drag-hint">拖动圆点可移动</span>
+        </div>
+        <div class="mobile-command-dock__modes" role="listbox" aria-label="可用模式">
+          <button
+            v-for="option in modeOptions"
+            :key="option.id"
+            class="mobile-command-dock__mode"
+            :class="{ 'is-active': option.id === activeModeId }"
+            type="button"
+            role="option"
+            :aria-selected="option.id === activeModeId"
+            :data-mobile-mode-option="option.id"
+            @click="selectMode(option.id)"
+          >
+            <span>{{ option.label }}</span>
+            <Check v-if="option.id === activeModeId" :size="14" :stroke-width="2" aria-hidden="true" />
+          </button>
+        </div>
+
+        <div class="mobile-command-dock__divider" aria-hidden="true"></div>
+        <div class="mobile-command-dock__actions">
+          <button type="button" data-mobile-search-button @click="runAction('open-search')">
+            <Search :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <span>搜索</span>
+          </button>
+          <button type="button" data-mobile-settings-button @click="runAction('open-settings')">
+            <Settings :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <span>设置</span>
+          </button>
+          <button type="button" data-mobile-account-button @click="runAction('open-account')">
+            <UserRound :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <span>{{ accountLabel }}</span>
+          </button>
+        </div>
+      </section>
+    </div>
   </nav>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { ChevronDown, PanelLeft, RefreshCw, UserRound } from 'lucide-vue-next'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { Check, PanelLeft, Puzzle, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
 import { gsap } from 'gsap'
+import { Draggable } from 'gsap/Draggable'
+
+export interface MobileModeOption {
+  id: string
+  label: string
+}
+
+const DOCK_POSITION_KEY = 'lamtools.mobile.command-dock-position-v1'
+
+gsap.registerPlugin(Draggable)
 
 const props = withDefaults(defineProps<{
   hidden?: boolean
   syncing?: boolean
-  modeLabel?: string
-  modeTitle?: string
-  canToggleMode?: boolean
+  modeOptions?: MobileModeOption[]
+  activeModeId?: string
+  accountLabel?: string
 }>(), {
   hidden: false,
   syncing: false,
-  modeLabel: '',
-  modeTitle: '',
-  canToggleMode: false,
+  modeOptions: () => [],
+  activeModeId: '',
+  accountLabel: '登录 / 账号',
 })
 
 const emit = defineEmits<{
   'open-sidebar': []
   'open-account': []
-  'cycle-mode': []
+  'open-search': []
+  'open-settings': []
+  'select-mode': [id: string]
 }>()
 
 const root = ref<HTMLElement | null>(null)
+const dock = ref<HTMLElement | null>(null)
+const dockTrigger = ref<HTMLButtonElement | null>(null)
+const panel = ref<HTMLElement | null>(null)
 const syncIcon = ref<HTMLElement | null>(null)
+const panelOpen = ref(false)
+const panelOpensLeft = ref(true)
+const panelOpensUp = ref(false)
+const panelOffsetX = ref(0)
+const panelOffsetY = ref(52)
 let motion: ReturnType<typeof gsap.matchMedia> | null = null
 let syncTween: gsap.core.Tween | null = null
+let panelTween: gsap.core.Tween | null = null
+let draggable: Draggable | null = null
+let motionAllowed = false
+let suppressNextClick = false
+const activeModeLabel = computed(() => (
+  props.modeOptions.find((option) => option.id === props.activeModeId)?.label || '默认'
+))
+
+function readDockPosition(): { x: number; y: number } | null {
+  try {
+    const parsed = JSON.parse(globalThis.localStorage?.getItem(DOCK_POSITION_KEY) || 'null')
+    return parsed && Number.isFinite(parsed.x) && Number.isFinite(parsed.y)
+      ? { x: parsed.x, y: parsed.y }
+      : null
+  } catch {
+    return null
+  }
+}
+
+function persistDockPosition(): void {
+  if (!draggable) return
+  try {
+    globalThis.localStorage?.setItem(DOCK_POSITION_KEY, JSON.stringify({ x: draggable.x, y: draggable.y }))
+  } catch {
+    // Storage denial only disables position persistence for this device.
+  }
+}
+
+function updatePanelDirection(): void {
+  const trigger = dockTrigger.value
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  const viewportGap = 12
+  const panelWidth = Math.min(panel.value?.offsetWidth || 286, Math.max(0, window.innerWidth - viewportGap * 2))
+  const panelHeight = Math.min(panel.value?.offsetHeight || 340, Math.max(0, window.innerHeight - viewportGap * 2))
+  const preferredLeft = rect.right - panelWidth
+  const panelLeft = Math.min(
+    Math.max(preferredLeft, viewportGap),
+    Math.max(viewportGap, window.innerWidth - panelWidth - viewportGap),
+  )
+  let preferredTop = rect.bottom + 8
+  if (preferredTop + panelHeight > window.innerHeight - viewportGap) {
+    preferredTop = rect.top - panelHeight - 8
+  }
+  const panelTop = Math.min(
+    Math.max(preferredTop, viewportGap),
+    Math.max(viewportGap, window.innerHeight - panelHeight - viewportGap),
+  )
+  panelOffsetX.value = panelLeft - rect.left
+  panelOffsetY.value = panelTop - rect.top
+  panelOpensLeft.value = panelLeft < rect.left
+  panelOpensUp.value = panelTop < rect.top
+}
+
+function togglePanel(): void {
+  if (suppressNextClick) return
+  panelOpen.value = !panelOpen.value
+}
+
+function closePanel(): void {
+  panelOpen.value = false
+}
+
+function selectMode(id: string): void {
+  emit('select-mode', id)
+  closePanel()
+}
+
+function runAction(event: 'open-search' | 'open-settings' | 'open-account'): void {
+  if (event === 'open-search') emit('open-search')
+  else if (event === 'open-settings') emit('open-settings')
+  else emit('open-account')
+  closePanel()
+}
+
+function handleDocumentPointerDown(event: PointerEvent): void {
+  const target = event.target
+  if (target instanceof Node && !dock.value?.contains(target)) closePanel()
+}
+
+function handleDocumentKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') closePanel()
+}
+
+function handleViewportResize(): void {
+  draggable?.applyBounds(window)
+  updatePanelDirection()
+}
+
+watch(() => props.hidden, (hidden) => {
+  if (hidden) closePanel()
+})
+
+watch(panelOpen, async (open) => {
+  panelTween?.kill()
+  panelTween = null
+  if (!open) return
+  await nextTick()
+  updatePanelDirection()
+  if (!motionAllowed || !panel.value) return
+  panelTween = gsap.fromTo(panel.value,
+    { autoAlpha: 0, y: panelOpensUp.value ? 6 : -6, scale: 0.98 },
+    { autoAlpha: 1, y: 0, scale: 1, duration: 0.18, ease: 'power2.out', clearProps: 'opacity,visibility,transform' },
+  )
+})
 
 onMounted(() => {
-  if (!root.value) return
   motion = gsap.matchMedia()
   motion.add('(prefers-reduced-motion: no-preference)', () => {
+    motionAllowed = true
     const stop = watch(
       () => [props.syncing, props.hidden] as const,
       ([syncing, hidden]) => {
@@ -105,16 +278,49 @@ onMounted(() => {
       },
       { immediate: true },
     )
-
     return () => {
+      motionAllowed = false
       stop()
       syncTween?.kill()
       syncTween = null
     }
-  }, root.value)
+  }, root.value || undefined)
+
+  if (dock.value && dockTrigger.value) {
+    const saved = readDockPosition()
+    if (saved) gsap.set(dock.value, saved)
+    const instances = Draggable.create(dock.value, {
+      type: 'x,y',
+      trigger: dockTrigger.value,
+      bounds: window,
+      edgeResistance: 0.82,
+      dragClickables: true,
+      minimumMovement: 4,
+      onDragStart: () => closePanel(),
+      onDragEnd: () => {
+        suppressNextClick = true
+        persistDockPosition()
+        updatePanelDirection()
+        window.setTimeout(() => { suppressNextClick = false }, 0)
+      },
+    })
+    draggable = instances[0] || null
+    draggable?.applyBounds(window)
+  }
+
+  document.addEventListener('pointerdown', handleDocumentPointerDown)
+  document.addEventListener('keydown', handleDocumentKeydown)
+  window.addEventListener('resize', handleViewportResize)
 })
 
 onUnmounted(() => {
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
+  document.removeEventListener('keydown', handleDocumentKeydown)
+  window.removeEventListener('resize', handleViewportResize)
+  draggable?.kill()
+  draggable = null
+  panelTween?.kill()
+  panelTween = null
   syncTween?.kill()
   syncTween = null
   motion?.revert()
@@ -126,18 +332,15 @@ onUnmounted(() => {
 .mobile-top-bar {
   --text: var(--theme-control-text);
   position: fixed;
-  top: max(var(--space-2), env(safe-area-inset-top, 0px));
-  right: var(--space-3);
-  left: var(--space-3);
+  inset: 0;
   z-index: var(--z-popover);
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 44px;
-  align-items: center;
   pointer-events: none;
 }
 
 .mobile-top-bar__button {
-  position: relative;
+  position: fixed;
+  top: max(var(--space-2), env(safe-area-inset-top, 0px));
+  left: var(--space-3);
   display: grid;
   place-items: center;
   width: 44px;
@@ -147,44 +350,9 @@ onUnmounted(() => {
   color: var(--text);
   cursor: pointer;
   pointer-events: auto;
+  touch-action: none;
   transition: filter var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
   -webkit-tap-highlight-color: transparent;
-}
-
-.mobile-top-bar__button--account {
-  justify-self: end;
-}
-
-.mobile-top-bar__center {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-1);
-  pointer-events: none;
-}
-
-.mobile-top-bar__mode {
-  display: inline-flex;
-  min-width: 0;
-  max-width: 100%;
-  min-height: 36px;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-1);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 650;
-  pointer-events: auto;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.mobile-top-bar__mode span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .mobile-top-bar__button:hover {
@@ -195,29 +363,27 @@ onUnmounted(() => {
   transform: scale(.98);
 }
 
-.mobile-top-bar__button:focus-visible {
+.mobile-top-bar__button:focus-visible,
+.mobile-command-dock__panel button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--text) 72%, transparent);
   outline-offset: var(--space-1);
 }
 
 .mobile-top-bar__sync {
-  position: relative;
-  justify-self: center;
+  position: fixed;
+  top: max(var(--space-3), env(safe-area-inset-top, 0px));
+  left: 50%;
   display: inline-flex;
+  min-height: 32px;
   align-items: center;
   gap: var(--space-2);
-  min-height: 32px;
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
   color: color-mix(in srgb, var(--text) 72%, transparent);
   font-size: 12px;
   font-weight: 650;
   pointer-events: none;
-}
-
-.mobile-top-bar__mode + .mobile-top-bar__sync {
-  position: absolute;
-  top: calc(100% + var(--space-1));
+  transform: translateX(-50%);
 }
 
 .mobile-top-bar__sync-icon {
@@ -225,12 +391,126 @@ onUnmounted(() => {
   place-items: center;
 }
 
+.mobile-command-dock {
+  position: fixed;
+  top: max(var(--space-2), env(safe-area-inset-top, 0px));
+  right: var(--space-3);
+  width: 44px;
+  height: 44px;
+  pointer-events: none;
+}
+
+.mobile-command-dock__trigger {
+  position: relative;
+  inset: auto;
+}
+
+.mobile-command-dock__panel {
+  position: absolute;
+  top: var(--mobile-command-panel-y);
+  left: var(--mobile-command-panel-x);
+  width: min(286px, calc(100vw - var(--space-6)));
+  box-sizing: border-box;
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  color: var(--text);
+  pointer-events: auto;
+  transform-origin: top right;
+}
+
+.mobile-command-dock:not(.mobile-command-dock--open-left) .mobile-command-dock__panel {
+  transform-origin: top left;
+}
+
+.mobile-command-dock--open-up .mobile-command-dock__panel {
+  transform-origin: bottom right;
+}
+
+.mobile-command-dock--open-up:not(.mobile-command-dock--open-left) .mobile-command-dock__panel {
+  transform-origin: bottom left;
+}
+
+.mobile-command-dock__heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mobile-command-dock__drag-hint {
+  color: color-mix(in srgb, var(--text) 48%, transparent);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.mobile-command-dock__modes,
+.mobile-command-dock__actions {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.mobile-command-dock__mode,
+.mobile-command-dock__actions button {
+  display: flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: flex-start;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-command-dock__mode {
+  justify-content: space-between;
+}
+
+.mobile-command-dock__mode:hover,
+.mobile-command-dock__actions button:hover {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
+}
+
+.mobile-command-dock__mode:active,
+.mobile-command-dock__actions button:active,
+.mobile-command-dock__mode.is-active {
+  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  color: var(--text);
+}
+
+.mobile-command-dock__divider {
+  height: 1px;
+  margin: var(--space-2);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .mobile-top-bar__button {
     transition: none;
     transform: none !important;
   }
-  .mobile-top-bar__sync-icon {
+
+  .mobile-command-dock__mode,
+  .mobile-command-dock__actions button {
+    transition: none;
+    transform: none !important;
+  }
+
+  .mobile-top-bar__sync-icon,
+  .mobile-command-dock__panel {
     transform: none !important;
   }
 }

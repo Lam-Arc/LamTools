@@ -71,6 +71,9 @@
       :title="sidebarTitle"
       :show-sidebar-header="showSidebarHeader"
       :show-default-header-action="showSidebarHeaderAction"
+      :show-search-action="showSidebarSearchAction"
+      :show-plugins-action="showSidebarPluginsAction"
+      :show-settings-action="showSidebarSettingsAction"
       @close="closeDrawers"
       @toggle-pinned="onSidebarTogglePinned"
       @mouseleave="onLeftDrawerLeave"
@@ -237,6 +240,9 @@ const props = withDefaults(
     sidebarTitle?: string
     showSidebarHeader?: boolean
     showSidebarHeaderAction?: boolean
+    showSidebarSearchAction?: boolean
+    showSidebarPluginsAction?: boolean
+    showSidebarSettingsAction?: boolean
     storageKey?: string
     density?: 'compact' | 'standard' | 'loose'
     contentWidth?: number
@@ -273,6 +279,9 @@ const props = withDefaults(
     sidebarTitle: '',
     showSidebarHeader: true,
     showSidebarHeaderAction: true,
+    showSidebarSearchAction: true,
+    showSidebarPluginsAction: true,
+    showSidebarSettingsAction: true,
     density: 'standard',
     contentWidth: 780,
     mainContentFullBleed: false,

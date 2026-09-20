@@ -2542,3 +2542,41 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
 - This is a documentation handoff for the verified foundation only; it does
   not claim a communication/protocol refactor or cloud Core Worker. Preserve
   all unrelated and concurrent worktree changes.
+
+## Mobile floating command dock closure (2026-09-20)
+
+- Deployment `mobile_floating_command_dock_20260920` is complete in production
+  code, with APK install confirmation pending. Mobile now exposes a draggable
+  optical-glass command dock listing all app/plugin modes plus search, settings,
+  and account. The left sidebar retains plugin management and its
+  session/project opener; mobile hides duplicate search/settings actions and
+  desktop defaults are unchanged.
+- GSAP Draggable persists and clamps the dock position, separates drag from
+  click, and keeps panel geometry within 12px at 280px and 390px widths.
+  Reduced-motion behavior and ARIA listbox/option semantics are covered. The
+  independent verifier found and the main agent fixed horizontal overflow and
+  listitem semantics; the recheck passed.
+- Verification: UI typecheck passed; UI coverage passed 96 files / 761 tests;
+  mobile typecheck passed; mobile coverage passed 17 files / 79 tests;
+  `npm run cap:sync` and Android `assembleDebug` passed.
+- Wireless ADB installation on vivo reaches the OEM package-confirmation step
+  but cannot complete without device confirmation, so no real-touch verification
+  is claimed. Next entry point: confirm the APK on-device, then exercise dock
+  drag/click, mode selection, search/settings/account, and narrow-width states.
+- Read-only Git handoff — intended deployment files:
+  `core/mobile/src/App.vue`,
+  `core/mobile/tests/mobile-command-dock-contract.test.ts`,
+  `core/ui/src/app/LamToolsApp.vue`,
+  `core/ui/src/components/LeftSidebarShell.vue`,
+  `core/ui/src/components/MobileTopBar.vue`,
+  `core/ui/src/components/WorkspaceShell.vue`,
+  `core/ui/tests/left-sidebar-shell.test.ts`,
+  `core/ui/tests/mobile-top-bar.test.ts`, and
+  `core/ui/tests/optical-glass-contract.test.ts`.
+  Exclude unrelated dirty paths: `agent_docs/project_diary.md`, the modified
+  `core/src/lamtools_core/**` prompt/compaction files, their
+  `core/tests/test_context_compaction.py`,
+  `test_core_default_agent.py`, `test_kernel.py`, `test_project_context.py`,
+  `test_skill_runtime.py`, `test_tool_result_model_evidence.py`, and
+  `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`, `docs.7z`. No commit or
+  cleanup was performed.

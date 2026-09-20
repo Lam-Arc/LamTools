@@ -84,15 +84,15 @@
     </div>
 
     <footer class="drawer-footer">
-      <button class="settings-entry" type="button" aria-label="打开搜索" @click="emit('search')">
+      <button v-if="props.showSearchAction" class="settings-entry" type="button" aria-label="打开搜索" @click="emit('search')">
         <span aria-hidden="true"><Search :size="14" :stroke-width="1.8" /></span>
         <span>搜索</span>
       </button>
-      <button class="settings-entry" type="button" aria-label="打开插件" @click="emit('plugins')">
+      <button v-if="props.showPluginsAction" class="settings-entry" type="button" aria-label="打开插件" @click="emit('plugins')">
         <span aria-hidden="true"><Puzzle :size="14" :stroke-width="1.8" /></span>
         <span>插件</span>
       </button>
-      <button class="settings-entry" type="button" aria-label="打开设置" @click="emit('settings')">
+      <button v-if="props.showSettingsAction" class="settings-entry" type="button" aria-label="打开设置" @click="emit('settings')">
         <span aria-hidden="true"><Command :size="14" :stroke-width="1.8" /></span>
         <span>设置</span>
       </button>
@@ -113,11 +113,17 @@ const props = withDefaults(
     title?: string
     showSidebarHeader?: boolean
     showDefaultHeaderAction?: boolean
+    showSearchAction?: boolean
+    showPluginsAction?: boolean
+    showSettingsAction?: boolean
   }>(),
   {
     title: '',
     showSidebarHeader: true,
     showDefaultHeaderAction: true,
+    showSearchAction: true,
+    showPluginsAction: true,
+    showSettingsAction: true,
   },
 )
 

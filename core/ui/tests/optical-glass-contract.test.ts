@@ -48,6 +48,7 @@ describe('shared optical glass contract', () => {
     expect(appSource).toContain('class="core-goal-area optical-glass"')
     expect(mobileSource).toContain('class="mobile-top-bar__button optical-glass"')
     expect(mobileSource).toContain('class="mobile-top-bar__sync optical-glass"')
+    expect(mobileSource).toContain('class="mobile-command-dock__panel optical-glass"')
     expect(catalogSource).toContain("'optical-glass': variant === 'popover'")
     expect(runtimeDockSource).toContain('class="wf-node-runtime optical-glass"')
   })

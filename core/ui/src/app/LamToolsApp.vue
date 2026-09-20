@@ -125,6 +125,8 @@
     :content-width="contentWidth"
     :show-sidebar-header="false"
     :show-sidebar-header-action="false"
+    :show-sidebar-search-action="appRuntime.platform !== 'mobile'"
+    :show-sidebar-settings-action="appRuntime.platform !== 'mobile'"
     :show-right-panel-header="false"
     :main-content-full-bleed="activePluginMode?.pluginId === 'workflow'"
     :workflow-mode="activePluginMode?.pluginId === 'workflow'"
@@ -144,7 +146,7 @@
     @update:right-pinned="syncRightPinned"
     @settings="openSettings"
     @plugins="openPlugins"
-    @search="showSearch = true"
+    @search="openSearch"
     @composer-submit="submitComposer"
     @composer-drop="handleComposerDrop"
   >
@@ -754,7 +756,13 @@ const emit = defineEmits<{
   'left-drawer-change': [value: boolean]
   'account-submit': [payload: MobileControlAccountPayload]
   'account-logout': []
-  'mobile-mode-state': [payload: { label: string; title: string; canToggle: boolean }]
+  'mobile-mode-state': [payload: {
+    label: string
+    title: string
+    canToggle: boolean
+    activeId: string
+    options: Array<{ id: string; label: string }>
+  }]
   'sync-request': []
 }>()
 
@@ -3291,11 +3299,18 @@ function cycleAppMode(): void {
   void selectAppMode(modes[(index + 1) % modes.length])
 }
 
+function selectAppModeByKey(id: string): void {
+  const mode = appModes.value.find((candidate) => modeKey(candidate) === id)
+  if (mode) void selectAppMode(mode)
+}
+
 watch([activeAppMode, appModes], ([mode, modes]) => {
   emit('mobile-mode-state', {
     label: mode.title,
     title: nextAppModeTitle.value,
     canToggle: modes.length > 1,
+    activeId: modeKey(mode),
+    options: modes.map((candidate) => ({ id: modeKey(candidate), label: candidate.title })),
   })
 }, { immediate: true })
 
@@ -3351,6 +3366,10 @@ function openSettings(): void {
   showSettings.value = true
   void refreshRemoteGateway()
   void refreshRemoteAccount()
+}
+
+function openSearch(): void {
+  showSearch.value = true
 }
 
 function openPlugins(): void {
@@ -3485,10 +3504,17 @@ function openLeftSidebar(): void {
 }
 
 function handleStudyOpenSearch(): void {
-  showSearch.value = true
+  openSearch()
 }
 
-defineExpose({ openLeftSidebar, cycleAppMode, openProject })
+defineExpose({
+  openLeftSidebar,
+  cycleAppMode,
+  selectAppModeByKey,
+  openSearch,
+  openSettings,
+  openProject,
+})
 
 onMounted(() => {
   void uiPreferences.load()
