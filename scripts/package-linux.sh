@@ -78,6 +78,20 @@ if [[ ! -f "$ROOT/core/desktop/src-tauri/tauri.conf.json" ]]; then
   die "repository root not found: $ROOT"
 fi
 
+# Tauri resolves bundle icons while compiling generate_context!. Keep this
+# check driven by tauri.conf.json so every configured icon—not only the first
+# 32x32 entry—must exist in both the checkout and the staged Linux source.
+mapfile -t TAURI_ICON_PATHS < <(
+  grep -oE '"icons/[^"]+"' "$ROOT/core/desktop/src-tauri/tauri.conf.json" \
+    | sed -E 's/^"//; s/"$//'
+)
+(( ${#TAURI_ICON_PATHS[@]} > 0 )) \
+  || die "tauri.conf.json does not declare any bundle icons"
+for _icon_path in "${TAURI_ICON_PATHS[@]}"; do
+  [[ -f "$ROOT/core/desktop/src-tauri/$_icon_path" ]] \
+    || die "configured Tauri icon is missing from the checkout: $_icon_path"
+done
+
 if ! command -v pkg-config >/dev/null 2>&1; then
   die "pkg-config is required; install the Ubuntu build dependencies including libdbus-1-dev"
 fi
@@ -117,6 +131,11 @@ tar -C "$ROOT" \
   core/pyproject.toml core/lamtools-core-backend.spec core/desktop_backend.py \
   scripts/package-linux.sh scripts/verify-backend-ws.py \
   | tar -C "$SOURCE_ROOT" -xf -
+
+for _icon_path in "${TAURI_ICON_PATHS[@]}"; do
+  [[ -f "$SOURCE_ROOT/core/desktop/src-tauri/$_icon_path" ]] \
+    || die "configured Tauri icon was omitted from Linux staging: $_icon_path"
+done
 
 # The explicit cleanup protects against tar pattern behavior changes and also
 # removes generated files left by a previous interrupted build.
