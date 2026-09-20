@@ -10,8 +10,14 @@ import type { Ref } from 'vue'
 
 export type LamToolsPlatform = 'desktop' | 'mobile' | 'web'
 
+export type RuntimeFileSource = 'file' | 'photos' | 'camera'
+
 export interface RuntimeFileCapabilities {
-  pick(options?: { multiple?: boolean; accept?: string }): Promise<File[] | null>
+  pick(options?: {
+    multiple?: boolean
+    accept?: string
+    source?: RuntimeFileSource
+  }): Promise<File[] | null>
 }
 
 export interface RuntimeCapabilities {
@@ -97,8 +103,9 @@ export function createDomFilePicker(): RuntimeFileCapabilities {
       return new Promise<File[] | null>((resolve) => {
         const input = document.createElement('input')
         input.type = 'file'
-        input.multiple = options.multiple ?? true
-        if (options.accept) input.accept = options.accept
+        input.multiple = options.source === 'camera' ? false : (options.multiple ?? true)
+        input.accept = options.accept || (options.source === 'photos' || options.source === 'camera' ? 'image/*' : '')
+        if (options.source === 'camera') input.setAttribute('capture', 'environment')
         input.style.display = 'none'
         let settled = false
         const cleanup = () => {

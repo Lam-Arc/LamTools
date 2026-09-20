@@ -484,14 +484,11 @@
         @update:permission-preset="executionControls.selectPermissionPreset"
       >
         <template #leading>
-          <button
-            class="composer-attachment-button"
-            type="button"
-            title="添加附件"
-            aria-label="添加附件"
+          <AttachmentSourceMenu
+            :categorized="appRuntime.platform === 'mobile'"
             :disabled="!appRuntime.capabilities.files"
-            @click="chooseAttachments"
-          >+</button>
+            @select="chooseAttachments"
+          />
         </template>
         <template #after-runtime>
           <CoreWorkspaceMenu
@@ -617,7 +614,7 @@ import {
   type CoreQueuedInput,
 } from '../appServer'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'
-import type { LamToolsRuntime } from './runtime'
+import type { LamToolsRuntime, RuntimeFileSource } from './runtime'
 import { buildCoreComposerHighlightSegments } from '../composer/inputItems'
 import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
 import {
@@ -637,6 +634,7 @@ import {
 } from '../composables'
 
 import AttachmentTray from '../components/AttachmentTray.vue'
+import AttachmentSourceMenu from '../components/AttachmentSourceMenu.vue'
 import ChatThread from '../components/ChatThread.vue'
 import ChatOutlineNavigator from '../components/ChatOutlineNavigator.vue'
 import CommandPalette from '../components/CommandPalette.vue'
@@ -743,6 +741,7 @@ const emit = defineEmits<{
   'left-drawer-change': [value: boolean]
   'account-submit': [payload: MobileControlAccountPayload]
   'account-logout': []
+  'mobile-mode-state': [payload: { label: string; title: string; canToggle: boolean }]
 }>()
 
 function onLeftDrawerChange(value: boolean): void {
@@ -2637,17 +2636,24 @@ async function uploadFiles(files: FileList | File[]) {
   }
 }
 
-async function chooseAttachments() {
+async function chooseAttachments(source: RuntimeFileSource = 'file') {
   const picker = appRuntime.capabilities.files
   if (!picker) {
     composerErrorText.value = '当前环境不支持附件选择'
     return
   }
   try {
-    const files = await picker.pick({ multiple: true })
+    const files = await picker.pick({
+      source,
+      multiple: source !== 'camera',
+      accept: source === 'photos' || source === 'camera' ? 'image/*' : undefined,
+    })
     if (files?.length) await uploadFiles(files)
   } catch (error) {
-    composerErrorText.value = `打开附件选择器失败：${messageFromError(error)}`
+    const message = messageFromError(error)
+    composerErrorText.value = message === '设备拒绝了您的请求'
+      ? message
+      : `打开附件选择器失败：${message}`
   }
 }
 
@@ -3266,6 +3272,14 @@ function cycleAppMode(): void {
   void selectAppMode(modes[(index + 1) % modes.length])
 }
 
+watch([activeAppMode, appModes], ([mode, modes]) => {
+  emit('mobile-mode-state', {
+    label: mode.title,
+    title: nextAppModeTitle.value,
+    canToggle: modes.length > 1,
+  })
+}, { immediate: true })
+
 function invokeSidebarPrimaryAction(): void {
   const action = activePluginSurface.value?.sidebar?.onPrimaryAction
   if (action) {
@@ -3455,7 +3469,7 @@ function handleStudyOpenSearch(): void {
   showSearch.value = true
 }
 
-defineExpose({ openLeftSidebar })
+defineExpose({ openLeftSidebar, cycleAppMode })
 
 onMounted(() => {
   void uiPreferences.load()

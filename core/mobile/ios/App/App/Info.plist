@@ -24,6 +24,12 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>在同一局域网中发现并连接已配对的 LamTools 电脑。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄并上传您主动添加到对话的照片。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于选择并上传您主动添加到对话的照片。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于在您要求时将照片保存到相册。</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_lamtools._tcp</string>

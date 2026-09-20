@@ -36,4 +36,21 @@ describe('MobileTopBar', () => {
     expect(wrapper.get('.mobile-top-bar').attributes('style')).toContain('display: none')
     wrapper.unmount()
   })
+
+  it('exposes the current mobile plugin mode without restoring the desktop title bar', async () => {
+    const wrapper = mount(MobileTopBar, {
+      props: {
+        canToggleMode: true,
+        modeLabel: '工作流',
+        modeTitle: '切换到 Agent',
+      },
+    })
+
+    const button = wrapper.get('[data-mobile-mode-button]')
+    expect(button.text()).toContain('工作流')
+    expect(button.attributes('aria-label')).toBe('切换到 Agent')
+    await button.trigger('click')
+    expect(wrapper.emitted('cycle-mode')).toHaveLength(1)
+    wrapper.unmount()
+  })
 })

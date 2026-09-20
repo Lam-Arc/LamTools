@@ -11,16 +11,30 @@
       <PanelLeft :size="18" :stroke-width="1.8" aria-hidden="true" />
     </button>
 
-    <div
-      v-show="syncing"
-      class="mobile-top-bar__sync optical-glass"
-      role="status"
-      aria-live="polite"
-    >
-      <span ref="syncIcon" class="mobile-top-bar__sync-icon" aria-hidden="true">
-        <RefreshCw :size="14" :stroke-width="1.9" />
-      </span>
-      <span>正在同步</span>
+    <div class="mobile-top-bar__center">
+      <button
+        v-if="canToggleMode"
+        class="mobile-top-bar__mode optical-glass"
+        type="button"
+        :title="modeTitle"
+        :aria-label="modeTitle || '切换插件模式'"
+        data-mobile-mode-button
+        @click="emit('cycle-mode')"
+      >
+        <span>· {{ modeLabel }}</span>
+        <ChevronDown :size="13" :stroke-width="2" aria-hidden="true" />
+      </button>
+      <div
+        v-show="syncing"
+        class="mobile-top-bar__sync optical-glass"
+        role="status"
+        aria-live="polite"
+      >
+        <span ref="syncIcon" class="mobile-top-bar__sync-icon" aria-hidden="true">
+          <RefreshCw :size="14" :stroke-width="1.9" />
+        </span>
+        <span>正在同步</span>
+      </div>
     </div>
 
     <button
@@ -38,20 +52,27 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { PanelLeft, RefreshCw, UserRound } from 'lucide-vue-next'
+import { ChevronDown, PanelLeft, RefreshCw, UserRound } from 'lucide-vue-next'
 import { gsap } from 'gsap'
 
 const props = withDefaults(defineProps<{
   hidden?: boolean
   syncing?: boolean
+  modeLabel?: string
+  modeTitle?: string
+  canToggleMode?: boolean
 }>(), {
   hidden: false,
   syncing: false,
+  modeLabel: '',
+  modeTitle: '',
+  canToggleMode: false,
 })
 
 const emit = defineEmits<{
   'open-sidebar': []
   'open-account': []
+  'cycle-mode': []
 }>()
 
 const root = ref<HTMLElement | null>(null)
@@ -134,6 +155,38 @@ onUnmounted(() => {
   justify-self: end;
 }
 
+.mobile-top-bar__center {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  pointer-events: none;
+}
+
+.mobile-top-bar__mode {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-top-bar__mode span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mobile-top-bar__button:hover {
   filter: brightness(1.015);
 }
@@ -160,6 +213,11 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 650;
   pointer-events: none;
+}
+
+.mobile-top-bar__mode + .mobile-top-bar__sync {
+  position: absolute;
+  top: calc(100% + var(--space-1));
 }
 
 .mobile-top-bar__sync-icon {

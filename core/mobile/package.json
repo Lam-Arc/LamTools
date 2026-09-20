@@ -21,6 +21,7 @@
     "@capacitor-community/sqlite": "^7.0.3",
     "@capacitor/android": "^7.6.9",
     "@capacitor/app": "^7.1.0",
+    "@capacitor/camera": "^7.0.5",
     "@capacitor/core": "^7.4.3",
     "@capacitor/ios": "^7.6.9",
     "@capacitor/network": "^7.0.2",

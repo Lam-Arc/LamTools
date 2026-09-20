@@ -5,14 +5,19 @@
       :runtime="runtime"
       :account-context="accountContext"
       @left-drawer-change="leftDrawerOpen = $event"
+      @mobile-mode-state="mobileModeState = $event"
       @account-submit="authenticateCoreAccount"
       @account-logout="logoutAccount"
     />
     <MobileTopBar
       :hidden="topBarHidden"
       :syncing="isSyncing"
+      :mode-label="mobileModeState.label"
+      :mode-title="mobileModeState.title"
+      :can-toggle-mode="mobileModeState.canToggle"
       @open-sidebar="openLeftSidebar"
       @open-account="accessPanelOpen = true"
+      @cycle-mode="lamToolsAppRef?.cycleAppMode()"
     />
     <div v-if="accessPanelOpen" class="mobile-access-overlay">
       <PairingScreen
@@ -66,6 +71,7 @@ const DEFAULT_SERVER_URL = 'wss://47.114.43.99.nip.io/v1/relay'
 
 const statusMessage = ref('')
 const lamToolsAppRef = ref<InstanceType<typeof LamToolsApp> | null>(null)
+const mobileModeState = ref({ label: '', title: '', canToggle: false })
 const accessPanelOpen = ref(true)
 const leftDrawerOpen = ref(false)
 const topBarHidden = computed(() => leftDrawerOpen.value || accessPanelOpen.value)
@@ -576,10 +582,17 @@ onUnmounted(() => {
 @import '@lamtools/ui/styles/variables.css';
 
 .mobile-host {
+  --mobile-header-offset: calc(env(safe-area-inset-top, 0px) + 60px);
+  --titlebar-offset: var(--mobile-header-offset);
   min-height: 100dvh;
   box-sizing: border-box;
   background: var(--theme-backdrop-background);
   color: var(--theme-backdrop-text);
+}
+
+@media (max-width: 640px) {
+  .mobile-host .workspace-main { padding-top: var(--space-5); }
+  .mobile-host .workspace-shell--full-bleed .workspace-main { padding-top: 0; }
 }
 
 .mobile-host-status {
@@ -614,7 +627,5 @@ onUnmounted(() => {
 @media (prefers-reduced-motion: reduce) {
   .mobile-access-overlay { backdrop-filter: none; }
 }
-@media (max-width: 640px) {
-  .mobile-host { padding: 0; }
-}
+@media (max-width: 640px) { .mobile-host { padding: 0; } }
 </style>
