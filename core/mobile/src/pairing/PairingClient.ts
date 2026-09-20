@@ -94,9 +94,11 @@ export class PairingClient {
     const accessToken = typeof result.accessToken === 'string' ? result.accessToken : ''
     if (!accessToken) throw new Error('配对服务未返回设备凭据')
 
-    const gatewayUrl = typeof result.gatewayUrl === 'string' && result.gatewayUrl
-      ? result.gatewayUrl
-      : pairing.gatewayUrl
+    // A direct manual/LAN candidate is the route that actually completed the
+    // pairing handshake. Do not replace it with the desktop's advertised
+    // address, which may belong to an unreachable VPN adapter. Relay pairing
+    // can still retain the desktop-advertised LAN route for route preference.
+    const gatewayUrl = trustedGatewayUrl(pairing, result)
     const relayUrl = typeof result.relayUrl === 'string' && result.relayUrl
       ? result.relayUrl
       : pairing.relayUrl
@@ -130,7 +132,6 @@ export class PairingClient {
           method: 'POST',
           headers: {
             Accept: 'application/json',
-            'Cache-Control': 'no-store',
             'Content-Type': 'application/json',
           },
           cache: 'no-store',
@@ -176,6 +177,16 @@ export class PairingClient {
       .filter((device) => device.host && Number.isInteger(device.port) && device.port > 0)
       .map((device) => normalizeGatewayEndpoint(`http://${formatHost(device.host)}:${device.port}`))
   }
+}
+
+export function trustedGatewayUrl(
+  pairing: PairingResolution,
+  result: Record<string, unknown>,
+): string {
+  if (!pairing.relayTicket) return pairing.gatewayUrl
+  return typeof result.gatewayUrl === 'string' && result.gatewayUrl
+    ? result.gatewayUrl
+    : pairing.gatewayUrl
 }
 
 export function normalizeGatewayEndpoint(value: string): string {

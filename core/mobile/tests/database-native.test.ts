@@ -4,7 +4,9 @@ const native = vi.hoisted(() => {
   const events: string[] = []
   const db = {
     isDBOpen: vi.fn(async () => ({ result: false })),
+    isTransactionActive: vi.fn(async () => ({ result: false })),
     open: vi.fn(async () => undefined),
+    rollbackTransaction: vi.fn(async () => ({ changes: { changes: 0 } })),
     execute: vi.fn(async () => ({ changes: { changes: 0 } })),
     query: vi.fn(async () => ({ values: [] })),
     run: vi.fn(async () => ({ changes: { changes: 0 } })),
@@ -55,6 +57,7 @@ describe('native local database connection lifecycle', () => {
     native.events.length = 0
     vi.clearAllMocks()
     native.db.isDBOpen.mockResolvedValue({ result: false })
+    native.db.isTransactionActive.mockResolvedValue({ result: false })
     native.connection.isConnection.mockImplementation(async () => {
       native.events.push('isConnection')
       return { result: false }
@@ -68,6 +71,16 @@ describe('native local database connection lifecycle', () => {
 
     expect(native.events.slice(0, 3)).toEqual(['check', 'isConnection', 'create'])
     expect(native.db.open).toHaveBeenCalledOnce()
+    expect(native.db.execute).toHaveBeenCalledOnce()
+  })
+
+  it('rolls back a transaction abandoned by a previous renderer', async () => {
+    native.db.isTransactionActive.mockResolvedValue({ result: true })
+    const database = createLocalDatabase<Record<string, unknown>>('lamtools-mobile')
+
+    await database.open()
+
+    expect(native.db.rollbackTransaction).toHaveBeenCalledOnce()
     expect(native.db.execute).toHaveBeenCalledOnce()
   })
 

@@ -180,6 +180,11 @@ class CapacitorLocalDatabase<TState> implements LocalDatabase<TState> {
       : await this.connection.createConnection(this.name, false, 'no-encryption', 1, false)
     const open = await this.db.isDBOpen()
     if (!open.result) await this.db.open()
+    // A renderer reload can interrupt a write after BEGIN but before COMMIT.
+    // Native SQLite outlives that renderer, so clear the abandoned transaction
+    // before the new repository starts writing.
+    const transaction = await this.db.isTransactionActive()
+    if (transaction.result) await this.db.rollbackTransaction()
     await this.db.execute(SQLITE_SCHEMA)
     await this.migrateSchema()
   }
