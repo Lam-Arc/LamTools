@@ -14,8 +14,7 @@ class FakeWire implements TunnelWire {
 
   async connect(): Promise<void> {
     if (this.failure) throw this.failure
-    this.state = 'connected'
-    for (const listener of this.stateListeners) listener(this.state)
+    this.emitState('connected')
   }
 
   send(_data: Uint8Array): void {}
@@ -32,8 +31,12 @@ class FakeWire implements TunnelWire {
   }
 
   close(): void {
-    this.state = 'disconnected'
-    for (const listener of this.stateListeners) listener(this.state)
+    this.emitState('disconnected')
+  }
+
+  emitState(state: TransportConnectionState): void {
+    this.state = state
+    for (const listener of this.stateListeners) listener(state)
   }
 }
 
@@ -215,7 +218,31 @@ describe('ConnectionManager route selection', () => {
     await Promise.resolve()
 
     expect(manager.transport.getState()).toBe('disconnected')
-    expect(manager.state.value).toBe('reconnecting')
+    expect(manager.state.value).toBe('offline')
+    manager.close()
+  })
+
+  it('keeps a failed route offline until a reconnect completes a handshake', async () => {
+    const wires: FakeWire[] = []
+    const manager = new ConnectionManager({
+      trustedDevice: { ...trustedDevice, gatewayUrl: 'ws://127.0.0.1:4000/_lamtools/tunnel' },
+      lanDiscovery: { async discover() { return [] } },
+      wireFactory: () => {
+        const wire = new FakeWire()
+        wires.push(wire)
+        return wire
+      },
+    })
+
+    await manager.transport.connect()
+    expect(manager.state.value).toBe('connected_lan')
+    wires[0]!.emitState('failed')
+    await Promise.resolve()
+    expect(manager.state.value).toBe('offline')
+    expect(manager.message.value).toBe('电脑离线')
+
+    await manager.transport.connect()
+    expect(manager.state.value).toBe('connected_lan')
     manager.close()
   })
 })

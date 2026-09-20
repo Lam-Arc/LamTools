@@ -369,7 +369,7 @@ export function createCoreAppServerRuntimeController<
     if (!runtime.state || runtime.state.thread_id !== snapshotPage.thread_id) return false
     const incoming = hydrateSnapshot(snapshotPage)
     const current = runtime.state
-    const merged = mergeHistorySnapshot(current, incoming)
+    const merged = mergeCoreHistorySnapshot(current, incoming)
     if (!sessionStateStore.applySnapshot(merged)) return false
     runtime.state = merged
     return true
@@ -844,7 +844,7 @@ export function applyCoreAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent
     : applyAppEvent(snapshot, event)
 }
 
-function mergeHistorySnapshot<T extends CoreAppSnapshot>(current: T, page: T): T {
+export function mergeCoreHistorySnapshot<T extends CoreAppSnapshot>(current: T, page: T): T {
   const mergeItems = <T>(older: Record<string, T> | undefined, newer: Record<string, T> | undefined) => ({
     ...(older || {}),
     ...(newer || {}),

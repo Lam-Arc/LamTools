@@ -33,6 +33,25 @@ logs.
   repository state after logout, replacement, resume, or unmount. Noise
   handshake waits are bounded and cancellation-safe, and non-native builds use
   memory-only credential storage unless persistence is explicitly requested.
+- Mobile standalone capability is developed before any remote communication or
+  protocol refactor. The first standalone scope excludes filesystem, command,
+  terminal, MCP, and other host-privileged operations; existing paired
+  desktop/LAN/Relay behavior remains compatible until a separately approved
+  protocol deployment.
+- The verified mobile foundation is local-first: the default entry is an
+  independent local mode with a login-free panel; local projects and sessions
+  use SQLite, with direct OpenAI-compatible and Anthropic provider access.
+  Sync begins at device → project → remote control/import, browsing cache is
+  independent, offline mode disables remote control, and import pagination
+  must fetch the complete session history. Mobile hides session-title and
+  window-switch controls; this foundation remains separate from any later
+  communication/protocol refactor. Before replacing an App Server transport,
+  disconnect must clear the old client's reconnect timers so it cannot close a
+  newer remote-control connection. Final validation passed 16 mobile files / 77
+  tests, typecheck, Capacitor sync, and Android `assembleDebug`; ADB overlay
+  installation on vivo V2536A / Android 16 verified the login-free entry,
+  surface-matched dynamic safe area, compact sidebar, long-press context
+  menu, and import. Offline-device remote control was not claimed.
 - Treat Office/runtime capability discovery as reusable runtime state rather
   than letting each Agent task spend many model rounds searching program paths.
   Model latency dominates these workflows, so eliminating discovery rounds is
@@ -591,3 +610,13 @@ logs.
 - Linux 后端必须进入专属进程组：正常退出先向整组发送 SIGTERM、超时后 SIGKILL；桌面进程异常死亡时
   通过竞态检查后的 `PDEATHSIG=SIGKILL` 保证直接 sidecar 不残留。AppImage 冒烟必须真实捕获包内
   `LamCore` 的 PID 与 starttime，并在 launcher 超时退出后断言其消失，不能只把 timeout 124 当作成功。
+
+## Core 提示词分层决策（2026-09-20）
+
+- 默认身份在 CLI、HTTP、默认 Agent 与基础 Kit 间统一为 `你是 Sunday Agent。`；高频 Shell、文件、搜索、Web、
+  MCP、证据复用规则集中维护，外部网页和 MCP 输出统一视为不可信数据而非指令。
+- 未编辑的全局 `AGENTS.md` / `memory.md` 播种模板不进入提示词；项目 `AGENTS.md` 与既有
+  sub-agent guide/strategy/roles 仍完整保留。Skill 常驻索引只携带名称和有界触发摘要，完整正文继续由
+  `load_skill` 按需加载。
+- 易变计划与循环修复指令使用带 `internal=true` 的尾部 user 消息，避免 Provider 把新增 system 消息提升
+  后破坏稳定前缀缓存；上下文压缩不得把这类内部消息当成真实最新用户输入或新的语义分组。

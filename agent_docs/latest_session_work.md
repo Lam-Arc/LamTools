@@ -2898,3 +2898,113 @@ mobile UI.
   `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`, and `docs.7z` remain
   intentionally untracked. Next entry point: real device/network acceptance
   of pairing, reconnect/resume, workspace switching, and cache recovery.
+
+## DSH prompt comparison and Core prompt optimization handoff (2026-09-20)
+
+- Task ID/deployment/state: `prompt_comparison_20260920` / **complete for the
+  documented implementation scope**. This handoff records the selected prompt
+  optimizations after comparing LamTools with DeepSeek Harness (DSH). DSH was
+  pinned to official commit `ddefc45fbc7f8e46dd73185e68295696d1297887`
+  (`0.1.6-alpha.2`, 2026-09-17), using the native text-turn expected snapshot
+  and the system-prompt assembly design. Baseline evidence was about 4,276
+  bytes for DSH native and 13,117 characters / 245 lines for the LamTools
+  prompt. The post-change prompt measured 11,264 characters / 194 lines; the
+  Skill index fell from 3,341 to 1,878 characters.
+- Implemented prompt changes: `base_agent.py`, `default_agent.py`,
+  `http_agent_app.py`, and `cli.py` now share the one-line identity
+  `你是 Sunday Agent。`; `base_agent.py` centralizes the common
+  Shell/file/search/web/Skill/evidence/progress rules; MCP server activation
+  is described as on-demand and its output as untrusted external data. Study
+  retains its narrower prompt while using the shared safety subset.
+- Context and loading changes: `project_context.py` skips the exact seeded
+  global `AGENTS.md` and `memory.md` templates but keeps customized content;
+  `skills.py` emits compact trigger hints and leaves full Skill instructions to
+  `load_skill`. The full project `AGENTS.md`, the guide/strategy/role layers,
+  and existing plugin/MCP capability model were not removed or rewritten in
+  this scope.
+- Cache/compaction changes: the active plan and loop repair guidance now use
+  late `user` messages tagged `metadata={"internal": true}`. This keeps the
+  stable system prefix reusable while allowing the shared history to retain
+  the guidance. Internal messages are excluded from recent-user selection and
+  semantic compaction grouping; internal metadata is stripped before model
+  dispatch. Guidance keys cover duplicate input, payload reassessment,
+  no-progress recovery, tool-progress gates, failure diagnosis, and goal
+  completion repair.
+- Evidence references: `core/src/lamtools_core/app/base_agent.py:97`,
+  `:101`, `:445`, `:479`, `:534`; `core/src/lamtools_core/app/project_context.py:119`
+  and `:134`; `core/src/lamtools_core/skills.py:65` and `:97`;
+  `core/src/lamtools_core/kernel/loop.py:868`, `:1024`, `:1116`, `:1144`,
+  `:1158`, `:1188`, and `:1299`; and
+  `core/src/lamtools_core/context_compaction/planner.py:135` and `:238`.
+- Verification status: regression tests were added for the canonical identity
+  and consolidated tool protocol, seeded-template filtering, compact Skill
+  index/full on-demand load, late internal plan messages, internal repair
+  metadata, and compaction grouping. The focused suite passed 259 tests; the
+  entrypoint/plugin/Study suite passed 237 with 1 skip. `compileall` and
+  `git diff --check` passed. No Tauri visual check is applicable to this
+  backend prompt change.
+- Git/disposition: read-only inspection found the expected heavily dirty,
+  concurrently edited worktree. No stage, commit, reset, revert, cleanup,
+  release, or attribution was performed; `project_diary.md` was left
+  unchanged. Exact next entry point: decide whether to add a DSH-style prompt
+  snapshot, duplicate/order checks, and a character/token budget gate. Keep
+  the existing guide/strategy/role injection unchanged unless separately
+  approved.
+
+## Standalone mobile architecture decision handoff (2026-09-20)
+
+- Task ID/deployment/state: `mobile_standalone_scope_archive` /
+  `mobile_standalone_foundation_20260920` / **paused** pending user consensus.
+  Confirmed sequencing: deliver standalone basic functions first; defer the
+  communication/protocol refactor until later.
+- Verified context: mobile `App.vue` currently injects only
+  `RemoteTransport`/`ConnectionManager` and the local sync cache. Relay's
+  README/control/main paths say Relay stores no Core work data and forwards
+  opaque Noise frames. The shared Workbench requires
+  `LamToolsTransport`/App Server semantics, while Python Core owns LLM,
+  runtime, and tool execution.
+- Proposed minimum scope, not approved or implemented: phone-local text-only
+  model access and local sessions, with existing paired desktop/Relay still
+  available. Exclude file read/write, command/terminal, MCP/plugins, and host
+  tools. A cloud Core Worker alternative would materially expand security and
+  deployment scope and is not implemented.
+- Prior validation for targeted stabilization commit `b2761c06`: mobile
+  14 files / 60 tests, typecheck, build, Capacitor sync, and Gradle
+  `assembleDebug` passed. This is stabilization evidence only, not standalone
+  architecture acceptance.
+- Exact next decision: local direct provider/API-key access with local-only
+  sessions versus a server-hosted Core. Read-only Git handoff: concurrent
+  prompt/backend edits and the documented personal/generated paths remain
+  untouched; this closure did not modify production/tests/diary or stage,
+  commit, reset, or clean anything. Do not infer approval or implementation
+  from the preceding checks.
+
+## Mobile standalone foundation current contract (2026-09-20)
+
+- The current mobile entry is local-first: it opens an independent local mode
+  through a login-free panel. Local projects and sessions use SQLite, and the
+  phone can connect directly to OpenAI-compatible or Anthropic providers. The
+  paired desktop/Relay route remains available separately; communication and
+  protocol refactoring is not part of this foundation.
+- The sync path is device → project → remote control/import. Browsing cache is
+  independent from sync, offline mode disables remote control, and import uses
+  pagination to retrieve the complete session history. The mobile surface
+  hides session-title and window-switch controls.
+- Transport switching now disconnects before replacement and clears the old
+  App Server client's reconnect timers, preventing that stale client from
+  closing the new remote-control connection. The overall communication
+  protocol refactor remains deferred.
+- Verification evidence: mobile tests passed 16 files / 77 tests; the shared
+  UI passed 96 files / 757 tests and typecheck; mobile `npm run typecheck`,
+  `npm run cap:sync`, and Android `assembleDebug` passed. ADB
+  overlay installation on vivo V2536A running Android 16 verified the
+  login-free entry, surface-matched dynamic safe area, compact left sidebar,
+  long-press context menu, and import.
+- The current offline device's remote-control behavior was not verified. This
+  handoff does not claim a broader communication/protocol refactor or any
+  other remote-control device acceptance. Next entry point is to repeat the
+  remote-control path only when a connected device/network is available.
+- Disposition: this records verified local-foundation behavior only. It does
+  not claim a cloud Core Worker, communication/protocol refactor, or physical
+  device acceptance beyond the listed vivo checks. Preserve unrelated and
+  concurrent worktree changes.

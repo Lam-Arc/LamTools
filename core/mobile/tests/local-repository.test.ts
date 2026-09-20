@@ -231,4 +231,93 @@ describe('LocalRepository', () => {
     expect(restarted.state.value.workspaceId).toBe('relay-workspace-1')
     expect(restarted.state.value.hostWorkspaceId).toBe('core-workspace-1')
   })
+
+  it('isolates the same Workspace id across accounts and clears scope on logout', async () => {
+    const database = new ScopedFakeDatabase()
+    const first = createLocalRepository(database, { serverId: 'server-a', accountId: 'alice' })
+    await first.setWorkspaceId('shared-workspace')
+    await first.applySyncSnapshot({
+      workspace_id: 'core-shared',
+      cursor: 1,
+      snapshotVersion: 1,
+      projects: [{ id: 'project-1', name: 'Alice cache', path: '/alice' }],
+    })
+
+    const otherAccount = createLocalRepository(database, { serverId: 'server-b', accountId: 'alice' })
+    await otherAccount.setWorkspaceId('shared-workspace')
+    expect(await otherAccount.listProjects()).toEqual([])
+
+    await first.setAccountScope('', '')
+    expect(await first.listProjects()).toEqual([])
+    await first.setAccountScope('server-a', 'alice')
+    expect((await first.listProjects())[0]?.name).toBe('Alice cache')
+  })
+
+  it('rejects a gapped sync batch without partially importing changes', async () => {
+    const repository = createLocalRepository(new FakeDatabase())
+    await repository.applySyncSnapshot({
+      cursor: 1,
+      snapshotVersion: 1,
+      projects: [{ id: 'project-1', name: 'Before', path: '/before' }],
+    })
+
+    await expect(repository.applySyncBatch([{
+      seq: 3,
+      type: 'project',
+      operation: 'upsert',
+      entity_id: 'project-1',
+      entity: { id: 'project-1', name: 'After', path: '/after' },
+    }], 3)).rejects.toThrow('游标不连续')
+    expect(repository.state.value.cursor).toBe(1)
+    expect((await repository.listProjects())[0]?.name).toBe('Before')
+  })
+
+  it('imports a remote project as an independent local copy and remaps session snapshot identity', async () => {
+    const repository = createLocalRepository(new FakeDatabase())
+    const imported = await repository.importLocalProject({
+      id: 'remote-project',
+      name: '桌面项目',
+      path: 'E:\\desktop-project',
+      workRoot: 'E:\\desktop-project',
+      iconKey: 'code',
+      colorKey: 'blue',
+      revision: 9,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      deleted: false,
+    }, [{
+      id: 'remote-thread',
+      projectId: 'remote-project',
+      title: '桌面会话',
+      status: 'completed',
+      revision: 7,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      metadata: { project_id: 'remote-project', work_root: 'E:\\desktop-project' },
+      deleted: false,
+    }], [{
+      thread_id: 'remote-thread',
+      status: 'completed',
+      revision: 7,
+      session: { id: 'remote-thread', metadata: { project_id: 'remote-project' } },
+      core: { thread_id: 'remote-thread', status: 'completed', revision: 7 },
+    } as any])
+
+    expect(imported.id).not.toBe('remote-project')
+    expect(imported.workRoot).toBe(`mobile://${imported.id}`)
+    const [session] = await repository.listSessions(imported.id)
+    expect(session?.id).not.toBe('remote-thread')
+    expect(session?.metadata).toMatchObject({
+      project_id: imported.id,
+      work_root: imported.workRoot,
+      imported_from: 'remote-thread',
+    })
+    const snapshot = await repository.loadThreadSnapshot(session!.id)
+    expect(snapshot?.thread_id).toBe(session?.id)
+    expect(snapshot?.core?.thread_id).toBe(session?.id)
+    expect((snapshot as any)?.session).toMatchObject({
+      id: session?.id,
+      metadata: { project_id: imported.id, work_root: imported.workRoot },
+    })
+  })
 })

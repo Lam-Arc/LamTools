@@ -13,11 +13,11 @@
       >
         <header class="core-project-dialog-header">
           <h2 id="core-project-dialog-title">新建项目</h2>
-          <p>选择一个工作目录，系统会为项目准备基础配置。</p>
+          <p>{{ localOnly ? '项目将保存在当前设备。' : '选择一个工作目录，系统会为项目准备基础配置。' }}</p>
         </header>
 
         <form class="core-project-create" @keydown.esc.prevent="cancel" @submit.prevent="submit">
-          <label class="core-project-field core-project-root-label">
+          <label v-if="!localOnly" class="core-project-field core-project-root-label">
             <span>项目地址</span>
             <div class="core-project-root-field">
               <input
@@ -48,13 +48,14 @@
           </label>
 
           <label class="core-project-field">
-            <span>项目名称 <em>选填</em></span>
+            <span>项目名称 <em v-if="!localOnly">选填</em></span>
             <input
               v-model="name"
               data-project-name
               class="core-project-input"
               autocomplete="off"
-              placeholder="留空时使用目录名称"
+              :placeholder="localOnly ? '例如：手机项目' : '留空时使用目录名称'"
+              :required="localOnly"
               :disabled="loading"
             />
           </label>
@@ -72,7 +73,7 @@
 
           <footer class="core-project-actions">
             <button type="button" class="core-project-cancel" data-project-cancel :disabled="loading" @click="cancel">取消</button>
-            <button type="submit" class="core-project-submit" data-project-submit :disabled="loading || !workRoot.trim()">
+            <button type="submit" class="core-project-submit" data-project-submit :disabled="loading || (localOnly ? !name.trim() : !workRoot.trim())">
               {{ loading ? '创建中' : '创建项目' }}
             </button>
           </footer>
@@ -107,10 +108,12 @@ const props = withDefaults(defineProps<{
   error?: string
   transport: LamToolsTransport
   teleportTarget?: string
+  localOnly?: boolean
 }>(), {
   loading: false,
   error: '',
   teleportTarget: 'body',
+  localOnly: false,
 })
 
 const emit = defineEmits<{
@@ -136,10 +139,10 @@ onMounted(() => nextTick(() => workRootInput.value?.focus()))
 
 function submit() {
   const root = workRoot.value.trim()
-  if (!root || props.loading) return
+  if (props.loading || (props.localOnly ? !name.value.trim() : !root)) return
   emit('submit', {
     name: name.value.trim(),
-    work_root: root,
+    work_root: props.localOnly ? '' : root,
     icon_key: iconKey.value,
     color_key: colorKey.value,
   })

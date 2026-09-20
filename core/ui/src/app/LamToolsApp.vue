@@ -150,22 +150,34 @@
   >
     <template #primary>
       <div class="core-project-primary-actions">
-        <button
-          v-if="sidebarPrimaryActionLabel"
-          class="sidebar-create-project"
-          type="button"
-          data-sidebar-primary-action
-          :title="sidebarPrimaryActionLabel"
-          :aria-label="sidebarPrimaryActionLabel"
-          @click="invokeSidebarPrimaryAction"
-        >
-          <span aria-hidden="true">＋</span><span>{{ sidebarPrimaryActionLabel }}</span>
-        </button>
+        <div class="core-project-primary-row">
+          <button
+            v-if="sidebarPrimaryActionLabel"
+            class="sidebar-create-project"
+            type="button"
+            data-sidebar-primary-action
+            :title="sidebarPrimaryActionLabel"
+            :aria-label="sidebarPrimaryActionLabel"
+            @click="invokeSidebarPrimaryAction"
+          >
+            <span aria-hidden="true">＋</span><span>{{ sidebarPrimaryActionLabel }}</span>
+          </button>
+          <button
+            v-if="appRuntime.platform === 'mobile' && !activePluginMode"
+            class="sidebar-sync-project"
+            type="button"
+            title="同步项目"
+            aria-label="同步项目"
+            data-sidebar-sync-project
+            @click="emit('sync-request')"
+          ><RefreshCw :size="17" :stroke-width="1.9" aria-hidden="true" /></button>
+        </div>
         <CoreProjectCreate
           v-if="showProjectCreate && !activePluginMode"
           :loading="projectCreateLoading"
           :error="projectCreateError"
           :transport="transport"
+          :local-only="appRuntime.capabilities.localProjects?.value === true"
           @submit="createProject"
           @cancel="closeProjectCreate"
         />
@@ -224,8 +236,8 @@
     </template>
 
     <template #main-header>
-      <div v-if="activePluginMode" class="workspace-plugin-header" data-plugin-header></div>
-      <div v-else-if="activeSessionId" class="thread-header" data-session-header>
+      <div v-if="appRuntime.platform !== 'mobile' && activePluginMode" class="workspace-plugin-header" data-plugin-header></div>
+      <div v-else-if="appRuntime.platform !== 'mobile' && activeSessionId" class="thread-header" data-session-header>
         <CoreSessionTitleEditor
           :title="activeSessionTitle"
           :rename="renameActiveSession"
@@ -590,6 +602,7 @@ import {
   ClipboardPaste,
   Copy,
   LoaderCircle,
+  RefreshCw,
   Scissors,
   TextSelect,
   Upload,
@@ -742,6 +755,7 @@ const emit = defineEmits<{
   'account-submit': [payload: MobileControlAccountPayload]
   'account-logout': []
   'mobile-mode-state': [payload: { label: string; title: string; canToggle: boolean }]
+  'sync-request': []
 }>()
 
 function onLeftDrawerChange(value: boolean): void {
@@ -2085,6 +2099,11 @@ async function openRecentProject(projectId: string): Promise<void> {
   } else {
     await createProjectSession(project.id)
   }
+}
+
+async function openProject(projectId: string): Promise<void> {
+  await Promise.all([refreshProjects(), refreshSessions()])
+  await openRecentProject(projectId)
 }
 
 async function selectRegisteredProject(projectId: string): Promise<void> {
@@ -3469,7 +3488,7 @@ function handleStudyOpenSearch(): void {
   showSearch.value = true
 }
 
-defineExpose({ openLeftSidebar, cycleAppMode })
+defineExpose({ openLeftSidebar, cycleAppMode, openProject })
 
 onMounted(() => {
   void uiPreferences.load()

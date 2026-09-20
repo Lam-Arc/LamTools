@@ -52,7 +52,7 @@ export class SyncEngine {
         this.scheduleReconnect()
       }
       if (connectionState === 'failed') {
-        this.state.value = 'error'
+        this.state.value = 'offline'
         this.scheduleReconnect()
       }
     })
@@ -112,23 +112,29 @@ export class SyncEngine {
         }
         if (result.ok === false) throw new Error(String(result.error || '同步失败'))
         if (result.mode === 'snapshot') {
+          const snapshotCursor = integerCursor(result.cursor)
+          if (snapshotCursor == null) throw new Error('同步响应缺少有效游标')
           await this.trackRepositoryWrite(this.options.repository.applySyncSnapshot(result))
           if (!this.isCurrent(generation)) return
+          if (this.options.repository.state.value.cursor !== snapshotCursor) {
+            throw new Error('同步响应游标不一致')
+          }
         } else if (result.mode === 'delta') {
-          const changes = Array.isArray(result.changes) ? result.changes : []
-          for (const value of changes) {
-            if (!this.isCurrent(generation)) return
-            if (isRecord(value)) {
-              await this.trackRepositoryWrite(
-                this.options.repository.applySyncChange(value as unknown as LocalSyncChange),
-              )
-            }
-            if (this.options.repository.state.value.snapshotRequired) {
-              // Do not apply the rest of this delta against the stale local
-              // branch. The next request is an atomic full snapshot.
-              cursor = null
-              break
-            }
+          const deltaCursor = integerCursor(result.cursor)
+          if (deltaCursor == null || !Array.isArray(result.changes)) {
+            throw new Error('同步响应缺少有效游标或变更列表')
+          }
+          const changes: LocalSyncChange[] = []
+          for (const value of result.changes) {
+            if (!isRecord(value)) throw new Error('同步响应包含无效变更')
+            changes.push(value as unknown as LocalSyncChange)
+          }
+          await this.trackRepositoryWrite(this.options.repository.applySyncBatch(changes, deltaCursor))
+          if (!this.isCurrent(generation)) return
+          if (this.options.repository.state.value.snapshotRequired) {
+            // Do not request a delta from a branch that requires replacement.
+            // The next request is an atomic full snapshot.
+            cursor = null
           }
         }
         if (!this.isCurrent(generation)) return
@@ -136,7 +142,7 @@ export class SyncEngine {
           cursor = null
           continue
         }
-        cursor = numberOrNull(result.cursor) ?? this.options.repository.state.value.cursor
+        cursor = integerCursor(result.cursor) ?? this.options.repository.state.value.cursor
         if (result.has_more !== true) break
       }
       this.state.value = 'synced'
@@ -152,7 +158,10 @@ export class SyncEngine {
         this.scheduleReconnect()
         return
       }
-      this.state.value = this.options.transport.getState() === 'disconnected' ? 'offline' : 'error'
+      // A failed remote sync is an offline condition from the mobile user's
+      // perspective, regardless of whether the transport surfaced `failed`
+      // or remained nominally connected while the RPC timed out.
+      this.state.value = 'offline'
       this.options.onError?.(this.lastError.value)
       this.scheduleReconnect()
     }
@@ -231,8 +240,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-function numberOrNull(value: unknown): number | null {
-  if (value == null || value === '') return null
+function integerCursor(value: unknown): number | null {
   const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : null
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
 }

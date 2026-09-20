@@ -2451,3 +2451,94 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
   remain intentionally untracked. Exact next entry point is device/network
   acceptance of pairing, reconnect/resume, workspace switching, and cache
   recovery; do not infer it from the static checks above.
+
+## DSH prompt comparison and Core prompt optimization (2026-09-20)
+
+- Deployment `prompt_comparison_20260920` is in the prompt-optimization
+  handoff. The verified comparison used DeepSeek Harness commit `ddefc45f`
+  (`0.1.6-alpha.2`, 2026-09-17), its native text-turn snapshot, and the
+  system-prompt assembly design. The baseline measured about 4,276 bytes for
+  DSH native versus 13,117 characters / 245 lines for the LamTools prompt;
+  the post-change prompt measured 11,264 characters / 194 lines, while the
+  Skill index fell from 3,341 to 1,878 characters.
+- The current Core delta gives every default entry point one canonical,
+  one-sentence identity (`你是 Sunday Agent。`) and moves the
+  high-frequency Shell, file, search, web, Skill, evidence-reuse, and progress
+  rules into one shared tool protocol. MCP activation output is explicitly
+  treated as untrusted external data. Study keeps its narrower protocol while
+  reusing the shared safety rules.
+- Seeded global `AGENTS.md` and `memory.md` templates are filtered from prompt
+  context, while customized files remain eligible. The Skill prompt index now
+  contains compact trigger hints (full content stays behind `load_skill`).
+  Active plans and loop repair guidance are late internal `user` messages so
+  the stable system prefix can be reused; internal guidance is excluded from
+  recent-user selection and semantic compaction grouping.
+- The comparison/optimization does not yet implement the full DSH section
+  registry or snapshot/budget gate. The existing LamTools guide/strategy/role
+  layers remain unchanged, as does the broader project-context model. These
+  are deliberate scope limits, not evidence that those areas were audited as
+  complete.
+- Verification disposition: focused regression coverage was added for the
+  canonical prompt, compact Skill index, template filtering, internal plan
+  and repair messages, and compaction grouping. The focused suite passed 259
+  tests; the entrypoint/plugin/Study suite passed 237 with 1 skip. `compileall`
+  and `git diff --check` passed. The workspace remains heavily dirty and
+  concurrent changes are preserved.
+- Next milestone: decide whether to add a complete prompt snapshot and budget
+  regression gate. No Tauri visual acceptance is relevant to this backend
+  prompt change.
+
+## Standalone mobile architecture decision handoff (2026-09-20)
+
+- Task ID/deployment/state: `mobile_standalone_scope_archive` /
+  `mobile_standalone_foundation_20260920` / **paused** pending user consensus.
+  The confirmed sequence is standalone basic functions first, followed later
+  by communication/protocol refactoring.
+- Current evidence bounds the architecture: mobile `App.vue` injects only
+  `RemoteTransport`/`ConnectionManager` and the local sync cache; Relay's
+  README/control/main paths state that Relay stores no Core work data and only
+  forwards opaque Noise frames; the shared Workbench requires
+  `LamToolsTransport`/App Server semantics; and Python Core owns LLM,
+  runtime, and tool execution.
+- Proposed minimum scope, awaiting approval and not implemented: phone-local,
+  text-only model access and local sessions while paired desktop/Relay remains
+  available. File read/write, command/terminal, MCP/plugins, and host tools are
+  explicitly excluded. A cloud Core Worker alternative would expand the
+  security and deployment scope and is not implemented.
+- Targeted stabilization commit `b2761c06` passed the prior mobile checks:
+  14 files / 60 tests, typecheck, build, Capacitor sync, and Gradle
+  `assembleDebug`. These results do not approve or validate the standalone
+  proposal.
+- Exact next decision: choose local direct provider/API-key access with
+  local-only sessions, or a server-hosted Core. Read-only Git handoff found
+  concurrent prompt/backend edits and the documented personal/generated paths;
+  this closure made no production/test/diary changes, staging, commit, reset,
+  or cleanup.
+
+## Mobile standalone foundation current contract (2026-09-20)
+
+- The verified mobile foundation is local-first: the default entry is an
+  independent local mode with a login-free panel. Local projects and sessions
+  persist in SQLite, while direct OpenAI-compatible and Anthropic provider
+  access is available. The paired desktop/Relay path remains a separate
+  option; communication/protocol refactoring is deferred.
+- Sync enters through device → project → remote control/import. Browsing cache
+  is independent, offline mode disables remote control, and import pagination
+  pulls the complete session history. Mobile hides session-title and
+  window-switch controls.
+- Before replacing an App Server transport, disconnect now clears the old
+  client's reconnect timers, preventing an old client from closing a newer
+  remote-control connection. Communication protocol refactoring remains
+  deferred.
+- Verification: mobile coverage passed 16 files / 77 tests; shared UI coverage
+  passed 96 files / 757 tests and typecheck; mobile `npm run typecheck`,
+  `npm run cap:sync`, and Android `assembleDebug` passed. ADB
+  overlay installation on vivo V2536A running Android 16 verified the
+  login-free entry, surface-matched dynamic safe area, compact left sidebar,
+  long-press context menu, and import.
+- The currently offline device's remote-control path was not verified. No
+  broader communication/protocol refactor is claimed; preserve all unrelated
+  and concurrent worktree changes.
+- This is a documentation handoff for the verified foundation only; it does
+  not claim a communication/protocol refactor or cloud Core Worker. Preserve
+  all unrelated and concurrent worktree changes.

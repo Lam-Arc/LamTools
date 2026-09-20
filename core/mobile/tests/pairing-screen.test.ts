@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(new URL('../src/pairing/PairingScreen.vue', import.meta.url), 'utf8')
 const appSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+const syncSource = readFileSync(new URL('../src/sync/MobileSyncPanel.vue', import.meta.url), 'utf8')
 const templateEnd = source.indexOf('\n</template>\n\n<script setup')
 const template = source.slice(source.indexOf('<template>'), templateEnd + '\n</template>'.length)
 
@@ -53,5 +54,66 @@ describe('PairingScreen account entry', () => {
     expect(appSource).toContain(':account-context="accountContext"')
     expect(appSource).toContain('@account-submit="authenticateCoreAccount"')
     expect(appSource).toContain('@account-logout="logoutAccount"')
+  })
+
+  it('starts in standalone mode without forcing the account panel open', () => {
+    expect(appSource).toContain("const activeRuntimeMode = ref<'local' | 'remote'>('local')")
+    expect(appSource).toContain('const accessPanelOpen = ref(false)')
+    expect(appSource).toContain(':closable="true"')
+    expect(appSource).not.toContain('accessPanelOpen.value = !activeTrustedDevice.value')
+  })
+
+  it('routes account and paired-device choices through the explicit sync flow', () => {
+    expect(appSource).toContain('@workspace-select="openWorkspaceSync"')
+    expect(appSource).toContain('@select-device="openDeviceSync"')
+    expect(appSource).toContain('@sync-request="openSyncPanel()"')
+    expect(syncSource).toContain("value=\"remote\" :disabled=\"busy || selectedDevice?.online === false\"")
+    expect(syncSource).toContain('设备下线后不可用')
+    expect(syncSource).toContain('将项目与会话复制到手机')
+  })
+
+  it('groups account workspaces by host and isolates cached projects by account', () => {
+    expect(appSource).toContain('`account-device:${hostKey}`')
+    expect(appSource).toContain("accountWorkspaces.value.filter((workspace) => (")
+    expect(appSource).toContain("await syncRepository.setAccountScope(session?.serverId || '', session?.username || '')")
+    expect(appSource).toContain("await remoteRepository.setAccountScope(session?.serverId || '', session?.username || '')")
+    expect(appSource).toContain('const syncProjectTargets = new Map')
+  })
+
+  it('requires a completed remote sync before opening the selected project', () => {
+    const disconnect = appSource.indexOf('runtime.workbench.disconnect()')
+    const switchTransport = appSource.indexOf('await transport.use(connectionManager.getTransport())', disconnect)
+    const start = appSource.indexOf('await syncEngine.start()')
+    const open = appSource.indexOf('await lamToolsAppRef.value?.openProject(projectId)', start)
+
+    expect(disconnect).toBeGreaterThan(-1)
+    expect(switchTransport).toBeGreaterThan(disconnect)
+    expect(start).toBeGreaterThan(-1)
+    expect(open).toBeGreaterThan(start)
+    expect(appSource).toContain("if (syncEngine.state.value !== 'synced')")
+    expect(appSource).toContain("throw new Error(`会话历史游标重复：${thread.title}`)")
+  })
+
+  it('persists offline sync devices and disables stale remote access after restart', () => {
+    expect(appSource).toContain('SYNC_OFFLINE_DEVICES_STORAGE_KEY')
+    expect(appSource).toContain('readSyncOfflineDeviceIds()')
+    expect(appSource).toContain('setSyncDeviceOffline(payload.deviceId, true)')
+    expect(appSource).toContain('`account:${server}:${account}:${deviceId}`')
+  })
+
+  it('imports history by the source project id and cancels stale project loads', () => {
+    expect(appSource).toContain('thread.projectId === projectId')
+    expect(appSource).toContain('class SyncLoadCancelledError extends Error')
+    expect(appSource).toContain('prepareSyncDevice(deviceId, workspace?.workspaceId || \'\', generation)')
+  })
+
+  it('keeps only the system inset above chat and shifts drawer content below controls', () => {
+    expect(appSource).toContain('--mobile-header-offset: env(safe-area-inset-top, 0px)')
+    expect(appSource).toContain('background: var(--theme-main-background)')
+    expect(appSource).toContain("'mobile-host--left-drawer-open': leftDrawerOpen")
+    expect(appSource).toContain('.mobile-host--left-drawer-open::before')
+    expect(appSource).toContain('background: var(--theme-backdrop-background)')
+    expect(appSource).toContain('.mobile-host .workspace-main { padding-top: calc(var(--space-6) + var(--space-1)); }')
+    expect(appSource).toContain('.mobile-host .drawer-left { padding-top: var(--space-4); }')
   })
 })

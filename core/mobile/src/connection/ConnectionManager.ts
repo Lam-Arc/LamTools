@@ -167,8 +167,9 @@ export class ConnectionManager {
       }
       if (this.state.value === 'offline' || this.state.value === 'error') {
         this.lanFailed = false
-        this.state.value = 'reconnecting'
-        this.message.value = CONNECTION_LABELS.reconnecting
+        // Network recovery only makes a retry possible. Keep the user-facing
+        // state offline until the transport has completed a real handshake;
+        // a `connecting`/`reconnecting` event alone is not proof of reachability.
         void this.transport.close()
       }
     })
@@ -211,8 +212,10 @@ export class ConnectionManager {
       : await loadOrCreateDeviceIdentity()
     this.assertCurrent(generation)
     this.path.value = null
-    this.state.value = 'discovering'
-    this.message.value = CONNECTION_LABELS.discovering
+    if (this.state.value !== 'offline') {
+      this.state.value = 'discovering'
+      this.message.value = CONNECTION_LABELS.discovering
+    }
     let devices: Awaited<ReturnType<LanDiscovery['discover']>> = []
     try {
       devices = await this.lanDiscovery.discover()
@@ -311,6 +314,7 @@ export class ConnectionManager {
   ): void {
     this.assertCurrent(generation)
     this.path.value = path
+    if (this.state.value === 'offline') return
     this.state.value = state
     this.message.value = CONNECTION_LABELS[state]
   }
@@ -324,19 +328,20 @@ export class ConnectionManager {
       return
     }
     if (state === 'connecting' || state === 'reconnecting') {
+      if (this.state.value === 'offline') return
       this.state.value = this.path.value === 'relay' ? 'connecting_remote' : 'connecting_lan'
       this.message.value = CONNECTION_LABELS[this.state.value]
       return
     }
     if (state === 'failed') {
       if (this.path.value === 'lan') this.lanFailed = true
-      this.state.value = 'error'
-      this.message.value = CONNECTION_LABELS.error
+      this.state.value = 'offline'
+      this.message.value = CONNECTION_LABELS.offline
       return
     }
-    if (state === 'disconnected' && this.state.value !== 'idle' && this.state.value !== 'offline') {
-      this.state.value = 'reconnecting'
-      this.message.value = CONNECTION_LABELS.reconnecting
+    if (state === 'disconnected' && this.state.value !== 'idle') {
+      this.state.value = 'offline'
+      this.message.value = CONNECTION_LABELS.offline
     }
   }
 }

@@ -25,6 +25,7 @@ export interface RuntimeCapabilities {
   notifications: boolean
   desktopWindow: boolean
   files?: RuntimeFileCapabilities
+  localProjects?: Readonly<Ref<boolean>>
 }
 
 export interface RuntimeWorkspaceOption {

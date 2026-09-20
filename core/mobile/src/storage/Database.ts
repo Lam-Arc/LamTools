@@ -606,12 +606,15 @@ function writeMemoryState<TState>(name: string, state: TState): void {
 
 function localStateScope(value: unknown): string {
   if (isRecord(value)) {
+    const accountScope = stringValue(value.accountScope || value.account_scope)
     const workspaceId = stringValue(value.workspaceId || value.workspace_id)
-    if (workspaceId) return `workspace:${workspaceId}`
+    const prefix = accountScope ? `account:${accountScope}` : 'account:anonymous'
+    if (workspaceId) return `${prefix}:workspace:${encodeURIComponent(workspaceId)}`
     const desktopId = stringValue(value.desktopId || value.desktop_id)
-    if (desktopId) return `desktop:${desktopId}`
+    if (desktopId) return `${prefix}:desktop:${encodeURIComponent(desktopId)}`
+    return `${prefix}:default`
   }
-  return 'default'
+  return 'account:anonymous:default'
 }
 
 function isScopedBucket<TState>(value: unknown): value is { active: TState | null; scopes: Record<string, TState> } {

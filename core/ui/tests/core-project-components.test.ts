@@ -61,6 +61,25 @@ describe('CoreProjectCreate', () => {
     }]])
   })
 
+  it('creates a named mobile-local project without requesting a desktop directory', async () => {
+    const wrapper = mount(CoreProjectCreate, {
+      props: { transport, localOnly: true },
+      global: { stubs: { Teleport: true } },
+    })
+
+    expect(wrapper.find('[data-project-root]').exists()).toBe(false)
+    expect(wrapper.get('[data-project-submit]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-project-name]').setValue('手机项目')
+    await wrapper.get('form').trigger('submit')
+
+    expect(wrapper.emitted('submit')).toEqual([[{
+      name: '手机项目',
+      work_root: '',
+      icon_key: 'folder',
+      color_key: 'gray',
+    }]])
+  })
+
   it('offers eight semantic icons and sixteen colors in the create flow', async () => {
     const wrapper = mount(CoreProjectCreate, { props: { transport }, global: { stubs: { Teleport: true } } })
 
@@ -379,6 +398,7 @@ describe('Core project session ID contract', () => {
 
     expect(mainHeader).toContain('<CoreSessionTitleEditor')
     expect(mainHeader).toContain('class="thread-header" data-session-header')
+    expect(mainHeader).toContain("appRuntime.platform !== 'mobile' && activeSessionId")
     expect(mainHeader).not.toContain(':session-id=')
     expect(appSource).toContain(':session-id="projectSettingsSessionId"')
     expect(appSource).toMatch(/const projectSettingsSessionId = computed\(\(\) => \{[\s\S]*?if \(!activeSessionId\.value \|\| selectedProject\.value\?\.id !== activeProjectId\.value\) return undefined[\s\S]*?return activeSessionId\.value[\s\S]*?\n\}\)/)

@@ -235,6 +235,34 @@ describe('SyncEngine', () => {
     await engine.close()
   })
 
+  it('keeps failed transport offline until a connected event completes a new sync', async () => {
+    const repository = createLocalRepository(new FakeDatabase())
+    let requests = 0
+    const transport = new FakeTransport(async () => {
+      requests += 1
+      return { ok: true, mode: 'snapshot', cursor: requests, snapshotVersion: requests }
+    })
+    const engine = new SyncEngine({
+      transport,
+      repository,
+      reconnectDelaysMs: [60_000],
+      requestRpc: (method, params) => transport.request({ kind: 'rpc', method, params }),
+    })
+
+    await engine.start()
+    expect(engine.state.value).toBe('synced')
+    transport.emitState('failed')
+    expect(engine.state.value).toBe('offline')
+    transport.emitState('reconnecting')
+    expect(engine.state.value).toBe('offline')
+
+    transport.emitState('connected')
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(requests).toBeGreaterThanOrEqual(2)
+    expect(engine.state.value).toBe('synced')
+    await engine.close()
+  })
+
   it('does not apply a late sync response after close', async () => {
     const repository = createLocalRepository(new FakeDatabase())
     let requestCount = 0
