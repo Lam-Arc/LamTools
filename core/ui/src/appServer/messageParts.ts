@@ -35,7 +35,7 @@ export function projectAssistantMessageParts(
 
   for (let index = source.length - 1; index >= 0; index -= 1) {
     const part = source[index]
-    if (part.partType !== 'model_text' || !normalizeAnswerText(part.content || '')) continue
+    if (part.partType !== 'model_text' || !normalizeAnswerText(part.content || '') || isExplicitNonFinalAnswerPart(part)) continue
     if (isExplicitFinalAnswerPart(part)) {
       answerIndex = index
       break
@@ -47,7 +47,7 @@ export function projectAssistantMessageParts(
     if (normalizedContent) {
       for (let index = source.length - 1; index >= 0; index -= 1) {
         const part = source[index]
-        if (part.partType !== 'model_text') continue
+        if (part.partType !== 'model_text' || isExplicitNonFinalAnswerPart(part)) continue
         if (normalizeAnswerText(part.content || '') !== normalizedContent) continue
         if (!hasMeaningfulTrailingProcess(source, index)) {
           answerIndex = index
@@ -64,7 +64,7 @@ export function projectAssistantMessageParts(
   if (answerIndex < 0 && options.live) {
     for (let index = source.length - 1; index >= 0; index -= 1) {
       const part = source[index]
-      if (part.partType !== 'model_text' || !normalizeAnswerText(part.content || '')) continue
+      if (part.partType !== 'model_text' || !normalizeAnswerText(part.content || '') || isExplicitNonFinalAnswerPart(part)) continue
       if (hasMeaningfulTrailingProcess(source, index)) break
       answerIndex = index
       break
@@ -85,7 +85,7 @@ export function projectAssistantMessageParts(
     // promote the terminal model-text once the process stream reaches its end.
     answerText: answerPart
       ? (answerText || String(answerPart.content || ''))
-      : options.live && hasMeaningfulModelText
+      : (options.live || source.some(isExplicitNonFinalAnswerPart)) && hasMeaningfulModelText
         ? ''
         : answerText,
   }
@@ -93,12 +93,19 @@ export function projectAssistantMessageParts(
 
 function isExplicitFinalAnswerPart(part: MessagePart): boolean {
   const metadata = part.metadata || {}
-  return metadata.final === true
+  return metadata.final_response === true
+    || metadata.final === true
     || metadata.is_final === true
     || metadata.final_answer === true
     || metadata.answer === true
     || metadata.role === 'assistant_answer'
     || metadata.kind === 'final_answer'
+}
+
+function isExplicitNonFinalAnswerPart(part: MessagePart): boolean {
+  if (part.partType !== 'model_text') return false
+  const metadata = part.metadata || {}
+  return metadata.final_response === false || metadata.has_tool_calls === true
 }
 
 function hasMeaningfulTrailingProcess(parts: MessagePart[], index: number): boolean {

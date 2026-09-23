@@ -50,15 +50,16 @@ const ModeContent = defineComponent({
 
 async function loadMode(): Promise<void> {
   const revision = ++loadRevision
+  const mode = getMode(props.modeId, props.pluginId)
   // Async work from a previous mode must not select a session after switching.
   scopedContext.value = {
     ...context,
+    modeCapabilities: mode?.capabilities,
     selectSession: async (id) => {
       if (revision !== loadRevision) return
       await context.selectSession(id)
     },
   }
-  const mode = getMode(props.modeId, props.pluginId)
   component.value = null
   error.value = ''
   modeTitle.value = mode?.title || ''

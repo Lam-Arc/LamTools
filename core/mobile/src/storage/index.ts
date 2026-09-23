@@ -13,3 +13,4 @@ export {
   type LocalThread,
 } from './LocalRepository'
 export { createLocalFirstProjectClient } from './LocalProjectClient'
+export { cloneState } from './cloneState'

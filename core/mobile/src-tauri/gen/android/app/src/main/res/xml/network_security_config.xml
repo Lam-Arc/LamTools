@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <!-- The Android platform verifier fetches signed GTS CRLs over HTTP.
+         Source: rustls-platform-verifier commit 7c3e664, generated CRL host list. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">c.pki.goog</domain>
+    </domain-config>
+</network-security-config>

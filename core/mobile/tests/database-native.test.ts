@@ -98,4 +98,11 @@ describe('native local database connection lifecycle', () => {
     expect(native.db.open).not.toHaveBeenCalled()
     expect(native.db.execute).toHaveBeenCalledOnce()
   })
+
+  it('surfaces native SQLite startup failures instead of using volatile memory', async () => {
+    native.connection.createConnection.mockRejectedValueOnce(new Error('SQLite unavailable'))
+    const database = createLocalDatabase<Record<string, unknown>>('lamtools-mobile')
+
+    await expect(database.open()).rejects.toThrow('SQLite unavailable')
+  })
 })

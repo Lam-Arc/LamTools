@@ -285,7 +285,7 @@ onUnmounted(() => {
 
 .mobile-top-bar__button {
   position: fixed;
-  top: max(var(--space-2), env(safe-area-inset-top, 0px));
+  top: max(var(--space-2), var(--mobile-header-offset, env(safe-area-inset-top, 0px)));
   left: var(--space-3);
   display: grid;
   place-items: center;
@@ -323,7 +323,7 @@ onUnmounted(() => {
 
 .mobile-top-bar__sync {
   position: fixed;
-  top: max(var(--space-3), env(safe-area-inset-top, 0px));
+  top: max(var(--space-3), var(--mobile-header-offset, env(safe-area-inset-top, 0px)));
   left: 50%;
   display: inline-flex;
   min-height: 32px;
@@ -345,7 +345,7 @@ onUnmounted(() => {
 
 .mobile-command-dock {
   position: fixed;
-  top: max(var(--space-2), env(safe-area-inset-top, 0px));
+  top: max(var(--space-2), var(--mobile-header-offset, env(safe-area-inset-top, 0px)));
   right: var(--space-3);
   width: 44px;
   height: 44px;

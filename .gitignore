@@ -67,6 +67,8 @@ archive/members/writer/frontend/src-tauri/gen/
 archive/members/writer/frontend/.electron-app-stage/
 .acceptance/
 core/desktop/src-tauri/target/
+core/mobile/src-tauri/target/
+core/runtime-rs/target/
 core/remote/relay/target/
 core/desktop/src-tauri/lamcore-backend/
 
@@ -154,6 +156,9 @@ core/_swap_checkboxes.py
 !core/desktop/src-tauri/icons/128x128.png
 !core/desktop/src-tauri/icons/128x128@2x.png
 !core/desktop/src-tauri/icons/icon.png
+!core/mobile/src-tauri/icons/icon.png
+!core/mobile/src-tauri/icons/android/**/ic_launcher*.png
+!core/mobile/src-tauri/gen/android/app/src/main/res/**/ic_launcher*.png
 !core/mobile/android/app/src/main/res/**/ic_launcher*.png
 !core/mobile/android/app/src/main/res/**/splash.png
 !core/mobile/ios/App/App/Assets.xcassets/**/*.png

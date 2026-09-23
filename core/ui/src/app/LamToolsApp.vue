@@ -1,5 +1,6 @@
 <template>
   <TitleBar
+    :hide-on-mobile="runtime.platform === 'mobile'"
     :show-in-preview="props.showPreviewTitleBar"
     :left-pinned="leftPinned"
     :right-pinned="rightPinned"
@@ -125,8 +126,9 @@
     :content-width="contentWidth"
     :show-sidebar-header="false"
     :show-sidebar-header-action="false"
-    :show-sidebar-search-action="appRuntime.platform !== 'mobile'"
-    :show-sidebar-settings-action="appRuntime.platform !== 'mobile'"
+    :show-sidebar-search-action="appRuntime.platform !== 'mobile' || showMobileFooterFallback"
+    :show-sidebar-settings-action="appRuntime.platform !== 'mobile' || showMobileFooterFallback"
+    :show-right-panel="appRuntime.platform !== 'mobile'"
     :show-right-panel-header="false"
     :main-content-full-bleed="activePluginMode?.pluginId === 'workflow'"
     :workflow-mode="activePluginMode?.pluginId === 'workflow'"
@@ -232,6 +234,23 @@
     </template>
 
     <template #sidebar-footer>
+      <template v-if="showMobileFooterFallback">
+        <button
+          v-for="option in mobileModeOptions"
+          :key="option.id"
+          class="sidebar-action"
+          type="button"
+          :aria-pressed="option.id === activeMobileModeId"
+          :data-mobile-footer-mode="option.id"
+          @click="selectAppModeByKey(option.id)"
+        >
+          <span aria-hidden="true"><Check v-if="option.id === activeMobileModeId" :size="14" :stroke-width="1.8" /><Blocks v-else :size="14" :stroke-width="1.8" /></span>
+          <span>{{ option.label }}</span>
+        </button>
+        <button class="sidebar-action" type="button" data-mobile-footer-account @click="emit('open-account')">
+          <span aria-hidden="true"><UserRound :size="14" :stroke-width="1.8" /></span><span>登录 / 账号</span>
+        </button>
+      </template>
       <button class="sidebar-action" type="button" @click="showArrange = true">
         <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>长期安排</span>
       </button>
@@ -598,7 +617,9 @@ import {
 import { gsap } from 'gsap'
 import {
   ArrowDown,
+  Blocks,
   CalendarClock,
+  Check,
   ChevronDown,
   ChevronUp,
   ClipboardPaste,
@@ -608,6 +629,7 @@ import {
   Scissors,
   TextSelect,
   Upload,
+  UserRound,
 } from 'lucide-vue-next'
 import type {
   CoreAttachment,
@@ -750,12 +772,14 @@ type RawProvider = {
 const props = defineProps<{
   runtime: LamToolsRuntime
   accountContext?: MobileControlAccountContext
+  mobileTopBarHidden?: boolean
   showPreviewTitleBar?: boolean
 }>()
 const emit = defineEmits<{
   'left-drawer-change': [value: boolean]
   'account-submit': [payload: MobileControlAccountPayload]
   'account-logout': []
+  'open-account': []
   'mobile-mode-state': [payload: {
     label: string
     title: string
@@ -770,6 +794,7 @@ function onLeftDrawerChange(value: boolean): void {
   emit('left-drawer-change', value)
 }
 const appRuntime = props.runtime
+const showMobileFooterFallback = computed(() => appRuntime.platform === 'mobile' && props.mobileTopBarHidden === true)
 const workbench = appRuntime.workbench
 const transport = appRuntime.transport
 const projectClient = appRuntime.projectClient || createCoreProjectClient(transport)
@@ -1238,7 +1263,12 @@ const coreAppMode = {
   load: async () => ({}) as never,
 } as PluginMode
 const appModes = computed<PluginMode[]>(() => [coreAppMode, ...pluginModes.value])
+const mobileModeOptions = computed(() => appModes.value.map((mode) => ({
+  id: mode.pluginId + ':' + mode.id,
+  label: mode.title,
+})))
 const activeAppModeKey = ref('core:agent')
+const activeMobileModeId = computed(() => activeAppModeKey.value)
 const activeAppMode = computed(() => (
   appModes.value.find((mode) => mode.pluginId + ':' + mode.id === activeAppModeKey.value)
     || coreAppMode
@@ -2847,6 +2877,9 @@ function selectAllComposerText(selection: ComposerSelection): void {
 }
 
 function openComposerContextMenu(event: MouseEvent): void {
+  // On Android, leave textarea editing to the native menu. The custom Paste
+  // action reads navigator.clipboard, which WebView may deny even for a tap.
+  if (appRuntime.platform === 'mobile') return
   const textarea = composerTextareaEl.value
   if (!textarea) return
   const selection: ComposerSelection = {

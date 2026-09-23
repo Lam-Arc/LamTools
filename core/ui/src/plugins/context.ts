@@ -106,6 +106,8 @@ export interface CorePluginModeContext {
   ensureRightPanelOpen: () => void
   lastEvent: Ref<CoreAppEvent | null>
   chat: CorePluginChatContext
+  /** Capabilities declared by the host for the active mode; see PluginUIEntry. */
+  modeCapabilities?: readonly string[]
 }
 
 export const CORE_PLUGIN_MODE_CONTEXT: InjectionKey<CorePluginModeContext> = Symbol('core-plugin-mode-context')

@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core'
 import { CapacitorSQLite, SQLiteConnection, type SQLiteDBConnection } from '@capacitor-community/sqlite'
+import { invoke } from '@tauri-apps/api/core'
 
 export interface LocalDatabase<TState> {
   open(): Promise<void>
@@ -9,6 +10,60 @@ export interface LocalDatabase<TState> {
   readScope?(scope: string): Promise<TState | null>
   writeScope?(scope: string, state: TState): Promise<void>
   close(): Promise<void>
+}
+
+/** Tauri owns durable mobile state. Keeping the SQLite connection and writes
+ * in Rust avoids WebView-origin changes or renderer failures silently moving
+ * projects and sessions into volatile browser storage. */
+class TauriLocalDatabase<TState> implements LocalDatabase<TState> {
+  constructor(private readonly name: string) {}
+
+  async open(): Promise<void> {
+    const current = await invoke<TState | null>('local_state_read', {
+      database: this.name,
+      scope: null,
+    })
+    if (current != null || typeof indexedDB === 'undefined') return
+
+    // Release-candidate Tauri builds briefly used WebView IndexedDB. Import
+    // their active state once before all subsequent writes move to Rust SQLite.
+    const webviewDatabase = new IndexedDbLocalDatabase<TState>(this.name)
+    await webviewDatabase.open()
+    try {
+      const legacy = await webviewDatabase.read()
+      if (legacy != null) await this.write(legacy)
+    } finally {
+      await webviewDatabase.close()
+    }
+  }
+
+  async read(): Promise<TState | null> {
+    return await invoke<TState | null>('local_state_read', {
+      database: this.name,
+      scope: null,
+    })
+  }
+
+  async write(state: TState): Promise<void> {
+    await this.writeScope(localStateScope(state), state)
+  }
+
+  async readScope(scope: string): Promise<TState | null> {
+    return await invoke<TState | null>('local_state_read', {
+      database: this.name,
+      scope,
+    })
+  }
+
+  async writeScope(scope: string, state: TState): Promise<void> {
+    await invoke('local_state_write', {
+      database: this.name,
+      scope,
+      state,
+    })
+  }
+
+  async close(): Promise<void> {}
 }
 
 const SQLITE_SCHEMA = `
@@ -623,11 +678,23 @@ function isScopedBucket<TState>(value: unknown): value is { active: TState | nul
 
 export function createLocalDatabase<TState>(name = 'lamtools-mobile'): LocalDatabase<TState> {
   const fallback = new MemoryLocalDatabase<TState>(name)
+  if (isTauriRuntime()) {
+    // Tauri persistence is a hard contract: surface native failures rather
+    // than pretending a process-local or WebView database is durable.
+    return new TauriLocalDatabase<TState>(name)
+  }
   if (Capacitor.isNativePlatform()) {
-    return new ResilientLocalDatabase(new CapacitorLocalDatabase<TState>(name), fallback)
+    // Never silently replace durable SQLite with process-local memory on a
+    // phone.  That made projects appear to save and then vanish after the app
+    // was restarted.  Surface native storage failures instead of losing data.
+    return new CapacitorLocalDatabase<TState>(name)
   }
   if (typeof indexedDB !== 'undefined') {
     return new ResilientLocalDatabase(new IndexedDbLocalDatabase<TState>(name), fallback)
   }
   return new MemoryLocalDatabase<TState>(name)
+}
+
+function isTauriRuntime(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }

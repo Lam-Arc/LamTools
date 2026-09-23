@@ -13,7 +13,17 @@ describe('mobile command dock host contract', () => {
     expect(appSource).toContain('@select-mode="lamToolsAppRef?.selectAppModeByKey($event)"')
     expect(appSource).toContain('@open-search="lamToolsAppRef?.openSearch()"')
     expect(appSource).toContain('@open-settings="lamToolsAppRef?.openSettings()"')
+    expect(appSource).toContain(':mobile-top-bar-hidden="topBarHidden"')
     expect(appSource).toContain('@open-account="accessPanelOpen = true"')
+  })
+
+  it('restores mobile sidebar actions only while the top bar is hidden', () => {
+    expect(shellSource).toContain("const showMobileFooterFallback = computed(() => appRuntime.platform === 'mobile' && props.mobileTopBarHidden === true)")
+    expect(shellSource).toContain(':show-sidebar-search-action="appRuntime.platform !== \'mobile\' || showMobileFooterFallback"')
+    expect(shellSource).toContain(':show-sidebar-settings-action="appRuntime.platform !== \'mobile\' || showMobileFooterFallback"')
+    expect(shellSource).toContain('v-if="showMobileFooterFallback"')
+    expect(shellSource).toContain('@click="selectAppModeByKey(option.id)"')
+    expect(shellSource).toContain('@click="emit(\'open-account\')"')
   })
 
   it('shows the active account identity without making login mandatory', () => {
@@ -32,5 +42,11 @@ describe('mobile command dock host contract', () => {
 
   it('removes the desktop main-card frame on the mobile viewport', () => {
     expect(appSource).toMatch(/\.mobile-host \.workspace-main \{[\s\S]*?border: 0;[\s\S]*?border-radius: 0;[\s\S]*?box-shadow: none;/)
+  })
+
+  it('disables the desktop right rail and preserves the full-height left drawer', () => {
+    expect(shellSource).toContain(':show-right-panel="appRuntime.platform !== \'mobile\'"')
+    expect(appSource).toContain('active.blur()')
+    expect(appSource).toMatch(/\.mobile-host \.drawer-left \{[\s\S]*?height: 100dvh;/)
   })
 })

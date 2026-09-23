@@ -108,7 +108,9 @@ describe('PairingScreen account entry', () => {
   })
 
   it('keeps only the system inset above chat and shifts drawer content below controls', () => {
-    expect(appSource).toContain('--mobile-header-offset: env(safe-area-inset-top, 0px)')
+    expect(appSource).toContain(
+      '--mobile-header-offset: max(var(--native-safe-area-top, 0px), env(safe-area-inset-top, 0px))',
+    )
     expect(appSource).toContain('background: var(--theme-main-background)')
     expect(appSource).toContain("'mobile-host--left-drawer-open': leftDrawerOpen")
     expect(appSource).toContain('.mobile-host--left-drawer-open::before')

@@ -1,6 +1,6 @@
 {
   "name": "@lamtools/mobile",
-  "version": "0.1.2",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "engines": {
@@ -14,9 +14,14 @@
     "test": "vitest run",
     "cap:sync": "npm run build && cap sync",
     "android": "cap run android",
-    "ios": "cap run ios"
+    "ios": "cap run ios",
+    "tauri": "tauri",
+    "tauri:android:init": "tauri android init",
+    "tauri:android:dev": "tauri android dev",
+    "tauri:android:build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-tauri-android-icons.ps1 && tauri android build --apk"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.0",
     "@aparajita/capacitor-secure-storage": "^7.1.6",
     "@capacitor-community/sqlite": "^7.0.3",
     "@capacitor/android": "^7.6.9",
@@ -33,6 +38,7 @@
     "vue": "^3.5.38"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.3",
     "@capacitor/cli": "^7.4.3",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.7",

@@ -1,0 +1,20 @@
+[package]
+name = "lamtools-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Shared Sunday Agent runtime for desktop and mobile hosts"
+
+[dependencies]
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "sync", "time"] }
+uuid = { version = "1", features = ["v4", "v5"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "fs"] }

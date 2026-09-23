@@ -51,6 +51,15 @@ type NotesManagerNavigationApi = {
 }
 const notesManager = ref<NotesManagerNavigationApi | null>(null)
 const noteWorkspaceActive = computed(() => page.value === 'notes' || currentBinding.value?.subject.kind === 'notes')
+/**
+ * The Note vault is a host capability rather than a UI preference.  A host
+ * that declares no `notes` capability never offers the workspace, so the user
+ * cannot reach controls the host cannot serve.
+ */
+const notesEnabled = computed(() => {
+  const capabilities = ctx.modeCapabilities
+  return !capabilities || capabilities.includes('notes')
+})
 const rightRailInitializedForNotes = ref(false)
 const pins = ref<StudyPin[]>([])
 const pinCacheKey = ref('')
@@ -387,6 +396,7 @@ const unregister = usePluginModeRuntime().register(`${props.pluginId}:${props.mo
       noteTreeError: notesTreeError.value,
       selectNote: selectNoteFromTree,
       refreshNoteTree: loadNoteTree,
+      notesEnabled: notesEnabled.value,
     })),
     primaryActionLabel: '',
     onPrimaryAction: () => navigate('chat'),
@@ -522,6 +532,7 @@ async function navigate(id: string): Promise<void> {
       return
     }
     if (id === 'notes') {
+      if (!notesEnabled.value) return
       page.value = 'notes'; notesVisited.value = true; selected.value = null; notesReturnPending.value = false; ensureNotesRightPanel()
       await Promise.all([refreshNotes(), selectBinding({ kind: 'notes', id: 'notes' })]); return
     }

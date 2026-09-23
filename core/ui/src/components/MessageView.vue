@@ -136,6 +136,20 @@
             </button>
           </div>
 
+          <div
+            v-if="mobileProgressVisible"
+            class="mobile-turn-progress"
+            :class="`mobile-turn-progress--${mobileProgress?.status}`"
+            role="status"
+            aria-live="polite"
+            :aria-label="`执行进度：${mobileProgress?.label}`"
+          >
+            <span class="mobile-turn-progress__label">{{ mobileProgress?.label }}</span>
+            <span class="mobile-turn-progress__track" aria-hidden="true">
+              <span class="mobile-turn-progress__fill" />
+            </span>
+          </div>
+
           <div v-if="terminalErrorText(msg)" class="assistant-terminal-error" role="alert">
             <span class="assistant-terminal-error__label">运行失败</span>
             <span>{{ terminalErrorText(msg) }}</span>
@@ -998,6 +1012,32 @@ const emit = defineEmits<{
 }>()
 
 const assistantTimestamp = computed(() => formatAssistantTimestamp(props.msg.timestamp))
+
+type MobileTurnProgress = {
+  label: string
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  expires_at?: number
+}
+
+const mobileProgress = computed<MobileTurnProgress | null>(() => {
+  const raw = (props.msg.metadata as Record<string, unknown> | undefined)?.mobile_turn_progress
+  if (!raw || typeof raw !== 'object') return null
+  const progress = raw as Record<string, unknown>
+  if (typeof progress.label !== 'string' || !['running', 'completed', 'failed', 'cancelled'].includes(String(progress.status))) return null
+  return progress as MobileTurnProgress
+})
+const mobileProgressVisible = ref(false)
+let mobileProgressTimer: ReturnType<typeof setTimeout> | undefined
+watch(mobileProgress, progress => {
+  if (mobileProgressTimer) clearTimeout(mobileProgressTimer)
+  mobileProgressTimer = undefined
+  const remaining = progress?.status === 'running' ? Infinity : Number(progress?.expires_at) - Date.now()
+  mobileProgressVisible.value = !!progress && remaining > 0
+  if (Number.isFinite(remaining) && remaining > 0) {
+    mobileProgressTimer = setTimeout(() => { mobileProgressVisible.value = false }, remaining)
+  }
+}, { immediate: true })
+onBeforeUnmount(() => { if (mobileProgressTimer) clearTimeout(mobileProgressTimer) })
 
 function formatAssistantTimestamp(value: string | undefined): { compact: string; expanded: string } | null {
   const date = value ? new Date(value) : null
@@ -3609,6 +3649,53 @@ function formatContextSummary(c: ContextCounts): string {
 </script>
 
 <style>
+.mobile-turn-progress {
+  --text: var(--theme-main-text);
+  display: grid;
+  gap: var(--space-1);
+  max-width: 280px;
+  margin: var(--space-2) 0;
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+  font-size: 12px;
+}
+
+.mobile-turn-progress__track {
+  position: relative;
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.mobile-turn-progress__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 36%;
+  border-radius: inherit;
+  background: var(--theme-control-background);
+  animation: mobile-turn-progress-sweep 1.4s ease-out infinite alternate;
+}
+
+.mobile-turn-progress--completed .mobile-turn-progress__fill,
+.mobile-turn-progress--failed .mobile-turn-progress__fill,
+.mobile-turn-progress--cancelled .mobile-turn-progress__fill {
+  width: 100%;
+  animation: none;
+}
+
+.mobile-turn-progress--failed .mobile-turn-progress__fill { background: var(--red); }
+.mobile-turn-progress--cancelled .mobile-turn-progress__fill { background: var(--orange); }
+
+@keyframes mobile-turn-progress-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(280%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-turn-progress__fill { animation: none; }
+}
+
 /* Generated image cards inside process details + fullscreen preview. */
 .tool-image-row {
   display: grid;

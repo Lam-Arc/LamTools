@@ -157,7 +157,12 @@ export function selectChatMessages(
       // Always accumulate the last agentMessage text as content for backward compat
       // (simple text-only Q&A, message filtering etc.) while keeping ALL agentMessages
       // in parts for inline chronological rendering.
-      if (!isProtocolEnvelopeText(content)) assistant.content = content
+      // An LLM can emit text before tool calls. Keep that item in the process
+      // timeline; only a final (or legacy unmarked) item supplies the flat
+      // answer field consumed by history, copy, and export paths.
+      if (!isProtocolEnvelopeText(content)
+        && item.final_response !== false
+        && item.has_tool_calls !== true) assistant.content = content
     }
     assistant.parts.push(item)
   }
@@ -598,11 +603,9 @@ function coreItemToAppItem(item: CoreRuntimeItem): CoreAppItem {
     parent_item_id: item.parent_item_id,
     type,
     status: item.status,
-    content: typeof item.content === 'string'
-      ? item.content
-      : typeof payload.content === 'string'
-        ? payload.content
-        : undefined,
+    // userMessage content is an array of typed input parts.  Keeping only
+    // strings made locally-created mobile user messages render as empty.
+    content: item.content ?? payload.content,
     deltas: item.deltas,
     artifacts: item.artifacts,
     usage: item.usage,

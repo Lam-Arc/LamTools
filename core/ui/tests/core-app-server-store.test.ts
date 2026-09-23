@@ -5,6 +5,7 @@ import {
   createCoreAppServerRuntimeState,
   hydrateSnapshot,
   selectChatMessages,
+  selectCoreWorkbenchMessages,
   type CoreAppServerRuntimeClient,
   type CoreAppEvent,
   type CoreAppSnapshot,
@@ -161,6 +162,49 @@ describe('core appServer runtime store', () => {
     expect(runtime.state?.core?.status).toBe('completed')
     expect(runtime.state?.core?.turns?.['turn-1']?.status).toBe('completed')
     expect(runtime.state?.revision).toBe(13)
+  })
+
+  it('keeps the newer live turn running after switching away and replaying an older terminal event', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const current = versionedSnapshot(20, 'running', 20)
+    current.turns = {
+      'turn-1': { turn_id: 'turn-1', status: 'completed', items: [] },
+      'turn-2': { turn_id: 'turn-2', status: 'running', items: [] },
+    }
+    current.core!.turns = {
+      'turn-1': { turn_id: 'turn-1', status: 'completed', items: [] },
+      'turn-2': { turn_id: 'turn-2', status: 'running', items: ['current-text'] },
+    }
+    current.core!.items = {
+      'current-text': {
+        item_id: 'current-text', turn_id: 'turn-2', seq: 19,
+        kind: 'message', status: 'completed', content: '正在检查',
+        payload: { type: 'agentMessage', content: '正在检查', final_response: false, has_tool_calls: true },
+      },
+    }
+    current.core!.item_order = ['current-text']
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method, params) => {
+        if (method !== 'thread/resume') return {}
+        if (params.thread_id === 'thread-2') return { snapshot: { ...snapshot(1, 'idle'), thread_id: 'thread-2' } }
+        return {
+          snapshot: current,
+          events: [{ ...runStatusEvent('old-terminal-replay', 'completed'), seq: 10, revision: 10 }],
+        }
+      }),
+    })
+
+    await controller.connect('thread-1')
+    await controller.switchThread('thread-2')
+    await controller.switchThread('thread-1')
+
+    expect(runtime.state?.core?.status).toBe('running')
+    expect(runtime.state?.core?.turns?.['turn-2']?.status).toBe('running')
+    const live = selectCoreWorkbenchMessages(runtime.state!, { active: true }).find(message => message.id === 'assistant:turn-2')
+    expect(live?.metadata?.live).toBe(true)
+    expect(live?.content).toBe('')
+    expect(live?.processParts?.map(part => part.id)).toContain('current-text')
+    expect(live?.answerPart).toBeNull()
   })
 
   it('refreshes and retries turn/start once with the same idempotency key', async () => {

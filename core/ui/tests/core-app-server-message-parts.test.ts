@@ -63,6 +63,29 @@ describe('assistant message parts projection', () => {
     expect(result.answerText).toBe('old snapshot')
   })
 
+  it('keeps explicitly intermediate model text in process, including when it matches flat content', () => {
+    const intermediate = part('intermediate', 'model_text', '先检查文件', {
+      metadata: { final_response: false, has_tool_calls: true },
+    })
+    for (const live of [false, true]) {
+      const result = projectAssistantMessageParts([intermediate], '先检查文件', { live })
+      expect(result.processParts).toEqual([intermediate])
+      expect(result.answerPart).toBeNull()
+      expect(result.answerText).toBe('')
+    }
+  })
+
+  it('promotes an explicitly final response after an intermediate response', () => {
+    const result = projectAssistantMessageParts([
+      part('intermediate', 'model_text', '先检查文件', { metadata: { final_response: false, has_tool_calls: true } }),
+      part('tool', 'tool_call', '', { toolName: 'read_file' }),
+      part('final', 'model_text', '完成', { metadata: { final_response: true, has_tool_calls: false } }),
+    ], '完成')
+    expect(result.processParts.map(part => part.id)).toEqual(['intermediate', 'tool'])
+    expect(result.answerPart?.id).toBe('final')
+    expect(result.answerText).toBe('完成')
+  })
+
   it('uses a terminal live model text while the flat content catches up', () => {
     const result = projectAssistantMessageParts([
       part('live-answer', 'model_text', '流式答案'),

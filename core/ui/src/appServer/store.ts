@@ -714,6 +714,15 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
         ? value.status
         : currentCore.status
     const status = isCoreAppThreadStatus(rawStatus) ? rawStatus : currentCore.status
+    // Resume hydrates the current snapshot before replaying old journal
+    // events. Closing a previous turn must not close a different active turn.
+    const hasOtherActiveTurn = turnId && Object.entries({
+      ...(snapshot.turns ?? {}),
+      ...(currentCore.turns ?? {}),
+    }).some(([id, turn]) => id !== turnId && (turn.status === 'running' || turn.status === 'waiting' || turn.status === 'interrupting'))
+    const threadStatus = hasOtherActiveTurn && (status === 'completed' || status === 'failed' || status === 'cancelled')
+      ? currentCore.status
+      : status
     const turns = { ...(currentCore.turns ?? {}) }
     if (turnId) {
       const turn = turns[turnId] ?? { turn_id: turnId, status: status || 'running', items: [] }
@@ -734,7 +743,7 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     }
     return {
       ...snapshot,
-      core: { ...currentCore, seen_event_ids: seen, turns, status },
+      core: { ...currentCore, seen_event_ids: seen, turns, status: threadStatus },
     }
   }
   if (kind === 'usage') {

@@ -16,6 +16,8 @@ const props = withDefaults(defineProps<{
   openSearch?: () => void
   pins?: StudyPin[]
   togglePin?: (pin: StudyPin) => void | Promise<void>
+  /** False when the host has no Note vault, so no dead entry is offered. */
+  notesEnabled?: boolean
 }>(), {
   loadChildren: undefined,
   openNode: undefined,
@@ -23,6 +25,7 @@ const props = withDefaults(defineProps<{
   openSearch: undefined,
   pins: () => [],
   togglePin: undefined,
+  notesEnabled: true,
 })
 
 const expanded = ref<Set<string>>(new Set())
@@ -121,7 +124,7 @@ function visibleChildren(course: Course): Array<{ node: KnowledgeItem; depth: nu
     <button class="sidebar-action study-sidebar-action" :class="{ active: active === 'map' }" type="button" @click="select('map')">
       <GitBranch :size="15" aria-hidden="true" /><span>图谱</span>
     </button>
-    <button class="sidebar-action study-sidebar-action" :class="{ active: active === 'notes' }" type="button" @click="select('notes')">
+    <button v-if="notesEnabled" class="sidebar-action study-sidebar-action" :class="{ active: active === 'notes' }" type="button" @click="select('notes')">
       <FileText :size="15" aria-hidden="true" /><span>笔记</span>
     </button>
     <div class="study-sidebar-divider" role="separator" />

@@ -19,6 +19,12 @@ export interface PluginUIEntry {
   icon?: string
   enabled?: boolean
   tools?: string[]
+  /**
+   * Host-declared capabilities for this mode.  An absent list means the host
+   * makes no claim, so the UI keeps every surface available; an empty list
+   * means the host supports none of them.
+   */
+  capabilities?: string[]
 }
 
 export interface PluginMode extends PluginUIEntry {

@@ -22,15 +22,16 @@ const props = withDefaults(defineProps<{
   openSearch?: () => void
   pins?: StudyPin[]
   togglePin?: (pin: StudyPin) => void | Promise<void>
+  notesEnabled?: boolean
 }>(), {
   noteWorkspaceActive: false, noteTree: () => [], activeNoteId: '', noteTreeLoading: false,
   noteTreeError: '', selectNote: undefined, refreshNoteTree: undefined,
   loadChildren: undefined, openNode: undefined, openPin: undefined, openSearch: undefined,
-  pins: () => [], togglePin: undefined,
+  pins: () => [], togglePin: undefined, notesEnabled: true,
 })
 </script>
 
 <template>
   <StudyNoteTree v-if="noteWorkspaceActive" :tree="noteTree" :active-id="activeNoteId" :loading="noteTreeLoading" :error="noteTreeError" :on-select="selectNote" :on-refresh="refreshNoteTree" />
-  <StudySidebar v-else :courses="courses" :active="active" :select="select" :load-children="loadChildren" :open-node="openNode" :open-pin="openPin" :open-search="openSearch" :pins="pins" :toggle-pin="togglePin" />
+  <StudySidebar v-else :courses="courses" :active="active" :select="select" :load-children="loadChildren" :open-node="openNode" :open-pin="openPin" :open-search="openSearch" :pins="pins" :toggle-pin="togglePin" :notes-enabled="notesEnabled" />
 </template>

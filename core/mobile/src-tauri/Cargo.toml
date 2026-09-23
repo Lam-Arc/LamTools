@@ -1,0 +1,29 @@
+[package]
+name = "sunday-mobile"
+version = "0.1.6"
+description = "Sunday mobile host"
+authors = ["Lam"]
+edition = "2021"
+
+[lib]
+name = "sunday_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+lamtools-runtime = { path = "../../runtime-rs" }
+json5 = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["fs", "macros", "rt", "sync"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+rustls-platform-verifier = "0.7"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "time"] }

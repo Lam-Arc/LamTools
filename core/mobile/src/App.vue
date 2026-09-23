@@ -7,11 +7,13 @@
       ref="lamToolsAppRef"
       :runtime="runtime"
       :account-context="accountContext"
+      :mobile-top-bar-hidden="topBarHidden"
       @left-drawer-change="leftDrawerOpen = $event"
       @mobile-mode-state="mobileModeState = $event"
       @sync-request="openSyncPanel()"
       @account-submit="authenticateCoreAccount"
       @account-logout="logoutAccount"
+      @open-account="accessPanelOpen = true"
     />
     <MobileTopBar
       :hidden="topBarHidden"
@@ -79,15 +81,17 @@ import {
 } from './pairing/TrustedDevices'
 import { onMobileResume } from './native/lifecycle'
 import { createMobileFilePicker } from './native/filePicker'
+import { observeNativeWindowInsets } from './native/windowInsets'
 import { loadOrCreateDeviceIdentity } from './pairing/DeviceIdentity'
 import PairingScreen, {
   type AccountAuthRequest,
 } from './pairing/PairingScreen.vue'
 import { createLocalDatabase } from './storage/Database'
-import { createLocalFirstProjectClient, createLocalRepository } from './storage'
+import { createLocalFirstProjectClient, createLocalRepository, type LocalState } from './storage'
 import { createSwitchableProjectClient } from './storage/SwitchableProjectClient'
 import { SwitchableTransport } from './connection/SwitchableTransport'
 import { StandaloneTransport } from './standalone/StandaloneTransport'
+import { loadLegacyMobileState } from './native/rustAgent'
 import { createStandaloneProjectClient } from './standalone/StandaloneProjectClient'
 import { SyncEngine } from './sync'
 import MobileSyncPanel, { type MobileSyncDevice } from './sync/MobileSyncPanel.vue'
@@ -286,7 +290,11 @@ function enqueueAccountOperation(task: () => Promise<void>): Promise<void> {
 }
 
 function openLeftSidebar(): void {
-  lamToolsAppRef.value?.openLeftSidebar()
+  // Closing the software keyboard before opening the fixed drawer prevents
+  // Android's transient visual viewport from clipping the sidebar.
+  const active = document.activeElement
+  if (active instanceof HTMLElement) active.blur()
+  window.requestAnimationFrame(() => lamToolsAppRef.value?.openLeftSidebar())
 }
 
 function closeAccessPanel(): void {
@@ -830,6 +838,9 @@ async function initialize(): Promise<void> {
   try {
     await localRepository.init()
     if (!isAppAlive()) return
+    const legacyState = await loadLegacyMobileState<LocalState>()
+    if (legacyState) await localRepository.importLegacyState(legacyState)
+    if (!isAppAlive()) return
     await remoteRepository.init()
     if (!isAppAlive()) return
     await syncRepository.init()
@@ -942,8 +953,18 @@ function localProjectToCoreProject(
 }
 
 let removeResumeListener: (() => void) | null = null
+let removeWindowInsetsListener: (() => void) | null = null
+
+function syncNativeWindowInsets(insets: { top: number }): void {
+  // The Android bridge reports CSS pixels. Keeping the value on :root lets
+  // the shared MobileTopBar inherit it without coupling the UI package to
+  // Tauri or Android.
+  const top = Number.isFinite(insets.top) ? Math.max(0, insets.top) : 0
+  document.documentElement.style.setProperty('--native-safe-area-top', `${top}px`)
+}
 
 onMounted(async () => {
+  removeWindowInsetsListener = observeNativeWindowInsets(syncNativeWindowInsets)
   await initialize()
   if (!isAppAlive()) return
   removeResumeListener = onMobileResume(() => { void restoreActiveConnection() })
@@ -955,6 +976,8 @@ onUnmounted(() => {
   workspaceSelectionGeneration += 1
   stopAccountDiscovery()
   removeResumeListener?.()
+  removeWindowInsetsListener?.()
+  document.documentElement.style.removeProperty('--native-safe-area-top')
   runtime.close()
   removeLocalRepositoryListener()
   removeRemoteRepositoryListener()
@@ -973,7 +996,7 @@ onUnmounted(() => {
 @import '@lamtools/ui/styles/variables.css';
 
 .mobile-host {
-  --mobile-header-offset: env(safe-area-inset-top, 0px);
+  --mobile-header-offset: max(var(--native-safe-area-top, 0px), env(safe-area-inset-top, 0px));
   --titlebar-offset: var(--mobile-header-offset);
   min-height: 100dvh;
   box-sizing: border-box;
@@ -986,7 +1009,7 @@ onUnmounted(() => {
   position: fixed;
   inset: 0 0 auto;
   z-index: var(--z-main-surface);
-  height: env(safe-area-inset-top, 0px);
+  height: var(--mobile-header-offset);
   background: var(--theme-main-background);
   pointer-events: none;
 }
@@ -1004,6 +1027,11 @@ onUnmounted(() => {
   }
   .mobile-host .workspace-shell--full-bleed .workspace-main { padding-top: 0; }
   .mobile-host .drawer-left { padding-top: var(--space-4); }
+  .mobile-host .drawer-left {
+    top: 0;
+    height: 100dvh;
+    padding-top: calc(var(--mobile-header-offset) + var(--space-4));
+  }
 }
 
 .mobile-host-status {
@@ -1029,7 +1057,7 @@ onUnmounted(() => {
   display: grid;
   place-items: center;
   box-sizing: border-box;
-  padding: max(var(--space-4), env(safe-area-inset-top)) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom));
+  padding: max(var(--space-4), var(--mobile-header-offset, env(safe-area-inset-top, 0px))) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom, 0px));
   overflow: auto;
   background: color-mix(in srgb, var(--theme-backdrop-text) 8%, transparent);
   backdrop-filter: blur(4px);

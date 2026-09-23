@@ -249,8 +249,14 @@ export function useShellLayout(options: ShellLayoutOptions) {
 
   let narrowMediaQuery: MediaQueryList | undefined
   function syncViewportMode(event: MediaQueryList | MediaQueryListEvent) {
+    const wasNarrow = isNarrowViewport.value
     isNarrowViewport.value = event.matches
-    if (!event.matches) return
+    if (event.matches === wasNarrow) return
+    if (!event.matches) {
+      leftPinned.value = true
+      leftOpen.value = true
+      return
+    }
     leftPinned.value = false
     rightPinned.value = false
     closeDrawers()

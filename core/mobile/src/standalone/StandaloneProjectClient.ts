@@ -9,10 +9,14 @@ import {
   type CoreProjectIconKey,
 } from '@lamtools/ui'
 import type { LocalProject, LocalRepository, LocalThread } from '../storage'
-import { DEVICE_REQUEST_DENIED_MESSAGE } from '../native/filePicker'
+import {
+  hasEmbeddedRustCore,
+  listEmbeddedProjectFiles,
+  readEmbeddedProjectFile,
+  writeEmbeddedProjectFile,
+} from '../native/rustAgent'
 
 export function createStandaloneProjectClient(repository: LocalRepository): CoreProjectClient {
-  const denied = async (): Promise<never> => { throw new Error(DEVICE_REQUEST_DENIED_MESSAGE) }
   return {
     async list() {
       return (await repository.listProjects()).map(toProject)
@@ -50,13 +54,97 @@ export function createStandaloneProjectClient(repository: LocalRepository): Core
     async listSessions(projectId) {
       return await repository.listSessions(projectId)
     },
-    async readAgents() { return { content: '', exists: false } },
-    writeAgents: denied,
-    async listFiles() { return { entries: [], path: '' } },
-    readFile: denied,
-    writeFile: denied,
-    readRawFile: denied,
-    async browseDirectory() { return { entries: [], path: '' } },
+    async readAgents(projectId) {
+      if (hasEmbeddedRustCore()) {
+        let file = await readEmbeddedProjectFile(projectId, 'AGENTS.md')
+        if (!file) {
+          const legacy = await repository.readProjectFile(projectId, 'AGENTS.md')
+          if (legacy) file = await writeEmbeddedProjectFile(projectId, legacy.path, legacy.content)
+        }
+        return { content: file?.content || '', exists: Boolean(file) }
+      }
+      const file = await repository.readProjectFile(projectId, 'AGENTS.md')
+      return { content: file?.content || '', exists: Boolean(file) }
+    },
+    async writeAgents(projectId, content) {
+      if (hasEmbeddedRustCore()) {
+        await writeEmbeddedProjectFile(projectId, 'AGENTS.md', content)
+        return { content, exists: true }
+      }
+      await repository.writeProjectFile(projectId, 'AGENTS.md', content)
+      return { content, exists: true }
+    },
+    async listFiles(projectId, path = '') {
+      if (hasEmbeddedRustCore()) {
+        let files = await listEmbeddedProjectFiles(projectId, path)
+        const nativePaths = new Set(files.map(file => file.path))
+        const legacyFiles = await repository.listProjectFiles(projectId, path)
+        for (const legacy of legacyFiles) {
+          if (nativePaths.has(legacy.path)) continue
+          await writeEmbeddedProjectFile(projectId, legacy.path, legacy.content)
+        }
+        if (legacyFiles.some(file => !nativePaths.has(file.path))) {
+          files = await listEmbeddedProjectFiles(projectId, path)
+        }
+        return {
+          path,
+          entries: files.map(file => ({
+            name: file.path,
+            type: 'file' as const,
+            size: file.size,
+            ext: file.path.includes('.') ? file.path.split('.').pop() || '' : '',
+          })),
+        }
+      }
+      const files = await repository.listProjectFiles(projectId, path)
+      return {
+        path,
+        entries: files.map(file => ({
+          name: file.path,
+          type: 'file' as const,
+          size: new TextEncoder().encode(file.content).length,
+          ext: file.path.includes('.') ? file.path.split('.').pop() || '' : '',
+        })),
+      }
+    },
+    async readFile(projectId, path) {
+      if (hasEmbeddedRustCore()) {
+        let file = await readEmbeddedProjectFile(projectId, path)
+        if (!file) {
+          const legacy = await repository.readProjectFile(projectId, path)
+          if (legacy) file = await writeEmbeddedProjectFile(projectId, legacy.path, legacy.content)
+        }
+        if (!file) throw new Error('文件不存在')
+        return file
+      }
+      const file = await repository.readProjectFile(projectId, path)
+      if (!file) throw new Error('文件不存在')
+      return { content: file.content, path: file.path }
+    },
+    async writeFile(projectId, path, content) {
+      if (hasEmbeddedRustCore()) return await writeEmbeddedProjectFile(projectId, path, content)
+      const file = await repository.writeProjectFile(projectId, path, content)
+      return { content: file.content, path: file.path }
+    },
+    async readRawFile(projectId, path) {
+      if (hasEmbeddedRustCore()) {
+        let file = await readEmbeddedProjectFile(projectId, path)
+        if (!file) {
+          const legacy = await repository.readProjectFile(projectId, path)
+          if (legacy) file = await writeEmbeddedProjectFile(projectId, legacy.path, legacy.content)
+        }
+        if (!file) return { status: 404, headers: {} as Record<string, string>, body: new Uint8Array() }
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body: new TextEncoder().encode(file.content),
+        }
+      }
+      const file = await repository.readProjectFile(projectId, path)
+      if (!file) return { status: 404, headers: {} as Record<string, string>, body: new Uint8Array() }
+      return { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: new TextEncoder().encode(file.content) }
+    },
+    async browseDirectory(path = '') { return { entries: [], path } },
   }
 }
 

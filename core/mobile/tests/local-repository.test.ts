@@ -25,6 +25,21 @@ class ScopedFakeDatabase extends FakeDatabase {
 }
 
 describe('LocalRepository', () => {
+  it('imports a legacy Capacitor state once without overwriting Tauri data', async () => {
+    const repository = createLocalRepository(new FakeDatabase())
+    await repository.init()
+    const legacy = JSON.parse(JSON.stringify(repository.state.value)) as LocalState
+    legacy.projects['legacy-project'] = {
+      id: 'legacy-project', name: '旧项目', path: 'mobile://legacy-project', workRoot: 'mobile://legacy-project',
+      iconKey: '', colorKey: '', revision: 1, createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z', deleted: false,
+    }
+
+    await expect(repository.importLegacyState(legacy)).resolves.toBe(true)
+    await expect(repository.listProjects()).resolves.toEqual([expect.objectContaining({ id: 'legacy-project' })])
+    await expect(repository.importLegacyState({ ...legacy, projects: {} })).resolves.toBe(false)
+    await expect(repository.listProjects()).resolves.toEqual([expect.objectContaining({ id: 'legacy-project' })])
+  })
+
   it('applies snapshot, buffers out-of-order deltas, and keeps tombstones idempotently', async () => {
     const database = new FakeDatabase()
     const repository = createLocalRepository(database)

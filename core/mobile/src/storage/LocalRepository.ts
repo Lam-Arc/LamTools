@@ -1,3 +1,4 @@
+import { cloneState } from './cloneState'
 import { ref, type Ref } from 'vue'
 import { applyCoreAppEvent } from '@lamtools/ui/appServer/store'
 import type { CoreAppEvent, CoreAppSnapshot } from '@lamtools/ui/appServer/protocol'
@@ -42,6 +43,13 @@ export interface LocalMessage {
   updatedAt: string
   deleted: boolean
   payload: Record<string, unknown>
+}
+
+export interface LocalProjectFile {
+  projectId: string
+  path: string
+  content: string
+  updatedAt: string
 }
 
 export interface LocalPendingOperation {
@@ -91,6 +99,7 @@ export interface LocalState {
   projects: Record<string, LocalProject>
   threads: Record<string, LocalThread>
   messages: Record<string, LocalMessage>
+  files: Record<string, LocalProjectFile>
   runtimeState: Record<string, Record<string, unknown>>
   snapshots: Record<string, CoreAppSnapshot>
   pendingOperations: Record<string, LocalPendingOperation>
@@ -101,6 +110,7 @@ export interface LocalState {
 export interface LocalRepository {
   readonly state: Ref<LocalState>
   init(): Promise<void>
+  importLegacyState(value: LocalState): Promise<boolean>
   setAccountScope(serverId: string, accountId: string): Promise<void>
   setDesktopId(desktopId: string): Promise<void>
   setWorkspaceId(workspaceId: string): Promise<void>
@@ -116,6 +126,9 @@ export interface LocalRepository {
   getLocalProject(projectId: string): Promise<LocalProject | null>
   updateLocalProject(projectId: string, input: { name?: string; iconKey?: string; colorKey?: string }): Promise<LocalProject>
   deleteLocalProject(projectId: string): Promise<void>
+  listProjectFiles(projectId: string, path?: string): Promise<LocalProjectFile[]>
+  readProjectFile(projectId: string, path: string): Promise<LocalProjectFile | null>
+  writeProjectFile(projectId: string, path: string, content: string): Promise<LocalProjectFile>
   createLocalSession(projectId?: string, title?: string): Promise<LocalThread>
   updateLocalSession(threadId: string, input: { title?: string; metadata?: Record<string, unknown>; status?: string }): Promise<LocalThread>
   deleteLocalSession(threadId: string): Promise<void>
@@ -177,6 +190,18 @@ export function createLocalRepository(
     await init()
     if (state.value.accountScope === desiredAccountScope) return
     await switchScope(state.value.workspaceId, state.value.desktopId, desiredAccountScope)
+  }
+
+  async function importLegacyState(value: LocalState): Promise<boolean> {
+    await init()
+    const hasLocalData = Object.keys(state.value.projects).length > 0
+      || Object.keys(state.value.threads).length > 0
+      || Object.keys(state.value.snapshots).length > 0
+    if (hasLocalData) return false
+    const legacy = normalizeState(value)
+    if (!Object.keys(legacy.projects).length && !Object.keys(legacy.threads).length) return false
+    await replaceState(legacy)
+    return true
   }
 
   async function setDesktopId(desktopId: string): Promise<void> {
@@ -297,6 +322,31 @@ export function createLocalRepository(
         delete next.snapshots[thread.id]
       }
     })
+  }
+
+  async function listProjectFiles(projectId: string, path = ''): Promise<LocalProjectFile[]> {
+    await init()
+    const prefix = normalizeProjectPath(path)
+    return Object.values(state.value.files)
+      .filter(file => file.projectId === projectId && (!prefix || file.path.startsWith(`${prefix}/`) || file.path === prefix))
+      .sort((a, b) => a.path.localeCompare(b.path))
+      .map(clone)
+  }
+
+  async function readProjectFile(projectId: string, path: string): Promise<LocalProjectFile | null> {
+    await init()
+    return clone(state.value.files[fileKey(projectId, path)] || null)
+  }
+
+  async function writeProjectFile(projectId: string, path: string, content: string): Promise<LocalProjectFile> {
+    await init()
+    const project = state.value.projects[projectId]
+    if (!project || project.deleted) throw new Error('项目不存在')
+    const normalizedPath = normalizeProjectPath(path)
+    if (!normalizedPath) throw new Error('文件路径不能为空')
+    const file: LocalProjectFile = { projectId, path: normalizedPath, content, updatedAt: new Date().toISOString() }
+    await update(next => { next.files[fileKey(projectId, normalizedPath)] = file })
+    return clone(file)
   }
 
   async function createLocalSession(projectId?: string, title = '新会话'): Promise<LocalThread> {
@@ -631,6 +681,7 @@ export function createLocalRepository(
   return {
     state,
     init,
+    importLegacyState,
     setAccountScope,
     setDesktopId,
     setWorkspaceId,
@@ -641,6 +692,9 @@ export function createLocalRepository(
     getLocalProject,
     updateLocalProject,
     deleteLocalProject,
+    listProjectFiles,
+    readProjectFile,
+    writeProjectFile,
     createLocalSession,
     updateLocalSession,
     deleteLocalSession,
@@ -902,6 +956,7 @@ function emptyLocalState(): LocalState {
     projects: {},
     threads: {},
     messages: {},
+    files: {},
     runtimeState: {},
     snapshots: {},
     pendingOperations: {},
@@ -1009,11 +1064,22 @@ function normalizeState(value: LocalState | null | undefined): LocalState {
     projects,
     threads,
     messages,
+    files: value.files || {},
     runtimeState: value.runtimeState || {},
     snapshots,
     pendingOperations: value.pendingOperations || {},
     syncBuffer: value.syncBuffer || {},
   }
+}
+
+function normalizeProjectPath(path: string): string {
+  const normalized = String(path || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/{2,}/g, '/')
+  if (normalized.split('/').some(part => part === '..')) throw new Error('文件路径不能离开项目目录')
+  return normalized.replace(/\/$/, '')
+}
+
+function fileKey(projectId: string, path: string): string {
+  return `${projectId}:${normalizeProjectPath(path)}`
 }
 
 function normalizeRecord(
@@ -1062,18 +1128,7 @@ function integerCursor(value: unknown): number | null {
   return Number.isSafeInteger(number) && number >= 0 ? number : null
 }
 
-function clone<T>(value: T): T {
-  if (typeof structuredClone === 'function') {
-    try {
-      return structuredClone(value)
-    } catch {
-      // Vue refs expose reactive proxies that structuredClone cannot accept.
-      // The persisted state is JSON by contract, so serialization is a safe
-      // and deterministic fallback for those proxies.
-    }
-  }
-  return JSON.parse(JSON.stringify(value)) as T
-}
+const clone = cloneState
 
 function arrayOfRecords(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : []

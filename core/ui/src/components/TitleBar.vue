@@ -143,6 +143,7 @@ const props = defineProps<{
   accountStatus?: MobileControlAccountStatus | null
   accountDevices?: MobileControlAccountDevice[]
   showInPreview?: boolean
+  hideOnMobile?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -160,7 +161,7 @@ const tauriWindow = typeof window === 'undefined'
   ? null
   : window as Window & { __TAURI_INTERNALS__?: TauriInternals }
 const isTauri = ref(Boolean(tauriWindow?.__TAURI_INTERNALS__?.invoke))
-const shouldDisplayTitleBar = computed(() => isTauri.value || props.showInPreview === true)
+const shouldDisplayTitleBar = computed(() => !props.hideOnMobile && (isTauri.value || props.showInPreview === true))
 const mobilePairingOpen = ref(false)
 const mobilePairingAnchor = ref<HTMLElement | null>(null)
 const maximizeButton = ref<HTMLButtonElement | null>(null)

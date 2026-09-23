@@ -66,9 +66,31 @@ export class CapacitorSecureStorage implements SecureStorage {
   }
 }
 
-let storage: SecureStorage = Capacitor.isNativePlatform()
-  ? new CapacitorSecureStorage()
-  : new MemorySecureStorage()
+/** Tauri adapter backed by the same Android Keystore aliases and encrypted
+ * SharedPreferences file as the previous Capacitor host. */
+export class TauriSecureStorage implements SecureStorage {
+  private readonly prefix = 'lamtools.mobile.'
+
+  async get<T>(key: string): Promise<T | null> {
+    const raw = await invoke<string | null>('secure_storage_get', { key: `${this.prefix}${key}` })
+    if (raw == null) return null
+    return JSON.parse(raw) as T
+  }
+
+  async set<T>(key: string, value: T): Promise<void> {
+    await invoke('secure_storage_set', { key: `${this.prefix}${key}`, value: JSON.stringify(value) })
+  }
+
+  async remove(key: string): Promise<void> {
+    await invoke('secure_storage_remove', { key: `${this.prefix}${key}` })
+  }
+}
+
+let storage: SecureStorage = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+  ? new TauriSecureStorage()
+  : Capacitor.isNativePlatform()
+    ? new CapacitorSecureStorage()
+    : new MemorySecureStorage()
 
 export function configureSecureStorage(next: SecureStorage): void { storage = next }
 export function secureStorage(): SecureStorage { return storage }
@@ -78,3 +100,4 @@ import {
   SecureStorage as NativeSecureStorage,
   type DataType,
 } from '@aparajita/capacitor-secure-storage'
+import { invoke } from '@tauri-apps/api/core'

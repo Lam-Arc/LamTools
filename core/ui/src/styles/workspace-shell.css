@@ -146,6 +146,9 @@
   overflow: hidden;
 }
 .drawer-left.open {
+  /* A revealed drawer uses its configured width even when the main surface
+     still has a narrow peek inset (for example during mobile shell layout). */
+  width: var(--left-card-width);
   transform: none;
 }
 /* Closed left drawer must be inert to clicks (mirrors .drawer-right) — the
@@ -537,6 +540,10 @@
   .drawer-left {
     background: var(--theme-backdrop-background);
     box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
+    /* Mobile drawers overlay the main surface; their width must not follow
+       the desktop peek inset (18px) while the shell is opening. */
+    width: var(--sidebar-width);
+    max-width: var(--sidebar-width);
   }
   .drawer-left:not(.open) { transform: translateX(-102%); }
   .drawer-right { opacity: 1; }
