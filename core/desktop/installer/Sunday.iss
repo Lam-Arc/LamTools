@@ -18,6 +18,12 @@
   #error WebView2Bootstrapper must be supplied by build-installer.ps1
 #endif
 
+; Windows file versioning has no pre-release field, so the numeric-only form is
+; supplied separately from the display version.
+#ifndef VersionInfoVersion
+  #error VersionInfoVersion must be supplied by build-installer.ps1
+#endif
+
 #define AppName "Sunday"
 #define AppTagline "AI software"
 #define AppDisplayName "Sunday"
@@ -36,7 +42,7 @@ AppUpdatesURL=https://github.com/Lam-Arc/LamTools/releases/latest
 AppComments={#AppName} - {#AppTagline}
 VersionInfoDescription={#AppName} - {#AppTagline}
 VersionInfoProductName={#AppName}
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#VersionInfoVersion}
 DefaultDirName={code:GetDefaultDirName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes

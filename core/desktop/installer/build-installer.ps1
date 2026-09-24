@@ -123,8 +123,16 @@ if (-not (Test-PeFile $webView2)) {
     throw "WebView2 bootstrapper is missing or invalid: $webView2"
 }
 
+# Inno's VersionInfoVersion must be numeric, so beta/rc spellings keep their
+# display form in AppVersion while the file version drops the suffix.
+$VersionInfoVersion = ($Version -replace '[^0-9.].*$', '').TrimEnd('.')
+if ([string]::IsNullOrWhiteSpace($VersionInfoVersion)) {
+    throw "Cannot derive a numeric file version from '$Version'."
+}
+
 $arguments = @(
     "/DAppVersion=$Version",
+    "/DVersionInfoVersion=$VersionInfoVersion",
     "/DSourceDir=$source",
     "/DOutputDir=$output",
     "/DAppIcon=$icon",
@@ -146,6 +154,7 @@ if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
 [PSCustomObject]@{
     status = 'ok'
     version = $Version
+    version_info = $VersionInfoVersion
     compiler = $compiler
     source_root = $source
     output_path = $installerPath
