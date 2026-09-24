@@ -73,6 +73,68 @@ function fakeStudy(overrides: Record<string, (params: Record<string, unknown>) =
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
+describe('session switching during a turn', () => {
+  it('keeps the in-progress turn when the session is reopened', async () => {
+    const repository = createLocalRepository(new MemoryDatabase())
+    const created = await repository.createLocalSession(undefined, 'Running')
+    const config = {
+      handleRpc: async () => null,
+      activeModel: async () => ({
+        provider: { id: 'p', name: 'P', api_type: 'openai', base_url: 'https://m.invalid/v1' },
+        model: { id: 'm', model_id: 'm', display_name: 'M' },
+        apiKey: 'k',
+      }),
+      runtimeModels: async () => [],
+      settings: async () => ({}),
+      subAgentRuntime: async () => ({ enabled: false, guide: '' }),
+      modePlan: async () => ({ tools: null, promptLine: '' }),
+    } as unknown as StandaloneConfigStore
+    // The turn never finishes: this is the state a user switches away from.
+    const runAgent = vi.fn(async () => new Promise<never>(() => {}))
+    let onStream: ((payload: unknown) => void) | undefined
+    const transport = new StandaloneTransport(
+      repository, config, runAgent, undefined, undefined, undefined, undefined, undefined, undefined,
+      async handler => { onStream = handler; return vi.fn() },
+    )
+    await transport.request({ method: 'turn/start', params: {
+      thread_id: created.id, input: [{ type: 'text', text: '写点东西' }],
+    } })
+    await vi.waitFor(() => expect(onStream).toBeTypeOf('function'))
+    const turnId = (await vi.waitFor(() => {
+      expect(runAgent).toHaveBeenCalled()
+      return String(runAgent.mock.calls[0][0].turnId)
+    }))
+    const published: CoreAppSnapshot[] = []
+    transport.subscribe(message => {
+      if (message.method === 'thread/snapshot' && message.params) published.push(message.params as unknown as CoreAppSnapshot)
+    })
+    onStream!({ turnId, kind: 'text_delta', delta: '正在写' })
+    onStream!({ turnId, kind: 'tool_call', data: { id: 'call-1', name: 'write_file', arguments: '{"path":"a.txt"}' } })
+    const itemContent = () => Object.values(published.at(-1)?.core?.items || {})
+      .map(item => String((item.payload as Record<string, unknown>)?.content || ''))
+      .join('')
+    await vi.waitFor(() => expect(itemContent()).toContain('正在写'))
+
+    // Reopening the session — what switching away and back does — must show the
+    // turn in progress, not an empty thread.
+    const resumed = await transport.request<{ snapshot: CoreAppSnapshot }>({
+      method: 'thread/resume', params: { thread_id: created.id },
+    })
+    const core = resumed.snapshot.core!
+    const turn = Object.values(core.turns || {}).find(candidate => candidate.turn_id === turnId)
+    expect(turn?.status).toBe('running')
+    const assistant = Object.values(core.items || {}).find(item => item.item_id === `${turnId}:assistant`)
+    expect(String(assistant?.payload?.content || '')).toContain('正在写')
+    const tool = Object.values(core.items || {}).find(item => item.item_id === `${turnId}:tool:call-1`)
+    expect(tool?.tool_name).toBe('write_file')
+    // A second resume returns the same live turn rather than a stale copy.
+    const again = await transport.request<{ snapshot: CoreAppSnapshot }>({
+      method: 'thread/resume', params: { thread_id: created.id },
+    })
+    expect(Object.values(again.snapshot.core?.turns || {}).some(candidate => candidate.turn_id === turnId)).toBe(true)
+  })
+})
+
 describe('checklist projection', () => {
   it('turns a checklist tool call into a plan part the transcript can render', async () => {
     const repository = createLocalRepository(new MemoryDatabase())

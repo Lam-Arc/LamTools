@@ -1386,8 +1386,26 @@ export class StandaloneTransport implements LamToolsTransport {
 
   private async snapshotFor(threadId: string): Promise<SnapshotWithSession> {
     await this.recoverOrphanedTurn(threadId)
-    const saved = await this.repository.loadThreadSnapshot(threadId) as SnapshotWithSession | null
     const thread = (await this.repository.listSessions()).find((candidate) => candidate.id === threadId)
+    // A running turn owns its state. The persisted copy lags by one debounce
+    // (and by whatever the stream has not flushed yet), so answering a resume
+    // from the store would show a session that looks emptier than the one the
+    // user just left — switching away and back used to lose the whole turn.
+    const live = this.activeSnapshots.get(threadId)
+    const liveRunning = live
+      && Object.values(live.core?.turns || {}).some(turn => turn.status === 'running' || turn.status === 'waiting')
+    if (live && liveRunning) {
+      const now = new Date().toISOString()
+      live.session = {
+        id: threadId,
+        title: thread?.title || live.session?.title || '新会话',
+        metadata: thread?.metadata || live.session?.metadata || {},
+        created_at: thread?.createdAt || live.session?.created_at || now,
+        updated_at: thread?.updatedAt || now,
+      }
+      return live
+    }
+    const saved = await this.repository.loadThreadSnapshot(threadId) as SnapshotWithSession | null
     const snapshot = saved ? jsonClone(saved) as SnapshotWithSession : emptySnapshot(threadId)
     const now = new Date().toISOString()
     snapshot.session = {
