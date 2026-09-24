@@ -83,6 +83,54 @@
 5. **Office 渲染**：技能存在但命令不可执行——要么补一个移动端渲染路径，要么把技能在移动端隐藏/改写。
 6. **会话检查点/回滚与 Goal**：桌面是两个完整子系统，移动端为零。这是**最大的两块结构缺口**。
 
+## 补充：工具层与运行时语义（CLI 维度已剔除）
+
+移动端没有 CLI，因此"CLI 是否有移动端对应物"不作为对照项。
+
+### 核心工具集：桌面 16 个，移动端只对上 3 个文件工具加技能/MCP/Study/搜索/生图
+
+桌面 `core_model_tools()` 暴露 16 个：`read_file`、`list_dir`、`search_files`、`search_content`、`load_skill`、
+`write_file`、`edit_file`、`run_command`、`web_fetch`、`mcp_activate`、`mcp_tool`、`sub_agent`、
+`sub_agent_message`、`write_checklist`、`update_checklist`、`question`。
+
+移动端对应情况：
+
+| 桌面工具 | 移动端 | 影响 |
+|---|---|---|
+| `list_dir` / `read_file` / `write_file` | `list_files` / `read_text_file` / `write_text_file` | 有，但**名称不同** |
+| `edit_file` | **无** | 没有定点编辑，只能整文件重写 —— 真实改代码的基本能力 |
+| `search_files` / `search_content` | **无** | 不能列文件、不能搜内容（我在桌面验证跑里它第一件事就是 `search_files` 三次）|
+| `web_fetch` | **无** | 不能抓取页面；Study 提示词要求"核验来源页"在移动端无法执行 |
+| `run_command` | 无（`capabilities.shell=false`） | Android 无 shell，属设计 |
+| `write_checklist` / `update_checklist` | **无** | 任务清单功能整体缺失（UI 侧也看不到）|
+| `question` | **无** | 没有"向用户提问"工具，只有审批流 |
+| `mcp_activate` / `mcp_tool` | **语义不同**（见下） | — |
+| `sub_agent` / `sub_agent_message` | 有 | ✓ |
+| `load_skill` | 有（另加 `read_skill_reference`） | ✓ |
+
+技能文本基本不依赖桌面工具名：14 个 Core 技能＋Study 技能里只有 `plugin-manager/SKILL.md` 提到一次 `edit_file`，
+`search_files`/`search_content`/`web_fetch`/`run_command`/`write_checklist` 均无提及。技能数量也对上：Core 14 + Study 5。
+
+### MCP 语义不同
+
+桌面是**网关 + 惰性激活**：`mcp_activate` 激活某个服务器后，下一回合才拿到它的工具，另有 `mcp_tool`。
+移动端 `McpToolRuntime::definitions()` 把每个服务器工具用**原名直接暴露**（`tool.function_name`），没有激活步骤。
+两者都能用，但工具列表与提示词、激活语义不一致。
+
+### Hook 类型
+
+Rust 只支持 `command` / `http` / `prompt` 三种处理器；`command` 在移动端无法执行（无 shell），按 `skipped_unavailable`
+跳过。桌面端处理器类型未逐项核对（文件位置没找对），标为未核查。
+
+## 还没核查的（诚实清单）
+
+1. **桌面端完整方法面**：工厂大部分注册在启动钩子里，我挂 `OperationCatalog.register` 只抓到 6 个即时注册项。凡是"UI 不调用、只有 CLI/其它客户端调用"的操作，可能仍没进这份清单。
+2. **UI 面板逐个可达性**：哪些设置面板与右侧栏模块（Runtime / Resources / Web Search / RAG / Artifacts）在移动端真的能渲染并拿到数据，我没有逐面板走一遍。
+3. **HTTP 路由对照**：桌面 `/api/core/...` 路由与移动端 `handleHttp` 覆盖面的差异（文件预览、附件、导出之外还有哪些）。
+4. **附件类型/模态逐项**：桌面 `attachment_modality` 与移动端 `preview_type` 的类型集合是否一致。
+5. **通知 / 剪贴板 / 分享 / 相机与文件选择**：移动端独有的原生能力，桌面无对应，需按"移动端独有"记录而非缺口。
+6. **流式与投影行为**：移动端自己做投影，与桌面服务端投影的差异（已知的"切会话丢过程"就是其中一例）。
+
 ## 方法说明（可信度边界）
 
 - UI 契约 48 项、移动端 83 项来自机械提取，可信。
