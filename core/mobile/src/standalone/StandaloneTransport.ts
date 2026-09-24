@@ -38,6 +38,8 @@ import {
 import { StandaloneConfigStore, type StandaloneModel } from './StandaloneConfigStore'
 import { StandaloneExtensionsStore } from './StandaloneExtensionsStore'
 import { StandaloneArrangeStore } from './StandaloneArrangeStore'
+import { createStandaloneProjectClient } from './StandaloneProjectClient'
+import { createStandaloneProjectRoutes } from './StandaloneProjectRoutes'
 import { searchStandaloneWorkspace } from './StandaloneWorkspaceSearch'
 import { exportStandaloneSession } from './StandaloneSessionExport'
 import { checkStandaloneUpdate } from './StandaloneUpdate'
@@ -146,6 +148,7 @@ export class StandaloneTransport implements LamToolsTransport {
   private readonly activeSnapshots = new Map<string, SnapshotWithSession>()
   private connecting: Promise<void> | null = null
   private readonly arrange: StandaloneArrangeStore
+  private readonly projectRoutes: ReturnType<typeof createStandaloneProjectRoutes>
 
   constructor(
     private readonly repository: LocalRepository,
@@ -158,7 +161,12 @@ export class StandaloneTransport implements LamToolsTransport {
     private readonly callWorkflow: WorkflowCall = callEmbeddedWorkflow,
     private readonly listenTurnStage: ListenTurnStage = defaultListenTurnStage,
     private readonly listenTurnStream: ListenTurnStream = defaultListenTurnStream,
-  ) { this.arrange = new StandaloneArrangeStore(repository) }
+  ) {
+    this.arrange = new StandaloneArrangeStore(repository)
+    // Route and client share one implementation so the two access paths cannot
+    // drift apart.
+    this.projectRoutes = createStandaloneProjectRoutes(createStandaloneProjectClient(repository))
+  }
 
   async connect(): Promise<void> {
     if (this.state === 'connected') return
@@ -536,6 +544,8 @@ export class StandaloneTransport implements LamToolsTransport {
         }
       } catch (error) { return attachmentErrorResponse(error) }
     }
+    const projectResponse = await this.projectRoutes(request)
+    if (projectResponse) return projectResponse
     return jsonResponse({ error: '设备拒绝了您的请求' }, 403)
   }
 

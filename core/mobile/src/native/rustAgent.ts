@@ -388,6 +388,46 @@ export async function writeEmbeddedProjectFile(
   return await invoke<EmbeddedProjectFile>('project_file_write', { projectId, path, content })
 }
 
+export interface EmbeddedProjectRawFile {
+  path: string
+  mimeType: string
+  bytes: Uint8Array
+}
+
+/** Bytes of one project file; `null` when the path does not exist. */
+export async function readEmbeddedProjectFileRaw(
+  projectId: string,
+  path: string,
+): Promise<EmbeddedProjectRawFile | null> {
+  const raw = await invoke<{ path: string; mimeType: string; dataBase64: string } | null>(
+    'project_file_read_raw',
+    { projectId, path },
+  )
+  if (!raw) return null
+  return { path: raw.path, mimeType: raw.mimeType, bytes: decodeBase64(raw.dataBase64) }
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value)
+  return Uint8Array.from(binary, character => character.charCodeAt(0))
+}
+
+export interface EmbeddedProjectAgents {
+  content: string
+  exists: boolean
+}
+
+export async function readEmbeddedProjectAgents(projectId: string): Promise<EmbeddedProjectAgents> {
+  return await invoke<EmbeddedProjectAgents>('project_agents_md', { projectId })
+}
+
+export async function writeEmbeddedProjectAgents(
+  projectId: string,
+  content: string,
+): Promise<EmbeddedProjectAgents> {
+  return await invoke<EmbeddedProjectAgents>('project_agents_md', { projectId, content })
+}
+
 export interface EmbeddedStudyCall {
   method: string
   params?: Record<string, unknown>

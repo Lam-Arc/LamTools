@@ -122,10 +122,59 @@
 Rust 只支持 `command` / `http` / `prompt` 三种处理器；`command` 在移动端无法执行（无 shell），按 `skipped_unavailable`
 跳过。桌面端处理器类型未逐项核对（文件位置没找对），标为未核查。
 
+## HTTP 路由对照
+
+桌面路由用脚本从 `core/src/lamtools_core` 枚举 `@router`／`@app` 装饰器，共 **56 条注册**
+（含 `/api/core` 前缀与 `attachment/http.py` 的重复注册）。移动端"是否处理"以
+`StandaloneTransport.handleHttp` 与 `standalone/StandaloneProjectRoutes.ts` 为准；"UI 是否调用"
+以扫描 `core/ui/src` 与 `core/mobile/src` 的路径字面量为准，不凭记忆。
+
+### 一、移动端已实现（19 条，其中本批新增 7 条）
+
+| 路由 | 移动端实现 |
+|---|---|
+| `GET|POST /sessions` | `handleHttp` + 本地库 |
+| `PATCH|DELETE /sessions/{id}` | 同上 |
+| `POST /sessions/{id}/export` | `StandaloneSessionExport` |
+| `GET|POST /sessions/{id}/attachments` | `handleHttp` + `attachments.rs` |
+| `GET|DELETE /attachments/{id}`、`/download`、`/preview`、`POST /open` | 同上 |
+| `GET /browse-directory` | **本批新增**：复用 project client 的 `browseDirectory`，与桌面一样隐藏点文件与构建目录 |
+| `GET|PUT /projects/{id}/agents-md` | **本批新增**：Rust `project_agents_md`，读写的就是 Agent 上下文加载的同一个文件 |
+| `GET /projects/{id}/files` | **本批新增**：复用 client `listFiles`，隐藏 node_modules/.git/dist 等目录 |
+| `GET|PUT /projects/{id}/files/content` | **本批新增**：PUT 要求文件已存在，与桌面一致（桌面不通过此路由建文件） |
+| `GET /projects/{id}/files/raw` | **本批新增**：Rust `project_file_read_raw` 返回真实字节与 MIME，消息/舞台的图片、视频、PDF 预览由 403 变为可用 |
+
+### 二、UI 走 project client，不走路由（7 条，行为已对齐）
+
+`GET|POST /projects`、`GET|PATCH|DELETE /projects/{id}`、`GET|POST /projects/{id}/sessions`。
+移动端本地模式用 `createStandaloneProjectClient`（Rust 命令直连），远端模式用真实桌面 HTTP，
+两条路径都不经过 `handleHttp`，所以路由缺失不影响面板。
+
+### 三、UI 从不调用，仅桌面服务端/CLI/隧道消费者（12 条）
+
+`GET /sessions/{id}`、`GET|POST /sessions/{id}/messages`、`GET|POST /sessions/{id}/events`、
+`POST /sessions/{id}/turns`、`GET /sessions/{id}/export/capabilities`、
+`POST /threads/{id}/export`、`GET /threads/{id}/export/capabilities`、
+`GET|POST /providers`、`GET /providers/default`、`GET|POST /usage`、`GET /usage/total`。
+
+扫描证据（`core/ui/src` + `core/mobile/src` 路径字面量命中数）：`/providers` 0、`/usage` 0、
+`/threads` 0、`/messages` 0、`/events` 0、`/turns` 0、`export/capabilities` 0。
+
+### 四、桌面专属（移动端不适用）
+
+`GET /`、`GET /{filename:path}`（静态资源）、`GET /api/health`、`GET /api/members`（已归档 member）、
+`GET /api/core/desktop-plugins*`（桌宠/桌面插件）、`GET /api/core/config/models|providers`（桌面配置文件直读）。
+
+### 五、未对齐且 UI 会调用（1 条，归批次 4）
+
+`GET /projects/{id}/artifacts/{artifact_id}/file`：消息与舞台的成果预览直接请求该路由
+（`LamToolsApp.vue:1503`、`MessageView.vue:2445`、`MessageAttachmentDeck.vue:610`），移动端目前 403，
+需要批次 4 的 artifact 存储落地后才能实现。
+
 ## 核查覆盖度
 
 已完成：桌面完整方法面（164）、UI 契约与面板归位、核心工具集、MCP 语义、Hook 类型、技能数量与文本引用、
-HTTP 路由、附件类型、移动端独有能力。
+HTTP 路由（见上节逐条对照）、附件类型、移动端独有能力。
 
 仍未逐项核查：① 每个面板在移动端的**实际渲染结果**（本文档只对照数据源，没有逐面板跑一遍 UI）；
 ② 桌面端 Hook 处理器类型的完整清单（Python 侧文件未定位到）；③ arrange 的 occurrence/signal 语义在移动端是否完整实现。

@@ -755,10 +755,10 @@ fn sunday_study_skill_catalog() -> Vec<StudySkillRecord> {
 /// Derived from the manifests and the runtimes this host actually assembles, so
 /// the panel cannot advertise a tool the agent would refuse to run.
 /// The project's AGENTS.md, the same file the desktop project panel edits.
-/// The desktop serves it under ; the mobile host has
-/// no HTTP server for the WebView, so the transport exposes this command on that
-/// path instead. The path is validated by [].
-/// The project's AGENTS.md, the same file the desktop panel edits.
+/// The desktop serves it under `GET|PUT /projects/{id}/agents-md`; the mobile
+/// host has no HTTP server for the WebView, so the transport exposes this
+/// command on that path instead. The path is validated by
+/// [`safe_project_relative_path`].
 #[tauri::command]
 async fn project_agents_md(
     app: tauri::AppHandle,
@@ -2324,6 +2324,88 @@ async fn project_file_write(
     Ok(NativeProjectFile { path, content })
 }
 
+/// Raw bytes of one project file, base64 encoded.
+///
+/// The desktop serves the same content under `GET /projects/{id}/files/raw`
+/// (and its text twin under `/files/content`); the WebView cannot reach a local
+/// HTTP server here, so the transport calls this command instead. Images and
+/// other binaries only survive as bytes, which is why this is a separate
+/// command from [`project_file_read`].
+const MAX_PROJECT_RAW_FILE_BYTES: u64 = 32 * 1024 * 1024;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeProjectRawFile {
+    path: String,
+    mime_type: String,
+    data_base64: String,
+}
+
+#[tauri::command]
+async fn project_file_read_raw(
+    app: tauri::AppHandle,
+    project_id: String,
+    path: String,
+) -> Result<Option<NativeProjectRawFile>, String> {
+    let root = native_project_root(&app, &project_id)?;
+    let resolved = safe_project_relative_path(&root, &path, false)?;
+    let metadata = match tokio::fs::metadata(&resolved).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.is_file() {
+        return Err(format!("'{}' is not a file", path));
+    }
+    if metadata.len() > MAX_PROJECT_RAW_FILE_BYTES {
+        return Err(format!(
+            "文件超过 {} MiB 上限，无法在移动端预览",
+            MAX_PROJECT_RAW_FILE_BYTES / (1024 * 1024)
+        ));
+    }
+    let bytes = tokio::fs::read(&resolved)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Some(NativeProjectRawFile {
+        mime_type: project_file_mime_type(&resolved, &bytes),
+        data_base64: {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        },
+        path,
+    }))
+}
+
+/// Extension first so a project file keeps its declared type even when the
+/// content is a text format `infer` cannot see (`.md`, `.jsonc`, ...).
+fn project_file_mime_type(path: &std::path::Path, bytes: &[u8]) -> String {
+    let extension = path
+        .extension()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let extension_mime = match extension.as_str() {
+        "md" => Some("text/markdown"),
+        "txt" | "log" | "rst" => Some("text/plain"),
+        "json" | "jsonc" => Some("application/json"),
+        "csv" => Some("text/csv"),
+        "html" | "htm" => Some("text/html"),
+        "css" => Some("text/css"),
+        "js" | "mjs" | "cjs" => Some("text/javascript"),
+        "ts" | "tsx" => Some("text/typescript"),
+        "vue" => Some("text/plain"),
+        "yaml" | "yml" => Some("application/yaml"),
+        "toml" => Some("application/toml"),
+        "py" => Some("text/x-python"),
+        "rs" => Some("text/x-rust"),
+        "svg" => Some("image/svg+xml"),
+        _ => None,
+    };
+    extension_mime
+        .map(str::to_string)
+        .or_else(|| infer::get(bytes).map(|kind| kind.mime_type().to_string()))
+        .unwrap_or_else(|| "application/octet-stream".into())
+}
+
 #[tauri::command]
 async fn load_legacy_mobile_state(app: tauri::AppHandle) -> Result<Option<Value>, String> {
     let app_data = app
@@ -2759,6 +2841,7 @@ pub fn run() {
         project_file_list,
         project_directory_browse,
         project_file_read,
+        project_file_read_raw,
         project_file_write,
         secure_storage_get,
         mobile_diagnostics_share,
@@ -2789,6 +2872,7 @@ pub fn run() {
         project_file_list,
         project_directory_browse,
         project_file_read,
+        project_file_read_raw,
         project_file_write
     ]);
     builder
@@ -2802,6 +2886,31 @@ mod tests {
     use lamtools_runtime::{study_skills::catalog_prompt, ModelTurn, ToolCall};
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn project_file_mime_type_prefers_the_declared_extension() {
+        // Text formats `infer` cannot see must keep their real type, otherwise
+        // the preview pane refuses to render them as text.
+        assert_eq!(
+            project_file_mime_type(std::path::Path::new("a/b/AGENTS.md"), b"# hi"),
+            "text/markdown"
+        );
+        assert_eq!(
+            project_file_mime_type(std::path::Path::new("notes.jsonc"), b"{}"),
+            "application/json"
+        );
+        // A binary keeps whatever the magic bytes say.
+        let png = [0x89u8, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
+        assert_eq!(
+            project_file_mime_type(std::path::Path::new("shot.bin"), &png),
+            "image/png"
+        );
+        // Unknown extension and unknown content stays octet-stream.
+        assert_eq!(
+            project_file_mime_type(std::path::Path::new("data.weird"), b"\x00\x01"),
+            "application/octet-stream"
+        );
+    }
 
     #[test]
     fn study_search_collects_only_trusted_study_sessions_and_snapshot_messages() {

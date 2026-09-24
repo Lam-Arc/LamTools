@@ -13,7 +13,10 @@ import {
   hasEmbeddedRustCore,
   browseEmbeddedProjectDirectory,
   listEmbeddedProjectFiles,
+  readEmbeddedProjectAgents,
   readEmbeddedProjectFile,
+  readEmbeddedProjectFileRaw,
+  writeEmbeddedProjectAgents,
   writeEmbeddedProjectFile,
 } from '../native/rustAgent'
 
@@ -57,21 +60,19 @@ export function createStandaloneProjectClient(repository: LocalRepository): Core
     },
     async readAgents(projectId) {
       if (hasEmbeddedRustCore()) {
-        let file = await readEmbeddedProjectFile(projectId, 'AGENTS.md')
-        if (!file) {
+        let agents = await readEmbeddedProjectAgents(projectId)
+        if (!agents.exists) {
+          // One-time migration of AGENTS.md written by the legacy store.
           const legacy = await repository.readProjectFile(projectId, 'AGENTS.md')
-          if (legacy) file = await writeEmbeddedProjectFile(projectId, legacy.path, legacy.content)
+          if (legacy) agents = await writeEmbeddedProjectAgents(projectId, legacy.content)
         }
-        return { content: file?.content || '', exists: Boolean(file) }
+        return agents
       }
       const file = await repository.readProjectFile(projectId, 'AGENTS.md')
       return { content: file?.content || '', exists: Boolean(file) }
     },
     async writeAgents(projectId, content) {
-      if (hasEmbeddedRustCore()) {
-        await writeEmbeddedProjectFile(projectId, 'AGENTS.md', content)
-        return { content, exists: true }
-      }
+      if (hasEmbeddedRustCore()) return await writeEmbeddedProjectAgents(projectId, content)
       await repository.writeProjectFile(projectId, 'AGENTS.md', content)
       return { content, exists: true }
     },
@@ -112,16 +113,23 @@ export function createStandaloneProjectClient(repository: LocalRepository): Core
     },
     async readRawFile(projectId, path) {
       if (hasEmbeddedRustCore()) {
-        let file = await readEmbeddedProjectFile(projectId, path)
-        if (!file) {
+        let raw = await readEmbeddedProjectFileRaw(projectId, path)
+        if (!raw) {
+          // One-time migration of a file that only exists in the legacy store.
           const legacy = await repository.readProjectFile(projectId, path)
-          if (legacy) file = await writeEmbeddedProjectFile(projectId, legacy.path, legacy.content)
+          if (legacy) {
+            await writeEmbeddedProjectFile(projectId, legacy.path, legacy.content)
+            raw = await readEmbeddedProjectFileRaw(projectId, path)
+          }
         }
-        if (!file) return { status: 404, headers: {} as Record<string, string>, body: new Uint8Array() }
+        if (!raw) return { status: 404, headers: {} as Record<string, string>, body: new Uint8Array() }
         return {
           status: 200,
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-          body: new TextEncoder().encode(file.content),
+          headers: {
+            'Content-Type': raw.mimeType,
+            'Content-Length': String(raw.bytes.length),
+          },
+          body: raw.bytes,
         }
       }
       const file = await repository.readProjectFile(projectId, path)

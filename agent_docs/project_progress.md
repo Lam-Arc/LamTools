@@ -14,7 +14,7 @@ and the opaque Relay tunnel.
 曾有 28 个未实现，另有核心工具集、HTTP 路由与整块子系统缺口。按批次推进，每批一个版本、逐批出包：
 
 1. ✅ 0.1.14 核心工具：`edit_file`、`search_files`、`search_content`、`web_fetch`
-2. ⏳ HTTP：`/projects/{id}/files/raw`、`files/content`、`agents-md`
+2. ✅ 0.1.15 HTTP 路由：`/projects/{id}/agents-md`、`/files`、`/files/content`、`/files/raw`、`/browse-directory`。桌面 56 条注册已逐条对照（parity 文档新增章节）；路由与移动端 project client 共用同一实现，`files/raw` 返回真实字节与 MIME，消息/舞台的图片视频 PDF 预览从 403 变为可用
 3. ⏳ 配置面：`config.loadtools`、`skill.create/delete`、`websearch.config.*`/`widget.*`、`plugin.config.*`/`install`/`uninstall`/`widget.get`/`invoke`
 4. ⏳ artifact 存储（含版本/回滚/打开）与 Goal 存储
 5. ⏳ 会话检查点 / fork / rollback
