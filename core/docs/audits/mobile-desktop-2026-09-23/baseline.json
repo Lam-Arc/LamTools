@@ -1,0 +1,91 @@
+{
+  "head": "9cc013066f6229ce48a0cf4784cdb9e9f6503019",
+  "baseline": "working tree, including uncommitted source changes",
+  "primarySourceHashes": [
+    {
+      "sha256": "D8C00F057D28BA3B8062511FCF661052BCA8459D5E4F3589C7BEB8F2C42F111B",
+      "path": "core/mobile/src/standalone/StandaloneTransport.ts"
+    },
+    {
+      "sha256": "7AE25EFB5DA53203B2AC4FD56F8BB11F81A5CEB90E02DB3620C13BDE776EC8BE",
+      "path": "core/mobile/src/standalone/StandaloneExtensionsStore.ts"
+    },
+    {
+      "sha256": "DCDF660392597F88FE44C53CDE55BBEA14910CE6897DD0CAD5026F56FF4F3DC1",
+      "path": "core/mobile/src/standalone/StandaloneConfigStore.ts"
+    },
+    {
+      "sha256": "D8328760F3E2673BC38F0821724B3C7458E37883D18B3E1F243CCAD1241BBACA",
+      "path": "core/mobile/src/standalone/StandaloneProjectClient.ts"
+    },
+    {
+      "sha256": "3B4EDBE1473D95D6D0F25CD0EDED8B23C0C8E2F2CA5A21DE9B0F52DA3543B5B9",
+      "path": "core/mobile/src/native/rustAgent.ts"
+    },
+    {
+      "sha256": "7C71352870086BA5C22D3CD56806F8DA37B3D1B742BBF4A8D85DC73322F60872",
+      "path": "core/mobile/src/storage/LocalRepository.ts"
+    },
+    {
+      "sha256": "BEB180EFD174C917A2C089D9F51EEDC01F2321A8FD33C96C74189809EBB0911C",
+      "path": "core/mobile/src/App.vue"
+    },
+    {
+      "sha256": "AFD50174120ACE81792F375460904DDF5A6A82BCEA5F9DBEC52761BCAB3293B3",
+      "path": "core/mobile/src-tauri/src/lib.rs"
+    },
+    {
+      "sha256": "081EAC27490A69FC518C7B1EF9C58296AD3ED73D6CFE7E7058529CA4AB616112",
+      "path": "core/runtime-rs/src/lib.rs"
+    },
+    {
+      "sha256": "304E9D24106408483F99DC802B878A0D987345155988E181CA1233337317BC51",
+      "path": "core/runtime-rs/src/provider.rs"
+    },
+    {
+      "sha256": "4504B276E071BEA6C0AAE2476C85C12DEA8731672755FCD610156DA89E5CE8D0",
+      "path": "core/runtime-rs/src/study.rs"
+    },
+    {
+      "sha256": "68FC7761F014B46C3DA85B255E725AA65CC67AC26DEB26CA4D9A4B898C14D79D",
+      "path": "core/runtime-rs/src/study_skills.rs"
+    },
+    {
+      "sha256": "0F8EB743F0CF38FDC046CCF5E41334510D7ED98AB350D472D0E2F545C870EFAC",
+      "path": "core/runtime-rs/src/sub_agent.rs"
+    },
+    {
+      "sha256": "470CE4DE3B6E5CAC67C2421CFC4A39DD8239538081CD66D3AF714FAB0DB114DB",
+      "path": "core/runtime-rs/src/hooks.rs"
+    },
+    {
+      "sha256": "D9B71D77727E3A79049F75FB19957DE380942D9CFD6FCBD3D6FA7DB875B7A0DD",
+      "path": "core/runtime-rs/src/mcp.rs"
+    },
+    {
+      "sha256": "07B238BFDE576632D3019C1E5CAD9FCF615F139C57E98D591E4C12D103D90F9F",
+      "path": "core/runtime-rs/src/workflow_ops.rs"
+    },
+    {
+      "sha256": "4ED83CF562089E2FD58D9A18691045F4DB549ACAE4BEC76995C55A1B10BCF4E7",
+      "path": "core/src/lamtools_core/app/default_agent.py"
+    },
+    {
+      "sha256": "E58E01D36CF09DD0925982DD087476753C3C1E69496CE573560C8C28F85E3500",
+      "path": "core/src/lamtools_core/kernel/loop.py"
+    },
+    {
+      "sha256": "AB654E8DD75D19B09282B4251DDD60B8164F96866D2B8D539601EB9953F6AB7E",
+      "path": "core/src/lamtools_core/cli.py"
+    },
+    {
+      "sha256": "F33BD37E517912086043D2242E4FED6EC3F192AC4B08011076C6557E8DDF6F2D",
+      "path": "core/ui/src/app/LamToolsApp.vue"
+    },
+    {
+      "sha256": "B36557D0F83BFAAFEC0CFF948DC94997215AA4EBF923549283803A4C1F605DBF",
+      "path": "core/ui/src/components/CoreSettings.vue"
+    }
+  ],
+  "releasedApk": "0.1.7 / 1007"
+}

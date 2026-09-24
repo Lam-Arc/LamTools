@@ -376,3 +376,29 @@ stash 验证与本改动无关）。
   位移都会立即覆盖陈旧的程序化滚动标记，保证滚动条/键盘操作可抢占吸底。
 - 验证：聚焦滚动测试 20/20、全套 UI contracts 87 文件 / 678 测试、typecheck、UI build
   均通过；`git diff --check` 仅有换行警告，未运行 Tauri 人工验证。
+
+### Android Rust OpenAI Chat SSE batching（2026-09-23）
+
+- Rust 原生 OpenAI Chat SSE 现增量传送 UTF-8 文本、reasoning 和带索引的工具调用；原生事件约每 32 ms 批量一次，TypeScript UI 更新约每 50 ms 批量一次。最终响应仍覆盖临时增量，重试/重置与内部压缩、dreaming 阶段门控一并处理。
+- 此次目标为恢复移动端真实增量流。历史基线是 completion-only；本次没有真实设备上的帧率或性能测量，也不据此声称手机实测完成。Anthropic、OpenAI Responses 和 Gemini 当前仍为 final-only。
+
+### Rust refactor follow-through（2026-09-23）
+
+- 0.1.2 website stable APK was tested by the user at 17:36 and returned
+  `provider connection failed before response headers`; the cause is unproven.
+  A signed universal 0.1.3 diagnostic APK was published at
+  `https://47.114.43.99.nip.io/downloads/Sunday-mobile-diagnostic-0.1.3-20260923.apk`
+  (49,464,744 bytes; SHA256
+  `D4FC6A8C759F25F68074784A2B1B692BE8A069ABEC73CC3819B6AEA26E7FF6BE`; code
+  1003; ARM64/ARMv7; 16 KiB aligned). Full public GET returned 200 with matching
+  size/hash. Website latest remains 0.1.2; the legacy 0.1.2 archive remains.
+- Source now rejects OpenAI Chat SSE EOF before `[DONE]` for reset/retry and
+  safely categorizes Android connection errors. The `finish_reason=length`
+  nonretryable error and provisional reset were added after the 0.1.3 build.
+  `workflow.run` supports deterministic built-in-only execution with preflight
+  and shaped responses; queue, human tasks, and host-backed nodes remain
+  unported. The broader Rust migration remains incomplete.
+- Verification: full Rust suite passed before the length fix; provider-focused
+  tests passed 29/29 after it; mobile-focused tests passed 34, and mobile
+  typecheck/build passed. No live phone HTTPS/stream success is established.
+  State is paused pending the user's 0.1.3 error text.

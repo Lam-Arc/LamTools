@@ -9,13 +9,11 @@ and the opaque Relay tunnel.
 
 ## Overall Progress
 
-The refactor is implemented. Core UI no longer uses the former demo entry;
-desktop and mobile both mount `core/ui/src/app/LamToolsApp.vue`. The Workbench
-depends on `LamToolsTransport`, desktop uses DirectTransport, and mobile keeps
-one stable RemoteTransport while ConnectionManager selects the secure LAN or
-Relay route. Pairing, device identity, secure-storage separation, Noise
-authentication, replay protection, protocol versioning, reconnect handling,
-and multi-client response ownership are in place.
+The shared-UI and multi-transport architecture has substantial existing
+implementation, but the current Rust/mobile refactor is still incomplete.
+Desktop and mobile work must be tracked against the active Rust migration
+below rather than treating the overall refactor as closed. The legacy
+Capacitor RemoteTransport path remains documented historical architecture.
 The latest Workflow UI closure adds multi-workflow tabs, a responsive
 schema-driven node catalog, Chinese presentation labels, and semantic Lucide
 icons while leaving canonical node IDs and execution contracts unchanged.
@@ -32,11 +30,90 @@ canvas into a text dashboard.
 
 ## Current Position
 
+- Mobile/Desktop capability audit and Study assembly repair (`mobile_study_skill_assembly_20260923`): deployment closure is complete for the audit and the specified Study main-agent fixes only; it does not mean the findings are all repaired or the Rust migration is complete. The canonical finding list is [the audit report](../core/docs/mobile-desktop-code-audit-2026-09-23.md), with supporting evidence in `core/docs/audits/mobile-desktop-2026-09-23/`. HEAD remains `9cc013066f6229ce48a0cf4784cdb9e9f6503019`; the fixes and audit were not released. Published mobile remains 0.1.7 / versionCode 1007; next package is 0.1.8 / 1008. Study mode aliases, five skills/fourteen references, disabled-skill filtering, approval-resume context, prompt updates, and two color-token fixes are present in source only. Ordinary skill loading and Study subagent tools/context remain missing. Verification: mobile 175 tests, Rust runtime 130, native 18, and mobile typecheck passed (323 tests total); a local fixture also confirmed PreToolUse `deny` and `ask_user` still execute the tool. Prioritize permission enforcement, attachment bytes, Study concurrency, and backup recovery, then continue the report's ordered scope. Do not satisfy parity by hiding functionality. Full read-only handoff is in [latest session work](latest_session_work.md); preserve the broadly dirty working tree.
+- Mobile sidebar and Study navigation (`mobile_sidebar_navigation_20260923`):
+  the narrow viewport keeps the bottom dock available independently of the
+  temporary drawer and account-panel state; wide layout restores modes,
+  account, search, settings, plugins, and arrange actions. The Notes tree's
+  “返回学习” navigation uses the resolved map binding before changing page.
+  Dirty-draft cancellation or failed navigation preserves the draft; successful
+  discard removes only the captured, unchanged draft. Main Study tests passed
+  27; dock mobile tests passed 9 and UI tests 15; final UI/mobile typechecks and
+  scoped diff check passed. Independent review covered success/cancel/failure.
+  Code-only validation; no visual device acceptance is claimed. Signed 0.1.7 /
+  versionCode 1007 is published as `https://47.114.43.99.nip.io/downloads/Sunday-mobile-0.1.7.apk`
+  and at the stable link; SHA256
+  `F6ECB4DD38366045B402C5513485B4F56342BFACCC67C6229AEE06B444C14386`,
+  49,764,432 bytes. The prior 0.1.2 stable APK was archived on the server.
+  Public versioned/latest HEAD returned 200 with matching length; homepage and
+  main JS returned 200, with public JS hash matching the local website build and
+  containing version 0.1.7. Server hash and cleanup checks passed. The prior
+  0.1.6 work was committed as `9cc01306`; this sidebar/navigation work remains
+  uncommitted pending phone feedback.
+- Android provider-credential follow-through (`mobile_auth016_20260923`): phone
+  0.1.5 reached the provider and received HTTP 401 `InvalidAuthorization/token`.
+  The actual phone key is unavailable, so cause is unproven. Mobile config
+  normalizes pasted `Authorization:` / `Bearer` prefixes on create/update and
+  legacy reads, preserves bare tokens, rejects blank/masked/invalid new keys,
+  and preserves stored credentials for masked updates. Focused tests passed
+  9/9 and typecheck passed. Signed 0.1.6 / code 1006 is published at
+  `https://47.114.43.99.nip.io/downloads/Sunday-mobile-diagnostic-0.1.6-20260923.apk`
+  (49,763,916 bytes; SHA256
+  `7A47E53747FB8D0BF06F8343F8E4A97EC37114894A81247022C62014191D7A39`).
+  Public HEAD returned 200 with expected length; no full GET was done. The
+  server key was revoked, authorized_keys is empty, stable/latest and 0.1.5
+  hashes unchanged; the final temporary local key file remains. Successful
+  phone authorization remains unverified; no Rust auth change was made.
+- Android TLS revocation follow-through (`mobile_tls015_release_docs`): signed
+  universal 0.1.5 / versionCode 1005 is built at
+  `release/mobile/Sunday-mobile_0.1.5.apk` (49,764,032 bytes; SHA256
+  `4683AB85217DD1FB60DDA6FB6914ADC88701BFB246B1C51E064399426B84EAD6`). It
+  retains the verified signer, is non-debuggable, includes ARM64/ARMv7, passes
+  16 KiB alignment, and contains the verified Sunday icon. Android 36 runtime
+  verification confirms the release Network Security Config trusts the API's
+  normal HTTPS chain, can download its signed CRL from `c.pki.goog`, and rejects
+  a revoked certificate. The default config failed because OCSP could not reach
+  its responder and cleartext HTTP CRL retrieval was blocked. The production
+  Android manifest narrowly permits HTTP only for `c.pki.goog` (no subdomains);
+  debug retains its previous cleartext behavior. The Rust/AAR verifier algorithm
+  is unchanged; upstream maps certificate-verification errors to Revoked even
+  for absent OCSP data. Contract tests passed 4/4. This validates the Android 36
+  Java platform verifier configuration, not the full Rust app path or physical
+  phone behavior. The user's 0.1.4 result was
+  `provider TLS certificate revocation check failed before response headers`.
+  Versioned APK is published at
+  `https://47.114.43.99.nip.io/downloads/Sunday-mobile-diagnostic-0.1.5-20260923.apk`; public HEAD returned 200 and a complete GET matched the expected size and SHA256. Server cleanup revoked the exact temporary key, left `authorized_keys` empty, removed staging files, and confirmed Caddy and relay active. Stable/latest 0.1.2, diagnostic 0.1.4, and archived legacy 0.1.2 hashes are unchanged. On a physical phone, 0.1.5 reached the provider and returned HTTP 401 `InvalidAuthorization/token`; successful authorization remains unverified. Broader Rust refactor remains incomplete.
+- Active Rust/mobile migration: Rust runtime Study, model, and Workflow runners
+  remain partial; queue, human-task, and host-backed Workflow nodes are not
+  ported. The mobile app has a Tauri host, Stop handling, and snapshot-based
+  recovery. Phone TLS reaches the provider; acceptance remains unverified after the 0.1.5 HTTP 401, with credential normalization in 0.1.6 awaiting retest. The broader
+  Rust refactor remains incomplete.
+- Operational evidence (2026-09-23): the phone trace reached
+  `http_request_built` at 13:43:42, then reported `provider send task failed`;
+  there was no matching provider console record. Android reqwest 0.13.5 uses
+  `rustls-platform-verifier` 0.7, and source inspection found its missing JNI
+  and Kotlin initialization. This is a probable cause, not yet confirmed by a
+  successful phone HTTPS request.
+- Latest scoped verification: full `core/runtime-rs` tests passed (119 tests),
+  Android `cargo check`, Gradle Kotlin compilation, and ARM64 APK build passed;
+  independent source/APK review passed. Mobile passed 156/156 across 27 files,
+  Vue typecheck passed, and Rust format checks passed for runtime and Android
+  host. Emulator installation was blocked by `Can't find service: package`, so
+  there is no device HTTPS proof.
+- Python suite status: the latest full run passed 2260 tests with 2 skipped in
+  347.68 seconds, after fixing a transient Windows atomic-replace issue in
+  `MEMORY.md` handling.
+- Latest scoped verification: full Rust tests passed (67 unit tests and all
+  integration suites), `cargo check --lib` passed, and mobile passed 156/156
+  with typecheck. These checks do not establish phone behavior or complete the
+  Rust migration.
+
 - Shared UI/runtime: `core/ui/src/app/`, `core/ui/src/workbench/`, and
   `core/ui/src/transport/`.
-- Mobile-only code is limited to pairing, native capabilities, lifecycle,
-  discovery, secure storage, and connection/wire code; its APP screen mounts
-  the shared `LamToolsApp`.
+- The established mobile transport surface owns pairing, native capabilities,
+  lifecycle, discovery, secure storage, and connection/wire code. The newer
+  mobile Tauri host/runtime migration is tracked separately above and remains
+  incomplete.
 - The Tauri Gateway keeps Core loopback-only and bridges authenticated,
   encrypted tunnel frames; Relay forwards opaque tunnel traffic without
   parsing Core business messages.
@@ -2637,3 +2714,761 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
   untracked `.tmp_glass_rg.txt`, `MyProject/`, `artifacts/`, and `docs.7z`
   remain preserved; no cleanup was performed by this closure. Next entry
   point is ordinary development from the published `v0.3.6` baseline.
+
+## Model catalog/provider refactor closure (2026-09-21)
+
+- Task ID/deployment/state: `archivist_model_catalog_20260921` /
+  `commandcode_provider_20260921` / **complete**. The implemented catalog
+  keeps the model record ID separate from the upstream API `model_id`; the
+  latter remains unchanged for requests, including provider-specific `/` and
+  `:` characters. Provider connection data and model definitions remain
+  separate JSONC records.
+- User-defined groups are persisted in `model_groups.jsonc` with unique names,
+  stable IDs, ordered many-to-many memberships, and revision checks. Existing
+  models can be added to a group; deleting a group removes only relationships.
+  Adding a new model from the group view requires an absolute API base URL and
+  either selects a matching existing provider or creates a provider/model and
+  membership atomically with rollback on failure. “未分组” is computed in the
+  UI.
+- Request-format resolution is model-over-provider: explicit model profile,
+  provider profile, matchers, then protocol default; inline provider overrides
+  are merged before model overrides. RPC/CLI surfaces cover model/provider
+  CRUD, group CRUD/reorder/member replacement, and composite model creation.
+- `CoreModelCatalogViewToggle` is shared by the main model picker and 设置 →
+  模型与供应商. The 按组 / 按供应商 choice is persisted at
+  `settings.jsonc` → `core.modelCatalog.classification`. Presets now include
+  Command Code, Command Code Free, OpenCode Free, SambaNova Free, Groq Free,
+  Google Gemini Free, Cloudflare Workers AI Free, and OpenRouter Free; their
+  API-key/documentation links open through the external URL bridge. Free preset
+  models are merged into the user `Free` group after creation.
+- Verification: backend full run reported `2201 passed`; an isolated rerun of
+  the environment-jitter case passed, and a subsequent independent full run
+  reported `2202 passed`. Core UI reported 96 files / 773 tests passed;
+  UI typecheck and the desktop build passed. These are code/build checks, not
+  a claim of manual Tauri visual acceptance.
+- Git handoff is read-only: the worktree remains heavily dirty with user and
+  concurrent changes, including the separate `project_diary.md` update; no
+  reset, cleanup, stage, commit, release, or attribution was performed. Next
+  entry point is to open the Tauri Settings → 模型与供应商 page or the main
+  model picker and exercise the group/provider toggle, group CRUD, and a real
+  provider request with user-supplied credentials.
+
+## Website Windows installer refresh (2026-09-22)
+
+- Deployment `website_installer_20260922` completed without a version bump,
+  commit, tag, or GitHub Release. The current dirty worktree was packaged as
+  Sunday Desktop `0.3.6` through `scripts/package.ps1`.
+- The package pipeline passed the desktop Vite build, PyInstaller plugin
+  boundary checks, packaged REST/WebSocket/Study/websearch smoke, Tauri release
+  build, and Inno Setup compilation. The resulting setup is 94,124,582 bytes
+  with SHA256 `41FEDC6C7F14ED7A6B5F9420DD2CDA780CD386B499E915B85873F60091711343`.
+- Local setup acceptance installed to `E:\setuptest\0.3.6`; the verified main
+  and backend processes were PID 19560 and PID 10424 from that directory.
+- The website download `/downloads/Sunday-latest-x64-setup.exe` was atomically
+  replaced at `2026-09-22T02:30:09Z`. HTTP returned 200 and Content-Length
+  94,124,582; the server hash matched the local package. The prior 94,081,829
+  byte file remains at
+  `/var/www/lamtools/Sunday-latest-x64-setup.exe.before-20260922T023008Z`.
+- Server verification confirmed the temporary deployment key was removed and
+  `lamtools-relay` remained active. The worktree and unrelated untracked files
+  were preserved.
+
+## Android bundled catalog repair and website refresh (2026-09-22)
+
+- Android standalone mode now exposes the bundled desktop plugin/skill catalog,
+  including Study and its UI mode, with persisted enable/disable state. Shared
+  plugin settings recognize Study and Workflow as built in. Desktop's empty
+  default hook configuration remains empty; remote mode continues to read the
+  connected desktop's live hooks.
+- Mobile tests, typecheck, production build, Capacitor Android sync, Gradle
+  release build, APK metadata checks, and V2 signature verification passed.
+  APK `release/mobile/Sunday-mobile_0.1.2.apk` is 31,709,068 bytes, SHA256
+  `58E0E54BCD21602A3AD9E4DA186276701CA15929D1943C97B65568C0BE19035A`.
+- Website `/downloads/Sunday-mobile-latest.apk` was atomically replaced at
+  `2026-09-22T03:36:46Z`; HTTP returned 200 with matching length. Rollback is
+  `/var/www/lamtools/Sunday-mobile-latest.apk.before-20260922T033646Z`.
+- Cloud Assistant inspection/deployment/verification invocations:
+  `t-hz06xsqi4tfah34`, `t-hz06xsqlku6ar5s`, `t-hz06xsqn3srvqps`.
+  Temporary SSH authorization was removed (`KEY_COUNT=0`) and
+  `lamtools-relay` remained active.
+
+## Android Tauri 2 shared Rust release candidate (2026-09-22)
+
+- Deployment `mobile_tauri_rust_release_20260922` reached the P1 release-candidate
+  boundary. Android now uses the Tauri 2 host and routes standalone model turns
+  only through the shared Rust runtime; the obsolete TypeScript provider/tool
+  loop was removed and guarded by contract tests.
+- Latest signed artifact:
+  `release/mobile/Sunday-mobile_0.1.2.apk`, versionCode `1002`, 41,785,124 bytes,
+  SHA256 `0D72E68CEB487CFB676E8B20AD46F21BBE6969F0C3669D30437355A883EF203C`.
+  It has one V2 signer, certificate SHA256
+  `045567d59580c97311203453e104938ad09d9f79e1e78e028f607cdbc4ecb4fb`,
+  `arm64-v8a` + `armeabi-v7a`, and passed non-debuggable/non-testOnly,
+  `zipalign -P 16`, and arm64 ELF `0x4000` LOAD alignment checks.
+- The reported black screen was reproduced on an API 36 x86_64 emulator. Its
+  cause was a CSP rejection of `WebAssembly.Module` during
+  `noise-handshake`/`xsalsa20` initialization before Vue mounted. The mobile
+  CSP now grants only `wasm-unsafe-eval`, the entry point renders a startup
+  failure surface if module loading fails, and packaging removes stale emulator
+  ABIs before producing the physical-device release.
+- Verification passed: mobile 19 files / 108 tests, mobile typecheck and
+  production build, `core/runtime-rs` 2 tests, Tauri host 2 tests, both Rust
+  format checks, and `git diff --check`. The corrected x86_64 debug build
+  launched successfully on the API 36 emulator with the Sunday onboarding
+  visible and no CSP/compile/startup exception in logcat. CI includes the same
+  frontend/Rust boundary checks plus a real aarch64 Tauri Android debug build.
+- The currently published APK remains the earlier 31,709,068-byte Capacitor
+  build. Its signer certificate exactly matches the new Tauri APK, but only a
+  clean emulator launch has been accepted; in-place upgrade, legacy SQLite
+  import, and secure-key continuity on the prior-install physical phone remain
+  pending. The website APK was intentionally not replaced. Next milestone:
+  connect that phone, perform the upgrade/migration matrix, then publish only
+  if it passes.
+- Scope remains P1 rather than complete Python Core replacement. Hooks, MCP,
+  subagents, compaction, memory, full Study/Workflow backend behavior, and the
+  complete model-level official thinking-parameter adapter still require later
+  migration before feature parity can be claimed.
+
+## Shared Rust Agent continuation: native protocols, persistence, and approvals (2026-09-22)
+
+- Goal `01a0bad2-6dfd-79b3-b832-3403fcf1e1a1` remains **active**. The Android
+  black-screen defect is fixed, but P0-P8 is not complete and the website APK
+  remains the prior Capacitor build.
+- `core/runtime-rs` now supports native OpenAI Responses and Gemini Generative
+  Language request/response envelopes in addition to Chat Completions and
+  Anthropic. It maps tools, output limits, official reasoning settings,
+  reasoning text, provider-native continuation state, and the actual upstream
+  model id. Bundled media/non-reasoning profile variants are embedded too.
+- Rust `AgentContext` now owns Sunday identity plus global/project/memory/mode
+  sections. Android loads project `AGENTS.md` and `MEMORY.md`; projectless Study
+  sessions receive an isolated session workspace and explicit Study mode
+  context instead of failing the project-id check.
+- Native persistence now covers model/provider settings and plugin/skill
+  switches, with one-time legacy localStorage import and no silent fallback.
+  The UI file browser and Rust Agent tools share the same native project
+  directory, with lazy import of prior SQLite-backed project files.
+- Project file writes are `ask_user` operations. Rust returns a serializable
+  continuation, the standalone transport persists and projects a normal Core
+  approval card, and `approval/respond` resumes the same tool/model chain.
+  Per-session approvals are retained in session metadata.
+- Verification at this checkpoint: Rust runtime 11/11 tests, mobile Tauri host
+  5/5 tests, mobile 22 files / 114 tests, mobile typecheck and production Vite
+  build passed, and a real aarch64 Tauri Android debug APK build completed.
+- Still pending: complete Hooks engine/config/trust execution, MCP, subagents,
+  context compaction, memory/Dreaming, full Study/Workflow Rust backends,
+  desktop/CLI Rust host replacement, cross-platform final regression, and the
+  real-phone Capacitor-to-Tauri upgrade/data/key migration matrix.
+
+## Shared Rust Hooks and MCP checkpoint (2026-09-22)
+
+- Hooks are now implemented in `core/runtime-rs`: configuration parsing,
+  definition hashes and per-hook trust, cumulative decisions, Prompt/HTTP/MCP/
+  Command handlers, required-hook fail-closed behavior, and all seven lifecycle
+  events are connected to the shared Agent loop. Mobile hook list/config/trust/
+  untrust/delete RPCs persist through native SQLite instead of returning an
+  empty catalog.
+- Shared MCP support now covers server config, stdio JSON-RPC initialization,
+  header and JSON-lines framing, tool discovery/calls, permissions, safe result
+  formatting, and Hook MCP calls. Android reads global and project MCP config;
+  unavailable executables surface as errors instead of fake tools.
+- Verification passed: Rust runtime 18 tests, mobile Tauri host 5 tests, mobile
+  22 files / 115 tests, typecheck, Vite production build, `git diff --check`,
+  and a complete four-ABI Tauri Android debug APK build. No device is currently
+  connected, so the latest APK has not received a new runtime launch test.
+
+## Shared Rust Sub Agent, compaction, and Dreaming checkpoint (2026-09-22)
+
+- Shared Rust now owns reusable non-blocking Sub Agents, strict lifecycle/tool
+  contracts, independent histories, durable bidirectional mailboxes, approval
+  continuation, read-only `consider` filtering, and recursive-delegation
+  blocking. Android stores records/mail in SQLite, exposes list/snapshot and
+  approval RPCs, and keeps one process-level hub across turns.
+- Android sends the complete configured model catalog (including each
+  provider credential) into the Rust boundary. Parent tools combine Project,
+  MCP, and Sub Agent; child tools combine Project/MCP plus parent messaging.
+  Global/project Sub Agent guide and delegation settings persist natively;
+  `forbidden` removes the parent delegation tools.
+- Rust context compaction and durable runtime history are connected. Context
+  windows drive automatic 80%/60% thresholds, the existing retained-step
+  setting is honored, recent user instructions survive, and model/fallback
+  summaries are bounded. Provider-native state and tool history persist in the
+  Android session database and are reused after restart.
+- Rust Dreaming appends durable facts to project `MEMORY.md` without replacing
+  manual content, uses the existing `core.dreaming` settings, is turn-id
+  idempotent, and keeps its throttle checkpoint in SQLite. Dreaming failure is
+  reported as best-effort metadata and does not fail the completed main turn.
+- Verification at this checkpoint: runtime 23/23, Android host 7/7, mobile 22
+  files / 117 tests, mobile typecheck, production Vite build, and an aarch64
+  Tauri Android debug APK build passed. The website APK remains unchanged.
+- Still pending before P0-P8 completion: full Study/Workflow Rust backends,
+  desktop Python-host replacement, Rust CLI, final unified migration/rollback,
+  real-phone Capacitor-to-Tauri data/key upgrade, and Windows/Linux/macOS/
+  Android final regression.
+- Goal remains active. Still pending: subagents, context compaction,
+  memory/Dreaming, full Study/Workflow Rust services, desktop/CLI Rust host
+  replacement, final cross-platform regression, and the physical-phone
+  upgrade/data/key matrix. The website APK remains unchanged.
+
+## Shared Rust Study backend checkpoint (2026-09-22)
+
+- Goal `01a0bad2-6dfd-79b3-b832-3403fcf1e1a1` remains active. This package
+  moved Study out of the bundled Python plugin for the native host: the scoped
+  knowledge graph, annotations, presentation state and the Study agent tools now
+  live in `core/runtime-rs/src/study.rs` and reach the UI through the mobile
+  Tauri host.
+- `StudyStore` implements the existing contract over SQLite: layered reads with
+  revision-bound cursors and the 32 KiB cap, revision-checked incremental
+  builds with receipts and outbox events, scoped search and pins, layout state,
+  session bindings, marks with the prompt-version migration and anchor
+  normalization, and a local-lexicon translate path that needs no model.
+- `StandaloneTransport` no longer returns empty Study data: every `study.*` call
+  goes to the runtime, session creation and the selected-node teaching position
+  stay in the host that owns the session store, and Study failures reject with
+  the structured error payload. The Study mode context now comes from the
+  shared prompt and latest context rather than a hand-written string.
+- Verification: runtime 23 lib + 11 Study tests, Tauri host 9 tests, mobile 23
+  files / 125 tests, mobile typecheck, Vite production build, both
+  `cargo fmt --check` runs, and `git diff --check`.
+- Still pending for full Study parity: the Note vault/Raw/Resource graph and
+  note pins, exams with evidence-checked signing, and the streaming selection
+  cancel path. `study.exam`, `study.sign` and `study.notes` currently fail
+  loudly on mobile instead of returning empty results.
+- Remaining migration scope after Study: the Workflow backend, the desktop
+  host/CLI Rust replacement, the real-device Capacitor-to-Tauri upgrade matrix,
+  and the Windows/Linux/macOS/Android release gate. The website APK is
+  unchanged.
+
+## Compaction equivalence fix and Dreaming divergence finding (2026-09-22)
+
+- Goal `01a0bad2-6dfd-79b3-b832-3403fcf1e1a1` stays **active**.
+- Context compaction in `core/runtime-rs/src/compaction.rs` now matches the
+  shared Python policy in `context_compaction_budget.py` and `tokens.py`:
+  - The token estimator is no longer a byte-length heuristic. It categorises
+    characters the same way `estimate_text_tokens` does (ASCII / 3.5,
+    CJK / 1.5, emoji × 2, other / 2) and charges the documented per-message
+    overhead (200 exact, 100 fast) plus 50 tokens per tool call. The previous
+    `bytes / 4` estimate undercounted ASCII text by roughly 12 % and charged
+    almost no per-message overhead, so the native host compacted later than the
+    Python host for the same conversation.
+  - The trigger decision uses `measure_for_compaction_trigger` semantics: the
+    fast estimate is trusted only while `fast × 8 < trigger`, otherwise the
+    exact estimator runs. This is the guard the Python comment added because
+    Unicode-heavy text can be substantially undercounted.
+  - An explicit `compact_trigger_tokens`/`compact_limit_tokens` of `0` is
+    treated as unset and falls back to the shared 80 % / 60 % ratios, matching
+    Python's `X or default`.
+  - `align_tail_start` documents and enforces the retention invariant that the
+    retained tail never begins on a tool result, so a request can never carry a
+    tool result whose assistant tool call was summarized away. Python needs the
+    same guard in its history trim (`while history[cut].role == "tool"`); in
+    Rust the split is always anchored on a user message, so this is a defended
+    invariant rather than a live defect.
+  - Tests: `token_estimation_follows_the_shared_unicode_policy`,
+    `an_explicit_zero_budget_keeps_the_shared_ratio_policy`, and
+    `compaction_never_orphans_a_tool_result`. Runtime is now 26 lib tests.
+- **Verified defect, not yet fixed — Dreaming is not equivalent.** Rust
+  `core/runtime-rs/src/memory.rs` writes `MEMORY.md` in a different format than
+  the Python implementation in `mem/memory_file.py`:
+  - Python owns a structured, sectioned document: the fixed `# Memory` header,
+    the five sections `Preferences` / `Facts` / `Decisions` / `Todo` /
+    `Deprecated`, `- [YYYY-MM-DD] content — source: <id>` entry lines with
+    human-authored entries (no `source`) preserved forever, in-place update of
+    an existing `(source, section)` pair, and a 20 000-character budget that
+    trims machine entries before human ones.
+  - Rust appends every extracted fact under an unprefixed `## Dreaming update`
+    heading with plain `- ` bullets, uses a different header line, and guards a
+    262 144-character limit instead of 20 000.
+  - Consequences, in order of severity: (1) `MEMORY.md` grown by the native
+    host exceeds `MAX_MEMORY_MD_CHARS = 20000` and
+    `ProjectContextLoader`'s per-file read cap, so memory silently stops
+    reaching the system prompt while dreaming keeps appending; (2) Python never
+    parses Rust's `## Dreaming update` bullets as structured entries, so they
+    are carried verbatim, can never be de-duplicated or suppressed, and the
+    section grows without bound; (3) Rust's `existing_memory.contains(update)`
+    is a substring check rather than Python's per-`(source, section)` update.
+    Python preserves unknown lines verbatim, so this is not data loss — it is a
+    format split plus silent truncation of the loaded memory.
+  - Required fix: port `mem/memory_file.py` (parse / render / append-new-entries
+    / section-tail / budget trim / merge / suppress) into the shared runtime and
+    have `dream_with_model` return structured entries that the host merges with
+    those semantics. Nothing was claimed as migrated here; the file-format split
+    is recorded so the next Dreaming package fixes it rather than adding another
+    strategy.
+- Verification after this pass: `core/runtime-rs` 26 lib tests + 11 Study
+  integration tests, Tauri host 9 tests, mobile 23 files / 125 tests, mobile
+  `vue-tsc` typecheck, Vite production build, `cargo fmt --check` for both
+  crates, and `git diff --check` all pass. No APK was rebuilt and the website
+  APK is unchanged.
+
+## Shared Rust Study exams and assessment signing (2026-09-22)
+
+- Goal `01a0bad2-6dfd-79b3-b832-3403fcf1e1a1` stays **active**. No version was
+  published; the website APK is unchanged.
+- Added `core/runtime-rs/src/study_exams.rs` (declared from `study.rs` as
+  `mod exams`) porting the bundled plugin's `exams.py` and the `sign` path from
+  `store.py`:
+  - `study.exam` with `create` / `list` / `get` / `reference` /
+    `save_answers` / `submit` / `help` and the versioned `grade` / `review`
+    pair.  Public reads allowlist learner-safe fields, so the private
+    answer/rubric never leaks through an ordinary exam response, and `help` is
+    only projected for the requested question.
+  - Validation matches the reference: question type/prompt/node ownership,
+    positive bounded scores, choice options, private grading-step limits,
+    per-question results covering every question exactly once, assessed and
+    incorrect node ownership, and `uncertain` results carrying no evidence.
+  - Scores stay authoritative: a coarse or stale `state` is normalized from the
+    score instead of rejecting a semantically valid model grade, and helped
+    questions are excluded from independent mastery evidence.
+  - Grading versions increment only on a real change; an exact retry or a
+    repeat of the last `grading_hash` returns the stored document without a new
+    version, `grading_history` keeps the previous grade, and
+    `request_id` receipts reject a conflicting retry.
+  - Auto-derived suggestions reproduce the reference thresholds (pass at 0.6,
+    `medium` at 0.8 with two or more unhelped questions, `high` only at 1.0 with
+    a prior pass on a different exam) and quote the supporting question ids.
+  - `study.sign` requires a graded exam, the current `grading_version` and exact
+    supporting `question_ids`; it rejects caller-supplied evidence fields,
+    matches the graded suggestion (including mastery and reason), refuses
+    helped, uncertain or malformed question evidence, resolves merge aliases,
+    writes `assessment` records with retained history, bumps the node's
+    `state_revision`, emits a `study.mastery.changed` outbox event and stores a
+    `study_sign_receipts` row so retries replay the original result.
+- Host wiring: `sunday_study_rpc` now routes `study.exam` and `study.sign`, and
+  the Study tool list exposes `sign` and `exam` from the plugin's own
+  `tools.jsonc`.  `study.notes` remains the only Study operation that fails
+  loudly because the Note vault is still Python-only.
+- Tests: `core/runtime-rs/tests/study_exam.rs` adds 8 contract tests covering
+  public/private separation, creation guards, grading guards, derived mastery
+  and idempotency, state normalization with helped questions, evidence-checked
+  signing, and unknown-id rejection.  The Tauri host adds an end-to-end
+  create → submit → grade → sign round trip through `dispatch_study`.
+- Verification: runtime 26 lib + 11 Study + 8 exam tests; Tauri host 10 tests;
+  mobile 23 files / 125 tests; mobile `vue-tsc`, Vite production build, both
+  `cargo fmt --check` runs and `git diff --check` all pass.
+- Still Python-only and not claimed as migrated: the Study Note vault
+  (`study.notes`, note pins and the Raw/Resource layers), the Workflow backend
+  (20,843 Python lines across 27 modules), and the desktop host/CLI Rust
+  replacement (the Python application is 102,722 lines).  Those are multi-session
+  packages, not single-session ones.
+
+## Study Note vault disabled on the mobile host via a capability declaration (2026-09-22)
+
+- Goal `01a0bad2-6dfd-79b3-b832-3403fcf1e1a1` stays **active**. The Rust Study
+  migration does not include the Note vault yet, so the mobile host previously
+  offered a "笔记" entry that could only fail. That entry is now gone instead of
+  being reachable-but-broken.
+- The gate is a general host capability declaration rather than a mobile special
+  case, because the Note vault is a host capability and not a UI preference:
+  - `PluginUIEntry.capabilities?: string[]` (`core/ui/src/plugins/types.ts`)
+    declares what a mode can serve. Absence means the host makes no claim and
+    every surface stays available; an empty list claims the host supports none.
+  - `PluginModeHost` publishes the active mode's declaration through
+    `CorePluginModeContext.modeCapabilities`.
+  - `StudyView` derives `notesEnabled` from it, refuses `navigate('notes')` when
+    the capability is absent, and passes the flag to the sidebar host.
+  - `StudySidebar` hides the 笔记 entry when the host has no vault, while 图谱,
+    搜索 and 管理你的知识 stay available.
+- Desktop keeps the vault: `study/plugin.json` now declares
+  `"capabilities": ["notes"]`, and the Python manifest parser, model and
+  `plugin.ui.list` serializer pass the declaration through. Undeclared modes
+  (for example `workflow`) omit the field so the UI keeps their surfaces.
+- Mobile declares `capabilities: []` for Study in
+  `StandaloneExtensionsStore.plugin.ui.list`, and `study.notes` still fails
+  loudly at the RPC boundary as a second line of defence.
+- Tests: Python covers optional parsing, empty-versus-absent separation, invalid
+  declarations being skipped at discovery, and the declaration surviving the
+  `plugin.ui.list` boundary; the shared UI covers the hidden entry plus the
+  guarded navigation and capability read; mobile asserts the declared empty
+  capability.
+- Verification: `core/ui` 96 files / 778 tests and its typecheck, `core/mobile`
+  23 files / 125 tests plus typecheck and production build, Python plugin tests
+  139 passed plus 16 registry tests, and the desktop frontend build all pass.
+  The running Tauri dev instance stayed healthy and reloaded both sides.
+
+## Mobile runtime acceptance on the Android emulator (2026-09-22)
+
+- Goal `01a0bad2-6dfd-79b3-b832-3403fcf1e1a1` stays **active**. This pass closes
+  the gap that matters most: the Rust Study migration had only ever been
+  compiled and unit-tested on the host target, never built for Android and never
+  run on a device.
+- Android target builds: `npx tauri android build --debug --apk --target
+  aarch64 --ci` and the same with `--target x86_64` both succeed. This is the
+  first proof that the `rusqlite` `bundled` dependency added to
+  `core/runtime-rs` cross-compiles SQLite for Android.
+- Runtime evidence on the API 36 x86_64 emulator (`lamtools_api36`), fresh
+  install of the x86_64 debug APK:
+  - The app launches with no black screen, and logcat contains no CSP,
+    `WebAssembly`, `CompileError` or JavaScript error; the first-run onboarding
+    renders normally.
+  - Creating a project works, and Study mode activates with its own header and
+    composer placeholder.
+  - The Study navigator shows 搜索 / 管理你的知识 / 图谱 and **no 笔记 entry**,
+    which is the capability gate working on a real device: the desktop
+    navigator still has 笔记 in the same position.
+  - Selecting 图谱 renders the empty-graph state ("0 个节点 0 条关系") instead of
+    an error surface, so `study.get` round-tripped through
+    `StandaloneTransport` → Tauri command → `StudyStore`.
+  - `state/study.db` exists next to the other native state files, and its schema
+    is exactly `StudyStore::ensure_schema`: `study_records`,
+    `study_scope_meta`, `study_receipts`, `study_sign_receipts`,
+    `study_outbox`, `study_session_bindings`, `study_pins`,
+    `study_course_removals`, with `study_scope_meta` holding
+    `structure_revision` and `state_revision` under the
+    `local-userlocal-environmentdefault` compatibility scope key.
+- Still **not** verified, and not claimed: a real model turn (no provider
+  credential on the device), graph writes from the agent, the exam and signing
+  flows end to end on a device, and any physical-device (as opposed to
+  emulator) upgrade or data-migration run. The desktop host received only
+  startup-level verification (window, backend connection, successful RPCs on
+  the Python side), not interactive feature acceptance.
+- Screenshots and the pulled database are under `artifacts/mobile-acceptance/`.
+
+## Desktop 0.3.7-beta.1 build and installer fix (2026-09-23)
+
+- Goal `01a0bad2-6dfd-79b3-b832-3403fcf1e1a1` stays **active**. Nothing was
+  published, tagged, or pushed; the website APK and GitHub Releases are
+  untouched.
+- Version raised to `0.3.7-beta.1` in all five locations (tauri.conf.json,
+  Cargo.toml, desktop package.json, pyproject.toml, `__init__.py`). The beta
+  suffix is deliberate and safe in an unusual way:
+  - `scripts/bump-version.ps1` and the `release.yml` tag guard both require a
+    bare `x.y.z`, so `v0.3.7-beta.1` can never be published by the release
+    workflow. A beta cannot be mistaken for a release.
+  - `scripts/package.ps1` and `installer/build-installer.ps1` accept the
+    suffixed form, so the local installer keeps the beta identity in its
+    filename and in `AppVersion`.
+  - `update.check` tolerates the suffix by design (`compare_versions` only
+    reads dotted numeric segments), so a beta build never fails its update
+    check.
+  - Known limitation, pre-existing and not introduced here: because
+    `compare_versions` ignores pre-release ordering, a `0.3.7-beta.1` install
+    compares as newer than a future stable `0.3.7`, so it would not be offered
+    that upgrade. Betas are for local acceptance, not distribution, so this was
+    left alone rather than changing release semantics.
+- Fixed the installer so a beta version can actually compile: Inno Setup's
+  `VersionInfoVersion` is a numeric file version and rejected `0.3.7-beta.1`
+  ("Value of [Setup] section directive VersionInfoVersion is invalid"), which
+  aborted the installer at the last step. `Sunday.iss` now takes a separate
+  numeric `VersionInfoVersion` define, and `build-installer.ps1` derives it by
+  stripping the pre-release suffix and exports it in its result object
+  (`version_info`). Display version and Windows file version are therefore
+  independent, and a stable build's file version is unchanged.
+- Acceptance (project skill `lamtools-setup-install`, Inno
+  `/VERYSILENT /NORESTART /DIR=`): installed to `E:\setuptest .3.7-beta.1`
+  and verified `app_file_version = 0.3.7-beta.1` with the main process and the
+  packaged `lamcore-backend\LamCore.exe` both running from that directory.
+  Installer: `core/desktop/src-tauri/target/release/bundle/inno/Sunday_0.3.7-beta.1_x64-setup.exe`,
+  93,997,103 bytes, SHA256
+  `de1549a7bf5f1f625febbc24314999a04020186498755a56ef49fc0259d2bf80`.
+  The first acceptance attempt failed because a running `tauri dev` instance
+  held the single-instance lock and the installed app handed off and exited;
+  closing the dev instance made the verification pass. This is a test-environment
+  conflict, not a product defect.
+- Verification boundary: `package.ps1` steps 1-3 (frontend, PyInstaller backend,
+  Tauri release executable) succeeded in the run that failed at step 4, and the
+  repaired step 4 then succeeded on its own against that staged payload. A
+  single end-to-end `package.ps1` run of the repaired script has not been done,
+  so the full chain is not yet proven in one pass. `release.yml` runs the same
+  path in CI.
+- Mobile artifact for the same acceptance round:
+  `release/mobile/Sunday-mobile_0.1.2-debug-aarch64.apk`, 203,208,324 bytes,
+  SHA256 `9c1ddd87fd324c73d0f9009eb78ae58669324fa27fc23efbc819e6131a00d643`,
+  arm64-v8a only, debug-signed (installable, not publishable).
+
+## Fixed: structuredClone rejected reactive state in the mobile stores (2026-09-23)
+
+- Reported error: `Failed to execute 'structuredClone' on 'Window': #<Object>
+  could not be cloned.` The desktop chain is not the source: `core/desktop/src`,
+  `core/ui/src`, `core/desktop/node_modules/@tauri-apps` and
+  `core/mobile/node_modules/@tauri-apps` contain no `structuredClone` call, so
+  every call site lives in the mobile standalone stores.
+- Root cause, reproduced in a test (`structuredClone` on a `reactive(...)`
+  object throws): the stores let Vue reactive proxies into persisted state and
+  then cloned that state on read.
+  - `StandaloneConfigStore` `settings.update` shallow-merged the caller's
+    object (`{ ...existing, ...value }`) and `config.subagent.settings.set`
+    assigned `current[key] = value`, so a reactive value written from a settings
+    panel stayed in `state` as a proxy.
+  - `settings.get` additionally returned `state.settings[namespace]` **by
+    reference**, so the UI could mutate stored state and a reactive copy of it
+    could leak back in from the other direction.
+  - The reads in `settings()`, `normalizedSubAgentSettings()` and
+    `StandaloneExtensionsStore.runtimeHooks()` then called
+    `structuredClone(state...)` and threw.
+  - `LocalRepository` had already been hardened for exactly this shape (its
+    private `clone` catches and falls back to JSON), but that hardening was
+    never shared with the other two stores — the same defect was fixed in one
+    place and missed in three.
+- Fix: one shared `cloneState` helper (`core/mobile/src/storage/cloneState.ts`)
+  that prefers `structuredClone` and falls back to a JSON round-trip, now used
+  by every call site. Writes are isolated (`settings.update`,
+  `config.subagent.settings.set` clone before storing), reads are guarded
+  (`settings()`, `normalizedSubAgentSettings()`, `runtimeHooks()`), and
+  `settings.get` returns a copy instead of its internal object.
+  `LocalRepository` reuses the same helper so the fallback has one home.
+- Tests: `core/mobile/tests/clone-state.test.ts` asserts that
+  `structuredClone` rejects a reactive proxy while `cloneState` accepts it, and
+  covers the real paths — a reactive `settings.update` value read back through
+  `settings()` and `settings.get`, a reactive Sub Agent role assignment read
+  back through `subAgentRuntime()`, and the hook/MCP config read. Mobile is now
+  24 files / 130 tests, plus typecheck and production build.
+- Not covered: the desktop packages were not rebuilt for this change, because
+  the fix is mobile-only and the desktop chain never calls `structuredClone`.
+  The previously delivered mobile APK predates the fix and was rebuilt.
+
+## Mobile: model requests had no timeout, so a stalled turn never returned (2026-09-23)
+
+- Reported symptom: in Agent mode a message produced no reply and no error, the
+  turn stayed running with the elapsed time counting up, and the composer kept
+  showing the stop action. A previous turn had surfaced the `structuredClone`
+  error (fixed separately).
+- Root cause, located at `core/runtime-rs/src/provider.rs`: the HTTP client was
+  built with headers only —
+  `reqwest::Client::builder().default_headers(headers).build()` — with no
+  `.timeout()` and no `.connect_timeout()`. reqwest applies no request timeout by
+  default, so when the target address never answers (DNS black hole, stalled TLS
+  handshake, server that accepts but never responds) the `send()` future never
+  resolves. The turn then holds neither a result nor an error, which is exactly
+  the observed shape: UI running, elapsed time growing, no output.
+- The Python host does bound this: `config/retry_store.py` defines
+  `DEFAULT_MODEL_RETRY_CONFIG` with `model_timeout_seconds: 360`,
+  `model_retries: 10`, `retry_delays_seconds: [1, 1, 2, 5, 5]`, `jitter: true`
+  and `empty_response_retries: 3`. None of that had been ported to the Rust
+  provider.
+- Fix, aligned to those defaults rather than inventing a policy: added a
+  `RetryPolicy` (attempts 10, timeout 360 s, delays 1/1/2/5/5 with the tail
+  repeating, clock-seeded 0.5x–1.5x jitter) and `HttpModelBackend::with_retry_policy`;
+  the client now sets `.timeout(policy.timeout)`, and `complete` sends through
+  `send_with_retry`, which retries transport failures, timeouts, 5xx and 429
+  within the attempt budget and returns a real error otherwise. A 4xx stays
+  fatal because retrying cannot help it.
+- Tests in `provider.rs`: the wait rhythm matches the shared baseline, jitter
+  stays inside 0.5x–1.5x, and — the one that matters — a provider that accepts a
+  connection and never answers now fails inside the bound instead of hanging
+  (a local listener that reads the request and stays silent; the call returns an
+  error in ~1 s with a 1 s timeout where it previously never returned at all).
+- Not yet ported, recorded rather than implied: `empty_response_retries`
+  (re-issuing after an empty completion) and the streaming idle timeout, which
+  does not apply while the Rust provider sends `stream: false`.
+- The refreshed ARM64 trace debug APK variants include this Rust provider fix;
+  neither has yet been tested on a phone.
+
+## Mobile layout and request-trace fixes (2026-09-23)
+
+- The narrow sidebar fix removes the 18px peek constraint while the drawer is
+  open. The Android native inset bridge supplies the status-bar top inset, and
+  the app retries a temporary zero value. The shared desktop TitleBar is now
+  explicitly hidden when `runtime.platform` is mobile, avoiding the fixed
+  desktop titlebar overlapping Android status content.
+- Verification: mobile layout contract 4/4; mobile suite 154/154; focused UI
+  tests 36/36; mobile and shared UI typechecks passed. The in-chat trace begins
+  before model lookup and the first message save, avoids intermediate
+  persistence, and passed targeted coverage 28/28.
+- ARM64 debug-signed APK:
+  `core/mobile/artifacts/Sunday-mobile-trace-debug-0.1.2-20260923-debug-signed.apk`
+  (216,634,556 bytes; SHA256
+  `C2561DE2AF20D07B0186C14299F73ECF8DCF5F29D54A68DCF7468C282D87A41C`;
+  signing certificate `a6fed859…a30c`, matching the prior debug signer).
+- ARM64 release-signed APK:
+  `core/mobile/artifacts/Sunday-mobile-trace-debug-0.1.2-20260923-release-signed.apk`
+  (216,634,556 bytes; SHA256
+  `220222D066E0F6AAF8C08BBAFB6B1D8C3C756B6829EDE4E3C4C87AB5DFEA0B1D`;
+  signing certificate `045567d5…4fb`, matching the prior release signer).
+  Both packages are `com.lamtools.mobile`, versionName `0.1.2`, versionCode
+  `1002`, ARM64, targetSdk 36. Neither has been phone-tested or visually
+  accepted.
+- This earlier trace build was superseded by the network-stall follow-up below.
+  The Rust refactor remains incomplete.
+
+## Desktop command shell setting (`shell_session_fix_20260923`)
+
+- Deployment `shell_session_fix_20260923` is complete. Desktop Python shell selection is configured by `core.commandShell`, exposed in GUI Settings and through `command-shell get/set`. Windows automatic selection is WSL → Git Bash → PowerShell; explicit unavailable choices fall back safely. Linux keeps native command behavior, and Android hides the setting.
+- Agent command execution and Workflow execution share a shell resolver. WSL discovery uses a cached probe bounded to 4 seconds; command working directories use `--cd`, workflow WSL environment forwarding is explicit through `WSLENV`, and path validation respects each shell's quoting rules.
+- UI corrections route duplicate error notices once, prevent replayed terminal events from an older turn closing a newer running turn, and project `final_response` / `has_tool_calls` while retaining interim text in process state. Send/stop glyphs and composer trail now share the composer background, including its gradient and theme changes.
+- Verification: 5 UI test files / 75 tests passed; 4 Python suites / 111 tests passed; `npm run typecheck` passed; `git diff --check` exited 0.
+- Boundary: real WSL working-directory execution remains unverified because WSL hung for over 50 seconds on this host; the bounded probe now falls back. No Tauri UI or Android device observation was performed, per code-only verification. Rust/mobile refactor files were untouched by this deployment. No commit, tag, or push was made.
+
+## Mobile HTTP send stall follow-up (mobile_http_send_stall_20260923; 2026-09-23)
+
+- Phone trace evidence: at 12:04:14 the turn reached `http_send_start`; by about
+  12:11 it had emitted neither response headers nor an error stage. The provider
+  console had no matching request. This places the stall at or before response
+  headers, but does not identify whether DNS, TCP connect, TLS, routing, or
+  another transport condition caused it.
+- Rust provider now caps connection establishment at 15 seconds, shows a fixed
+  waiting stage after 30 seconds, applies a 120-second deadline before response
+  headers, and permits at most two pre-header attempts. The existing 360-second
+  response-body timeout and retry behavior for 5xx responses remain. JavaScript
+  trace stage labels are fixed for this path.
+- Verification: `core/runtime-rs` cargo tests passed; mobile suite 154/154 and
+  mobile typecheck passed. Two ARM64 APK variants were rebuilt, versionCode
+  1002, versionName 0.1.2, targetSdk 36; their signing certificates match the
+  corresponding previous debug/release variants. Neither new APK has been
+  phone-tested.
+- Debug-signed APK:
+  `core/mobile/artifacts/Sunday-mobile-trace-network-0.1.2-20260923-debug-signed.apk`
+  (216,802,308 bytes; SHA256
+  `30501B9735ADD0C4E13FA0B3CDBBA041DC11C3E1264F2B0C5DC81DEC4F415405`).
+- Release-signed APK:
+  `core/mobile/artifacts/Sunday-mobile-trace-network-0.1.2-20260923-release-signed.apk`
+  (216,802,308 bytes; SHA256
+  `01D59CFA6A8F050693726A2A0617247013EE4219CA4BE6508D937E91B7E304FE`).
+- This checkpoint is superseded by the isolated-send follow-up below. The
+  12:47 trace exercised the request-build APK; the new isolated-send APK pair
+  remains untested on the user's phone.
+
+## Mobile request-build trace follow-up (mobile_http_send_stall_20260923_closure; 2026-09-23)
+
+- The earlier 12:04 phone trace came from the older APK built at 11:24. It
+  reached `http_send_start` without headers or an error by about 12:11, but it
+  predates the latest request-build instrumentation and cannot verify that
+  build. The screenshot's model label matches the Command Code preset; the
+  actual provider configured on the phone is still unknown, so confirmation was
+  requested. The phone-side network root cause remains unproven.
+- Rust now builds the HTTP request before emitting the fixed
+  `http_request_built` stage; build failures emit `http_request_build_error`.
+  The bounded pre-header wait/retry is retained, and JavaScript maps both stages
+  to fixed labels. Connection establishment is capped at 15 seconds, a fixed
+  waiting stage appears after 30 seconds, the pre-header deadline is 120 seconds,
+  and there are at most two pre-header attempts. The existing 360-second
+  response-body timeout and 5xx retry policy remain.
+- Verification: runtime Rust test groups passed 64 + 11 + 8 + 2 + 11 + 9 + 9;
+  16 focused provider tests passed; mobile passed 154/154 and its typecheck
+  passed. Both ARM64 APKs are version 0.1.2 / versionCode 1002 / targetSdk 36;
+  the packaging script verified that their signatures match the corresponding
+  previous debug and release signing identities. Neither new package has been
+  tested on the user's phone.
+- Release-signed APK:
+  `core/mobile/artifacts/Sunday-mobile-trace-request-0.1.2-20260923-release-signed.apk`
+  SHA256 `A9C8BEA0AF8095FA70B0CF4555093D7F55ECDCD59B7498F767187CCE14BF95D7`.
+- Debug-signed APK:
+  `core/mobile/artifacts/Sunday-mobile-trace-request-0.1.2-20260923-debug-signed.apk`
+  SHA256 `E8A614FAEECAFCD12094EAF66F64DC01092DF5BEB3EB2B72C28AB9A9B70BC191`.
+- This request-build checkpoint is superseded by the isolated-send follow-up
+  below. The Rust refactor remains incomplete.
+
+## Mobile HTTP stall second-trace handoff (mobile_http_send_stall_20260923_second_trace_handoff; 2026-09-23)
+
+- New phone evidence: the request reached `http_request_built` at 12:47:08, then
+  showed no native 30-second marker for more than two minutes. The phone showed
+  Command Code selected. This still does not establish why the native request
+  task is not progressing.
+- Desktop control probe succeeded in about 25 seconds with one step and a final
+  reply using `run-local --model-id deepseek/deepseek-v4.1-flash --no-thinking
+  --max-tokens 128 你好` against `https://api.commandcode.ai/provider/v1`.
+  This validates the desktop Python path only; it does not verify the Android
+  request path or actual phone provider configuration.
+- Rust now spawns the reqwest send task before publishing the built stage, with
+  abort-on-drop and independent watchdogs. The JavaScript trace emits host-side
+  wait markers at 35 and 125 seconds while the native invoke remains pending.
+  `core/runtime-rs/Cargo.toml` enables Tokio macros as a normal dependency and
+  multi-thread runtime support for dev tests. A standalone production check had
+  previously failed without the macros feature; this was a feature-gating issue,
+  not an Android runtime result.
+- Verification: full Rust tests passed (67 unit tests and all integration
+  suites); `cargo check --lib` passed; mobile passed 156/156 and typecheck passed.
+- New ARM64, version 0.1.2, versionCode 1002, targetSdk 36 packages were signed
+  and checked against the previous signing identities. The isolated request
+  variants below have not yet been tested on the phone.
+- Release-signed APK:
+  `core/mobile/artifacts/Sunday-mobile-trace-isolated-0.1.2-20260923-release-signed.apk`
+  SHA256 `D1FF09A435806655568D6AD043018A57448BBE71D5E6A456D8467698702A2FC6`.
+- Debug-signed APK:
+  `core/mobile/artifacts/Sunday-mobile-trace-isolated-0.1.2-20260923-debug-signed.apk`
+  SHA256 `7E64BD32D4A3FFEA1D2E1AB914401D5258D9826012D067BFB296B315F324BB33`.
+- State: paused pending a phone test of these isolated-send APKs and its new
+  trace. Root cause remains unproven; broader Rust Workflow/refactor work is
+  incomplete. The working tree is dirty; preserve unrelated changes. This is a
+  read-only handoff with no commit or cleanup.
+
+## Mobile project files and long-running chat progress (2026-09-23)
+
+- `root.list_files` accepts an empty path and returns `project_root`, allowing
+  project files to be browsed from the root. Android project files live under
+  `app_data_dir()/projects/<project ID>`; Android's system file manager usually
+  does not expose this app-private directory.
+- Long-running chat execution logs now appear as an animated phase progress
+  bar. The terminal progress indicator hides about 1.5 seconds after success or
+  failure; answer and error bodies remain separate and do not concatenate the
+  execution log.
+- Verification passed: runtime Rust suite 119 tests; mobile 156 tests across 27
+  files; UI 793 tests; mobile Vue typecheck; Android `cargo check`; Gradle Kotlin
+  compilation; ARM64 signed APK build; design scan 87 files / 0 deviations.
+  Emulator installation was blocked by `Can't find service: package`; no
+  real-device HTTPS or visual acceptance is claimed.
+- Published signed diagnostic APK:
+  [Sunday-mobile-progress-root-0.1.2-20260923.apk](https://47.114.43.99.nip.io/downloads/Sunday-mobile-progress-root-0.1.2-20260923.apk)
+  (218,855,436 bytes; SHA256
+  `7A845855B1830C80D4EE3D7FB599BAEF5585B3DFD007F63ED494384B9D5942BB`).
+- The full Rust migration remains incomplete.
+
+## Mobile streaming release handoff (mobile_streaming_audit_20260923; 2026-09-23)
+
+- Closure state: complete for the scoped Command Code/DeepSeek streaming repair
+  and website APK switch. OpenAI Chat SSE now streams UTF-8 text, reasoning, and
+  indexed tool calls; native and JavaScript events batch at 32 ms and 50 ms.
+  Retry/reset and final-response authority, internal compaction/dreaming gates,
+  fixed release stages, and frontend reasoning-terminal cleanup are covered.
+  Anthropic, Responses, and Gemini remain final-only. The wider Rust refactor is
+  incomplete and there is no real-phone proof.
+- Verification passed: runtime 122 tests; mobile 158 tests across 27 files; UI
+  793 tests across 98 files; typecheck; mobile Vite build; design scan 87 files /
+  0 deviations; signed universal Android APK build for ARM64 + ARMv7 with 16 KiB
+  alignment. APK version is 0.1.2 / versionCode 1002 and uses the prior
+  diagnostic signing certificate.
+- Website stable download now serves the 49,158,412-byte APK with SHA256
+  `57958F1C739B4B2FC65556D49AD567A80A3CF21DD1C352791D31200609CFB561`; the
+  versioned and stable public URLs both returned HTTP 200 and the full stable
+  GET matched that hash. The older public artifact was archived. Caddy-lamtools
+  and relay are active; temporary server SSH authorization was revoked.
+- Read-only Git handoff: working tree remains broadly dirty with unrelated and
+  ongoing Rust/mobile refactor work. Preserve it. No commit, tag, push, or
+  cleanup was performed. Local temporary SSH key files remain at
+  `C:\Users\ADMINI~1\AppData\Local\Temp\lamtools-mobile-stream-upload-20260923`
+  after automatic exec approval rejected removal; the server no longer
+  authorizes this key. No staging file remains.
+
+## Sunday SVG system-prompt language experiment (sunday_svg_ab_closure; 2026-09-23)
+
+- State: complete. The one-run-per-language test used Sunday `run-local` with
+  `deepseek/deepseek-v4.1-flash`, thinking `max` (极高; budget 16,384),
+  temperature 0.7, and the task “直接使用 SVG 画一个动态的鹈鹕骑自行车”.
+  The only experimental variable was the full system-prompt language.
+- Results: Chinese system prompt — 49 model steps, 52 tool calls, 13 failed
+  (25.00%), 723.273 s, 4,053,398 reported tokens; English system prompt — 22
+  steps, 29 calls, 3 failed (10.34%), 525.865 s, 2,136,453 reported tokens.
+  The Chinese run had one empty model response without provider usage, so its
+  true token total is not exact; reported totals exclude that response.
+- Both SVGs parsed and showed code-driven frame differences at 0.4 s. No human
+  visual evaluation was performed. One run per language, so the observed
+  differences do not establish a causal language effect. No production code
+  changed; stronger evidence would require repeated runs.
+
+## Sunday code-task system-prompt language experiment (sunday_code_dev_bug_ab_20260923; 2026-09-23)
+
+- State: complete. Four Sunday `run-local` conditions used DeepSeek V4.1 Flash,
+  thinking `max` (极高; budget 16,384), temperature 0.7: development and bug
+  repair, each with Chinese or equivalent English system prompts. All four
+  independently passed the 8-case acceptance suite.
+- In this sample, English was faster and used fewer reported tokens: development
+  95.212 s / 185,853 tokens (zh) versus 78.329 s / 150,237 (en); bug repair
+  74.344 s / 150,693 (zh) versus 32.675 s / 56,515 (en). Development had one
+  failed tool call in each language; bug repair had none. One run per condition
+  does not establish a causal language effect.
+- Canonical detail and four output files are in
+  `core/experiments/sunday_code_dev_bug_ab_20260923/REPORT.md` and its
+  `runs/*/outputs/order_quote.py`. No production code changed; repeat both task
+  pairs if a stronger causal comparison is required.
+
+## Sunday English system-prompt rollout (sunday_system_prompts_english_20260923; 2026-09-23)
+
+- State: complete. Sunday-owned preset prompts now have equivalent English
+  text across Python main/auxiliary paths, shared Study Python/Rust,
+  subagent defaults, mode/shell fragments, and the bundled skill index.
+  User-authored and current global configuration remain unchanged.
+- Handoff export accepts the new English metadata prefixes and legacy Chinese
+  prefixes. Focused code-only verification passed: independent English prompt
+  9, subagent/export 72, skill 12, config defaults plus English prompt 10,
+  Study Python 48, Study Rust 11, auxiliary Python 146, and `git diff --check`.
+- No broad full-suite or GUI run is claimed. Next entry point: preserve both
+  metadata-prefix forms and rerun the focused checks when prompt sources change.

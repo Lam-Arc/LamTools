@@ -1,0 +1,11 @@
+[package]
+name = "mobile-audit-pre-hook-repro"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+lamtools-runtime = { path = "../../../../runtime-rs" }
+async-trait = "0.1"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

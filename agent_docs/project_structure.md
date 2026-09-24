@@ -12,7 +12,9 @@ feature-level inventories belong in their module documentation.
 - `core/ui/src/right-sidebar/` contains the right-rail module contracts and
   `core/ui/src/components/RightSidebar*.vue` contains the host, module frame,
   layout editor, widget renderer, and built-in Runtime/Web Search/RAG surfaces.
-- `core/mobile/` is the mobile client surface; `core/remote/relay/` contains
+- `core/mobile/` is the mobile client surface. `core/mobile/src-tauri/` owns
+  the in-progress Tauri mobile host and native runtime bridge; `core/runtime-rs/`
+  contains the partial Rust runtime migration. `core/remote/relay/` contains
   the opaque relay surface. `core/tests/`, `core/ui/tests/`, `core/config/`,
   `core/docs/`, `core/skills/`, and `core/templates/` support Core.
 - `website/`: independent Vue/Vite website. Its showcase imports real
@@ -37,6 +39,11 @@ feature-level inventories belong in their module documentation.
   `mcp`, `mem`, `attachment`, `artifact`, `export`, and `update` provide the
   Core execution, model, tool, durable-runtime, configuration, extension,
   content, export, and update domains.
+- `lamtools_core.config.model_store` and `provider_store` own separate
+  file-backed model/provider records under the unified JSONC root;
+  `model_group_store` owns `model_groups.jsonc` and ordered many-to-many model
+  memberships. `config.operations` exposes their RPC catalog and performs
+  model-record/provider validation and rollback for composite creation.
 - `core/src/lamtools_core/plugins/bundled/workflow/backend/` owns the Workflow
   registry and schemas, V2 document/compiler/adapters, durable runtime, queue,
   event history, snapshots, cache, activations, expression evaluator, and
@@ -50,12 +57,19 @@ feature-level inventories belong in their module documentation.
 - `core/ui/src` exposes the shared `LamToolsApp`, Workbench, workspace shell,
   session/chat/composer components, runtime/settings/project/plugin surfaces,
   transport helpers, and shared types through `core/ui/src/index.ts`.
+- `core/ui/src/components/CoreModelCatalogViewToggle.vue` is shared by the
+  main model picker and `CoreSettings`' 模型与供应商 catalog. `LamToolsApp`
+  loads model groups and the persisted `core.modelCatalog.classification`
+  setting, then routes group/provider changes through config RPCs.
 - `core/desktop/src-tauri` owns native Tauri commands, window management,
   packaging, and the authenticated RemoteGateway; `core/desktop/src` boots
   the shared UI with DirectTransport and bridges native commands.
 - `core/mobile/src` owns only the mobile host lifecycle, pairing/trusted-device
-  flow, native capabilities, route selection, secure wire, and
-  RemoteTransport. Its APP screen mounts the shared `LamToolsApp`.
+  flow, native capabilities, route selection, secure wire, and mobile UI
+  integration. The Tauri host under `core/mobile/src-tauri/` provides native
+  runtime commands; migration of the Study, model, and Workflow internal
+  runners remains partial. Stop and snapshot recovery are implemented, while
+  phone visual confirmation of sidebar and system inset fixes is pending.
 - `core/remote/relay` authenticates desktop/mobile tunnel presence and forwards
   opaque encrypted frames; it has no Core session or message model.
 
@@ -74,6 +88,11 @@ feature-level inventories belong in their module documentation.
   history/queue inspection, activation/deactivation, and durable resume/signal
   behavior. Workflow invokes Agent/Model/plugin nodes through explicit
   `WorkflowExecutionContext` adapters rather than shared runtime state.
+- Model/provider RPCs expose provider and model listing/CRUD, model-group
+  listing/CRUD/reorder/member replacement, and atomic new-model-plus-provider
+  creation. The CLI exposes the same surface through `models` and
+  `models groups` commands. A model's local record ID is used at these
+  boundaries while its upstream `model_id` is preserved for provider calls.
 - In Tauri, Rust publishes a dynamically selected loopback backend URL through
   `get_api_base`; the desktop bootstrap constructs DirectTransport and passes
   the resulting runtime to the shared UI.

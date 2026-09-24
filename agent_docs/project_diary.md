@@ -52,6 +52,36 @@ logs.
   installation on vivo V2536A / Android 16 verified the login-free entry,
   surface-matched dynamic safe area, compact sidebar, long-press context
   menu, and import. Offline-device remote control was not claimed.
+- For Android releases, treat `core/mobile/src-tauri/gen/android` as the active
+  package and `core/mobile/src-tauri/icons/android` as the canonical launcher
+  resources. Sync them before Tauri builds and inspect the signed APK's adaptive
+  background and launcher pixels; edits to the archived Capacitor Android
+  resources do not change the shipped Tauri icon.
+- Keep mobile navigation controls reachable in exactly one place: the top-right
+  command dock when visible, and the left sidebar footer when the host hides
+  that dock. On narrow-to-wide viewport changes, restore the pinned sidebar;
+  an open drawer needs its full width independently of the main surface's peek
+  inset.
+- A provider console with no HTTP request does not prove the Android request
+  stayed inside the app. TLS certificate verification can fail before HTTP
+  headers. Classify the safe cause without echoing URLs or keys, and preserve
+  certificate validation while investigating Android platform-verifier faults.
+- `rustls-platform-verifier` 0.7.0 maps every Android revocation-check
+  `CertPathValidatorException` to `Revoked`, including a missing OCSP responder.
+  That status alone is not evidence of actual revocation. Android can fall back
+  to signed CRLs, whose distribution URLs may use HTTP; inspect the packaged
+  network security policy before replacing the verifier or weakening validation.
+  For the observed GTS chain, an exact `c.pki.goog` cleartext exception fixes the
+  platform check while the default policy remains closed. Preserve the debug
+  resource overlay explicitly, and validate both a valid and a revoked CRL
+  fixture; neither a desktop HTTPS success nor an Android harness proves the
+  complete phone application path.
+- Keep credential input separate from HTTP authentication syntax: mobile may
+  receive a copied `Authorization: Bearer ...` header, while Rust supplies the
+  scheme itself. Normalize that wrapper on both writes and legacy reads, reject
+  masked placeholders, and preserve the existing key when a masked editor value
+  is submitted. A provider 401 confirms HTTP was reached but does not establish
+  whether the device's unknown credential is expired, mistyped, or malformed.
 - Treat Office/runtime capability discovery as reusable runtime state rather
   than letting each Agent task spend many model rounds searching program paths.
   Model latency dominates these workflows, so eliminating discovery rounds is
@@ -651,3 +681,151 @@ logs.
 - Tauri 的 `bundle.icon` 是 Linux `generate_context!` 的编译输入，即使仓库全局忽略 `*.png` 也必须精确放行并跟踪
   配置引用的图标。Linux 打包脚本须在 checkout 与 staging 两处按配置动态校验所有图标，避免本地有文件而 CI checkout
   缺文件的隐性发布失败。
+
+## 模型目录与供应商配置合同（2026-09-21）
+
+- 模型配置的内部记录 ID 与上游 API `model_id` 必须分离：安全 `id` 用于 JSONC 文件名、默认模型、UI 选择和模型组关系，
+  上游 `model_id` 原样用于请求并允许 `/`、`:` 等官方字符；旧 JSONC 缺 `id` 时以安全文件 stem 兼容读取。
+- 用户模型组是 `.lam/core/config/model_groups.jsonc` 中的独立全局配置，采用稳定 group id、唯一名称、有序多对多 membership
+  与 revision 乐观并发控制；模型可属于多个组，“未分组”只在 UI 投影中计算。删除组只删除关系，删除模型或供应商必须清理关系。
+- 连接信息继续只由可见 Provider JSONC 保存；模型不复制 `base_url/api_key/api_type`。按组新建模型必须填写 API 基础 URL，
+  选择现有供应商时只能匹配其 URL，选择新供应商时组合创建 provider、model 与 membership；版本冲突或写入失败不得残留新文件。
+- 请求适配优先级固定为显式 model profile > 显式 provider profile > model matcher > provider/base matcher > protocol default；
+  inline override 先合并 provider 再合并 model。Command Code/OpenCode 等混合网关的 DeepSeek、Qwen、GLM 预设必须写入模型级官方适配器。
+- 主界面模型菜单与“设置 → 模型与供应商”共用“按组 / 按供应商”分类偏好，持久化在 `settings.jsonc` 的
+  `core.modelCatalog.classification`；免费供应商预设创建后将返回的内部模型 ID 合并到用户 `Free` 组。
+
+## Android Tauri 2 与共享 Rust Agent 边界（2026-09-22）
+
+- Android 本地模式的模型执行必须经 `StandaloneTransport` → Tauri command → `core/runtime-rs`；移动端
+  TypeScript 不得重新引入 `fetch`/`CapacitorHttp` 的模型请求、第二套系统提示词或前端工具循环。Vue UI
+  和 App Server 形状继续跨桌面/移动端共享，平台差异只留在宿主、持久化与系统能力适配层。
+- 当前 Rust Core 是 P1 骨架，只覆盖 Sunday 身份、模型请求、项目文件工具、工具结果回传循环与实际模型 ID。
+  Hooks、MCP、子代理、上下文压缩、记忆以及完整 Study/Workflow 后端迁移仍是后续阶段；Android 正式能力
+  不得因为能生成 APK 就被描述为已经与 Python Core 完全等价。
+- Android 正式包除既有签名、版本和 release flags 外，必须包含且只包含 `arm64-v8a` 与 `armeabi-v7a`，
+  通过 `zipalign -P 16`，并保证 arm64 应用库所有 ELF `LOAD` 段为 `0x4000` 对齐。以上检查固化在
+  `scripts/package-mobile.ps1`，不能依赖发布前人工记忆。
+- 从 Capacitor APK 切换到 Tauri APK 前必须在真实设备覆盖安装，验证旧 SQLite、加密密钥与项目/会话迁移；
+  同签名和更高 versionCode 只证明系统允许升级，不能替代数据迁移验证。未完成真机验收时保留官网旧包。
+- Tauri Android 的 CSP 必须显式允许依赖初始化所需的 WebAssembly：当前 `noise-handshake` → `xsalsa20`
+  会在 Vue 挂载前构造 `WebAssembly.Module`，因此使用窄权限 `script-src 'self' 'wasm-unsafe-eval'`；不得为此
+  放开更宽泛的 `'unsafe-eval'`。移动入口必须保留独立的启动错误兜底，模块导入或挂载失败时显示诊断信息，
+  不能再次留下 0×0 的空 `#app` 黑屏。
+- 正式 Android 构建前必须清理生成目录中不属于发布合同的 `x86`/`x86_64` JNI 库，避免模拟器调试产物
+  混入只允许 `arm64-v8a` 与 `armeabi-v7a` 的正式包。
+
+## 共享 Rust Agent 的协议、状态与审批合同（2026-09-22）
+
+- Rust 模型后端必须按协议生成原生请求，不能仅替换 URL：Chat Completions 使用 `messages`，OpenAI
+  Responses 使用 `input`/扁平 function tools/`max_output_tokens`，Gemini 使用
+  `contents`/`systemInstruction`/`generationConfig`，Anthropic 使用 content blocks。官方思考字段继续由
+  model profile 优先于 provider profile 的适配规则产生。
+- 供应商原生续传状态只能在相同协议且相同上游模型内回放：Responses 保留 reasoning/function-call output
+  items，Gemini 保留 thought signature 与 functionCall content，Anthropic 保留 thinking/redacted-thinking blocks，
+  Chat Completions 保留 reasoning message fields；切换模型不得携带这些不透明状态。
+- Tauri Android 的项目、会话、模型/供应商设置、插件/技能开关均以 Rust SQLite 为持久化边界；原生读写失败
+  必须向上暴露，不能静默落入 WebView localStorage/IndexedDB 或进程内存。旧 WebView 设置只允许在新库为空时
+  一次性导入。
+- UI 文件浏览与 Agent 项目文件工具必须指向同一个 `app_data_dir()/projects/<project-id>` 根目录；旧移动端
+  SQLite 中的项目文件在首次列举/读取时迁入该目录。任何新实现不得恢复“UI 看一份、Agent 写另一份”的双存储。
+- `ask_user` 工具通过可序列化 Rust continuation 暂停，审批卡和 continuation 一同进入会话快照；批准、拒绝或
+  指导后从同一模型消息链继续，不能重新请求并重放审批前的模型调用。`approve_for_session` 的工具授权写回
+  会话元数据，`hard_block` 永不受权限预设解除。
+
+## 共享 Rust Hooks 与 MCP 合同（2026-09-22）
+
+- Hook 定义、稳定哈希、逐条信任、匹配和累积语义属于共享 Rust Core；移动端只持久化配置并转发，不得再以
+  `hook.list = []` 伪装功能存在。7 个生命周期事件必须在共享 Agent Loop 内触发，审批续传后不得重放
+  `PreToolUse`。必需 Hook 的无效输出、失败、超时或平台不可用一律 fail closed。
+- Hook command 必须以 argv 方式交给宿主 runner，模型可控占位符不得经过 shell 展开。Android 当前没有安全的
+  本地命令 runner，因此 optional command Hook 记为 `skipped_unavailable`，required command Hook 阻断；Prompt、
+  HTTP 和已连接 MCP Hook 可原生执行。
+- MCP 的配置解析、工具命名、stdio JSON-RPC、`Content-Length`/JSON Lines framing、工具发现、权限和结果格式化
+  统一进入 `core/runtime-rs`。消息体上限为 32 MiB，header 上限为 64 KiB；下划线开头的运行时参数不得发给
+  MCP server。Android 从共享配置和项目 `.lamtools/mcp.json` 读取配置，进程不存在时显式报告启动失败。
+
+## 共享 Rust 子代理、压缩与 Dreaming 合同（2026-09-22）
+
+- 子代理生命周期、父子邮箱、独立历史、审批 continuation 和运行状态属于进程级共享 Rust `SubAgentHub`；
+  Android 只负责 SQLite `SubAgentStore` 与宿主工具装配。父 Agent 可用 Project/MCP/Sub Agent 工具，子 Agent
+  只继承 Project/MCP 与 parent-message 工具，`consider` 继续执行只读过滤，且禁止递归委派。所有已配置模型及
+  对应 provider key 在 Tauri 调用边界一次性提供，模型级配置继续优先于供应商配置。
+- Rust runtime history（含 provider state、tool call/result 与压缩摘要）是模型续传真源；共享 UI 快照继续作为
+  展示真源。Android 每次成功回合把 runtime history 持久化到原生 SQLite 会话元数据，下回合只追加当前 user
+  输入，不能再从 UI 文本反向重建并丢失工具/思考续传状态。
+- 自动上下文压缩默认在模型 context window 的 80% 触发并压到 60%，模型总结失败时使用确定性有界摘要；
+  `core.contextCompaction.retained_steps` 控制保留的完整最近步骤，缺省 0，同时最多 20 条近期用户指令以数据区
+  形式保留。压缩模型调用不暴露工具，且统一关闭思考。
+- Dreaming 默认关闭；启用后仅在有工具结果或压缩结果、且达到 `min_turns` 时运行。Dreaming 不得改写或删除
+  用户现有 `MEMORY.md`，只追加去重后的持久事实；失败不反向把已成功主回合改成失败。节流 checkpoint 和 turn-id
+  幂等状态保存在 Rust SQLite，写入后的 MEMORY 在下一回合重新加载。
+
+## Rust 移动端取消与 Workflow 执行边界（2026-09-23）
+
+- 移动端 Stop 的世代号必须在异步准备和初始快照写入之前登记；完成、审批续传和快照保存后的每个异步边界都要核对世代号。同一会话的快照写入按提交顺序串行化，入队时深拷贝快照，避免运行中对象的后续修改污染已持久化版本。
+- Rust runtime history 属于产生它的已完成回合。持久化时记录来源 turn id；取消回合的迟到元数据写入不得成为下一回合的模型上下文。缺少可信来源或上一回合已取消时，从可见消息重建并跳过取消的 assistant 内容。
+- Study 分页游标的 HMAC 是二进制字节，可能包含用于分隔载荷的 `.`；解析必须按固定签名长度定位分隔符，不能搜索最后一个同名字节。
+- Workflow Rust 同步执行器目前只覆盖受限的内置数据节点：`workflow.run` 先以宿主选定的项目作用域读取 V2 文档并静态预检，再执行纯内置图；权限、恢复/部分运行、外部节点与未实现语义均在副作用前明确拒绝。队列、持久化、Human Task、激活和宿主执行器仍需独立移植，不能把这一路径称为完整 Python 契约。
+
+## Core Shell 与会话恢复边界（2026-09-23）
+
+- `core.commandShell` 是桌面 Python 命令工具和 Workflow 命令节点共享的 Shell 偏好；Windows 自动顺序为 WSL、Git Bash、Windows PowerShell，手动所选不可用时按同序降级。WSL 是否可用须用有界执行探测，不能只凭 `wsl.exe` 或已注册发行版判断；向 WSL 传递的命令保持单个 argv 参数，工作目录显式传给 `--cd`，工作流只通过 `WSLENV` 转发显式配置的变量。
+- Windows 命令路径校验必须按所选 Shell 的引号语义生成参数，再解析路径；保留原样引号或在引号不完整时退回空白切分，会把实际越界的路径误判成工作区内路径。校验要拦截引号拼接的 `../`，同时允许合法的工作区内引号路径。
+- `thread.resume` 先装入当前快照再重放旧 journal 事件。旧轮次终态只更新该轮次，不能覆盖另一正在运行轮次的全局状态；同轮次的终态补偿仍须保留。`final_response` / `has_tool_calls` 标记须穿过运行时事件投影，显式非最终模型文本留在过程区，无标记旧快照保留兼容推断。
+- Composer 发送失败只走错误提示通道，不能把同一错误也发成成功色状态提示。发送/停止按钮的外层用 composer 文字色，纸飞机、停止方块及尾迹直接以 composer 背景填充；背景可能是渐变，不能作为 CSS `color` 值。
+
+## 移动端请求前诊断与终态恢复（2026-09-23）
+
+- 模型供应商控制台无请求记录时，不应把长时间的 `running` 归因于模型重试。独立模式在发 HTTP 前还经过扩展/密钥读取、Tauri 调用、原生项目与 Hook/MCP 装配、上下文压缩和预模型 Hook；按 turn id 记录这些阶段及真正的 HTTP 发送边界，才能定位停点。调试回显只包含固定阶段名与时间，不含密钥、提示词或请求体，也不能进入后续模型历史。
+- Android WebView 重载会丢失旧 JS Promise，持久 `running` 快照不能直接恢复为仍在执行。新 Transport 应尝试按 turn id 取消遗留原生任务，并把该轮次标为取消；等待审批的 `waiting` 保持原状。后台终态保存失败仍须通知当前 UI，不能让 fire-and-forget Promise 静默拒绝。
+- MCP 初始化在正式模型请求之前执行；超时必须覆盖 stdin 写入、flush 和响应读取的完整调用，不能只包住读取。默认无 MCP 时，不能把 MCP 路径当作某次故障的既定原因。
+- Android edge-to-edge 下，decor view 初始返回 `top=0` 可能是临时值；Web 层继续短暂重读，原生层以稳定 status-bar inset 和系统栏高度兜底。代码/构建通过不等于真机状态栏视觉验收。
+- Android 也是 Tauri 运行时，共用 TitleBar 的 `isTauri` 判断会错误挂载桌面窗口标题栏；移动宿主应显式关闭桌面 TitleBar，仅由 MobileTopBar 占据原生 inset 之后的顶栏位置。移动端诊断回显必须在模型配置读取与首次快照保存前开始；中间阶段只实时通知 UI，不排队写入快照，以免卡住终态持久化。
+- Android APK 覆盖安装要求包名与签名一致。调试构建若要覆盖正式包，须用现有正式证书签名并核对证书摘要；若要覆盖旧调试包，则保留原调试证书。交付前分别核验 APK，不能仅凭相同版本号判断可覆盖。
+- Windows 上原子替换 `MEMORY.md.tmp` 偶发被系统以 WinError 5/32/33 拒绝；仅对这些已知临时占用错误做短时有界重试。连续失败必须保留原文件并向上抛错，不能吞掉写入失败。
+- Workflow 命令节点生成 `WSLENV` 时，显式环境变量按声明顺序在前，绑定的 `INPUT_*` 变量在后；不要通过集合消除顺序并造成测试或跨进程行为漂移。
+
+## 移动端模型连接诊断（2026-09-23）
+
+- `http_send_start` 在构建请求前触发，只证明代码进入 HTTP 尝试；请求显式 `.build()` 成功后才报告 `http_request_built`，失败则报告 `http_request_build_error` 并直接结束。`http_request_built` 也不能证明字节已离开设备；在 `http_headers_received` 前，供应商控制台无记录不能单独区分 DNS、连接、TLS、代理、错误目标地址与尚未出响应头。移动端 Rust `reqwest` 直接连接配置的 HTTPS 供应商地址，此路径不经过本机应用网关或固定本地端口。
+- 共享后端原先默认每次请求 360 秒、最多 10 次重试，连接前卡点会表现为长时间无新阶段。连接建立限制 15 秒；等待响应头 30 秒报告固定阶段、120 秒结束该次尝试，响应头前故障最多尝试两次。已收到响应头后的响应体超时及 HTTP 5xx/429 重试仍按原策略执行。阶段事件只含固定名称，不含 URL、密钥或消息内容。
+- 真机若超过连接/响应头计时仍看不到新阶段，应检查 Android 后台调度、Rust Tokio 任务进展与 Tauri 事件传递，不能继续把故障直接归因于供应商网络。
+- Android 真机已观察到 `http_request_built` 后超过两分钟仍无 30 秒原生等待标记。普通异步网络等待不足以解释这一现象：同一任务若在同步回调或发送 future 的 poll 中不让出线程，任务内的 `tokio::select!` 定时分支也无法运行。发送请求因此先排入独立 Tokio 任务，再上报构建阶段；等待者的 30 秒/120 秒计时独立运行，超时或取消时中止发送任务。调试版另以 WebView 定时器报告 35 秒/125 秒等待，用于区分界面存活与原生阶段停滞。此改动提高有界性，但不能据此宣称已找出该手机的确切根因。
+- `reqwest 0.13` 在 Android 上经 `rustls-platform-verifier 0.7` 使用系统证书验证；这条路径必须在首个 HTTPS 握手前由 JNI 初始化，并将对应的 Kotlin AAR 打入 APK。缺少初始化时证书验证会 panic，发送任务以 `JoinError` 失败；真机这次的 `provider send task failed` 与该机制吻合，但修复是否解决用户设备上的调用仍须真机复测。发送任务的 panic 与取消分别报告，避免再次合并为模糊错误；不能通过关闭 TLS 验证绕过此问题。
+- Android 诊断 APK 应使用与现有安装包一致的签名以支持覆盖安装，上传到独立云文件名并核对完整下载 SHA-256；不要以未经真机验收的诊断构建覆盖正式 `latest`。上传授权只在传输期间存在，发布后按精确匹配撤销并清理暂存文件。
+
+## Android 项目根目录与运行进度展示（2026-09-23）
+
+- Tauri Android 的项目根位于 `app_data_dir()/projects/<project_id>`，属于应用私有存储；系统“文件”App 不显示可浏览的 Sunday 目录。不要把该绝对路径误说成用户可通过文件管理器访问的共享目录。共享 `ProjectFileTools::list_files` 省略路径、空路径和 `.` 都应列当前项目根，并在结果中回传规范化的相对路径和绝对 `project_root`；读写仍拒绝空路径及越界路径。若需要在系统文件管理器访问项目文件，应另做 Android SAF 导出/授权，不能靠扩大旧式存储权限解决。
+- 移动端运行阶段只作为临时 UI 元数据传递；回答/错误正文保留纯结果，不能再拼接长篇执行日志，也不能把进度信息喂回模型历史。阶段数没有可校准的总量，因此进度条采用不显示百分比的动画和当前阶段文字；终态短暂显示后按到期时间隐藏，并清理取消/卸载时的监听与计时器。动效须遵循 LamTools 主题 token 和 reduced-motion 回退。
+
+## Android 流式回复与官网包切换（2026-09-23）
+
+- 移动端 OpenAI Chat 请求此前固定 `stream:false` 且在完整响应后才提交消息；真正的流式回复须在 Rust 按 SSE 帧重组 UTF-8、思考与按索引分片的工具调用，向 WebView 发送合并后的临时增量，最终结果仍由 `TurnResult` 覆盖。新模型轮次和重试必须重置临时内容，取消和失败必须收束已显示的思考状态。
+- 流式事件只在父代理的 `runtime_model_start` 至 `runtime_model_done` 之间公开，防止压缩、Dreaming 或子代理内部模型输出混入当前聊天。固定阶段事件本身不含密钥或请求体，正式构建也要发出，否则进度条会失去原生阶段信息。其他供应商协议在对应 SSE 格式实现前不能宣称支持流式。
+- 官网 Android 下载使用稳定的 `Sunday-mobile-latest.apk` 路径。切换前先把旧文件保存为可公开下载且校验哈希的独立存档，再上传新版本到暂存名并校验完整 SHA-256，最后原子替换稳定文件；公网完整下载及服务状态也须复核。代码测试和签名检查不等于真机流式或 HTTPS 验收。
+
+## Android 模型连接复测与版本纪律（2026-09-23）
+
+- 真机对已签名 0.1.2 包仍报告响应头前连接失败，说明 Android HTTPS 故障尚未关闭。此类错误须按 DNS、TCP、TLS 证书/握手与代理归类为固定提示；原始 `reqwest` 错误可能含完整 URL 或代理凭据，只能用于内部分类，不进入 UI/日志。源码已初始化 Android 证书验证器也不能替代真机握手证据。
+- OpenAI Chat SSE 必须收到 `[DONE]` 才能把累积文本或工具调用当作完成；干净的提前 EOF 仍是截断，必须报错并在重试时清空临时输出。输出上限 `finish_reason=length` 不能静默当作完整回答，续传语义需另行处理。
+- 每次交付新的 Android APK 同步递增移动端语义版本与 Tauri `versionCode`，并在签名产物里核对；诊断包先发独立版本链接，待真机验收后再切换官网稳定路径，旧版本继续保留可校验的存档。
+
+## Sunday 预制系统提示词语言（2026-09-23）
+
+- Sunday 自带的主 Agent、Study、子代理策略、辅助模型调用和技能索引指令统一用英文表达原有规则；用户自行编写的全局配置、项目上下文和技能内容按原文注入，不自动翻译。需要中文输出的现有约束仍由英文指令明确表达。Python 与 Rust Study 继续共用同一份系统提示词；交接导出对旧中文和新英文运行时前缀都要兼容。
+
+## Mobile sidebar navigation ownership (2026-09-23)
+
+- Floating-command availability is a viewport/layout decision; opening a temporary drawer or account overlay must not restore duplicate left-sidebar commands. Narrow layouts keep commands in the floating dock; wide layouts restore the full sidebar footer.
+- Study's note sidebar depends on both the visible page and the active session binding. Leaving Notes must restore a learning binding, not merely change the page to chat; route the exit through the existing dirty-document navigation guard so cancelled navigation preserves the draft.
+- Note navigation discards only the captured departing draft after the destination action succeeds; rejected session switches retain the note view, binding, and draft. A later concurrent edit must also survive the original navigation attempt.
+
+## Mobile/Desktop parity audit lessons (2026-09-23)
+
+- A catalog entry is not execution evidence: compare the visible UI action, actual transport route, assembled model tools/context, durable side effects and restart behavior. Standalone project management uses an injected project client, so missing project RPC methods alone do not prove missing UI capability; paired remote forwarding also does not prove standalone parity.
+- Shared Study skills must be embedded from canonical resources, and the real UI mode key `study:study` must be normalized at both initial and approval-resume boundaries. Parent-agent skill assembly does not automatically propagate to sub-agent tools or resumed child context.
+- Permission semantics must survive every runtime port. The audit's isolated fixture established that Rust PreToolUse `permissionDecision=deny/ask_user` was ignored for AutoAllow tools; matching hook event names or passing lifecycle tests is insufficient.
+- Successful upload/config responses must mean the payload is durably stored and consumed by the next execution stage. Returning an attachment ID without bytes, or listing a skill without its loader, must never be counted as feature parity.
+- Existing tests passing cannot establish cross-platform parity when they omit the differing behavior. The canonical audit and staged repair boundaries are recorded in `core/docs/mobile-desktop-code-audit-2026-09-23.md`; its source baseline must remain distinct from the currently released APK.

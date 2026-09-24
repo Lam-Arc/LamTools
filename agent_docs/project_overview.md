@@ -31,6 +31,13 @@ the desktop Vue process, and Relay forwards opaque tunnel bytes. The Python
 `/api/core`, and streams the live app-server over the
 `core.app_server.v1` WebSocket/JSON-RPC protocol.
 
+The active mobile/Rust work is migrating the mobile host and runtime behind
+`core/mobile/src-tauri/` and `core/runtime-rs/`. This migration is incomplete:
+Study, model, and Workflow internal runners are partial, even though mobile
+Stop handling and snapshot recovery are implemented. Treat the Capacitor
+RemoteTransport description above as the existing architecture, not proof that
+the Rust migration is complete.
+
 The Core right rail is a modular `RightSidebarHost`: a roughly 320px,
 single-column separator stack rendered on one token-driven liquid-glass host
 surface. The host owns module ordering, visibility, collapse state, and
@@ -39,6 +46,15 @@ Search, RAG status/search, and Artifacts. Plugin contributions are either
 validated declarative snapshots or trusted in-process Vue components selected
 through the loader registry; raw plugin markup is not evaluated. Three.js and
 runtime visualization remain deferred.
+
+Model and provider configuration is file-backed under the unified JSONC config
+root. Providers own connection data; models keep a safe internal record ID
+separate from the unchanged upstream API `model_id`, and model-level request
+adaptation can override provider-level adaptation. User-defined model groups
+are persisted independently in `model_groups.jsonc` and may contain any
+existing models through ordered many-to-many membership. The main model menu
+and Settings → 模型与供应商 both expose the shared 按组 / 按供应商 capsule
+toggle; the selected classification is persisted in `settings.jsonc`.
 
 Sunday Workflow is a local-first durable subsystem under the bundled workflow
 plugin. Its canonical V2 document is compiled into a canvas-free execution
@@ -93,6 +109,15 @@ deferred and is not a supported artifact in the current distribution scope.
 - Runtime state uses SQLite, while user-facing model/provider/settings and
   related configuration uses JSONC under `.lam/core/config/` (overridable by
   `LAMTOOLS_CORE_CONFIG_ROOT`); no configuration database is used.
+- Model/provider configuration uses separate JSONC records: model record IDs
+  are safe local identifiers used by UI/default/group references, while the
+  upstream `model_id` is preserved byte-for-byte for requests. Groups are
+  stored in `model_groups.jsonc`; deleting a group removes only membership
+  relationships, not model records.
+- The model catalog includes Command Code, OpenCode Free, and additional Free
+  presets for SambaNova, Groq, Google Gemini, Cloudflare Workers AI, and
+  OpenRouter. Preset API-key/documentation URLs are rendered as external links;
+  providers and models are not assumed to have an anonymous key.
 - Tauri is the only UI observation environment for Core. The website showcase
   is a separate build and directly mounts real `core/ui` components.
 - `core/ui/src/demo` is not a product entry point; new product UI belongs in

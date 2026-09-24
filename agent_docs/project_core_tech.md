@@ -8,7 +8,9 @@ dependency inventories belong to the package manifests and module documents.
 - Python `>=3.14` for `lamtools-core`.
 - TypeScript/JavaScript with Node `>=24.17.0 <25` and npm `>=11.17.0` for the
   shared UI and website.
-- Rust 2021 edition for the Tauri desktop shell.
+- Rust 2021 edition for the Tauri desktop shell and the in-progress Rust
+  runtime/mobile host. The Rust runtime migration is partial; Study, model, and
+  Workflow internal runners are not yet a complete replacement for Python.
 
 ## Frameworks and Libraries
 
@@ -33,6 +35,9 @@ dependency inventories belong to the package manifests and module documents.
 - Tauri `2.x` provides the desktop shell and native bridge; the configured
   Windows bundle target is NSIS; Linux targets AppImage and Debian bundles.
   The website uses anime.js `4.x` for motion.
+- The mobile client is being moved to a Tauri host with Rust runtime commands;
+  its Stop and snapshot-recovery paths are implemented. Sidebar and system
+  inset source fixes have not yet received phone visual confirmation.
 
 ## Build, Test, and Development Tools
 
@@ -55,6 +60,15 @@ dependency inventories belong to the package manifests and module documents.
 
 - Model/provider adapters call configured external LLM APIs, including
   OpenAI-compatible and named provider presets documented by the project.
+- Provider JSONC records own `api_type`, `base_url`, API key, connection
+  defaults, and provider-level adapter/request customization. Model JSONC
+  records own the safe local record ID, unchanged upstream `model_id`, provider
+  reference, capability/limits, thinking metadata, and optional model-level
+  adapter/request customization.
+- Adapter resolution is ordered: explicit model profile, explicit provider
+  profile, model matcher, provider/base matcher, then protocol default. Inline
+  request overrides are merged provider first and model second, so model
+  configuration wins over provider configuration.
 - MCP is an optional integration surface for external tools.
 - Update checking queries GitHub's latest-release API; downloading/installing
   remains user-guided.
@@ -69,6 +83,22 @@ dependency inventories belong to the package manifests and module documents.
 - User-editable Core configuration is JSONC under `.lam/core/config/`, seeded
   idempotently without overwriting existing files. Provider API keys are stored
   in provider config files; list RPCs mask them.
+- User-defined model groups are persisted in
+  `.lam/core/config/model_groups.jsonc`. The catalog stores stable group IDs,
+  unique names, ordered many-to-many memberships, and a revision for
+  optimistic concurrency. Memberships reference model record IDs, not upstream
+  API model IDs; missing records are surfaced as dangling memberships and
+  “未分组” is a UI projection.
+- `settings.jsonc` stores the global catalog classification at
+  `core.modelCatalog.classification`; the same value drives the main model
+  picker and Settings → 模型与供应商. The shared
+  `CoreModelCatalogViewToggle` implements the compact capsule control.
+- Configuration RPCs include `config.model_groups.list`,
+  `config.model_group.create|update|delete`,
+  `config.model_group.members.set`, `config.model_groups.reorder`, and
+  `config.model.create_with_provider`. The CLI mirrors group CRUD/member
+  operations under `models groups` and new model creation under
+  `models create --group`.
 - Core runtime data is local SQLite. Do not introduce the retired config DB
   tables or `LAMTOOLS_LLM_CONFIG_DB` configuration path.
 - Workflow runs pin an immutable definition revision. Durable execution records

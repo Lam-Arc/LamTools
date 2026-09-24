@@ -86,7 +86,7 @@ version: 0.1.0
 ### 光学液态玻璃（true glass surface）
 统一复用 `core/ui/src/styles/optical-glass.css` 的 `.optical-glass`，不得另建 `.liquid-glass` 或在消费者中重复 `backdrop-filter`、主体背景和悬浮阴影。材质 token 位于 `variables.css`：blur 8px、saturate 1.14、brightness 1.02；主体使用所在 theme area 的 `--text` 以约 16% 透明度混合，保持高透射，不用组件级 `opacity`。
 
-玻璃边缘由原语统一提供 1px 低对比度物理边、左上局部 radial specular、顶部 inset 高光、灰绿色下缘折射，以及短的双层阴影。消费者只负责几何、`--text` area 映射和语义 modifier；交互玻璃 hover 只可轻微增亮，active 使用 0.97–0.98 缩放。原语必须同时提供 `-webkit-backdrop-filter`、不支持 backdrop 时的半透明 fallback，并在 `prefers-reduced-motion: reduce` 下不引入持续运动。
+玻璃边缘由原语统一提供 2px 纯中性灰物理边：浅色模式使用浅灰，深色模式使用深灰，边框自身不得叠加镜面、透明或渐变效果。玻璃内部仍保留左上局部 radial specular、顶部 inset 高光、灰绿色下缘折射，以及短的双层阴影。消费者只负责几何、`--text` area 映射和语义 modifier；交互玻璃 hover 只可轻微增亮，active 使用 0.97–0.98 缩放。原语必须同时提供 `-webkit-backdrop-filter`、不支持 backdrop 时的半透明 fallback，并在 `prefers-reduced-motion: reduce` 下不引入持续运动。
 
 true glass surface 清单：右侧 rail、上下文菜单 root/submenu、Study selection card、Workflow catalog popover/runtime dock、回到最新按钮、移动端顶栏按钮/同步状态、goal 区。模态 dimmer、opaque panel、左侧 drawer、Workflow node card 不得套用该原语。
 
