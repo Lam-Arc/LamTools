@@ -35,12 +35,53 @@ from lamtools_core.tool.command_runner import (
 )
 
 
-def split_command_for_path_validation(command: str) -> list[str]:
-    """Split a command for validation while preserving Windows shell behavior."""
-    try:
-        return shlex.split(command, posix=False)
-    except ValueError:
-        return command.split()
+def split_command_for_path_validation(command: str, *, shell_kind: str = "bash") -> list[str]:
+    """Return semantic argv tokens for path validation, failing closed on bad quotes."""
+    if shell_kind not in {"powershell", "pwsh"}:
+        return shlex.split(command, posix=True)
+
+    tokens: list[str] = []
+    token: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == "'":
+                if index + 1 < len(command) and command[index + 1] == "'":
+                    token.append("'")
+                    index += 2
+                    continue
+                quote = ""
+            else:
+                token.append(char)
+        elif quote == '"':
+            if char == "`" and index + 1 < len(command):
+                token.append(command[index + 1])
+                index += 2
+                continue
+            if char == '"':
+                quote = ""
+            else:
+                token.append(char)
+        elif char.isspace():
+            if token:
+                tokens.append("".join(token))
+                token.clear()
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == "`" and index + 1 < len(command):
+            token.append(command[index + 1])
+            index += 2
+            continue
+        else:
+            token.append(char)
+        index += 1
+    if quote:
+        raise ValueError("unmatched PowerShell quote")
+    if token:
+        tokens.append("".join(token))
+    return tokens
 
 
 def _command_lifecycle_metadata(
@@ -104,8 +145,8 @@ class CommandToolHandlers:
         On Unix (Linux/macOS): commands are split via ``shlex.split`` and
         executed without shell expansion.
 
-        On Windows: Git Bash is preferred when available. PowerShell 7 or
-        Windows PowerShell 5.1 are safe fallbacks when Git Bash is unavailable.
+        On Windows: use the persisted shell preference, or automatically prefer
+        WSL, then Git Bash, then Windows PowerShell 5.1.
 
         Path validation applies regardless of platform. Risk approval is
         handled by the caller's command policy before this method executes.
@@ -174,10 +215,21 @@ class CommandToolHandlers:
                 if command_shell.kind in {"powershell", "pwsh"}
                 else command
             )
-            argv = command_shell.argv(shell_command)
-            validation_argv = [command_shell.kind, *split_command_for_path_validation(shell_command)]
+            argv = command_shell.argv_for(shell_command, cwd=self._work_root)
+            subprocess_env = command_shell.prepare_environment()
+            try:
+                validation_argv = [
+                    command_shell.kind,
+                    *split_command_for_path_validation(shell_command, shell_kind=command_shell.kind),
+                ]
+            except ValueError as exc:
+                return ToolResult(
+                    call_id=call.id, name=call.name,
+                    status="failed", error=f"Invalid command syntax: {exc}",
+                )
         else:
             command_shell = resolve_command_shell()
+            subprocess_env = None
             try:
                 argv = shlex.split(command)
             except ValueError as exc:
@@ -262,6 +314,7 @@ class CommandToolHandlers:
                         argv,
                         cwd=self._work_root,
                         command=command,
+                        env=subprocess_env,
                         http_probe=http_probe,
                         process_registry=self._background_process_registry,
                         session_id=runtime_session_id,
@@ -297,6 +350,7 @@ class CommandToolHandlers:
                         argv,
                         cwd=self._work_root,
                         timeout=timeout,
+                        env=subprocess_env,
                         progress_callback=_emit_command_progress if self._core_event_callback is not None else None,
                     )
         finally:

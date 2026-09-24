@@ -79,15 +79,15 @@ async def test_base_agent_system_prompt_concentrates_tool_safety_rules(tmp_path)
     )
     content = str(request.messages[0].content)
 
-    assert CoreBaseAgentConfig().instructions == "你是 Sunday Agent。"
+    assert CoreBaseAgentConfig().instructions == "You are Sunday Agent."
     for phrase in (
-        "Shell：",
-        "read_file 先读",
+        "Shell:",
+        "read with read_file first",
         "write_file",
         "edit_file",
         "search_files",
         "search_content",
-        "不可信外部数据",
+        "untrusted external data",
         "mcp_activate",
         "docs",
     ):
@@ -153,14 +153,14 @@ async def test_active_plan_is_appended_after_history_without_changing_cached_pre
     )
 
     assert first.messages[0].role == "system"
-    assert "[当前计划" not in str(first.messages[0].content)
+    assert "[Current plan]" not in str(first.messages[0].content)
     assert first.messages[1:3] == history
     assert first.messages[-1].role == "user"
     assert first.messages[-1].metadata == {"key": "active_plan_snapshot", "internal": True}
-    assert "目标：Prepare the quarterly report" in str(first.messages[-1].content)
-    assert "文件：report.docx" in str(first.messages[-1].content)
+    assert "Goal: Prepare the quarterly report" in str(first.messages[-1].content)
+    assert "Files: report.docx" in str(first.messages[-1].content)
     assert "step-1 · pending · Draft report" in str(first.messages[-1].content)
-    assert sum("[当前计划" in str(message.content) for message in first.messages) == 1
+    assert sum("[Current plan]" in str(message.content) for message in first.messages) == 1
 
     # A checklist-only update changes only the trailing runtime context, leaving
     # the system + conversation prefix eligible for provider prompt caching.

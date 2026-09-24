@@ -4239,7 +4239,7 @@ class WorkflowRunner:
     ) -> dict[str, Any]:
         """command node: run a shell command (invoke CLI tools).
 
-        Uses the same shell resolution as run_command (Git Bash on Windows),
+        Uses the same persisted shell resolution as run_command on Windows,
         feeds bound inputs as stdin JSON + INPUT_<PORT> env vars, and splits
         JSON stdout to same-named output ports (else whole stdout to default).
         """
@@ -4261,8 +4261,13 @@ class WorkflowRunner:
         cwd = str(cfg.get("cwd") or work_root or ".")
         env = dict(os.environ)
         extra_env = cfg.get("env") or {}
+        # Preserve declaration order when generating WSLENV: explicit node
+        # environment entries first, followed by bound workflow inputs.
+        forward_env_names: list[str] = []
         if isinstance(extra_env, dict):
-            env.update({str(k): str(v) for k, v in extra_env.items()})
+            custom_env = {str(k): str(v) for k, v in extra_env.items()}
+            env.update(custom_env)
+            forward_env_names.extend(custom_env)
         # Bind inputs as INPUT_<PORTNAME> env vars AND substitute ${VAR}/$VAR
         # tokens in the command ourselves — Windows cmd.exe does not expand
         # $VAR, so relying on the shell would break portability.
@@ -4272,6 +4277,7 @@ class WorkflowRunner:
                 continue
             env_name = f"INPUT_{name.upper()}"
             env[env_name] = str(value)
+            forward_env_names.append(env_name)
             substitutions[env_name] = str(value)
         command = _substitute_env_vars(command, substitutions)
         timeout = _as_float(cfg.get("timeout"), default=60.0)
@@ -4279,8 +4285,8 @@ class WorkflowRunner:
         # that wants structured input can read it; INPUT_<PORT> env vars + ${VAR}
         # substitution are a convenience for shells that prefer them.
         stdin_payload = json.dumps({"inputs": bound_inputs}, ensure_ascii=False, default=str).encode("utf-8")
-        # Run the command through the SAME shell run_command uses
-        # (resolve_command_shell → Git Bash on Windows), so command nodes behave
+        # Run through the same shell preference as run_command on Windows
+        # (auto: WSL, Git Bash, then Windows PowerShell), so command nodes behave
         # identically to the rest of the product. create_subprocess_shell would
         # otherwise fall back to COMSPEC (cmd.exe) on Windows, breaking bash
         # syntax (single quotes, pipes) the model may write.
@@ -4289,13 +4295,14 @@ class WorkflowRunner:
             from lamtools_core.tool.command_runner import resolve_command_shell
 
             shell = resolve_command_shell()
-            argv = shell.argv(command)
+            argv = shell.argv_for(command, cwd=cwd)
+            env = shell.prepare_environment(env, forward_names=forward_env_names) or env
             # On a python.org install of Windows, `python3` resolves to the
             # Microsoft Store redirect stub (exits non-zero / opens Store).
             # Prepend a shim directory mapping python3 → the real interpreter
             # so model-written `python3 ...` commands actually run. This is a
             # platform-defect workaround, not behaviour fabrication.
-            shim_dir = _python3_shim_dir()
+            shim_dir = None if shell.kind == "wsl" else _python3_shim_dir()
             if shim_dir is not None:
                 env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
         else:

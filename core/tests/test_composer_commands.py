@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import re
+
 import lamtools_core.composer_commands as composer_commands
 import lamtools_core.skill_runtime as skill_runtime
 import pytest
@@ -55,8 +57,11 @@ def test_builtin_office_skills_are_discoverable_with_trigger_descriptions():
     }
 
     assert expected <= skills.keys()
+    # Built-in descriptions are English and must keep the usage clause that
+    # tells the model when to route to the skill rather than only what it does.
     assert all(
-        any(marker in skills[name].description for marker in ("使用", "用于"))
+        re.search(r"\bfor\b", skills[name].description, re.IGNORECASE)
+        and len(skills[name].description) >= 40
         for name in expected
     )
 

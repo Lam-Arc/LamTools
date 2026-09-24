@@ -1109,9 +1109,7 @@ async def handle_turn_start_operation(
         return write_result
     accepted, user, running, snapshot, materialized, is_first_message = write_result
 
-    # Best-effort: generate a short title from the first user message. Runs in
-    # the background so it never blocks the turn response; failures are logged
-    # and swallowed inside the task.
+    # Best-effort: generate a short title from the first user message.
     if is_first_message and context.host.llm_client and prepared.runtime_text:
         loop = _get_running_loop()
         loop.create_task(_auto_title_session(
@@ -2480,10 +2478,6 @@ async def _auto_title_session(
         if not is_default_title(existing_title, session_id=thread_id):
             return
 
-        # Resolve the model the same way the kernel does: explicit turn model
-        # > session-chosen model (metadata.model_id) > host default. The host
-        # default is empty when no model is marked ``is_default`` at boot, so
-        # the session-chosen model is what makes title generation work there.
         resolved_model = model_id
         if not resolved_model and existing is not None:
             metadata = getattr(existing, "metadata", None)

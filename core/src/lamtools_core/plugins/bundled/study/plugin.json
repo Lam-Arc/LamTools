@@ -35,6 +35,9 @@
         "title": "Study",
         "entry": "./ui/index.ts",
         "icon": "book-open",
+        "capabilities": [
+          "notes"
+        ],
         "tools": [
           "get_knowledge_net",
           "build_knowledge_net",

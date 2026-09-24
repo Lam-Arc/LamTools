@@ -34,8 +34,8 @@ SUBAGENT_DIR = "subagent"
 #: per-parameter usage (model/mode/agent) lives in the sub_agent tool schema so
 #: the model learns it from the tool definition, not the system prompt.
 DEFAULT_SUBAGENT_GUIDE = """\
-## Sub-agent 委派指南
-互不依赖的任务应委派 sub-agent 并行执行。委派时其 prompt 至少明确：工作范围、任务目标、输出格式。任务应自包含、边界清晰，避免与主 agent 职责重叠。"""
+## Sub-agent Delegation Guide
+Delegate independent tasks to sub-agents so they can run in parallel. When delegating, the prompt must specify at least the scope of work, task goal, and output format. Tasks should be self-contained and clearly bounded, without overlapping the main agent's responsibilities."""
 
 #: Default sub-agent settings. ``default_multimodal_model`` is the model_id or
 #: display_name used in the capability prompt to tell text models which multimodal
@@ -217,13 +217,14 @@ def load_global_delegation_strategy() -> str:
 
 
 _DELEGATION_STRATEGY_PROMPTS = {
-    "forbidden": "当前子代理委派策略：禁止委派子代理。",
-    "low": "当前子代理委派策略：仅在大范围调查、探索时委派子代理。",
-    "medium": "当前子代理委派策略：保持当前默认委派策略。",
+    "forbidden": "Current sub-agent delegation strategy: do not delegate to sub-agents.",
+    "low": "Current sub-agent delegation strategy: delegate only for broad investigations or exploration.",
+    "medium": "Current sub-agent delegation strategy: keep the current default delegation strategy.",
     "high": (
-        "当前子代理委派策略：必须先制定计划并由用户确认；确认后立即生成高中心化 "
-        "Checklist，尽可能由多个子代理并行推进，主 Agent 统一负责决策指挥、任务分配、"
-        "依赖协调、冲突调解、结果整合与最终验收。"
+        "Current sub-agent delegation strategy: first make a plan and obtain user confirmation. "
+        "After confirmation, immediately create a highly centralized Checklist and use multiple "
+        "sub-agents in parallel wherever possible. The main Agent remains responsible for decisions, "
+        "direction, task assignment, dependency coordination, conflict resolution, integration, and final acceptance."
     ),
 }
 
@@ -232,8 +233,8 @@ def render_delegation_strategy_prompt(work_root: str | Path | None = None) -> st
     """Render the effective strategy as stable leading-system discipline."""
     strategy = load_effective_delegation_strategy(work_root)
     return (
-        "## Sub-agent 委派策略\n"
-        "本策略优先于通用委派指南与角色建议。\n"
+        "## Sub-agent Delegation Strategy\n"
+        "This strategy takes precedence over the general delegation guide and role suggestions.\n"
         + _DELEGATION_STRATEGY_PROMPTS[strategy]
     )
 
@@ -377,13 +378,13 @@ def render_role_assignments_prompt(work_root: str | Path | None = None) -> str:
     if not rules:
         return ""
     lines = [
-        "## Sub-agent 角色分配",
-        "匹配任务类型时，优先使用对应的类型、模型与思考强度范围；未匹配时按实际任务选择。",
+        "## Sub-agent Role Assignments",
+        "When a task type matches, prefer its assigned type, model, and reasoning level range; otherwise choose according to the task.",
     ]
     for rule in rules:
         lines.append(
-            "- 任务类型：{task_type}；类型：{type}；建议模型：{model}；"
-            "建议思考强度：{reasoning_min}–{reasoning_max}".format(**rule)
+            "- Task type: {task_type}; type: {type}; suggested model: {model}; "
+            "suggested reasoning level: {reasoning_min}–{reasoning_max}".format(**rule)
         )
     return "\n".join(lines)
 

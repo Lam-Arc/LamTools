@@ -1,6 +1,6 @@
 ---
 name: office-documents
-description: 创建、修改和排版报告、方案、周报、通知、操作手册及 Word/Markdown 文档。用户要求写正式文档、套用现有模板、润色或修改 DOCX 时使用；演示文稿、表格计算和 PDF 页面操作交给对应办公 Skill。
+description: Create/edit reports, plans, updates, notices, manuals and Word/Markdown docs. Use for formal writing, templates or DOCX; use other Office skills for slides, sheets and PDFs.
 metadata:
   version: 0.2.0
   language: zh-CN

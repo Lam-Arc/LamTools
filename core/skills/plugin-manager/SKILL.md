@@ -1,6 +1,6 @@
 ---
 name: plugin-manager
-description: 插件 / 技能 / 钩子的统一管理入口——安装、更新、卸载、依赖管理、新建技能（SKILL.md）、安装技能、新建钩子（hooks.json）、安装钩子、创建插件（引用 create-plugin）。Use when the user asks to install, update, remove, enable, disable, or check dependencies of a plugin, to install or create a skill, to install or create a hook, or to manage plugin assets. No settings toggle needed — load this skill and act on demand.
+description: Manage plugins, skills and hooks: install, update, remove, check dependencies or create them. Use for plugin/skill/hook management; load on demand without a settings toggle.
 ---
 
 # Plugin Manager

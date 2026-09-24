@@ -1,6 +1,6 @@
 ---
 name: office-charts
-description: 根据表格、CSV 或明确数字生成趋势、对比、占比、分布及相关性图表，并改善图表的选型、标注、配色和可读性。用户要求数据可视化、画统计图或美化业务图表时使用；流程和结构关系使用 office-infographics。
+description: Create trend/share/comparison/distribution/correlation charts from data; improve choice, labels, color and clarity. Stats/business charts; use office-infographics for processes.
 metadata:
   version: 0.2.0
   language: zh-CN

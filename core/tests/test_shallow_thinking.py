@@ -38,40 +38,38 @@ def test_extract_shallow_thinking_keeps_incomplete_marker_text_visible():
 
 def test_shallow_thinking_prompt_starts_with_strong_format_instruction():
     assert SHALLOW_THINKING_PROMPT.startswith(
-        "你在必须先按照以下格式展示你的推理过程！！！\n\n# 任务\n"
+        "You must first show your reasoning in the following format!!!\n\n# Task\n"
     )
     assert (
-        "# 任务\n"
-        "shallow thinking 块是无论输出什么内容都必须先输出的固定前缀。\n"
-        "先输出一个 shallow thinking 块，再继续正文、状态文字或工具调用。\n\n"
+        "# Task\n"
+        "The shallow thinking block is a required prefix before any other output.\n"
+        "Output one complete shallow thinking block before the main response, status text, or tool call.\n\n"
     ) in SHALLOW_THINKING_PROMPT
     assert (
-        "# 执行顺序\n"
-        "1. 先输出完整 shallow thinking 块。\n"
-        "2. 再输出最终答案、状态文字，或继续工具调用流程。\n\n"
+        "# Order of execution\n"
+        "1. Output the complete shallow thinking block first.\n"
+        "2. Then output the final answer or status text, or continue with tool calls.\n\n"
     ) in SHALLOW_THINKING_PROMPT
     assert (
-        "# 不要省略\n"
-        "问题很简单、只是继续上一轮、或需要调用工具时，也不要省略 shallow thinking 块。"
+        "# Do not omit\n"
+        "Do not omit the shallow thinking block even if the question is simple, you are merely continuing a prior turn, or you need to call a tool."
     ) in SHALLOW_THINKING_PROMPT
     assert (
-        "# 任务\n"
-        "shallow thinking 块是无论输出什么内容都必须先输出的固定前缀。\n"
-        "先输出一个 shallow thinking 块，再继续正文、状态文字或工具调用。\n\n"
-        "# 输出格式（MUST遵循）\n\n"
+        "# Task\n"
+        "The shallow thinking block is a required prefix before any other output.\n"
+        "Output one complete shallow thinking block before the main response, status text, or tool call.\n\n"
+        "# Output format (MUST follow)\n\n"
     ) in SHALLOW_THINKING_PROMPT
     assert (
-        "# 输出格式（MUST遵循）\n\n"
+        "# Output format (MUST follow)\n\n"
         f"{SHALLOW_THINKING_START}\n"
-        "[已知信息与问题界定]\n"
-        "[逻辑与推理]\n"
-        "[结论]\n"
-        "[验证]\n"
+        "[Known facts and problem definition]\n"
+        "[Logic and reasoning]\n"
+        "[Conclusion]\n"
+        "[Verification]\n"
         f"{SHALLOW_THINKING_END}"
     ) in SHALLOW_THINKING_PROMPT
-    assert "简短" not in SHALLOW_THINKING_PROMPT
-    assert "每次回复都必须先输出上面的 shallow thinking 块" not in SHALLOW_THINKING_PROMPT
-    assert "如果需要调用工具，也必须先完整输出 shallow thinking 块" not in SHALLOW_THINKING_PROMPT
+    assert "brief" not in SHALLOW_THINKING_PROMPT
 
 
 @pytest.mark.asyncio

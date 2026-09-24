@@ -829,7 +829,7 @@ async def test_sub_agent_runner_consider_mode_filters_tools_and_injects_prompt(t
     assert "write_file" not in tool_names
     assert "sub_agent" not in tool_names
     system_prompt = str(llm.requests[0].messages[0].content)
-    assert "当前模式" in system_prompt
+    assert "Current mode" in system_prompt
     assert "consider" in system_prompt
 
 
@@ -855,7 +855,7 @@ async def test_sub_agent_runner_execute_mode_keeps_full_access(tmp_path):
     # execute mode has an empty tool list, so tools are not filtered, but the mode prompt line
     # is still injected (mode_prompt_line fires whenever the mode is known).
     system_prompt = str(llm.requests[0].messages[0].content)
-    assert "当前模式" in system_prompt
+    assert "Current mode" in system_prompt
     assert "execute" in system_prompt
 
 
@@ -878,7 +878,7 @@ async def test_sub_agent_runner_unknown_mode_falls_back_to_full_access(tmp_path)
     # unknown mode is treated as no filtering so the sub-agent is never locked out
     assert "write_file" in tool_names
     system_prompt = str(llm.requests[0].messages[0].content)
-    assert "当前模式" not in system_prompt
+    assert "Current mode" not in system_prompt
 
 
 @pytest.mark.asyncio
@@ -892,7 +892,7 @@ async def test_sub_agent_runner_empty_mode_is_full_access_by_default(tmp_path):
     tool_names = {tool["function"]["name"] for tool in llm.requests[0].tools or []}
     assert "write_file" in tool_names
     system_prompt = str(llm.requests[0].messages[0].content)
-    assert "当前模式" not in system_prompt
+    assert "Current mode" not in system_prompt
 
 
 class _FakeAttachment:

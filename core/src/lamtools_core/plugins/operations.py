@@ -206,6 +206,9 @@ def _ui_payload(plugin: Any) -> dict[str, Any] | None:
         }
         if hasattr(item, "tools"):
             result["tools"] = [str(tool) for tool in (item.tools or [])]
+        capabilities = getattr(item, "capabilities", None)
+        if capabilities is not None:
+            result["capabilities"] = [str(capability) for capability in capabilities]
         return result
 
     return {

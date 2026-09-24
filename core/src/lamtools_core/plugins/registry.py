@@ -637,6 +637,23 @@ class PluginRegistry:
                 }
                 if cls is PluginUIMode:
                     values["tools"] = tools
+                    raw_capabilities = raw_item.get("capabilities")
+                    if raw_capabilities is not None:
+                        if not isinstance(raw_capabilities, list) or any(
+                            not isinstance(capability, str) or not capability.strip()
+                            for capability in raw_capabilities
+                        ):
+                            raise ValueError(
+                                f"plugin ui.{key}[{index}].capabilities must be an array of "
+                                f"non-empty strings: {manifest_path}"
+                            )
+                        capabilities = [capability.strip() for capability in raw_capabilities]
+                        if len(set(capabilities)) != len(capabilities):
+                            raise ValueError(
+                                f"plugin ui.{key}[{index}].capabilities contains duplicates: "
+                                f"{manifest_path}"
+                            )
+                        values["capabilities"] = capabilities
                 parsed.append(cls(**values))
             return parsed
 

@@ -202,7 +202,7 @@ def _messages_with_model_notes(
     if not normalized:
         return messages
 
-    note_block = f"当前模型备注：{normalized}"
+    note_block = f"Current model notes: {normalized}"
     system_index = next(
         (index for index, message in enumerate(messages) if message.role == "system"),
         None,
@@ -952,7 +952,7 @@ def load_llm_config(*, model_ref: str = "") -> LLMConfig:
         provider_api_type=provider.api_type or "openai",
         base_url=base_url,
         api_key=provider.api_key,
-        model_record_id=model.model_id,
+        model_record_id=model.id,
         model_id=model.model_id,
         display_name=model.display_name or model.model_id,
         notes=model.notes,
@@ -970,10 +970,7 @@ def load_llm_config(*, model_ref: str = "") -> LLMConfig:
 
 def _provider_extra(provider: ProviderConfig) -> dict[str, Any]:
     """Surface the provider's adapter_profile_id through the extra plumbing."""
-    extra = dict(provider.extra or {})
-    if provider.adapter_profile_id:
-        extra["adapter_profile_id"] = provider.adapter_profile_id
-    return extra
+    return provider.to_extra()
 
 
 def _resolve_provider_for_model(model: ModelConfig) -> ProviderConfig | None:
@@ -1031,7 +1028,8 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
         provider = provider_map.get(m.provider_id) or provider_map.get(m.provider) or None
         resolved.append(
             {
-                "id": m.model_id,
+                "id": m.id,
+                "model_record_id": m.id,
                 "provider_id": m.provider_id or (provider.id if provider is not None else ""),
                 "provider_name": provider.name if provider is not None else m.provider,
                 "provider_api_type": provider.api_type if provider is not None else "openai",
@@ -1050,7 +1048,7 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
                             provider_api_type=provider.api_type if provider is not None else "openai",
                             base_url=(provider.base_url if provider is not None else "").rstrip("/"),
                             api_key="",
-                            model_record_id=m.model_id,
+                            model_record_id=m.id,
                             model_id=m.model_id,
                             display_name=m.display_name,
                             context_window=m.context_window,
@@ -1069,6 +1067,7 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
                 "notes": m.notes,
                 "is_default": m.is_default,
                 "adapter_profile_id": m.adapter_profile_id,
+                "extra": m.to_extra(),
             }
         )
     return resolved
@@ -1873,6 +1872,22 @@ def build_parser(
     models_show.add_argument("model_id")
     models_show.add_argument("--work-root", default="")
     models_show.set_defaults(func=cmd_models_show)
+    models_create = models_sub.add_parser("create", help="Create a model and visible provider, optionally in a group")
+    models_create.add_argument("--group", required=True, dest="group_id")
+    models_create.add_argument("--model-id", required=True)
+    models_create.add_argument("--display-name", default="")
+    models_create.add_argument("--base-url", required=True, help="API base URL (not /chat/completions)")
+    models_create.add_argument("--provider-id", default="")
+    models_create.add_argument("--provider-name", default="")
+    models_create.add_argument("--api-type", default="openai")
+    models_create.add_argument("--api-key", default="", help="Prefer LAMTOOLS_LLM_API_KEY to avoid shell history")
+    models_create.add_argument("--adapter-profile-id", default="")
+    models_create.add_argument("--context-window", type=int, default=0)
+    models_create.add_argument("--max-output-tokens", type=int, default=4096)
+    models_create.add_argument("--temperature", type=float, default=0.2)
+    models_create.add_argument("--thinking-supported", action="store_true")
+    models_create.add_argument("--thinking-budget", type=int, default=10000)
+    models_create.set_defaults(func=cmd_models_create)
     models_set = models_sub.add_parser("set", help="Update a model field (e.g. capability)")
     models_set.add_argument("model_id")
     models_set.add_argument("--field", required=True, help="Field to set: capability|is_default|adapter_profile_id|context_window|max_output_tokens|temperature")
@@ -1885,6 +1900,30 @@ def build_parser(
     models_default.add_argument("--scope", choices=("project", "global"), default="global")
     models_default.add_argument("--work-root", default="")
     models_default.set_defaults(func=cmd_models_default)
+    model_groups = models_sub.add_parser("groups", help="Manage user-defined model groups")
+    model_groups_sub = model_groups.add_subparsers(dest="model_groups_command", required=True)
+    groups_list = model_groups_sub.add_parser("list")
+    groups_list.set_defaults(func=cmd_model_groups_list)
+    groups_create = model_groups_sub.add_parser("create")
+    groups_create.add_argument("name")
+    groups_create.add_argument("--model", action="append", default=[])
+    groups_create.set_defaults(func=cmd_model_groups_create)
+    groups_rename = model_groups_sub.add_parser("rename")
+    groups_rename.add_argument("group_id")
+    groups_rename.add_argument("name")
+    groups_rename.set_defaults(func=cmd_model_groups_rename)
+    groups_delete = model_groups_sub.add_parser("delete")
+    groups_delete.add_argument("group_id")
+    groups_delete.set_defaults(func=cmd_model_groups_delete)
+    groups_reorder = model_groups_sub.add_parser("reorder")
+    groups_reorder.add_argument("group_ids", nargs="+")
+    groups_reorder.set_defaults(func=cmd_model_groups_reorder)
+    groups_members = model_groups_sub.add_parser("members")
+    groups_members_sub = groups_members.add_subparsers(dest="model_group_members_command", required=True)
+    groups_members_set = groups_members_sub.add_parser("set")
+    groups_members_set.add_argument("group_id")
+    groups_members_set.add_argument("model_ids", nargs="*")
+    groups_members_set.set_defaults(func=cmd_model_group_members_set)
 
     permissions = sub.add_parser("permissions", help="Manage Core permission defaults (设置 → 权限)")
     permissions_sub = permissions.add_subparsers(dest="permissions_command", required=True)
@@ -1929,6 +1968,14 @@ def build_parser(
         help=f"Initial model Steps to retain (0-{MAX_RETAINED_STEPS}; default {DEFAULT_RETAINED_STEPS})",
     )
     context_compaction_config.set_defaults(func=cmd_context_compaction_config)
+
+    command_shell = sub.add_parser("command-shell", help="Show or select the shell used for command execution")
+    command_shell_sub = command_shell.add_subparsers(dest="command_shell_command", required=True)
+    command_shell_get = command_shell_sub.add_parser("get", help="Show the saved preference and effective shell")
+    command_shell_get.set_defaults(func=cmd_command_shell_get)
+    command_shell_set = command_shell_sub.add_parser("set", help="Save the command shell preference")
+    command_shell_set.add_argument("preference", choices=("auto", "wsl", "git-bash", "powershell"))
+    command_shell_set.set_defaults(func=cmd_command_shell_set)
 
     loadtools = sub.add_parser("loadtools", help="Manage mode tool-set configuration (loadtools.jsonc)")
     loadtools_sub = loadtools.add_subparsers(dest="loadtools_command", required=True)
@@ -4074,7 +4121,7 @@ async def cmd_models_default(args: argparse.Namespace) -> int:
         return 1
     # Clear other defaults first.
     for existing in store.list_sync(work_root=args.work_root or None):
-        if existing.model_id != model.model_id and existing.is_default:
+        if existing.id != model.id and existing.is_default:
             store.write(replace(existing, is_default=False), scope=args.scope, work_root=args.work_root or None)
     path = store.write(replace(model, is_default=True), scope=args.scope, work_root=args.work_root or None)
     print(f"[models] default set to {model.model_id} -> {path}")
@@ -4125,6 +4172,92 @@ async def cmd_permissions_show(args: argparse.Namespace) -> int:
     )
     print("说明:              这些值只作为新会话默认；当前任务可在输入框临时调整")
     return 0
+
+
+async def _run_config_cli_operation(name: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    from lamtools_core.config.operations import build_config_operation_catalog
+
+    result = await build_config_operation_catalog().execute(name, payload)
+    if result.status != "ok":
+        print(str(result.payload.get("error") or "operation failed"), file=sys.stderr)
+        return 1, result.payload
+    print(json.dumps(result.payload, ensure_ascii=False, indent=2))
+    return 0, result.payload
+
+
+async def cmd_models_create(args: argparse.Namespace) -> int:
+    api_key = str(args.api_key or os.environ.get("LAMTOOLS_LLM_API_KEY", "")).strip()
+    existing = bool(args.provider_id)
+    provider: dict[str, Any] = {
+        "mode": "existing" if existing else "new",
+        "base_url": args.base_url,
+        "api_type": args.api_type,
+        "api_key": api_key,
+        "adapter_profile_id": args.adapter_profile_id,
+    }
+    if existing:
+        provider["provider_id"] = args.provider_id
+    else:
+        provider["name"] = args.provider_name
+        if not args.provider_name:
+            print("--provider-name is required when --provider-id is omitted", file=sys.stderr)
+            return 1
+    code, _ = await _run_config_cli_operation(
+        "config.model.create_with_provider",
+        {
+            "group_id": args.group_id,
+            "model": {
+                "model_id": args.model_id,
+                "display_name": args.display_name or args.model_id,
+                "context_window": args.context_window,
+                "max_output_tokens": args.max_output_tokens,
+                "temperature": args.temperature,
+                "thinking_supported": args.thinking_supported,
+                "thinking_budget": args.thinking_budget,
+            },
+            "provider": provider,
+        },
+    )
+    return code
+
+
+async def cmd_model_groups_list(args: argparse.Namespace) -> int:
+    code, _ = await _run_config_cli_operation("config.model_groups.list", {})
+    return code
+
+
+async def cmd_model_groups_create(args: argparse.Namespace) -> int:
+    code, _ = await _run_config_cli_operation(
+        "config.model_group.create", {"name": args.name, "model_ids": list(args.model)}
+    )
+    return code
+
+
+async def cmd_model_groups_rename(args: argparse.Namespace) -> int:
+    code, _ = await _run_config_cli_operation(
+        "config.model_group.update", {"group_id": args.group_id, "name": args.name}
+    )
+    return code
+
+
+async def cmd_model_groups_delete(args: argparse.Namespace) -> int:
+    code, _ = await _run_config_cli_operation("config.model_group.delete", {"group_id": args.group_id})
+    return code
+
+
+async def cmd_model_groups_reorder(args: argparse.Namespace) -> int:
+    code, _ = await _run_config_cli_operation(
+        "config.model_groups.reorder", {"group_ids": list(args.group_ids)}
+    )
+    return code
+
+
+async def cmd_model_group_members_set(args: argparse.Namespace) -> int:
+    code, _ = await _run_config_cli_operation(
+        "config.model_group.members.set",
+        {"group_id": args.group_id, "model_ids": list(args.model_ids)},
+    )
+    return code
 
 
 async def cmd_permissions_config(args: argparse.Namespace) -> int:
@@ -4759,6 +4892,31 @@ async def cmd_load_context_get(args: argparse.Namespace) -> int:
         ensure_ascii=False,
         indent=2,
     ), flush=True)
+    return 0
+
+
+async def cmd_command_shell_get(args: argparse.Namespace) -> int:
+    from lamtools_core.config.settings_store import get_setting
+    from lamtools_core.tool.command_runner import resolve_command_shell
+
+    saved = get_setting("core.commandShell")
+    preference = saved.get("preference") if isinstance(saved, dict) else None
+    if preference not in {"auto", "wsl", "git-bash", "powershell"}:
+        preference = "auto"
+    shell = resolve_command_shell()
+    print(json.dumps({
+        "preference": preference,
+        "effective": {"name": shell.name, "kind": shell.kind, "executable": shell.executable},
+    }, ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_command_shell_set(args: argparse.Namespace) -> int:
+    from lamtools_core.config.settings_store import set_setting
+
+    preference = str(args.preference)
+    set_setting("core.commandShell", {"preference": preference})
+    print(json.dumps({"preference": preference}, ensure_ascii=False), flush=True)
     return 0
 
 

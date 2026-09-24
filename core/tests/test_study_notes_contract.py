@@ -50,12 +50,11 @@ def test_study_cli_exposes_search_and_pin_parity() -> None:
 
 def test_study_prompt_routes_notes_and_keeps_first_turn_tool_contract() -> None:
     prompt = (STUDY_ROOT / "prompts" / "study-system.md").read_text(encoding="utf-8")
-    assert "整理学习笔记用 curate-notes" in prompt
-    assert "Study 模式首轮就显示 notes 工具" in prompt
-    assert "笔记能力已启用时整理用 curate-notes" not in prompt
+    assert "curate-notes for organizing study notes" in prompt
+    assert "Show the notes tool from the first turn in Study mode" in prompt
     assert all(route in prompt for route in ("build-map", "teach", "answer", "take-exam"))
     assert "Raw → Resource → Note" in prompt
-    assert "右侧栏" in prompt
+    assert "right sidebar" in prompt
     assert "NOTE_REGION_LOCKED" in prompt
 
 
@@ -112,8 +111,8 @@ def test_curate_skill_matches_three_layer_contract_and_protects_edits() -> None:
     assert "reason" in combined and "overlap" in combined
     assert "REVISION_CONFLICT" in combined
     assert "CONTENT_HASH_CONFLICT" in combined
-    assert "未保存草稿" in combined
-    assert "锁定只阻止 Agent" in combined
+    assert "unsaved draft" in combined
+    assert "lock prevents Agent edits" in combined
 
     # The skill must no longer teach the retired append/update or payload-owned
     # ownership model.  Generic prose may discuss protected ranges, but no

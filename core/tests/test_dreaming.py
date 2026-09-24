@@ -10,6 +10,7 @@ import pytest
 from lamtools_core.llm import ChatMessage, LLMRequest, LLMResponse
 from lamtools_core.mem import MemoryQuery
 from lamtools_core.mem.dreaming import (
+    DREAM_PROMPT,
     DreamCandidate,
     dream_session,
     record_dream_turn,
@@ -91,7 +92,8 @@ class TestFormatHistory:
     def test_includes_compaction_summary(self):
         history = [ChatMessage(role="user", content="hi")]
         text = _format_history_for_dream(history, compaction_summary="prior context")
-        assert "[此前会话摘要]" in text
+        assert "[Prior session summary]" in text
+        assert "[Current session]" in text
         assert "prior context" in text
 
     def test_empty_history(self):
@@ -108,7 +110,15 @@ class TestFormatHistory:
             )
         ]
         text = _format_history_for_dream(history)
+        assert "(Called tools: read_file)" in text
         assert "read_file" in text
+
+
+def test_dream_prompt_preserves_chinese_memory_content_contract():
+    assert '"kind": "preference|fact|decision|lesson|todo"' in DREAM_PROMPT
+    assert '"content": "One concise sentence in Chinese"' in DREAM_PROMPT
+    assert "Output nothing outside the JSON array" in DREAM_PROMPT
+    assert "empty array `[]`" in DREAM_PROMPT
 
 
 # ── should_dream / record_dream_turn ─────────────────────────────

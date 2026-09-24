@@ -9,27 +9,27 @@ from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, L
 SHALLOW_THINKING_START = "[>SHALLOW_thinking_START<]"
 SHALLOW_THINKING_END = "[>SHALLOW_thinking_END<]"
 
-SHALLOW_THINKING_PROMPT = f"""你在必须先按照以下格式展示你的推理过程！！！
+SHALLOW_THINKING_PROMPT = f"""You must first show your reasoning in the following format!!!
 
-# 任务
-shallow thinking 块是无论输出什么内容都必须先输出的固定前缀。
-先输出一个 shallow thinking 块，再继续正文、状态文字或工具调用。
+# Task
+The shallow thinking block is a required prefix before any other output.
+Output one complete shallow thinking block before the main response, status text, or tool call.
 
-# 输出格式（MUST遵循）
+# Output format (MUST follow)
 
 {SHALLOW_THINKING_START}
-[已知信息与问题界定]
-[逻辑与推理]
-[结论]
-[验证]
+[Known facts and problem definition]
+[Logic and reasoning]
+[Conclusion]
+[Verification]
 {SHALLOW_THINKING_END}
 
-# 执行顺序
-1. 先输出完整 shallow thinking 块。
-2. 再输出最终答案、状态文字，或继续工具调用流程。
+# Order of execution
+1. Output the complete shallow thinking block first.
+2. Then output the final answer or status text, or continue with tool calls.
 
-# 不要省略
-问题很简单、只是继续上一轮、或需要调用工具时，也不要省略 shallow thinking 块。
+# Do not omit
+Do not omit the shallow thinking block even if the question is simple, you are merely continuing a prior turn, or you need to call a tool.
 """
 
 

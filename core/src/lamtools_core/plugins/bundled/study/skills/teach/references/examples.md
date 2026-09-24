@@ -1,57 +1,62 @@
-# 原创教学片段与自查
+# Original teaching examples and checks
 
-用途：示范不同障碍下怎样真正讲清楚；不是统一输出模板，也不是已进行的真实学生实验。以下片段均为本包原创。
+Purpose: demonstrate how to explain different obstacles clearly. These are neither a uniform response template nor reports of real learner experiments. The passages below are original to this package. Chinese in the sample user messages and responses illustrates the required user-language behavior.
 
-## 1. 初学导数：先建立变化关系
-用户：“我刚学导数，别先给一堆公式。”
+## 1. Introducing derivatives through change
 
-响应示例：
+Sample user: “我刚学导数，别先给一堆公式。”
+
+Sample response:
 “导数（derivative）描述的是：在某个位置，输入稍微变化时，输出变化得有多快。以y=x²为例，在x=2附近，x增加h，y就从4变为(2+h)²，所以这段的平均变化率是
 \[
 \frac{(2+h)^2-4}{h}=4+h,\quad h\ne0.
 \]
 当h越来越接近0，平均变化率越来越接近4；因此x=2处的导数是4。注意不是把h=0塞进原分式，而是看h趋近0时的极限；图上对应曲线在(2,4)附近的切线斜率。”
 
-有绘图能力时生成与本例一致的曲线、点和切线y=4x−4；无能力时文字解释仍完整，不写“如下图”却没有图。
-检查：限定到一点的导数；没有把局部关系当全局线性；没有一开始引入高阶导数、微分方程和优化。
+If drawing is available, generate a matching curve, point, and tangent y=4x−4. Otherwise the text should be complete without claiming an absent figure appears below. Check: derivative at one point; local relationship not mistaken for global linearity; no premature higher derivatives, differential equations, or optimization.
 
-## 2. 链式法则：只补被跳过的桥
-用户：“为什么还要乘2x？”
+## 2. Chain rule: supply the skipped bridge
 
-响应示例：
+Sample user: “为什么还要乘2x？”
+
+Sample response:
 “因为你不是对x直接取立方，而是先把x变成x²+1，再对这个结果取立方。令u=x²+1，外层对u的导数是3u²，内层对x的导数是2x；两层的变化率要相乘，所以y'=3(x²+1)²·2x。只写前半段，算的是对u的变化率，不是对x的。”
 
-检查：说清了中间变量，不只是复述“因为链式法则”；用户问局部问题，不重新讲完整课程。通常不需要联网或图片。
+Check: the intermediate variable is explained, not merely “because of the chain rule.” A local question does not restart the whole lesson. Search and imagery are usually unnecessary.
 
-## 3. 电子：条件、量和验证一体
-用户：“RC充电的时间常数为什么有意义？”
+## 3. Electronics: conditions, quantities, and verification together
 
-响应示例：
+Sample user: “RC充电的时间常数为什么有意义？”
+
+Sample response:
 “先看理想5V阶跃源经1kΩ电阻给初始未充电的100μF电容充电：τ=RC=0.1s。电容电压是vC(t)=5(1−e^(−t/0.1))V，因此一个τ后约为3.16V，即最终值的63.2%；τ刻画这个响应变快或变慢的时间尺度，不表示一个τ后就充满。初始电流是5mA，随后随电容电压上升而减小。”
 
-示意图：实际支持时画时间—电容电压曲线，标0.1s与3.16V；拓扑必须串联RC、输出跨电容。这里是理想分析，不是具体器件安全设计；真实选型需核实耐压、功率、源阻抗与应用条件。
-检查：μF换算正确；未说5τ等于严格充满；区分电容电压与电阻电压。
+When supported, show a time-versus-capacitor-voltage curve marking 0.1s and 3.16V. The topology must be series RC with output across the capacitor. This is ideal analysis, not a safe design for particular components; real selection requires checking voltage rating, power, source impedance, and application conditions. Check μF conversion, do not say five time constants means exactly full, and distinguish capacitor and resistor voltages.
 
-## 4. 数据结构：用状态解释，不只报遍历答案
-用户：“我总是不明白BFS的队列有什么用。”
+## 4. Data structures: explain states, not just traversal order
 
-给定无权图A→B、A→C、B→D、C→D，邻居按字母顺序处理。说明队列保存“已经发现、还没展开”的节点，入队时标记已发现：从[A]开始，处理A后是[B,C]；处理B后[C,D]；处理C时D已发现，不再重复入队，剩[D]。因此顺序A,B,C,D。这是一种约定好的顺序，不是任何邻居顺序都唯一。
+Sample user: “我总是不明白BFS的队列有什么用。”
 
-检查：解释入队标记避免重复；没有把无权图BFS最少边数误写成任意带权最短路径。图规模小，状态序列比动画特效重要。
+For the unweighted graph A→B, A→C, B→D, C→D, process neighbors alphabetically. Explain that the queue holds nodes already discovered but not expanded, and mark each on enqueue. Start at [A]. After processing A: [B,C]; after B: [C,D]; while processing C, D is already discovered, so do not enqueue it again; [D] remains. The resulting order is A,B,C,D under this convention, not unique for all neighbor orders.
 
-## 5. 熟练者要证明：别重复新手故事
-用户：“我会计算，解释可导为什么蕴含连续。”
+Check that marking on enqueue prevents duplicates. Do not equate the minimum-edge-count path from unweighted BFS with shortest paths under arbitrary edge weights. This small graph needs a state sequence more than an elaborate animation.
 
-设f在a处可导，差商在x≠a且x→a时趋于有限值f'(a)。此时
+## 5. An experienced learner requests proof
+
+Sample user: “我会计算，解释可导为什么蕴含连续。”
+
+If f is differentiable at a, the difference quotient for x≠a approaches finite f'(a) as x→a. Then
 \[
 f(x)-f(a)=\frac{f(x)-f(a)}{x-a}(x-a)\longrightarrow f'(a)\cdot0=0.
 \]
-故f(x)→f(a)，在a连续；逆命题不成立，例如|x|在0连续但左右差商分别为−1和1，不可导。
+Hence f(x)→f(a), so f is continuous at a. The converse fails: |x| is continuous at 0, but its left and right difference quotients are −1 and 1.
 
-检查：可导的实值有限导数与定义域邻域条件；式子只用于x≠a，极限论证非直接代0。用户已熟练，不重新解释“函数是什么”。
+Check for a finite real derivative and appropriate neighborhood in the domain. Use the displayed identity only for x≠a and reason by a limit, not direct substitution. Do not reteach “what is a function” to this learner.
 
-## 6. 从具体问题到算法：精确保留前提
-用排好序的号码表说明：每次看中间项，根据大小关系排除一半；若未排序，这种排除就没有依据。再映射为二分查找的区间不变式和停止条件。不要为了类比把O(n/2)当作不同于O(n)的渐近复杂度等级。
+## 6. From a concrete problem to an algorithm
 
-## 7. 如何用这些片段评估
-检查是否选择了适合输入的讲法、关键桥梁是否存在、条件和结果是否正确；不要只检查是否出现“例题”“配图”等关键词。此处示例数值与推导有配套程序检查，但示例检查通过不等于未知问题都能讲对。
+A sorted list of numbers illustrates checking the middle and excluding half by comparison. Without sorting, that exclusion is unjustified. Then connect the example to binary search's interval invariant and stopping condition. Do not treat O(n/2) as a different asymptotic complexity class from O(n).
+
+## 7. Evaluate these passages
+
+Check whether the approach suits the input, necessary bridges are present, and conditions and results are correct. Do not merely check for keywords such as “example” or “diagram.” Companion code checks the sample numbers and derivations, but passing those checks does not mean every unknown problem will be taught correctly.

@@ -23,13 +23,9 @@ _logger = logging.getLogger(__name__)
 #: enforce a hard ceiling defensively).
 MAX_TITLE_LEN = 20
 
-#: The first message is truncated to this many characters before being sent to
-#: the model, keeping the title request cheap regardless of input length.
+#: Limit how much of the first message is sent to the title model.
 MAX_MESSAGE_CHARS = 2000
 
-#: Hard ceiling on one title-generation call (retries included) so a hung
-#: model never leaves the background task lingering for the HTTP client's
-#: default (360s).
 TITLE_CALL_TIMEOUT_SECONDS = 30.0
 
 #: Session titles that count as "untouched defaults" and may be overwritten.
@@ -51,11 +47,7 @@ async def generate_session_title(
     model_id: str,
     first_message_text: str,
 ) -> str | None:
-    """Generate a ≤20-char title from the first user message.
-
-    Returns ``None`` when the client fails or yields an empty result; callers
-    should then leave the existing title untouched.
-    """
+    """Generate a ≤20-char title without reasoning or an output-token cap."""
     text = (first_message_text or "").strip()
     if not text:
         return None
@@ -66,21 +58,20 @@ async def generate_session_title(
             ChatMessage(
                 role="system",
                 content=(
-                    "将以下用户消息压缩为一个不超过 20 字的简短标题，"
-                    "直接输出标题文本，不要引号、不要解释、不要句号。"
-                    "语言与用户消息的语言保持一致。"
+                    "Condense the following user message into a short title of no more than 20 characters. "
+                    "Output only the title text, without quotation marks, explanation, or a final period. "
+                    "Use the same language as the user message."
                 ),
             ),
             ChatMessage(role="user", content=text),
         ],
         model=model_id,
         temperature=0,
-        max_tokens=40,
+        metadata={
+            "thinking_enabled": False,
+            "reasoning_level": "off",
+        },
     )
-
-    # Retry a transient failure once and bound the whole call — a stuck model
-    # must not leave a background task lingering for minutes. Fatal/token
-    # errors are never retried (see classify_model_error).
     try:
         response: "LLMResponse" = await complete_with_retry(
             llm_client,
@@ -88,7 +79,7 @@ async def generate_session_title(
             max_attempts=2,
             timeout_seconds=TITLE_CALL_TIMEOUT_SECONDS,
         )
-    except Exception:  # noqa: BLE001 — title generation must never break a turn
+    except Exception:  # noqa: BLE001
         _logger.warning("[autotitle] llm complete failed", exc_info=True)
         return None
 

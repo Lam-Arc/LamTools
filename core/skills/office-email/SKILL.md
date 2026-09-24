@@ -1,6 +1,6 @@
 ---
 name: office-email
-description: 整理邮件线程、提取问题与待办，撰写回复、通知、跟进和成果交付邮件。用户要求写邮件、回复邮件或总结邮箱内容时使用；实际邮箱检索、草稿保存及发送仅在连接器可用且获得对应授权时执行。
+description: Organize email, extract questions/tasks, draft replies/notices/follow-ups/delivery messages. For writing/summaries; retrieval, drafts or sending need connector + authorization.
 metadata:
   version: 0.2.0
   language: zh-CN

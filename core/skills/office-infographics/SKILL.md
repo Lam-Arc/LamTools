@@ -1,6 +1,6 @@
 ---
 name: office-infographics
-description: 将文字资料整理成流程图、泳道图、时间线、路线图、组织结构、方案对比和一页式信息图。用户要求把步骤、关系或长说明可视化时使用；以数值统计为核心的图表交给 office-charts。
+description: Turn text into flowcharts, swimlanes, timelines, roadmaps, org charts, comparisons and one-page infographics. Use for steps or relationships; use office-charts for statistics.
 metadata:
   version: 0.2.0
   language: zh-CN

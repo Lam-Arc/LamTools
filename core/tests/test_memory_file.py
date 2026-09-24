@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pytest
 
 from lamtools_core.mem import MemoryEntry
+from lamtools_core.mem import memory_file as memory_file_module
 from lamtools_core.mem.memory_file import (
     merge_into_memory_md,
     parse_memory_md,
@@ -99,6 +101,52 @@ class TestWriteMemoryMd:
         text = p.read_text(encoding="utf-8")
         assert "# Memory" in text
         assert "dreaming" in text.lower()
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows replace sharing error")
+    def test_replace_retries_transient_windows_sharing_error(self, memory_file: Path, monkeypatch: pytest.MonkeyPatch):
+        original_replace = memory_file_module.os.replace
+        attempts = 0
+        delays: list[float] = []
+
+        def briefly_locked(src: Path, dst: Path) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                error = PermissionError(13, "file in use")
+                error.winerror = 32
+                raise error
+            original_replace(src, dst)
+
+        monkeypatch.setattr(memory_file_module.os, "replace", briefly_locked)
+        monkeypatch.setattr(memory_file_module.time, "sleep", delays.append)
+        write_memory_md(memory_file, parse_memory_md(memory_file))
+
+        assert attempts == 3
+        assert delays == [0.025, 0.05]
+        assert "用户偏好 PowerShell 中文用 UTF-8" in memory_file.read_text(encoding="utf-8")
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows replace sharing error")
+    def test_replace_surfaces_persistent_windows_error_without_changing_original(
+        self, memory_file: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        original = memory_file.read_bytes()
+        attempts = 0
+
+        def permanently_locked(_src: Path, _dst: Path) -> None:
+            nonlocal attempts
+            attempts += 1
+            error = PermissionError(13, "file in use")
+            error.winerror = 5
+            raise error
+
+        monkeypatch.setattr(memory_file_module.os, "replace", permanently_locked)
+        monkeypatch.setattr(memory_file_module.time, "sleep", lambda _delay: None)
+
+        with pytest.raises(PermissionError, match="file in use"):
+            write_memory_md(memory_file, parse_memory_md(memory_file))
+
+        assert attempts == 5
+        assert memory_file.read_bytes() == original
 
 
 class TestMergeIntoMemoryMd:

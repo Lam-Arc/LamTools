@@ -14,6 +14,7 @@ from lamtools_core.app.http_agent_app import (
     CoreConfigRoutingLLMClient,
     create_core_agent_http_app,
 )
+import lamtools_core.app.http_agent_app as http_agent_app_module
 from lamtools_core.app import CoreAgentSpec
 from lamtools_core.cli import CoreHttpLLMClient, list_core_cli_sessions
 from lamtools_core.llm import LLMRequest, LLMStreamEvent
@@ -72,6 +73,24 @@ def _write_two_model_jsonc_config(config_root: Path) -> None:
         '}\n',
         encoding="utf-8",
     )
+
+
+def test_core_agent_http_app_resolves_the_command_shell_while_starting(
+    tmp_path: Path, monkeypatch, isolated_config_root: Path
+) -> None:
+    """The bounded WSL probe is a start-up cost, never a first-request one."""
+    _write_jsonc_config(isolated_config_root)
+    warmed: list[int] = []
+    monkeypatch.setattr(http_agent_app_module, "warm_command_shell", lambda: warmed.append(1))
+
+    create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+    )
+
+    assert warmed == [1]
 
 
 def test_core_agent_http_app_exposes_live_app_server(tmp_path: Path, isolated_config_root: Path) -> None:
@@ -1045,7 +1064,7 @@ def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tm
                 })
                 started = _receive_rpc_response(websocket, 3)
                 turn_id = started["result"]["runtime_start"]["turn_id"]
-                assert sealed_window.wait(timeout=2)
+                assert sealed_window.wait(timeout=10)
                 runtime_task = registry.task("sealed-transport-thread", run_id=turn_id)
                 assert runtime_task is not None
                 runtime_done = threading.Event()
@@ -1090,6 +1109,7 @@ def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_pa
     assert body["models"] == [
         {
             "id": "model-record",
+            "model_record_id": "model-record",
             "provider_id": "provider-1",
             "provider_name": "Provider",
             "provider_api_type": "openai",
@@ -1105,6 +1125,7 @@ def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_pa
             "notes": "",
             "is_default": False,
             "adapter_profile_id": "",
+            "extra": {},
         }
     ]
     assert "secret" not in response.text

@@ -1,6 +1,6 @@
 ---
 name: office-files
-description: 盘点授权目录，查找和分类办公资料，提出归档结构，批量重命名或移动文件，并识别内容重复项。用户要求整理文件夹、清理重复资料、规范命名或项目归档时使用；默认先预览，不自动删除或覆盖。
+description: Inventory authorized office files; classify, archive, rename or move, and find duplicates. Use for folder cleanup or naming; preview first, never auto-delete or overwrite.
 metadata:
   version: 0.2.0
   language: zh-CN

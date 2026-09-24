@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import re
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -42,6 +44,7 @@ MODEL_FILENAME_SUFFIX = ".jsonc"
 class ModelConfig:
     """A single model definition loaded from jsonc."""
 
+    id: str = ""                  # stable safe record id / file stem
     model_id: str = ""
     display_name: str = ""
     provider: str = ""            # provider name (resolved against the DB)
@@ -55,6 +58,7 @@ class ModelConfig:
     reasoning: dict[str, Any] = field(default_factory=dict)
     adapter_profile_id: str = ""  # reference to a shared adapter profile
     request_body: dict[str, Any] = field(default_factory=dict)  # per-model override
+    adapter_profile_override: dict[str, Any] = field(default_factory=dict)
     capability: str = ""          # "text" | "multimodal" | "" (→ builtin table)
     notes: str = ""               # free-form notes/remarks (optional, user-facing)
     is_default: bool = False
@@ -75,9 +79,15 @@ class ModelConfig:
         extra: dict[str, Any] = {}
         if self.adapter_profile_id:
             extra["adapter_profile_id"] = self.adapter_profile_id
+        override = copy.deepcopy(self.adapter_profile_override)
         if self.request_body:
             # The profile resolver reads ``adapter_profile_override.request.body``.
-            extra["adapter_profile_override"] = {"request": {"body": dict(self.request_body)}}
+            request = override.get("request") if isinstance(override.get("request"), dict) else {}
+            body = request.get("body") if isinstance(request.get("body"), dict) else {}
+            request["body"] = _deep_merge(body, self.request_body)
+            override["request"] = request
+        if override:
+            extra["adapter_profile_override"] = override
         if self.reasoning:
             extra["reasoning"] = copy.deepcopy(self.reasoning)
         if self.capability:
@@ -170,7 +180,12 @@ class ModelStore:
             return None
         if not isinstance(data, dict):
             return None
-        model_id = str(data.get("model_id") or path.stem).strip()
+        record_id = str(data.get("id") or path.stem).strip()
+        try:
+            validate_config_id("model record", record_id)
+        except ValueError:
+            return None
+        model_id = str(data.get("model_id") or record_id).strip()
         if not model_id:
             return None
         thinking = data.get("thinking")
@@ -179,10 +194,14 @@ class ModelStore:
         request_body = data.get("request_body")
         if not isinstance(request_body, dict):
             request_body = {}
+        profile_override = data.get("adapter_profile_override")
+        if not isinstance(profile_override, dict):
+            profile_override = {}
         reasoning = data.get("reasoning")
         if not isinstance(reasoning, dict):
             reasoning = {}
         return ModelConfig(
+            id=record_id,
             model_id=model_id,
             display_name=str(data.get("display_name") or "").strip(),
             provider=str(data.get("provider") or "").strip(),
@@ -196,6 +215,7 @@ class ModelStore:
             reasoning=copy.deepcopy(reasoning),
             adapter_profile_id=str(data.get("adapter_profile_id") or "").strip(),
             request_body=request_body,
+            adapter_profile_override=copy.deepcopy(profile_override),
             capability=str(data.get("capability") or "").strip().lower(),
             notes=str(data.get("notes") or "").strip(),
             is_default=bool(data.get("is_default") or False),
@@ -209,7 +229,7 @@ class ModelStore:
 
     def list_sync(self, *, work_root: str | None = None) -> list[ModelConfig]:
         models = self._load_map(work_root)
-        return sorted(models.values(), key=lambda m: m.model_id)
+        return sorted(models.values(), key=lambda m: (m.display_name or m.model_id or m.id).casefold())
 
     async def get(self, model_ref: str, *, work_root: str | None = None) -> ModelConfig | None:
         return await asyncio.to_thread(self.get_sync, model_ref, work_root=work_root)
@@ -221,11 +241,12 @@ class ModelStore:
         models = self._load_map(work_root)
         if ref in models:
             return models[ref]
-        # Match by display_name or provider_id fallback.
+        # External model ids are not filesystem ids and may contain '/'.  They
+        # remain accepted as an unambiguous convenience lookup.
         lowered = ref.lower()
-        for model in models.values():
-            if model.display_name.lower() == lowered or model.provider_id == ref:
-                return model
+        exact = [model for model in models.values() if model.model_id == ref or model.display_name.lower() == lowered]
+        if len(exact) == 1:
+            return exact[0]
         # Substring match on display_name as a last resort.
         for model in models.values():
             if lowered and lowered in model.display_name.lower():
@@ -253,9 +274,9 @@ class ModelStore:
             model = self._parse(path)
             if model is None:
                 continue
-            models[model.model_id] = model
+            models[model.id] = model
             if model.is_default:
-                default_id = default_id or model.model_id
+                default_id = default_id or model.id
         self._cached_signature = sig
         self._cached_models = models
         self._cached_default = default_id
@@ -265,13 +286,19 @@ class ModelStore:
 
     @staticmethod
     def write_path(model_id: str, *, scope: str, work_root: str | None) -> Path:
-        validate_config_id("model", model_id)
+        validate_config_id("model record", model_id)
         if scope == "project" and work_root:
             return Path(work_root).resolve() / ".lam" / "config" / MODELS_SUBDIR / f"{model_id}{MODEL_FILENAME_SUFFIX}"
         return core_config_dir() / MODELS_SUBDIR / f"{model_id}{MODEL_FILENAME_SUFFIX}"
 
     def write(self, model: ModelConfig, *, scope: str, work_root: str | None) -> Path:
-        path = self.write_path(model.model_id, scope=scope, work_root=work_root)
+        if not model.id:
+            try:
+                model.id = validate_config_id("model record", model.model_id)
+            except ValueError:
+                model.id = make_model_record_id(model.provider_id or model.provider, model.model_id)
+        validate_config_id("model record", model.id)
+        path = self.write_path(model.id, scope=scope, work_root=work_root)
         path.parent.mkdir(parents=True, exist_ok=True)
         from lamtools_core.config.root import atomic_write_text
 
@@ -285,6 +312,7 @@ class ModelStore:
         import json
 
         data: dict[str, Any] = {
+            "id": model.id,
             "model_id": model.model_id,
             "display_name": model.display_name,
             "provider": model.provider,
@@ -305,7 +333,19 @@ class ModelStore:
             data["reasoning"] = copy.deepcopy(model.reasoning)
         if model.request_body:
             data["request_body"] = copy.deepcopy(model.request_body)
+        if model.adapter_profile_override:
+            data["adapter_profile_override"] = copy.deepcopy(model.adapter_profile_override)
         return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
 
 
 __all__ = [
@@ -313,7 +353,20 @@ __all__ = [
     "MODEL_FILENAME_SUFFIX",
     "ModelConfig",
     "ModelStore",
+    "make_model_record_id",
 ]
+
+
+def make_model_record_id(provider_id: str, model_id: str) -> str:
+    """Return a deterministic safe record id without changing upstream model_id."""
+    raw = f"{provider_id}-{model_id}".strip("-")
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-.").lower()
+    if not slug or not slug[0].isalnum():
+        slug = f"model-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:12]}"
+    if len(slug) > 128:
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+        slug = f"{slug[:115].rstrip('-.')}-{digest}"
+    return validate_config_id("model record", slug)
 
 
 def resolve_model_capability(model_id: str, *, work_root: str | None = None) -> str:

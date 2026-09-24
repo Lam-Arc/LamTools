@@ -285,11 +285,12 @@ def resolve_adapter_profile_from_profiles(
 ) -> dict[str, Any]:
     provider_extra = _extra_dict(provider_extra)
     model_extra = _extra_dict(model_extra)
-    # A model-level explicit profile always wins.  When it is absent, a
-    # shipped model matcher is more specific than a provider-wide profile;
-    # this is important for OpenAI-compatible gateways that expose DeepSeek,
-    # GLM, Kimi, Qwen, or Grok models through the same endpoint.
+    # Explicit configuration is authoritative: model beats provider, and both
+    # beat heuristic matchers.  This prevents a model name such as ``qwen`` or
+    # ``glm`` from silently bypassing a gateway's explicit request format.
     profile = _profile_from_extra(model_extra, profiles)
+    if profile is None:
+        profile = _profile_from_extra(provider_extra, profiles)
     if profile is None and model_id:
         profile = _best_matching_profile(
             profiles,
@@ -297,8 +298,6 @@ def resolve_adapter_profile_from_profiles(
             model_id,
             api_type=api_type,
         )
-    if profile is None:
-        profile = _profile_from_extra(provider_extra, profiles)
     if profile is None and provider_name:
         profile = _best_matching_profile(
             profiles,
@@ -1993,6 +1992,15 @@ def normalize_stream_chunk_with_profile(
         )
 
     reasoning = get_path(chunk, response_path(profile, "stream_response", "reasoning_delta", "choices.0.delta.reasoning_content"))
+    if reasoning in (None, ""):
+        # OpenAI-compatible aggregators are split between
+        # ``reasoning_content`` and ``reasoning``. Command Code currently
+        # streams the latter (plus reasoning_details), so accepting both is
+        # required even when the selected model uses an otherwise standard
+        # Chat Completions profile.
+        reasoning = get_path(chunk, "choices.0.delta.reasoning")
+    if reasoning in (None, ""):
+        reasoning = get_path(chunk, "choices.0.delta.thinking")
     if reasoning:
         return LLMStreamEvent(
             kind="thinking_delta",
@@ -2043,6 +2051,10 @@ def normalize_response_with_profile(
 
     raw_content = get_path(response, content_path)
     raw_thinking = get_path(response, reasoning_path)
+    if raw_thinking in (None, ""):
+        raw_thinking = get_path(response, "choices.0.message.reasoning")
+    if raw_thinking in (None, ""):
+        raw_thinking = get_path(response, "choices.0.message.thinking")
     raw_tool_calls = get_path(response, tool_calls_path)
     finish_reason = str(get_path(response, finish_path, "stop") or "stop")
     usage = _usage_from_raw(get_path(response, usage_path))

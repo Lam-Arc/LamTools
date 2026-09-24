@@ -19,6 +19,36 @@ from lamtools_core.event.runtime_projection import (
 )
 
 
+def test_runtime_text_response_markers_survive_projection():
+    for final_response, has_tool_calls in [(False, True), (True, False)]:
+        events = runtime_fact_to_run_item_events(
+            thread_id="thread-1",
+            event_id=f"text-{final_response}",
+            group="message",
+            source="core",
+            phase="runtime.part",
+            status="completed",
+            sequence=1,
+            metadata={"payload": {
+                "part_type": "text",
+                "status": "completed",
+                "content": "reply",
+                "turn_id": "turn-1",
+                "final_response": final_response,
+                "has_tool_calls": has_tool_calls,
+            }},
+        )
+        assert events and events[0].payload["final_response"] is final_response
+        assert events[0].payload["has_tool_calls"] is has_tool_calls
+
+    legacy = runtime_fact_to_run_item_events(
+        thread_id="thread-1", event_id="legacy-text", group="message", source="core",
+        phase="runtime.part", status="completed", sequence=2,
+        metadata={"payload": {"part_type": "text", "status": "completed", "content": "legacy"}},
+    )
+    assert legacy and "final_response" not in legacy[0].payload
+
+
 def test_runtime_projection_accumulates_tool_input_delta_preview():
     first = runtime_fact_to_run_item_events(
         thread_id="thread-1",

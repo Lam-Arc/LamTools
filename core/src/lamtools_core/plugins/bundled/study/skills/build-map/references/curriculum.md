@@ -1,33 +1,38 @@
-# 课程设计：从可完成的任务反推知识
+# Curriculum design: work backward from achievable tasks
 
-读取时机：新建整门课程、跨课程体系、核查覆盖或发现图谱只有章节名字。
+Read when creating a complete course, a cross-course system, checking coverage, or finding that a map has only chapter titles.
 
-## 1. 三层对齐
-1.1）学习目标：课程完成后能解释、判断、计算、证明、实现或设计什么。
-1.2）证据：什么作答或作品能显示这些能力，哪些证据只是记忆复述。
-1.3）教学：哪些知识与例子能让用户完成目标；先后依据是真实前置，不是目录位置。
-1.4）不用每个小节点生成一张大表。主课程/模块保留必要对齐记录，叶节点继承适用要求。
+## 1. Align three layers
 
-## 2. 一个导数单元的原创设计例子
-目标：能从差商解释一点处的导数，能正确使用链式法则，并能区分可导与连续。
-内容：函数变化、差商与极限、点的导数/导函数、基本求导、复合函数和链式法则、条件与反例。
-教学：同一x²例子连接差商与切线；完整复合函数求导示范；|x|的左右变化率反例。
-证据：解释差商不能直接令h=0；独立求导含非平凡内层；判断“连续一定可导”并说明。
-范围边界：该单元不自动包含偏导、梯度下降或微分方程，只建立有意义的后续关联。
+1.1) Learning goals: what the learner can explain, judge, calculate, prove, implement, or design after the course.
+1.2) Evidence: what responses or work would show those abilities, and what merely repeats memorized material.
+1.3) Teaching: which knowledge and examples enable the goals. Order by real prerequisites, not table-of-contents position.
+1.4) Do not generate a large table for every small node. Keep necessary alignment at course and module level; leaf nodes inherit applicable requirements.
 
-## 3. 前置和关联
-3.1）课程行政先修与实际必需知识分开。MIT 18.06SC 课程页明确区分学校要求的多元微积分先修与学习线代本身并不必需微积分；建图不能只抄选课条件就加硬依赖。
-3.2）共享概念用稳定ID，课程特定要求放课程或归属。列向量的线性组合与电路方程组可关联，须指出实际线性模型和适用条件。
-3.3）同一课程可以多条学习路线；路线改变教学顺序，不自动隐藏原来已确认的内容。大图的节点和关系不是唯一上课顺序。
-3.4）检查不合理循环和含糊依赖：硬前置A→B且B→A应重新拆分或改成关联；普通双向引用不是错误。
+## 2. Original derivative-unit design example
 
-## 4. 全面但不无限扩展
-4.1）保留范围依据与版本，按模块登记“框架、待细化、待核对”。每个独立公式保存内容和条件，但等价变形可在同一节点里表达。
-4.2）完整性检查采用范围清单逐项核对，必要时读原目录或课程要求。没有实际来源只能称通用初稿，不声称考试必考范围。
-4.3）允许先建可靠框架再分批细化，但不能把首批完成宣称全课程完成；不得在后台承诺未经调度能力支持的持续建图。
-4.4）已有知识的教学说明可简记“先哪种例子、常见混淆、边界、独立考查方向”。没有意义就留空，不批量生成空泛口号。
+Goal: explain a derivative at a point through the difference quotient, use the chain rule correctly, and distinguish differentiability from continuity.
+Content: function change, difference quotient and limit, point derivative and derivative function, basic differentiation, composite functions and chain rule, conditions and counterexamples.
+Teaching: connect quotient and tangent with the same x² example; demonstrate a complete composite differentiation; use |x| as a counterexample through one-sided rates of change.
+Evidence: explain why h cannot be set directly to zero in the quotient; independently differentiate a composite with a nontrivial inner function; evaluate “continuous implies differentiable” with a reason or counterexample.
+Scope: the unit does not automatically include partial derivatives, gradient descent, or differential equations, though it may link to them meaningfully later.
 
-## 5. 课程案例可借鉴什么
-MIT 18.06SC：单元、讲解、例题讲解和练习共同组成学习会话；借鉴组织方式，不照搬所有先修与题量。https://ocw.mit.edu/courses/18-06sc-linear-algebra-fall-2011/pages/syllabus/
-CS50 Lecture 0：用同一查找问题连接日常操作、伪代码和算法选择；借鉴具体到抽象的连贯关系，不把娱乐效果当有效性的证据。https://cs50.harvard.edu/x/2025/notes/0/
-CMU：目标、考查、教学保持一致；借鉴设计方法，不宣称这一张课程图已经证明学生学会。https://www.cmu.edu/teaching/designteach/design/learningobjectives.html
+## 3. Prerequisites and associations
+
+3.1) Separate administrative course prerequisites from knowledge actually needed. MIT 18.06SC's syllabus distinguishes an institution's multivariable-calculus requirement from calculus not being necessary to learn linear algebra itself. Do not copy enrollment conditions as hard knowledge dependencies.
+3.2) Use stable IDs for shared concepts and place course-specific requirements on the course or membership. A vector linear combination may link to circuit equation systems, but explain the actual linear model and applicability.
+3.3) A course may have several learning routes. A route changes teaching order, not automatically hides confirmed content. A large graph's nodes and edges do not prescribe one lesson order.
+3.4) Check unreasonable cycles and vague dependencies. Hard prerequisite A→B and B→A calls for decomposition or association instead. Ordinary bidirectional references are not errors.
+
+## 4. Comprehensive within bounds
+
+4.1) Preserve the scope source and version and track “framework,” “needs detail,” and “needs verification” by module. Store each independent formula and its conditions, but equivalent transformations may live in one node.
+4.2) Check completeness against a scope list and read the original syllabus or course requirements when needed. Without an actual source, call the result a general draft rather than a guaranteed exam scope.
+4.3) It is valid to build a reliable framework and refine it in batches, but do not call the first batch a complete course. Do not promise ongoing background map building without scheduling capability.
+4.4) Existing knowledge nodes may briefly note example choice, common confusions, boundaries, and directions for independent assessment. Leave empty when there is nothing useful; do not mass-generate vague slogans.
+
+## 5. What to borrow from courses
+
+MIT 18.06SC combines units, explanations, worked examples, and practice into learning sessions. Borrow the organization, not all prerequisites or question counts. https://ocw.mit.edu/courses/18-06sc-linear-algebra-fall-2011/pages/syllabus/
+CS50 Lecture 0 connects one search problem to everyday action, pseudocode, and algorithm selection. Borrow its concrete-to-abstract continuity, not entertainment as evidence of learning. https://cs50.harvard.edu/x/2025/notes/0/
+CMU emphasizes aligning goals, assessment, and teaching. Borrow the design method; a curriculum graph alone is not proof that a learner mastered it. https://www.cmu.edu/teaching/designteach/design/learningobjectives.html

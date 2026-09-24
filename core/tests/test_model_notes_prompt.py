@@ -102,14 +102,14 @@ def test_http_client_injects_notes_without_mutating_or_duplicating_request() -> 
     assert original_system.content == "base instructions"
     assert prepared.messages[0] is not original_system
     assert prepared.messages[0].metadata == {"cache": "stable"}
-    assert prepared.messages[0].content == "base instructions\n当前模型备注：第一行\n第二行"
-    assert str(prepared_again.messages[0].content).count("当前模型备注：") == 1
+    assert prepared.messages[0].content == "base instructions\nCurrent model notes: 第一行\n第二行"
+    assert str(prepared_again.messages[0].content).count("Current model notes: ") == 1
     assert prepared.metadata == {"trace_id": "trace-1"}
     assert "notes" not in prepared.metadata
 
     payload = client._assemble_request(prepared, stream=False)["payload"]
     assert "notes" not in payload
-    assert payload["messages"][0]["content"].endswith("当前模型备注：第一行\n第二行")
+    assert payload["messages"][0]["content"].endswith("Current model notes: 第一行\n第二行")
 
 
 def test_http_client_omits_empty_notes_without_adding_system_message_or_blank_line() -> None:
@@ -128,7 +128,7 @@ def test_http_client_inserts_notes_as_first_system_message_when_missing() -> Non
     )
 
     assert [(message.role, message.content) for message in prepared.messages] == [
-        ("system", "当前模型备注：direct request note"),
+        ("system", "Current model notes: direct request note"),
         ("user", "hello"),
     ]
     assert prepared.messages[1] is original_user
@@ -167,8 +167,8 @@ def test_routing_client_uses_notes_for_each_actual_model_without_parent_leakage(
     )
 
     assert inherited.model == "model-a"
-    assert "当前模型备注：只使用模型 A 的约束" in str(inherited.messages[0].content)
+    assert "Current model notes: 只使用模型 A 的约束" in str(inherited.messages[0].content)
     assert "模型 B" not in str(inherited.messages[0].content)
     assert overridden.model == "model-b"
-    assert "当前模型备注：只使用模型 B 的约束" in str(overridden.messages[0].content)
+    assert "Current model notes: 只使用模型 B 的约束" in str(overridden.messages[0].content)
     assert "模型 A" not in str(overridden.messages[0].content)

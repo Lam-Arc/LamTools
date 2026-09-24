@@ -1,46 +1,46 @@
 ---
 name: take-exam
-description: 在 Study 中按学习目标创建整份测试、接收文字或图片答卷、统一批改并基于证据更新知识状态。也用于作业批改、错题复测和成绩复核；不在每次讲解后自动考试，不把受帮助作答或看不清的答案当独立能力证据。
-compatibility: 面向 Study 的 Agent Skills 宿主；只使用实际注册且获授权的工具。图谱、考试、笔记或媒体能力缺失时按正文降级，不虚构接口。
+description: Create a complete test for learning goals in Study, accept written or image submissions, grade the whole submission, and update knowledge state from evidence. Also use for homework grading, retesting errors, and grade review. Do not automatically test after every explanation or treat helped or illegible answers as evidence of independent ability.
+compatibility: For the Study Agent Skills host. Use only tools that are actually registered and authorized. If graph, exam, note, or media capabilities are unavailable, follow the fallback guidance below; do not invent interfaces.
 metadata:
   version: "3.0.0"
   study-stage: "active"
 ---
 
-# 考试
+# Take an exam
 
-一句话摘要：考查用户能否独立解释、选择和运用所学，而不是只会复现刚看过的答案；成绩和掌握结论都必须与可核查证据对应。
+In one sentence: Assess whether the user can independently explain, choose, and apply what they learned, rather than merely reproduce a recently seen answer. Grades and mastery conclusions must correspond to checkable evidence.
 
-## 1. 先设计考查，再生成题目
-1.1）用户请求或已约定考试时启用。以指定范围为先，否则取最近已完成教学单元；读取相关目标、必要历史与帮助记录，不扩大到全科。
-1.2）先建立轻量蓝图：目标节点 → 要观察的能力 → 题型/评分依据。区分复述、方法选择、条件判断、计算、解释、迁移；题目数量不等于覆盖程度。
-1.3）未指定时可用 3—6 题作为小卷起点，按目标和时间调整；不是科学最优值。范围太大须说明抽样覆盖，不用一张短卷给整科定级。
-1.4）新手以已教典型任务和少量合理变式为主；熟练者可增加方法选择和迁移。变式改变表面条件但保留已教原理，不能偷偷考新知识。诊断未学知识须预先说明。
-1.5）用户上传原作业要求批改就沿用原题；题面缺失先补齐，不另出无关试卷。详细蓝图见 [测评设计](references/assessment.md)。
+## 1. Design the assessment before writing questions
+1.1) Use this skill when the user requests a test or one was agreed. Prioritize a specified scope; otherwise use the most recently completed teaching unit. Read relevant goals, necessary history, and help records without expanding to the entire subject.
+1.2) Build a brief blueprint: target node → observable ability → question type and grading grounds. Distinguish recall, method selection, condition judgment, calculation, explanation, and transfer. Question count is not the same as coverage.
+1.3) If no count is specified, a small test of 3–6 questions can be a starting point; adjust for goals and time. This is not a scientifically optimal number. Explain sampling limits for a broad scope; do not use one short test to grade an entire subject.
+1.4) For beginners, emphasize taught representative tasks and a few reasonable variations. For experienced learners, add method selection and transfer. Variations may change surface conditions while preserving taught principles; do not quietly assess new knowledge. Announce any diagnostic assessment of untaught knowledge beforehand.
+1.5) When the user submits existing homework for grading, use the original questions. Obtain missing problem statements first; do not create an unrelated test. For a detailed blueprint, read [Assessment design](references/assessment.md).
 
-## 2. 出卷并检查
-2.1）使用实际 exam 工具一次保存考试 ID、题号、节点、题面、每题分值、参考解和事先评分标准。参考解是供当前 Agent 在会话变长或压缩后恢复判卷依据的持久记录，不是必须隔离执行的密钥；正常出卷不再额外调用一个模型。面向用户展示整份题面时不要主动附上参考解。
-2.2）选择题检查唯一/多选约定、选项相互关系和无意提示；问答题允许等价表达与正确异解。避免只重复同一算式换数字，难度不靠晦涩语言或冷门陷阱制造。
-2.3）发布前独立解题并核对条件、单位、结果、图示和可判性；需要时用授权计算验证，随机数值检查不代替证明。不能确认的题不发布或标明需人工核验。
-2.4）稳定原创练习不默认搜索。用户要求真实真题、特定年份/最新题型、现实数据或不确定规则时查一手来源；区分真实原题与原创仿题，不伪造年份、出处或版权授权。来源与配图见 [资料](references/resources.md)。
-2.5）整份题一次呈现，非英语课以常用语言为主，必要专业英语不增加额外语言考查。图不得暗示答案；跨题不能无意泄漏另一题的独立考点。
+## 2. Create and check the exam
+2.1) Use the actual exam tool to save the exam ID, question numbers, nodes, question text, point values, reference solutions, and predetermined grading criteria in one operation. The reference solutions are durable grounds that the current Agent can recover after a long or compacted conversation, not secrets requiring separate execution. Do not call another model just to create a normal exam. When showing the complete test to the user, do not proactively include the reference solutions.
+2.2) For multiple-choice questions, check whether one or several choices are allowed, how choices relate, and whether they unintentionally reveal answers. Accept equivalent wording and valid alternative solutions for free-response questions. Avoid repeating a single calculation with new numbers; do not create difficulty with obscure wording or rare traps.
+2.3) Solve independently before publishing, checking conditions, units, results, diagrams, and whether answers can be graded. Use authorized calculation when needed; random numerical checks do not replace a proof. Do not publish an unverified question unless it is clearly marked as requiring manual verification.
+2.4) Do not search by default for stable original practice questions. Check primary sources for requested authentic past papers, specific years or latest formats, real-world data, or uncertain rules. Distinguish authentic questions from original imitations. Do not fabricate years, sources, or copyright permission. For sources and images, read [Resources](references/resources.md).
+2.5) Present the whole test at once. Except for English classes, use the user's usual language as primary; necessary English terminology must not add an unintended language assessment. A diagram must not reveal the answer, and one question must not inadvertently leak another question's independent target.
 
-## 3. 收卷与帮助
-3.1）分批答案按考试 ID、题号保存；一张图片不自动交卷。用户明确提交、点击交卷或直接要求“批改这份作业”后才统一处理本次提交。
-3.2）图像不清、题号对应不明、符号歧义列为待确认，不猜测后判错；已清晰部分可先评。明确提交后真正留空按未作答处理，与读不清区分。
-3.3）作答中请求答疑转 answer，记录实际帮助的题目/步骤与程度；求助不是失败。已公开答案或关键帮助的部分不能视为独立能力证据，其他未受助部分单独判断。
-3.4）没有图像理解、隐私授权或合规附件通道时说明缺口，收必要文字或清晰题面；不能假装识别成功。
+## 3. Collect answers and record help
+3.1) Save partial answers by exam ID and question number. A single image does not automatically submit the exam. Grade the current submission as a whole only after the user explicitly submits, clicks Submit, or directly asks to grade this homework.
+3.2) Mark an unclear image, uncertain question mapping, or ambiguous symbol as pending clarification; do not guess and then mark it wrong. Clear portions may be graded first. After explicit submission, a truly blank answer is unanswered, distinct from illegible work.
+3.3) Route requests for help during an exam to answer. Record the questions or steps actually helped and the degree of help. Asking for help is not failure. An answer or key hint already revealed cannot support an independent-ability conclusion for that portion; judge untouched portions separately.
+3.4) If image understanding, privacy authorization, or a compliant attachment path is absent, explain the gap and request the necessary text or a clear problem image. Do not pretend to have recognized it.
 
-## 4. 批改要诊断，也要可修复
-4.1）当前 Agent 按已定参考解、分值和评分点统一判卷；选择题也不由程序做原始字符串严格比较。允许等价表达、有效异解和部分得分，结果相同未必推理正确，表述不同未必错。若上下文中已没有可靠的原始依据，再按考试 ID 读取已保存参考答案，不必每次重复读取。
-4.2）逐题区分概念、条件、选法、操作和偶发计算错误；一道题关联多节点时只归因到实际可见步骤，不把整卷分数套给每个节点。
-4.3）反馈聚焦“哪一步、为什么、怎样改”，先呈现简明结果与关键问题，完整解析按需展开。不要用一次成绩评价智力、勤奋或整个学科能力。
-4.4）题目有歧义、参考答案错误或评分条件不公时，更正/作废相关项并重算，不能让出题错误降低用户状态。无法判断先保持未决。
-4.5）每题保存得分、满分、关键步骤得分和反馈；无法可靠判断时标记待确认，不因格式差异让整卷失败。当用户质疑评分时允许正确异解，复核记录版本与理由。详细规范见 [批改](references/grading.md)。
+## 4. Grade diagnostically and allow corrections
+4.1) The current Agent grades the whole submission against the established reference solution, point values, and criteria. Do not grade even multiple-choice questions by strict raw string comparison. Allow equivalent expressions, valid alternate solutions, and partial credit. A correct result may have unsound reasoning, and different wording may still be correct. Read saved reference answers by exam ID only if reliable original grounds are no longer in context; do not reread them every time.
+4.2) Distinguish concept, condition, method choice, execution, and incidental calculation errors for each question. If a question relates to several nodes, attribute evidence only to visible steps, not the whole exam score to every node.
+4.3) Focus feedback on which step, why it matters, and how to fix it. Present a concise result and key issues first; expand complete solutions on request. Do not use one grade to assess intelligence, effort, or ability across an entire subject.
+4.4) If a question is ambiguous, the reference answer is wrong, or grading conditions are unfair, correct or void the affected item and recalculate. An exam author's error must not lower the user's state. Leave unresolved work pending.
+4.5) Save each question's earned points, possible points, key-step points, and feedback. Mark uncertain work for clarification rather than failing the entire test for formatting differences. When the user disputes grading, consider valid alternate solutions and record the review version and reason. For detailed rules, read [Grading](references/grading.md).
 
-## 5. 回写有边界
-5.1）先保存有效批改，再通过 sign 提交对应考试、题目、评分版本与理由；复用幂等机制，失败重试不重复加分扣分。只更新证据充分的节点，未考到、未决或受助后无独立证据的部分保持原状。
-5.2）通过表示达到事先的基础要求；低表示基础达标但不稳定，中表示典型任务独立稳定，高需要多次且不同情境中的可靠独立证据。这是产品起始规则，不是经验证的标准量表。
-5.3）不因一次短卷满分直接变高，不因一次疏忽抹掉所有历史；结合原始证据和近期变化，不凭模型自信百分比打分。
-5.4）复核修正原证据而不是新增一次独立考试。旧成绩变更通知相关笔记/记忆失效检查，不直接篡改用户笔记。
-5.5）用户要求再测时用同目标的新题；延迟复习可按约定建议，不擅自创建提醒或后台任务。考试结束后用 answer 讲错题、teach 补基础，不再次强制一题一答。
+## 5. Bound mastery updates
+5.1) Save valid grading first, then use sign to submit the corresponding exam, questions, grading version, and reasons. Reuse idempotency so retries do not add or subtract points twice. Update only nodes supported by sufficient evidence; leave untested, unresolved, or helped portions without independent evidence unchanged.
+5.2) Passing means meeting predetermined basic requirements. Low means the basics are met but unstable; medium requires reliable independent work on representative tasks; high requires repeated, reliable, independent evidence across different contexts. These are initial product rules, not a validated psychometric scale.
+5.3) Do not jump to high mastery from one perfect short test or erase all history for one slip. Consider original evidence and recent changes; do not grade from a model confidence percentage.
+5.4) A review corrects the original evidence; it is not a new independent exam. A changed historical grade should trigger validity checks for related notes or memory, not direct edits to the user's notes.
+5.5) On request, retest the same goals with new questions. Suggest delayed review if agreed, but do not create reminders or background jobs on your own. After the exam, use answer for missed questions or teach for missing basics; do not force another question-by-question round.

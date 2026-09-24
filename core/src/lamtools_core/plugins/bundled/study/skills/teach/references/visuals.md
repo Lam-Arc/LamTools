@@ -1,40 +1,45 @@
-# 配图：先确定图要解决的困难
+# Illustrations: decide which difficulty an image should resolve
 
-读取时机：考虑图、动画、交互例子或外部参考图片时。配图不受学科、对象或图片种类限制；以是否明显帮助理解为准，不为展示能力而加图。
+Read when considering a diagram, animation, interactive example, or external reference image. Subject, object, and image type are unrestricted. Add an image when it clearly improves understanding, not to display capability.
 
-## 1. 选表示
-| 要表达的关系 | 优先表示 | 必须检查 |
-|---|---|---|
-| 函数变化、近似、频率 | 可核验曲线/频谱 | 公式、范围、采样、坐标、单位；幅度约定 |
-| 数据结构与遍历 | 小树/小图和状态序列 | 节点、边方向、遍历顺序、重复访问 |
-| 通信协议与时序 | 时序图/消息序列 | 参与者、消息方向、先后和成功/异常条件 |
-| 电路和物理 | 规范简图加量的方向 | 连接拓扑、参考地、极性、单位、初始条件 |
-| 空间对象与结构变换 | 对照示意或可控变换 | 对应点/边、视角、比例是否示意 |
-| 真实仪器、器件外观 | 可追溯实物照片 | 型号、版本、拍摄对象、来源与使用许可 |
-| 一步代数、文字定义 | 通常文字/公式就够 | 别增加无关插图 |
+## 1. Choose a representation
 
-## 2. 做图前的最小设计
-2.1）用一句话确定图回答什么：如“割线怎样随间隔缩小接近x=2处的斜率”，而不是“配一张导数图”。
-2.2）主图只承担一个主要问题；保持与正文相同的变量和例子，标出被讨论的那一段/状态。必要次图用于对比，不自动输出完整画廊。
-2.3）实际使用宿主支持且能在当前消息中渲染的绘图、图表、矢量图或图像能力。Study 正文支持经过安全过滤的 fenced `svg` 技术示意；输出前确认它是完整 SVG 且标注与正文一致。不能把 SVG 源码块、“另存为文件后打开”或未渲染的代码称为配图。精确技术示意优先可检查的定义或代码；艺术性生成只用于确有帮助且不需精确符号的场景。各宿主工具调用规则优先。
-2.4）讲义引用图片先判断是否真能证明当前点。网页搜到不等于有授权；不能把不相关实物图片标成指定器件。
-2.5）任何需要外部参考图的主题都使用 `web_search(search_type="image")` 找候选；首轮结果明显跑题或为空时改写查询，加入明确学科、对象、英文术语或可信站点，总计不超过三轮。图片搜索端点不可用时，用普通网页搜索找可信来源页，读取页面返回的图片候选后继续核验。随后打开来源页核对对象、版本和上下文，并抓取图片 URL 确认返回图片 MIME。只用 Markdown `![替代文字](https://...)` 嵌入 HTTPS 图片，图片后紧邻给出来源页；优先官方、公共领域或许可清楚的来源，不因搜索引擎收录就宣称可自由转载。
+| Relationship | Preferred representation | Check |
+| --- | --- | --- |
+| Function change, approximation, frequency | Verifiable curve or spectrum | Formula, range, sampling, axes, units, amplitude convention |
+| Data structure and traversal | Small tree/graph and state sequence | Nodes, edge direction, traversal order, repeated visits |
+| Communication protocol and timing | Sequence diagram | Participants, message direction, order, success and exception conditions |
+| Circuit and physics | Standard schematic with quantity directions | Topology, reference ground, polarity, units, initial conditions |
+| Spatial object and structural transformation | Comparison or controlled transformation | Corresponding points/edges, viewpoint, whether scale is illustrative |
+| Real instrument or component appearance | Traceable photograph | Model, version, photographed object, source, reuse license |
+| One algebra step or written definition | Usually text or a formula | Avoid irrelevant illustrations |
 
-## 3. 输出前检查
-3.1）读实际生成结果，不只看“工具成功”。公式、正负方向、坐标零点、单位、节点标签与正文一致；装饰性透视不能改变理解。
-3.2）计算示意与物理真实分开。例如RC曲线基于理想串联RC、阶跃源、给定初值，不是实物测量数据。
-3.3）图题说明对象，图旁一两句指导观察；给文字替代说明。颜色可以辅助，但信息也通过标签、线型或形状表达。
-3.4）数学图不是证明：图示提示猜想或关系，成立条件仍需文字/推导支持。
+## 2. Minimal design before drawing
 
-## 4. 动画、交互与失败
-4.1）时间演化或连续参数变化确实是难点且支持暂停/重播时再用动画；静态对照已经清楚就不增加动画。
-4.2）手机、弱性能、减少动态效果设置下提供静态版本。复杂可视化不重构整个Study界面，不做3D知识网络。
-4.3）结构、状态或时序不能渲染时可给状态表或明确的图形描述；描述不能冒称图片已经生成。用户需要真实/参考图片而搜索、来源核验、图片响应核验或渲染失败时说明具体缺口，不用 ASCII 图冒充配图。
-4.4）代码演示执行须授权；外部脚本/页面不可信，不开启无关权限。
+2.1) State in one sentence what the image answers, such as “how the secant approaches the slope at x=2 as the interval shrinks,” rather than “add a derivative picture.”
+2.2) Give the main figure one primary question. Keep variables and examples consistent with the text and label the discussed segment or state. Add a second comparison figure only when needed, not an automatic gallery.
+2.3) Use drawing, chart, vector, or image capabilities that the host supports and renders in the current message. Study safely renders filtered fenced `svg` technical diagrams; check that the SVG is complete and labels agree with the text. An SVG source block, “save and open this file,” or unrendered code is not an inserted illustration. Prefer checkable definitions or code for precise technical diagrams. Use artistic generation only when useful and exact symbols are unnecessary. Host tool rules take precedence.
+2.4) Check whether an image in course material actually supports the present point. A search result is not reuse permission; do not label an unrelated product photo as the specified component.
+2.5) For any topic needing an external reference image, use `web_search(search_type="image")` to find candidates. If the first results are clearly irrelevant or empty, revise the query with explicit discipline, object, English term, or trusted site, for no more than three rounds total. If image search is unavailable, find a trusted source page through ordinary web search and verify its image candidates. Open the source page to check subject, version, and context, and fetch the image URL to confirm an image MIME response. Embed only the actual HTTPS image with Markdown image syntax and alt text; cite the source page immediately after it. Prefer official, public-domain, or clearly licensed material. Search indexing is not proof of free reuse.
 
-## 5. 可直接检查的原创例子
-函数y=x²在x=2处：曲线点(2,4)，切线y=4x−4；h≠0时割线斜率4+h，h→0时趋于4。切线只在局部近似曲线，不能画成全局相等；h=0不能直接代入原差商。
-同一示意可以先用静态“较大h/较小h”对照，再在支持交互时调h；不要因无法动画而拒绝讲清极限。
+## 3. Check before sending
 
-## 6. 案例出处与限制
-3Blue1Brown 的导数文本课用具体变化、图形与数学表达串联，值得借鉴的是同一对象的表示对应，而不是照抄动画或将所有课都视觉化。https://www.3blue1brown.com/lessons/derivatives/
+3.1) Inspect the actual generated result, not merely a success receipt. Formula, sign direction, origin, units, node labels, and text must agree. Decorative perspective must not distort meaning.
+3.2) Separate a calculated illustration from physical measurement. For example, an RC curve based on an ideal series circuit, step source, and specified initial value is not measured hardware data.
+3.3) Give the figure a descriptive caption, one or two nearby sentences guiding observation, and a text alternative. Color may help but labels, line styles, or shapes must also carry meaning.
+3.4) A mathematical picture suggests a conjecture or relationship but does not prove it; conditions still require text or derivation.
+
+## 4. Animation, interaction, and failure
+
+4.1) Animate only if time evolution or continuous parameter change is the real difficulty and pause/replay controls exist. Skip animation when a static comparison is already clear.
+4.2) Provide a static version for phones, weak hardware, or reduced-motion settings. A complex visualization must not rebuild the entire Study interface or create a 3D knowledge graph.
+4.3) If a structure, state, or sequence cannot be rendered, use a state table or precise graphic description without claiming an image exists. If the user needs a real or reference image and search, source verification, image-response verification, or rendering fails, name the gap; ASCII art cannot impersonate an illustration.
+4.4) Code demonstrations require authorized execution. External scripts and pages are untrusted and do not grant unrelated permissions.
+
+## 5. Original checkable example
+
+For y=x² at x=2, the curve point is (2,4), the tangent is y=4x−4, and the secant slope for h≠0 is 4+h, approaching 4 as h→0. The tangent approximates the curve locally, not globally. Do not substitute h=0 into the original difference quotient. A static comparison of larger and smaller h can precede an interactive h slider; lack of animation is no reason to leave the limit unexplained.
+
+## 6. Example source and limits
+
+3Blue1Brown's derivatives lesson links concrete change, graphics, and mathematics. The useful lesson is correspondence among representations of one object, not copying animations or visualizing every class. https://www.3blue1brown.com/lessons/derivatives/

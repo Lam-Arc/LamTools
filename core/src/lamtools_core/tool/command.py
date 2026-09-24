@@ -77,6 +77,7 @@ def run_subprocess_blocking(
     *,
     cwd: Path,
     timeout: int,
+    env: dict[str, str] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> CommandExecution:
     """Run a command without depending on the active asyncio loop's subprocess support."""
@@ -87,6 +88,7 @@ def run_subprocess_blocking(
         process = subprocess.Popen(
             argv,
             cwd=str(cwd),
+            env=env,
             shell=isinstance(argv, str),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -164,6 +166,7 @@ def run_subprocess_streaming_blocking(
     cwd: Path,
     timeout: int,
     progress: Callable[[str, str], None],
+    env: dict[str, str] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> CommandExecution:
     started_at = time.monotonic()
@@ -202,6 +205,7 @@ def run_subprocess_streaming_blocking(
         process = subprocess.Popen(
             argv,
             cwd=str(cwd),
+            env=env,
             shell=isinstance(argv, str),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -289,11 +293,12 @@ async def run_subprocess(
     cwd: Path,
     timeout: int,
     progress_callback: Callable[[str, str], Awaitable[None]] | None = None,
+    env: dict[str, str] | None = None,
 ) -> CommandExecution:
     cancel_event = threading.Event()
     if progress_callback is None:
         future = asyncio.create_task(
-            asyncio.to_thread(run_subprocess_blocking, argv, cwd=cwd, timeout=timeout, cancel_event=cancel_event)
+            asyncio.to_thread(run_subprocess_blocking, argv, cwd=cwd, timeout=timeout, env=env, cancel_event=cancel_event)
         )
         try:
             return await asyncio.shield(future)
@@ -319,6 +324,7 @@ async def run_subprocess(
             cwd=cwd,
             timeout=timeout,
             progress=_progress,
+            env=env,
             cancel_event=cancel_event,
         )
     )
@@ -410,12 +416,17 @@ def validate_command_paths(
     *,
     allow_outside: bool = False,
 ) -> None:
-    for i, arg in enumerate(args):
+    for i, raw_arg in enumerate(args):
         if i == 0:
             continue
 
+        # Windows-oriented tokenization deliberately preserves quote marks.
+        # Remove balanced shell quoting before resolving paths so e.g.
+        # `cat '../outside'` cannot pass validation as a literal filename.
+        arg = _strip_matching_quotes(raw_arg)
+
         if "=" in arg:
-            value = arg.split("=", 1)[1]
+            value = _strip_matching_quotes(arg.split("=", 1)[1])
             if not value:
                 continue
         elif arg.startswith("-") or (arg.startswith("/") and len(arg) <= 4 and arg[1:].isalpha()):
@@ -423,8 +434,22 @@ def validate_command_paths(
         else:
             value = arg
 
+        has_path_syntax = (
+            value in {".", ".."}
+            or value.startswith(("./", ".\\", "../", "..\\"))
+            or "/" in value
+            or "\\" in value
+            or re.match(r"^[A-Za-z]:[\\/]", value) is not None
+        )
+        if has_path_syntax and any(char in value for char in "'\""):
+            raise ValueError(
+                f"Path argument '{raw_arg}' (position {i}) uses mixed or unmatched quoting "
+                "that cannot be validated safely"
+            )
+
         if (
-            value.startswith("/")
+            value in {".", ".."}
+            or value.startswith("/")
             or value.startswith("~")
             or re.match(r"^[A-Za-z]:[\\/]", value)
             or "/" in value
@@ -439,13 +464,19 @@ def validate_command_paths(
             # path pass the bounds check (audit 06 S1).
             if value.startswith("~") or any(ch in value for ch in "$`"):
                 raise ValueError(
-                    f"Path argument '{arg}' (position {i}) uses shell expansion "
+                    f"Path argument '{raw_arg}' (position {i}) uses shell expansion "
                     "that cannot be validated against the workspace"
                 )
             resolved = (work_root / value).resolve()
             allowed_roots = (work_root.resolve(), *(root.resolve() for root in resource_roots))
             if not any(is_within_path(resolved, root) for root in allowed_roots):
-                raise ValueError(f"Path argument '{arg}' (position {i}) escapes work_root")
+                raise ValueError(f"Path argument '{raw_arg}' (position {i}) escapes work_root")
+
+
+def _strip_matching_quotes(value: str) -> str:
+    while len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    return value
 
 
 def detect_test_command(work_root: Path) -> str:

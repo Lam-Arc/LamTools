@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import functools
 import os
 import re
 import shlex
@@ -16,6 +17,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from lamtools_core.config.settings_store import get_setting
 
 from lamtools_core.tool.command import (
     CommandExecution as _CommandExecution,
@@ -62,6 +65,7 @@ def _run_background_subprocess_blocking(
     *,
     cwd: Path,
     command: str,
+    env: dict[str, str] | None = None,
     http_probe: _BackgroundHttpProbe | None = None,
     process_registry: Any | None = None,
     session_id: str = "",
@@ -84,6 +88,7 @@ def _run_background_subprocess_blocking(
         process = subprocess.Popen(
             argv,
             cwd=str(cwd),
+            env=env,
             shell=isinstance(argv, str),
             stdout=stdout_handle,
             stderr=stderr_handle,
@@ -234,6 +239,7 @@ async def _run_background_subprocess(
     *,
     cwd: Path,
     command: str,
+    env: dict[str, str] | None = None,
     http_probe: _BackgroundHttpProbe | None = None,
     process_registry: Any | None = None,
     session_id: str = "",
@@ -246,6 +252,7 @@ async def _run_background_subprocess(
             argv,
             cwd=cwd,
             command=command,
+            env=env,
             http_probe=http_probe,
             process_registry=process_registry,
             session_id=session_id,
@@ -558,11 +565,51 @@ class CommandShell:
     kind: str
 
     def argv(self, command: str) -> list[str]:
+        if self.kind == "wsl":
+            # The caller supplies --cd separately through argv_for; keep argv()
+            # useful for callers that do not need cwd forwarding.
+            return [self.executable, "--exec", "bash", "-lc", command]
         if self.kind == "git-bash":
             return [self.executable, "--noprofile", "--norc", "-lc", command]
         if self.kind == "pwsh":
             return _powershell_argv(command, executable=self.executable)
         return _powershell_argv(command, executable=self.executable)
+
+    def argv_for(self, command: str, *, cwd: str | Path | None = None) -> list[str]:
+        if self.kind == "wsl":
+            argv = [self.executable]
+            if cwd is not None:
+                argv.extend(("--cd", str(cwd)))
+            argv.extend(("--exec", "bash", "-lc", command))
+            return argv
+        return self.argv(command)
+
+    def prepare_environment(
+        self,
+        env: dict[str, str] | None = None,
+        *,
+        forward_names: tuple[str, ...] | list[str] | set[str] = (),
+    ) -> dict[str, str] | None:
+        if self.kind != "wsl":
+            return env
+        # Ordinary run_command has no explicit per-call environment; leave the
+        # inherited process environment and WSLENV untouched in that case.
+        if env is None and not forward_names:
+            return None
+        values = dict(os.environ if env is None else env)
+        # Add only workflow env entries and INPUT_* bindings. Exclude Windows
+        # PATH from these generated WSLENV entries so it cannot replace Linux
+        # PATH; the ordinary run_command path leaves inherited WSLENV untouched.
+        names = [
+            str(name) for name in forward_names
+            if str(name).casefold() not in {"path", "wslenv"} and str(name) in values
+        ]
+        existing = [part for part in values.get("WSLENV", "").split(":") if part]
+        entries = [part for part in existing if part.split("/", 1)[0].casefold() != "path"]
+        seen = {part.split("/", 1)[0].casefold() for part in entries}
+        entries.extend(name for name in names if name.casefold() not in seen)
+        values["WSLENV"] = ":".join(entries)
+        return values
 
 
 def _git_bash_path() -> Path | None:
@@ -628,35 +675,102 @@ def _python_http_server_root(command: str, work_root: Path) -> Path:
     return candidate
 
 
+def _wsl_path() -> str | None:
+    return shutil.which("wsl.exe") or shutil.which("wsl")
+
+
+@functools.lru_cache(maxsize=1)
+def _wsl_available() -> bool:
+    executable = _wsl_path()
+    if not executable:
+        return False
+    try:
+        completed = subprocess.run(
+            [executable, "--exec", "bash", "-lc", "exit 0"],
+            capture_output=True,
+            timeout=4,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    # Listing a registered distro is insufficient: its first launch can still
+    # fail or stall. A bounded no-op confirms the default distro can execute.
+    return completed.returncode == 0
+
+
+def _legacy_shell_preference() -> str | None:
+    raw = os.environ.get("LAMTOOLS_COMMAND_SHELL", "").strip().lower()
+    aliases = {
+        "git-bash": "git-bash", "gitbash": "git-bash", "bash": "git-bash",
+        "pwsh": "pwsh", "powershell7": "pwsh", "powershell-7": "pwsh",
+        "powershell": "powershell", "windows-powershell": "powershell",
+        "powershell5": "powershell", "powershell-5.1": "powershell",
+    }
+    return aliases.get(raw)
+
+
+def _stored_shell_preference() -> str | None:
+    try:
+        value = get_setting("core.commandShell")
+    except Exception:
+        return None
+    preference = value.get("preference") if isinstance(value, dict) else None
+    return preference if preference in {"auto", "wsl", "git-bash", "powershell"} else None
+
+
 def resolve_command_shell() -> CommandShell:
     if sys.platform != "win32":
         return CommandShell(name="Direct POSIX execution", executable="", kind="direct")
-
-    preferred = os.environ.get("LAMTOOLS_COMMAND_SHELL", "git-bash").strip().lower()
-    if preferred in {"git-bash", "gitbash", "bash", ""}:
-        git_bash = _git_bash_path()
-        if git_bash is not None:
-            return CommandShell(name="Git Bash", executable=str(git_bash), kind="git-bash")
-    elif preferred in {"pwsh", "powershell7", "powershell-7"}:
+    preference = _stored_shell_preference()
+    # Preserve the old environment override only while there is no persisted
+    # preference; a saved selection always wins.
+    if preference is None:
+        preference = _legacy_shell_preference() or "auto"
+    if preference == "pwsh":
         pwsh = shutil.which("pwsh.exe") or shutil.which("pwsh")
         if pwsh:
             return CommandShell(name="PowerShell 7", executable=pwsh, kind="pwsh")
-    elif preferred in {"powershell", "windows-powershell", "powershell5", "powershell-5.1"}:
+        preference = "auto"
+    if preference == "wsl" and _wsl_available():
+        return CommandShell(name="WSL", executable=_wsl_path() or "wsl.exe", kind="wsl")
+    if preference == "git-bash":
+        git_bash = _git_bash_path()
+        if git_bash is not None:
+            return CommandShell(name="Git Bash", executable=str(git_bash), kind="git-bash")
+    if preference == "powershell":
         return CommandShell(name="Windows PowerShell 5.1", executable="powershell.exe", kind="powershell")
 
-    pwsh = shutil.which("pwsh.exe") or shutil.which("pwsh")
-    if pwsh:
-        return CommandShell(name="PowerShell 7", executable=pwsh, kind="pwsh")
+    # Automatic selection, and manual selections whose shell is unavailable,
+    # use the product's Windows priority order.
+    if _wsl_available():
+        return CommandShell(name="WSL", executable=_wsl_path() or "wsl.exe", kind="wsl")
+    git_bash = _git_bash_path()
+    if git_bash is not None:
+        return CommandShell(name="Git Bash", executable=str(git_bash), kind="git-bash")
     return CommandShell(name="Windows PowerShell 5.1", executable="powershell.exe", kind="powershell")
+
+
+def warm_command_shell() -> CommandShell:
+    """Resolve the command shell once at start-up and return it.
+
+    Windows automatic selection probes WSL with a bounded no-op, which costs
+    seconds when the default distro is cold.  The result is cached per process,
+    but the first ``resolve_command_shell`` caller still pays that probe — and
+    on the model-request path that caller is the user's first turn.  Warming the
+    probe while the process starts keeps the shell decision single-sourced and
+    stable while leaving the first request free of it.
+    """
+    return resolve_command_shell()
 
 
 def command_shell_prompt() -> str:
     shell = resolve_command_shell()
     platform = "Windows" if sys.platform == "win32" else "POSIX"
     return (
-        f"[命令 Shell]\n"
-        f"当前平台：{platform}。\n"
-        f"当前 shell：{shell.name}（{shell.executable}）。"
+        f"[Command Shell]\n"
+        f"Current platform: {platform}.\n"
+        f"Current shell: {shell.name} ({shell.executable})."
     )
 
 

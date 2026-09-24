@@ -19,6 +19,7 @@ there is no database, no migration, no fallback parsing.
 from __future__ import annotations
 
 import asyncio
+import copy
 import re
 import sys
 from collections.abc import Iterable
@@ -63,9 +64,33 @@ class ProviderConfig:
     api_key: str = ""
     is_default: bool = False
     adapter_profile_id: str = ""  # reference to a shared adapter profile
+    request_body: dict[str, Any] = field(default_factory=dict)
+    adapter_profile_override: dict[str, Any] = field(default_factory=dict)
+    reasoning: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)  # free-form extension
     notes: str = ""               # free-form notes/remarks (optional, user-facing)
     source_path: str = ""         # which file this came from (for debugging/UI)
+
+    def to_extra(self) -> dict[str, Any]:
+        """Materialise canonical provider adapter customization.
+
+        Legacy values inside ``extra`` remain readable, while first-class
+        fields always win and are what new writes serialize.
+        """
+        extra = copy.deepcopy(self.extra)
+        if self.adapter_profile_id:
+            extra["adapter_profile_id"] = self.adapter_profile_id
+        override = copy.deepcopy(self.adapter_profile_override)
+        if self.request_body:
+            request = override.get("request") if isinstance(override.get("request"), dict) else {}
+            body = request.get("body") if isinstance(request.get("body"), dict) else {}
+            request["body"] = _deep_merge(body, self.request_body)
+            override["request"] = request
+        if override:
+            extra["adapter_profile_override"] = override
+        if self.reasoning:
+            extra["reasoning"] = copy.deepcopy(self.reasoning)
+        return extra
 
     def masked(self) -> "ProviderConfig":
         """Return a copy with the api key masked for display/listing."""
@@ -165,6 +190,15 @@ class ProviderStore:
         extra = data.get("extra")
         if not isinstance(extra, dict):
             extra = {}
+        request_body = data.get("request_body", extra.get("request_body"))
+        if not isinstance(request_body, dict):
+            request_body = {}
+        profile_override = data.get("adapter_profile_override", extra.get("adapter_profile_override"))
+        if not isinstance(profile_override, dict):
+            profile_override = {}
+        reasoning = data.get("reasoning", extra.get("reasoning"))
+        if not isinstance(reasoning, dict):
+            reasoning = {}
         return ProviderConfig(
             id=provider_id,
             name=str(data.get("name") or provider_id).strip(),
@@ -172,7 +206,10 @@ class ProviderStore:
             base_url=str(data.get("base_url") or "").strip(),
             api_key=str(data.get("api_key") or "").strip(),
             is_default=bool(data.get("is_default") or False),
-            adapter_profile_id=str(data.get("adapter_profile_id") or "").strip(),
+            adapter_profile_id=str(data.get("adapter_profile_id") or extra.get("adapter_profile_id") or "").strip(),
+            request_body=copy.deepcopy(request_body),
+            adapter_profile_override=copy.deepcopy(profile_override),
+            reasoning=copy.deepcopy(reasoning),
             extra=extra,
             notes=str(data.get("notes") or "").strip(),
             source_path=str(path),
@@ -265,9 +302,30 @@ class ProviderStore:
         }
         if provider.adapter_profile_id:
             data["adapter_profile_id"] = provider.adapter_profile_id
-        if provider.extra:
-            data["extra"] = dict(provider.extra)
+        if provider.request_body:
+            data["request_body"] = copy.deepcopy(provider.request_body)
+        if provider.adapter_profile_override:
+            data["adapter_profile_override"] = copy.deepcopy(provider.adapter_profile_override)
+        if provider.reasoning:
+            data["reasoning"] = copy.deepcopy(provider.reasoning)
+        clean_extra = {
+            key: copy.deepcopy(value)
+            for key, value in provider.extra.items()
+            if key not in {"adapter_profile_id", "request_body", "adapter_profile_override", "reasoning"}
+        }
+        if clean_extra:
+            data["extra"] = clean_extra
         return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
 
 
 __all__ = [

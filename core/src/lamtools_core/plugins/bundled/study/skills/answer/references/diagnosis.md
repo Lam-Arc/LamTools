@@ -1,30 +1,36 @@
-# 答疑：诊断局部障碍，而不是全面盘问
+# Answer a question: diagnose a local obstacle without interrogation
 
-读取时机：错误链条较长、用户多次追问、同样答案来自不同原因，或考试中需要分级提示。
+Read when an error chain is long, a user asks repeatedly, the same answer might have several causes, or an exam calls for graduated hints.
 
-## 1. 最小诊断
-1.1）先看用户给出的题目、选中句子与实际步骤。分别考虑读题/符号、概念、条件、方法选择、操作、计算；这是假设集合，不是要求用户填量表。
-1.2）已有内容能定位就直接解释。缺少能改变结果的关键信息才问一个问题，如“这条线是对地电压还是两端电压？”不要问已显示的题号。
-1.3）不把程序报错、试题平台验收失败都归为学生概念问题；检查平台约定、输入版本、代码与用户实际结果。
+## 1. Minimal diagnosis
 
-## 2. 给到用户所需的帮助程度
-2.1）只要方向：提示关键对象或条件，不泄最终结果。
-2.2）卡在一步：给这一桥梁与理由。
-2.3）要求完整解法：完整给出必要过程，不继续反问。
-2.4）要求检查：保留正确部分，指出第一处重要错误及后续影响；有多种正确方法不能强改成自己的写法。
-这是供选择的帮助层级，不是必须走完四轮的脚本。
+1.1) Look first at the question, selected sentence, and actual steps supplied. Consider reading or notation, concept, condition, method selection, operation, and calculation errors as hypotheses, not a questionnaire the user must complete.
+1.2) Explain directly when existing content identifies the issue. Ask one question only for a missing fact that would change the answer, such as whether a plotted voltage is relative to ground or across two terminals. Do not ask for a question number already shown.
+1.3) A program error or test-platform rejection is not automatically a conceptual failure. Check platform conventions, input versions, code, and the user's actual result.
 
-## 3. 原创诊断例子
-例一：y=(x²+1)³，学生写3(x²+1)²。外层求导是对的；少的是内层对x的导数2x。应解释中间变量，不笼统批评“求导不会”。
-例二：学生说sqrt(x²)=x。仅在x≥0成立；x=−2时左侧2、右侧−2，因此实数范围应为|x|。给反例后说清根号表示非负平方根，不只报正确公式。
-例三：学生解出正确结果但除以可能为0的表达式。要补分类或检验，不能因最终恰好对而认可整个推导。
-例四：代码示例能运行但不符合题目要求。区分语言本身、题目约束、实际测试环境，必要时读取测试说明；不要从“改了缩进后通过”推断缩进就是所有HTML错误的原因。
+## 2. Give the level of help requested
 
-## 4. 考试中的帮助
-4.1）题目/节点/步骤关联明确时记录概念提示、关键步骤或完整答案曝光；仅澄清措辞不一概等同关键帮助。
-4.2）只读取获准公开的当前题解析，不把整个考试的密钥返回主会话。若服务无法可靠记录帮助，不得默认为独立。
-4.3）帮助本身不是失败，也不证明通过。用户要求重测时用新的同目标题，而不是背过原题后升级。
+2.1) For direction only, hint at the key object or condition without revealing the final result.
+2.2) For a blocked step, supply that connection and its reason.
+2.3) For a full solution, give the necessary complete process rather than continuing to question the learner.
+2.4) For a check, preserve correct work, identify the first consequential error and its effects, and do not force a valid alternate method into your own form.
 
-## 5. 判断是否已经答到点上
-是否回答原问？是否有必要解释而非仅贴代码/公式？是否少了关键条件？是否反复重讲无关章节？是否把自己的错误归咎用户？
-确认答案足够后就停止，不自动加完整考试、学习路线或大量资源链接。
+These are selectable depths, not a mandatory four-round script.
+
+## 3. Original diagnostic examples
+
+1. For y=(x²+1)³, a learner writes 3(x²+1)². Differentiating the outer layer is right; the missing factor is the derivative of the inner expression with respect to x, 2x. Explain the intermediate variable rather than broadly saying the learner cannot differentiate.
+2. A learner says sqrt(x²)=x. That holds only for x≥0. At x=−2, the left side is 2 and the right side is −2, so over the reals the expression is |x|. Explain that square root denotes the nonnegative root after giving the counterexample.
+3. A learner reaches the right result but divides by an expression that might be zero. Add cases or verification. A coincidentally right result does not validate the whole derivation.
+4. Sample code runs but fails the assignment requirements. Separate language behavior, task constraints, and the actual test environment; read test instructions if needed. Passing after changing indentation does not show indentation caused every HTML error.
+
+## 4. Help during an exam
+
+4.1) When question, node, and step are clear, record concept hints, key steps, or complete-answer exposure. Clarifying wording alone is not always substantive help.
+4.2) Read only the authorized explanation for the current question. Do not return the whole exam's secret answers to the main conversation. If help cannot be recorded reliably, do not assume the later answer was independent.
+4.3) Help does not mean failure or passing. On a retest request, use a fresh question for the same goal instead of upgrading mastery after memorizing the old one.
+
+## 5. Check whether the question was answered
+
+Did the response answer the original question? Is necessary reasoning present rather than only pasted code or a formula? Were essential conditions omitted? Did it repeat unrelated chapters or blame the user for the Agent's own error?
+Stop when the answer is sufficient. Do not automatically append a full exam, learning plan, or a large list of links.

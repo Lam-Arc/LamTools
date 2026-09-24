@@ -10,7 +10,15 @@ from .model_store import (
     MODELS_SUBDIR,
     ModelConfig,
     ModelStore,
+    make_model_record_id,
     resolve_model_capability,
+)
+from .model_group_store import (
+    MODEL_GROUPS_FILENAME,
+    ModelGroup,
+    ModelGroupMembership,
+    ModelGroupRevisionConflict,
+    ModelGroupStore,
 )
 from .operations import build_config_operation_catalog
 from .provider_store import (
@@ -45,12 +53,18 @@ __all__ = [
     "IMAGEGEN_NAMESPACE",
     "MASKED_API_KEY",
     "MODEL_FILENAME_SUFFIX",
+    "MODEL_GROUPS_FILENAME",
     "MODEL_RETRY_FILENAME",
     "MODELS_SUBDIR",
     "PROVIDERS_SUBDIR",
     "SETTINGS_FILENAME",
     "ModelConfig",
+    "ModelGroup",
+    "ModelGroupMembership",
+    "ModelGroupRevisionConflict",
+    "ModelGroupStore",
     "ModelStore",
+    "make_model_record_id",
     "ProviderConfig",
     "ProviderStore",
     "build_config_operation_catalog",

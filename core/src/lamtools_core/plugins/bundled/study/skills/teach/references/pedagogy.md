@@ -1,47 +1,54 @@
-# 教法：从障碍选择方法
+# Pedagogy: choose an approach from the obstacle
 
-读取时机：完整新课、多个知识点组合、学生连续不理解或需要切换讲法；简单局部问题直接回答。
+Read for a full new lesson, multiple combined knowledge points, repeated confusion, or a change of teaching approach. Answer a simple local question directly.
 
-## 1. 判断的是当前状态，不是固定人设
-1.1）可利用当前问题、既有步骤、最近独立作答和明确偏好。把“推测卡在变量替换”当作待验证解释，不把它变成“用户抽象思维差”。
-1.2）不给人固定贴视觉型、听觉型等学习类型标签，也不靠年龄/专业推测能力。用户喜欢图是呈现偏好，不代表所有主题必须画图。
-1.3）同一个人不同主题可从不同起点开始；当前要求比长期偏好更具体时，以当前要求为准。
+## 1. Assess current state, not a fixed persona
 
-## 2. 选一条最合适的主线
-| 当前现象 | 教学处理 | 避免 |
-|---|---|---|
-| 刚接触，连符号都陌生 | 具体任务、符号对照、完整小例题，再给规则 | 一次引入大量术语；先猜再教 |
-| 能照着算，但不知含义 | 用原来的例子对照图像、量的变化和公式 | 换一堆无关比喻 |
-| 知道几个公式，不会选 | 比较两道相似但条件不同的题，说明选择依据 | 只换数字重复同一模板 |
-| 每次卡在中间一行 | 补这一行使用的规则或代数连接 | 从章节开头重复 |
-| 表面正确，理由不成立 | 解释为什么这个结果碰巧对，给最小反例 | 仅检查答案相等 |
-| 熟悉典型题，想深入 | 边界、推导、证明或合理迁移 | 强制重新讲定义与故事 |
-| 用户明确要发现式学习 | 给必要材料和可完成问题，按求助程度增援 | 把这种方法强加给所有人 |
+1.1) Use the current question, work shown, recent independent responses, and explicit preferences. Treat “perhaps stuck on variable substitution” as a hypothesis to check, not “the user has poor abstract reasoning.”
+1.2) Do not assign fixed visual, auditory, or other learning-type labels or infer ability from age or profession. A preference for pictures does not mean every subject needs one.
+1.3) One person may start at different levels in different topics. A specific current request outranks a general long-term preference.
 
-这张表是行动指南，不是经验证的学习风格分类器。
+## 2. Choose one suitable main path
 
-## 3. 例题要暴露“为什么这样做”
-3.1）完整例题至少给目标、关键条件、选法依据、决定性步骤和检查。计算过程可以压缩重复算术，但不能省略新方法第一次出现的关键一步。
-3.2）先在简单但不失真的情境中练一个核心关系，再说明一般表达。不为了简单删去分母非零、独立性或理想模型条件。
-3.3）进阶的不是多做几遍：用户愿意练时，从完整示范到少一步提示，再到独立变式；速度依当前表现调整，不按固定轮数撤提示。
-3.4）相关对照可只改一个关键条件，如“复合函数求导”与“两个函数相乘”，帮助判断而不只是机械记忆。
-3.5）把解法迁移到新情境时说清保持不变的结构和改变的条件。跨课例子不是展示学识的旁支。
+| Current signal | Teaching response | Avoid |
+| --- | --- | --- |
+| New to the topic and symbols | Concrete task, symbol mapping, complete small example, then rule | Too many terms at once; guessing before teaching |
+| Can follow a calculation but not explain it | Connect the same example to a diagram, changing quantities, and formula | Many unrelated analogies |
+| Knows formulas but cannot select one | Compare similar questions with different conditions and explain the choice | Changing only numbers in one template |
+| Stuck on one intermediate line | Supply the rule or algebraic link used there | Repeating the whole chapter |
+| Result is right but reasoning invalid | Show why it happens to work and give a minimal counterexample | Checking answer equality only |
+| Comfortable with typical questions, wants depth | Boundary, derivation, proof, or reasonable transfer | Forcing basic definitions and stories again |
+| Explicitly requests discovery learning | Provide necessary material and a solvable question, increasing help as requested | Imposing discovery on everyone |
 
-## 4. 学科差异
-4.1）数学：同时照顾对象、符号、条件与推理；直观图不代替严格证明，数值例子不代替全称命题。
-4.2）编程：使用最小可运行情境，解释输入、状态变化和输出；若实际执行则报告环境与结果，未执行不声称测试通过。代码正确、测试期望和平台约束分开核对。
-4.3）电子工程：先说明电路拓扑、参考方向、单位、初始条件和理想假设；实际器件参数需要数据表。示意值不能直接当可上电设计，避免把漂亮图当接线图。
-4.4）语言：词义与使用情境连起来，说明语域和常见搭配；考试规则与自然表达差异要说清。不要把统计上常见写成唯一正确。
-4.5）史学/人文：区分事件事实、材料观点与解释；有争议的结论给来源和其他有据观点，不用漂亮故事掩盖证据不足。
+This is an action guide, not a validated classifier of learning styles.
 
-## 5. 反馈与节奏
-5.1）反馈针对可观察内容：“你把外层求导做对了，遗漏在内层变化率”；避免“太聪明了”“你就是没基础”等空泛判断。
-5.2）学生说不懂时，先缩小障碍或换一种表示，必要时问一个定位问题。不要用更多同义句淹没问题，也不要要求自证认真学习。
-5.3）主动学习可以是自己预测、解释一步、检查反例或稍后独立做题，不等于每条消息都以问题结尾。用户要完整解释就完成解释。
-5.4）本次教到约定目标即可收束。留下可恢复学习位置，教学不改通过状态。
+## 3. A worked example should show why
 
-## 6. 采用这些规则的依据与限制
-以下仅给设计出处，普通教学无需把本节读给用户。
-- van Gog、Kester、Paas（2011），新手电路排错实验支持在该复杂任务中使用示范而非一上来纯解题；并未证明所有场景都必须先示范，也未证明“示范+做题”必然胜过示范本身。https://doi.org/10.1016/j.cedpsych.2010.10.004
-- CMU Eberly 的课程设计建议将学习目标、练习与考查对应；用于把“讲完”改成“能做什么”。https://www.cmu.edu/teaching/designteach/design/learningobjectives.html
-- Deslauriers 等（2019）的大学物理研究提示感到学会与实际表现可能分离；不能据此忽视体验或强迫不停作答。https://pubmed.ncbi.nlm.nih.gov/31484770/
+3.1) Include the goal, key conditions, reason for the method, decisive steps, and a check. Repetitive arithmetic may be shortened, but do not omit the first key step of a new method.
+3.2) Practice a core relationship in a simple but truthful setting before generalizing. Simplicity does not justify dropping a nonzero denominator, independence condition, or ideal-model assumption.
+3.3) Progress is not merely more repetition. If the user wants practice, move from a full demonstration to one missing hint and then an independent variation. Adjust the pace to actual performance, not a fixed number of rounds.
+3.4) A useful contrast may change just one decisive condition, such as differentiating a composite function versus a product.
+3.5) For transfer to a new context, identify what structure remains and which conditions change. A cross-course example is not a digression to display expertise.
+
+## 4. Discipline-specific needs
+
+4.1) Mathematics: connect objects, symbols, conditions, and reasoning. An intuitive picture does not replace proof, and a numerical example does not prove a universal statement.
+4.2) Programming: use a minimal runnable context and explain input, state changes, and output. If code is executed, report environment and result; otherwise do not claim tests passed. Distinguish code correctness, test expectations, and platform constraints.
+4.3) Electronics: state circuit topology, reference direction, units, initial conditions, and ideal assumptions first. Real components require data sheets. Example values are not automatically a safe powered design; an attractive figure is not a wiring diagram.
+4.4) Language: connect meaning to usage, register, and common collocations. Clarify differences between exam rules and natural expression. “Common” does not mean “the only correct form.”
+4.5) History and humanities: separate event facts, source viewpoints, and interpretation. Support disputed conclusions with sources and other evidence-based views rather than a compelling but unsupported story.
+
+## 5. Feedback and pace
+
+5.1) Address observable work: “Your outer derivative is correct; the missing part is the inner rate of change.” Avoid empty praise or labels such as “you have no foundation.”
+5.2) When the learner is lost, isolate the obstacle or change representation; ask one locating question if needed. Do not flood them with synonyms or demand proof of effort.
+5.3) Active learning can mean predicting, explaining a step, checking a counterexample, or solving later independently. It does not mean ending every message with a question. Complete a full explanation when requested.
+5.4) Stop when the agreed goal for this lesson is met. Preserve a resumable learning position; teaching does not change pass status.
+
+## 6. Grounds and limits
+
+These sources explain design choices; do not recite them in ordinary lessons.
+
+- van Gog, Kester, and Paas (2011) found support for demonstrations over immediate pure problem solving in a novice circuit-troubleshooting experiment. It does not prove that every setting requires demonstration first or that “demonstration plus practice” always beats demonstration alone. https://doi.org/10.1016/j.cedpsych.2010.10.004
+- CMU Eberly recommends aligning learning goals, practice, and assessment, shifting attention from “content delivered” to “what the learner can do.” https://www.cmu.edu/teaching/designteach/design/learningobjectives.html
+- Deslauriers et al. (2019) found that feeling of learning and actual performance can diverge in university physics. This does not justify ignoring user experience or forcing constant responses. https://pubmed.ncbi.nlm.nih.gov/31484770/

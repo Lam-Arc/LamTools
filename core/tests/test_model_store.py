@@ -154,6 +154,26 @@ def test_model_store_write_roundtrips(tmp_path, isolated_config_root):
     assert loaded.thinking_supported is True
 
 
+def test_record_id_is_separate_from_upstream_model_id_with_slash(isolated_config_root):
+    store = ModelStore()
+    model = ModelConfig(
+        id="commandcode-qwen-qwen3.8-max",
+        model_id="Qwen/Qwen3.8-Max",
+        display_name="Qwen 3.8 Max",
+        provider="Command Code",
+        provider_id="commandcode",
+    )
+
+    path = store.write(model, scope="global", work_root=None)
+    loaded = ModelStore().get_sync("commandcode-qwen-qwen3.8-max")
+
+    assert path.name == "commandcode-qwen-qwen3.8-max.jsonc"
+    assert loaded is not None
+    assert loaded.id == "commandcode-qwen-qwen3.8-max"
+    assert loaded.model_id == "Qwen/Qwen3.8-Max"
+    assert json.loads(path.read_text(encoding="utf-8"))["model_id"] == "Qwen/Qwen3.8-Max"
+
+
 # --- RPC operations (config.models.upsert/delete) -------------------------
 
 
@@ -184,6 +204,11 @@ async def test_rpc_models_upsert_then_list_roundtrip(tmp_path, isolated_config_r
         "temperature": 0.3,
         "thinking": {"supported": True, "budget": 5000},
         "capability": "multimodal",
+        "extra": {
+            "adapter_profile_id": "qwen",
+            "request_body": {"enable_thinking": True},
+            "reasoning": {"mode": "effort"},
+        },
         "is_default": True,
     })
     assert upsert.status == "ok"
@@ -196,6 +221,52 @@ async def test_rpc_models_upsert_then_list_roundtrip(tmp_path, isolated_config_r
     assert model.display_name == "New Model"
     assert model.resolved_capability == "multimodal"
     assert model.is_default is True
+    assert model.adapter_profile_id == "qwen"
+    assert model.request_body == {"enable_thinking": True}
+    assert model.reasoning == {"mode": "effort"}
+
+    from lamtools_core.cli import list_llm_model_configs
+
+    listed = next(item for item in list_llm_model_configs(work_root=str(work)) if item["id"] == model.id)
+    assert listed["extra"]["adapter_profile_id"] == "qwen"
+    assert listed["extra"]["adapter_profile_override"]["request"]["body"] == {
+        "enable_thinking": True
+    }
+
+
+@pytest.mark.asyncio
+async def test_legacy_rpc_keeps_upstream_model_id_separate_and_cleans_groups(
+    tmp_path, isolated_config_root
+):
+    from lamtools_core.config.model_group_store import ModelGroupStore
+
+    catalog = _model_catalog(tmp_path / "work")
+    created = await catalog.execute("config.models.upsert", {
+        "scope": "global",
+        "provider_id": "command-code",
+        "model_id": "Qwen/Qwen3.8-Max",
+        "display_name": "Qwen 3.8 Max",
+    })
+    assert created.status == "ok"
+    record_id = created.payload["model_record_id"]
+    assert "/" not in record_id
+    assert created.payload["model_id"] == "Qwen/Qwen3.8-Max"
+
+    model = ModelStore().get_sync(record_id)
+    assert model is not None
+    assert model.id == record_id
+    assert model.model_id == "Qwen/Qwen3.8-Max"
+
+    groups = ModelGroupStore()
+    group_id = groups.create("Free", model_ids=[record_id])["group_id"]
+    deleted = await catalog.execute("config.models.delete", {
+        "scope": "global",
+        "model_record_id": record_id,
+    })
+    assert deleted.status == "ok"
+    snapshot = groups.snapshot()
+    group = next(item for item in snapshot["groups"] if item["id"] == group_id)
+    assert group["model_ids"] == []
 
 
 @pytest.mark.asyncio

@@ -594,6 +594,12 @@ def runtime_fact_to_run_item_events(
         if (not content and part_type != "compaction") or content == "runtime.part":
             return []
         item_payload: dict[str, Any] = {"type": item_type}
+        if item_type == "agentMessage":
+            # Keep response-level semantics through live events and snapshots.
+            # Presence matters: older producers omit these markers entirely.
+            for key in ("final_response", "has_tool_calls"):
+                if key in payload:
+                    item_payload[key] = payload[key]
         if isinstance(delta, str) and delta and status not in TERMINAL_STATUSES:
             item_payload["delta"] = delta
         else:

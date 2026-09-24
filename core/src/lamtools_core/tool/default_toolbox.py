@@ -1325,6 +1325,9 @@ class CoreToolbox:
     ) -> list[dict[str, Any]]:
         self._refresh_runtime_permissions()
         effective_exclude = set(exclude_tools or set())
+        if self.mcp_caller is None:
+            # No MCP tools were loaded, so neither gateway can be used.
+            effective_exclude.update({"mcp_activate", "mcp_tool"})
         # Apply loadtools active_mode filtering
         if active_mode and self.load_tools:
             allowed = self._mode_tool_set(active_mode)

@@ -113,6 +113,72 @@ def test_model_reasoning_override_refines_selected_profile():
     assert resolved["reasoning"]["off_supported"] is False
 
 
+def test_explicit_profile_precedence_is_model_then_provider_then_matcher():
+    profiles = {
+        "model-explicit": {"id": "model-explicit", "protocol": "openai-chat-completions"},
+        "provider-explicit": {"id": "provider-explicit", "protocol": "openai-chat-completions"},
+        "matched": {
+            "id": "matched",
+            "protocol": "openai-chat-completions",
+            "match_model": ["qwen"],
+        },
+        "openai-compatible": {"id": "openai-compatible", "protocol": "openai-chat-completions"},
+    }
+    provider = resolve_adapter_profile_from_profiles(
+        profiles,
+        api_type="openai",
+        base_url="https://gateway.example/v1",
+        model_id="qwen-max",
+        provider_extra={"adapter_profile_id": "provider-explicit"},
+    )
+    model = resolve_adapter_profile_from_profiles(
+        profiles,
+        api_type="openai",
+        base_url="https://gateway.example/v1",
+        model_id="qwen-max",
+        provider_extra={"adapter_profile_id": "provider-explicit"},
+        model_extra={"adapter_profile_id": "model-explicit"},
+    )
+    matched = resolve_adapter_profile_from_profiles(
+        profiles,
+        api_type="openai",
+        base_url="https://gateway.example/v1",
+        model_id="qwen-max",
+    )
+
+    assert provider["id"] == "provider-explicit"
+    assert model["id"] == "model-explicit"
+    assert matched["id"] == "matched"
+
+
+def test_provider_override_merges_before_model_override():
+    profiles = {
+        "base": {
+            "id": "base",
+            "protocol": "openai-chat-completions",
+            "request": {"body": {"shared": "profile", "profile_only": True}},
+        }
+    }
+    resolved = resolve_adapter_profile_from_profiles(
+        profiles,
+        api_type="openai",
+        base_url="https://gateway.example/v1",
+        provider_extra={
+            "adapter_profile_id": "base",
+            "adapter_profile_override": {"request": {"body": {"shared": "provider", "provider_only": True}}},
+        },
+        model_extra={
+            "adapter_profile_override": {"request": {"body": {"shared": "model", "model_only": True}}},
+        },
+    )
+    payload = build_profiled_openai_request(_text_request("upstream/model"), resolved)["payload"]
+
+    assert payload["shared"] == "model"
+    assert payload["profile_only"] is True
+    assert payload["provider_only"] is True
+    assert payload["model_only"] is True
+
+
 def test_stream_chunk_uses_profile_paths():
     profile = {
         "stream_response": {
@@ -1186,6 +1252,47 @@ async def test_core_http_llm_client_stream_accumulates_state_and_emits_done_afte
     assert events[-1].provider_state["message_fields"] == {"reasoning_content": "think"}
     assert events[-1].provider_state["model"] == "deepseek-chat"
     assert events[3].usage is not None and events[3].usage.total_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_core_http_llm_client_accepts_command_code_reasoning_field(monkeypatch):
+    sse = "\n".join([
+        'data: {"choices":[{"delta":{"content":"","reasoning":"think"}}]}',
+        'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+        "",
+    ])
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=sse.encode("utf-8"),
+        )
+
+    real_async_client = cli_module.httpx.AsyncClient
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(cli_module.httpx, "AsyncClient", client_factory)
+    events = [event async for event in _http_client_for_test().stream(_text_request("deepseek-chat"))]
+
+    assert [event.kind for event in events] == ["thinking_delta", "content_delta", "done"]
+    assert events[0].content == "think"
+    assert events[-1].provider_state["message_fields"] == {"reasoning": "think"}
+
+
+def test_normalize_openai_response_accepts_command_code_reasoning_field():
+    normalized = normalize_response_with_profile(
+        {"choices": [{"message": {"content": "answer", "reasoning": "think"}}]},
+        {"id": "openai-chat"},
+        model="command-code-model",
+    )
+
+    assert normalized["thinking"] == "think"
+    assert normalized["provider_state"]["message_fields"] == {"reasoning": "think"}
 
 
 @pytest.mark.asyncio

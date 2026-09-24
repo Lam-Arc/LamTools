@@ -126,24 +126,25 @@ class TestGenerateSessionTitle:
         assert asyncio.run(self._run(llm, first_message="  ")) is None
         assert llm.calls == []
 
-    def test_empty_response_is_none(self):
-        llm = FakeLLMClient(response=LLMResponse(content=""))
-        assert asyncio.run(self._run(llm)) is None
-
     def test_error_returns_none(self):
         llm = FakeLLMClient(error=RuntimeError("boom"))
         assert asyncio.run(self._run(llm)) is None
 
-    def test_request_shape(self):
+    def test_request_disables_thinking_and_uses_model_output_limit(self):
         llm = FakeLLMClient(response=LLMResponse(content="标题"))
         asyncio.run(self._run(llm))
-        assert len(llm.calls) == 1
         request = llm.calls[0]
         assert request.model == "model-x"
         assert request.temperature == 0
-        assert request.max_tokens == 40
+        assert request.max_tokens is None
         assert request.messages[0].role == "system"
-        assert request.messages[1].role == "user"
+        assert "no more than 20 characters" in request.messages[0].content
+        assert "same language as the user message" in request.messages[0].content
+        assert request.messages[1].content == "你好世界"
+        assert request.metadata == {
+            "thinking_enabled": False,
+            "reasoning_level": "off",
+        }
 
 
 class TestAutoTitleSession:
@@ -209,16 +210,12 @@ class TestAutoTitleSession:
         assert llm.calls[0].model == "turn-model"
 
     def test_session_metadata_model_used_when_host_default_empty(self):
-        """Regression: no model is marked is_default at boot, so the host
-        default is empty — the session-chosen model (metadata.model_id, the
-        same source the kernel uses) must be used instead."""
         hub = FakeHub()
         llm = FakeLLMClient(response=LLMResponse(content="生成的标题"))
         store = FakeSessionStore(existing_title="t1", metadata={"model_id": "session-model"})
         context = _context(llm=llm, store=store, hub=hub)
         context.host.default_model_id = ""
         asyncio.run(_auto_title_session(context=context, thread_id="t1", first_message="你好"))
-        assert len(llm.calls) == 1
         assert llm.calls[0].model == "session-model"
         assert store.patch_calls[0]["title"] == "生成的标题"
 

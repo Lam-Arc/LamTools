@@ -1,6 +1,6 @@
 ---
 name: office-slides
-description: 从资料、报告或提纲创建可编辑 PPTX，或读取、修改已有演示文稿。用于项目汇报、方案介绍、工作总结、培训材料和指定页面修改；需要结合文档、数据图表和结构图时由本 Skill 组织成果。
+description: Create editable PPTX from materials, reports or outlines, or edit decks. Use for reports, proposals, summaries and training; coordinate documents, charts and diagrams as needed.
 metadata:
   version: 0.2.0
   language: zh-CN

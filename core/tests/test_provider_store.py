@@ -104,6 +104,68 @@ def test_provider_store_write_round_trip_and_scope(isolated_config_root: Path, t
     assert project_provider.source_path == str(project_path)
 
 
+def test_provider_store_canonical_adapter_customization_roundtrips(isolated_config_root: Path) -> None:
+    store = ProviderStore()
+    provider = ProviderConfig(
+        id="custom-profile",
+        name="Custom Profile",
+        base_url="https://custom.test/v1",
+        adapter_profile_id="openai-chat",
+        request_body={"provider_flag": True},
+        adapter_profile_override={"request": {"unsupported_fields": ["temperature"]}},
+        reasoning={"off_supported": False},
+    )
+
+    path = store.write(provider, scope="global", work_root=None)
+    loaded = ProviderStore().get_sync(provider.id)
+
+    assert loaded is not None
+    assert loaded.request_body == {"provider_flag": True}
+    assert loaded.reasoning == {"off_supported": False}
+    assert loaded.to_extra()["adapter_profile_override"]["request"]["body"] == {"provider_flag": True}
+    raw = path.read_text(encoding="utf-8")
+    assert '"request_body"' in raw
+    assert '"reasoning"' in raw
+
+
+@pytest.mark.asyncio
+async def test_provider_operations_promote_customization_from_ui_extra(isolated_config_root: Path) -> None:
+    from lamtools_core.config.operations import build_config_operation_catalog
+
+    catalog = build_config_operation_catalog()
+    created = await catalog.execute("config.provider.create", {
+        "id": "ui-extra",
+        "name": "UI Extra",
+        "base_url": "https://example.test/v1",
+        "api_key": "secret",
+        "extra": {
+            "adapter_profile_id": "openai-chat",
+            "request_body": {"provider_flag": True},
+            "adapter_profile_override": {"request": {"unsupported_fields": ["temperature"]}},
+            "reasoning": {"off_supported": False},
+        },
+    })
+    assert created.status == "ok", created.payload
+    provider = ProviderStore().get_sync("ui-extra")
+    assert provider is not None
+    assert provider.request_body == {"provider_flag": True}
+    assert provider.reasoning == {"off_supported": False}
+
+    updated = await catalog.execute("config.provider.update", {
+        "provider_id": provider.id,
+        "extra": {
+            "adapter_profile_id": "qwen",
+            "request_body": {"provider_flag": False},
+            "reasoning": {"off_supported": True},
+        },
+    })
+    assert updated.status == "ok", updated.payload
+    provider = ProviderStore().get_sync("ui-extra")
+    assert provider is not None
+    assert provider.adapter_profile_id == "qwen"
+    assert provider.request_body == {"provider_flag": False}
+    assert provider.reasoning == {"off_supported": True}
+
 def test_provider_store_serialization_keeps_masked_key_out_of_listing(isolated_config_root: Path) -> None:
     _write_provider(isolated_config_root, "p1", name="P1", api_key="super-secret-key")
     providers = ProviderStore().list_sync()

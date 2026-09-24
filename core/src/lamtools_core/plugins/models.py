@@ -29,6 +29,9 @@ class PluginUIMode:
     entry: Path
     icon: str = ""
     tools: list[str] = field(default_factory=list)
+    # None means the manifest makes no claim and the host keeps every surface;
+    # an empty list claims the mode supports none of them.
+    capabilities: list[str] | None = None
 
 
 @dataclass(frozen=True)

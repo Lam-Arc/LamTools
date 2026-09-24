@@ -32,7 +32,7 @@ async def test_load_subagent_guide_returns_builtin_when_no_file(tmp_path, isolat
     guide = load_subagent_guide(tmp_path / "work")
 
     assert guide == DEFAULT_SUBAGENT_GUIDE
-    assert "委派" in guide
+    assert "Delegate" in guide
     assert resolve_subagent_guide_path(tmp_path / "work") is None
 
 
@@ -208,11 +208,10 @@ def test_role_assignment_prompt_is_stable_and_empty_configuration_is_omitted(
         work_root=work,
     )
     assert render_role_assignments_prompt(work) == (
-        "## Sub-agent 角色分配\n"
-        "匹配任务类型时，优先使用对应的类型、模型与思考强度范围；未匹配时按实际任务选择。\n"
-        "- 任务类型：Research；类型：consider；建议模型：model-a；建议思考强度：light–high"
+        "## Sub-agent Role Assignments\n"
+        "When a task type matches, prefer its assigned type, model, and reasoning level range; otherwise choose according to the task.\n"
+        "- Task type: Research; type: consider; suggested model: model-a; suggested reasoning level: light–high"
     )
-
 
 def test_delegation_strategy_defaults_inherits_overrides_and_unsets(
     tmp_path, isolated_config_root
@@ -262,11 +261,12 @@ def test_delegation_strategy_validation_and_prompt_copy(tmp_path, isolated_confi
         work_root=work,
     )
     assert render_delegation_strategy_prompt(work) == (
-        "## Sub-agent 委派策略\n"
-        "本策略优先于通用委派指南与角色建议。\n"
-        "当前子代理委派策略：必须先制定计划并由用户确认；确认后立即生成高中心化 "
-        "Checklist，尽可能由多个子代理并行推进，主 Agent 统一负责决策指挥、任务分配、"
-        "依赖协调、冲突调解、结果整合与最终验收。"
+        "## Sub-agent Delegation Strategy\n"
+        "This strategy takes precedence over the general delegation guide and role suggestions.\n"
+        "Current sub-agent delegation strategy: first make a plan and obtain user confirmation. "
+        "After confirmation, immediately create a highly centralized Checklist and use multiple "
+        "sub-agents in parallel wherever possible. The main Agent remains responsible for decisions, "
+        "direction, task assignment, dependency coordination, conflict resolution, integration, and final acceptance."
     )
 
 # --- RPC operations -------------------------------------------------------
@@ -609,12 +609,12 @@ async def test_base_agent_appends_role_assignments_immediately_after_subagent_gu
     system_prompt = str(request.messages[0].content)
     expected = (
         f"{DEFAULT_SUBAGENT_GUIDE}\n\n"
-        "## Sub-agent 委派策略\n"
-        "本策略优先于通用委派指南与角色建议。\n"
-        "当前子代理委派策略：保持当前默认委派策略。\n\n"
-        "## Sub-agent 角色分配\n"
-        "匹配任务类型时，优先使用对应的类型、模型与思考强度范围；未匹配时按实际任务选择。\n"
-        "- 任务类型：Research；类型：consider；建议模型：model-a；建议思考强度：off–max"
+        "## Sub-agent Delegation Strategy\n"
+        "This strategy takes precedence over the general delegation guide and role suggestions.\n"
+        "Current sub-agent delegation strategy: keep the current default delegation strategy.\n\n"
+        "## Sub-agent Role Assignments\n"
+        "When a task type matches, prefer its assigned type, model, and reasoning level range; otherwise choose according to the task.\n"
+        "- Task type: Research; type: consider; suggested model: model-a; suggested reasoning level: off–max"
     )
     assert expected in system_prompt
 
@@ -654,12 +654,12 @@ async def test_forbidden_strategy_keeps_guide_but_has_priority_and_runtime_block
     )
     system_prompt = str(request.messages[0].content)
     guide_index = system_prompt.index("CUSTOM GUIDE: delegate broadly")
-    strategy_index = system_prompt.index("## Sub-agent 委派策略")
-    roles_index = system_prompt.index("## Sub-agent 角色分配")
+    strategy_index = system_prompt.index("## Sub-agent Delegation Strategy")
+    roles_index = system_prompt.index("## Sub-agent Role Assignments")
     assert guide_index < strategy_index < roles_index
-    assert "本策略优先于通用委派指南与角色建议" in system_prompt
-    assert "禁止委派子代理" in system_prompt
-    assert "请用户提供文字描述" in system_prompt
+    assert "takes precedence over the general delegation guide" in system_prompt
+    assert "do not delegate to sub-agents" in system_prompt
+    assert "ask the user for a text description" in system_prompt
 
     visible = {spec.name for spec in kit.toolbox.tool_specs()}
     assert "sub_agent" not in visible
@@ -707,11 +707,11 @@ async def test_base_agent_injects_capability_prompt_for_text_model(tmp_path, iso
     )
 
     system_prompt = str(request.messages[0].content)
-    assert "当前模型能力" in system_prompt
-    assert "文本模型" in system_prompt
-    assert "不支持图片" in system_prompt
+    assert "Current model capability" in system_prompt
+    assert "text only" in system_prompt
+    assert "image, video, and audio input are unsupported" in system_prompt
     assert "sub_agent" in system_prompt
-    assert "多模态模型" in system_prompt
+    assert "multimodal model" in system_prompt
 
 
 @pytest.mark.asyncio
@@ -731,8 +731,8 @@ async def test_base_agent_injects_capability_prompt_for_multimodal_model(tmp_pat
     )
 
     system_prompt = str(request.messages[0].content)
-    assert "当前模型能力" in system_prompt
-    assert "多模态" in system_prompt
+    assert "Current model capability" in system_prompt
+    assert "multimodal" in system_prompt
 
 
 @pytest.mark.asyncio
@@ -752,7 +752,7 @@ async def test_base_agent_omits_capability_line_when_capability_unknown(tmp_path
     )
 
     system_prompt = str(request.messages[0].content)
-    assert "当前模型能力" not in system_prompt
+    assert "Current model capability" not in system_prompt
 
 
 # --- Default multimodal model resolution -----------------------------------
@@ -819,7 +819,7 @@ async def test_text_model_capability_prompt_uses_first_multimodal_model(tmp_path
     )
 
     system_prompt = str(request.messages[0].content)
-    assert '指定 model 为 "alpha-mm"' in system_prompt
+    assert 'set model to "alpha-mm"' in system_prompt
     assert "Kimi-K2.6" not in system_prompt
 
 
@@ -839,6 +839,6 @@ async def test_text_model_capability_prompt_omits_concrete_model_when_none(tmp_p
     )
 
     system_prompt = str(request.messages[0].content)
-    assert "指定 model 为支持图片的模型" in system_prompt
+    assert "set model to a model that supports images" in system_prompt
     assert 'model="' not in system_prompt
     assert "Kimi-K2.6" not in system_prompt

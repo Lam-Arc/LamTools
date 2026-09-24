@@ -262,6 +262,44 @@ def test_legacy_migration_is_idempotent_lossless_and_scoped(tmp_path):
     assert other.notes({'action': 'list'})['total'] == 0
 
 
+def test_legacy_migration_preserves_unindexed_markdown(tmp_path):
+    store = StudyStore(tmp_path / 'study.db')
+    with store.db() as db:
+        db.execute('INSERT INTO study_notes(scope_key,id,title,revision,source_json,deleted_at,path,parent_id,content_hash) '
+                   "VALUES(?,?,?,?,?,NULL,?,?,?)",
+                   (store.scope.key, 'legacy', 'Legacy', 1, '{}', '', '', ''))
+        db.execute('INSERT INTO study_note_blocks VALUES(?,?,?,?,?,?,?,?,?)',
+                   (store.scope.key, 'legacy', 'block', 0, 'user', 'migrated text', 0, 1, '{}'))
+    root = vault_root(store.path, store.scope.key)
+    root.mkdir(parents=True)
+    occupied = root / 'Legacy.md'
+    occupied.write_text('keep this file', encoding='utf-8')
+
+    migrated = store.notes({'action': 'get', 'note_id': 'legacy'})['note']
+
+    assert occupied.read_text(encoding='utf-8') == 'keep this file'
+    assert migrated['path'] != 'Legacy.md'
+    assert migrated['body_md'] == 'migrated text'
+
+
+def test_note_vault_root_symlink_cannot_redirect_writes(tmp_path):
+    store = StudyStore(tmp_path / 'study.db')
+    resource_id = resource(store, 'symlink')
+    root = vault_root(store.path, store.scope.key)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    try:
+        root.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f'directory symlinks unavailable: {exc}')
+
+    with pytest.raises(ValueError, match='INVALID_NOTE_PATH'):
+        store.notes({'action': 'create', 'note_id': 'escape', 'title': 'Escape',
+                     'resource_ids': [resource_id], 'body_md': 'secret'})
+    assert list(outside.iterdir()) == []
+
+
 @pytest.mark.asyncio
 async def test_structured_tool_failure_and_success_only_broadcast(tmp_path):
     events = []

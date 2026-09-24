@@ -1,6 +1,6 @@
 ---
 name: office-research
-description: 围绕明确问题阅读本地资料，使用 websearch/webfetch 补充证据，形成带来源、日期和不确定性说明的研究或对比报告。用于方案比较、产品调查、行业资料整理和项目调研；长任务可结合 subAgent 分工。
+description: Research using local materials plus websearch/webfetch; report sources, dates and uncertainty. Use for options, products, industries or projects; may delegate long tasks.
 metadata:
   version: 0.2.0
   language: zh-CN

@@ -52,23 +52,23 @@ __all__ = [
 # ── prompt ───────────────────────────────────────────────────────
 
 DREAM_PROMPT = """\
-你是一个记忆整理器。你的任务是从一段 Agent 会话中提取**值得跨会话长期保留**的信息。
+You organize long-term memory. Extract only information from this agent conversation that is worth retaining across sessions.
 
-只提取以下类型，且必须满足"未来会话会用得上"的标准：
-- preference（用户偏好/工作习惯）：例如"用户偏好 PowerShell 涉及中文用 UTF-8"
-- fact（项目事实/架构知识）：例如"项目数据库在 data/core.db，共 14 张表"
-- decision（已确定的技术/设计决策）：例如"context_compaction 不覆盖原始历史，只设读取边界"
-- lesson（踩坑教训/已否决方向）：例如"SQLite 写必须走 write_coordinator，否则与 live 写并发锁冲突"
-- todo（明确的后续待办）：例如"给 memory.search 接 FTS5"
+Include only these kinds of information, and only when they will be useful in a future session:
+- preference (user preferences or working habits), for example: "The user prefers UTF-8 when handling Chinese text in PowerShell."
+- fact (project facts or architecture), for example: "The project database is at data/core.db and has 14 tables."
+- decision (confirmed technical or design decisions), for example: "context_compaction does not overwrite raw history; it only sets a read boundary."
+- lesson (pitfalls or rejected approaches), for example: "SQLite writes must use write_coordinator, or they conflict with concurrent live writes."
+- todo (explicit follow-up tasks), for example: "Add FTS5 to memory.search."
 
-**不要提取**：一次性任务细节（如"刚才改了第 42 行"）、临时调试步骤、当前会话独有的上下文。
+Do not extract one-off task details (such as a recent line edit), temporary debugging steps, or context relevant only to this session.
 
-输出严格的 JSON 数组，每个元素：
-{"kind": "preference|fact|decision|lesson|todo", "content": "简洁的一句话，中文", "confidence": 0.0~1.0}
+Output a strict JSON array with each element in this shape:
+{"kind": "preference|fact|decision|lesson|todo", "content": "One concise sentence in Chinese", "confidence": 0.0~1.0}
 
-- confidence：该信息对未来会话的确定性与价值。确定的事实/明确偏好给 0.8+，推测性的给 0.5-0.7。
-- 不要输出任何 JSON 之外的内容（不要 markdown 代码块标记、不要解释）。
-- 如果本会话没有值得长期保留的内容，输出空数组 `[]`。
+- confidence measures certainty and future value. Give confirmed facts and explicit preferences 0.8 or higher; give speculative items 0.5 to 0.7.
+- Output nothing outside the JSON array: no markdown fences or explanation.
+- If there is nothing worth retaining across sessions, output the empty array `[]`.
 """
 
 
@@ -447,8 +447,8 @@ def _format_history_for_dream(
     """
     parts: list[str] = []
     if compaction_summary:
-        parts.append(f"[此前会话摘要]\n{compaction_summary}\n")
-        parts.append("[本次会话]")
+        parts.append(f"[Prior session summary]\n{compaction_summary}\n")
+        parts.append("[Current session]")
 
     total = 0
     for msg in history:
@@ -464,7 +464,7 @@ def _format_history_for_dream(
             # Keep tool call traces but without args detail.
             if msg.tool_calls:
                 names = ", ".join(tc.name for tc in msg.tool_calls)
-                content = f"(调用工具: {names})"
+                content = f"(Called tools: {names})"
             else:
                 continue
 

@@ -1105,9 +1105,13 @@ async def test_core_agent_instructs_parent_to_delegate_complete_deliverable(tmp_
     )
 
     system_prompt = llm.requests[0].messages[0].content
-    assert "委派" in system_prompt
-    assert "将成功的工具结果视为可复用证据" in system_prompt
-    assert "已确认事实、仍存疑点及下一步" in system_prompt
+    # The delegation contract is English now: the guide, the binding strategy
+    # line, and the evidence/summary discipline the parent must follow.
+    assert "## Sub-agent Delegation Guide" in system_prompt
+    assert "the prompt must specify at least the scope of work, task goal, and output format" in system_prompt
+    assert "## Sub-agent Delegation Strategy" in system_prompt
+    assert "Treat successful tool results as reusable evidence." in system_prompt
+    assert "confirmed facts, remaining uncertainties, and the next step" in system_prompt
 
 
 @pytest.mark.asyncio

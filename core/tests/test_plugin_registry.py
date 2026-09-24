@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from lamtools_core.plugins import PluginRegistry, PluginStateStore
+from lamtools_core.plugins import operations
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -206,3 +207,78 @@ def test_registry_rejects_invalid_desktop_entry(tmp_path: Path, entry: str):
 
     assert registry.discover() == []
     assert registry.discover_errors[0]["name"] == "bad-pet"
+
+def _ui_mode_plugin(tmp_path: Path, modes: list[dict]) -> Path:
+    plugin = tmp_path / "plugins" / "study"
+    (plugin / "ui").mkdir(parents=True, exist_ok=True)
+    (plugin / "ui" / "index.ts").write_text("export default {}", encoding="utf-8")
+    write_json(plugin / "plugin.json", {
+        "name": "study",
+        "version": "1.0.0",
+        "description": "Study",
+        "ui": {"modes": modes},
+    })
+    return plugin
+
+
+def test_ui_mode_capabilities_separate_absent_from_empty(tmp_path: Path):
+    """A mode declares host capabilities; absence must stay distinct from empty.
+
+    The shared UI keeps every surface available when a host makes no claim, so
+    a host that cannot serve the Study Note vault declares an empty list
+    instead of being silently treated as capable.
+    """
+    _ui_mode_plugin(tmp_path, [
+        {"id": "study", "title": "Study", "entry": "./ui/index.ts", "capabilities": ["notes"]},
+        {"id": "plain", "title": "Plain", "entry": "./ui/index.ts"},
+    ])
+    modes = {
+        mode.id: mode
+        for mode in PluginRegistry(plugin_roots=[tmp_path / "plugins"]).discover()[0].ui.modes
+    }
+    assert modes["study"].capabilities == ["notes"]
+    assert modes["plain"].capabilities is None
+
+    _ui_mode_plugin(tmp_path, [
+        {"id": "study", "title": "Study", "entry": "./ui/index.ts", "capabilities": []},
+    ])
+    modes = {
+        mode.id: mode
+        for mode in PluginRegistry(plugin_roots=[tmp_path / "plugins"]).discover()[0].ui.modes
+    }
+    assert modes["study"].capabilities == []
+
+
+def test_ui_mode_capabilities_reject_invalid_declarations(tmp_path: Path):
+    """An invalid declaration is refused at discovery instead of half-applied."""
+    for invalid in (["notes", "notes"], [""], "notes", [7]):
+        _ui_mode_plugin(tmp_path, [
+            {"id": "study", "title": "Study", "entry": "./ui/index.ts", "capabilities": invalid},
+        ])
+        assert PluginRegistry(plugin_roots=[tmp_path / "plugins"]).discover() == []
+
+
+def test_bundled_study_mode_declares_the_note_vault_capability():
+    bundled = Path(__file__).resolve().parents[1] / "src" / "lamtools_core" / "plugins" / "bundled"
+    modes = {
+        f"{manifest.name}:{mode.id}": mode
+        for manifest in PluginRegistry(plugin_roots=[bundled]).discover()
+        if manifest.ui is not None
+        for mode in manifest.ui.modes
+    }
+    # The desktop Study mode owns the Note vault, so its workspace stays offered.
+    assert modes["study:study"].capabilities == ["notes"]
+    # Workflow makes no claim, which keeps its surfaces available everywhere.
+    assert modes["workflow:workflow"].capabilities is None
+
+    # The declaration must also survive the plugin.ui.list boundary, because
+    # that payload is what the shared UI gates its surfaces on.
+    payloads = {
+        manifest.name: operations._ui_payload(manifest)
+        for manifest in PluginRegistry(plugin_roots=[bundled]).discover()
+    }
+    study_mode = payloads["study"]["modes"][0]
+    assert study_mode["capabilities"] == ["notes"]
+    # An undeclared mode omits the field entirely, which the UI reads as "make
+    # no claim" rather than "supports nothing".
+    assert "capabilities" not in payloads["workflow"]["modes"][0]

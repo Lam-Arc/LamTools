@@ -1,34 +1,41 @@
-# 测评设计：覆盖能力，而不是凑题数
+# Assessment design: cover abilities, not a target number of questions
 
-读取时机：整卷生成、多个目标共同考查、复测或难度配置。
+Read when generating a whole test, assessing several goals together, retesting, or configuring difficulty.
 
-## 1. 先确定可以推断到哪里
-1.1）每个题目或评分步骤对应目标节点及能力类型：定义复述、条件判断、方法选择、计算、推理、迁移。一个选择题通常不能完整证明推导能力。
-1.2）先设基础要求再出题；收卷后不因作答情况任意改门槛。有争议/错误评分标准可修正，但记录理由与版本。
-1.3）考试范围大的时候明确本次抽样；不能用三道题给一门课程全面定级。
-1.4）不把模板相同的十道算式当十种能力。选若干足以辨别当前目标的问题，题量服从目标与用户时间。
+## 1. Decide what can be inferred
 
-## 2. 原创蓝图示例（不是可直接复用的保密题库）
-学习单元已讲：差商、链式法则、定义域条件和连续/可导区别。
-- 一题解释差商含义与h≠0、h→0的区别。
-- 一题含非平凡内层的复合函数求导，观察是否漏内层导数。
-- 一题判断使用规则的条件，观察方法选择而非复杂算术。
-- 一题评价一个关于连续与可导的断言，并给理由或反例。
-不要在第一题泄露后面题的答案；已经给用户看过的例子不再当作新鲜独立题。
+1.1) Map every question or scored step to a target node and ability type: definition recall, condition judgment, method selection, calculation, reasoning, or transfer. One multiple-choice answer usually cannot establish full derivation ability.
+1.2) Set basic requirements before writing questions; do not change the threshold after seeing responses. Disputed or incorrect criteria may be corrected with a recorded reason and version.
+1.3) Explicitly describe sampling when the exam scope is broad. Three questions cannot comprehensively grade a whole course.
+1.4) Ten calculations sharing one template do not represent ten abilities. Select enough distinct questions to reveal current goals; let goals and user time determine count.
 
-## 3. 新题与评分准备
-3.1）当前 Agent 建立题面、每题分值、参考答案和评分点，并由 exam 持久化。参考答案用于上下文压缩或长间隔后的按需恢复；正常情况下沿用当前会话已有依据，不重复读取或另起隔离模型调用。
-3.2）题面须有足够信息和明确要求；合理难度来自考点，而不是歧义、陌生词或无关阅读负担。
-3.3）单选保证唯一最合适答案；多选明确要求。干扰项可来自真实常见错误，但不能靠选项长度、语法或措辞泄题。
-3.4）问答题评分允许同义表达、等价推导及合理另一方法；计分点绑定关键能力，不绑定某一固定答案句式。
-3.5）新的迁移题需保留已学原理，变化情境不能把未知知识偷偷变成达标门槛；诊断陌生知识需提前说明。
+## 2. Original blueprint example, not a reusable secret question bank
 
-## 4. 练习、考试和记忆
-4.1）完整示范、带提示练习、独立测试是不同证据。即使练习得分，也要保留帮助标签。
-4.2）较晚再次独立回忆/应用可检验保持情况；只在用户请求或既有安排中进行，不擅自设置自动提醒。
-4.3）同卷改分不增加一次独立证据；重新换题才可能提供新的证据，且仍需检查题目重用/答案曝光。
-4.4）阅卷存在不确定性；疑难或重要用途应提供人工复核通道，不把模型自评置信度当可靠校准分数。
+The taught unit covered difference quotients, the chain rule, domain conditions, and the continuity/differentiability distinction.
 
-## 5. 研究依据不等于硬编码门槛
-Roediger 与 Karpicke（2006）的特定材料实验表明延迟回忆中检索练习有优势，支持不只看阅读流畅度；不提供适用于所有课程的统一复习间隔。https://learninglab.psych.purdue.edu/downloads/2006/2006_Roediger_Karpicke_PsychSci.pdf
-Deslauriers 等（2019）提醒同时看主观体验和独立表现；不是忽视用户反感或强迫逐题盘问的依据。https://pubmed.ncbi.nlm.nih.gov/31484770/
+- Ask one question about the meaning of a difference quotient and the difference between h≠0 and h→0.
+- Ask one composite derivative with a nontrivial inner function to see whether its derivative is omitted.
+- Ask one condition for using a rule, observing method selection rather than difficult arithmetic.
+- Ask for an evaluation of a continuity-versus-differentiability claim with a reason or counterexample.
+
+Do not reveal a later answer in an earlier question. An example already shown to the learner is not a fresh independent question.
+
+## 3. New questions and grading preparation
+
+3.1) The current Agent creates the question, point values, reference answer, and criteria, and persists them through exam. A reference answer supports recovery after context compaction or a long gap. Normally use grounds already in the current conversation; do not reread them or start a separate isolated model call unnecessarily.
+3.2) Supply enough information and clear requirements. Valid difficulty comes from the target, not ambiguity, unknown words, or irrelevant reading load.
+3.3) A single-choice item needs one best answer; a multiple-choice item must say so. Distractors may reflect real common errors but must not reveal the answer through length, grammar, or wording.
+3.4) Free-response grading accepts synonyms, equivalent derivations, and reasonable alternate methods. Scoring points attach to abilities, not one exact answer sentence.
+3.5) A transfer question may change context while keeping the taught principle. Do not make unknown knowledge a hidden passing requirement. Announce diagnostic testing of unfamiliar knowledge in advance.
+
+## 4. Practice, exams, and memory
+
+4.1) Full demonstrations, helped practice, and independent tests are different evidence. Retain help labels even if practice earns a score.
+4.2) Later independent recall or application can test retention. Use it only at the user's request or under an existing arrangement; do not create automatic reminders unasked.
+4.3) A regrade of the same submission is not new independent evidence. A new problem can be, after checking for reused questions and answer exposure.
+4.4) Grading can be uncertain. Offer a human review path for difficult or high-stakes uses; model self-reported confidence is not a calibrated grade.
+
+## 5. Research is not a hard-coded threshold
+
+Roediger and Karpicke (2006) found a delayed-recall advantage for retrieval practice on specific materials, supporting more than a feeling of reading fluency. Their study does not prescribe one review interval for every course. https://learninglab.psych.purdue.edu/downloads/2006/2006_Roediger_Karpicke_PsychSci.pdf
+Deslauriers et al. (2019) remind us to consider subjective experience alongside independent performance; their work does not justify ignoring dislike or forcing constant questioning. https://pubmed.ncbi.nlm.nih.gov/31484770/

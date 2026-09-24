@@ -275,6 +275,17 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     assert specs["write_file"].metadata["recovery"]
 
 
+def test_core_toolbox_only_advertises_mcp_gateways_when_caller_is_available(tmp_path):
+    without_mcp = build_core_toolbox(work_root=tmp_path)
+    without_names = {tool["function"]["name"] for tool in without_mcp.model_tools()}
+    assert "mcp_activate" not in without_names
+    assert "mcp_tool" not in without_names
+
+    with_mcp = build_core_toolbox(work_root=tmp_path, mcp_caller=FakeMCPCaller())
+    with_names = {tool["function"]["name"] for tool in with_mcp.model_tools()}
+    assert {"mcp_activate", "mcp_tool"} <= with_names
+
+
 def test_write_checklist_description_covers_optional_planning_contract(tmp_path):
     toolbox = build_core_toolbox(work_root=tmp_path)
 

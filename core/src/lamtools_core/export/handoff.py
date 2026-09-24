@@ -159,12 +159,18 @@ def _sanitize_semantic_text(value: str) -> str:
         lowered = stripped.lower()
         if (
             ("当前项目:" in stripped and "当前会话:" in stripped)
+            or ("Current project:" in stripped and "current session:" in stripped)
+            or stripped.startswith("Current session:")
             or stripped.startswith("Available MCP servers")
             or stripped.startswith("已知成功证据调用 ID")
             or stripped.startswith("证据调用 ID")
+            or stripped.startswith("Known successful evidence call IDs")
             or stripped == "[命令 Shell]"
+            or stripped == "[Command Shell]"
             or stripped.startswith("当前平台：")
+            or stripped.startswith("Current platform:")
             or stripped.startswith("当前 shell：")
+            or stripped.startswith("Current shell:")
             or stripped.startswith("Instructions from:")
         ):
             continue
@@ -185,6 +191,7 @@ def _sanitize_semantic_text(value: str) -> str:
             continue
         # Capability guidance is useful, but a named delegate model is not.
         line = re.sub(r"（指定\s*model\s*为\s*\"[^\"]*\"）", "", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s*\(set\s+model\s+to\s+\"[^\"]*\"\)", "", line, flags=re.IGNORECASE)
         line = re.sub(r",\s*model\s*=\s*\"[^\"]*\"", "", line, flags=re.IGNORECASE)
         # Deferred attachment ids are private DB identifiers.  Keep the
         # sentence's attachment meaning without carrying the id or tool call.

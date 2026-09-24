@@ -1,6 +1,6 @@
 ---
 name: office-spreadsheets
-description: 读取、清洗、合并、去重、统计和制作 Excel/CSV 表格，包括预算、台账、汇总表和数据分析。用户要求处理 XLSX、计算公式、修改工作表或校验报表时使用；独立图表交给 office-charts。
+description: Read, clean, merge, deduplicate, summarize and create Excel/CSV tables for budgets, registers or analysis. Use for XLSX, formulas or edits; standalone charts use office-charts.
 metadata:
   version: 0.2.0
   language: zh-CN

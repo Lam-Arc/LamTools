@@ -1,6 +1,6 @@
 ---
 name: office-pdf
-description: 阅读和提取 PDF 信息，合并、拆分、旋转、重排页面，填写受支持的表单，或把文档导出为正式 PDF。用户要求处理 PDF 文件、引用页码或制作归档文件时使用；正文深度编辑优先交给 office-documents。
+description: Read or extract, merge, split, rotate, reorder or fill PDFs, or export a document to PDF. Use for page citations or archival files; use office-documents for substantial editing.
 metadata:
   version: 0.2.0
   language: zh-CN

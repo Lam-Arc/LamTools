@@ -41,6 +41,8 @@ from datetime import datetime
 import os
 from pathlib import Path
 import re
+import sys
+import time
 from typing import Literal
 
 from lamtools_core.mem import MemoryEntry
@@ -314,7 +316,19 @@ def _section_tail(lines: list[str], header_index: int) -> int:
 def _atomic_write(path: Path, text: str) -> None:
     tmp = path.with_name(f"{path.name}.tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    # Windows can briefly reject a replace while another process (for example
+    # an indexer or scanner) has either file open. Keep the original file
+    # intact, retry only the known sharing/access-denied errors, and surface
+    # the final error if the file remains unavailable.
+    retry_delays = (0.025, 0.05, 0.1, 0.2) if sys.platform == "win32" else ()
+    for delay in (*retry_delays, None):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError as exc:
+            if delay is None or getattr(exc, "winerror", None) not in (5, 32, 33):
+                raise
+            time.sleep(delay)
 
 
 def _format_line(entry: ParsedEntry) -> str:

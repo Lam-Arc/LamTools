@@ -21,7 +21,7 @@ import lamtools_core.tool.command as command_module
 import lamtools_core.tool.command_runner as command_runner
 import lamtools_core.tool.command_tools as command_tools_module
 from lamtools_core.tool import ToolCall
-from lamtools_core.tool.command_tools import CommandToolHandlers
+from lamtools_core.tool.command_tools import CommandToolHandlers, split_command_for_path_validation
 from lamtools_core.runtime.background_processes import BackgroundProcessRegistry
 
 
@@ -31,6 +31,68 @@ def test_command_execution_defaults_are_tool_friendly():
     assert execution.stdout == ""
     assert execution.stderr == ""
     assert execution.metadata == {}
+
+
+@pytest.mark.parametrize("quoted_path", ["'../outside.txt'", '"../outside.txt"'])
+def test_command_path_guard_rejects_quoted_parent_paths(tmp_path: Path, quoted_path: str):
+    with pytest.raises(ValueError, match="escapes work_root"):
+        validate_command_paths(["cat", quoted_path], tmp_path)
+
+
+def test_command_path_guard_allows_quoted_in_root_paths(tmp_path: Path):
+    tokens = split_command_for_path_validation('cat "subdir/inside file.txt"')
+    validate_command_paths(["shell", *tokens], tmp_path)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'cat ./".."/../outside.txt',
+        "cat ./ '..'/../outside.txt",
+        'cat --output=".."/outside.txt',
+        'Get-Content -LiteralPath ./".."/../outside.txt',
+        'cat "../outside path.txt',
+    ],
+)
+def test_command_path_guard_fails_closed_for_embedded_or_unmatched_quotes(
+    tmp_path: Path, command: str,
+):
+    with pytest.raises(ValueError):
+        tokens = split_command_for_path_validation(command)
+        validate_command_paths(["shell", *tokens], tmp_path)
+
+
+@pytest.mark.parametrize("shell_kind", ["wsl", "git-bash", "powershell", "pwsh"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        'cat ./".."/../outside.txt',
+        "cat ./ '..'/../outside.txt",
+        'cat --output=".."/outside.txt',
+        'Get-Content -LiteralPath ./".."/../outside.txt',
+    ],
+)
+def test_shell_aware_path_validation_rejects_quote_concatenation(
+    tmp_path: Path, shell_kind: str, command: str,
+):
+    with pytest.raises(ValueError):
+        tokens = split_command_for_path_validation(command, shell_kind=shell_kind)
+        validate_command_paths([shell_kind, *tokens], tmp_path)
+
+
+@pytest.mark.parametrize("shell_kind", ["wsl", "git-bash", "powershell", "pwsh"])
+@pytest.mark.parametrize("command", ['cat "core"/pyproject.toml', 'cat ./"core"/pyproject.toml'])
+def test_shell_aware_path_validation_allows_in_root_quote_concatenation(
+    tmp_path: Path, shell_kind: str, command: str,
+):
+    tokens = split_command_for_path_validation(command, shell_kind=shell_kind)
+    validate_command_paths([shell_kind, *tokens], tmp_path)
+
+
+@pytest.mark.parametrize("shell_kind", ["wsl", "git-bash", "powershell", "pwsh"])
+def test_shell_aware_path_splitter_rejects_unmatched_quotes(shell_kind: str) -> None:
+    with pytest.raises(ValueError):
+        split_command_for_path_validation('cat "../outside path.txt', shell_kind=shell_kind)
 
 
 def test_windows_command_creationflags_hide_console(monkeypatch):
@@ -50,21 +112,19 @@ def test_windows_command_shell_prefers_git_bash(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(command_runner.sys, "platform", "win32")
     monkeypatch.setattr(command_runner, "_git_bash_path", lambda: bash)
     monkeypatch.delenv("LAMTOOLS_COMMAND_SHELL", raising=False)
+    monkeypatch.setattr(command_runner, "_stored_shell_preference", lambda: "auto")
+    monkeypatch.setattr(command_runner, "_wsl_available", lambda: True)
 
     shell = command_runner.resolve_command_shell()
 
-    assert shell.name == "Git Bash"
-    assert shell.argv("pwd && ls") == [
-        str(bash),
-        "--noprofile",
-        "--norc",
-        "-lc",
-        "pwd && ls",
-    ]
+    assert shell.name == "WSL"
+    assert shell.kind == "wsl"
 
 
 def test_windows_command_shell_honors_explicit_powershell(monkeypatch):
     monkeypatch.setattr(command_runner.sys, "platform", "win32")
+    monkeypatch.setattr(command_runner, "_stored_shell_preference", lambda: None)
+    monkeypatch.setattr(command_runner, "_wsl_available", lambda: False)
     monkeypatch.setenv("LAMTOOLS_COMMAND_SHELL", "powershell")
 
     shell = command_runner.resolve_command_shell()
@@ -75,15 +135,128 @@ def test_windows_command_shell_honors_explicit_powershell(monkeypatch):
     assert "powershell.exe" in command_runner.command_shell_prompt()
 
 
-def test_windows_command_shell_falls_back_when_git_bash_is_missing(monkeypatch):
+def test_windows_command_shell_falls_back_when_wsl_has_no_distro_or_git_bash(monkeypatch):
     monkeypatch.setattr(command_runner.sys, "platform", "win32")
     monkeypatch.setattr(command_runner, "_git_bash_path", lambda: None)
+    monkeypatch.setattr(command_runner, "_stored_shell_preference", lambda: "auto")
+    monkeypatch.setattr(command_runner, "_wsl_available", lambda: False)
     monkeypatch.setattr(command_runner.shutil, "which", lambda _name: None)
     monkeypatch.delenv("LAMTOOLS_COMMAND_SHELL", raising=False)
 
     shell = command_runner.resolve_command_shell()
 
     assert shell.name == "Windows PowerShell 5.1"
+
+
+def test_wsl_probe_rejects_launcher_without_usable_default_distro(monkeypatch):
+    monkeypatch.setattr(command_runner, "_wsl_path", lambda: "wsl.exe")
+    monkeypatch.setattr(
+        command_runner.subprocess,
+        "run",
+        lambda *_args, **_kwargs: command_runner.subprocess.CompletedProcess(
+            args=["wsl.exe", "--exec", "bash", "-lc", "exit 0"], returncode=1, stdout=b"", stderr=b""
+        ),
+    )
+    command_runner._wsl_available.cache_clear()
+    try:
+        assert command_runner._wsl_available() is False
+    finally:
+        command_runner._wsl_available.cache_clear()
+
+
+def test_wsl_probe_bounds_a_hanging_default_distro(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def hanging_probe(args, **kwargs):
+        captured["args"] = args
+        captured.update(kwargs)
+        raise command_runner.subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(command_runner, "_wsl_path", lambda: "wsl.exe")
+    monkeypatch.setattr(command_runner.subprocess, "run", hanging_probe)
+    command_runner._wsl_available.cache_clear()
+    try:
+        assert command_runner._wsl_available() is False
+        assert captured["timeout"] == 4
+    finally:
+        command_runner._wsl_available.cache_clear()
+
+
+def test_saved_shell_preference_overrides_legacy_environment(monkeypatch, tmp_path: Path):
+    bash = tmp_path / "bash.exe"
+    bash.write_text("", encoding="utf-8")
+    monkeypatch.setattr(command_runner.sys, "platform", "win32")
+    monkeypatch.setenv("LAMTOOLS_COMMAND_SHELL", "powershell")
+    monkeypatch.setattr(command_runner, "_git_bash_path", lambda: bash)
+    monkeypatch.setattr(command_runner, "_wsl_available", lambda: False)
+    monkeypatch.setattr(command_runner, "_stored_shell_preference", lambda: "git-bash")
+    assert command_runner.resolve_command_shell().kind == "git-bash"
+
+
+def test_windows_command_shell_auto_prefers_wsl_then_git_bash(monkeypatch, tmp_path: Path):
+    bash = tmp_path / "bash.exe"
+    bash.write_text("", encoding="utf-8")
+    monkeypatch.setattr(command_runner.sys, "platform", "win32")
+    monkeypatch.setattr(command_runner, "_stored_shell_preference", lambda: "auto")
+    monkeypatch.setattr(command_runner, "_wsl_available", lambda: True)
+    monkeypatch.setattr(command_runner, "_wsl_path", lambda: "wsl.exe")
+    monkeypatch.setattr(command_runner, "_git_bash_path", lambda: bash)
+    assert command_runner.resolve_command_shell().kind == "wsl"
+
+    monkeypatch.setattr(command_runner, "_wsl_available", lambda: False)
+    shell = command_runner.resolve_command_shell()
+    assert shell.kind == "git-bash"
+    assert shell.argv("pwd && ls") == [str(bash), "--noprofile", "--norc", "-lc", "pwd && ls"]
+
+
+def test_manual_unavailable_shell_falls_back_to_auto(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(command_runner.sys, "platform", "win32")
+    monkeypatch.setattr(command_runner, "_stored_shell_preference", lambda: "wsl")
+    monkeypatch.setattr(command_runner, "_wsl_available", lambda: False)
+    bash = tmp_path / "bash.exe"
+    bash.write_text("", encoding="utf-8")
+    monkeypatch.setattr(command_runner, "_git_bash_path", lambda: bash)
+    assert command_runner.resolve_command_shell().kind == "git-bash"
+
+
+def test_wsl_command_argv_cwd_and_env_preserve_linux_path(monkeypatch, tmp_path: Path):
+    shell = command_runner.CommandShell(name="WSL", executable="wsl.exe", kind="wsl")
+    assert shell.argv_for("printf '%s' \"one arg\"", cwd=tmp_path) == [
+        "wsl.exe", "--cd", str(tmp_path), "--exec", "bash", "-lc", "printf '%s' \"one arg\"",
+    ]
+    env = shell.prepare_environment(
+        {"PATH": r"C:\Windows", "TOKEN": "value", "WSLENV": "PATH/p:OLD"},
+        forward_names={"TOKEN"},
+    )
+    assert env is not None
+    assert env["WSLENV"] == "OLD:TOKEN"
+
+
+def test_warm_command_shell_pays_the_probe_once_before_the_first_request(monkeypatch):
+    """The bounded WSL probe must not be deferred to the first model request."""
+    probes: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        probes.append(list(args))
+        return command_runner.subprocess.CompletedProcess(
+            args=args, returncode=0, stdout=b"", stderr=b""
+        )
+
+    monkeypatch.setattr(command_runner.sys, "platform", "win32")
+    monkeypatch.setattr(command_runner, "_stored_shell_preference", lambda: "auto")
+    monkeypatch.setattr(command_runner, "_git_bash_path", lambda: None)
+    monkeypatch.setattr(command_runner, "_wsl_path", lambda: "wsl.exe")
+    monkeypatch.setattr(command_runner.subprocess, "run", fake_run)
+    command_runner._wsl_available.cache_clear()
+    try:
+        assert command_runner.warm_command_shell().kind == "wsl"
+        assert len(probes) == 1
+
+        # The model-request path reuses the cached start-up decision.
+        assert "Current shell: WSL" in command_runner.command_shell_prompt()
+        assert len(probes) == 1
+    finally:
+        command_runner._wsl_available.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -126,6 +299,39 @@ async def test_run_command_uses_resolved_shell_and_reports_it(monkeypatch, tmp_p
     assert result.metadata["shell_state"] == "exited"
     assert result.metadata["readiness_state"] == "not_requested"
     assert "[process_state: exited]" in result.content
+
+
+@pytest.mark.asyncio
+async def test_run_command_does_not_forward_windows_environment_to_wsl(monkeypatch, tmp_path: Path):
+    shell = command_runner.CommandShell(name="WSL", executable="wsl.exe", kind="wsl")
+    captured: dict[str, object] = {}
+
+    async def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return CommandExecution(exit_code=0, stdout="ok\n")
+
+    monkeypatch.setattr(command_tools_module.sys, "platform", "win32")
+    monkeypatch.setattr(command_tools_module, "resolve_command_shell", lambda: shell)
+    monkeypatch.setattr(command_tools_module, "_run_subprocess", fake_run)
+    monkeypatch.setenv("SHELL_TEST_VALUE", "secret-value")
+    monkeypatch.setenv("WSLENV", "USER_EXISTING/p:PATH/p")
+    handlers = CommandToolHandlers(
+        work_root=tmp_path,
+        command_timeout=10,
+        loaded_skill_roots=set(),
+    )
+
+    result = await handlers.run_command(
+        ToolCall(id="wsl-call", name="run_command", arguments={"command": "printf '%s' \"$SHELL_TEST_VALUE\""})
+    )
+
+    assert result.status == "ok"
+    assert captured["argv"] == [
+        "wsl.exe", "--cd", str(tmp_path), "--exec", "bash", "-lc",
+        "printf '%s' \"$SHELL_TEST_VALUE\"",
+    ]
+    assert captured["env"] is None
 
 
 @pytest.mark.asyncio
@@ -176,7 +382,11 @@ async def test_python_http_server_is_inferred_as_background_and_probes_served_di
 
 
 @pytest.mark.asyncio
-async def test_python_http_server_lifecycle_contract_with_real_process(tmp_path: Path):
+async def test_python_http_server_lifecycle_contract_with_real_process(tmp_path: Path, monkeypatch):
+    # This readiness contract serves a Windows-created temp directory and
+    # probes IPv4 loopback; keep both the shell and bind address deterministic.
+    monkeypatch.setenv("LAMTOOLS_COMMAND_SHELL", "git-bash")
+    monkeypatch.setattr(command_runner, "_stored_shell_preference", lambda: None)
     site = tmp_path / "site"
     site.mkdir()
     (site / "index.html").write_text("ready from served directory", encoding="utf-8")
@@ -194,11 +404,11 @@ async def test_python_http_server_lifecycle_contract_with_real_process(tmp_path:
     result = await handlers.run_command(ToolCall(
         id="real-server-call",
         name="run_command",
-        arguments={"command": f"python -m http.server {port} --directory site"},
+        arguments={"command": f"python -m http.server {port} --bind 127.0.0.1 --directory site"},
         metadata={"_runtime_session_id": "server-test", "_runtime_run_id": "turn-test"},
     ))
     try:
-        assert result.status == "ok", result.error
+        assert result.status == "ok", f"{result.error}; metadata={result.metadata}"
         assert result.metadata["process_state"] == "running"
         assert result.metadata["shell_state"] == "running"
         assert result.metadata["readiness_state"] == "ready"

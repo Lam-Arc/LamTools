@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -15,7 +16,10 @@ from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowPort,
     WorkflowRunner,
 )
+import lamtools_core.plugins.bundled.workflow.backend.runtime as workflow_runtime
+import lamtools_core.tool.command_runner as command_runner
 from lamtools_core.runtime import RuntimeTaskRegistry
+from lamtools_core.tool.command_runner import CommandShell
 
 
 def _node(
@@ -41,6 +45,52 @@ def _node(
         config=dict(config or {}),
         ports=ports,
     )
+
+
+@pytest.mark.asyncio
+async def test_workflow_wsl_forwards_only_explicit_env_and_inputs(monkeypatch, tmp_path: Path) -> None:
+    shell = CommandShell(name="WSL", executable="wsl.exe", kind="wsl")
+    captured: dict[str, object] = {}
+
+    async def fake_create(argv, *, cwd, env):
+        captured.update(argv=argv, cwd=cwd, env=env)
+
+        class FakeProcess:
+            returncode = 0
+
+            async def communicate(self, _payload):
+                return b"ok", b""
+
+        return FakeProcess()
+
+    monkeypatch.setattr(workflow_runtime.sys, "platform", "win32")
+    monkeypatch.setattr(workflow_runtime, "_create_workflow_process", fake_create)
+    monkeypatch.setattr(workflow_runtime, "_python3_shim_dir", lambda: pytest.fail("WSL must use Linux python3"))
+    monkeypatch.setattr(command_runner, "resolve_command_shell", lambda: shell)
+    monkeypatch.setenv("WSLENV", "KEEP/p:PATH/p")
+    monkeypatch.setenv("UNRELATED_SECRET", "do-not-forward")
+
+    result = await WorkflowRunner()._run_command(
+        {
+            "command": "printf '%s %s' $INPUT_QUERY $CUSTOM_TOKEN",
+            "env": {"CUSTOM_TOKEN": "visible-value"},
+        },
+        {"query": "bound-value"},
+        str(tmp_path),
+    )
+
+    assert result == "ok"
+    argv = captured["argv"]
+    assert isinstance(argv, list)
+    assert argv[:3] == ["wsl.exe", "--cd", str(tmp_path)]
+    assert argv[-1] == "printf '%s %s' bound-value $CUSTOM_TOKEN"
+    env = captured["env"]
+    assert isinstance(env, dict)
+    wslenv_entries = env["WSLENV"].split(":")
+    assert wslenv_entries[0] == "KEEP/p"
+    assert wslenv_entries == ["KEEP/p", "CUSTOM_TOKEN", "INPUT_QUERY"]
+    assert "UNRELATED_SECRET" not in env["WSLENV"]
+    assert env["PATH"] == os.environ["PATH"]
 
 
 def _edge(source: str, source_port: str, target: str, target_port: str) -> WorkflowEdge:
@@ -119,10 +169,11 @@ async def test_runner_records_script_failure_on_node(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_command_success_nonzero_and_timeout(tmp_path: Path) -> None:
+async def test_runner_command_success_nonzero_and_timeout(tmp_path: Path, monkeypatch) -> None:
     if sys.platform == "win32":
-        # The product resolves Git Bash on this host when available, so keep
-        # the command fixture POSIX-compatible even on Windows.
+        # Keep this POSIX fixture on the same shell used before the persisted
+        # auto preference was introduced.
+        monkeypatch.setenv("LAMTOOLS_COMMAND_SHELL", "git-bash")
         success_command = "printf ok"
         failure_command = "exit 7"
         timeout_command = "sleep 0.2"
@@ -164,8 +215,10 @@ async def test_runner_command_success_nonzero_and_timeout(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_runner_cancel_kills_command_and_returns_cancelled_node_state(tmp_path: Path) -> None:
+async def test_runner_cancel_kills_command_and_returns_cancelled_node_state(tmp_path: Path, monkeypatch) -> None:
     """A cancelled command must not leave the workflow task or subprocess alive."""
+    if sys.platform == "win32":
+        monkeypatch.setenv("LAMTOOLS_COMMAND_SHELL", "git-bash")
     workflow = WorkflowDef(
         name="command-cancel",
         nodes=[

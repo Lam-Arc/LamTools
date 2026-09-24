@@ -113,6 +113,25 @@ def test_handoff_is_fixed_provider_neutral_message_only_payload():
     ]
 
 
+def test_handoff_removes_english_runtime_prompt_metadata():
+    payload = build_handoff_context([
+        ChatMessage(
+            role="system",
+            content=(
+                "Instructions\n"
+                "Current project: C:/private, current session: sid, current model: gpt-secret\n"
+                "[Command Shell]\nCurrent platform: Windows.\nCurrent shell: Git Bash (bash.exe).\n"
+                "Known successful evidence call IDs are opaque references.\n"
+                "Current model capability: text only (set model to \"secret-model\")."
+            ),
+        ),
+    ])
+
+    assert payload["context"] == [
+        {"role": "system", "content": "Instructions\nCurrent model capability: text only."},
+    ]
+
+
 def test_handoff_keeps_tool_result_knowledge_and_generic_attachment_data():
     payload = build_handoff_context([
         {

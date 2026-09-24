@@ -1,65 +1,65 @@
-# 三层笔记参考
+# Three-layer notes reference
 
-读取时机：需要调用 notes、组织 Markdown 知识库、处理来源/链接或解释写入冲突时。这里记录当前契约的非显然细节；技能入口只保留决策约束。
+Read when calling notes, organizing the Markdown knowledge base, handling sources or links, or resolving write conflicts. This file records non-obvious details of the current contract; the skill entry contains decision rules.
 
-## 1. 数据归属
+## 1. Data ownership
 
-### Raw：宿主快照
+### Raw: host snapshots
 
-Raw 是宿主从会话、用户标记、考试记录和知识节点捕获的原始快照。它包含 `raw_id`、`kind`、`origin_id`、原文 `content`、`metadata` 和捕获时间，并返回 `immutable: true`。Agent 只能用 `raw_list`、`raw_get` 读取；Raw 捕获属于可信宿主，不是 Agent 的写入能力。Raw 不存在时，先说明缺口，不用模型记忆或猜测补造。
+Raw is an original host-captured snapshot of a session, user mark, exam record, or knowledge node. It has a `raw_id`, `kind`, `origin_id`, original `content`, `metadata`, and capture time, and returns `immutable: true`. The Agent may read it only through `raw_list` and `raw_get`. Capturing Raw belongs to the trusted host, not the Agent's write abilities. If Raw is absent, explain the gap; do not fill it from model memory or guesswork.
 
-### Resource：可追溯素材
+### Resource: traceable material
 
-Resource 是 Agent 读取 Raw 后生成的可版本化素材，包含 `resource_id`、`title`、`content`、`raw_ids`、`origin` 和 `revision`。创建或更新前确认 `raw_ids` 都是本次实际读取到的 Raw；没有来源的内容只能留在未保存草稿中。Resource 供 Note 组织和引用，不能作为用户点击 Note 后看到的最终呈现，也不能伪装成用户原文。
+A Resource is versioned material the Agent creates after reading Raw. It contains `resource_id`, `title`, `content`, `raw_ids`, `origin`, and `revision`. Before creating or updating one, confirm that each `raw_id` belongs to Raw actually read for this work. Content without a source belongs only in an unsaved draft. A Resource is material for organizing and citing in a Note, not the final display when a user opens a Note, and cannot impersonate the user's words.
 
-### Note：Markdown 知识库
+### Note: Markdown knowledge base
 
-Note 是用户可见的真实 Markdown 文件，SQLite 只保存索引、关系、revision/hash 和范围锁。一个 Study 笔记库可以有多篇 `.md` 文档；`path` 是库内相对路径，也是左侧文件目录的唯一结构来源；`parent_id` 只表达语义上的子文档关系，并生成 Note 关系图中的父子边，不改变文件目录。每篇文档必须有至少一个真实 `resource_ids`，宿主把来源写入 frontmatter，并在正文最下方按一行一条低调列出，呈现为类似论文参考文献的来源区；Agent 只提交正文、标题、父文档和来源 ID，不手写宿主管理字段。
+A Note is an actual user-visible Markdown file. SQLite stores only its index, relationships, revision/hash, and range locks. One Study note vault can contain multiple `.md` documents. `path` is relative to the vault and is the sole source of the left file tree structure. `parent_id` means a semantic child-document relationship and creates a parent-child edge in the Note graph; it does not change the file tree. Every Note must have at least one real `resource_ids` entry. The host writes sources into frontmatter and lists them discreetly at the very end, one per line, as a reference section. The Agent submits only body, title, parent, and source IDs, not host-managed fields.
 
-正文可以使用 Markdown 原生语法，包括标题、列表、引用、代码围栏、表格、数学公式和图片。它不是旧式的拼接素材容器：Resource 应先被理解、去重和重组，再以完整文章写入 Note。用户内容、用户原话和 AI 整理内容要在语义上清楚区分；AI 改写不改变原文归属。
+The body may use native Markdown, including headings, lists, quotations, code fences, tables, formulas, and images. A Note is not an old-style container of concatenated materials. Understand, deduplicate, and reorganize Resources before writing a complete article. Distinguish user content, exact user quotations, and AI-organized content semantically. An AI paraphrase does not change who authored the original.
 
-## 2. 读取顺序和动作
+## 2. Read order and actions
 
-任何写入前都先按范围读取 Raw、Resource 和目标 Note。当前 notes 工具动作如下；参数以运行时 schema 为准，不从示例推测未声明字段。
+Before any write, read Raw, Resource, and the target Note within scope. Use the runtime schema for parameters; do not infer undocumented fields from examples.
 
-| 动作 | 作用 | 关键输入/回执 |
+| Action | Purpose | Key inputs or receipt |
 | --- | --- | --- |
-| `raw_list` | 分页前的 Raw 候选读取 | 可按宿主支持的范围筛选；返回 `raw_sources`，每条不可变 |
-| `raw_get` | 读取完整 Raw | `raw_id`；返回 `raw`、`metadata` 和不可变标记 |
-| `resource_list` | 找可复用素材 | 返回 Resource、`raw_ids` 和当前 `revision` |
-| `resource_get` | 读取一条素材 | `resource_id`；返回完整内容、来源链和版本 |
-| `resource_create` | 创建 AI 素材 | `title`、`content`、真实 `raw_ids`；回执 `resource_id`、`revision` |
-| `resource_update` | 最小修订素材 | `resource_id`、`title`、`content`、`raw_ids`、当前 `expected_revision`；冲突不写入 |
-| `list` | 查询 Note 候选 | `q`/`query`、`offset`、`limit`；返回标题、路径、Resource 引用、revision/hash |
-| `tree` | 读取 Note 文件树 | 返回按真实 Markdown `path` 目录组织的 `tree`；`parent_id` 只表达子文档语义和图谱关系 |
-| `get` | 读取完整 Note | `note_id`；返回 `body_md`、revision/hash、Resource 引用、链接、反向链接和锁定范围 |
-| `graph` | 读取 Note 总体关系 | 返回当前 Note 库的节点/边；它是 Note 右侧栏视图，不是独立知识层 |
-| `backlinks` | 读取反向链接 | `note_id`；只报告已解析的 Note 关系 |
-| `create` | 创建 Markdown Note | `title`、`body_md`、至少一个真实 `resource_ids`，可选 `note_id`/`path`/`parent_id`；回执路径和 revision/hash |
-| `update` | 原子更新 Markdown Note | `note_id`、完整 `body_md`、`resource_ids`、当前 `expected_revision` 和 `expected_content_hash`；成功才产生新版本 |
+| `raw_list` | Page through Raw candidates | Filter by host-supported scope; returns immutable `raw_sources` |
+| `raw_get` | Read full Raw | `raw_id`; returns `raw`, `metadata`, and immutable marker |
+| `resource_list` | Find reusable material | Returns Resources, `raw_ids`, and current `revision` |
+| `resource_get` | Read one Resource | `resource_id`; returns full content, source lineage, and version |
+| `resource_create` | Create AI material | `title`, `content`, real `raw_ids`; receipt has `resource_id`, `revision` |
+| `resource_update` | Minimally revise material | `resource_id`, `title`, `content`, `raw_ids`, current `expected_revision`; a conflict does not write |
+| `list` | Query Note candidates | `q`/`query`, `offset`, `limit`; returns title, path, Resource citations, revision/hash |
+| `tree` | Read Note file tree | `tree` organized by real Markdown `path`; `parent_id` concerns semantic child relationship and graph only |
+| `get` | Read full Note | `note_id`; returns `body_md`, revision/hash, Resource citations, links, backlinks, locks |
+| `graph` | Read overall Note relationships | Returns nodes and edges of the current Note vault for the right sidebar, not a separate knowledge layer |
+| `backlinks` | Read incoming links | `note_id`; reports resolved Note relationships only |
+| `create` | Create Markdown Note | `title`, `body_md`, at least one real `resource_ids`; optional `note_id`/`path`/`parent_id`; receipt has path and revision/hash |
+| `update` | Atomically update Markdown Note | `note_id`, complete `body_md`, `resource_ids`, current `expected_revision` and `expected_content_hash`; only success creates a version |
 
-Raw 捕获、用户选区锁定/解除和宿主元数据维护不属于 Agent 的动作。Agent 不把锁状态、作者归属或来源尾部塞进正文参数。
+Raw capture, user selection locking and unlocking, and host metadata maintenance are not Agent actions. Do not put lock state, attribution, or the source tail into body parameters.
 
-## 3. 来源、链接和图谱
+## 3. Sources, links, and graph
 
-`Resource.raw_ids` 是 Resource 到 Raw 的来源链；`Note.resource_ids` 是 Note 到 Resource 的来源链。只使用实际返回的 ID；来源失效时保留“待确认”而不是换成近似 ID。外部网页或教材是外部补充，不能写成用户已经学会的事实。
+`Resource.raw_ids` links a Resource to Raw; `Note.resource_ids` links a Note to Resources. Use only IDs actually returned. If a source is invalid, mark it for verification instead of substituting a similar ID. External webpages and textbooks are supplemental sources, not proof that the user learned anything.
 
-Note 之间用 `[[note:<真实 Note ID>]]`，Note 指向知识节点用 `[[node:<真实节点 ID>]]`；目标唯一且已核实时才可使用普通 wikilink。链接应说明关系用途和边界，不能因为标题相似就批量堆叠。代码围栏、行式代码和数学内容中的文字不应被解析为关系。目标不存在或有歧义时返回待处理链接，不编造目标。
+Use `[[note:<real Note ID>]]` for Note links and `[[node:<real node ID>]]` for links to knowledge nodes. An ordinary wikilink is acceptable only when the target is unique and verified. Explain what the link means and its boundary rather than batch-linking similar titles. Text in code fences, inline code, and math must not be parsed as relationships. Return an unresolved link for missing or ambiguous targets; do not invent one.
 
-`parent_id` 只表达语义上的父子文档关系；它不决定左侧文件目录，不等于 wikilink，也不等于学习前置关系。关系图同时展示父子边和 Note wikilink 边，归属当前 Note 右侧栏。
+`parent_id` denotes only a semantic parent-child relationship. It neither determines the left file tree, nor equals a wikilink or learning prerequisite. The relationship graph shows both parent-child and Note wikilink edges in the current Note's right sidebar.
 
-## 4. 编辑、锁定与冲突
+## 4. Editing, locks, and conflicts
 
-用户可以在 Note 编辑器中框选一段文字并锁定。锁定只是 Agent 写入保护，用户仍可自由编辑；用户编辑后宿主按引文、前后文和 revision 重锚范围。Agent 读取 `get` 时应保留锁定信息，但不尝试管理锁。
+The user can select and lock a span in the Note editor. This protects against Agent writes, while the user remains free to edit. After a user edit, the host reanchors the locked range using quoted text, surrounding context, and revision. Retain lock information returned by `get` but do not try to manage locks.
 
-当 Agent 的完整正文变更与锁定范围重合，服务返回 `NOTE_REGION_LOCKED`，并尽可能带 `reason`、`overlaps`（或 `overlap`）及范围信息。必须保留本次未保存草稿，向用户说明冲突区域和原因，改为建议或请求用户处理；不得删去重合内容、拆分绕过、换写到另一篇等价 Note 或重试覆盖。
+When a complete body edit overlaps a lock, the service returns `NOTE_REGION_LOCKED` with `reason`, `overlaps` (or `overlap`), and range information when possible. Keep the unsaved draft, explain the affected range and reason, and offer a suggestion or ask the user to handle it. Do not remove or split the overlap to bypass the lock, write to another equivalent Note, or retry an overwrite.
 
-`REVISION_CONFLICT` 表示 Note/Resource 版本已变化；`CONTENT_HASH_CONFLICT` 或外部变化表示 Markdown 文件在读取后被改动。任何一种情况都要重新读取对应 Raw、Resource、Note，比较最新全文后做最小增量。超时或回执不明时先 `get`/`list` 判断是否已写入，再决定是否重试。
+`REVISION_CONFLICT` means the Note or Resource version changed. `CONTENT_HASH_CONFLICT` or an external change means the Markdown file was edited after it was read. Reread the relevant Raw, Resource, and Note and compare the latest full text before making the smallest edit. On a timeout or unclear receipt, use `get` or `list` to determine whether the write occurred before retrying.
 
-只有明确成功回执且目标 ID、revision/hash 与变更相符，才可向用户说“已创建/已更新”。否则写“草稿”“未保存”“冲突”或“服务不可用”，并说明可执行的下一步。
+Say “created” or “updated” only after an explicit successful receipt whose target ID and revision/hash match the change. Otherwise say “draft,” “unsaved,” “conflict,” or “service unavailable,” and give an actionable next step.
 
-## 5. 组织示例与证据强度
+## 5. Organization examples and evidence strength
 
-可把一次答疑整理为：核心命题与条件、推导步骤、可复用例子、混淆点、与其他 Note 的真实连接。一次标记只能支持“关注”，一次翻译只能支持“已处理该内容”；只有实际考试证据或用户明确陈述才支持个人误区，而且措辞不能超过证据强度。
+One answered question can become a Note with the main claim and conditions, derivation steps, reusable example, common confusion, and genuine links to other Notes. One mark supports only “attention given”; one translation supports only “this content was processed.” A personal misconception requires actual exam evidence or an explicit user statement, and wording must not exceed that evidence.
 
-自检问题可以写进正文，但看过问题、读过答案、生成过 Resource 或整理过 Note 都不触发考试签名，不证明掌握。考试评定仍通过 exam 流程完成。
+A self-check question may appear in the body, but seeing it, reading its answer, generating a Resource, or organizing a Note does not trigger exam sign-off or prove mastery. Exam assessment still follows the exam flow.

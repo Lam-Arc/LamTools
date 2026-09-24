@@ -108,7 +108,7 @@ def mode_prompt_line(
     if mode is None:
         return ""
     desc = mode.description or active_mode
-    return f"当前模式: {active_mode} — {desc}"
+    return f"Current mode: {active_mode} — {desc}"
 
 
 def mode_names(load_tools: LoadTools) -> list[str]:
@@ -143,7 +143,7 @@ def default_load_tools() -> LoadTools:
     """Return a built-in default (consider + execute) suitable for Core."""
     return LoadTools({
         "consider": LoadToolMode(
-            description="思索模式：仅使用只读工具进行分析和调研，不修改任何文件",
+            description="Consider mode: use read-only tools for analysis and research; do not modify files",
             tools=[
                 "read_file", "list_dir", "search_files", "search_content",
                 "web_search", "web_fetch", "git_status", "git_diff",
@@ -151,7 +151,7 @@ def default_load_tools() -> LoadTools:
             ],
         ),
         "execute": LoadToolMode(
-            description="执行模式：可使用全部工具进行完整的代码操作",
+            description="Execute mode: use all tools for complete code operations",
             tools=[],
         ),
     })

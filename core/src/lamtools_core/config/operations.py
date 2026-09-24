@@ -16,6 +16,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
 from lamtools_core.context_compaction_budget import (
@@ -24,7 +25,8 @@ from lamtools_core.context_compaction_budget import (
 )
 
 from .imagegen_store import IMAGEGEN_NAMESPACE, load_imagegen_config, save_imagegen_config
-from .model_store import ModelConfig, ModelStore
+from .model_store import ModelConfig, ModelStore, make_model_record_id
+from .model_group_store import ModelGroupRevisionConflict, ModelGroupStore
 from .provider_store import MASKED_API_KEY, ProviderConfig, ProviderStore, mask_api_key, slugify
 from .settings_store import get_setting, set_setting
 
@@ -50,6 +52,9 @@ def build_config_operation_catalog(
     def _models() -> ModelStore:
         return ModelStore()
 
+    def _groups() -> ModelGroupStore:
+        return ModelGroupStore()
+
     def _provider_response(provider: ProviderConfig) -> dict[str, Any]:
         return {
             "id": provider.id,
@@ -59,13 +64,13 @@ def build_config_operation_catalog(
             "api_key": mask_api_key(provider.api_key),
             "has_api_key": bool(provider.api_key),
             "is_default": provider.is_default,
-            "extra": dict(provider.extra),
+            "extra": provider.to_extra(),
         }
 
     def _model_response(model: ModelConfig) -> dict[str, Any]:
         return {
-            "id": model.model_id,
-            "model_record_id": model.model_id,
+            "id": model.id,
+            "model_record_id": model.id,
             "provider_id": model.provider_id,
             "model_id": model.model_id,
             "display_name": model.display_name,
@@ -107,25 +112,64 @@ def build_config_operation_catalog(
         while candidate in taken:
             candidate = f"{provider_id}-{suffix}"
             suffix += 1
+        provider_extra = params.get("extra") if isinstance(params.get("extra"), dict) else {}
         provider = ProviderConfig(
             id=candidate,
             name=name,
             api_type=str(params.get("api_type") or "openai").strip(),
             base_url=str(params.get("base_url") or "").strip(),
             api_key=str(params.get("api_key") or "").strip(),
-            extra=dict(params["extra"]) if isinstance(params.get("extra"), dict) else {},
+            adapter_profile_id=str(
+                params.get("adapter_profile_id")
+                or provider_extra.get("adapter_profile_id")
+                if provider_extra
+                else params.get("adapter_profile_id") or ""
+            ).strip(),
+            request_body=(
+                dict(params["request_body"])
+                if isinstance(params.get("request_body"), dict)
+                else dict(provider_extra["request_body"])
+                if isinstance(provider_extra.get("request_body"), dict)
+                else {}
+            ),
+            adapter_profile_override=(
+                dict(params["adapter_profile_override"])
+                if isinstance(params.get("adapter_profile_override"), dict)
+                else dict(provider_extra["adapter_profile_override"])
+                if isinstance(provider_extra.get("adapter_profile_override"), dict)
+                else {}
+            ),
+            reasoning=(
+                dict(params["reasoning"])
+                if isinstance(params.get("reasoning"), dict)
+                else dict(provider_extra["reasoning"])
+                if isinstance(provider_extra.get("reasoning"), dict)
+                else {}
+            ),
+            extra=dict(provider_extra),
         )
         store.write(provider, scope="global", work_root=root)
         # Nested models[] (UI preset creations) become per-model jsonc files.
         models_raw = params.get("models")
+        created_models: list[ModelConfig] = []
         if isinstance(models_raw, list):
             model_store = _models()
             for raw in models_raw:
                 if not isinstance(raw, dict) or not str(raw.get("model_id") or ""):
                     continue
                 model = _model_config_from_payload(raw, fallback_provider=provider)
+                model.id = _unique_model_record_id(model, model_store, root)
+                if model.is_default:
+                    _clear_other_defaults(model_store, model.id, root)
                 model_store.write(model, scope="global", work_root=root)
-        return OperationResult(name=request.name, payload={"provider": _provider_response(provider)})
+                created_models.append(model)
+        return OperationResult(
+            name=request.name,
+            payload={
+                "provider": _provider_response(provider),
+                "models": [_model_response(model) for model in created_models],
+            },
+        )
 
     async def provider_update(request: OperationRequest) -> OperationResult:
         params = request.payload
@@ -160,13 +204,16 @@ def build_config_operation_catalog(
         store._cached_providers = None
         # Also remove model files referencing this provider (UI warns about this).
         model_store = _models()
+        removed_model_ids: list[str] = []
         for model in model_store.list_sync(work_root=root):
             if model.provider_id == provider.id or model.provider == provider.name:
+                removed_model_ids.append(model.id)
                 model_path = Path(model.source_path)
                 if model_path.is_file():
                     model_path.unlink()
         model_store._cached_signature = None
         model_store._cached_models = None
+        _groups().remove_model_ids(removed_model_ids)
         return OperationResult(name=request.name, payload={"ok": True})
 
     async def models_list(request: OperationRequest) -> OperationResult:
@@ -185,8 +232,9 @@ def build_config_operation_catalog(
             return _error(request, f"provider not found: {params.get('provider_id')}")
         model = _model_config_from_payload(params, fallback_provider=provider)
         model_store = _models()
+        model.id = _unique_model_record_id(model, model_store, root)
         if model.is_default:
-            _clear_other_defaults(model_store, model.model_id, root)
+            _clear_other_defaults(model_store, model.id, root)
         model_store.write(model, scope=_scope(params, root), work_root=root)
         return OperationResult(name=request.name, payload={"model": _model_response(model)})
 
@@ -200,19 +248,12 @@ def build_config_operation_catalog(
         if model is None:
             return _error(request, f"model not found: {model_record_id}")
         payload = {k: v for k, v in params.items() if k not in ("model_record_id", "id", "scope", "extra_json")}
-        if "extra" in payload and isinstance(payload.get("extra"), dict):
-            extra = payload.pop("extra")
-            payload.setdefault("capability", str(extra.get("capability") or "").strip())
-            payload.setdefault("adapter_profile_id", str(extra.get("adapter_profile_id") or "").strip())
         payload.setdefault("provider", model.provider)
         payload.setdefault("provider_id", model.provider_id)
         updated = _model_config_from_payload(payload, fallback_provider=_fallback_provider(model))
-        if updated.model_id != model.model_id:
-            old_path = Path(model.source_path)
-            if old_path.is_file():
-                old_path.unlink()
+        updated.id = model.id
         if updated.is_default:
-            _clear_other_defaults(model_store, updated.model_id, root)
+            _clear_other_defaults(model_store, updated.id, root)
         scope = _scope(params, root)
         if scope == "global" and _is_project_source(model.source_path, root):
             # Same shadow trap as provider_update (audit 09 S3).
@@ -228,12 +269,178 @@ def build_config_operation_catalog(
         model = model_store.get_sync(model_record_id, work_root=root)
         if model is None:
             return _error(request, f"model not found: {model_record_id}")
-        path = Path(model.source_path) if model.source_path else model_store.write_path(model.model_id, scope="global", work_root=root)
+        path = Path(model.source_path) if model.source_path else model_store.write_path(model.id, scope="global", work_root=root)
         if path.is_file():
             path.unlink()
         model_store._cached_signature = None
         model_store._cached_models = None
+        _groups().remove_model_ids([model.id])
         return OperationResult(name=request.name, payload={"ok": True})
+
+    async def model_groups_list(request: OperationRequest) -> OperationResult:
+        models = _models().list_sync(work_root=root)
+        return OperationResult(
+            name=request.name,
+            payload=_groups().snapshot(available_model_ids=(model.id for model in models)),
+        )
+
+    async def model_group_create(request: OperationRequest) -> OperationResult:
+        try:
+            model_ids = _validated_existing_model_ids(request.payload.get("model_ids"), _models(), root)
+            payload = _groups().create(
+                str(request.payload.get("name") or ""),
+                model_ids=model_ids,
+                expected_revision=_optional_int(request.payload.get("expected_revision")),
+            )
+            return OperationResult(name=request.name, payload=payload)
+        except (ValueError, LookupError, ModelGroupRevisionConflict) as exc:
+            return _error(request, str(exc))
+
+    async def model_group_update(request: OperationRequest) -> OperationResult:
+        try:
+            payload = _groups().update(
+                str(request.payload.get("group_id") or request.payload.get("id") or ""),
+                name=str(request.payload.get("name") or ""),
+                expected_revision=_optional_int(request.payload.get("expected_revision")),
+            )
+            return OperationResult(name=request.name, payload=payload)
+        except (ValueError, LookupError, ModelGroupRevisionConflict) as exc:
+            return _error(request, str(exc))
+
+    async def model_group_delete(request: OperationRequest) -> OperationResult:
+        try:
+            payload = _groups().delete(
+                str(request.payload.get("group_id") or request.payload.get("id") or ""),
+                expected_revision=_optional_int(request.payload.get("expected_revision")),
+            )
+            return OperationResult(name=request.name, payload=payload)
+        except (ValueError, LookupError, ModelGroupRevisionConflict) as exc:
+            return _error(request, str(exc))
+
+    async def model_group_members_set(request: OperationRequest) -> OperationResult:
+        try:
+            model_ids = _validated_existing_model_ids(request.payload.get("model_ids"), _models(), root)
+            payload = _groups().set_members(
+                str(request.payload.get("group_id") or ""),
+                model_ids,
+                expected_revision=_optional_int(request.payload.get("expected_revision")),
+            )
+            return OperationResult(name=request.name, payload=payload)
+        except (ValueError, LookupError, ModelGroupRevisionConflict) as exc:
+            return _error(request, str(exc))
+
+    async def model_groups_reorder(request: OperationRequest) -> OperationResult:
+        try:
+            raw_ids = request.payload.get("group_ids")
+            if not isinstance(raw_ids, list):
+                raise ValueError("group_ids must be an array")
+            payload = _groups().reorder(
+                [str(item) for item in raw_ids],
+                expected_revision=_optional_int(request.payload.get("expected_revision")),
+            )
+            return OperationResult(name=request.name, payload=payload)
+        except (ValueError, LookupError, ModelGroupRevisionConflict) as exc:
+            return _error(request, str(exc))
+
+    async def model_create_with_provider(request: OperationRequest) -> OperationResult:
+        params = request.payload
+        model_raw = params.get("model")
+        provider_raw = params.get("provider")
+        if not isinstance(model_raw, dict) or not isinstance(provider_raw, dict):
+            return _error(request, "model and provider objects are required")
+        group_id = str(params.get("group_id") or "").strip()
+        group_snapshot = _groups().snapshot()
+        group = next((item for item in group_snapshot["groups"] if item["id"] == group_id), None)
+        if group is None:
+            return _error(request, f"model group not found: {group_id}")
+        try:
+            expected_revision = _optional_int(params.get("expected_revision"))
+            if expected_revision is not None and expected_revision != int(group_snapshot["revision"]):
+                raise ModelGroupRevisionConflict(
+                    f"model group revision conflict: expected {expected_revision}, current {group_snapshot['revision']}"
+                )
+            base_url = _normalize_provider_base_url(provider_raw.get("base_url"))
+            mode = str(provider_raw.get("mode") or "").strip().lower()
+            provider_store = _providers()
+            created_provider = False
+            if mode == "existing":
+                provider = _find_provider(str(provider_raw.get("provider_id") or ""), store=provider_store)
+                if provider is None:
+                    raise LookupError(f"provider not found: {provider_raw.get('provider_id')}")
+                if _normalize_provider_base_url(provider.base_url) != base_url:
+                    raise ValueError("base_url does not match the selected provider")
+            elif mode == "new":
+                name = str(provider_raw.get("name") or "").strip()
+                if not name:
+                    raise ValueError("provider.name is required for mode=new")
+                base_id = str(provider_raw.get("id") or "").strip() or slugify(name)
+                candidate, suffix = base_id, 2
+                taken = {item.id for item in provider_store.list_sync(work_root=root)}
+                while candidate in taken:
+                    candidate = f"{base_id}-{suffix}"
+                    suffix += 1
+                provider = _provider_config_from_nested(candidate, name, base_url, provider_raw)
+                provider_store.write(provider, scope="global", work_root=root)
+                created_provider = True
+            else:
+                raise ValueError("provider.mode must be existing or new")
+
+            model_id = str(model_raw.get("model_id") or "").strip()
+            if not model_id:
+                raise ValueError("model.model_id is required")
+            model_store = _models()
+            model_payload = dict(model_raw)
+            model_payload["provider_id"] = provider.id
+            model_payload["provider"] = provider.name
+            model = _model_config_from_payload(model_payload, fallback_provider=provider)
+            model.id = _unique_model_record_id(model, model_store, root)
+            try:
+                model_store.write(model, scope="global", work_root=root)
+            except Exception:
+                if created_provider:
+                    provider_path = Path(provider.source_path) if provider.source_path else provider_store.write_path(
+                        provider.id, scope="global", work_root=root
+                    )
+                    if provider_path.is_file():
+                        provider_path.unlink()
+                raise
+            model_ids = [*group["model_ids"], *group["dangling_model_ids"]]
+            if model.id not in model_ids:
+                model_ids.append(model.id)
+            try:
+                groups_payload = _groups().set_members(
+                    group_id,
+                    model_ids,
+                    expected_revision=expected_revision,
+                )
+            except (ModelGroupRevisionConflict, OSError):
+                model_path = Path(model.source_path) if model.source_path else model_store.write_path(
+                    model.id, scope="global", work_root=root
+                )
+                if model_path.is_file():
+                    model_path.unlink()
+                model_store._cached_signature = None
+                model_store._cached_models = None
+                if created_provider:
+                    provider_path = Path(provider.source_path) if provider.source_path else provider_store.write_path(
+                        provider.id, scope="global", work_root=root
+                    )
+                    if provider_path.is_file():
+                        provider_path.unlink()
+                    provider_store._cached_signature = None
+                    provider_store._cached_providers = None
+                raise
+            return OperationResult(
+                name=request.name,
+                payload={
+                    "provider": _provider_response(provider),
+                    "model": _model_response(model),
+                    "groups": groups_payload,
+                    "created_provider": created_provider,
+                },
+            )
+        except (ValueError, LookupError, ModelGroupRevisionConflict, OSError) as exc:
+            return _error(request, str(exc))
 
     async def settings_get(request: OperationRequest) -> OperationResult:
         namespace = str(request.payload.get("namespace") or "").strip()
@@ -408,8 +615,15 @@ def build_config_operation_catalog(
         "config.provider.delete": provider_delete,
         "config.models.list": models_list,
         "config.model.create": model_create,
+        "config.model.create_with_provider": model_create_with_provider,
         "config.model.update": model_update,
         "config.model.delete": model_delete,
+        "config.model_groups.list": model_groups_list,
+        "config.model_group.create": model_group_create,
+        "config.model_group.update": model_group_update,
+        "config.model_group.delete": model_group_delete,
+        "config.model_group.members.set": model_group_members_set,
+        "config.model_groups.reorder": model_groups_reorder,
         "config.import_env": import_environment_operation,
         "settings.get": settings_get,
         "settings.update": settings_update,
@@ -421,6 +635,81 @@ def build_config_operation_catalog(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _dict_value(source: dict[str, Any], key: str) -> dict[str, Any]:
+    value = source.get(key)
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _validated_existing_model_ids(value: Any, store: ModelStore, work_root: str | None) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("model_ids must be an array")
+    existing = {item.id for item in store.list_sync(work_root=work_root)}
+    result: list[str] = []
+    for raw in value:
+        model_id = str(raw or "").strip()
+        if model_id not in existing:
+            raise ValueError(f"model not found: {model_id}")
+        if model_id not in result:
+            result.append(model_id)
+    return result
+
+
+def _normalize_provider_base_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("provider.base_url must be an absolute HTTP(S) URL")
+    if parsed.username or parsed.password:
+        raise ValueError("provider.base_url must not contain credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("provider.base_url must not contain a query or fragment")
+    path = parsed.path.rstrip("/")
+    if path.lower().endswith("/chat/completions"):
+        raise ValueError("provider.base_url must be an API base URL, not a /chat/completions endpoint")
+    if len(raw) > 2048:
+        raise ValueError("provider.base_url is too long")
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc, path, "", ""))
+
+
+def _provider_config_from_nested(
+    provider_id: str,
+    name: str,
+    base_url: str,
+    payload: dict[str, Any],
+) -> ProviderConfig:
+    return ProviderConfig(
+        id=provider_id,
+        name=name,
+        api_type=str(payload.get("api_type") or "openai").strip(),
+        base_url=base_url,
+        api_key=str(payload.get("api_key") or "").strip(),
+        adapter_profile_id=str(payload.get("adapter_profile_id") or "").strip(),
+        request_body=_dict_value(payload, "request_body"),
+        adapter_profile_override=_dict_value(payload, "adapter_profile_override"),
+        reasoning=_dict_value(payload, "reasoning"),
+        notes=str(payload.get("notes") or "").strip(),
+    )
+
+
+def _unique_model_record_id(model: ModelConfig, store: ModelStore, work_root: str | None) -> str:
+    requested = str(model.id or "").strip()
+    base = requested or make_model_record_id(model.provider_id or model.provider, model.model_id)
+    candidate, suffix = base, 2
+    while store.get_sync(candidate, work_root=work_root) is not None:
+        candidate = f"{base[:124]}-{suffix}"
+        suffix += 1
+    return candidate
+
 
 def _model_config_from_payload(params: dict[str, Any], *, fallback_provider: ProviderConfig | None) -> ModelConfig:
     """Build a ModelConfig from an RPC payload (UI shape: model_id, display_name, …).
@@ -446,6 +735,7 @@ def _model_config_from_payload(params: dict[str, Any], *, fallback_provider: Pro
     thinking_supported = bool(thinking.get("supported", params.get("thinking_supported") or False)) if isinstance(thinking, dict) else bool(params.get("thinking_supported") or False)
     thinking_budget = int(thinking.get("budget", params.get("thinking_budget") or 10000)) if isinstance(thinking, dict) else int(params.get("thinking_budget") or 10000)
     return ModelConfig(
+        id=str(params.get("id") or params.get("model_record_id") or "").strip(),
         model_id=str(params.get("model_id") or "").strip(),
         display_name=str(params.get("display_name") or "").strip(),
         provider=provider_name,
@@ -457,7 +747,21 @@ def _model_config_from_payload(params: dict[str, Any], *, fallback_provider: Pro
         thinking_budget=thinking_budget,
         reasoning_effort=str(params.get("reasoning_effort") or "").strip(),
         adapter_profile_id=str(extra.get("adapter_profile_id") or params.get("adapter_profile_id") or "").strip(),
-        request_body=dict(extra["request_body"]) if isinstance(extra.get("request_body"), dict) else {},
+        request_body=(
+            dict(extra["request_body"])
+            if isinstance(extra.get("request_body"), dict)
+            else _dict_value(params, "request_body")
+        ),
+        adapter_profile_override=(
+            dict(extra["adapter_profile_override"])
+            if isinstance(extra.get("adapter_profile_override"), dict)
+            else _dict_value(params, "adapter_profile_override")
+        ),
+        reasoning=(
+            dict(extra["reasoning"])
+            if isinstance(extra.get("reasoning"), dict)
+            else _dict_value(params, "reasoning")
+        ),
         capability=str(extra.get("capability") or params.get("capability") or "").strip().lower(),
         notes=str(params.get("notes") or "").strip(),
         is_default=bool(params.get("is_default") or False),
@@ -474,8 +778,17 @@ def _provider_update_fields(provider: ProviderConfig, params: dict[str, Any]) ->
     api_key = params.get("api_key")
     if isinstance(api_key, str) and api_key.strip() and api_key.strip() != MASKED_API_KEY:
         updates["api_key"] = api_key.strip()
+    extra = params.get("extra") if isinstance(params.get("extra"), dict) else {}
     if isinstance(params.get("extra"), dict):
-        updates["extra"] = dict(params["extra"])
+        updates["extra"] = dict(extra)
+    for key in ("request_body", "adapter_profile_override", "reasoning"):
+        value = params.get(key) if isinstance(params.get(key), dict) else extra.get(key)
+        if isinstance(value, dict):
+            updates[key] = dict(value)
+    if params.get("adapter_profile_id") is not None or "adapter_profile_id" in extra:
+        updates["adapter_profile_id"] = str(
+            params.get("adapter_profile_id") or extra.get("adapter_profile_id") or ""
+        ).strip()
     if isinstance(params.get("is_default"), bool):
         updates["is_default"] = params["is_default"]
     return replace(provider, **updates)
@@ -489,7 +802,7 @@ def _fallback_provider(model: ModelConfig) -> ProviderConfig | None:
 
 def _clear_other_defaults(model_store: ModelStore, model_id: str, work_root: str | None) -> None:
     for existing in model_store.list_sync(work_root=work_root):
-        if existing.model_id != model_id and existing.is_default:
+        if existing.id != model_id and existing.is_default:
             model_store.write(replace(existing, is_default=False), scope="global", work_root=work_root)
 
 

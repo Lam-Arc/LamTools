@@ -1,40 +1,46 @@
-# 信息密度与输出形态
+# Information density and response form
 
-读取时机：主题复杂、手机小屏、用户要求太快/太长/不明白，或默认回复开始像整本教材。
+Read for a complex topic, a small phone screen, feedback that an answer is too fast, long, or unclear, or a default answer beginning to resemble a textbook.
 
-## 1. 密度不等于字数
-1.1）主要观察同时新增了多少概念、符号和分支，以及相邻步骤缺了几座“桥”。短到每句都要补前置同样难懂；长到反复重述、没有主线也难懂。
-1.2）保留“对象 → 关系 → 操作理由 → 结果含义”，删无关背景、重复总结、旁支案例和格式噪音。不要以短为理由只给结论。
-1.3）没有通用最佳字数、公式数量或段长。下列档位是产品组织方式，不是教学研究的固定阈值。
+## 1. Density is not word count
 
-## 2. 按请求定体量
-2.1）一句局部问题：直接结论，加恰好足够的依据。只问“为什么乘2x”，不要发完整导数课程。
-2.2）一个新主题：一条解释链、一个代表例子、必要边界；需要图时让图承担一部分关系表达，而不是再复制一遍所有文字。
-2.3）完整证明/系统课程：保留完整推理和覆盖；用章节组织，不擅自只给摘要，也不人为切成每次必须回复“继续”。
-2.4）复习：先定位差异和易错，再按需要展开；已知部分简短唤回，不重新引入所有符号。
-2.5）小卡片：短段落、少量重点、自然换行；只有确需时列步骤。卡片布局由宿主负责，本技能不通过奇怪空格或 HTML 强制样式。
+1.1) Watch how many concepts, symbols, and branches arrive together and how many connecting steps are missing. An answer so short that each sentence needs prerequisite repair is hard to follow; a long, repetitive answer without a main path is also hard to follow.
+1.2) Keep object → relationship → reason for action → meaning of result. Remove irrelevant background, repetitive summaries, tangential examples, and formatting noise. Brevity is not a reason to give only a conclusion.
+1.3) There is no universal best word count, formula count, or paragraph length. The following sizes are product organization choices, not research thresholds.
 
-## 3. 语言和排版
-3.1）默认常用语言讲原理；关键术语第一次附英文。英语辅助不能把学习一件事变成同时读两份全文。
-3.2）新符号在附近说明，图例在图旁，相关解释不要与图隔很远。字幕、替代文本等可访问性内容不因“去重”被删掉。
-3.3）段落有重点但不是每句独占一段；小屏不堆宽表。公式单列是为了可读，不代表每行推导都要一个大标题。
-3.4）示范步骤可编号，连续解释宜用自然段。结尾不重复全文，也不自动加多项后续推荐。
+## 2. Size for the request
 
-## 4. 用户反馈如何改变下一次输出
-| 反馈 | 下一次具体变化 |
-|---|---|
-| 太快 | 重用原例子，补被跳过的一步；减少同时引入的新表示 |
-| 太长 | 先给答案，删背景与旁支；保留决定性依据 |
-| 太抽象 | 用一个具体量/图/状态轨迹，再映射回原符号 |
-| 太简单 | 跳过熟悉铺垫，直接边界、证明或迁移 |
-| 没看懂图 | 解释坐标和一个具体位置，再说全图关系；不马上再丢三张图 |
-| 不想被反问 | 连贯解释到底，练习只在明确要求时出现 |
+2.1) For one local question, give the direct answer and just enough support. “Why multiply by 2x?” does not call for a full derivative course.
+2.2) For a new topic, use one explanatory chain, one representative example, and necessary boundaries. If an image is needed, let it carry part of the relationship rather than repeating all text in it.
+2.3) For a full proof or systematic course, preserve reasoning and coverage. Organize with sections; do not silently reduce it to a summary or force the user to say “continue” after every artificial fragment.
+2.4) For review, identify differences and likely errors first; recall known material briefly and expand as needed rather than redefining every symbol.
+2.5) For a small card, use short paragraphs, limited emphasis, and natural line breaks. List steps only when useful. The host handles card layout; do not force formatting with odd spaces or HTML.
 
-## 5. 对照片段（原创，不是模板）
-过密：“由链式法则 f'=3u²u'=6x(x²+1)²。”
-更合适的局部解释：“外面是立方，里面是 x²+1；外层对里面求导得到3(x²+1)²，再乘里面对x的导数2x，所以结果是6x(x²+1)²。”
-这不是鼓励永远多写；已经熟悉链式法则的人只需结果和必要条件。
+## 3. Language and layout
 
-## 6. 依据边界
-Mayer 与 Chandler（2001）研究的是可控分段的多媒体解释，不能推导出“每100字必须暂停”或对所有纯文字都最优。本产品采用可调节节奏、完整小单元，不用固定分段点击作为硬要求。https://doi.org/10.1037/0022-0663.93.2.390
-公开学习者讨论对视觉直观、计算先行和叙述密度存在相反偏好；因此采用可调整呈现，不从点赞数推导最佳教法。
+3.1) Default to the user's usual language for principles and add English on first use of key terms. English support should not require reading two full copies of the lesson.
+3.2) Define new symbols nearby and put the legend beside a diagram. Do not remove captions or accessible alt text in the name of deduplication.
+3.3) Give paragraphs a focus without putting every sentence in a separate paragraph. Avoid wide tables on small screens. Standalone formulas help readability; every derivation line does not need a large heading.
+3.4) Number demonstration steps when useful; use paragraphs for continuous explanation. Do not repeat the whole response at the end or automatically attach many next-step recommendations.
+
+## 4. Respond to user feedback
+
+| Feedback | Concrete next change |
+| --- | --- |
+| Too fast | Reuse the original example, fill one skipped step, reduce simultaneous new representations |
+| Too long | Put the answer first and remove background and tangents while preserving decisive grounds |
+| Too abstract | Use one concrete quantity, image, or state trace, then map it to original symbols |
+| Too easy | Skip familiar setup and proceed to limits, proof, or transfer |
+| Did not understand the image | Explain axes and one specific point, then the whole relationship; do not immediately add three more images |
+| Does not want questions | Explain continuously; offer practice only when explicitly requested |
+
+## 5. Original comparison, not a template
+
+Too dense: “By the chain rule, f'=3u²u'=6x(x²+1)².”
+More useful locally: “The outside is a cube and the inside is x²+1. Differentiating the outside with respect to the inside gives 3(x²+1)²; multiply by the derivative of the inside with respect to x, which is 2x. The result is 6x(x²+1)².”
+This does not mean always writing more. Someone fluent in the chain rule may need only the result and conditions.
+
+## 6. Evidence boundary
+
+Mayer and Chandler (2001) studied controllable segments of multimedia explanations. Their work does not imply “pause every 100 words” or that this is optimal for all plain text. This product uses adjustable pace and complete small units rather than fixed mandatory clicks. https://doi.org/10.1037/0022-0663.93.2.390
+Public learner discussions show opposing preferences for visual intuition, calculation first, and narrative density. Therefore presentation remains adjustable; popularity counts do not establish a best teaching method.

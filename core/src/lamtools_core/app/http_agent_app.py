@@ -58,6 +58,7 @@ from .live_member import DefaultCoreLiveMemberHooks
 from .live_operations import CoreLiveContext, CoreLiveOperationHost, recover_stale_active_turns
 from .project_store import ActiveProjectSessionsError, CoreProjectStore
 from lamtools_core.artifact import ArtifactRegistry, ArtifactStore, kind_from_mime
+from lamtools_core.tool.command_runner import warm_command_shell
 from .live_router import create_core_live_router
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
@@ -206,6 +207,10 @@ def create_core_agent_http_app(
     temperature: float = 0.2,
     frontend_dir: Path | str | None = None,
 ) -> FastAPI:
+    # Resolve the command shell while the server starts. Windows automatic
+    # selection runs a bounded WSL probe whose cost must not land on the first
+    # model request; the cached decision is what the prompt and run_command use.
+    warm_command_shell()
     try:
         config = load_llm_config(model_ref=model_id)
     except ValueError:
@@ -1370,7 +1375,8 @@ def _register_model_operations(
     *,
     work_root: Path | str | None = None,
 ) -> None:
-    from lamtools_core.config.model_store import ModelConfig, ModelStore
+    from lamtools_core.config.model_group_store import ModelGroupStore
+    from lamtools_core.config.model_store import ModelConfig, ModelStore, make_model_record_id
     from lamtools_core.config.provider_store import ProviderStore
     from dataclasses import replace
 
@@ -1386,9 +1392,26 @@ def _register_model_operations(
         provider = ProviderStore().get_sync(provider_id)
         return provider.name if provider is not None else fallback
 
-    def _payload_model_config(model_id: str, payload: dict[str, Any]) -> ModelConfig:
+    def _payload_model_config(record_id: str, payload: dict[str, Any]) -> ModelConfig:
         thinking = payload.get("thinking") if isinstance(payload.get("thinking"), dict) else {}
-        request_body = payload.get("request_body") if isinstance(payload.get("request_body"), dict) else {}
+        extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
+        request_body = (
+            payload.get("request_body")
+            if isinstance(payload.get("request_body"), dict)
+            else extra.get("request_body") if isinstance(extra.get("request_body"), dict) else {}
+        )
+        profile_override = (
+            payload.get("adapter_profile_override")
+            if isinstance(payload.get("adapter_profile_override"), dict)
+            else extra.get("adapter_profile_override")
+            if isinstance(extra.get("adapter_profile_override"), dict)
+            else {}
+        )
+        reasoning = (
+            payload.get("reasoning")
+            if isinstance(payload.get("reasoning"), dict)
+            else extra.get("reasoning") if isinstance(extra.get("reasoning"), dict) else {}
+        )
         provider_id = str(payload.get("provider_id") or "")
         # Prefer resolving the provider name from the provider store by
         # provider_id so the jsonc file always carries the correct name even
@@ -1399,7 +1422,8 @@ def _register_model_operations(
         else:
             provider_name = str(payload.get("provider") or payload.get("provider_name") or "")
         return ModelConfig(
-            model_id=str(payload.get("model_id") or model_id),
+            id=record_id,
+            model_id=str(payload.get("model_id") or record_id),
             display_name=str(payload.get("display_name") or ""),
             provider=provider_name,
             provider_id=provider_id,
@@ -1409,17 +1433,19 @@ def _register_model_operations(
             thinking_supported=bool(thinking.get("supported", payload.get("thinking_supported") or False)),
             thinking_budget=int(thinking.get("budget", payload.get("thinking_budget") or 10000)),
             reasoning_effort=str(payload.get("reasoning_effort") or ""),
-            adapter_profile_id=str(payload.get("adapter_profile_id") or ""),
+            adapter_profile_id=str(payload.get("adapter_profile_id") or extra.get("adapter_profile_id") or ""),
             request_body=request_body,
-            capability=str(payload.get("capability") or "").strip().lower(),
+            adapter_profile_override=dict(profile_override),
+            reasoning=dict(reasoning),
+            capability=str(payload.get("capability") or extra.get("capability") or "").strip().lower(),
             notes=str(payload.get("notes") or "").strip(),
             is_default=bool(payload.get("is_default") or False),
         )
 
     async def models_upsert(request: OperationRequest) -> OperationResult:
         payload = request.payload if isinstance(request.payload, dict) else {}
-        model_id = str(payload.get("model_id") or "").strip()
-        if not model_id:
+        upstream_model_id = str(payload.get("model_id") or "").strip()
+        if not upstream_model_id:
             return OperationResult(name=request.name, status="error", payload={"error": "model_id is required"})
         scope = str(payload.get("scope") or "global").strip()
         if scope not in ("project", "global"):
@@ -1429,30 +1455,53 @@ def _register_model_operations(
             return OperationResult(name=request.name, status="error", payload={"error": "work_root is required for project scope"})
         # Clear is_default on all other models when setting a new default.
         store = _store()
-        model = _payload_model_config(model_id, payload)
+        record_id = str(payload.get("model_record_id") or payload.get("id") or "").strip()
+        existing = store.get_sync(record_id, work_root=str(root) if root else None) if record_id else None
+        if existing is not None:
+            record_id = existing.id
+        if not record_id:
+            provider_ref = str(payload.get("provider_id") or payload.get("provider") or payload.get("provider_name") or "")
+            base_id = make_model_record_id(provider_ref, upstream_model_id)
+            record_id = base_id
+            suffix = 2
+            while store.get_sync(record_id, work_root=str(root) if root else None) is not None:
+                record_id = f"{base_id[:124]}-{suffix}"
+                suffix += 1
+        model = _payload_model_config(record_id, payload)
         if model.is_default:
             for existing in store.list_sync(work_root=str(root) if root else None):
-                if existing.model_id != model.model_id and existing.is_default:
+                if existing.id != model.id and existing.is_default:
                     existing.is_default = False
                     store.write(existing, scope=scope, work_root=root)
         path = store.write(model, scope=scope, work_root=root)
-        return OperationResult(name=request.name, payload={"path": str(path), "model_id": model.model_id, "scope": scope})
+        return OperationResult(name=request.name, payload={
+            "path": str(path),
+            "id": model.id,
+            "model_record_id": model.id,
+            "model_id": model.model_id,
+            "scope": scope,
+        })
 
     async def models_delete(request: OperationRequest) -> OperationResult:
         from pathlib import Path as _Path
 
         payload = request.payload if isinstance(request.payload, dict) else {}
-        model_id = str(payload.get("model_id") or "").strip()
+        model_ref = str(payload.get("model_record_id") or payload.get("model_id") or "").strip()
         scope = str(payload.get("scope") or "global").strip()
-        if not model_id:
+        if not model_ref:
             return OperationResult(name=request.name, status="error", payload={"error": "model_id is required"})
         root = str(payload.get("work_root") or payload.get("workRoot") or "").strip() or work_root
-        path = ModelStore.write_path(model_id, scope=scope, work_root=root)
+        store = _store()
+        model = store.get_sync(model_ref, work_root=str(root) if root else None)
+        if model is None:
+            return OperationResult(name=request.name, status="error", payload={"error": f"model not found: {model_ref}"})
+        path = _Path(model.source_path) if model.source_path else ModelStore.write_path(model.id, scope=scope, work_root=root)
         if not path.is_file():
             return OperationResult(name=request.name, status="error", payload={"error": f"no model file at {path}"})
         path.unlink()
-        _store()._cached_signature = None  # invalidate cache
-        _store()._cached_models = None
+        store._cached_signature = None  # invalidate cache
+        store._cached_models = None
+        ModelGroupStore().remove_model_ids([model.id])
         return OperationResult(name=request.name, payload={"deleted": str(path)})
 
     async def models_set_default(request: OperationRequest) -> OperationResult:
@@ -1472,10 +1521,16 @@ def _register_model_operations(
             return OperationResult(name=request.name, status="error", payload={"error": f"model not found: {model_id}"})
         # Clear other defaults, then mark this one.
         for existing in store.list_sync(work_root=root):
-            if existing.model_id != model.model_id and existing.is_default:
+            if existing.id != model.id and existing.is_default:
                 store.write(replace(existing, is_default=False), scope=scope, work_root=root)
         path = store.write(replace(model, is_default=True), scope=scope, work_root=root)
-        return OperationResult(name=request.name, payload={"path": str(path), "model_id": model.model_id, "scope": scope})
+        return OperationResult(name=request.name, payload={
+            "path": str(path),
+            "id": model.id,
+            "model_record_id": model.id,
+            "model_id": model.model_id,
+            "scope": scope,
+        })
 
     for name, handler in {
         "config.models.upsert": models_upsert,

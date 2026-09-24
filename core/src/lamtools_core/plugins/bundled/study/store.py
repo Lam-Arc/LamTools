@@ -1904,11 +1904,15 @@ class StudyStore:
                 resource_ids.append(resource_id)
             body = '\n\n'.join(body_parts)
             path = normalize_relative_path(None, title=str(note['title']), note_id=str(note['id']), existing=existing)
+            destination = root / path
+            if destination.exists() or destination.is_symlink():
+                existing.add(path)
+                path = normalize_relative_path(None, title=str(note['title']), note_id=str(note['id']), existing=existing)
             existing.add(path)
             metadata = {'id': note['id'], 'title': note['title'], 'parent_id': None,
                         'resource_ids': resource_ids, 'resource_refs': self._resource_refs(db, resource_ids),
                         'revision': int(note['revision'])}
-            document = write_document(root, path, metadata, body)
+            document = write_document(root, path, metadata, body, replace=False)
             db.execute(
                 'UPDATE study_notes SET path=?,parent_id=?,content_hash=?,source_json=? WHERE scope_key=? AND id=?',
                 (path, '', document.content_hash, json.dumps({'resource_ids': resource_ids}, ensure_ascii=False),
@@ -2161,7 +2165,8 @@ class StudyStore:
                 body = str(p.get('body_md') or '')
                 metadata = {'id': note_id, 'title': title, 'parent_id': parent_id or None,
                             'resource_ids': resource_ids, 'resource_refs': self._resource_refs(db, resource_ids), 'revision': 1}
-                document = write_document(vault_root(self.path, self.scope.key), path, metadata, body)
+                document = write_document(vault_root(self.path, self.scope.key), path, metadata, body,
+                                          replace=False)
                 try:
                     db.execute('INSERT INTO study_notes(scope_key,id,title,revision,source_json,deleted_at,path,parent_id,content_hash) VALUES(?,?,?,?,?,NULL,?,?,?)',
                                (self.scope.key, note_id, title, 1, json.dumps({'resource_ids': resource_ids}), path, parent_id, document.content_hash))

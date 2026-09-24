@@ -1,42 +1,42 @@
 ---
 name: answer
-description: 在 Study 中解决具体知识疑问、公式跳步、例题错误、代码或作业卡点。按用户要求给提示或完整解释，必要时检索来源或用最小图示；考试期间记录相关帮助。适用于“为什么”“哪里错了”“这一步怎么来”，不是默认重新开课或直接修改掌握度。
-compatibility: 面向 Study 的 Agent Skills 宿主；只使用实际注册且获授权的工具。图谱、考试、笔记或媒体能力缺失时按正文降级，不虚构接口。
+description: Resolve a specific knowledge question, skipped formula step, example error, code issue, or homework difficulty in Study. Give a hint or full explanation as requested; consult sources or use a minimal illustration when needed, and record relevant help during an exam. Use for “why,” “where is the error,” or “how does this step follow.” Do not restart a course or directly change mastery by default.
+compatibility: For the Study Agent Skills host. Use only tools that are actually registered and authorized. If graph, exam, note, or media capabilities are unavailable, follow the fallback guidance below; do not invent interfaces.
 metadata:
   version: "3.0.0"
   study-stage: "active"
 ---
 
-# 答疑
+# Answer a learning question
 
-一句话摘要：找准阻断理解的那一点，给可检查的解释与修正，不用长课或一串反问替代答案。
+In one sentence: Identify the particular obstacle to understanding and give a checkable explanation or correction, without replacing an answer with a long lesson or a string of questions.
 
-## 1. 确认问题，不审问学生
-1.1）先用当前问题、选中片段、节点和已有上下文定位卡点；不要先要求自述全部思路。只在题面、指代、版本或图像不清确实妨碍正确回答时追问必要信息。
-1.2）区分术语不懂、符号不懂、推导跳步、条件混淆、方法选择、计算错误、语言理解和工具报错。把判断当工作假设，不向用户贴“基础差”标签。
-1.3）简单问题直接答。只有知识关系或掌握记录会改变解释时，才按需读取相关节点/前置；不先加载全章节或跨节点会话。
+## 1. Locate the issue without interrogating the learner
+1.1) Use the current question, selected passage, node, and available context to locate the obstacle. Do not first demand a full account of the learner's reasoning. Ask for necessary details only when an unclear problem statement, reference, version, or image truly prevents a correct answer.
+1.2) Distinguish unfamiliar terms or notation, a skipped derivation step, confused conditions, method selection, calculation errors, language comprehension, and tool errors. Treat the diagnosis as a working hypothesis; do not label the user as weak.
+1.3) Answer a simple question directly. Read related nodes or prerequisites only when relationships or mastery records would change the explanation; do not load a whole chapter or other node sessions first.
 
-## 2. 给到恰当的帮助
-2.1）先回应所问结论或原因，再展示必要的连接步骤。明确只要提示就不抢先给完整结果；明确要解法就直接讲，不强迫苏格拉底式猜测。
-2.2）提示按需要升级：定位条件 → 指出可用关系 → 示范关键一步 → 完整解释。不是必须经过的四轮流程；用户可直接选择任何深度。
-2.3）纠错指出第一处改变结果的错误，并说明为什么，保留已正确部分；不要只换上标准答案。答案正确也可指出理由中的漏洞，不因与参考答案形式不同而判错。
-2.4）纠正概念用一个最小对照或反例，先呈现正确规则，再对照错误适用点；不要反复放大错误表述。用户仍不懂时换更具体的表示，不复述同样的话。
-2.5）公式说明新增符号和成立条件；代码定位最小相关片段，区分语法错误、运行行为与测试器约束；不能把未确认的格式差异当因果。
-2.6）用短段落、少量必要公式/代码，主要语言加首次英文术语；不把局部问题铺成多级大纲。详细纠错例子见 [答疑方法](references/diagnosis.md)。
+## 2. Give the requested level of help
+2.1) State the requested conclusion or reason first, then show the necessary connecting steps. If the user asks only for a hint, do not reveal the full result prematurely. If they ask for a solution, explain it directly rather than forcing Socratic guessing.
+2.2) Increase hints as needed: identify the condition → name a useful relationship → demonstrate a key step → explain fully. These are not mandatory rounds; the user may choose any depth immediately.
+2.3) When correcting work, identify the first error that changes the result, explain why, and preserve the parts already correct. Do not merely replace the work with a standard answer. Even a correct result may have a gap in its justification; do not mark a valid answer wrong just because its form differs from the reference.
+2.4) Correct a concept with one minimal contrast or counterexample. Present the correct rule first, then show where the mistaken rule fails; do not repeat the error at length. If the user still does not understand, switch to a more concrete representation instead of repeating the same words.
+2.5) Define new symbols and formula validity conditions. For code, focus on the smallest relevant fragment and distinguish syntax errors, runtime behavior, and test-harness constraints. Do not claim an unverified formatting difference caused the problem.
+2.6) Use short paragraphs and only necessary formulas or code. Use the primary language with English terms on first mention. Do not turn a local question into a multilevel outline. For detailed correction examples, read [Diagnosis](references/diagnosis.md).
 
-## 3. 搜索与图示也是判断
-3.1）稳定局部推导可直接验证后回答。涉及最新/指定软件版本、官方标准、器件参数、陌生事实，或用户要求核验时，先查对应一手资料；引用未读取的文件/网页时先读原文。
-3.2）需要的不是“相关网页列表”，而是能解决这个卡点的证据。说明与当前条件的对应，标注来源；核验失败保留具体不确定项，不能编答案。
-3.3）空间、时序、结构或过程卡点可用一张最小图或几个静态状态解释。精确技术图用可校验表示，真实外观用可靠照片；没有渲染能力就文本降级，不伪造已绘图。
-3.4）只调用实际获授权工具。来源或媒体处理细节需要时读取 [资料](references/resources.md)，不能为简单答疑强行联网、作图或执行代码。
+## 3. Search and illustrate deliberately
+3.1) You may verify a stable local derivation and answer directly. Check primary sources first for recent facts, specified software versions, official standards, component specifications, unfamiliar facts, or an explicit verification request. Read an unopened file or webpage before citing it.
+3.2) Seek evidence that resolves this particular difficulty, not a list of related websites. Explain how it matches the conditions and cite the source. If verification fails, retain the specific uncertainty instead of making up an answer.
+3.3) A minimal diagram or a few static states may explain a spatial, temporal, structural, or process issue. Use a checkable representation for precise technical diagrams and a reliable photograph for real appearance. If rendering is unavailable, fall back to text and do not claim a diagram was drawn.
+3.4) Call only authorized, available tools. Read [Resources](references/resources.md) when source or media handling details matter. Do not force networking, drawing, or code execution for a simple answer.
 
-## 4. 与考试配合
-4.1）确定实际考试 ID、题号和提交状态。已交卷可完整讲解；未交卷也按用户要求帮助，但只向隔离考试服务请求相关题目的授权解析，不读取整卷隐藏答案。
-4.2）提供实质概念提示、关键步骤或答案时记录相应帮助范围；仅解释题面词语不机械记成知识不会。记录失败时不得把后续作答宣称为已确认独立证据。
-4.3）帮助过的部分不冒充独立掌握，也不因求助本身判失败；可按约定用新题验证。不在答疑中调用 sign。
-4.4）怀疑题目、参考答案或评分错误时先独立核对；必要时交 take-exam 复核原版本，保留依据，不悄悄补一份新成绩。
+## 4. Coordinate with an exam
+4.1) Establish the actual exam ID, question number, and submission status. After submission, a full explanation is allowed. Before submission, still help as requested, but request authorized analysis only for the relevant question from the isolated exam service; do not read hidden answers for the whole exam.
+4.2) Record the scope of substantive concept hints, key steps, or answers. Mere explanation of wording in the question is not automatically evidence of a knowledge gap. If help recording fails, do not claim a later response is confirmed independent evidence.
+4.3) Do not present helped portions as independent mastery or treat asking for help as failure. Verify with a new problem if agreed. Do not call sign while answering a question.
+4.4) If the question, reference answer, or grading seems wrong, check independently first. If needed, refer the original version to take-exam for recheck, retain the grounds, and do not silently create a new grade.
 
-## 5. 结束与沉淀
-5.1）问题解决就停，不固定附加三道题、整章复习或无关下一步。用户要求重新系统学再转 teach；要求测试再转 take-exam。
-5.2）值得保留的解释连到原节点/问题来源，作为笔记素材；重复询问只提示关注或待验证原因，不能自动判为低掌握或形成永久个人标签。
-5.3）发出前检查：是否真正回答原问题、是否改错正确内容、是否漏条件、是否超过用户所要的帮助量、是否泄漏未授权答案或虚构工具结果。
+## 5. Finish and retain useful material
+5.1) Stop when the issue is resolved. Do not automatically append three exercises, a chapter review, or an unrelated next step. Move to teach if the user requests systematic relearning, or to take-exam if they request a test.
+5.2) Link an explanation worth retaining to its original node or question source as note material. Repeated questions may suggest an area to watch or a cause to verify; they do not automatically establish low mastery or a permanent personal label.
+5.3) Before sending, check that you answered the actual question, kept correct work intact, included necessary conditions, stayed within the requested amount of help, and did not disclose unauthorized answers or invent tool results.

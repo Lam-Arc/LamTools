@@ -111,6 +111,14 @@ def resolve_document_path(root: Path, relative_path: str) -> Path:
     relative = PurePosixPath(relative_path)
     if relative.is_absolute() or any(part in ('', '.', '..') for part in relative.parts):
         raise ValueError('INVALID_NOTE_PATH')
+    # The vault is host-owned storage next to the Study database.  Resolving
+    # the supplied root as the trust anchor would accept a symlink to anywhere.
+    container = root.parent
+    if container.is_symlink() or root.is_symlink():
+        raise ValueError('INVALID_NOTE_PATH')
+    expected_root = container.parent.resolve() / container.name / root.name
+    if root.resolve() != expected_root:
+        raise ValueError('INVALID_NOTE_PATH')
     target, resolved_root = root.joinpath(*relative.parts).resolve(), root.resolve()
     try:
         target.relative_to(resolved_root)
@@ -128,7 +136,8 @@ def read_document(root: Path, relative_path: str) -> NoteDocument:
     except UnicodeDecodeError as exc:
         raise ValueError('NOTE_FILE_NOT_UTF8') from exc
 
-def write_document(root: Path, relative_path: str, metadata: dict[str, Any], content: str) -> NoteDocument:
+def write_document(root: Path, relative_path: str, metadata: dict[str, Any], content: str,
+                   *, replace: bool = True) -> NoteDocument:
     target = resolve_document_path(root, relative_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=f'.{target.name}.', suffix='.tmp', dir=target.parent)
@@ -138,7 +147,13 @@ def write_document(root: Path, relative_path: str, metadata: dict[str, Any], con
             handle.write(serialize_document(metadata, content))
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, target)
+        if replace:
+            os.replace(temporary, target)
+        else:
+            try:
+                os.link(temporary, target)
+            except FileExistsError as exc:
+                raise ValueError('NOTE_PATH_EXISTS') from exc
     finally:
         if temporary.exists():
             temporary.unlink()
