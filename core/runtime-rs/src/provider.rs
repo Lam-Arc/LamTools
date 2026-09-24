@@ -270,12 +270,12 @@ fn jitter_factor() -> f64 {
 
 /// One transport attempt, tagged for the retry decision.
 enum AttemptOutcome {
-    /// Retrying can help: transport failure, timeout, server error or an
-    /// unparsable body.
+    /// Retrying can help: a pre-header connection failure or stall, a stream or
+    /// body read failure, a server error or an unparsable body. The class is
+    /// visible in the stage stream (`http_connect_error`, `http_send_timeout`)
+    /// but it does not change the budget: the desktop reads the same
+    /// `model_retry.jsonc` and treats every transient failure alike.
     Retry(RuntimeError),
-    /// A connection or pre-header stall gets one more chance, regardless of
-    /// the wider policy for HTTP status and response-body failures.
-    RetryConnection(RuntimeError),
     /// Retrying cannot help: the provider reported a client-side error.
     Fatal(RuntimeError),
 }
@@ -432,16 +432,9 @@ impl HttpModelBackend {
             match self.send_attempt(body).await {
                 Ok(payload) => return Ok(payload),
                 Err(AttemptOutcome::Fatal(error)) => return Err(error),
-                Err(outcome) => {
-                    let (error, max_attempts) = match outcome {
-                        AttemptOutcome::Retry(error) => (error, self.policy.attempts.max(1)),
-                        AttemptOutcome::RetryConnection(error) => {
-                            (error, self.policy.attempts.max(1).min(2))
-                        }
-                        AttemptOutcome::Fatal(_) => unreachable!(),
-                    };
+                Err(AttemptOutcome::Retry(error)) => {
                     failures += 1;
-                    if failures >= max_attempts {
+                    if failures >= self.policy.attempts.max(1) {
                         if self.stream.is_some() {
                             self.stream_event("reset", String::new());
                         }
@@ -512,7 +505,7 @@ impl HttpModelBackend {
                 HeaderSendError::Transport(_) => "provider request failed before response headers",
             };
             self.report("http_transport_error");
-            AttemptOutcome::RetryConnection(RuntimeError::Model(message.into()))
+            AttemptOutcome::Retry(RuntimeError::Model(message.into()))
         })?;
         self.report("http_headers_received");
         let status = response.status();
@@ -3573,7 +3566,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preheader_failure_has_two_attempts_and_safe_stages() {
+    async fn preheader_failure_retries_the_whole_budget_with_safe_stages() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
@@ -3586,7 +3579,8 @@ mod tests {
             settings,
             RetryPolicy {
                 attempts: 10,
-                timeout: Duration::from_secs(2),
+                // Bounded per attempt: ten attempts must not make the suite slow.
+                timeout: Duration::from_millis(300),
                 delays: vec![0.0],
                 jitter: false,
                 empty_response_retries: 0,
@@ -3609,7 +3603,28 @@ mod tests {
             .await
             .unwrap_err();
         let stages = stages.lock().unwrap();
-        assert_eq!(stages.len(), 9, "pre-header failures get only two attempts");
+        // Desktop parity: a failure before the response headers is an ordinary
+        // transient failure, so it gets the whole configured budget. It used to
+        // be clamped to two attempts, which made a few seconds of mobile-network
+        // trouble fatal to a turn that the desktop, reading the same
+        // model_retry.jsonc, would have retried ten times.
+        assert_eq!(
+            stages
+                .iter()
+                .filter(|stage| **stage == "http_send_start")
+                .count(),
+            10,
+            "every configured attempt runs"
+        );
+        assert_eq!(
+            stages
+                .iter()
+                .filter(|stage| **stage == "http_retry_wait")
+                .count(),
+            9,
+            "one wait between consecutive attempts"
+        );
+        assert_eq!(stages.len(), 4 * 10 + 9);
         assert_eq!(stages[0], "http_send_start");
         assert_eq!(stages[1], "http_request_built");
         assert!(matches!(
@@ -3618,14 +3633,59 @@ mod tests {
         ));
         assert_eq!(stages[3], "http_transport_error");
         assert_eq!(stages[4], "http_retry_wait");
-        assert_eq!(stages[5], "http_send_start");
-        assert_eq!(stages[6], "http_request_built");
-        assert!(matches!(
-            stages[7],
-            "http_send_timeout" | "http_connect_error"
-        ));
-        assert_eq!(stages[8], "http_transport_error");
+        assert_eq!(
+            stages.last().copied(),
+            Some("http_transport_error"),
+            "the last attempt reports the failure it gave up on"
+        );
         assert!(!error.to_string().contains("secret"));
+    }
+
+    /// The attempt budget is the configured one, not a hidden constant: raising
+    /// `model_retries` has to lengthen the window a pre-header failure survives.
+    #[tokio::test]
+    async fn the_preheader_budget_follows_the_configured_attempts() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+
+        let mut settings = config("model", json!({}));
+        settings.base_url = format!("http://{address}/path");
+        let stages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let reported_stages = stages.clone();
+        let mut backend = HttpModelBackend::with_retry_policy(
+            settings,
+            RetryPolicy {
+                attempts: 3,
+                timeout: Duration::from_millis(300),
+                delays: vec![0.0],
+                jitter: false,
+                empty_response_retries: 0,
+                stream_idle_timeout: None,
+            },
+        )
+        .unwrap()
+        .with_progress(move |stage| reported_stages.lock().unwrap().push(stage));
+        backend.client = reqwest::Client::builder().no_proxy().build().unwrap();
+        backend
+            .complete(
+                "model",
+                &[Message::User {
+                    content: "hello".into(),
+                }],
+                &[],
+                &TurnOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        let stages = stages.lock().unwrap();
+        assert_eq!(
+            stages
+                .iter()
+                .filter(|stage| **stage == "http_send_start")
+                .count(),
+            3
+        );
     }
 
     #[tokio::test]
@@ -3774,7 +3834,7 @@ mod tests {
             settings,
             RetryPolicy {
                 attempts: 3,
-                timeout: Duration::from_secs(2),
+                timeout: Duration::from_millis(300),
                 delays: vec![0.0],
                 jitter: false,
                 empty_response_retries: 0,

@@ -837,6 +837,13 @@ logs.
 - An agent loop without a step budget needs an evidence-based stop. Removing a round cap without the desktop's repeated-result guard trades a truncation bug for an unbounded one.
 - Anything the client fetches at runtime belongs in the release steps and in public verification, not only in the repository: the update manifest was bumped locally for ten releases and never published, because no step generated, uploaded or checked it.
 
+## Policy numbers are a parity layer too (2026-09-24)
+
+- Comparing the two engines' *defaults* is not comparing their behaviour: both retry policies carried identical defaults (10 attempts, delays 1,1,2,5,5, jitter, 360 s, 120 s idle), while the mobile call site clamped pre-header connection failures to two attempts — so a few seconds of mobile-network trouble ended a turn the desktop would have retried ten times. A values-to-values diff would have declared parity; the miss is only visible when the decision table ("which error class gets which budget") is laid out per class on both sides.
+- A test can encode a divergence as intent. `preheader failures get only two attempts` asserted the clamp; treating a green test as evidence of correctness hides exactly that. For any guard, threshold or cap, ask what the other host does with it and why the test asserts what it asserts.
+- Evidence that has been re-attributed once gets closed early: pre-header failures were investigated as an Android TLS problem and afterwards read as "the network", so the same log shape stopped being examined. Keep a failure class open until the *policy* behind it has been checked, not just its plausibility.
+- A log cannot prove a budget unless it names it: stage names carried no attempt index or limit, so the log that contained the clamp could not show it. Report exhaustion explicitly (attempt count) instead of leaving it to be counted by hand against the source.
+
 ## Mobile release operational lessons (2026-09-24)
 
 - Redirecting the packager with `*>` merges stderr into the PowerShell pipeline, and a native command writing there becomes a terminating error under `$ErrorActionPreference = 'Stop'`: the wrapper dies while Gradle keeps building and the log stops mid-file. Redirect stdout only (`>`).
