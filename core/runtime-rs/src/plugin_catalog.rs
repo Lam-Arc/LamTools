@@ -76,6 +76,7 @@ fn entry(
     manifest: &str,
     implemented: &[&str],
     unavailable_note: &str,
+    ready_note: &str,
 ) -> PluginInventory {
     let declared = declared_tools(manifest);
     let assembled = declared
@@ -84,7 +85,7 @@ fn entry(
         .cloned()
         .collect::<Vec<_>>();
     let note = if assembled.len() == declared.len() {
-        String::new()
+        ready_note.to_owned()
     } else if assembled.is_empty() {
         unavailable_note.to_owned()
     } else {
@@ -114,30 +115,35 @@ pub fn bundled_plugin_inventory() -> Vec<PluginInventory> {
             GIT_TOOLS,
             &[],
             "移动端未装配：Android 没有 git 可执行文件，且项目目录不是仓库",
+            "",
         ),
         entry(
             "imagegen",
             IMAGEGEN_TOOLS,
-            &[],
+            &["generate_image"],
             "移动端未装配：需要先完成生图配置与图片落地",
+            "需在设置 → 生图中启用并填写 API 地址，模型才会看到该工具",
         ),
         entry(
             "study",
             STUDY_TOOLS_RESOURCE,
             study::IMPLEMENTED_STUDY_TOOLS.as_slice(),
             "移动端未装配",
+            "",
         ),
         entry(
             "websearch",
             WEBSEARCH_TOOLS,
             &["web_search"],
             "移动端未装配：搜索内核尚未移植到 Rust",
+            "",
         ),
         entry(
             "workflow",
             WORKFLOW_TOOLS,
             &[],
             "移动端仅提供界面 RPC，未向 Agent 装配工具",
+            "",
         ),
     ]
 }
@@ -196,9 +202,57 @@ mod tests {
     }
 
     #[test]
+    fn assembled_image_generation_matches_the_runtime_and_names_its_setup() {
+        use crate::image_gen::{GenerateImageTools, ImageGenConfig, ImageSink};
+        use crate::ToolRuntime;
+        use std::sync::Arc;
+
+        struct Sink;
+        #[async_trait::async_trait]
+        impl ImageSink for Sink {
+            async fn save_image(
+                &self,
+                _filename: &str,
+                _mime: &str,
+                _bytes: &[u8],
+            ) -> Result<String, crate::RuntimeError> {
+                Ok("attachment://x".into())
+            }
+        }
+
+        let inventory = bundled_plugin_inventory();
+        let entry = inventory
+            .iter()
+            .find(|item| item.plugin == "imagegen")
+            .expect("imagegen entry");
+        let runtime: Vec<String> = GenerateImageTools::new(
+            ImageGenConfig {
+                enabled: true,
+                api_url: "https://images.example.invalid/v1".into(),
+                api_key: String::new(),
+                model: String::new(),
+            },
+            Arc::new(Sink),
+        )
+        .definitions(&crate::DeviceCapabilities::default())
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect();
+        let reported: Vec<String> = entry
+            .assembled
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect();
+        assert_eq!(reported, runtime);
+        // Assembled but not usable until the user configures it, which the panel
+        // has to say because the tool hides itself while unconfigured.
+        assert!(entry.note.contains("生图"));
+    }
+
+    #[test]
     fn unavailable_plugins_report_no_tools_and_a_reason() {
         let inventory = bundled_plugin_inventory();
-        for name in ["git", "imagegen", "workflow"] {
+        for name in ["git", "workflow"] {
             let item = inventory
                 .iter()
                 .find(|entry| entry.plugin == name)

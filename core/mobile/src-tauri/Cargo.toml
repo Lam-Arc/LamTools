@@ -1,6 +1,6 @@
 [package]
 name = "sunday-mobile"
-version = "0.1.11"
+version = "0.1.12"
 description = "Sunday mobile host"
 authors = ["Lam"]
 edition = "2021"
@@ -18,6 +18,7 @@ json5 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 infer = "0.19"
+async-trait = "0.1"
 rusqlite = { version = "0.37", features = ["bundled"] }
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["fs", "macros", "rt", "sync"] }
@@ -28,5 +29,4 @@ jni = "0.22"
 rustls-platform-verifier = "0.7"
 
 [dev-dependencies]
-async-trait = "0.1"
 tokio = { version = "1", features = ["macros", "rt", "time"] }

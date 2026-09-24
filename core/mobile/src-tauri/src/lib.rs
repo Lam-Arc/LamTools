@@ -16,6 +16,7 @@ use lamtools_runtime::{
     },
     workflow_ops,
     workflow_store::WorkflowStore,
+    image_gen::{GenerateImageTools, ImageGenConfig, ImageSink},
     web_search::WebSearchTools,
     AgentContext, AgentRuntime, ApprovalResponse, DeviceCapabilities, Message, ModelBackend,
     ToolCall, ToolObserver, ToolRuntime, TurnContinuation, TurnOptions, TurnProgress, TurnRequest,
@@ -107,6 +108,40 @@ impl ToolObserver for MobileToolObserver {
                 },
             }),
         );
+    }
+}
+
+/// Stores generated images as session attachments so they render in the
+/// conversation and open with the existing attachment plumbing.
+struct MobileImageSink {
+    app: tauri::AppHandle,
+    session_id: String,
+}
+
+#[async_trait::async_trait]
+impl ImageSink for MobileImageSink {
+    async fn save_image(
+        &self,
+        filename: &str,
+        mime: &str,
+        bytes: &[u8],
+    ) -> Result<String, lamtools_runtime::RuntimeError> {
+        let store = native_attachment_store(&self.app)
+            .map_err(lamtools_runtime::RuntimeError::Tool)?;
+        let bytes = bytes.to_vec();
+        let session_id = self.session_id.clone();
+        let filename = filename.to_owned();
+        let mime = mime.to_owned();
+        // Hashing and writing are blocking; keep them off the runtime's loop.
+        let metadata = tokio::task::spawn_blocking(move || {
+            store
+                .save(&session_id, &filename, &mime, &bytes)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| lamtools_runtime::RuntimeError::Tool(error.to_string()))?
+        .map_err(lamtools_runtime::RuntimeError::Tool)?;
+        Ok(format!("附件 {} ({})", metadata.filename, metadata.id))
     }
 }
 
@@ -703,6 +738,10 @@ struct MobileTurnPayload {
     /// the switch would be a control that changes nothing.
     #[serde(default)]
     disabled_plugin_names: Vec<String>,
+    /// `core.imagegen` settings; the host resolves them so the runtime can stay
+    /// unaware of where a platform keeps configuration.
+    #[serde(default)]
+    imagegen_config: Value,
 }
 
 #[tauri::command]
@@ -843,6 +882,23 @@ async fn sunday_agent_turn_inner(
         .any(|name| name == "websearch")
     {
         shared_tools.push(Arc::new(WebSearchTools::new()));
+    }
+    if !payload
+        .disabled_plugin_names
+        .iter()
+        .any(|name| name == "imagegen")
+    {
+        // Unconfigured image generation hides itself from the model, so the
+        // runtime stays the single gate for what the model can see.
+        let config: ImageGenConfig =
+            serde_json::from_value(payload.imagegen_config.clone()).unwrap_or_default();
+        shared_tools.push(Arc::new(GenerateImageTools::new(
+            config,
+            Arc::new(MobileImageSink {
+                app: app.clone(),
+                session_id: parent_thread_id.clone(),
+            }),
+        )));
     }
     if payload.study_tools {
         shared_tools.push(Arc::new(StudyTools::new(native_study_store(&app)?)));
@@ -1000,6 +1056,10 @@ struct MobileResumePayload {
     /// the switch would be a control that changes nothing.
     #[serde(default)]
     disabled_plugin_names: Vec<String>,
+    /// `core.imagegen` settings; the host resolves them so the runtime can stay
+    /// unaware of where a platform keeps configuration.
+    #[serde(default)]
+    imagegen_config: Value,
 }
 
 #[tauri::command]
@@ -1095,6 +1155,12 @@ async fn sunday_agent_resume_inner(
     // Web search needs only the network, and the desktop host offers it in Study
     // sessions too, so it is not gated on the Study workspace. The runtime drops
     // the definition when the device reports no network.
+    // Needed by the image sink, and read from the payload only.
+    let parent_thread_id = if payload.session_id.trim().is_empty() {
+        payload.continuation.hook_context.session_id.clone()
+    } else {
+        payload.session_id.clone()
+    };
     let mut shared_tools: Vec<Arc<dyn ToolRuntime>> =
         vec![project_runtime, mcp_runtime, skill_runtime];
     if !payload
@@ -1104,16 +1170,28 @@ async fn sunday_agent_resume_inner(
     {
         shared_tools.push(Arc::new(WebSearchTools::new()));
     }
+    if !payload
+        .disabled_plugin_names
+        .iter()
+        .any(|name| name == "imagegen")
+    {
+        // Unconfigured image generation hides itself from the model, so the
+        // runtime stays the single gate for what the model can see.
+        let config: ImageGenConfig =
+            serde_json::from_value(payload.imagegen_config.clone()).unwrap_or_default();
+        shared_tools.push(Arc::new(GenerateImageTools::new(
+            config,
+            Arc::new(MobileImageSink {
+                app: app.clone(),
+                session_id: parent_thread_id.clone(),
+            }),
+        )));
+    }
     if payload.study_tools {
         shared_tools.push(Arc::new(StudyTools::new(native_study_store(&app)?)));
     }
     let child_tools: Arc<dyn ToolRuntime> =
         Arc::new(CompositeToolRuntime::new(&capabilities, shared_tools.clone()));
-    let parent_thread_id = if payload.session_id.trim().is_empty() {
-        payload.continuation.hook_context.session_id.clone()
-    } else {
-        payload.session_id.clone()
-    };
     let models = with_active_model(
         payload.models,
         &payload.continuation.model_record_id,

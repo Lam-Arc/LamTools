@@ -164,6 +164,7 @@ export async function runEmbeddedSundayTurn(input: {
   study?: { enabled?: boolean }
   disabledSkillNames?: string[]
   disabledPluginNames?: string[]
+  imagegenConfig?: Record<string, unknown>
   retryConfig?: Record<string, unknown>
   loadContextConfig?: Record<string, unknown>
   context?: {
@@ -208,6 +209,7 @@ export async function runEmbeddedSundayTurn(input: {
       studyTools: input.study?.enabled === true,
       disabledSkillNames: input.disabledSkillNames || [],
       disabledPluginNames: input.disabledPluginNames || [],
+      imagegenConfig: input.imagegenConfig || {},
       retryConfig: input.retryConfig || {},
       loadContextConfig: input.loadContextConfig || {},
     },
@@ -233,6 +235,7 @@ export async function resumeEmbeddedSundayTurn(input: {
   study?: { enabled?: boolean }
   disabledSkillNames?: string[]
   disabledPluginNames?: string[]
+  imagegenConfig?: Record<string, unknown>
   retryConfig?: Record<string, unknown>
   loadContextConfig?: Record<string, unknown>
 }): Promise<RustTurnProgress> {
@@ -260,6 +263,7 @@ export async function resumeEmbeddedSundayTurn(input: {
       studyTools: input.study?.enabled === true,
       disabledSkillNames: input.disabledSkillNames || [],
       disabledPluginNames: input.disabledPluginNames || [],
+      imagegenConfig: input.imagegenConfig || {},
       retryConfig: input.retryConfig || {},
       loadContextConfig: input.loadContextConfig || {},
     },

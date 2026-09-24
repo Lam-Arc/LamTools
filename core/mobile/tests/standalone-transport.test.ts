@@ -249,6 +249,43 @@ describe('StandaloneTransport', () => {
     expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({ reasoningLevel: expected }))
   })
 
+  it('forwards the 设置 → 生图 configuration to the native runtime', async () => {
+    const repository = createLocalRepository(new MemoryDatabase())
+    const config = new StandaloneConfigStore(new MemorySecureStorage())
+    await config.handleRpc('config.provider.create', {
+      name: 'Test', api_type: 'openai', base_url: 'https://model.invalid/v1', api_key: 'secret',
+      models: [{ model_id: 'image-model', display_name: 'Image Model' }],
+    })
+    // The shared image generation panel writes this namespace.
+    await config.handleRpc('settings.update', {
+      namespace: 'core.imagegen',
+      value: { enabled: true, api_url: 'https://images.invalid/v1', api_key: 'img-key', model: 'dall-e' },
+    })
+    const runAgent = vi.fn(async () => ({
+      text: 'ok', runtimeModelId: 'image-model', toolRounds: 0,
+    }))
+    const created = await createStandaloneProjectClient(repository).create({ name: '生图项目', work_root: '' })
+    const transport = new StandaloneTransport(repository, config, runAgent)
+    await transport.connect()
+    await transport.request({ method: 'initialize', params: {} })
+
+    await transport.request({
+      method: 'turn/start',
+      params: { thread_id: created.session.id, input: [{ type: 'text', text: '画一张图' }] },
+    })
+
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalled())
+    // Without this the Rust tool can never be configured, so it would stay
+    // hidden from the model no matter what the panel says.
+    expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({
+      imagegenConfig: expect.objectContaining({
+        enabled: true,
+        api_url: 'https://images.invalid/v1',
+        model: 'dall-e',
+      }),
+    }))
+  })
+
   it('keeps each tool round visible instead of letting the next round replace it', async () => {
     const repository = createLocalRepository(new MemoryDatabase())
     const config = new StandaloneConfigStore(new MemorySecureStorage())

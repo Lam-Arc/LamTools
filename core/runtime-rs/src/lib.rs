@@ -12,6 +12,7 @@ use std::{collections::BTreeMap, sync::Arc};
 pub mod compaction;
 pub mod hooks;
 pub mod mcp;
+pub mod image_gen;
 pub mod memory;
 pub mod plugin_catalog;
 mod profiles;
