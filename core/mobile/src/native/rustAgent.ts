@@ -118,6 +118,27 @@ export async function listEmbeddedStudySkills(): Promise<EmbeddedStudySkill[]> {
   return await invoke<EmbeddedStudySkill[]>('sunday_study_skill_catalog')
 }
 
+/** One tool the mobile agent can actually call, as reported by the runtime. */
+export interface EmbeddedPluginTool {
+  name: string
+  permission: string
+}
+
+/** Tool inventory for one bundled plugin on this device. */
+export interface EmbeddedPluginInventory {
+  plugin: string
+  /** Tools assembled into the agent; the panel count must come from this. */
+  assembled: EmbeddedPluginTool[]
+  /** What the plugin manifest declares, for an honest comparison. */
+  declared_count: number
+  /** Why the two differ; empty when everything declared is assembled. */
+  note: string
+}
+
+export async function listEmbeddedPluginInventory(): Promise<EmbeddedPluginInventory[]> {
+  return await invoke<EmbeddedPluginInventory[]>('sunday_plugin_inventory')
+}
+
 export async function runEmbeddedSundayTurn(input: {
   turnId: string
   sessionId: string

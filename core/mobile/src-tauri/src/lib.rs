@@ -705,6 +705,15 @@ fn sunday_study_skill_catalog() -> Vec<StudySkillRecord> {
     study_skills::catalog()
 }
 
+/// Bundled plugin tool inventory for the extensions panel.
+///
+/// Derived from the manifests and the runtimes this host actually assembles, so
+/// the panel cannot advertise a tool the agent would refuse to run.
+#[tauri::command]
+fn sunday_plugin_inventory() -> Vec<lamtools_runtime::plugin_catalog::PluginInventory> {
+    lamtools_runtime::plugin_catalog::bundled_plugin_inventory()
+}
+
 fn apply_study_skill_context(context: &mut AgentContext, disabled: &[String]) {
     if !context
         .mode_context
@@ -2586,6 +2595,7 @@ pub fn run() {
         sunday_sub_agent_approval,
         sunday_study_rpc,
         sunday_study_skill_catalog,
+        sunday_plugin_inventory,
         sunday_workflow_rpc,
         load_legacy_mobile_state,
         local_state_read,
@@ -2615,6 +2625,7 @@ pub fn run() {
         sunday_sub_agent_approval,
         sunday_study_rpc,
         sunday_study_skill_catalog,
+        sunday_plugin_inventory,
         sunday_workflow_rpc,
         load_legacy_mobile_state,
         local_state_read,

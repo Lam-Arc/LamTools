@@ -30,6 +30,40 @@ describe('standalone bundled extensions', () => {
     ]))
   })
 
+  it('reports only the tools the runtime assembles and explains the rest', async () => {
+    const inventory = vi.fn(async () => [
+      { plugin: 'study', assembled: [{ name: 'get_knowledge_net', permission: 'auto_allow' }], declared_count: 5, note: '' },
+      { plugin: 'git', assembled: [], declared_count: 2, note: '移动端未装配：Android 没有 git 可执行文件，且项目目录不是仓库' },
+    ])
+    const store = new StandaloneExtensionsStore(undefined, vi.fn(async () => []), inventory)
+    const plugins = (await store.handleRpc('plugin.list', {}))!.plugins as Array<Record<string, unknown>>
+
+    const study = plugins.find(plugin => plugin.name === 'study')!
+    expect(study.tools).toEqual([
+      expect.objectContaining({
+        path: 'bundled://study/tools.jsonc',
+        tools: [expect.objectContaining({ name: 'get_knowledge_net', permission: 'auto_allow' })],
+      }),
+    ])
+    expect(study.tools_note).toBe('')
+
+    const git = plugins.find(plugin => plugin.name === 'git')!
+    // A plugin whose tools are missing must not imply it has none by accident.
+    expect(git.tools).toEqual([])
+    expect(String(git.tools_note)).toContain('Android 没有 git')
+    expect(inventory).toHaveBeenCalledOnce()
+  })
+
+  it('does not claim zero tools when the tool inventory cannot be read', async () => {
+    const store = new StandaloneExtensionsStore(
+      undefined,
+      vi.fn(async () => []),
+      vi.fn(async () => { throw new Error('no native host') }),
+    )
+    const plugins = (await store.handleRpc('plugin.list', {}))!.plugins as Array<Record<string, unknown>>
+    expect(plugins.every(plugin => plugin.tools_note === '工具清单读取失败，无法确认')).toBe(true)
+  })
+
   it('registers Study and persists extension switches', async () => {
     const storage = new MemoryStandaloneStateStorage({ disabledPlugins: [], disabledSkills: [] })
     const store = new StandaloneExtensionsStore(storage)

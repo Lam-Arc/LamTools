@@ -13,6 +13,7 @@ pub mod compaction;
 pub mod hooks;
 pub mod mcp;
 pub mod memory;
+pub mod plugin_catalog;
 mod profiles;
 pub mod project_tools;
 pub mod provider;

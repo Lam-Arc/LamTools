@@ -2741,7 +2741,11 @@ impl StudyStore {
 pub const STUDY_TOOLS_RESOURCE: &str =
     include_str!("../../src/lamtools_core/plugins/bundled/study/tools.jsonc");
 
-const IMPLEMENTED_STUDY_TOOLS: [&str; 5] = [
+/// Tools this runtime implements from the bundled Study manifest.
+///
+/// Public so the plugin inventory can compare the manifest's declarations with
+/// what the runtime can actually execute instead of trusting a copy.
+pub const IMPLEMENTED_STUDY_TOOLS: [&str; 5] = [
     "get_knowledge_net",
     "build_knowledge_net",
     "sign",

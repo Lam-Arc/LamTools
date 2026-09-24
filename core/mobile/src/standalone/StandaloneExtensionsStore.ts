@@ -5,8 +5,10 @@ import {
 import {
   hasEmbeddedRustCore,
   listEmbeddedHooks,
+  listEmbeddedPluginInventory,
   listEmbeddedStudySkills,
   type EmbeddedHookListPayload,
+  type EmbeddedPluginInventory,
   type EmbeddedStudySkill,
 } from '../native/rustAgent'
 import { cloneState } from '../storage/cloneState'
@@ -48,6 +50,8 @@ interface ExtensionState {
 
 export class StandaloneExtensionsStore {
   private state: ExtensionState | null = null
+  private inventory = new Map<string, EmbeddedPluginInventory>()
+  private inventoryStatus: 'idle' | 'ready' | 'failed' = 'idle'
 
   constructor(
     private readonly storage: StandaloneStateStorage<ExtensionState> = createStandaloneStateStorage({
@@ -56,23 +60,68 @@ export class StandaloneExtensionsStore {
       legacyKey: EXTENSION_STATE_KEY,
     }),
     private readonly studySkillCatalog: () => Promise<EmbeddedStudySkill[]> = listEmbeddedStudySkills,
+    private readonly pluginInventory: () => Promise<EmbeddedPluginInventory[]> = listEmbeddedPluginInventory,
   ) {}
+
+  /**
+   * Read the runtime's tool inventory once per store instance.
+   *
+   * An unreadable inventory must not become a confident "0 tools": the panel
+   * says the count is unknown instead.
+   */
+  private async loadInventory(): Promise<void> {
+    if (this.inventoryStatus !== 'idle') return
+    try {
+      for (const entry of await this.pluginInventory()) this.inventory.set(entry.plugin, entry)
+      this.inventoryStatus = 'ready'
+    } catch (error) {
+      this.inventoryStatus = 'failed'
+      console.error('Failed to read the plugin tool inventory', error)
+    }
+  }
+
+  private inventoryNote(name: string): string {
+    if (this.inventoryStatus === 'failed') return '工具清单读取失败，无法确认'
+    return this.inventory.get(name)?.note || ''
+  }
 
   async handleRpc(method: string, params: Record<string, unknown>): Promise<Record<string, unknown> | null> {
     const state = await this.load()
     if (method === 'plugin.list') {
+      await this.loadInventory()
       return {
-        plugins: plugins.map(plugin => ({
-          ...plugin,
-          id: plugin.name,
-          builtin: true,
-          root: `bundled://${plugin.name}`,
-          enabled: !state.disabledPlugins.includes(plugin.name),
-          skills: 'skills' in plugin ? [`bundled://${plugin.name}/skills`, `bundled://${plugin.name}/future`] : [],
-          hooks: [], mcp: [], tools: [], operations: [], commands: [],
-          skill_names: 'skills' in plugin ? [...plugin.skills] : [],
-          hook_summary: [], dependencies: [], deps_status: 'none', config_schema: '',
-        })),
+        plugins: plugins.map(plugin => {
+          // Report only what the runtime actually assembles. A hand-written
+          // list used to return an empty array for every plugin, which told the
+          // user nothing about whether a tool was missing or merely unlisted.
+          const inventory = this.inventory.get(plugin.name)
+          return {
+            ...plugin,
+            id: plugin.name,
+            builtin: true,
+            root: `bundled://${plugin.name}`,
+            enabled: !state.disabledPlugins.includes(plugin.name),
+            skills: 'skills' in plugin ? [`bundled://${plugin.name}/skills`, `bundled://${plugin.name}/future`] : [],
+            hooks: [], mcp: [],
+            tools: inventory?.assembled?.length
+              ? [{
+                  path: `bundled://${plugin.name}/tools.jsonc`,
+                  tools: inventory.assembled.map(tool => ({
+                    name: tool.name,
+                    permission: tool.permission,
+                    visibility: 'model',
+                    skill: '',
+                    handler: `rust://${plugin.name}`,
+                    timeout: 0,
+                  })),
+                }]
+              : [],
+            tools_note: this.inventoryNote(plugin.name),
+            operations: [], commands: [],
+            skill_names: 'skills' in plugin ? [...plugin.skills] : [],
+            hook_summary: [], dependencies: [], deps_status: 'none', config_schema: '',
+          }
+        }),
         errors: [],
       }
     }

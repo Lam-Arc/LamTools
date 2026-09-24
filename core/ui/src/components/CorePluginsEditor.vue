@@ -65,6 +65,7 @@
               <span class="plugin-meta">
                 <span class="hook-status" :class="depsClass(plugin)">{{ depsLabel(plugin) }}</span>
                 <span class="hook-status is-plugins-tools">{{ toolCount(plugin) }} 工具</span>
+                <span v-if="plugin.tools_note" class="hook-status is-plugins-note">{{ plugin.tools_note }}</span>
                 <span v-if="isBundled(plugin)" class="hook-status is-bundled">内置</span>
               </span>
             </div>
@@ -312,6 +313,8 @@ interface PluginItem {
   hooks: string[]
   mcp: string[]
   tools: { path: string; tools: PluginToolDecl[]; error?: string }[]
+  /** Present when the host cannot supply the full tool list; explains why. */
+  tools_note?: string
   skill_names: string[]
   hook_summary: { event: string; matcher: string; type: string }[]
   dependencies: string[]
@@ -913,6 +916,14 @@ onMounted(fetchPlugins)
 
 .hook-status.is-plugins-tools {
   color: var(--purple);
+}
+
+/* Muted, wrapping explanation for a host that cannot list every declared tool. */
+.hook-status.is-plugins-note {
+  color: var(--theme-main-text);
+  opacity: .62;
+  white-space: normal;
+  max-width: 100%;
 }
 
 .plugin-path {
