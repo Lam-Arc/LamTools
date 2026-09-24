@@ -37,6 +37,35 @@ describe('standalone reachable RPCs', () => {
     vi.unstubAllGlobals()
   })
 
+  it('names the address that failed when the update manifest cannot be read', async () => {
+    // Every one of these was the on-device result until the manifest was
+    // actually published, so the error has to say where the app looked.
+    const cases: Array<() => void> = [
+      () => vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404, json: async () => ({}) }))),
+      () => vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }))),
+      () => vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed') })),
+      () => vi.stubGlobal('fetch', vi.fn(async () => ({
+        ok: true, json: async () => { throw new SyntaxError('Unexpected token <') },
+      }))),
+    ]
+    const failures: Array<Record<string, unknown>> = []
+    for (const stub of cases) {
+      stub()
+      const result = await checkStandaloneUpdate('0.1.25')
+      expect(result.status).toBe('check_failed')
+      expect(result.current_version).toBe('0.1.25')
+      failures.push(result)
+      vi.unstubAllGlobals()
+    }
+    expect(String(failures[0].error)).toContain('HTTP 404')
+    expect(String(failures[1].error)).toContain('HTTP 500')
+    expect(String(failures[2].error)).toContain('不可达')
+    expect(String(failures[3].error)).toContain('Unexpected token')
+    for (const failure of failures) {
+      expect(String(failure.error)).toContain(MOBILE_UPDATE_MANIFEST)
+    }
+  })
+
   it('persists model notes and can clear them explicitly', async () => {
     const storage = new MemoryStandaloneStateStorage<any>()
     const secrets = new MemorySecureStorage()
