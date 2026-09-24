@@ -118,7 +118,10 @@ fn choose_tail_start(history: &[Message], retained_steps: usize) -> usize {
     }
     let mut seen = 0usize;
     for (index, message) in history.iter().enumerate().rev() {
-        if matches!(message, Message::User { .. }) {
+        if matches!(
+            message,
+            Message::User { .. } | Message::UserMultimodal { .. }
+        ) {
             seen += 1;
             if seen == retained_steps {
                 return index;
@@ -145,7 +148,9 @@ fn recent_user_instructions(history: &[Message], limit: usize) -> String {
     let mut instructions = history
         .iter()
         .filter_map(|message| match message {
-            Message::User { content } => Some(content.trim()),
+            Message::User { content } | Message::UserMultimodal { content, .. } => {
+                Some(content.trim())
+            }
             _ => None,
         })
         .filter(|content| !content.is_empty())
@@ -312,6 +317,9 @@ fn format_message(message: &Message) -> String {
     match message {
         Message::System { content } => format!("system: {content}"),
         Message::User { content } => format!("user: {content}"),
+        Message::UserMultimodal { content, images } => {
+            format!("user: {content} [{} attached image(s)]", images.len())
+        }
         Message::Assistant { content, .. } => format!("assistant: {content}"),
         Message::AssistantToolCalls { calls, .. } => format!(
             "assistant tool calls: {}",
@@ -395,6 +403,13 @@ fn estimate_message(message: &Message, fast: bool) -> usize {
         | Message::User { content }
         | Message::Assistant { content, .. } => {
             total += estimate_text_tokens(content, fast);
+        }
+        Message::UserMultimodal { content, images } => {
+            total += estimate_text_tokens(content, fast);
+            // Image token cost varies by model and crop strategy. Reserve a
+            // conservative fixed estimate without counting base64 payloads as
+            // transcript text.
+            total += images.len().saturating_mul(1_000);
         }
         Message::AssistantToolCalls { calls, .. } => {
             for call in calls {

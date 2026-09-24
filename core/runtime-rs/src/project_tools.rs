@@ -4,6 +4,7 @@ use crate::{
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
+use tokio::io::AsyncWriteExt;
 
 pub struct ProjectFileTools {
     root: PathBuf,
@@ -26,6 +27,20 @@ impl ProjectFileTools {
             return Err(RuntimeError::Tool(
                 "path must stay inside the current project".into(),
             ));
+        }
+        let mut resolved = self.root.clone();
+        for component in path.components() {
+            resolved.push(component);
+            match std::fs::symlink_metadata(&resolved) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(RuntimeError::Tool(
+                        "project path cannot follow a symbolic link".into(),
+                    ))
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => return Err(RuntimeError::Tool(error.to_string())),
+            }
         }
         Ok(self.root.join(path))
     }
@@ -74,7 +89,9 @@ impl ToolRuntime for ProjectFileTools {
                         .map_err(tool_error)?;
                 }
                 let content = call.arguments["content"].as_str().unwrap_or_default();
-                tokio::fs::write(&path, content).await.map_err(tool_error)?;
+                write_atomic(&path, content.as_bytes())
+                    .await
+                    .map_err(tool_error)?;
                 Ok(json!({"ok":true,"path":call.arguments["path"],"bytes":content.len()}))
             }
             "read_text_file" => {
@@ -110,6 +127,36 @@ impl ToolRuntime for ProjectFileTools {
 
 fn tool_error(error: std::io::Error) -> RuntimeError {
     RuntimeError::Tool(error.to_string())
+}
+
+async fn write_atomic(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    let temporary = path.with_file_name(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("project"),
+        uuid::Uuid::new_v4()
+    ));
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .await?;
+    let written = async {
+        file.write_all(content).await?;
+        file.sync_all().await
+    }
+    .await;
+    drop(file);
+    if let Err(error) = written {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        return Err(error);
+    }
+    if let Err(error) = tokio::fs::rename(&temporary, path).await {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -204,6 +251,38 @@ mod tests {
             })
             .await;
         assert!(matches!(empty_read_path, Err(RuntimeError::Tool(_))));
+
+        let rewritten = tools
+            .execute(&ToolCall {
+                id: "write-2".into(),
+                name: "write_text_file".into(),
+                arguments: json!({"path":"notes/你好.txt","content":"第二版"}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(rewritten["bytes"], "第二版".len());
+        assert_eq!(
+            tokio::fs::read_to_string(root.join("notes/你好.txt"))
+                .await
+                .unwrap(),
+            "第二版"
+        );
+
+        #[cfg(unix)]
+        {
+            let outside = root.with_extension("outside");
+            tokio::fs::create_dir(&outside).await.unwrap();
+            std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+            let escaped_link = tools
+                .execute(&ToolCall {
+                    id: "linked-read".into(),
+                    name: "read_text_file".into(),
+                    arguments: json!({"path":"linked/secret.txt"}),
+                })
+                .await;
+            assert!(matches!(escaped_link, Err(RuntimeError::Tool(_))));
+            tokio::fs::remove_dir_all(&outside).await.unwrap();
+        }
 
         tokio::fs::remove_dir_all(root).await.unwrap();
     }

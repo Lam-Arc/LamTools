@@ -1,6 +1,7 @@
 use crate::profiles::{apply_request_profile, resolve_profile};
 use crate::{
-    Message, ModelBackend, ModelTurn, RuntimeError, ToolCall, ToolDefinition, TurnOptions,
+    ImageInput, Message, ModelBackend, ModelTurn, RuntimeError, ToolCall, ToolDefinition,
+    TurnOptions, MAX_MODEL_IMAGES, MAX_MODEL_IMAGE_BYTES, MAX_MODEL_IMAGE_TOTAL_BYTES,
 };
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
@@ -153,6 +154,8 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub thinking_supported: bool,
     pub thinking_budget: Option<u32>,
+    #[serde(default)]
+    pub notes: String,
 }
 
 /// Transport retry policy, mirroring `DEFAULT_MODEL_RETRY_CONFIG` in the
@@ -171,6 +174,8 @@ pub struct RetryPolicy {
     pub jitter: bool,
     /// Additional model turns after a successful but empty completion.
     pub empty_response_retries: usize,
+    /// Maximum silence between streaming network chunks; None disables it.
+    pub stream_idle_timeout: Option<Duration>,
 }
 
 impl Default for RetryPolicy {
@@ -181,11 +186,60 @@ impl Default for RetryPolicy {
             delays: vec![1.0, 1.0, 2.0, 5.0, 5.0],
             jitter: true,
             empty_response_retries: 3,
+            stream_idle_timeout: Some(Duration::from_secs(120)),
         }
     }
 }
 
 impl RetryPolicy {
+    /// Accept the validated `model_retry.jsonc` shape at the mobile host
+    /// boundary. Invalid or missing fields retain the shared defaults.
+    pub fn from_config(value: &Value) -> Self {
+        let mut policy = Self::default();
+        if let Some(n) = value
+            .get("model_retries")
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0)
+        {
+            policy.attempts = usize::try_from(n).unwrap_or(usize::MAX);
+        }
+        if let Some(n) = value
+            .get("model_timeout_seconds")
+            .and_then(Value::as_f64)
+            .filter(|n| valid_policy_seconds(*n))
+        {
+            policy.timeout = Duration::from_secs_f64(n);
+        }
+        if value
+            .get("model_stream_idle_timeout_seconds")
+            .is_some_and(Value::is_null)
+        {
+            policy.stream_idle_timeout = None;
+        } else if let Some(n) = value
+            .get("model_stream_idle_timeout_seconds")
+            .and_then(Value::as_f64)
+            .filter(|n| valid_policy_seconds(*n))
+        {
+            policy.stream_idle_timeout = Some(Duration::from_secs_f64(n));
+        }
+        if let Some(n) = value.get("empty_response_retries").and_then(Value::as_u64) {
+            policy.empty_response_retries = usize::try_from(n).unwrap_or(usize::MAX);
+        }
+        if let Some(delays) = value.get("retry_delays_seconds").and_then(Value::as_array) {
+            let delays: Vec<f64> = delays
+                .iter()
+                .filter_map(Value::as_f64)
+                .filter(|n| n.is_finite() && *n >= 0.0 && *n < 1e12)
+                .collect();
+            if !delays.is_empty() {
+                policy.delays = delays;
+            }
+        }
+        if let Some(jitter) = value.get("jitter").and_then(Value::as_bool) {
+            policy.jitter = jitter;
+        }
+        policy
+    }
     /// Seconds to wait before the retry that follows `attempt` failures.
     fn delay_seconds(&self, attempt: usize) -> f64 {
         let base = self
@@ -199,6 +253,10 @@ impl RetryPolicy {
             base
         }
     }
+}
+
+fn valid_policy_seconds(seconds: f64) -> bool {
+    seconds.is_finite() && seconds > 0.0 && seconds < 1e12
 }
 
 /// A 0.5x-1.5x factor seeded from the clock; jitter only spreads retries.
@@ -346,10 +404,21 @@ impl HttpModelBackend {
             .get("endpoint")
             .and_then(Value::as_str)
             .unwrap_or(fallback);
-        join_endpoint(
+        let mut url = join_endpoint(
             &self.config.base_url,
             &endpoint.replace("{model}", &self.config.api_model_id),
-        )
+        );
+        if self.stream.is_some() && self.protocol() == ProviderProtocol::GeminiGenerativeLanguage {
+            url = url.replace(":generateContent", ":streamGenerateContent");
+            if !url.contains("alt=sse") {
+                url.push_str(if url.contains('?') {
+                    "&alt=sse"
+                } else {
+                    "?alt=sse"
+                });
+            }
+        }
+        url
     }
 
     /// Retry a transport failure within the policy budget so a stalled
@@ -373,6 +442,9 @@ impl HttpModelBackend {
                     };
                     failures += 1;
                     if failures >= max_attempts {
+                        if self.stream.is_some() {
+                            self.stream_event("reset", String::new());
+                        }
                         return Err(error);
                     }
                     self.report("http_retry_wait");
@@ -444,14 +516,32 @@ impl HttpModelBackend {
         })?;
         self.report("http_headers_received");
         let status = response.status();
-        if status.is_success() && body.get("stream").and_then(Value::as_bool) == Some(true) {
-            let payload =
-                read_openai_stream(response, self.stream.as_ref(), self.progress.as_ref())
+        if status.is_success() && self.stream.is_some() {
+            let payload = match self.protocol() {
+                ProviderProtocol::OpenAiChat => {
+                    read_openai_stream_with_idle(
+                        response,
+                        self.stream.as_ref(),
+                        self.progress.as_ref(),
+                        self.policy.stream_idle_timeout,
+                    )
                     .await
-                    .map_err(|error| {
-                        self.report("http_transport_error");
-                        AttemptOutcome::Retry(RuntimeError::Model(error))
-                    })?;
+                }
+                protocol => {
+                    read_native_stream(
+                        response,
+                        protocol,
+                        self.stream.as_ref(),
+                        self.progress.as_ref(),
+                        self.policy.stream_idle_timeout,
+                    )
+                    .await
+                }
+            }
+            .map_err(|error| {
+                self.report("http_transport_error");
+                AttemptOutcome::Retry(RuntimeError::Model(error))
+            })?;
             self.report("http_body_received");
             self.remember_runtime_model(&payload);
             return Ok(payload);
@@ -509,9 +599,18 @@ impl HttpModelBackend {
 /// Assemble OpenAI-compatible SSE into the same shape used by the nonstreaming
 /// parser. Tool-call arguments are joined by index before JSON decoding.
 async fn read_openai_stream(
+    response: reqwest::Response,
+    report: Option<&Arc<dyn Fn(&'static str, String) + Send + Sync>>,
+    progress: Option<&Arc<dyn Fn(&'static str) + Send + Sync>>,
+) -> Result<Value, String> {
+    read_openai_stream_with_idle(response, report, progress, None).await
+}
+
+async fn read_openai_stream_with_idle(
     mut response: reqwest::Response,
     report: Option<&Arc<dyn Fn(&'static str, String) + Send + Sync>>,
     progress: Option<&Arc<dyn Fn(&'static str) + Send + Sync>>,
+    idle_timeout: Option<Duration>,
 ) -> Result<Value, String> {
     if !response
         .headers()
@@ -533,7 +632,20 @@ async fn read_openai_stream(
     let mut last_emit = std::time::Instant::now();
     let mut done = false;
     let mut reported_streaming = false;
-    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+    let mut total_bytes = 0usize;
+    while let Some(chunk) = if let Some(idle) = idle_timeout {
+        tokio::time::timeout(idle, response.chunk())
+            .await
+            .map_err(|_| "provider stream idle timeout".to_owned())?
+    } else {
+        response.chunk().await
+    }
+    .map_err(|e| e.to_string())?
+    {
+        total_bytes = total_bytes.saturating_add(chunk.len());
+        if total_bytes > MAX_NATIVE_STREAM_BYTES {
+            return Err("provider SSE exceeds 32 MiB".into());
+        }
         buffer.extend_from_slice(&chunk);
         if buffer.len() > 8 * 1024 * 1024 {
             return Err("provider SSE frame exceeds 8 MiB".into());
@@ -688,6 +800,482 @@ fn flush_stream_pending(
     }
 }
 
+const MAX_NATIVE_STREAM_BYTES: usize = 32 * 1024 * 1024;
+
+/// Native protocol SSE is assembled into the same payload shape as its JSON
+/// endpoint, so the existing model-turn and continuation parsers remain the
+/// single source of truth for text, reasoning and tool calls.
+async fn read_native_stream(
+    mut response: reqwest::Response,
+    protocol: ProviderProtocol,
+    report: Option<&Arc<dyn Fn(&'static str, String) + Send + Sync>>,
+    progress: Option<&Arc<dyn Fn(&'static str) + Send + Sync>>,
+    idle_timeout: Option<Duration>,
+) -> Result<Value, String> {
+    if !response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .contains("text/event-stream")
+    {
+        return response
+            .json::<Value>()
+            .await
+            .map_err(|error| error.to_string());
+    }
+    let mut buffer = Vec::<u8>::new();
+    let mut total = 0usize;
+    let mut accumulator = NativeStream::new(protocol);
+    while let Some(chunk) = if let Some(idle) = idle_timeout {
+        tokio::time::timeout(idle, response.chunk())
+            .await
+            .map_err(|_| "provider stream idle timeout".to_owned())?
+    } else {
+        response.chunk().await
+    }
+    .map_err(|error| error.to_string())?
+    {
+        total = total.saturating_add(chunk.len());
+        if total > MAX_NATIVE_STREAM_BYTES {
+            return Err("provider SSE exceeds 32 MiB".into());
+        }
+        buffer.extend_from_slice(&chunk);
+        if buffer.len() > 8 * 1024 * 1024 {
+            return Err("provider SSE frame exceeds 8 MiB".into());
+        }
+        while let Some((end, delimiter)) = sse_frame_boundary(&buffer) {
+            let frame = buffer.drain(..end + delimiter).collect::<Vec<_>>();
+            let frame = std::str::from_utf8(&frame[..end]).map_err(|error| error.to_string())?;
+            let mut event_name = "";
+            let mut data_lines = Vec::new();
+            for line in frame.split(|ch| ch == '\r' || ch == '\n') {
+                if let Some(name) = line.strip_prefix("event:") {
+                    event_name = name.trim();
+                }
+                if let Some(data) = line.strip_prefix("data:") {
+                    data_lines.push(data.trim_start());
+                }
+            }
+            let data = data_lines.join("\n");
+            if data.is_empty() {
+                continue;
+            }
+            if data == "[DONE]" {
+                accumulator.sentinel()?;
+            } else {
+                let event: Value = serde_json::from_str(&data)
+                    .map_err(|error| format!("invalid provider SSE: {error}"))?;
+                accumulator.ingest(&event, event_name, report, progress)?;
+            }
+            if accumulator.done {
+                return accumulator.finish();
+            }
+        }
+    }
+    Err(if buffer.is_empty() {
+        "provider SSE ended before terminal event".into()
+    } else {
+        "provider SSE ended with incomplete frame".into()
+    })
+}
+
+struct NativeStream {
+    protocol: ProviderProtocol,
+    payload: Value,
+    tool_inputs: Vec<String>,
+    open_blocks: Vec<bool>,
+    done: bool,
+    reported_streaming: bool,
+}
+
+impl NativeStream {
+    fn new(protocol: ProviderProtocol) -> Self {
+        let payload = match protocol {
+            ProviderProtocol::AnthropicMessages => json!({"content":[],"stop_reason":null}),
+            ProviderProtocol::OpenAiResponses => json!({"output":[]}),
+            ProviderProtocol::GeminiGenerativeLanguage => {
+                json!({"candidates":[{"content":{"role":"model","parts":[]}}]})
+            }
+            ProviderProtocol::OpenAiChat => Value::Null,
+        };
+        Self {
+            protocol,
+            payload,
+            tool_inputs: Vec::new(),
+            open_blocks: Vec::new(),
+            done: false,
+            reported_streaming: false,
+        }
+    }
+
+    fn delta(
+        &mut self,
+        kind: &'static str,
+        value: &str,
+        report: Option<&Arc<dyn Fn(&'static str, String) + Send + Sync>>,
+        progress: Option<&Arc<dyn Fn(&'static str) + Send + Sync>>,
+    ) {
+        if value.is_empty() {
+            return;
+        }
+        if !self.reported_streaming {
+            self.reported_streaming = true;
+            if let Some(progress) = progress {
+                progress("http_streaming");
+            }
+        }
+        if let Some(report) = report {
+            report(kind, value.to_owned());
+        }
+    }
+
+    fn sentinel(&mut self) -> Result<(), String> {
+        match self.protocol {
+            ProviderProtocol::GeminiGenerativeLanguage
+                if self.payload.pointer("/candidates/0/finishReason").is_some() =>
+            {
+                self.done = true;
+                Ok(())
+            }
+            _ if self.done => Ok(()),
+            _ => Err("provider SSE ended before terminal event".into()),
+        }
+    }
+
+    fn ingest(
+        &mut self,
+        event: &Value,
+        sse_name: &str,
+        report: Option<&Arc<dyn Fn(&'static str, String) + Send + Sync>>,
+        progress: Option<&Arc<dyn Fn(&'static str) + Send + Sync>>,
+    ) -> Result<(), String> {
+        if let Some(message) = event.pointer("/error/message").and_then(Value::as_str) {
+            return Err(message.to_owned());
+        }
+        match self.protocol {
+            ProviderProtocol::AnthropicMessages => {
+                self.anthropic(event, sse_name, report, progress)
+            }
+            ProviderProtocol::OpenAiResponses => self.responses(event, sse_name, report, progress),
+            ProviderProtocol::GeminiGenerativeLanguage => self.gemini(event, report, progress),
+            ProviderProtocol::OpenAiChat => unreachable!(),
+        }
+    }
+
+    fn anthropic(
+        &mut self,
+        event: &Value,
+        sse_name: &str,
+        report: Option<&Arc<dyn Fn(&'static str, String) + Send + Sync>>,
+        progress: Option<&Arc<dyn Fn(&'static str) + Send + Sync>>,
+    ) -> Result<(), String> {
+        let kind = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or(sse_name);
+        match kind {
+            "message_start" => {
+                if let Some(model) = event.pointer("/message/model") {
+                    self.payload["model"] = model.clone();
+                }
+            }
+            "content_block_start" => {
+                let index = stream_index(event, "index")?;
+                let block = event.get("content_block").cloned().unwrap_or(Value::Null);
+                let blocks = self.payload["content"].as_array_mut().unwrap();
+                if index != blocks.len() {
+                    return Err("out-of-order Anthropic content block".into());
+                }
+                blocks.push(block);
+                self.tool_inputs.push(String::new());
+                self.open_blocks.push(true);
+            }
+            "content_block_delta" => {
+                let index = stream_index(event, "index")?;
+                let delta = event.get("delta").ok_or("missing Anthropic delta")?;
+                let kind = delta.get("type").and_then(Value::as_str).unwrap_or("");
+                match kind {
+                    "text_delta" | "thinking_delta" | "signature_delta" => {
+                        let (field, source, report_kind) = match kind {
+                            "text_delta" => ("text", "text", "text_delta"),
+                            "thinking_delta" => ("thinking", "thinking", "reasoning_delta"),
+                            _ => ("signature", "signature", ""),
+                        };
+                        let part = delta.get(source).and_then(Value::as_str).unwrap_or("");
+                        let block = self.payload["content"]
+                            .get_mut(index)
+                            .ok_or("unknown Anthropic block")?;
+                        append_json_string(&mut block[field], part);
+                        if !report_kind.is_empty() {
+                            self.delta(report_kind, part, report, progress);
+                        }
+                    }
+                    "input_json_delta" => {
+                        let part = delta
+                            .get("partial_json")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        self.tool_inputs
+                            .get_mut(index)
+                            .ok_or("unknown Anthropic tool block")?
+                            .push_str(part);
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_stop" => {
+                let index = stream_index(event, "index")?;
+                *self
+                    .open_blocks
+                    .get_mut(index)
+                    .ok_or("unknown Anthropic block")? = false;
+                if let Some(raw) = self.tool_inputs.get(index).filter(|raw| !raw.is_empty()) {
+                    self.payload["content"][index]["input"] = serde_json::from_str(raw)
+                        .map_err(|_| "incomplete Anthropic tool arguments")?;
+                }
+            }
+            "message_delta" => {
+                if let Some(reason) = event.pointer("/delta/stop_reason") {
+                    self.payload["stop_reason"] = reason.clone();
+                }
+            }
+            "message_stop" => {
+                self.done = true;
+            }
+            "error" => return Err("provider streaming error".into()),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn responses(
+        &mut self,
+        event: &Value,
+        sse_name: &str,
+        report: Option<&Arc<dyn Fn(&'static str, String) + Send + Sync>>,
+        progress: Option<&Arc<dyn Fn(&'static str) + Send + Sync>>,
+    ) -> Result<(), String> {
+        let kind = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or(sse_name);
+        match kind {
+            "response.created" | "response.in_progress" => {
+                if let Some(model) = event.pointer("/response/model") {
+                    self.payload["model"] = model.clone();
+                }
+            }
+            "response.output_item.added" | "response.output_item.done" => {
+                let index = stream_index(event, "output_index")?;
+                let item = event
+                    .get("item")
+                    .cloned()
+                    .ok_or("missing Responses output item")?;
+                let output = self.payload["output"].as_array_mut().unwrap();
+                if index > output.len() {
+                    return Err("out-of-order Responses output item".into());
+                }
+                if index == output.len() {
+                    output.push(item);
+                } else {
+                    output[index] = item;
+                }
+            }
+            "response.output_text.delta"
+            | "response.reasoning_summary_text.delta"
+            | "response.function_call_arguments.delta" => {
+                let index = stream_index(event, "output_index")?;
+                let part = event.get("delta").and_then(Value::as_str).unwrap_or("");
+                let item = self.payload["output"]
+                    .get_mut(index)
+                    .ok_or("unknown Responses output item")?;
+                match kind {
+                    "response.output_text.delta" => {
+                        let content_index = event
+                            .get("content_index")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0) as usize;
+                        if content_index > 128 {
+                            return Err("too many Responses content parts".into());
+                        }
+                        let content = item["content"]
+                            .as_array_mut()
+                            .ok_or("missing Responses message content")?;
+                        while content.len() <= content_index {
+                            content.push(json!({"type":"output_text","text":""}));
+                        }
+                        append_json_string(&mut content[content_index]["text"], part);
+                        self.delta("text_delta", part, report, progress);
+                    }
+                    "response.reasoning_summary_text.delta" => {
+                        let summary_index = event
+                            .get("summary_index")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0) as usize;
+                        if summary_index > 128 {
+                            return Err("too many Responses summaries".into());
+                        }
+                        let summaries = item["summary"]
+                            .as_array_mut()
+                            .ok_or("missing Responses summary")?;
+                        while summaries.len() <= summary_index {
+                            summaries.push(json!({"type":"summary_text","text":""}));
+                        }
+                        append_json_string(&mut summaries[summary_index]["text"], part);
+                        self.delta("reasoning_delta", part, report, progress);
+                    }
+                    _ => append_json_string(&mut item["arguments"], part),
+                }
+            }
+            "response.completed" => {
+                if let Some(response) = event.get("response") {
+                    self.payload = response.clone();
+                }
+                self.done = true;
+            }
+            "response.failed" | "response.incomplete" => {
+                return Err(format!("provider Responses stream {kind}"))
+            }
+            "error" => return Err("provider streaming error".into()),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn gemini(
+        &mut self,
+        event: &Value,
+        report: Option<&Arc<dyn Fn(&'static str, String) + Send + Sync>>,
+        progress: Option<&Arc<dyn Fn(&'static str) + Send + Sync>>,
+    ) -> Result<(), String> {
+        if let Some(model) = event.get("modelVersion") {
+            self.payload["modelVersion"] = model.clone();
+        }
+        if let Some(candidate) = event.pointer("/candidates/0") {
+            if let Some(parts) = candidate
+                .pointer("/content/parts")
+                .and_then(Value::as_array)
+            {
+                for part in parts {
+                    if self.payload["candidates"][0]["content"]["parts"]
+                        .as_array()
+                        .unwrap()
+                        .len()
+                        >= 4096
+                    {
+                        return Err("too many Gemini stream parts".into());
+                    }
+                    let text = part.get("text").and_then(Value::as_str).unwrap_or("");
+                    if part.get("thought").and_then(Value::as_bool) == Some(true) {
+                        self.delta("reasoning_delta", text, report, progress);
+                    } else {
+                        self.delta("text_delta", text, report, progress);
+                    }
+                    self.payload["candidates"][0]["content"]["parts"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(part.clone());
+                }
+            }
+            if let Some(reason) = candidate.get("finishReason") {
+                self.payload["candidates"][0]["finishReason"] = reason.clone();
+                self.done = true;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Value, String> {
+        match self.protocol {
+            ProviderProtocol::AnthropicMessages => {
+                if self.open_blocks.iter().any(|open| *open) {
+                    return Err("Anthropic stream ended with unfinished content block".into());
+                }
+                if self.payload["stop_reason"] == "max_tokens" {
+                    return Err("provider output truncated at max_tokens".into());
+                }
+                if self.payload["stop_reason"].is_null() {
+                    return Err("Anthropic stream missing stop reason".into());
+                }
+            }
+            ProviderProtocol::OpenAiResponses => {
+                if self.payload.get("status").and_then(Value::as_str) != Some("completed") {
+                    return Err("Responses stream did not complete".into());
+                }
+                if let Some(output) = self.payload.get("output").and_then(Value::as_array) {
+                    for item in output {
+                        if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                            let raw = item
+                                .get("arguments")
+                                .and_then(Value::as_str)
+                                .ok_or("Responses tool arguments missing")?;
+                            if !serde_json::from_str::<Value>(raw)
+                                .is_ok_and(|args| args.is_object())
+                            {
+                                return Err("incomplete Responses tool arguments".into());
+                            }
+                        }
+                    }
+                }
+            }
+            ProviderProtocol::GeminiGenerativeLanguage => {
+                let reason = self
+                    .payload
+                    .pointer("/candidates/0/finishReason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !matches!(reason, "STOP" | "FINISH_REASON_UNSPECIFIED") {
+                    return Err(format!("Gemini stream stopped with {reason}"));
+                }
+            }
+            ProviderProtocol::OpenAiChat => unreachable!(),
+        }
+        Ok(self.payload)
+    }
+}
+
+fn stream_index(event: &Value, key: &str) -> Result<usize, String> {
+    let index = event
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("missing provider {key}"))?;
+    if index > 128 {
+        return Err("too many provider stream items".into());
+    }
+    Ok(index as usize)
+}
+
+fn messages_with_model_notes(messages: &[Message], notes: &str) -> Vec<Message> {
+    let notes = notes.trim();
+    if notes.is_empty() {
+        return messages.to_vec();
+    }
+    let note_block = format!("Current model notes: {notes}");
+    let mut updated = messages.to_vec();
+    if let Some(index) = updated
+        .iter()
+        .position(|message| matches!(message, Message::System { .. }))
+    {
+        if let Message::System { content } = &mut updated[index] {
+            if !content.contains(&note_block) {
+                if !content.is_empty() && !content.ends_with('\n') {
+                    content.push('\n');
+                }
+                content.push_str(&note_block);
+            }
+        }
+    } else {
+        updated.insert(
+            0,
+            Message::System {
+                content: note_block,
+            },
+        );
+    }
+    updated
+}
+
 #[async_trait]
 impl ModelBackend for HttpModelBackend {
     async fn complete(
@@ -698,7 +1286,8 @@ impl ModelBackend for HttpModelBackend {
         options: &TurnOptions,
     ) -> Result<ModelTurn, RuntimeError> {
         let protocol = self.protocol();
-        let mut request_messages = messages.to_vec();
+        let mut request_messages = messages_with_model_notes(messages, &self.config.notes);
+        validate_model_images(&request_messages)?;
         for empty_attempt in 0..=self.policy.empty_response_retries {
             let mut body = match protocol {
                 ProviderProtocol::AnthropicMessages => anthropic_body(
@@ -730,9 +1319,13 @@ impl ModelBackend for HttpModelBackend {
                     options,
                 ),
             };
-            if protocol == ProviderProtocol::OpenAiChat && self.stream.is_some() {
-                // Profiles can override body fields; force the requested wire protocol last.
-                body["stream"] = Value::Bool(true);
+            // Profiles can override body fields; select the wire format last.
+            if protocol == ProviderProtocol::GeminiGenerativeLanguage {
+                if let Some(fields) = body.as_object_mut() {
+                    fields.remove("stream");
+                }
+            } else {
+                body["stream"] = Value::Bool(self.stream.is_some());
             }
             if empty_attempt > 0 {
                 self.stream_event("reset", String::new());
@@ -761,7 +1354,7 @@ impl ModelBackend for HttpModelBackend {
                 ),
             }
             .map_err(|error| {
-                if protocol == ProviderProtocol::OpenAiChat {
+                if self.stream.is_some() {
                     self.stream_event("reset", String::new());
                 }
                 error
@@ -800,6 +1393,87 @@ impl ModelBackend for HttpModelBackend {
             .map(|model_id| model_id.clone())
             .unwrap_or_else(|_| self.config.api_model_id.clone())
     }
+}
+
+fn validate_model_images(messages: &[Message]) -> Result<(), RuntimeError> {
+    let mut total_bytes = 0usize;
+    for message in messages {
+        let Message::UserMultimodal { images, .. } = message else {
+            continue;
+        };
+        if images.is_empty() || images.len() > MAX_MODEL_IMAGES {
+            return Err(RuntimeError::Model(format!(
+                "image input must contain between 1 and {MAX_MODEL_IMAGES} images"
+            )));
+        }
+        for image in images {
+            if image.attachment_id.trim().is_empty() {
+                return Err(RuntimeError::Model(
+                    "image input is missing its durable attachment ID".into(),
+                ));
+            }
+            if !matches!(
+                image.mime_type.as_str(),
+                "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+            ) {
+                return Err(RuntimeError::Model(format!(
+                    "unsupported image MIME type: {}",
+                    image.mime_type
+                )));
+            }
+            let decoded_bytes = checked_base64_size(&image.data_base64).ok_or_else(|| {
+                RuntimeError::Model("image input is missing valid base64 bytes".into())
+            })?;
+            if decoded_bytes > MAX_MODEL_IMAGE_BYTES {
+                return Err(RuntimeError::Model(format!(
+                    "image exceeds the {} MiB model-input limit",
+                    MAX_MODEL_IMAGE_BYTES / (1024 * 1024)
+                )));
+            }
+            total_bytes = total_bytes.saturating_add(decoded_bytes);
+            if total_bytes > MAX_MODEL_IMAGE_TOTAL_BYTES {
+                return Err(RuntimeError::Model(format!(
+                    "conversation images exceed the {} MiB model-input limit",
+                    MAX_MODEL_IMAGE_TOTAL_BYTES / (1024 * 1024)
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn checked_base64_size(value: &str) -> Option<usize> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() % 4 != 0 {
+        return None;
+    }
+    let padding = bytes.iter().rev().take_while(|byte| **byte == b'=').count();
+    if padding > 2 {
+        return None;
+    }
+    let payload_end = bytes.len().checked_sub(padding)?;
+    if bytes[..payload_end]
+        .iter()
+        .any(|byte| !byte.is_ascii_alphanumeric() && !matches!(*byte, b'+' | b'/'))
+        || bytes[payload_end..].iter().any(|byte| *byte != b'=')
+    {
+        return None;
+    }
+    match padding {
+        0 => {}
+        1 if payload_end % 4 == 3 => {}
+        2 if payload_end % 4 == 2 => {}
+        _ => return None,
+    }
+    bytes
+        .len()
+        .checked_div(4)?
+        .checked_mul(3)?
+        .checked_sub(padding)
+}
+
+fn openai_image_data_url(image: &ImageInput) -> String {
+    format!("data:{};base64,{}", image.mime_type, image.data_base64)
 }
 
 fn openai_body(
@@ -860,6 +1534,19 @@ fn openai_message(message: &Message, model: &str, profile_id: &str) -> Value {
     let mut value = match message {
         Message::System { content } => json!({"role":"system","content":content}),
         Message::User { content } => json!({"role":"user","content":content}),
+        Message::UserMultimodal { content, images } => {
+            let mut parts = Vec::with_capacity(images.len() + usize::from(!content.is_empty()));
+            if !content.is_empty() {
+                parts.push(json!({"type":"text","text":content}));
+            }
+            parts.extend(images.iter().map(|image| {
+                json!({
+                    "type":"image_url",
+                    "image_url":{"url":openai_image_data_url(image),"detail":"auto"},
+                })
+            }));
+            json!({"role":"user","content":parts})
+        }
         Message::Assistant {
             content,
             provider_state: _,
@@ -910,6 +1597,20 @@ fn responses_body(
                 "role":"user",
                 "content":[{"type":"input_text","text":content}],
             })),
+            Message::UserMultimodal { content, images } => {
+                let mut parts = Vec::with_capacity(images.len() + usize::from(!content.is_empty()));
+                if !content.is_empty() {
+                    parts.push(json!({"type":"input_text","text":content}));
+                }
+                parts.extend(images.iter().map(|image| {
+                    json!({
+                        "type":"input_image",
+                        "image_url":openai_image_data_url(image),
+                        "detail":"auto",
+                    })
+                }));
+                input.push(json!({"type":"message","role":"user","content":parts}));
+            }
             Message::Assistant {
                 content,
                 provider_state,
@@ -1009,6 +1710,18 @@ fn gemini_body(
                 "role":"user",
                 "parts":[{"text":content}],
             })),
+            Message::UserMultimodal { content, images } => {
+                let mut parts = Vec::with_capacity(images.len() + usize::from(!content.is_empty()));
+                if !content.is_empty() {
+                    parts.push(json!({"text":content}));
+                }
+                parts.extend(images.iter().map(|image| {
+                    json!({
+                        "inline_data":{"mime_type":image.mime_type,"data":image.data_base64},
+                    })
+                }));
+                contents.push(json!({"role":"user","parts":parts}));
+            }
             Message::Assistant {
                 content,
                 provider_state,
@@ -1138,6 +1851,21 @@ fn anthropic_body(
         match message {
             Message::System { .. } => {}
             Message::User { content } => converted.push(json!({"role":"user","content":content})),
+            Message::UserMultimodal { content, images } => {
+                let mut blocks = Vec::with_capacity(images.len() + usize::from(!content.is_empty()));
+                if !content.is_empty() {
+                    blocks.push(json!({"type":"text","text":content}));
+                }
+                blocks.extend(images.iter().map(|image| json!({
+                    "type":"image",
+                    "source":{
+                        "type":"base64",
+                        "media_type":image.mime_type,
+                        "data":image.data_base64,
+                    },
+                })));
+                converted.push(json!({"role":"user","content":blocks}));
+            }
             Message::Assistant {
                 content,
                 provider_state,
@@ -1700,6 +2428,437 @@ mod tests {
     use super::*;
 
     #[test]
+    fn model_notes_enter_system_context_once_without_mutating_history() {
+        let original = vec![
+            Message::System {
+                content: "Base instructions".into(),
+            },
+            Message::User {
+                content: "hi".into(),
+            },
+        ];
+        let with_notes = messages_with_model_notes(&original, "  Prefer concise answers.  ");
+        assert_eq!(
+            original[0],
+            Message::System {
+                content: "Base instructions".into()
+            }
+        );
+        assert_eq!(
+            with_notes[0],
+            Message::System {
+                content: "Base instructions\nCurrent model notes: Prefer concise answers.".into()
+            }
+        );
+        assert_eq!(
+            messages_with_model_notes(&with_notes, "Prefer concise answers."),
+            with_notes
+        );
+        let inserted = messages_with_model_notes(&original[1..], "Use tools when needed");
+        assert_eq!(
+            inserted[0],
+            Message::System {
+                content: "Current model notes: Use tools when needed".into()
+            }
+        );
+        let mut settings = config("model", Value::Null);
+        settings.notes = "Prefer concise answers.".into();
+        let profile = resolve_profile(
+            &settings.api_type,
+            &settings.base_url,
+            &settings.api_model_id,
+            &settings.provider_name,
+            &settings.provider_extra,
+            &settings.model_extra,
+        );
+        let body = openai_body(
+            &settings,
+            &profile,
+            &with_notes,
+            &[],
+            &TurnOptions::default(),
+        );
+        assert_eq!(
+            body.pointer("/messages/0/content"),
+            Some(&json!(
+                "Base instructions\nCurrent model notes: Prefer concise answers."
+            ))
+        );
+    }
+
+    fn native_test_policy() -> RetryPolicy {
+        RetryPolicy {
+            attempts: 1,
+            timeout: Duration::from_secs(5),
+            delays: vec![0.0],
+            jitter: false,
+            empty_response_retries: 0,
+            stream_idle_timeout: Some(Duration::from_secs(1)),
+        }
+    }
+
+    fn sse_server(frames: &str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let frames = frames.to_owned();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let size = socket.read(&mut buffer).unwrap();
+                if size == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..size]);
+                if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|part| part.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
+            for piece in frames.as_bytes().chunks(7) {
+                socket.write_all(piece).unwrap();
+            }
+            String::from_utf8(request).unwrap()
+        });
+        (format!("http://{address}"), server)
+    }
+
+    fn native_config(base_url: String, protocol: &str) -> ProviderConfig {
+        let mut settings = config("native-model", Value::Null);
+        settings.base_url = base_url;
+        settings.provider_extra = json!({"adapter_profile_id":protocol});
+        settings.api_type = match protocol {
+            "anthropic-messages" => "anthropic",
+            "gemini" => "gemini",
+            _ => "openai-responses",
+        }
+        .into();
+        settings
+    }
+
+    #[tokio::test]
+    async fn anthropic_sse_emits_deltas_and_assembles_thinking_and_tool_input() {
+        let frames = [
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-remote\"}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"plan\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call-1\",\"name\":\"lookup\",\"input\":{}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"x\\\":1}\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":2}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        ].concat();
+        let (base, server) = sse_server(&frames);
+        let events = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let sink = events.clone();
+        let backend = HttpModelBackend::with_retry_policy(
+            native_config(base, "anthropic-messages"),
+            native_test_policy(),
+        )
+        .unwrap()
+        .with_stream(move |kind, delta| sink.lock().unwrap().push((kind.into(), delta)));
+        let turn = backend
+            .complete(
+                "model",
+                &[Message::User {
+                    content: "hi".into(),
+                }],
+                &[],
+                &TurnOptions::default(),
+            )
+            .await
+            .unwrap();
+        let request = server.join().unwrap();
+        assert!(request.contains("/messages"));
+        assert!(request.contains("\"stream\":true"));
+        match turn {
+            ModelTurn::ToolCalls {
+                calls,
+                provider_state,
+            } => {
+                assert_eq!(calls[0].arguments, json!({"x":1}));
+                assert_eq!(provider_state["content_blocks"][0]["thinking"], "plan");
+            }
+            other => panic!("expected Anthropic tool call: {other:?}"),
+        }
+        assert!(events
+            .lock()
+            .unwrap()
+            .contains(&("text_delta".into(), "hello".into())));
+        assert!(events
+            .lock()
+            .unwrap()
+            .contains(&("reasoning_delta".into(), "plan".into())));
+    }
+
+    #[tokio::test]
+    async fn responses_sse_uses_native_items_and_completion() {
+        let frames = [
+            "data: {\"type\":\"response.created\",\"response\":{\"model\":\"gpt-remote\"}}\n\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"summary\":[]}}\n\n",
+            "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"plan\"}\n\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"output_index\":1,\"content_index\":0,\"delta\":\"hello\"}\n\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"lookup\",\"arguments\":\"\"}}\n\n",
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":2,\"delta\":\"{\\\"x\\\":1}\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"model\":\"gpt-remote\",\"output\":[{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"plan\"}]},{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]},{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"lookup\",\"arguments\":\"{\\\"x\\\":1}\"}]}}\n\n",
+        ].concat();
+        let (base, server) = sse_server(&frames);
+        let events = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let sink = events.clone();
+        let backend = HttpModelBackend::with_retry_policy(
+            native_config(base, "openai-responses"),
+            native_test_policy(),
+        )
+        .unwrap()
+        .with_stream(move |kind, delta| sink.lock().unwrap().push((kind.into(), delta)));
+        let turn = backend
+            .complete(
+                "model",
+                &[Message::User {
+                    content: "hi".into(),
+                }],
+                &[],
+                &TurnOptions::default(),
+            )
+            .await
+            .unwrap();
+        let request = server.join().unwrap();
+        assert!(request.contains("/responses"));
+        assert!(request.contains("\"stream\":true"));
+        match turn {
+            ModelTurn::ToolCalls {
+                calls,
+                provider_state,
+            } => {
+                assert_eq!(calls[0].arguments, json!({"x":1}));
+                assert_eq!(provider_state["output"][0]["summary"][0]["text"], "plan");
+            }
+            other => panic!("expected Responses tool call: {other:?}"),
+        }
+        assert!(events
+            .lock()
+            .unwrap()
+            .contains(&("text_delta".into(), "hello".into())));
+        assert!(events
+            .lock()
+            .unwrap()
+            .contains(&("reasoning_delta".into(), "plan".into())));
+    }
+
+    #[tokio::test]
+    async fn gemini_sse_uses_stream_endpoint_and_preserves_thought_signature() {
+        let frames = [
+            "data: {\"modelVersion\":\"gemini-remote\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"plan\",\"thought\":true,\"thoughtSignature\":\"sig\"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hello\"},{\"functionCall\":{\"name\":\"lookup\",\"args\":{\"x\":1}}}]}}]}\n\n",
+            "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n",
+        ].concat();
+        let (base, server) = sse_server(&frames);
+        let events = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let sink = events.clone();
+        let backend = HttpModelBackend::with_retry_policy(
+            native_config(base, "gemini"),
+            native_test_policy(),
+        )
+        .unwrap()
+        .with_stream(move |kind, delta| sink.lock().unwrap().push((kind.into(), delta)));
+        let turn = backend
+            .complete(
+                "model",
+                &[Message::User {
+                    content: "hi".into(),
+                }],
+                &[],
+                &TurnOptions::default(),
+            )
+            .await
+            .unwrap();
+        let request = server.join().unwrap();
+        assert!(request.contains(":streamGenerateContent?alt=sse"));
+        assert!(!request.contains("\"stream\":true"));
+        match turn {
+            ModelTurn::ToolCalls {
+                calls,
+                provider_state,
+            } => {
+                assert_eq!(calls[0].arguments, json!({"x":1}));
+                assert_eq!(
+                    provider_state["content"]["parts"][0]["thoughtSignature"],
+                    "sig"
+                );
+            }
+            other => panic!("expected Gemini tool call: {other:?}"),
+        }
+        assert!(events
+            .lock()
+            .unwrap()
+            .contains(&("text_delta".into(), "hello".into())));
+        assert!(events
+            .lock()
+            .unwrap()
+            .contains(&("reasoning_delta".into(), "plan".into())));
+    }
+
+    #[test]
+    fn retry_policy_reads_host_config_with_safe_defaults() {
+        let policy = RetryPolicy::from_config(&json!({
+            "model_retries": 4,
+            "model_timeout_seconds": 12.5,
+            "model_stream_idle_timeout_seconds": null,
+            "retry_delays_seconds": [0.25, -1, "bad", 3],
+            "empty_response_retries": 2,
+            "jitter": false,
+        }));
+        assert_eq!(policy.attempts, 4);
+        assert_eq!(policy.timeout, Duration::from_millis(12_500));
+        assert_eq!(policy.stream_idle_timeout, None);
+        assert_eq!(policy.delays, vec![0.25, 3.0]);
+        assert_eq!(policy.empty_response_retries, 2);
+        assert!(!policy.jitter);
+        assert_eq!(
+            RetryPolicy::from_config(&json!({"model_timeout_seconds":-1})).stream_idle_timeout,
+            Some(Duration::from_secs(120))
+        );
+    }
+
+    #[test]
+    fn native_stream_rejects_truncated_terminal_states() {
+        let mut anthropic = NativeStream::new(ProviderProtocol::AnthropicMessages);
+        anthropic
+            .ingest(
+                &json!({"type":"message_delta","delta":{"stop_reason":"max_tokens"}}),
+                "",
+                None,
+                None,
+            )
+            .unwrap();
+        anthropic
+            .ingest(&json!({"type":"message_stop"}), "", None, None)
+            .unwrap();
+        assert!(anthropic.finish().unwrap_err().contains("truncated"));
+        let mut unfinished = NativeStream::new(ProviderProtocol::AnthropicMessages);
+        unfinished.ingest(&json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c","name":"lookup","input":{}}}), "", None, None).unwrap();
+        unfinished
+            .ingest(
+                &json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+                "",
+                None,
+                None,
+            )
+            .unwrap();
+        unfinished
+            .ingest(&json!({"type":"message_stop"}), "", None, None)
+            .unwrap();
+        assert!(unfinished.finish().unwrap_err().contains("unfinished"));
+        let mut responses = NativeStream::new(ProviderProtocol::OpenAiResponses);
+        assert!(responses
+            .ingest(&json!({"type":"response.incomplete"}), "", None, None)
+            .is_err());
+        let mut malformed_tool = NativeStream::new(ProviderProtocol::OpenAiResponses);
+        malformed_tool.ingest(&json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"c","name":"lookup","arguments":"{"}]}}), "", None, None).unwrap();
+        assert!(malformed_tool.finish().unwrap_err().contains("arguments"));
+        let mut gemini = NativeStream::new(ProviderProtocol::GeminiGenerativeLanguage);
+        gemini
+            .ingest(
+                &json!({"candidates":[{"finishReason":"MAX_TOKENS"}]}),
+                "",
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(gemini.finish().unwrap_err().contains("MAX_TOKENS"));
+    }
+
+    #[tokio::test]
+    async fn native_stream_idle_timeout_resets_provisional_output() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 8192];
+            let _ = socket.read(&mut buffer);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n").unwrap();
+            std::thread::sleep(Duration::from_millis(400));
+        });
+        let events = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let sink = events.clone();
+        let mut policy = native_test_policy();
+        policy.stream_idle_timeout = Some(Duration::from_millis(100));
+        let backend = HttpModelBackend::with_retry_policy(
+            native_config(format!("http://{address}"), "anthropic-messages"),
+            policy,
+        )
+        .unwrap()
+        .with_stream(move |kind, delta| sink.lock().unwrap().push((kind.into(), delta)));
+        let error = backend
+            .complete(
+                "model",
+                &[Message::User {
+                    content: "hi".into(),
+                }],
+                &[],
+                &TurnOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(error.to_string().contains("idle timeout"));
+        let events = events.lock().unwrap();
+        assert!(events.contains(&("text_delta".into(), "partial".into())));
+        assert_eq!(events.last(), Some(&("reset".into(), String::new())));
+    }
+
+    #[tokio::test]
+    async fn native_sse_clean_eof_before_terminal_is_not_a_success() {
+        let (base, server) = sse_server("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n");
+        let events = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let sink = events.clone();
+        let backend = HttpModelBackend::with_retry_policy(
+            native_config(base, "anthropic-messages"),
+            native_test_policy(),
+        )
+        .unwrap()
+        .with_stream(move |kind, delta| sink.lock().unwrap().push((kind.into(), delta)));
+        let error = backend
+            .complete(
+                "model",
+                &[Message::User {
+                    content: "hi".into(),
+                }],
+                &[],
+                &TurnOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(error.to_string().contains("terminal event"));
+        let events = events.lock().unwrap();
+        assert!(events.contains(&("text_delta".into(), "partial".into())));
+        assert_eq!(events.last(), Some(&("reset".into(), String::new())));
+    }
+
+    #[test]
     fn sse_boundaries_accept_cr_lf_and_crlf_line_endings() {
         assert_eq!(sse_frame_boundary(b"data: one\r\rdata: two"), Some((9, 2)));
         assert_eq!(sse_frame_boundary(b"data: one\n\ndata: two"), Some((9, 2)));
@@ -1868,6 +3027,7 @@ mod tests {
                 delays: vec![0.0],
                 jitter: false,
                 empty_response_retries: 0,
+                stream_idle_timeout: None,
             },
         )
         .unwrap()
@@ -1967,6 +3127,7 @@ mod tests {
                 delays: vec![0.0],
                 jitter: false,
                 empty_response_retries: 0,
+                stream_idle_timeout: None,
             },
         )
         .unwrap()
@@ -2137,6 +3298,7 @@ mod tests {
                 delays: vec![0.0],
                 jitter: false,
                 empty_response_retries: 0,
+                stream_idle_timeout: None,
             },
         )
         .unwrap()
@@ -2337,6 +3499,7 @@ mod tests {
                 delays: vec![0.0],
                 jitter: false,
                 empty_response_retries: 0,
+                stream_idle_timeout: None,
             },
         )
         .unwrap()
@@ -2381,6 +3544,7 @@ mod tests {
                 delays: vec![0.0],
                 jitter: false,
                 empty_response_retries: 0,
+                stream_idle_timeout: None,
             },
         )
         .unwrap()
@@ -2504,6 +3668,7 @@ mod tests {
                     delays: vec![0.0],
                     jitter: false,
                     empty_response_retries: empty_retries,
+                    stream_idle_timeout: None,
                 },
             )
             .unwrap();
@@ -2567,6 +3732,7 @@ mod tests {
                 delays: vec![0.0],
                 jitter: false,
                 empty_response_retries: 0,
+                stream_idle_timeout: None,
             },
         )
         .unwrap();
@@ -2626,7 +3792,158 @@ mod tests {
             model_extra,
             thinking_supported: true,
             thinking_budget: Some(10_000),
+            notes: String::new(),
         }
+    }
+
+    #[test]
+    fn image_messages_use_native_schemas_for_every_supported_protocol() {
+        let message = Message::UserMultimodal {
+            content: "What is shown?".into(),
+            images: vec![ImageInput {
+                attachment_id: "attachment-1".into(),
+                mime_type: "image/png".into(),
+                data_base64: "AAEC/w==".into(),
+            }],
+        };
+
+        let chat_config = config("model", Value::Null);
+        let chat_profile = resolve_profile(
+            &chat_config.api_type,
+            &chat_config.base_url,
+            &chat_config.api_model_id,
+            &chat_config.provider_name,
+            &chat_config.provider_extra,
+            &chat_config.model_extra,
+        );
+        let chat = openai_body(
+            &chat_config,
+            &chat_profile,
+            std::slice::from_ref(&message),
+            &[],
+            &TurnOptions::default(),
+        );
+        assert_eq!(
+            chat.pointer("/messages/0/content/1/image_url/url")
+                .and_then(Value::as_str),
+            Some("data:image/png;base64,AAEC/w==")
+        );
+
+        let mut responses_config = config("model", Value::Null);
+        responses_config.api_type = "openai-responses".into();
+        responses_config.provider_extra = json!({"adapter_profile_id":"openai-responses"});
+        let responses_profile = resolve_profile(
+            &responses_config.api_type,
+            &responses_config.base_url,
+            &responses_config.api_model_id,
+            &responses_config.provider_name,
+            &responses_config.provider_extra,
+            &responses_config.model_extra,
+        );
+        let responses = responses_body(
+            &responses_config,
+            &responses_profile,
+            std::slice::from_ref(&message),
+            &[],
+            &TurnOptions::default(),
+        );
+        assert_eq!(
+            responses
+                .pointer("/input/0/content/1/image_url")
+                .and_then(Value::as_str),
+            Some("data:image/png;base64,AAEC/w==")
+        );
+
+        let mut anthropic_config = config("model", Value::Null);
+        anthropic_config.api_type = "anthropic".into();
+        anthropic_config.provider_extra = json!({"adapter_profile_id":"anthropic-messages"});
+        let anthropic_profile = resolve_profile(
+            &anthropic_config.api_type,
+            &anthropic_config.base_url,
+            &anthropic_config.api_model_id,
+            &anthropic_config.provider_name,
+            &anthropic_config.provider_extra,
+            &anthropic_config.model_extra,
+        );
+        let anthropic = anthropic_body(
+            &anthropic_config,
+            &anthropic_profile,
+            std::slice::from_ref(&message),
+            &[],
+            &TurnOptions::default(),
+        );
+        assert_eq!(
+            anthropic
+                .pointer("/messages/0/content/1/source/media_type")
+                .and_then(Value::as_str),
+            Some("image/png")
+        );
+        assert_eq!(
+            anthropic
+                .pointer("/messages/0/content/1/source/data")
+                .and_then(Value::as_str),
+            Some("AAEC/w==")
+        );
+
+        let mut gemini_config = config("model", Value::Null);
+        gemini_config.api_type = "gemini".into();
+        gemini_config.provider_extra = json!({"adapter_profile_id":"gemini"});
+        let gemini_profile = resolve_profile(
+            &gemini_config.api_type,
+            &gemini_config.base_url,
+            &gemini_config.api_model_id,
+            &gemini_config.provider_name,
+            &gemini_config.provider_extra,
+            &gemini_config.model_extra,
+        );
+        let gemini = gemini_body(
+            &gemini_config,
+            &gemini_profile,
+            std::slice::from_ref(&message),
+            &[],
+            &TurnOptions::default(),
+        );
+        assert_eq!(
+            gemini
+                .pointer("/contents/0/parts/1/inline_data/mime_type")
+                .and_then(Value::as_str),
+            Some("image/png")
+        );
+        assert_eq!(
+            gemini
+                .pointer("/contents/0/parts/1/inline_data/data")
+                .and_then(Value::as_str),
+            Some("AAEC/w==")
+        );
+    }
+
+    #[test]
+    fn image_payloads_are_bounded_and_omitted_from_durable_history() {
+        let message = Message::UserMultimodal {
+            content: "Look".into(),
+            images: vec![ImageInput {
+                attachment_id: "attachment-1".into(),
+                mime_type: "image/png".into(),
+                data_base64: "AAEC/w==".into(),
+            }],
+        };
+        validate_model_images(std::slice::from_ref(&message)).unwrap();
+        let serialized = serde_json::to_value(&message).unwrap();
+        assert_eq!(serialized["images"][0]["attachment_id"], "attachment-1");
+        assert_eq!(serialized["images"][0]["mime_type"], "image/png");
+        assert!(serialized["images"][0].get("data_base64").is_none());
+
+        let too_large = "A".repeat(((MAX_MODEL_IMAGE_BYTES + 2) / 3) * 4 + 4);
+        let oversized = Message::UserMultimodal {
+            content: String::new(),
+            images: vec![ImageInput {
+                attachment_id: "attachment-2".into(),
+                mime_type: "image/jpeg".into(),
+                data_base64: too_large,
+            }],
+        };
+        assert!(validate_model_images(&[oversized]).is_err());
+        assert!(checked_base64_size("not base64!").is_none());
     }
 
     #[test]

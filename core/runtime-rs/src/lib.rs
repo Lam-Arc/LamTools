@@ -16,7 +16,9 @@ pub mod memory;
 mod profiles;
 pub mod project_tools;
 pub mod provider;
+pub mod skills;
 pub mod study;
+pub mod study_skills;
 pub mod sub_agent;
 pub mod workflow_data_packet;
 pub mod workflow_document;
@@ -25,6 +27,9 @@ pub mod workflow_runner;
 pub mod workflow_store;
 
 const MAX_TOOL_ROUNDS: usize = 8;
+pub const MAX_MODEL_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+pub const MAX_MODEL_IMAGE_TOTAL_BYTES: usize = 20 * 1024 * 1024;
+pub const MAX_MODEL_IMAGES: usize = 8;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DeviceCapabilities {
@@ -106,6 +111,10 @@ pub enum Message {
     User {
         content: String,
     },
+    UserMultimodal {
+        content: String,
+        images: Vec<ImageInput>,
+    },
     Assistant {
         content: String,
         #[serde(default, rename = "providerState")]
@@ -122,6 +131,20 @@ pub enum Message {
         name: String,
         content: String,
     },
+}
+
+/// A durable reference plus transient image bytes for a model request.
+///
+/// Hosts persist `attachment_id` and `mime_type`, then rehydrate `data_base64`
+/// from their attachment store before replaying history. Omitting the bytes
+/// from serialized runtime history avoids copying large payloads into session
+/// metadata and approval continuations.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ImageInput {
+    pub attachment_id: String,
+    pub mime_type: String,
+    #[serde(default, skip_serializing)]
+    pub data_base64: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -188,6 +211,8 @@ pub struct TurnResult {
     #[serde(default)]
     pub hook_status_messages: Vec<String>,
     #[serde(default)]
+    pub runtime_warnings: Vec<String>,
+    #[serde(default)]
     pub runtime_history: Vec<Message>,
     pub compaction: Option<compaction::CompactionReport>,
     pub dreaming: Option<memory::DreamingOutcome>,
@@ -219,11 +244,15 @@ pub struct TurnContinuation {
     pub capabilities: DeviceCapabilities,
     pub options: TurnOptions,
     #[serde(default)]
+    pub context: AgentContext,
+    #[serde(default)]
     pub hook_context: hooks::HookRunContext,
     #[serde(default)]
     pub hook_audit_events: Vec<Value>,
     #[serde(default)]
     pub hook_status_messages: Vec<String>,
+    #[serde(default)]
+    pub runtime_warnings: Vec<String>,
     pub tool_rounds: usize,
     pub pending_calls: Vec<ToolCall>,
     pub next_call_index: usize,
@@ -388,6 +417,7 @@ where
             .rev()
             .find_map(|message| match message {
                 Message::User { content } => Some(content.clone()),
+                Message::UserMultimodal { content, .. } => Some(content.clone()),
                 _ => None,
             })
             .unwrap_or_default();
@@ -411,9 +441,11 @@ where
             messages,
             capabilities: request.capabilities,
             options: request.options,
+            context: request.context,
             hook_context: request.hook_context,
             hook_audit_events: Vec::new(),
             hook_status_messages: Vec::new(),
+            runtime_warnings: Vec::new(),
             tool_rounds: 0,
             pending_calls: Vec::new(),
             next_call_index: 0,
@@ -526,7 +558,7 @@ where
                     call.arguments = updated_input;
                     continuation.pending_calls[continuation.next_call_index] = call.clone();
                 }
-                if pre_decision.decision == "block" {
+                if pre_decision.decision == "block" || pre_decision.permission_decision == "deny" {
                     append_tool_result(
                         &mut continuation.messages,
                         &call,
@@ -535,18 +567,24 @@ where
                             ("blocked", Value::Bool(true)),
                             (
                                 "error",
-                                Value::String(if pre_decision.reason.is_empty() {
-                                    "Tool call blocked by hook".into()
-                                } else {
-                                    pre_decision.reason
-                                }),
+                                Value::String(
+                                    if !pre_decision.permission_decision_reason.is_empty() {
+                                        pre_decision.permission_decision_reason
+                                    } else if !pre_decision.reason.is_empty() {
+                                        pre_decision.reason
+                                    } else {
+                                        "Tool call blocked by hook".into()
+                                    },
+                                ),
                             ),
                         ]),
                     )?;
                     continuation.next_call_index += 1;
                     continue;
                 }
-                match self.tools.permission(&call) {
+                let hook_ask_user = pre_decision.permission_decision == "ask_user";
+                let tool_permission = self.tools.permission(&call);
+                match tool_permission {
                     ToolPermission::HardBlock => {
                         append_tool_result(
                             &mut continuation.messages,
@@ -562,12 +600,15 @@ where
                         )?;
                         continuation.next_call_index += 1;
                     }
-                    ToolPermission::AskUser
-                        if continuation.options.permission_preset == PermissionPreset::Ask
-                            && !continuation
-                                .options
-                                .session_approved_tools
-                                .contains(&call.name) =>
+                    ToolPermission::AskUser | ToolPermission::AutoAllow
+                        if hook_ask_user
+                            || (tool_permission == ToolPermission::AskUser
+                                && continuation.options.permission_preset
+                                    == PermissionPreset::Ask
+                                && !continuation
+                                    .options
+                                    .session_approved_tools
+                                    .contains(&call.name)) =>
                     {
                         let request = approval_request(&continuation)?;
                         let mut permission_event = hooks::HookEvent::new(
@@ -684,6 +725,7 @@ where
                             session_approved_tools: continuation.options.session_approved_tools,
                             hook_audit_events: continuation.hook_audit_events,
                             hook_status_messages: continuation.hook_status_messages,
+                            runtime_warnings: continuation.runtime_warnings,
                             runtime_history,
                             compaction: continuation.compaction,
                             dreaming: None,
@@ -1157,5 +1199,234 @@ mod tests {
                 result: TurnResult { tool_rounds: 1, .. }
             }
         ));
+    }
+
+    struct AutoCountingTools {
+        calls: Arc<AtomicUsize>,
+        arguments: Arc<Mutex<Vec<Value>>>,
+    }
+
+    #[async_trait]
+    impl ToolRuntime for AutoCountingTools {
+        fn definitions(&self, _: &DeviceCapabilities) -> Vec<ToolDefinition> {
+            vec![ToolDefinition {
+                name: "write_text_file".into(),
+                description: "fixture".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }]
+        }
+        async fn execute(&self, call: &ToolCall) -> Result<Value, RuntimeError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.arguments.lock().unwrap().push(call.arguments.clone());
+            Ok(serde_json::json!({"ok":true}))
+        }
+    }
+
+    struct PermissionHookFixture {
+        pre_policy: &'static str,
+        permission_policy: &'static str,
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl hooks::HookExecutor for PermissionHookFixture {
+        async fn run(&self, event: hooks::HookEvent) -> hooks::HookDecision {
+            self.events.lock().unwrap().push(event.event_name.clone());
+            match event.event_name.as_str() {
+                hooks::EVENT_PRE_TOOL_USE => hooks::HookDecision {
+                    permission_decision: self.pre_policy.into(),
+                    permission_decision_reason: "fixture pre-tool rule".into(),
+                    updated_input: Some(serde_json::json!({"path":"hook-updated.txt"})),
+                    ..Default::default()
+                },
+                hooks::EVENT_PERMISSION_REQUEST => hooks::HookDecision {
+                    permission_decision: self.permission_policy.into(),
+                    permission_decision_reason: "fixture approval rule".into(),
+                    ..Default::default()
+                },
+                _ => hooks::HookDecision::default(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn pre_tool_hook_deny_blocks_auto_tool_and_reports_reason() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let runtime = AgentRuntime::new(
+            FixtureModel {
+                calls: Mutex::new(0),
+            },
+            AutoCountingTools {
+                calls: calls.clone(),
+                arguments: Arc::new(Mutex::new(Vec::new())),
+            },
+        )
+        .with_hook_executor(Arc::new(PermissionHookFixture {
+            pre_policy: "deny",
+            permission_policy: "",
+            events: events.clone(),
+        }));
+        let progress = runtime
+            .run_turn_progress(TurnRequest {
+                turn_id: "pre-deny".into(),
+                model_record_id: "fixture".into(),
+                history: vec![Message::User {
+                    content: "write".into(),
+                }],
+                capabilities: DeviceCapabilities::default(),
+                context: AgentContext {
+                    project_instructions: "PROJECT_RULE".into(),
+                    ..Default::default()
+                },
+                hook_context: Default::default(),
+                options: TurnOptions {
+                    permission_preset: PermissionPreset::FullAccess,
+                    ..Default::default()
+                },
+            })
+            .await
+            .unwrap();
+        let TurnProgress::Completed { result } = progress else {
+            panic!("deny must complete with blocked tool result")
+        };
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(result.runtime_history.iter().any(|message| matches!(message, Message::Tool { content, .. } if content.contains("fixture pre-tool rule") && content.contains("blocked"))));
+        assert!(!events
+            .lock()
+            .unwrap()
+            .contains(&hooks::EVENT_PERMISSION_REQUEST.to_owned()));
+    }
+
+    #[tokio::test]
+    async fn pre_tool_hook_ask_user_pauses_auto_tool_even_under_full_access_and_resumes_updated_call(
+    ) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let arguments = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let runtime = AgentRuntime::new(
+            FixtureModel {
+                calls: Mutex::new(0),
+            },
+            AutoCountingTools {
+                calls: calls.clone(),
+                arguments: arguments.clone(),
+            },
+        )
+        .with_hook_executor(Arc::new(PermissionHookFixture {
+            pre_policy: "ask_user",
+            permission_policy: "",
+            events: events.clone(),
+        }));
+        let progress = runtime
+            .run_turn_progress(TurnRequest {
+                turn_id: "pre-ask".into(),
+                model_record_id: "fixture".into(),
+                history: vec![Message::User {
+                    content: "write".into(),
+                }],
+                capabilities: DeviceCapabilities::default(),
+                context: AgentContext {
+                    project_instructions: "PROJECT_RULE".into(),
+                    ..Default::default()
+                },
+                hook_context: Default::default(),
+                options: TurnOptions {
+                    permission_preset: PermissionPreset::FullAccess,
+                    session_approved_tools: vec!["write_text_file".into()],
+                    ..Default::default()
+                },
+            })
+            .await
+            .unwrap();
+        let TurnProgress::ApprovalRequired {
+            request,
+            continuation,
+        } = progress
+        else {
+            panic!("hook must force approval")
+        };
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            request.tool_call.arguments,
+            serde_json::json!({"path":"hook-updated.txt"})
+        );
+        assert!(events
+            .lock()
+            .unwrap()
+            .contains(&hooks::EVENT_PERMISSION_REQUEST.to_owned()));
+        let resumed = runtime
+            .resume_turn(
+                continuation,
+                ApprovalResponse {
+                    request_id: request.request_id,
+                    decision: ApprovalDecision::ApproveOnce,
+                    guidance: String::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(resumed, TurnProgress::Completed { .. }));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *arguments.lock().unwrap(),
+            vec![serde_json::json!({"path":"hook-updated.txt"})]
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_tool_hook_ask_user_still_honors_permission_request_allow_and_deny() {
+        for permission_policy in ["allow", "deny"] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let runtime = AgentRuntime::new(
+                FixtureModel {
+                    calls: Mutex::new(0),
+                },
+                AutoCountingTools {
+                    calls: calls.clone(),
+                    arguments: Arc::new(Mutex::new(Vec::new())),
+                },
+            )
+            .with_hook_executor(Arc::new(PermissionHookFixture {
+                pre_policy: "ask_user",
+                permission_policy,
+                events: events.clone(),
+            }));
+            let progress = runtime
+                .run_turn_progress(TurnRequest {
+                    turn_id: format!("pre-{permission_policy}"),
+                    model_record_id: "fixture".into(),
+                    history: vec![Message::User {
+                        content: "write".into(),
+                    }],
+                    capabilities: DeviceCapabilities::default(),
+                    context: AgentContext {
+                        project_instructions: "PROJECT_RULE".into(),
+                        ..Default::default()
+                    },
+                    hook_context: Default::default(),
+                    options: TurnOptions {
+                        permission_preset: PermissionPreset::FullAccess,
+                        ..Default::default()
+                    },
+                })
+                .await
+                .unwrap();
+            let TurnProgress::Completed { result } = progress else {
+                panic!("PermissionRequest {permission_policy} must resolve without foreground approval")
+            };
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                usize::from(permission_policy == "allow")
+            );
+            assert!(events
+                .lock()
+                .unwrap()
+                .contains(&hooks::EVENT_PERMISSION_REQUEST.to_owned()));
+            if permission_policy == "deny" {
+                assert!(result.runtime_history.iter().any(|message| matches!(message, Message::Tool { content, .. } if content.contains("fixture approval rule") && content.contains("denied"))));
+            }
+        }
     }
 }

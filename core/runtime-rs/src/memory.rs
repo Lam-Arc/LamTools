@@ -90,7 +90,9 @@ fn render_history(history: &[Message]) -> String {
     history
         .iter()
         .filter_map(|message| match message {
-            Message::User { content } => Some(format!("user: {}", truncate_chars(content, 4_000))),
+            Message::User { content } | Message::UserMultimodal { content, .. } => {
+                Some(format!("user: {}", truncate_chars(content, 4_000)))
+            }
             Message::Assistant { content, .. } => {
                 Some(format!("assistant: {}", truncate_chars(content, 4_000)))
             }

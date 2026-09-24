@@ -1013,6 +1013,7 @@ mod tests {
                     base_url: "https://example.invalid/v1".into(),
                     api_key: "key".into(),
                     api_model_id: "model-a".into(),
+                    notes: String::new(),
                     max_output_tokens: None,
                     temperature: None,
                     provider_name: String::new(),

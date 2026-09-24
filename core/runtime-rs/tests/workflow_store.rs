@@ -1,5 +1,7 @@
 use lamtools_runtime::workflow_document::document_from_workflow_def;
-use lamtools_runtime::workflow_store::{WorkflowStore, WorkflowStoreError};
+use lamtools_runtime::workflow_store::{
+    WorkflowRuntimeBucket, WorkflowStore, WorkflowStoreError,
+};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
@@ -65,6 +67,48 @@ fn save_conflict_and_atomic_overwrite() {
             .count(),
         0
     );
+}
+
+#[test]
+fn runtime_queue_records_are_durable_and_scoped_separately_from_documents() {
+    let fixture = Fixture::new();
+    let global = WorkflowStore::new(fixture.path().join("global"));
+    let project_root = fixture.path().join("project");
+
+    global
+        .mutate_runtime_records(WorkflowRuntimeBucket::Queue, None, |items| {
+            items.push(json!({"queue_id":"global-run", "status":"completed"}));
+        })
+        .unwrap();
+    global
+        .mutate_runtime_records(
+            WorkflowRuntimeBucket::Queue,
+            Some(&project_root),
+            |items| items.push(json!({"queue_id":"project-run", "status":"queued"})),
+        )
+        .unwrap();
+
+    let reopened = WorkflowStore::new(fixture.path().join("global"));
+    assert_eq!(
+        reopened
+            .runtime_records(WorkflowRuntimeBucket::Queue, None)
+            .unwrap(),
+        vec![json!({"queue_id":"global-run", "status":"completed"})]
+    );
+    assert_eq!(
+        reopened
+            .runtime_records(WorkflowRuntimeBucket::Queue, Some(&project_root))
+            .unwrap(),
+        vec![json!({"queue_id":"project-run", "status":"queued"})]
+    );
+    assert!(reopened.list(None).unwrap().is_empty());
+    assert!(fixture
+        .path()
+        .join("global/workflow/queue.json")
+        .is_file());
+    assert!(project_root
+        .join(".lam/workflow/queue.json")
+        .is_file());
 }
 
 #[test]

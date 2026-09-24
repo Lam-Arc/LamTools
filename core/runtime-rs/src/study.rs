@@ -5,7 +5,7 @@
 //! state available to native hosts that have no Python process, so mobile and
 //! desktop cannot drift into separate Study implementations.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -150,6 +150,21 @@ pub type StudyResult<T> = Result<T, StudyError>;
 pub struct StudyStore {
     path: PathBuf,
     scope: StudyScope,
+}
+
+/// Core-owned Study session data supplied by a trusted host after it checks
+/// the same Study scope. Tool payloads must never construct these entries.
+pub struct StudySearchSession {
+    pub scope: StudyScope,
+    pub id: String,
+    pub title: String,
+    pub node_name: String,
+    pub messages: Vec<StudySearchMessage>,
+}
+
+pub struct StudySearchMessage {
+    pub id: String,
+    pub content: String,
 }
 
 impl StudyStore {
@@ -1786,6 +1801,16 @@ impl StudyStore {
     // ------------------------------------------------------------------
 
     pub fn search(&self, payload: &Value) -> StudyResult<Value> {
+        self.search_with_sessions(payload, &[])
+    }
+
+    /// Search the local graph and Notes, then merge host-owned Study chats.
+    /// The host must pass only sessions it has verified belong to this scope.
+    pub fn search_with_sessions(
+        &self,
+        payload: &Value,
+        sessions: &[StudySearchSession],
+    ) -> StudyResult<Value> {
         let query = payload
             .get("query")
             .and_then(Value::as_str)
@@ -1848,6 +1873,43 @@ impl StudyStore {
                 "target": {"kind": "node", "id": node_id},
             }));
         }
+        results.extend(notes::search_notes(self, &connection, &query)?);
+        for session in sessions {
+            if session.scope.key() != self.scope.key() {
+                continue;
+            }
+            let label = format!("{} {}", session.title, session.node_name);
+            let matching_message = session
+                .messages
+                .iter()
+                .find(|message| message.content.to_lowercase().contains(&folded));
+            let (snippet_source, message_id) = if let Some(message) = matching_message {
+                (message.content.as_str(), Some(message.id.as_str()))
+            } else if label.to_lowercase().contains(&folded) {
+                (label.as_str(), None)
+            } else {
+                continue;
+            };
+            let mut target = json!({"kind": "session", "id": session.id});
+            let mut item = json!({
+                "entity_type": "session", "kind": "session",
+                "entity_id": session.id, "session_id": session.id,
+                "title": session.title,
+                "snippet": search_snippet(snippet_source, &query, 240),
+            });
+            if let Some(message_id) = message_id.filter(|id| !id.is_empty()) {
+                target["message_id"] = json!(message_id);
+                item["message_id"] = json!(message_id);
+            }
+            item["target"] = target;
+            results.push(item);
+        }
+        results.sort_by_key(|item| {
+            (
+                item["entity_type"].as_str().unwrap_or("").to_owned(),
+                item["entity_id"].as_str().unwrap_or("").to_owned(),
+            )
+        });
         let total = results.len();
         let page: Vec<Value> = results.into_iter().take(limit as usize).collect();
         Ok(json!({
@@ -2391,14 +2453,9 @@ impl StudyStore {
         }
         // Keep the SQLite connection out of the model call so the future stays
         // Send for the async hosts.
-        let (mut mark, anchor) = {
+        let (mark, anchor) = {
             let connection = self.connect()?;
-            let transaction = connection.unchecked_transaction()?;
-            let (mark, changed) = migrate_mark(self.get(&transaction, &id, Some("mark"))?);
-            if changed {
-                self.put(&transaction, "mark", &mark)?;
-                transaction.commit()?;
-            }
+            let (mark, _) = migrate_mark(self.get(&connection, &id, Some("mark"))?);
             let anchor = mark.get("anchor").cloned().unwrap_or_else(|| json!({}));
             (mark, anchor)
         };
@@ -2408,6 +2465,8 @@ impl StudyStore {
         } else {
             None
         };
+        let mut dictionary_result = None;
+        let mut content_result = None;
         if let Some(entry) = entry {
             let word = entry.get("word").and_then(Value::as_str).unwrap_or("");
             let phonetic = entry.get("phonetic").and_then(Value::as_str).unwrap_or("");
@@ -2420,10 +2479,7 @@ impl StudyStore {
                 translation.push('\n');
                 translation.push_str(example);
             }
-            if let Value::Object(entries) = &mut mark {
-                entries.insert("dictionary".into(), entry);
-                entries.insert("translate".into(), Value::String(translation));
-            }
+            dictionary_result = Some((entry, translation));
         } else {
             let mut messages = selection_messages(&action, &anchor)?;
             if action == "ask" {
@@ -2489,31 +2545,37 @@ impl StudyStore {
             if content.is_empty() {
                 return Err(StudyError::new("Model returned an empty response"));
             }
-            if action == "ask" {
-                let question = payload
-                    .get("question")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .trim()
-                    .to_owned();
-                if let Value::Object(entries) = &mut mark {
-                    let mut thread = entries
-                        .get("thread")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
+            content_result = Some(content);
+        }
+        // Acquire the database writer slot before reading the current record.
+        // Separate StudyStore instances (and processes) then merge their
+        // results without replacing turns committed while the model ran.
+        let mut write_connection = self.connect()?;
+        let write_transaction =
+            write_connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (mut mark, _) = migrate_mark(self.get(&write_transaction, &id, Some("mark"))?);
+        if let Value::Object(entries) = &mut mark {
+            if let Some((entry, translation)) = dictionary_result {
+                entries.insert("dictionary".into(), entry);
+                entries.insert("translate".into(), Value::String(translation));
+            } else if let Some(content) = content_result {
+                if action == "ask" {
+                    let question = payload
+                        .get("question")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim();
+                    let thread = entries.entry("thread").or_insert_with(|| json!([]));
+                    let thread = thread
+                        .as_array_mut()
+                        .ok_or_else(|| StudyError::new("Invalid mark thread"))?;
                     thread.push(json!({"role": "user", "content": question}));
                     thread.push(json!({"role": "assistant", "content": content}));
-                    entries.insert("thread".into(), Value::Array(thread));
+                } else {
+                    entries.insert(action.clone(), Value::String(content));
                 }
-            } else if let Value::Object(entries) = &mut mark {
-                entries.insert(action.clone(), Value::String(content));
             }
         }
-        // Do not resurrect a mark that was deleted while the model answered.
-        let write_connection = self.connect()?;
-        let write_transaction = write_connection.unchecked_transaction()?;
-        self.get(&write_transaction, &id, Some("mark"))?;
         self.put(&write_transaction, "mark", &mark)?;
         write_transaction.commit()?;
         Ok(json!({ "mark": mark }))
@@ -2627,6 +2689,30 @@ impl StudyStore {
             .filter(|value| !is_empty_value(value))
         {
             latest.insert("teaching_position".into(), position.clone());
+        }
+        if study_scope != "notes" || !explicit_node_id.is_empty() {
+            let mut relevant = Vec::new();
+            for exam in self.rows(&connection, "exam")?.into_iter().rev() {
+                let status = exam.get("status").and_then(Value::as_str).unwrap_or("");
+                if !matches!(status, "open" | "in_progress" | "submitted") {
+                    continue;
+                }
+                if !node_id.is_empty()
+                    && !exam
+                        .get("node_ids")
+                        .and_then(Value::as_array)
+                        .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(&node_id)))
+                {
+                    continue;
+                }
+                relevant.push(json!({"id": exam["id"], "status": status}));
+                if relevant.len() == 8 {
+                    break;
+                }
+            }
+            if !relevant.is_empty() {
+                latest.insert("exams".into(), Value::Array(relevant));
+            }
         }
         self.set_meta(
             &connection,

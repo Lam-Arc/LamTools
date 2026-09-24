@@ -4,7 +4,10 @@
 //! bundled Python plugin defines, so a native host cannot silently drift.
 
 use lamtools_runtime::{
-    study::{dictionary, study_tool_definitions, StudyScope, StudyStore, StudyTools},
+    study::{
+        dictionary, study_tool_definitions, NoteWriter, StudyScope, StudySearchMessage,
+        StudySearchSession, StudyStore, StudyTools,
+    },
     DeviceCapabilities, Message, ModelBackend, ModelTurn, RuntimeError, ToolCall, ToolDefinition,
     ToolPermission, ToolRuntime, TurnOptions,
 };
@@ -14,6 +17,198 @@ fn temp_store(name: &str) -> StudyStore {
     let root = std::env::temp_dir().join(format!("lamtools-study-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     StudyStore::open(root.join("study.db"), StudyScope::local_compatibility()).unwrap()
+}
+
+#[tokio::test]
+async fn concurrent_answers_from_independent_stores_preserve_both_turns() {
+    use std::sync::Arc;
+    use tokio::sync::{Barrier, Notify};
+
+    struct HeldModel {
+        entered: Barrier,
+        release_a: Notify,
+        release_b: Notify,
+    }
+    #[async_trait::async_trait]
+    impl ModelBackend for HeldModel {
+        async fn complete(
+            &self,
+            _id: &str,
+            messages: &[Message],
+            _tools: &[ToolDefinition],
+            _options: &TurnOptions,
+        ) -> Result<ModelTurn, RuntimeError> {
+            let is_a = matches!(messages.last(), Some(Message::User { content }) if content.contains("User question: A"));
+            self.entered.wait().await;
+            if is_a {
+                self.release_a.notified().await;
+            } else {
+                self.release_b.notified().await;
+            }
+            Ok(ModelTurn::Text {
+                text: if is_a { "answer A" } else { "answer B" }.into(),
+                reasoning: String::new(),
+                provider_state: Value::Null,
+            })
+        }
+    }
+    let root = std::env::temp_dir().join(format!(
+        "lamtools-concurrent-mark-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let path = root.join("study.db");
+    let a = StudyStore::open(&path, StudyScope::local_compatibility()).unwrap();
+    let b = StudyStore::open(&path, StudyScope::local_compatibility()).unwrap();
+    let id = a.marks(&json!({"action":"create", "anchor":{"document_id":"d", "block_id":"b", "start":0, "end":3, "quote":"text"}})).unwrap()["mark"]["id"].as_str().unwrap().to_owned();
+    let model = Arc::new(HeldModel {
+        entered: Barrier::new(3),
+        release_a: Notify::new(),
+        release_b: Notify::new(),
+    });
+    let task = |store: StudyStore, model: Arc<HeldModel>, id: String, question: &'static str| {
+        tokio::spawn(async move {
+            store
+                .answer(
+                    &json!({"id":id,"action":"ask","question":question}),
+                    Some(model.as_ref()),
+                    "model",
+                    "model",
+                )
+                .await
+                .unwrap()
+        })
+    };
+    let answer_a = task(a, model.clone(), id.clone(), "A");
+    let answer_b = task(b, model.clone(), id.clone(), "B");
+    model.entered.wait().await;
+    model.release_a.notify_one();
+    answer_a.await.unwrap();
+    model.release_b.notify_one();
+    answer_b.await.unwrap();
+    let saved = StudyStore::open(&path, StudyScope::local_compatibility())
+        .unwrap()
+        .marks(&json!({"action":"get","id":id}))
+        .unwrap();
+    assert_eq!(
+        saved["mark"]["thread"],
+        json!([
+            {"role":"user","content":"A"},{"role":"assistant","content":"answer A"},
+            {"role":"user","content":"B"},{"role":"assistant","content":"answer B"}
+        ])
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn search_merges_note_body_and_trusted_study_sessions_with_scoped_results() {
+    let store = temp_store("search-notes-sessions");
+    store
+        .capture_note_raw(
+            Some("raw-search"),
+            "node",
+            "node-search",
+            "source",
+            &json!({}),
+        )
+        .unwrap();
+    store.notes(&json!({"action":"resource_create","resource_id":"resource-search","title":"Source","content":"source","raw_ids":["raw-search"]}), NoteWriter::Agent).unwrap();
+    store.notes(&json!({"action":"create","note_id":"note-search","title":"Reference","body_md":"The quartzneedle is here.","resource_ids":["resource-search"]}), NoteWriter::Agent).unwrap();
+    let note = store.search(&json!({"query":"quartzneedle"})).unwrap();
+    assert_eq!(note["total"], 1);
+    assert_eq!(
+        note["results"][0]["target"],
+        json!({"kind":"note","id":"note-search"})
+    );
+    let sessions = [StudySearchSession {
+        scope: StudyScope::local_compatibility(),
+        id: "study:main".into(),
+        title: "Calculus".into(),
+        node_name: String::new(),
+        messages: vec![StudySearchMessage {
+            id: "message-1".into(),
+            content: "quartzneedle in chat".into(),
+        }],
+    }];
+    let merged = store
+        .search_with_sessions(&json!({"query":"quartzneedle","limit":1}), &sessions)
+        .unwrap();
+    assert_eq!(merged["total"], 2);
+    assert_eq!(merged["has_more"], true);
+    let session = store
+        .search_with_sessions(&json!({"query":"quartzneedle","limit":2}), &sessions)
+        .unwrap();
+    assert_eq!(
+        session["results"][1]["target"],
+        json!({"kind":"session","id":"study:main","message_id":"message-1"})
+    );
+    let other = store.scoped(StudyScope::new("other", "mobile", "default"));
+    assert_eq!(
+        other.search(&json!({"query":"quartzneedle"})).unwrap()["total"],
+        0
+    );
+    assert_eq!(
+        other
+            .search_with_sessions(&json!({"query":"quartzneedle"}), &sessions)
+            .unwrap()["total"],
+        0
+    );
+}
+
+#[test]
+fn curation_tasks_are_durable_revision_checked_and_scoped() {
+    let store = temp_store("curation-tasks");
+    let created = store
+        .notes(
+            &json!({"action":"task_create","task_id":"task-1","checkpoint":{"step":1}}),
+            NoteWriter::Agent,
+        )
+        .unwrap();
+    assert_eq!(created["state"], "pending");
+    assert_eq!(
+        store
+            .notes(
+                &json!({"action":"task_checkpoint","task_id":"task-1","expected_revision":0}),
+                NoteWriter::Agent
+            )
+            .unwrap_err()
+            .message(),
+        "REVISION_CONFLICT"
+    );
+    let updated = store.notes(&json!({"action":"task_checkpoint","task_id":"task-1","expected_revision":1,"checkpoint":{"step":2}}), NoteWriter::Agent).unwrap();
+    assert_eq!(updated["revision"], 2);
+    let active = store
+        .notes(
+            &json!({"action":"curate_start","task_id":"other"}),
+            NoteWriter::Agent,
+        )
+        .unwrap();
+    assert_eq!(active["task_id"], "task-1");
+    assert_eq!(active["created"], false);
+    let cancelled = store
+        .notes(
+            &json!({"action":"curate_cancel","task_id":"task-1","expected_revision":2}),
+            NoteWriter::Agent,
+        )
+        .unwrap();
+    assert_eq!(cancelled["state"], "cancelled");
+    let reopened = StudyStore::open(store.path(), StudyScope::local_compatibility()).unwrap();
+    assert_eq!(
+        reopened
+            .notes(
+                &json!({"action":"task_get","task_id":"task-1"}),
+                NoteWriter::User
+            )
+            .unwrap()["checkpoint"]["step"],
+        2
+    );
+    let other = store.scoped(StudyScope::new("other", "mobile", "default"));
+    assert!(other
+        .notes(
+            &json!({"action":"task_get","task_id":"task-1"}),
+            NoteWriter::User
+        )
+        .is_err());
 }
 
 fn seed_operations() -> Value {
@@ -580,6 +775,7 @@ fn context_reports_the_study_prompt_and_the_selected_node() {
         }))
         .unwrap();
     store.current(Some("node-1")).unwrap();
+    let exam_id = store.exam(&json!({"action":"create","title":"矩阵测验","questions":[{"type":"written","prompt":"什么是矩阵？","node_ids":["node-1"],"answer":"数组","rubric":"定义","max_score":10}]})).unwrap()["exam"]["id"].as_str().unwrap().to_owned();
     let mut metadata = Map::new();
     metadata.insert("study_scope".into(), json!("node"));
     metadata.insert("preferred_language".into(), json!("zh"));
@@ -596,6 +792,10 @@ fn context_reports_the_study_prompt_and_the_selected_node() {
         context["latest_context"]["current_course"]["name"],
         json!("线性代数")
     );
+    assert_eq!(
+        context["latest_context"]["exams"],
+        json!([{"id":exam_id,"status":"open"}])
+    );
     assert!(context["request_local_late_context"]
         .as_str()
         .unwrap()
@@ -608,6 +808,7 @@ fn context_reports_the_study_prompt_and_the_selected_node() {
         .context(&json!({"session_id": "study:notes"}), Some(&notes_metadata))
         .unwrap();
     assert_eq!(notes["latest_context"].get("selected_node_id"), None);
+    assert_eq!(notes["latest_context"].get("exams"), None);
 }
 
 #[tokio::test]

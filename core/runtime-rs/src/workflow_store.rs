@@ -24,12 +24,32 @@ pub enum WorkflowStoreError {
     EmptyName,
     #[error("workflow name or id collides with another workflow")]
     Collision,
+    #[error("workflow runtime state is invalid: {0}")]
+    RuntimeState(String),
     #[error(transparent)]
     Document(#[from] WorkflowDocumentError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+/// Durable runtime data associated with a workflow scope.
+///
+/// Queue state uses the same `.lam/workflow/queue.json` path as the desktop
+/// Workflow runtime. Keeping it beside, rather than inside, the editable
+/// `workflows/` tree prevents runtime records from appearing as documents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowRuntimeBucket {
+    Queue,
+}
+
+impl WorkflowRuntimeBucket {
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::Queue => "queue.json",
+        }
+    }
 }
 
 pub type StoreResult<T> = Result<T, WorkflowStoreError>;
@@ -112,6 +132,89 @@ impl WorkflowStore {
             .list_scoped(work_root)?
             .into_iter()
             .find(|doc| doc["resource"]["id"] == id))
+    }
+
+    /// Read durable runtime records for the host-selected scope. Both global
+    /// and project paths are fixed by this store; request payloads cannot pick
+    /// an alternate directory.
+    pub fn runtime_records(
+        &self,
+        bucket: WorkflowRuntimeBucket,
+        work_root: Option<&Path>,
+    ) -> StoreResult<Vec<Value>> {
+        let path = self.runtime_state_path(bucket, work_root)?;
+        reject_symlink_components(&path)?;
+        if !path.is_file() {
+            return Ok(Vec::new());
+        }
+        let raw = read_json(&path)?;
+        let records = raw
+            .get("items")
+            .and_then(Value::as_array)
+            .or_else(|| raw.as_array())
+            .ok_or_else(|| {
+                WorkflowStoreError::RuntimeState(
+                    "expected an items array or a legacy array".into(),
+                )
+            })?;
+        Ok(records.clone())
+    }
+
+    /// Atomically replace the runtime records for the host-selected scope.
+    /// The process-wide mutation lock also serializes workflow-document and
+    /// queue-state writes, so each JSON snapshot is based on a stable read.
+    pub fn save_runtime_records(
+        &self,
+        bucket: WorkflowRuntimeBucket,
+        work_root: Option<&Path>,
+        records: &[Value],
+    ) -> StoreResult<()> {
+        let _guard = mutation_lock()
+            .lock()
+            .expect("workflow mutation lock poisoned");
+        let path = self.runtime_state_path(bucket, work_root)?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| WorkflowStoreError::Confinement(path.clone()))?;
+        ensure_directory(parent)?;
+        confined_child(parent, &path)?;
+        write_runtime_records(&path, records)
+    }
+
+    /// Read, update, and atomically persist one runtime-state snapshot while
+    /// holding the same process-wide mutation lock used by document saves.
+    pub fn mutate_runtime_records<T>(
+        &self,
+        bucket: WorkflowRuntimeBucket,
+        work_root: Option<&Path>,
+        update: impl FnOnce(&mut Vec<Value>) -> T,
+    ) -> StoreResult<T> {
+        let _guard = mutation_lock()
+            .lock()
+            .expect("workflow mutation lock poisoned");
+        let path = self.runtime_state_path(bucket, work_root)?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| WorkflowStoreError::Confinement(path.clone()))?;
+        ensure_directory(parent)?;
+        confined_child(parent, &path)?;
+        let mut records = read_runtime_records(&path)?;
+        let result = update(&mut records);
+        write_runtime_records(&path, &records)?;
+        Ok(result)
+    }
+
+    fn runtime_state_path(
+        &self,
+        bucket: WorkflowRuntimeBucket,
+        work_root: Option<&Path>,
+    ) -> StoreResult<PathBuf> {
+        let root = match work_root {
+            Some(root) => root.join(".lam"),
+            None => self.global_root.clone(),
+        };
+        reject_symlink_components(&root)?;
+        Ok(root.join("workflow").join(bucket.file_name()))
     }
 
     /// Compare-and-swap the named workflow. The process-wide lock protects
@@ -417,6 +520,26 @@ fn read_json(path: &Path) -> StoreResult<Value> {
     let mut bytes = Vec::new();
     File::open(path)?.read_to_end(&mut bytes)?;
     Ok(serde_json::from_slice(&bytes)?)
+}
+fn read_runtime_records(path: &Path) -> StoreResult<Vec<Value>> {
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let raw = read_json(path)?;
+    raw.get("items")
+        .and_then(Value::as_array)
+        .or_else(|| raw.as_array())
+        .cloned()
+        .ok_or_else(|| {
+            WorkflowStoreError::RuntimeState("expected an items array or a legacy array".into())
+        })
+}
+fn write_runtime_records(path: &Path, records: &[Value]) -> StoreResult<()> {
+    let payload = json!({
+        "version": 3,
+        "items": records,
+    });
+    write_atomic(path, &serde_json::to_vec_pretty(&payload)?)
 }
 fn read_entry(path: &Path) -> StoreResult<Option<Value>> {
     reject_symlink_components(path)?;
