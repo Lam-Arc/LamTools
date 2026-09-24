@@ -40,6 +40,7 @@ import { StandaloneExtensionsStore } from './StandaloneExtensionsStore'
 import { StandaloneArrangeStore } from './StandaloneArrangeStore'
 import { createStandaloneProjectClient } from './StandaloneProjectClient'
 import { createStandaloneProjectRoutes } from './StandaloneProjectRoutes'
+import { artifactRpc, artifactSnapshot, handleStandaloneArtifactHttp } from './StandaloneArtifacts'
 import { searchStandaloneWorkspace } from './StandaloneWorkspaceSearch'
 import { exportStandaloneSession } from './StandaloneSessionExport'
 import { checkStandaloneUpdate } from './StandaloneUpdate'
@@ -229,6 +230,8 @@ export class StandaloneTransport implements LamToolsTransport {
     if (method.startsWith('workflow.')) return await this.handleWorkflowRpc(method, params)
     const arrangeResult = await this.arrange.handleRpc(method, params)
     if (arrangeResult) return arrangeResult
+    const artifactResult = await artifactRpc(method, params)
+    if (artifactResult) return artifactResult
     if (method === 'workspace.search') return await searchStandaloneWorkspace(this.repository, params)
     if (method === 'update.check') return await checkStandaloneUpdate()
     if (method === 'project.list') {
@@ -548,6 +551,8 @@ export class StandaloneTransport implements LamToolsTransport {
         }
       } catch (error) { return attachmentErrorResponse(error) }
     }
+    const artifactResponse = await handleStandaloneArtifactHttp(request)
+    if (artifactResponse) return artifactResponse
     const projectResponse = await this.projectRoutes(request)
     if (projectResponse) return projectResponse
     return jsonResponse({ error: '设备拒绝了您的请求' }, 403)
@@ -1318,6 +1323,10 @@ export class StandaloneTransport implements LamToolsTransport {
       created_at: thread?.createdAt || now,
       updated_at: thread?.updatedAt || now,
     }
+    // The message views group artifacts under the item that produced them; the
+    // desktop fills this from its projector, the phone from the artifact store.
+    const projectId = String(thread?.metadata?.project_id || '')
+    snapshot.artifacts = projectId ? await artifactSnapshot(projectId) : {}
     return snapshot
   }
 

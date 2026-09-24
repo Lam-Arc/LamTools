@@ -37,6 +37,7 @@ use tauri::Emitter;
 use tauri::Manager;
 
 mod cancellation;
+mod artifacts;
 mod attachments;
 mod context_loader;
 use cancellation::{RegisterError, TurnCancellationRegistry};
@@ -77,6 +78,11 @@ fn bounded_tool_text(value: &Value) -> String {
 struct MobileToolObserver {
     app: tauri::AppHandle,
     turn_id: String,
+    /// Set so a successful project-file write can be recorded as an artifact
+    /// revision; the desktop gets the same fact from its event stream.
+    project_root: std::path::PathBuf,
+    project_id: String,
+    session_id: String,
 }
 
 impl ToolObserver for MobileToolObserver {
@@ -96,6 +102,16 @@ impl ToolObserver for MobileToolObserver {
     }
 
     fn finished(&self, call: &ToolCall, result: &Value, ok: bool) {
+        if ok {
+            record_tool_artifact(
+                &self.app,
+                &self.project_root,
+                &self.project_id,
+                &self.session_id,
+                &self.turn_id,
+                call,
+            );
+        }
         let _ = self.app.emit(
             "sunday-agent-stream",
             serde_json::json!({
@@ -793,6 +809,126 @@ fn sunday_plugin_inventory() -> Vec<lamtools_runtime::plugin_catalog::PluginInve
     lamtools_runtime::plugin_catalog::bundled_plugin_inventory()
 }
 
+/// The artifact store lives beside the other host databases.
+fn native_artifact_store(app: &tauri::AppHandle) -> Result<artifacts::ArtifactStore, String> {
+    let data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    artifacts::ArtifactStore::open(&data.join("artifacts.db"), &data.join("blobs"))
+}
+
+/// Record a write the agent just made as an artifact revision.
+///
+/// The desktop derives the same fact from its event stream; the phone has no
+/// projector, so the observation of the tool call is the source. Only tools that
+/// produce project files are recorded, and an unchanged write is not a new
+/// revision (the store decides that).
+fn record_tool_artifact(
+    app: &tauri::AppHandle,
+    project_root: &std::path::Path,
+    project_id: &str,
+    thread_id: &str,
+    turn_id: &str,
+    call: &ToolCall,
+) {
+    if !matches!(call.name.as_str(), "write_file" | "edit_file") {
+        return;
+    }
+    let Some(path) = call.arguments.get("path").and_then(Value::as_str) else {
+        return;
+    };
+    let Ok(store) = native_artifact_store(app) else {
+        return;
+    };
+    let origin = artifacts::ArtifactOrigin {
+        thread_id: thread_id.to_owned(),
+        turn_id: turn_id.to_owned(),
+        item_id: call.id.clone(),
+        tool_name: call.name.clone(),
+    };
+    let _ = store.record_file(project_id, project_root, path, origin);
+}
+
+#[tauri::command]
+async fn sunday_artifact_list(
+    app: tauri::AppHandle,
+    project_id: String,
+    include_deleted: Option<bool>,
+) -> Result<Value, String> {
+    let store = native_artifact_store(&app)?;
+    let records = store.list(&project_id, include_deleted.unwrap_or(false))?;
+    Ok(serde_json::json!({"artifacts": records}))
+}
+
+#[tauri::command]
+async fn sunday_artifact_revisions(
+    app: tauri::AppHandle,
+    project_id: String,
+    artifact_id: String,
+) -> Result<Value, String> {
+    let store = native_artifact_store(&app)?;
+    let artifact = store
+        .artifact(&artifact_id)?
+        .filter(|record| record.project_id == project_id)
+        .ok_or_else(|| "Artifact not found".to_owned())?;
+    let revisions = store.revisions(&artifact_id)?;
+    Ok(serde_json::json!({"artifact": artifact, "revisions": revisions}))
+}
+
+#[tauri::command]
+async fn sunday_artifact_set_deleted(
+    app: tauri::AppHandle,
+    project_id: String,
+    artifact_ids: Vec<String>,
+    deleted: bool,
+) -> Result<Value, String> {
+    if artifact_ids.is_empty() {
+        return Err("artifact_ids is required".into());
+    }
+    let store = native_artifact_store(&app)?;
+    let changed = store.set_deleted(&project_id, &artifact_ids, deleted)?;
+    Ok(if deleted {
+        serde_json::json!({"deleted": changed})
+    } else {
+        serde_json::json!({"restored": changed})
+    })
+}
+
+#[tauri::command]
+async fn sunday_artifact_restore_revision(
+    app: tauri::AppHandle,
+    project_id: String,
+    artifact_id: String,
+    revision_id: String,
+) -> Result<Value, String> {
+    let store = native_artifact_store(&app)?;
+    let root = native_project_root(&app, &project_id)?;
+    let record = store.restore_revision(&project_id, &root, &artifact_id, &revision_id)?;
+    Ok(serde_json::json!({"artifact": record}))
+}
+
+/// Bytes of one artifact revision; `null` when the artifact is not this project's.
+#[tauri::command]
+async fn sunday_artifact_file(
+    app: tauri::AppHandle,
+    project_id: String,
+    artifact_id: String,
+    revision_id: Option<String>,
+) -> Result<Option<Value>, String> {
+    let store = native_artifact_store(&app)?;
+    let Some(record) = store
+        .artifact(&artifact_id)?
+        .filter(|record| record.project_id == project_id)
+    else {
+        return Ok(None);
+    };
+    let (bytes, mime_type) = store.revision_bytes(&record, revision_id.as_deref())?;
+    use base64::Engine;
+    Ok(Some(serde_json::json!({
+        "path": record.path,
+        "mimeType": mime_type,
+        "dataBase64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+    })))
+}
+
 /// Every tool this host can advertise, for the mode tool-set editor.
 ///
 /// The desktop answers `config.loadtools.get` with a catalog derived from its
@@ -1082,10 +1218,13 @@ async fn sunday_agent_turn_inner(
     let runtime_foreground_model = foreground_model.clone();
     let runtime = AgentRuntime::new(model.clone(), tools)
         .with_hook_executor(hook_engine)
-        .with_guidance_source(agent_state.sub_agents.parent_guidance(parent_thread_id))
+        .with_guidance_source(agent_state.sub_agents.parent_guidance(parent_thread_id.clone()))
         .with_tool_observer(Arc::new(MobileToolObserver {
             app: app.clone(),
             turn_id: trace_turn_id.clone(),
+            project_root: project_root.clone(),
+            project_id: payload.project_id.clone(),
+            session_id: parent_thread_id.clone(),
         }))
         .with_progress(move |stage| {
             emit_agent_stage(&runtime_progress_app, &runtime_progress_turn_id, stage);
@@ -1379,10 +1518,13 @@ async fn sunday_agent_resume_inner(
     let runtime_foreground_model = foreground_model.clone();
     let runtime = AgentRuntime::new(model.clone(), tools)
         .with_hook_executor(hook_engine)
-        .with_guidance_source(agent_state.sub_agents.parent_guidance(parent_thread_id))
+        .with_guidance_source(agent_state.sub_agents.parent_guidance(parent_thread_id.clone()))
         .with_tool_observer(Arc::new(MobileToolObserver {
             app: app.clone(),
             turn_id: trace_turn_id.clone(),
+            project_root: project_root.clone(),
+            project_id: payload.project_id.clone(),
+            session_id: parent_thread_id.clone(),
         }))
         .with_progress(move |stage| {
             emit_agent_stage(&runtime_progress_app, &runtime_progress_turn_id, stage);
@@ -3067,6 +3209,11 @@ pub fn run() {
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
+        sunday_artifact_list,
+        sunday_artifact_revisions,
+        sunday_artifact_set_deleted,
+        sunday_artifact_restore_revision,
+        sunday_artifact_file,
         sunday_user_skills,
         sunday_skill_create,
         sunday_skill_delete,
@@ -3105,6 +3252,11 @@ pub fn run() {
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
+        sunday_artifact_list,
+        sunday_artifact_revisions,
+        sunday_artifact_set_deleted,
+        sunday_artifact_restore_revision,
+        sunday_artifact_file,
         sunday_user_skills,
         sunday_skill_create,
         sunday_skill_delete,

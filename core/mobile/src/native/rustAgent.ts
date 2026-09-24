@@ -134,6 +134,90 @@ export async function listEmbeddedPluginModeTools(mode: string): Promise<string[
   return await invoke<string[]>('sunday_plugin_mode_tools', { mode })
 }
 
+/** One artifact the host recorded from an agent write. */
+export interface EmbeddedArtifact {
+  artifact_id: string
+  project_id: string
+  name: string
+  path: string
+  mime_type: string
+  source: string
+  role: string
+  latest_revision_id: string
+  revision_count: number
+  thread_id: string
+  turn_id: string
+  item_id: string
+  tool_name: string
+  deleted: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface EmbeddedArtifactRevision {
+  revision_id: string
+  artifact_id: string
+  ordinal: number
+  blob_hash: string
+  size: number
+  mime_type: string
+  restored_from_revision_id: string
+  created_at: string
+}
+
+export async function listEmbeddedArtifacts(
+  projectId: string,
+  includeDeleted = false,
+): Promise<EmbeddedArtifact[]> {
+  if (!hasEmbeddedRustCore()) return []
+  const payload = await invoke<{ artifacts: EmbeddedArtifact[] }>('sunday_artifact_list', {
+    projectId,
+    includeDeleted,
+  })
+  return payload.artifacts || []
+}
+
+export async function readEmbeddedArtifactRevisions(
+  projectId: string,
+  artifactId: string,
+): Promise<{ artifact: EmbeddedArtifact; revisions: EmbeddedArtifactRevision[] }> {
+  return await invoke('sunday_artifact_revisions', { projectId, artifactId })
+}
+
+export async function setEmbeddedArtifactsDeleted(
+  projectId: string,
+  artifactIds: string[],
+  deleted: boolean,
+): Promise<{ deleted?: number; restored?: number }> {
+  return await invoke('sunday_artifact_set_deleted', { projectId, artifactIds, deleted })
+}
+
+export async function restoreEmbeddedArtifactRevision(
+  projectId: string,
+  artifactId: string,
+  revisionId: string,
+): Promise<{ artifact: EmbeddedArtifact }> {
+  return await invoke('sunday_artifact_restore_revision', { projectId, artifactId, revisionId })
+}
+
+export async function readEmbeddedArtifactFile(
+  projectId: string,
+  artifactId: string,
+  revisionId?: string,
+): Promise<{ path: string; mimeType: string; bytes: Uint8Array } | null> {
+  const raw = await invoke<{ path: string; mimeType: string; dataBase64: string } | null>(
+    'sunday_artifact_file',
+    { projectId, artifactId, revisionId: revisionId || null },
+  )
+  if (!raw) return null
+  const binary = atob(raw.dataBase64)
+  return {
+    path: raw.path,
+    mimeType: raw.mimeType,
+    bytes: Uint8Array.from(binary, character => character.charCodeAt(0)),
+  }
+}
+
 /** One bundled plugin's config schema, embedded and parsed by the host. */
 export interface EmbeddedPluginSchema {
   schema: Record<string, unknown>

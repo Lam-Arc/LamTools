@@ -48,7 +48,7 @@
 
 | 方法 | 桌面端作用 | 移动端现状 |
 |---|---|---|
-| `artifact.list`、`artifact.open`、`artifact.revisions`、`artifact.restore`、`artifact.revision.restore` | 工件列表、打开、版本与回滚（生成图片等产物的版本化） | 快照里只有空的 `artifacts: {}` 字段，**无任何 artifact RPC** |
+| `artifact.list`、`artifact.open`、`artifact.revisions`、`artifact.restore`、`artifact.revision.restore` | 工件列表、打开、版本与回滚 | **0.1.18 已对齐**：表（artifacts/artifact_revisions，blob 按 sha256 内容寻址）、操作（list/read|show/revisions/delete|remove/restore/revision.restore）、`GET /projects/{id}/artifacts/{id}/file?revision_id=` 路由、快照 `artifacts` 映射全部就位；`write_file`/`edit_file` 观察即记录版本，未变化不记新版本。**仅剩 `artifact.open`**：需要 Android intent 桥（附件面板已有同类能力），未随本版发布
 | `plugin.install`、`plugin.uninstall` | 安装/卸载插件 | 无宿主：移动端没有插件加载器（Python 后端/依赖装不进 APK），插件表是内置清单。0.1.16 起该 RPC 明确抛错并在面板显示，不再假装成功 |
 | `plugin.config.get`、`plugin.config.update` | 读/写插件配置（`configSchema` 驱动表单） | **已对齐**（0.1.17）：宿主内嵌 imagegen/websearch 的 `config/schema.jsonc`，`plugin.list` 因此出现配置入口（无 schema 的插件不显示入口）；写入的命名空间就是运行时读取的那个（`core.imagegen` / `core.websearch`），密钥打码/保留与桌面一致 |
 | `plugin.widget.get`、`plugin.widget.invoke` | 右侧栏插件挂件的读取与调用 | 只有 `plugin.widget.list`（返回空）。移动端没有插件 UI 宿主，没有挂件可读；调用会明确抛错 |
