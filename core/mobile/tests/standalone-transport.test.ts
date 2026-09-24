@@ -758,6 +758,103 @@ describe('StandaloneTransport', () => {
     ])
   })
 
+  it('keeps the durable tool history when a later turn is cancelled', async () => {
+    const repository = createLocalRepository(new MemoryDatabase())
+    const created = await createStandaloneProjectClient(repository).create({ name: '取消后历史', work_root: '' })
+    const config = new StandaloneConfigStore(new MemorySecureStorage())
+    await config.handleRpc('config.provider.create', {
+      name: 'Test', api_type: 'openai', base_url: 'https://model.invalid/v1', api_key: 'secret',
+      models: [{ model_id: 'history-model', display_name: 'History Model' }],
+    })
+    const runAgent = vi.fn(async (input: any) => {
+      const round = runAgent.mock.calls.length
+      // The second question is interrupted before the runtime answers.
+      if (round === 2) throw new Error('模型连接中断')
+      return {
+        text: `第${round}轮`,
+        runtimeModelId: 'history-model',
+        toolRounds: 1,
+        runtimeHistory: [
+          ...input.history,
+          { role: 'assistant_tool_calls', content: '', calls: [{ id: `call-${round}`, name: 'read_file', arguments: { path: 'a.txt' } }] },
+          { role: 'tool', tool_call_id: `call-${round}`, name: 'read_file', content: '{"ok":true}' },
+          { role: 'assistant', content: `第${round}轮` },
+        ],
+      }
+    })
+    const transport = new StandaloneTransport(repository, config, runAgent)
+
+    await transport.request({ method: 'turn/start', params: {
+      thread_id: created.session.id, input: [{ type: 'text', text: '第一问' }],
+    } })
+    await vi.waitFor(async () => {
+      expect((await repository.loadThreadSnapshot(created.session.id))?.status).toBe('completed')
+    })
+    await transport.request({ method: 'turn/start', params: {
+      thread_id: created.session.id, input: [{ type: 'text', text: '第二问' }],
+    } })
+    await vi.waitFor(async () => {
+      expect((await repository.loadThreadSnapshot(created.session.id))?.status).toBe('failed')
+    })
+    await transport.request({ method: 'turn/start', params: {
+      thread_id: created.session.id, input: [{ type: 'text', text: '第三问' }],
+    } })
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledTimes(3))
+
+    // The tool step of the first turn is still there, the failed turn contributes
+    // only the question the user asked, and nothing is replayed twice.
+    expect(runAgent.mock.calls[2][0].history).toEqual([
+      { role: 'user', content: '第一问' },
+      { role: 'assistant_tool_calls', content: '', calls: [{ id: 'call-1', name: 'read_file', arguments: { path: 'a.txt' } }] },
+      { role: 'tool', tool_call_id: 'call-1', name: 'read_file', content: '{"ok":true}' },
+      { role: 'assistant', content: '第1轮' },
+      { role: 'user', content: '第二问' },
+      { role: 'user', content: '第三问' },
+    ])
+  })
+
+  it('never hands a failure report to the model as an assistant answer', async () => {
+    const repository = createLocalRepository(new MemoryDatabase())
+    const created = await createStandaloneProjectClient(repository).create({ name: '失败文案', work_root: '' })
+    const config = new StandaloneConfigStore(new MemorySecureStorage())
+    await config.handleRpc('config.provider.create', {
+      name: 'Test', api_type: 'openai', base_url: 'https://model.invalid/v1', api_key: 'secret',
+      models: [{ model_id: 'plain-model', display_name: 'Plain Model' }],
+    })
+    // No runtime history at all, so the transcript items are the only source:
+    // this is the path a session takes when nothing has been persisted yet.
+    const runAgent = vi.fn(async () => {
+      const round = runAgent.mock.calls.length
+      if (round === 2) throw new Error('模型连接中断')
+      return { text: `第${round}轮`, runtimeModelId: 'plain-model', toolRounds: 0 }
+    })
+    const transport = new StandaloneTransport(repository, config, runAgent)
+
+    for (const question of ['第一问', '第二问']) {
+      await transport.request({ method: 'turn/start', params: {
+        thread_id: created.session.id, input: [{ type: 'text', text: question }],
+      } })
+      await vi.waitFor(async () => {
+        const snapshot = await repository.loadThreadSnapshot(created.session.id)
+        expect(snapshot?.status).toBe(question === '第一问' ? 'completed' : 'failed')
+      })
+    }
+    await transport.request({ method: 'turn/start', params: {
+      thread_id: created.session.id, input: [{ type: 'text', text: '第三问' }],
+    } })
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledTimes(3))
+
+    expect(runAgent.mock.calls[2][0].history).toEqual([
+      { role: 'user', content: '第一问' },
+      { role: 'assistant', content: '第1轮' },
+      { role: 'user', content: '第二问' },
+      { role: 'user', content: '第三问' },
+    ])
+    // The user still sees what happened; only the model is spared it.
+    const items = Object.values((await repository.loadThreadSnapshot(created.session.id))?.core?.items || {})
+    expect(items.some(item => item.status === 'failed' && String(item.content).includes('模型连接中断'))).toBe(true)
+  })
+
   it.each([undefined, 'study:study'])('retains mode %s and skill switches across a tool approval', async (activeMode) => {
     const repository = createLocalRepository(new MemoryDatabase())
     const created = await createStandaloneProjectClient(repository).create({ name: '审批项目', work_root: '' })

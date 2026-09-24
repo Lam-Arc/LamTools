@@ -1901,47 +1901,84 @@ async function conversationMessages(snapshot: SnapshotWithSession, activeTurnId 
   const previousTurns = Object.values(core.turns || {})
     .filter(turn => turn.turn_id !== activeTurnId)
     .sort((left, right) => Number(left.seq || 0) - Number(right.seq || 0))
-  const latestTurn = previousTurns.at(-1)
-  const persistedBelongsToLatestCompletedTurn = latestTurn?.status === 'completed'
-    && (sourceTurnId == null || sourceTurnId === latestTurn.turn_id)
-  if (Array.isArray(persisted) && persisted.every(isRustAgentMessage) && persistedBelongsToLatestCompletedTurn) {
+  // The durable history is the only place a turn's tool calls and their results
+  // survive, so it is what the next turn has to be built on. It used to be
+  // rejected unless the newest finished turn was the one that wrote it: one
+  // cancelled or failed turn then dropped every tool step the session had, and
+  // the model continued as if it had only ever exchanged plain text. It is used
+  // whenever the turn that wrote it is still a completed turn of this session,
+  // and the messages of the turns after it are appended below, so nothing the
+  // user said in between is lost and nothing is replayed twice.
+  const sourceTurn = sourceTurnId
+    ? previousTurns.find(turn => turn.turn_id === sourceTurnId)
+    : undefined
+  const sourceUsable = sourceTurnId == null || sourceTurn?.status === 'completed'
+  if (Array.isArray(persisted) && persisted.length && persisted.every(isRustAgentMessage) && sourceUsable) {
     const history = await hydrateImageMessages(jsonClone(persisted) as RustAgentMessage[], snapshot.thread_id)
-    if (!activeTurnId) return history
+    const caughtUp = sourceTurn
+      ? await turnMessages(core, previousTurns.filter(
+          turn => Number(turn.seq || 0) > Number(sourceTurn.seq || 0),
+        ), snapshot.thread_id)
+      : []
+    const messages = [...history, ...caughtUp]
+    if (!activeTurnId) return messages
     const current = core.turns?.[activeTurnId]
     const currentUser = (current?.items || [])
       .map(id => core.items?.[id])
       .find(item => isRecord(item?.payload) && item.payload.type === 'userMessage')
     const payload = isRecord(currentUser?.payload) ? currentUser.payload : {}
     const message = await inputMessage(payload.content, snapshot.thread_id)
-    return [...history, ...(message ? [message] : [])]
+    return [...messages, ...(message ? [message] : [])]
   }
+  return turnMessages(core, previousTurns, snapshot.thread_id)
+}
+
+/** The model-visible messages of whole turns, taken from the transcript items. */
+async function turnMessages(
+  core: NonNullable<CoreAppSnapshot['core']>,
+  turns: Array<{ items?: string[] }>,
+  threadId: string,
+): Promise<RustAgentMessage[]> {
   const messages: RustAgentMessage[] = []
-  for (const id of core.item_order || []) {
-    const item = core.items?.[id]
-    const payload = isRecord(item?.payload) ? item.payload : {}
-    if (payload.type === 'userMessage') {
-      const message = await inputMessage(payload.content, snapshot.thread_id)
+  for (const turn of turns) {
+    for (const id of turn.items || []) {
+      const message = await transcriptMessage(core.items?.[id], threadId)
       if (message) messages.push(message)
-      continue
-    }
-    if (payload.type === 'agentMessage') {
-      if (item?.status === 'cancelled') continue
-      // A tool round's narration is not a separate assistant message: the
-      // durable runtime history already replays it, so adding it here would
-      // duplicate the text on the next request.
-      if (payload.final_response === false) continue
-      // Older snapshots stored diagnostics in content; keep only their saved answer in model history.
-      const content = typeof payload.turn_trace_answer === 'string'
-        ? payload.turn_trace_answer
-        : String(payload.content || item?.content || '')
-      if (content) messages.push({
-        role: 'assistant',
-        content,
-        ...(payload.provider_state != null ? { providerState: payload.provider_state } : {}),
-      })
     }
   }
   return messages
+}
+
+async function transcriptMessage(
+  item: Record<string, any> | undefined,
+  threadId: string,
+): Promise<RustAgentMessage | null> {
+  const payload = isRecord(item?.payload) ? item.payload : {}
+  if (payload.type === 'userMessage') {
+    return await inputMessage(payload.content, threadId)
+  }
+  if (payload.type === 'agentMessage') {
+    // A cancelled turn has no answer, and a failed one carries an error report:
+    // neither is something the model said. Replaying the failure text as an
+    // assistant answer handed the next turn a turn that never happened, on top
+    // of the error the user already saw.
+    if (item?.status === 'cancelled' || item?.status === 'failed') return null
+    // A tool round's narration is not a separate assistant message: the
+    // durable runtime history already replays it, so adding it here would
+    // duplicate the text on the next request.
+    if (payload.final_response === false) return null
+    // Older snapshots stored diagnostics in content; keep only their saved answer in model history.
+    const content = typeof payload.turn_trace_answer === 'string'
+      ? payload.turn_trace_answer
+      : String(payload.content || item?.content || '')
+    if (!content) return null
+    return {
+      role: 'assistant',
+      content,
+      ...(payload.provider_state != null ? { providerState: payload.provider_state } : {}),
+    }
+  }
+  return null
 }
 
 /** Place a finished item directly before its turn's live answer item. */
