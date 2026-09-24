@@ -25,6 +25,7 @@ import {
   cancelEmbeddedSundayTurn,
   listEmbeddedSubAgents,
   listenEmbeddedSundayAgentStream,
+  readEmbeddedCheckpoint,
   respondEmbeddedSubAgentApproval,
   resumeEmbeddedSundayTurn,
   runEmbeddedSundayTurn,
@@ -42,6 +43,11 @@ import { createStandaloneProjectClient } from './StandaloneProjectClient'
 import { createStandaloneProjectRoutes } from './StandaloneProjectRoutes'
 import { artifactRpc, artifactSnapshot, handleStandaloneArtifactHttp } from './StandaloneArtifacts'
 import { goalRpc } from './StandaloneGoals'
+import {
+  createCheckpointRpc,
+  forkSnapshotUpToTurn,
+  truncateSnapshotAfterTurn,
+} from './StandaloneCheckpoints'
 import { searchStandaloneWorkspace } from './StandaloneWorkspaceSearch'
 import { exportStandaloneSession } from './StandaloneSessionExport'
 import { checkStandaloneUpdate } from './StandaloneUpdate'
@@ -151,6 +157,7 @@ export class StandaloneTransport implements LamToolsTransport {
   private connecting: Promise<void> | null = null
   private readonly arrange: StandaloneArrangeStore
   private readonly projectRoutes: ReturnType<typeof createStandaloneProjectRoutes>
+  private readonly checkpointRpc: ReturnType<typeof createCheckpointRpc>
 
   constructor(
     private readonly repository: LocalRepository,
@@ -168,6 +175,12 @@ export class StandaloneTransport implements LamToolsTransport {
     // Route and client share one implementation so the two access paths cannot
     // drift apart.
     this.projectRoutes = createStandaloneProjectRoutes(createStandaloneProjectClient(repository))
+    this.checkpointRpc = createCheckpointRpc({
+      sessionProjectId: sessionId => this.sessionProjectId(sessionId),
+      forkSession: (sessionId, turnId, title) => this.forkSessionAtTurn(sessionId, turnId, title),
+      truncateSession: (sessionId, turnId) => this.truncateSessionAfterTurn(sessionId, turnId),
+      checkpointTurn: async checkpointId => (await readEmbeddedCheckpoint(checkpointId)).turn_id,
+    })
   }
 
   async connect(): Promise<void> {
@@ -235,6 +248,8 @@ export class StandaloneTransport implements LamToolsTransport {
     if (artifactResult) return artifactResult
     const goalResult = await goalRpc(method, params)
     if (goalResult) return goalResult
+    const checkpointResult = await this.checkpointRpc(method, params)
+    if (checkpointResult) return checkpointResult
     if (method === 'workspace.search') return await searchStandaloneWorkspace(this.repository, params)
     if (method === 'update.check') return await checkStandaloneUpdate()
     if (method === 'project.list') {
@@ -1311,6 +1326,62 @@ export class StandaloneTransport implements LamToolsTransport {
     recordStage('js_native_returned')
     if (signal.aborted) throw new Error('操作已取消')
     return result
+  }
+
+/** The project a session belongs to, for checkpoint file scopes. */
+  private async sessionProjectId(sessionId: string): Promise<string> {
+    const thread = (await this.repository.listSessions()).find(candidate => candidate.id === sessionId)
+    return String(thread?.metadata?.project_id || '')
+  }
+
+  /**
+   * Branch a session at a checkpoint.
+   *
+   * The desktop forks server-side; here the branch is a new local session whose
+   * snapshot holds the items and turns up to that point, so the conversation and
+   * the files it was based on agree.
+   */
+  private async forkSessionAtTurn(
+    sessionId: string,
+    turnId: string,
+    title: string,
+  ): Promise<{ id: string; title: string }> {
+    const source = await this.snapshotFor(sessionId)
+    const created = await this.repository.createLocalSession(
+      String(source.session?.metadata?.project_id || '') || undefined,
+      title,
+    )
+    const branch = await this.snapshotFor(created.id)
+    const part = forkSnapshotUpToTurn(source, turnId)
+    branch.core = {
+      ...(branch.core || { thread_id: created.id, revision: 0, snapshot_seq: 0 }),
+      thread_id: created.id,
+      items: part.items as NonNullable<typeof branch.core>['items'],
+      turns: part.turns as NonNullable<typeof branch.core>['turns'],
+      revision: Number(source.core?.revision || 0),
+      snapshot_seq: Number(source.core?.snapshot_seq || 0),
+    }
+    await this.saveSnapshot(branch)
+    this.emitSnapshot(branch)
+    return { id: created.id, title: created.title }
+  }
+
+  /** Drop everything after a turn so the session matches the restored files. */
+  private async truncateSessionAfterTurn(
+    sessionId: string,
+    turnId: string,
+  ): Promise<{ removed_items: number; removed_turns: number }> {
+    const snapshot = await this.snapshotFor(sessionId)
+    const removed = truncateSnapshotAfterTurn(snapshot, turnId)
+    if (removed.removed_items || removed.removed_turns) {
+      snapshot.snapshot_seq = Number(snapshot.snapshot_seq || 0) + 1
+      if (snapshot.core) snapshot.core.snapshot_seq = snapshot.snapshot_seq
+      snapshot.revision = Number(snapshot.revision || 0) + 1
+      if (snapshot.core) snapshot.core.revision = snapshot.revision
+      await this.saveSnapshot(snapshot)
+      this.emitSnapshot(snapshot)
+    }
+    return removed
   }
 
   private async snapshotFor(threadId: string): Promise<SnapshotWithSession> {

@@ -38,6 +38,7 @@ use tauri::Manager;
 
 mod cancellation;
 mod artifacts;
+mod checkpoints;
 mod goals;
 mod attachments;
 mod context_loader;
@@ -1077,6 +1078,99 @@ async fn sunday_goal_update(
     Ok(goals::goal_payload(&goal))
 }
 
+/// The checkpoint store, beside the other host databases.
+fn native_checkpoint_store(app: &tauri::AppHandle) -> Result<checkpoints::CheckpointStore, String> {
+    let data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    checkpoints::CheckpointStore::open(&data.join("checkpoints.db"))
+}
+
+/// Record a checkpoint for one turn, at the turn boundary.
+fn record_turn_checkpoint(
+    app: &tauri::AppHandle,
+    project_root: &std::path::Path,
+    session_id: &str,
+    turn_id: &str,
+) {
+    let Ok(store) = native_checkpoint_store(app) else {
+        return;
+    };
+    let _ = store.create(
+        project_root,
+        session_id,
+        turn_id,
+        "",
+        "",
+        checkpoints::ActorKind::Agent,
+    );
+}
+
+#[tauri::command]
+async fn sunday_checkpoint_create(
+    app: tauri::AppHandle,
+    session_id: String,
+    turn_id: Option<String>,
+    label: Option<String>,
+    reason: Option<String>,
+) -> Result<Value, String> {
+    let store = native_checkpoint_store(&app)?;
+    let root = native_project_root(&app, &String::new())?;
+    let record = store.create(
+        &root,
+        &session_id,
+        turn_id.as_deref().unwrap_or_default(),
+        label.as_deref().unwrap_or_default(),
+        reason.as_deref().unwrap_or_default(),
+        checkpoints::ActorKind::User,
+    )?;
+    Ok(serde_json::json!({"checkpoint": record, "nodes": [record]}))
+}
+
+#[tauri::command]
+async fn sunday_checkpoint_get(app: tauri::AppHandle, checkpoint_id: String) -> Result<Value, String> {
+    let store = native_checkpoint_store(&app)?;
+    let record = store
+        .checkpoint(&checkpoint_id)?
+        .ok_or_else(|| format!("检查点不存在: {checkpoint_id}"))?;
+    Ok(serde_json::json!({"checkpoint": record}))
+}
+
+#[tauri::command]
+async fn sunday_checkpoint_graph(app: tauri::AppHandle, session_id: String) -> Result<Value, String> {
+    let store = native_checkpoint_store(&app)?;
+    let (nodes, heads) = store.graph(&session_id)?;
+    Ok(checkpoints::graph_payload(&nodes, &heads))
+}
+
+#[tauri::command]
+async fn sunday_checkpoint_list(app: tauri::AppHandle, session_id: String) -> Result<Value, String> {
+    let store = native_checkpoint_store(&app)?;
+    let nodes = store.list(&session_id)?;
+    Ok(serde_json::json!({"nodes": nodes}))
+}
+
+#[tauri::command]
+async fn sunday_checkpoint_restore(
+    app: tauri::AppHandle,
+    project_id: String,
+    session_id: String,
+    checkpoint_id: String,
+    scope: Option<String>,
+) -> Result<Value, String> {
+    let store = native_checkpoint_store(&app)?;
+    let artifacts = native_artifact_store(&app)?;
+    let root = native_project_root(&app, &project_id)?;
+    let outcome = checkpoints::restore(
+        &store,
+        &artifacts,
+        &root,
+        &project_id,
+        &session_id,
+        &checkpoint_id,
+        scope.as_deref().unwrap_or("workspace"),
+    )?;
+    Ok(checkpoints::restore_payload(&outcome))
+}
+
 /// Every tool this host can advertise, for the mode tool-set editor.
 ///
 /// The desktop answers `config.loadtools.get` with a catalog derived from its
@@ -1417,6 +1511,7 @@ async fn sunday_agent_turn_inner(
         &mut progress,
     )
     .await;
+    record_turn_checkpoint(&app, &project_root, &parent_thread_id, &trace_turn_id);
     emit_agent_stage(&app, &trace_turn_id, "native_dreaming_done");
     Ok(progress)
 }
@@ -1709,6 +1804,7 @@ async fn sunday_agent_resume_inner(
         &mut progress,
     )
     .await;
+    record_turn_checkpoint(&app, &project_root, &parent_thread_id, &trace_turn_id);
     emit_agent_stage(&app, &trace_turn_id, "native_dreaming_done");
     Ok(progress)
 }
@@ -3357,6 +3453,11 @@ pub fn run() {
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
+        sunday_checkpoint_create,
+        sunday_checkpoint_get,
+        sunday_checkpoint_graph,
+        sunday_checkpoint_list,
+        sunday_checkpoint_restore,
         sunday_goal_create,
         sunday_goal_get,
         sunday_goal_list,
@@ -3404,6 +3505,11 @@ pub fn run() {
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
+        sunday_checkpoint_create,
+        sunday_checkpoint_get,
+        sunday_checkpoint_graph,
+        sunday_checkpoint_list,
+        sunday_checkpoint_restore,
         sunday_goal_create,
         sunday_goal_get,
         sunday_goal_list,

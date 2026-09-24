@@ -231,6 +231,49 @@ export async function readEmbeddedArtifactFile(
   }
 }
 
+/** One checkpoint node, shaped like the desktop's checkpoint payload. */
+export interface EmbeddedCheckpoint {
+  id: string
+  graph_id: string
+  root_session_id: string
+  session_id: string
+  parent_checkpoint_id: string
+  edge_kind: string
+  turn_id: string
+  actor_kind: string
+  reason: string
+  label: string
+  work_root: string
+  manifest_hash: string
+  status: string
+  created_at: string
+}
+
+export async function readEmbeddedCheckpointGraph(
+  sessionId: string,
+): Promise<{ nodes: EmbeddedCheckpoint[]; heads: Record<string, string> }> {
+  if (!hasEmbeddedRustCore()) return { nodes: [], heads: {} }
+  const payload = await invoke<{ nodes: EmbeddedCheckpoint[]; heads: Record<string, string> }>(
+    'sunday_checkpoint_graph',
+    { sessionId },
+  )
+  return { nodes: payload.nodes || [], heads: payload.heads || {} }
+}
+
+export async function readEmbeddedCheckpoint(checkpointId: string): Promise<EmbeddedCheckpoint> {
+  const payload = await invoke<{ checkpoint: EmbeddedCheckpoint }>('sunday_checkpoint_get', { checkpointId })
+  return payload.checkpoint
+}
+
+export async function restoreEmbeddedCheckpoint(
+  projectId: string,
+  sessionId: string,
+  checkpointId: string,
+  scope = 'workspace',
+): Promise<Record<string, unknown>> {
+  return await invoke('sunday_checkpoint_restore', { projectId, sessionId, checkpointId, scope })
+}
+
 /** One durable goal, shaped like the desktop's `Goal.to_dict()`. */
 export interface EmbeddedGoal {
   id: string

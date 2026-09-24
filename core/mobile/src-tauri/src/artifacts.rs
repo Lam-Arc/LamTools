@@ -419,6 +419,26 @@ impl ArtifactStore {
         Ok((self.read_blob(&revision.blob_hash)?, mime))
     }
 
+    /// Where one blob lives, for stores that share this content address space.
+    pub fn blob_path(&self, hash: &str) -> PathBuf {
+        self.blob_root.join(hash)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn store_bytes_for_test(&self, hash: &str, bytes: &[u8]) -> Result<(), String> {
+        self.store_blob(hash, bytes)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_in_memory_at(blob_root: &std::path::Path) -> Self {
+        let store = Self {
+            connection: Connection::open_in_memory().expect("in-memory artifacts"),
+            blob_root: blob_root.to_path_buf(),
+        };
+        store.migrate().expect("artifacts schema");
+        store
+    }
+
     fn store_blob(&self, hash: &str, bytes: &[u8]) -> Result<(), String> {
         std::fs::create_dir_all(&self.blob_root).map_err(|error| error.to_string())?;
         let target = self.blob_root.join(hash);
