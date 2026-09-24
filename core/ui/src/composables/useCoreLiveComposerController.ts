@@ -404,8 +404,10 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   }
 
   function reportError(message: string): void {
+    // Status text is a notice toast in the host. Failures belong only in the
+    // error channel; sending them to both channels shows green and red copies.
+    options.setStatusText?.('')
     options.onError?.(message)
-    options.setStatusText?.(message)
   }
 
   function reportCommandError(message: string): void {

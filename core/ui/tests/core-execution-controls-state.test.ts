@@ -27,6 +27,25 @@ function createDeferred<T = void>() {
 }
 
 describe('useCoreExecutionControlsState', () => {
+  it('reprojects the same model catalog when the shared classification changes', async () => {
+    const models = ref([
+      { id: 'model-1', provider_id: 'provider-1', display_name: 'Model One', thinking_supported: true },
+    ])
+    const catalogView = ref<'group' | 'provider'>('provider')
+    const state = useCoreExecutionControlsState({
+      models,
+      providers,
+      groups: ref([{ id: 'free', name: 'Free', model_ids: ['model-1'] }]),
+      catalogView,
+      defaultModel: ref(models.value[0]),
+    })
+
+    expect(state.modelOptions.value.find(option => option.value === 'model-1')?.group).toBe('Provider One')
+    catalogView.value = 'group'
+    await nextTick()
+    expect(state.modelOptions.value.find(option => option.value === 'model-1')?.group).toBe('Free')
+  })
+
   it('restores a valid model selection and persists later changes', async () => {
     const storage = createStorage({
       [CORE_EXECUTION_CONTROLS_STORAGE_KEYS.modelId]: 'model-2',

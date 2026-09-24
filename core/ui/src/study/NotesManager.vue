@@ -136,14 +136,21 @@ type NoteNavigationAction = () => void | Promise<void>
  * chat action), so a dirty draft cannot be bypassed by changing chrome.
  */
 async function requestNavigation(action: NoteNavigationAction): Promise<boolean> {
+  const leavingNoteId = dirty.value ? props.selected?.id : undefined
+  const leavingDraft = leavingNoteId ? drafts.value[leavingNoteId] : undefined
   if (dirty.value) {
     const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
       ? window.confirm('当前笔记有未保存修改，确定放弃修改并继续吗？')
       : false
     if (!confirmed) return false
-    discardChanges()
   }
   await action()
+  // A failed navigation must leave the draft intact. Do not discard edits
+  // made while the destination was loading, or a newly selected note's draft.
+  if (leavingNoteId && drafts.value[leavingNoteId] === leavingDraft) {
+    const next = { ...drafts.value }; delete next[leavingNoteId]; drafts.value = next
+    saveState.value = 'idle'; saveError.value = ''; lockError.value = ''
+  }
   return true
 }
 function selectNote(note: StudyNote): void { void requestNavigation(() => props.onSelect(note)).catch(() => undefined) }

@@ -246,8 +246,8 @@ export { copyText } from './helpers/clipboard';
 
 // Data
 export { THEME_PRESETS, THEME_PRESET_GROUPS } from './data/theme-presets';
-export { PROVIDER_PRESETS } from './data/provider-presets';
-export type { ProviderPreset, ProviderPresetModel } from './data/provider-presets';
+export { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from './data/provider-presets';
+export type { ProviderPreset, ProviderPresetGroup, ProviderPresetModel } from './data/provider-presets';
 
 // Composables
 export {

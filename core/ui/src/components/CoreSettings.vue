@@ -18,13 +18,17 @@
             <h1>模型与供应商</h1>
             <p>管理模型接入、供应商配置与默认模型选择。</p>
           </div>
+          <CoreModelCatalogViewToggle
+            :model-value="catalogView"
+            @update:model-value="$emit('update:catalogView', $event)"
+          />
         </header>
 
         <div v-if="noticeText" class="settings-notice">{{ noticeText }}</div>
 
-        <div v-if="providers.length" class="models-workspace settings-surface">
+        <div v-if="catalogView === 'group' || providers.length" class="models-workspace settings-surface">
           <div class="models-workspace-body">
-          <aside class="provider-rail" aria-label="供应商列表">
+          <aside v-if="catalogView === 'provider'" class="provider-rail" aria-label="供应商列表">
             <div class="provider-rail-head">
               <div class="provider-rail-title">
                 <strong>供应商</strong>
@@ -76,7 +80,49 @@
             </div>
           </aside>
 
-          <section v-if="selectedProvider" class="provider-detail" aria-label="供应商详情">
+          <aside v-else class="provider-rail" aria-label="模型组列表">
+            <div class="provider-rail-head">
+              <div class="provider-rail-title">
+                <strong>模型组</strong>
+                <span>{{ modelGroups.length }}</span>
+              </div>
+            </div>
+            <label class="resource-search provider-search">
+              <span class="sr-only">搜索模型组</span>
+              <input v-model.trim="groupQuery" type="search" placeholder="搜索模型组" />
+            </label>
+            <div class="provider-picker" role="listbox" aria-label="选择模型组">
+              <button
+                v-for="group in filteredModelGroups"
+                :key="group.id"
+                class="provider-picker-item"
+                :class="{ 'is-selected': selectedModelGroup?.id === group.id }"
+                type="button"
+                role="option"
+                :aria-selected="selectedModelGroup?.id === group.id ? 'true' : 'false'"
+                :data-model-group="group.id"
+                @click="selectModelGroup(group.id)"
+              >
+                <span class="provider-picker-mark" aria-hidden="true">{{ (group.name || group.id).slice(0, 1).toUpperCase() }}</span>
+                <span class="provider-picker-copy">
+                  <strong>{{ group.name || group.id }}</strong>
+                  <span>{{ group.model_ids.length }} 个模型</span>
+                </span>
+              </button>
+              <div v-if="!filteredModelGroups.length" class="provider-rail-empty">
+                <strong>{{ groupQuery ? '没有匹配的模型组' : '还没有模型组' }}</strong>
+                <small>{{ groupQuery ? '换个关键词试试' : '创建分组来整理常用模型' }}</small>
+              </div>
+            </div>
+            <div class="provider-rail-footer">
+              <button class="provider-create-btn" type="button" data-model-group-create @click="startModelGroupCreate">
+                <span aria-hidden="true">＋</span>
+                <span>新建模型组</span>
+              </button>
+            </div>
+          </aside>
+
+          <section v-if="catalogView === 'provider' && selectedProvider" class="provider-detail" aria-label="供应商详情">
             <header class="provider-detail-head">
               <div class="provider-detail-identity">
                 <span class="provider-detail-context">当前供应商</span>
@@ -148,12 +194,70 @@
             </section>
           </section>
 
-          <section v-else class="models-empty-state models-empty-state--main" aria-label="供应商空状态">
+          <section v-else-if="catalogView === 'group' && selectedModelGroup" class="provider-detail" aria-label="模型组详情">
+            <header class="provider-detail-head">
+              <div class="provider-detail-identity">
+                <span class="provider-detail-context">当前模型组</span>
+                <div class="provider-name-line"><h2>{{ selectedModelGroup.name }}</h2></div>
+                <div class="provider-meta"><span>{{ selectedGroupModels.length }} 个模型，可来自多个供应商</span></div>
+              </div>
+              <div class="provider-head-actions">
+                <button class="text-btn" type="button" :data-model-group-edit="selectedModelGroup.id" @click="startModelGroupUpdate(selectedModelGroup)">重命名</button>
+                <button class="text-btn danger" type="button" :data-model-group-delete="selectedModelGroup.id" @click="$emit('delete-model-group', selectedModelGroup.id)">删除组</button>
+              </div>
+            </header>
+            <section class="model-section">
+              <header class="model-section-head">
+                <div class="model-section-title">
+                  <h2>模型</h2><span>{{ selectedGroupModels.length }} 个模型</span>
+                </div>
+                <div class="model-section-tools">
+                  <label class="resource-search model-search">
+                    <span class="sr-only">搜索模型</span>
+                    <input v-model.trim="modelQuery" type="search" placeholder="搜索模型" />
+                  </label>
+                  <button class="small-btn quiet" type="button" data-model-group-members @click="startGroupMembersEdit">添加已有模型</button>
+                  <button class="small-btn primary" type="button" data-group-model-create @click="startGroupModelCreate">＋ 新增模型</button>
+                </div>
+              </header>
+              <div class="model-list">
+                <div v-for="model in filteredSelectedGroupModels" :key="model.id" class="model-row" :class="{ 'is-default': model.is_default }">
+                  <div class="model-leading">
+                    <div class="model-identity">
+                      <div class="model-name-line">
+                        <strong>{{ model.display_name || model.model_id || model.id }}</strong>
+                        <span v-if="model.is_default" class="model-default-badge">当前默认</span>
+                      </div>
+                      <span class="model-meta">{{ modelProviderName(model) }} · {{ model.model_id || model.id }}</span>
+                    </div>
+                  </div>
+                  <div class="row-actions">
+                    <button v-if="!model.is_default" class="text-btn model-default-btn" type="button" @click="$emit('set-default-model', model.id)">设为默认</button>
+                    <button class="text-btn" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">编辑</button>
+                    <button class="text-btn danger" type="button" :data-model-group-remove="model.id" @click="removeModelFromSelectedGroup(model.id)">移出组</button>
+                  </div>
+                </div>
+                <div v-if="!filteredSelectedGroupModels.length" class="model-empty">
+                  <div>
+                    <strong>{{ modelQuery ? '没有匹配的模型' : '该组还没有模型' }}</strong>
+                    <span>{{ modelQuery ? '换个关键词试试' : '添加现有模型，或创建一个新模型' }}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </section>
+
+          <section v-else-if="catalogView === 'provider'" class="models-empty-state models-empty-state--main" aria-label="供应商空状态">
             <div class="models-empty-mark" aria-hidden="true"><span>+</span></div>
             <div class="models-empty-copy">
               <h2>还没有供应商</h2>
               <p>从左侧添加一个模型供应商，开始使用 Sunday。</p>
             </div>
+          </section>
+          <section v-else class="models-empty-state models-empty-state--main" aria-label="模型组空状态">
+            <div class="models-empty-mark" aria-hidden="true"><span>+</span></div>
+            <div class="models-empty-copy"><h2>还没有模型组</h2><p>创建一个模型组来整理所有供应商下的模型。</p></div>
+            <button class="small-btn primary" type="button" data-model-group-create @click="startModelGroupCreate">新建模型组</button>
           </section>
           </div>
         </div>
@@ -209,6 +313,32 @@
       </section>
 
       <section v-if="activeSection === 'loadtools'" class="settings-panel">
+        <article v-if="commandShellPlatform === 'windows' || commandShellPlatform === 'linux'" class="setting-card command-shell-card" data-command-shell-card>
+          <div class="subhead">
+            <span class="muted subhead-title">
+              命令行
+              <span class="subhead-sub">本机命令工具使用的 shell</span>
+            </span>
+            <div v-if="commandShellPlatform === 'windows'" class="subhead-actions">
+              <button class="text-btn" type="button" :disabled="commandShellLoading || commandShellSaving" data-command-shell-refresh @click="fetchCommandShellSettings">刷新</button>
+            </div>
+          </div>
+          <div v-if="commandShellPlatform === 'windows'" class="dream-row">
+            <span class="dream-min-turns">Windows shell</span>
+            <UiSelect
+              class="command-shell-select"
+              :model-value="commandShellPreference"
+              :options="commandShellOptions"
+              aria-label="Windows shell"
+              :disabled="commandShellLoading || commandShellSaving"
+              @update:model-value="updateCommandShellPreference"
+            />
+            <span v-if="commandShellSaving" class="muted" role="status">正在保存…</span>
+          </div>
+          <p v-if="commandShellPlatform === 'windows'" class="hook-meta">自动模式按 WSL → Git Bash → PowerShell 的顺序选择可用 shell；手动选择的 shell 不可用时也会按此顺序回退。</p>
+          <p v-else class="hook-meta">Linux 直接运行本机命令，不提供 Windows shell 选择。</p>
+          <p v-if="commandShellError" class="skill-error" role="alert" data-command-shell-error>{{ commandShellError }}</p>
+        </article>
         <!-- KeepAlive: switching sections must not destroy editor draft
              state (audit 17 S3 — the SettingsShell :key remount used to
              wipe every unsaved draft). -->
@@ -378,7 +508,8 @@
           <div class="subhead">
             <span class="muted subhead-title">
               全局约束
-              <span class="subhead-sub">AGENTS.md · .lam/core/config/</span>
+              <span v-if="commandShellPlatform === 'mobile'" class="subhead-sub">AGENTS.md · 移动端全局规则</span>
+              <span v-else class="subhead-sub">AGENTS.md · .lam/core/config/</span>
             </span>
             <div class="subhead-actions">
               <button class="text-btn" type="button" :disabled="agentsLoading" @click="fetchGlobalAgentsMd">刷新</button>
@@ -394,14 +525,16 @@
             :disabled="agentsLoading"
           />
           <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
-          <p class="hook-meta">保存到 <code>.lam/core/config/AGENTS.md</code>（统一配置目录）。项目级规则请在「项目设置 → 项目规则」内编辑，两者会相加注入系统提示词。</p>
+          <p v-if="commandShellPlatform === 'mobile'" class="hook-meta">保存在此设备的应用私有 SQLite 配置中。项目级规则请在「项目设置 → 项目规则」内编辑，两者会相加注入系统提示词。</p>
+          <p v-else class="hook-meta">保存到 <code>.lam/core/config/AGENTS.md</code>（统一配置目录）。项目级规则请在「项目设置 → 项目规则」内编辑，两者会相加注入系统提示词。</p>
         </article>
 
         <article class="setting-card">
           <div class="subhead">
             <span class="muted subhead-title">
               全局记忆
-              <span class="subhead-sub">memory.md · .lam/core/config/</span>
+              <span v-if="commandShellPlatform === 'mobile'" class="subhead-sub">memory.md · 移动端全局记忆</span>
+              <span v-else class="subhead-sub">memory.md · .lam/core/config/</span>
             </span>
             <div class="subhead-actions">
               <button class="text-btn" type="button" :disabled="memoryLoading" @click="fetchGlobalMemory">刷新</button>
@@ -417,14 +550,16 @@
             :disabled="memoryLoading"
           />
           <p v-if="memoryError" class="skill-error" role="alert">{{ memoryError }}</p>
-          <p class="hook-meta">保存到 <code>.lam/core/config/memory.md</code>。CLI：<code>core memory get/set</code>。</p>
+          <p v-if="commandShellPlatform === 'mobile'" class="hook-meta">保存在此设备的应用私有 SQLite 配置中，仅供本机移动端工作区使用。</p>
+          <p v-else class="hook-meta">保存到 <code>.lam/core/config/memory.md</code>。CLI：<code>core memory get/set</code>。</p>
         </article>
 
         <article class="setting-card">
           <div class="subhead">
             <span class="muted subhead-title">
               全局上下文加载
-              <span class="subhead-sub">load_context.jsonc · .lam/core/config/</span>
+              <span v-if="commandShellPlatform === 'mobile'" class="subhead-sub">load_context.jsonc · 移动端全局加载规则</span>
+              <span v-else class="subhead-sub">load_context.jsonc · .lam/core/config/</span>
             </span>
             <div class="subhead-actions">
               <button class="text-btn" type="button" :disabled="contextLoading" @click="fetchLoadContext">刷新</button>
@@ -474,7 +609,8 @@
           </div>
 
           <p v-if="contextError" class="skill-error" role="alert">{{ contextError }}</p>
-          <p class="hook-meta">保存到 <code>.lam/core/config/load_context.jsonc</code>，全局叠加到每个工作区（工作区自己的 load_context.jsonc 在其上叠加）。CLI：<code>core load-context get/set</code>。</p>
+          <p v-if="commandShellPlatform === 'mobile'" class="hook-meta">保存在此设备的应用私有 SQLite 配置中，全局规则叠加到本机工作区。</p>
+          <p v-else class="hook-meta">保存到 <code>.lam/core/config/load_context.jsonc</code>，全局叠加到每个工作区（工作区自己的 load_context.jsonc 在其上叠加）。CLI：<code>core load-context get/set</code>。</p>
         </article>
 
         <article class="setting-card">
@@ -522,7 +658,8 @@
             <button class="small-btn quiet" type="button" :disabled="dreamingLoading || dreamingSaving" @click="saveDreamingSettings">保存</button>
           </div>
           <p v-if="dreamingError" class="skill-error" role="alert">{{ dreamingError }}</p>
-          <p class="hook-meta">内容写入 <code>&lt;workRoot&gt;/MEMORY.md</code>，下个会话自动加载；<code>/dream</code> 命令始终可手动触发；短期记忆存 SQLite（<code>core_memories</code> 表）。CLI：<code>core memory dream show/config</code>。</p>
+          <p v-if="commandShellPlatform === 'mobile'" class="hook-meta">整理后的内容写入当前工作区的 MEMORY.md，下个会话自动加载；短期记忆保存在此设备的应用私有 SQLite 中。</p>
+          <p v-else class="hook-meta">内容写入 <code>&lt;workRoot&gt;/MEMORY.md</code>，下个会话自动加载；<code>/dream</code> 命令始终可手动触发；短期记忆存 SQLite（<code>core_memories</code> 表）。CLI：<code>core memory dream show/config</code>。</p>
         </article>
 
         <article class="setting-card" data-context-compaction-card>
@@ -636,14 +773,58 @@
       <!-- Floating editor overlay for provider/model edit forms.
            内联渲染即可：Teleport 目标是自身祖先（settings-card），传送等同原地；
            且 ref+Teleport 组合在测试环境（Teleport stub）会触发渲染递归。 -->
-      <div v-if="providerEditor || modelEditor" ref="editorOverlayEl" class="editor-overlay">
+      <div v-if="providerEditor || modelEditor || modelGroupEditor || groupMembersEditor" ref="editorOverlayEl" class="editor-overlay">
           <div ref="editorPopoverEl" class="editor-popover" :class="{ 'editor-popover--model': Boolean(modelEditor) }">
             <!-- Validation errors must render INSIDE the popover — the outer
                  noticeText sits behind the overlay's dim/blur and was
                  invisible to the user (audit 17 S3). -->
             <p v-if="editorError" class="skill-error editor-error" role="alert">{{ editorError }}</p>
+            <form v-if="modelGroupEditor" data-model-group-form class="config-form" @submit.prevent="submitModelGroup">
+              <div class="editor-popover-head field-wide">
+                <div>
+                  <span class="editor-overline">模型组</span>
+                  <h3>{{ modelGroupEditor.mode === 'create' ? '新建模型组' : '重命名模型组' }}</h3>
+                  <p>模型可同时存在于多个组；删除组不会删除模型。</p>
+                </div>
+                <button type="button" class="editor-popover-close" @click="modelGroupEditor = null">
+                  <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </button>
+              </div>
+              <label class="field field-wide">名称
+                <input v-model.trim="modelGroupEditor.name" data-model-group-name required maxlength="80" placeholder="例如：Free" />
+              </label>
+              <div class="editor-actions field-wide">
+                <button type="button" class="small-btn quiet" @click="modelGroupEditor = null">取消</button>
+                <button class="small-btn primary" type="submit">保存</button>
+              </div>
+            </form>
+
+            <form v-else-if="groupMembersEditor" data-model-group-members-form class="config-form" @submit.prevent="submitGroupMembers">
+              <div class="editor-popover-head field-wide">
+                <div>
+                  <span class="editor-overline">模型组成员</span>
+                  <h3>添加已有模型</h3>
+                  <p>选择要放入 {{ selectedModelGroup?.name || '当前组' }} 的模型。</p>
+                </div>
+                <button type="button" class="editor-popover-close" @click="groupMembersEditor = null">
+                  <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </button>
+              </div>
+              <div class="group-member-list field-wide">
+                <label v-for="model in models" :key="model.id" class="group-member-option">
+                  <input v-model="groupMembersEditor.model_ids" type="checkbox" :value="model.id" />
+                  <span><strong>{{ model.display_name || model.model_id || model.id }}</strong><small>{{ modelProviderName(model) }}</small></span>
+                </label>
+                <span v-if="!models.length" class="muted">暂无可添加的模型</span>
+              </div>
+              <div class="editor-actions field-wide">
+                <button type="button" class="small-btn quiet" @click="groupMembersEditor = null">取消</button>
+                <button class="small-btn primary" type="submit">保存成员</button>
+              </div>
+            </form>
+
             <!-- Provider editor -->
-            <form v-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider" @input="markSettingsDirty">
+            <form v-else-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider" @input="markSettingsDirty">
               <div class="editor-popover-head field-wide">
                 <div>
                   <span class="editor-overline">供应商配置</span>
@@ -663,6 +844,7 @@
                   <UiSelect
                     :model-value="providerEditor.preset_id"
                     :options="providerPresetOptions"
+                    data-provider-preset
                     placeholder="自定义"
                     aria-label="官方模板"
                     @update:model-value="onProviderPresetChange"
@@ -671,6 +853,13 @@
                 <div v-if="providerEditor.preset_id" class="preset-summary">
                   <strong>{{ providerEditor.name }}</strong>
                   <span>{{ providerEditor.base_url }} · 将自动添加模板内模型</span>
+                  <button
+                    v-if="selectedProviderPreset?.apiKeyUrl"
+                    class="text-btn"
+                    type="button"
+                    data-provider-api-key-link
+                    @click="openProviderApiKeyPage"
+                  >点此申请 API key</button>
                 </div>
               </section>
 
@@ -682,7 +871,7 @@
                 <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">名称
                   <input v-model.trim="providerEditor.name" data-provider-name required />
                 </label>
-                <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">服务地址
+                <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id || selectedProviderPreset?.baseUrlEditable" class="field">服务地址
                   <input v-model.trim="providerEditor.base_url" data-provider-base-url type="url" required />
                 </label>
                 <label class="field field-wide">API Key
@@ -727,7 +916,7 @@
             </form>
 
             <!-- Model editor -->
-            <form v-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form model-editor-form" @submit.prevent="submitModel" @input="markSettingsDirty">
+            <form v-else-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form model-editor-form" @submit.prevent="submitModel" @input="markSettingsDirty">
               <div class="editor-popover-head field-wide">
                 <div>
                   <span class="editor-overline">模型配置</span>
@@ -740,15 +929,37 @@
               </div>
               <section class="editor-section model-editor-basics field-wide">
                 <div class="model-editor-provider">
-                  <span>添加到</span>
+                  <span>{{ modelEditor.origin_group_id ? '供应商' : '添加到' }}</span>
                   <UiSelect
                     :model-value="modelEditor.provider_id"
-                    :options="providerOptions"
+                    :options="modelEditor.origin_group_id ? groupModelProviderOptions : providerOptions"
                     data-model-provider-id
                     aria-label="供应商"
-                    @update:model-value="modelEditor!.provider_id = $event"
+                    @update:model-value="onModelProviderChange"
                   />
                 </div>
+                <template v-if="modelEditor.origin_group_id">
+                  <label class="field field-wide">API 基础 URL
+                    <input v-model.trim="modelEditor.base_url" data-model-base-url type="url" required placeholder="https://api.example.com/v1" />
+                    <small v-if="modelEditor.provider_mode === 'existing'">必须与所选供应商的 API 基础 URL 一致。</small>
+                  </label>
+                  <div v-if="modelEditor.provider_mode === 'new'" class="model-editor-secondary field-wide">
+                    <label class="field">供应商名称
+                      <input v-model.trim="modelEditor.new_provider_name" data-model-new-provider-name required placeholder="例如：我的供应商" />
+                    </label>
+                    <label class="field">接口类型
+                      <UiSelect
+                        :model-value="modelEditor.new_provider_api_type ?? 'openai'"
+                        :options="apiTypeOptions"
+                        data-model-new-provider-api-type
+                        @update:model-value="modelEditor!.new_provider_api_type = $event"
+                      />
+                    </label>
+                    <label class="field field-wide">API Key
+                      <input v-model="modelEditor.new_provider_api_key" data-model-new-provider-api-key type="password" autocomplete="new-password" required />
+                    </label>
+                  </div>
+                </template>
                 <label class="field model-editor-id">模型 ID
                   <input v-model.trim="modelEditor.model_id" data-model-id required placeholder="例如 deepseek-v4-flash" />
                   <small>向供应商 API 发送的模型标识。</small>
@@ -837,11 +1048,12 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
-import { PROVIDER_PRESETS } from '../data/provider-presets'
+import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
 import {
   CORE_PERMISSION_PRESET_DESCRIPTIONS,
   CORE_PERMISSION_PRESET_LABELS,
+  type CoreModelCatalogView,
   type CorePermissionPreset,
 } from '../composer/execution'
 import {
@@ -854,6 +1066,7 @@ import {
   type ThemeStop,
 } from '../helpers/theme'
 import { openUpdatePage } from '../helpers/update'
+import { openExternalUrl } from '../helpers/openUrl'
 import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import ThemeEditor from './ThemeEditor.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
@@ -867,6 +1080,7 @@ import MobileControlPanel, {
   type MobileControlPairing,
 } from './MobileControlPanel.vue'
 import UiSelect from './UiSelect.vue'
+import CoreModelCatalogViewToggle from './CoreModelCatalogViewToggle.vue'
 import {
   readUpdateAutoCheck,
   setUpdateAutoCheck,
@@ -912,6 +1126,15 @@ export interface CoreSettingsProviderPayload {
   api_key?: string
   extra?: Record<string, unknown>
   models?: CoreSettingsModelPayload[]
+  model_group_name?: string
+}
+
+export interface CoreSettingsModelGroup {
+  id: string
+  name: string
+  model_ids: string[]
+  revision?: number
+  is_system?: boolean
 }
 
 export interface CoreSettingsModelPayload {
@@ -925,20 +1148,24 @@ export interface CoreSettingsModelPayload {
   thinking_supported: boolean
   thinking_budget: number
   temperature: number
+  is_default?: boolean
   capability?: string
   notes?: string
   extra?: Record<string, unknown>
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   models: CoreSettingsModel[]
   providers: CoreSettingsProvider[]
+  modelGroups?: CoreSettingsModelGroup[]
+  catalogView?: CoreModelCatalogView
   density: CoreSettingsDensity
   theme: ThemeData
   contentWidth?: number
   themeMode?: ThemeMode
   effectiveThemeMode?: 'light' | 'dark'
   allowEnvironmentImport?: boolean
+  commandShellPlatform?: 'windows' | 'linux' | 'mobile' | 'web' | 'other'
   permissionPreset?: CorePermissionPreset
   allowAccessOutsideWorkdir?: boolean
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -952,7 +1179,11 @@ const props = defineProps<{
   remoteAccountIdentity?: MobileControlIdentity | null
   remoteAccountLoading?: boolean
   remoteAccountDevices?: MobileControlAccountDevice[]
-}>()
+}>(), {
+  modelGroups: () => [],
+  catalogView: 'provider',
+  commandShellPlatform: 'other',
+})
 
 const emit = defineEmits<{
   close: []
@@ -980,6 +1211,12 @@ const emit = defineEmits<{
   'update-model': [payload: CoreSettingsModelPayload]
   'delete-model': [modelRecordId: string]
   'set-default-model': [modelId: string]
+  'update:catalogView': [value: CoreModelCatalogView]
+  'create-model-group': [payload: { name: string }]
+  'update-model-group': [payload: { group_id: string; name: string }]
+  'delete-model-group': [groupId: string]
+  'set-model-group-members': [payload: { group_id: string; model_ids: string[] }]
+  'create-model-with-provider': [payload: Record<string, unknown>]
   'remote-gateway-start': []
   'remote-gateway-stop': []
   'remote-pairing-create': []
@@ -1017,17 +1254,89 @@ const densityOptions: Array<{ value: CoreSettingsDensity; label: string }> = [
   { value: 'loose', label: '宽松' },
 ]
 
-type ProviderEditor = Required<Omit<CoreSettingsProviderPayload, 'provider_id'>> & {
+type CommandShellPreference = 'auto' | 'wsl' | 'git-bash' | 'powershell'
+const commandShellOptions = [
+  { value: 'auto', label: '自动' },
+  { value: 'wsl', label: 'WSL' },
+  { value: 'git-bash', label: 'Git Bash' },
+  { value: 'powershell', label: 'PowerShell' },
+]
+const commandShellPreference = ref<CommandShellPreference>('auto')
+const savedCommandShellPreference = ref<CommandShellPreference>('auto')
+const commandShellLoading = ref(false)
+const commandShellSaving = ref(false)
+const commandShellError = ref('')
+
+function normalizeCommandShellPreference(value: unknown): CommandShellPreference {
+  return value === 'wsl' || value === 'git-bash' || value === 'powershell' ? value : 'auto'
+}
+
+async function fetchCommandShellSettings() {
+  if (props.commandShellPlatform !== 'windows') return
+  const rpc = props.requestRpc || defaultRequestRpc
+  commandShellLoading.value = true
+  commandShellError.value = ''
+  try {
+    const result = await rpc('settings.get', { namespace: 'core.commandShell' })
+    const value = result.value && typeof result.value === 'object'
+      ? result.value as Record<string, unknown>
+      : {}
+    const preference = normalizeCommandShellPreference(value.preference)
+    commandShellPreference.value = preference
+    savedCommandShellPreference.value = preference
+  } catch (e) {
+    commandShellError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    commandShellLoading.value = false
+  }
+}
+
+async function updateCommandShellPreference(rawPreference: string) {
+  const preference = normalizeCommandShellPreference(rawPreference)
+  const previous = savedCommandShellPreference.value
+  if (preference === previous || commandShellSaving.value) return
+
+  commandShellPreference.value = preference
+  commandShellSaving.value = true
+  commandShellError.value = ''
+  try {
+    const rpc = props.requestRpc || defaultRequestRpc
+    await rpc('settings.update', {
+      namespace: 'core.commandShell',
+      value: { preference },
+    })
+    savedCommandShellPreference.value = preference
+  } catch (e) {
+    commandShellPreference.value = previous
+    commandShellError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    commandShellSaving.value = false
+  }
+}
+
+type ProviderEditor = Required<Omit<CoreSettingsProviderPayload, 'provider_id' | 'model_group_name'>> & {
   mode: 'create' | 'update'
   provider_id?: string
+  model_group_name?: string
   api_key: string
   extra_json: string
 }
 
-type ModelEditor = CoreSettingsModelPayload & { mode: 'create' | 'update'; extra_json: string }
+type ModelEditor = CoreSettingsModelPayload & {
+  mode: 'create' | 'update'
+  extra_json: string
+  origin_group_id?: string
+  provider_mode?: 'existing' | 'new'
+  base_url?: string
+  new_provider_name?: string
+  new_provider_api_type?: string
+  new_provider_api_key?: string
+}
 
 const providerEditor = ref<ProviderEditor | null>(null)
 const modelEditor = ref<ModelEditor | null>(null)
+const modelGroupEditor = ref<{ mode: 'create' | 'update'; group_id?: string; name: string } | null>(null)
+const groupMembersEditor = ref<{ group_id: string; model_ids: string[] } | null>(null)
 const noticeText = ref('')
 // Validation feedback shown INSIDE the editor overlay — noticeText renders
 // behind the overlay and was invisible while editing (audit 17 S3).
@@ -1280,6 +1589,8 @@ async function saveContextCompactionSettings() {
 function closeEditors() {
   providerEditor.value = null
   modelEditor.value = null
+  modelGroupEditor.value = null
+  groupMembersEditor.value = null
   editorError.value = ''
 }
 
@@ -1328,7 +1639,9 @@ const providerPresets = PROVIDER_PRESETS
 
 const providerCount = computed(() => props.providers.length)
 const selectedProviderId = ref<string | null>(null)
+const selectedModelGroupId = ref<string | null>(null)
 const providerQuery = ref('')
+const groupQuery = ref('')
 const modelQuery = ref('')
 const selectedProvider = computed(() =>
   props.providers.find(provider => provider.id === selectedProviderId.value) || props.providers[0] || null,
@@ -1338,6 +1651,19 @@ const selectedProviderModels = computed(() =>
     ? props.models.filter(model => model.provider_id === selectedProvider.value?.id)
     : [],
 )
+const selectedModelGroup = computed(() =>
+  props.modelGroups.find(group => group.id === selectedModelGroupId.value) || props.modelGroups[0] || null,
+)
+const selectedGroupModels = computed(() => {
+  const ids = new Set(selectedModelGroup.value?.model_ids || [])
+  return props.models.filter(model => ids.has(model.id))
+})
+const filteredModelGroups = computed(() => {
+  const query = groupQuery.value.toLocaleLowerCase()
+  if (!query) return props.modelGroups
+  return props.modelGroups.filter(group => [group.name, group.id]
+    .some(value => String(value || '').toLocaleLowerCase().includes(query)))
+})
 const filteredProviders = computed(() => {
   const query = providerQuery.value.toLocaleLowerCase()
   if (!query) return props.providers
@@ -1348,6 +1674,12 @@ const filteredSelectedProviderModels = computed(() => {
   const query = modelQuery.value.toLocaleLowerCase()
   if (!query) return selectedProviderModels.value
   return selectedProviderModels.value.filter(model => [model.display_name, model.model_id, model.id, model.capability]
+    .some(value => String(value || '').toLocaleLowerCase().includes(query)))
+})
+const filteredSelectedGroupModels = computed(() => {
+  const query = modelQuery.value.toLocaleLowerCase()
+  if (!query) return selectedGroupModels.value
+  return selectedGroupModels.value.filter(model => [model.display_name, model.model_id, model.id, model.capability]
     .some(value => String(value || '').toLocaleLowerCase().includes(query)))
 })
 
@@ -1362,11 +1694,35 @@ function selectProvider(providerId: string) {
   modelQuery.value = ''
 }
 
+function selectModelGroup(groupId: string) {
+  selectedModelGroupId.value = groupId
+  modelQuery.value = ''
+}
+
+function modelProviderName(model: CoreSettingsModel): string {
+  return props.providers.find(provider => provider.id === model.provider_id)?.name
+    || model.provider_name
+    || model.provider_id
+    || '未关联供应商'
+}
+
 // ── UiSelect option lists for provider/model editors ──
 const providerPresetOptions = computed(() => [
   { value: '', label: '自定义' },
-  ...PROVIDER_PRESETS.map(preset => ({ value: preset.id, label: preset.label })),
+  ...PROVIDER_PRESETS.map(preset => ({
+    value: preset.id,
+    label: preset.label,
+    group: PROVIDER_PRESET_GROUP_LABELS[preset.group],
+  })),
 ])
+const selectedProviderPreset = computed(() => (
+  providerPresets.find(preset => preset.id === providerEditor.value?.preset_id) || null
+))
+
+function openProviderApiKeyPage() {
+  const url = selectedProviderPreset.value?.apiKeyUrl
+  if (url) void openExternalUrl(url)
+}
 const apiTypeOptions = [
   { value: 'openai', label: 'OpenAI compatible' },
   { value: 'anthropic', label: 'Anthropic' },
@@ -1383,6 +1739,10 @@ const capabilityOptions = [
 const providerOptions = computed(() =>
   props.providers.map(p => ({ value: p.id, label: p.name || p.id })),
 )
+const groupModelProviderOptions = computed(() => [
+  ...providerOptions.value,
+  { value: '__new__', label: '＋ 新建供应商' },
+])
 
 function onProviderPresetChange(value: string) {
   const editor = providerEditor.value
@@ -1495,6 +1855,7 @@ function submitProvider() {
   if (editor.mode === 'create' && editor.preset_id) {
     const preset = providerPresets.find(candidate => candidate.id === editor.preset_id)
     if (preset) {
+      if ((preset as typeof preset & { group?: string }).group === 'free') payload.model_group_name = 'Free'
       payload.models = preset.models.map(model => ({
         provider_id: '',
         model_id: model.modelId,
@@ -1504,7 +1865,8 @@ function submitProvider() {
         thinking_supported: model.thinkingSupported,
         thinking_budget: model.thinkingBudget,
         temperature: model.temperature,
-        extra: model.extra,
+        is_default: model.modelId === preset.defaultModelId,
+        extra: providerPresetModelExtra(model),
       }))
     }
   }
@@ -1524,7 +1886,7 @@ function applyProviderPreset() {
   editor.name = preset.name
   editor.api_type = preset.apiType
   editor.base_url = preset.baseUrl
-  // 模板可预置 API Key（如 OpenCode Free 的 public），用户可覆盖
+  // 模板可预置 API Key；免费模型也可能要求用户申请真实凭据。
   editor.api_key = preset.defaultApiKey || ''
   editor.extra = { ...(preset.extra || {}), adapter_profile_id: preset.adapterProfile }
   editor.extra_json = JSON.stringify(editor.extra, null, 2)
@@ -1556,6 +1918,89 @@ function startModelCreateForProvider(provider: CoreSettingsProvider) {
     extra: {},
     extra_json: '{}',
   }
+}
+
+function startModelGroupCreate() {
+  modelGroupEditor.value = { mode: 'create', name: '' }
+}
+
+function startModelGroupUpdate(group: CoreSettingsModelGroup) {
+  modelGroupEditor.value = { mode: 'update', group_id: group.id, name: group.name }
+}
+
+function submitModelGroup() {
+  const editor = modelGroupEditor.value
+  if (!editor?.name.trim()) return
+  if (editor.mode === 'create') emit('create-model-group', { name: editor.name.trim() })
+  else emit('update-model-group', { group_id: editor.group_id || '', name: editor.name.trim() })
+  modelGroupEditor.value = null
+}
+
+function startGroupMembersEdit() {
+  const group = selectedModelGroup.value
+  if (!group) return
+  groupMembersEditor.value = { group_id: group.id, model_ids: [...group.model_ids] }
+}
+
+function submitGroupMembers() {
+  const editor = groupMembersEditor.value
+  if (!editor) return
+  emit('set-model-group-members', { group_id: editor.group_id, model_ids: [...new Set(editor.model_ids)] })
+  groupMembersEditor.value = null
+}
+
+function removeModelFromSelectedGroup(modelId: string) {
+  const group = selectedModelGroup.value
+  if (!group) return
+  emit('set-model-group-members', {
+    group_id: group.id,
+    model_ids: group.model_ids.filter(id => id !== modelId),
+  })
+}
+
+function startGroupModelCreate() {
+  const group = selectedModelGroup.value
+  if (!group) return
+  const provider = props.providers[0]
+  modelEditor.value = {
+    mode: 'create',
+    origin_group_id: group.id,
+    provider_mode: provider ? 'existing' : 'new',
+    provider_id: provider?.id || '__new__',
+    provider_name: provider?.name || '',
+    base_url: provider?.base_url || '',
+    new_provider_name: '',
+    new_provider_api_type: 'openai',
+    new_provider_api_key: '',
+    model_id: '',
+    display_name: '',
+    context_window: 128000,
+    max_output_tokens: 16384,
+    thinking_supported: false,
+    thinking_budget: 10000,
+    temperature: 0.7,
+    capability: '',
+    notes: '',
+    extra: {},
+    extra_json: '{}',
+  }
+}
+
+function onModelProviderChange(providerId: string) {
+  const editor = modelEditor.value
+  if (!editor) return
+  editor.provider_id = providerId
+  if (!editor.origin_group_id) return
+  if (providerId === '__new__') {
+    editor.provider_mode = 'new'
+    editor.provider_name = ''
+    editor.base_url = ''
+    return
+  }
+  const provider = props.providers.find(item => item.id === providerId)
+  editor.provider_mode = 'existing'
+  editor.provider_name = provider?.name || ''
+  editor.base_url = provider?.base_url || ''
 }
 
 function startModelUpdate(model: CoreSettingsModel) {
@@ -1591,9 +2036,68 @@ function submitModel() {
   }
   const extra = parseExtraJson(editor.extra_json)
   if (!extra) return
-  const { mode: _mode, extra_json: _extraJson, ...rest } = editor
-  const payload = { ...rest, extra }
-  if (editor.mode === 'create') emit('create-model', payload)
+  const payload: CoreSettingsModelPayload = {
+    ...(editor.model_record_id ? { model_record_id: editor.model_record_id } : {}),
+    provider_id: editor.provider_id,
+    provider_name: editor.provider_name,
+    model_id: editor.model_id,
+    display_name: editor.display_name,
+    context_window: editor.context_window,
+    max_output_tokens: editor.max_output_tokens,
+    thinking_supported: editor.thinking_supported,
+    thinking_budget: editor.thinking_budget,
+    temperature: editor.temperature,
+    capability: editor.capability,
+    notes: editor.notes,
+    extra,
+  }
+  if (editor.origin_group_id) {
+    if (!editor.base_url?.trim()) {
+      editorError.value = '按组新增模型时必须填写 API 基础 URL'
+      return
+    }
+    const existingProvider = props.providers.find(item => item.id === editor.provider_id)
+    if (
+      editor.provider_mode === 'existing'
+      && existingProvider?.base_url?.replace(/\/$/, '') !== editor.base_url.replace(/\/$/, '')
+    ) {
+      editorError.value = 'API 基础 URL 必须与所选供应商一致'
+      return
+    }
+    if (editor.provider_mode === 'new' && (!editor.new_provider_name?.trim() || !editor.new_provider_api_key?.trim())) {
+      editorError.value = '新供应商需要填写名称和 API Key'
+      return
+    }
+    emit('create-model-with-provider', {
+      group_id: editor.origin_group_id,
+      model: {
+        model_id: editor.model_id,
+        display_name: editor.display_name,
+        context_window: editor.context_window,
+        max_output_tokens: editor.max_output_tokens,
+        temperature: editor.temperature,
+        thinking_supported: editor.thinking_supported,
+        thinking_budget: editor.thinking_budget,
+        capability: editor.capability,
+        notes: editor.notes,
+        adapter_profile_id: String(extra.adapter_profile_id || ''),
+        request_body: extra.request_body && typeof extra.request_body === 'object' ? extra.request_body : {},
+      },
+      provider: editor.provider_mode === 'new'
+        ? {
+            mode: 'new',
+            name: editor.new_provider_name?.trim(),
+            base_url: editor.base_url.trim(),
+            api_type: editor.new_provider_api_type || 'openai',
+            api_key: editor.new_provider_api_key,
+          }
+        : {
+            mode: 'existing',
+            provider_id: editor.provider_id,
+            base_url: editor.base_url.trim(),
+          },
+    })
+  } else if (editor.mode === 'create') emit('create-model', payload)
   else emit('update-model', payload)
   modelEditor.value = null
   settingsDirty.value = false
@@ -1670,7 +2174,7 @@ function animateEditorEnter() {
 }
 
 watch(
-  () => Boolean(providerEditor.value || modelEditor.value),
+  () => Boolean(providerEditor.value || modelEditor.value || modelGroupEditor.value || groupMembersEditor.value),
   async (isOpen) => {
     if (!isOpen) return
     await nextTick()
@@ -1695,7 +2199,7 @@ useOutsidePointerDismiss({
 useOutsidePointerDismiss({
   overlay: editorOverlayEl,
   card: editorPopoverEl,
-  isActive: () => Boolean(providerEditor.value || modelEditor.value),
+  isActive: () => Boolean(providerEditor.value || modelEditor.value || modelGroupEditor.value || groupMembersEditor.value),
   onDismiss: closeEditors,
 })
 
@@ -1736,6 +2240,7 @@ onMounted(() => {
   void fetchLoadContext()
   void fetchDreamingSettings()
   void fetchContextCompactionSettings()
+  void fetchCommandShellSettings()
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
@@ -2230,6 +2735,46 @@ onUnmounted(() => {
   align-items: flex-end;
   justify-content: space-between;
   gap: var(--space-5);
+}
+
+.models-title > .model-catalog-view-toggle {
+  flex: 0 0 auto;
+}
+
+.group-member-list {
+  max-height: min(360px, 52vh);
+  overflow-y: auto;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.group-member-option {
+  min-height: 42px;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--settings-main-text, var(--theme-main-text));
+  cursor: pointer;
+}
+
+.group-member-option:hover {
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) var(--alpha-hover), transparent);
+}
+
+.group-member-option input {
+  flex: 0 0 auto;
+}
+
+.group-member-option span {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.group-member-option small {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) 58%, transparent);
 }
 
 .models-title-copy {

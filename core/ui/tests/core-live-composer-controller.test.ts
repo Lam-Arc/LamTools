@@ -84,6 +84,7 @@ describe('useCoreLiveComposerController', () => {
 
   it('reports an async turn-options failure and releases the submit guard', async () => {
     const errors: string[] = []
+    const statuses: string[] = []
     let attempts = 0
     let starts = 0
     const text = ref('study this')
@@ -109,13 +110,45 @@ describe('useCoreLiveComposerController', () => {
       },
       executeCommand: async () => true,
       onError: (message) => errors.push(message),
+      setStatusText: (message) => statuses.push(message),
     })
 
     expect(await controller.submit()).toBeNull()
     expect(errors).toEqual(['Study context unavailable'])
+    expect(statuses).toEqual([''])
     await controller.submit()
     expect(attempts).toBe(2)
     expect(starts).toBe(1)
+  })
+
+  it('reports a rejected turn start only through the error channel', async () => {
+    const errors: string[] = []
+    const statuses: string[] = []
+    const text = ref('run this task')
+    const controller = useCoreLiveComposerController({
+      activeThreadId: ref<string | null>('thread-1'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(text.value.length),
+      status: ref('idle'),
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async () => { throw new Error('turn rejected') },
+      interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
+      queueInput: async () => undefined,
+      listCommands: async () => [],
+      getWorkRoot: () => 'E:\\LamTools',
+      executeCommand: async () => true,
+      onError: (message) => errors.push(message),
+      setStatusText: (message) => statuses.push(message),
+    })
+
+    await expect(controller.submit()).resolves.toMatchObject({ status: 'started', ok: false })
+    expect(errors).toEqual(['turn rejected'])
+    expect(statuses).toEqual([''])
+    expect(statuses).not.toContain('turn rejected')
   })
 
   it('keeps a successful turn successful when the post-start callback fails', async () => {

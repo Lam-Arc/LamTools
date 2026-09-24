@@ -335,6 +335,32 @@ describe('WorkspaceShell responsive drawers', () => {
     wrapper.unmount()
   })
 
+  it('restores the pinned sidebar after returning to a wide viewport and closes it on narrow return', async () => {
+    const media = installMatchMedia(true)
+    const wrapper = mount(WorkspaceShell, { props: { productName: 'Sunday' } })
+    const shell = wrapper.get('.workspace-shell')
+    const controls = wrapper.vm as unknown as { openLeftDrawer: () => void }
+
+    controls.openLeftDrawer()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.mobile-drawer-backdrop').exists()).toBe(true)
+    expect(shell.classes()).toContain('left-open')
+
+    media.setMatches(false)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.mobile-drawer-backdrop').exists()).toBe(false)
+    expect(shell.classes()).toContain('left-open')
+    expect(wrapper.emitted('update:left-pinned')?.at(-1)).toEqual([true])
+    expect(wrapper.emitted('update:left-open')?.at(-1)).toEqual([true])
+
+    media.setMatches(true)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.mobile-drawer-backdrop').exists()).toBe(false)
+    expect(shell.classes()).not.toContain('left-open')
+    expect(wrapper.emitted('update:left-pinned')?.at(-1)).toEqual([false])
+    wrapper.unmount()
+  })
+
   it('marks the shared shell and composer for an empty Core session', () => {
     const wrapper = mount(WorkspaceShell, {
       props: { productName: 'Core', emptySession: true },

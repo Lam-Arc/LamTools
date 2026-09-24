@@ -30,6 +30,8 @@
     v-if="showSettings"
     :models="availableModels"
     :providers="availableProviders"
+    :model-groups="modelGroups"
+    :catalog-view="modelCatalogView"
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
@@ -38,6 +40,7 @@
     :effective-theme-mode="effectiveThemeMode"
     :permission-preset="defaultPermissionPreset"
     :allow-access-outside-workdir="allowAccessOutsideWorkdir"
+    :command-shell-platform="commandShellPlatform"
     :request-rpc="requestConfigOperation"
     :update-state="updateState"
     :remote-gateway-status="remoteGatewayStatus"
@@ -72,6 +75,12 @@
 	    @update-model="updateModel"
 	    @delete-model="deleteModel"
     @set-default-model="setDefaultModel"
+    @update:catalog-view="updateModelCatalogView"
+    @create-model-group="createModelGroup"
+    @update-model-group="updateModelGroup"
+    @delete-model-group="deleteModelGroup"
+    @set-model-group-members="setModelGroupMembers"
+    @create-model-with-provider="createModelWithProvider"
     @remote-gateway-start="startRemoteGateway"
     @remote-gateway-stop="stopRemoteGateway"
     @remote-pairing-create="createRemotePairing"
@@ -127,6 +136,7 @@
     :show-sidebar-header="false"
     :show-sidebar-header-action="false"
     :show-sidebar-search-action="appRuntime.platform !== 'mobile' || showMobileFooterFallback"
+    :show-sidebar-plugins-action="appRuntime.platform !== 'mobile' || showMobileFooterFallback"
     :show-sidebar-settings-action="appRuntime.platform !== 'mobile' || showMobileFooterFallback"
     :show-right-panel="appRuntime.platform !== 'mobile'"
     :show-right-panel-header="false"
@@ -233,7 +243,7 @@
       </SessionSidebar>
     </template>
 
-    <template #sidebar-footer>
+    <template v-if="showSidebarFooter" #sidebar-footer>
       <template v-if="showMobileFooterFallback">
         <button
           v-for="option in mobileModeOptions"
@@ -251,7 +261,7 @@
           <span aria-hidden="true"><UserRound :size="14" :stroke-width="1.8" /></span><span>登录 / 账号</span>
         </button>
       </template>
-      <button class="sidebar-action" type="button" @click="showArrange = true">
+      <button v-if="appRuntime.platform !== 'mobile' || showMobileFooterFallback" class="sidebar-action" type="button" data-mobile-footer-arrange @click="showArrange = true">
         <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>长期安排</span>
       </button>
     </template>
@@ -508,9 +518,11 @@
         :runtime-mode-label="runtimeModeLabel"
         :permission-preset="permissionPreset"
         :model-options="modelOptions"
+        :catalog-view="modelCatalogView"
         :thinking-mode-options="thinkingModeOptions"
         shallow-label="Shallow"
         @update:model-value="executionControls.selectModel"
+        @update:catalog-view="updateModelCatalogView"
         @update:thinking-mode="executionControls.selectThinkingMode"
         @update:shallow-thinking-enabled="setShallowThinking"
         @update:active-mode="executionControls.selectMode"
@@ -727,7 +739,7 @@ import {
 } from '../plugins/context'
 import type { PluginModeSurface } from '../plugins/context'
 import type { PluginMode } from '../plugins/types'
-import type { CorePermissionPreset } from '../composer/execution'
+import type { CoreModelCatalogView, CorePermissionPreset } from '../composer/execution'
 import { copyText } from '../helpers/clipboard'
 
 const CoreSettings = defineAsyncComponent(() => import('../components/CoreSettings.vue'))
@@ -759,6 +771,9 @@ type RawModel = {
   thinking_budget?: number
   reasoning_off_supported?: boolean
   temperature?: number
+  capability?: string
+  notes?: string
+  extra?: Record<string, unknown> | null
 }
 
 type RawProvider = {
@@ -767,12 +782,21 @@ type RawProvider = {
   api_type?: string
   base_url?: string
   has_api_key?: boolean
+  extra?: Record<string, unknown> | null
+}
+
+type RawModelGroup = {
+  id: string
+  name: string
+  model_ids: string[]
+  revision?: number
+  is_system?: boolean
 }
 
 const props = defineProps<{
   runtime: LamToolsRuntime
   accountContext?: MobileControlAccountContext
-  mobileTopBarHidden?: boolean
+  mobileCommandDockAvailable?: boolean
   showPreviewTitleBar?: boolean
 }>()
 const emit = defineEmits<{
@@ -794,7 +818,16 @@ function onLeftDrawerChange(value: boolean): void {
   emit('left-drawer-change', value)
 }
 const appRuntime = props.runtime
-const showMobileFooterFallback = computed(() => appRuntime.platform === 'mobile' && props.mobileTopBarHidden === true)
+const showMobileFooterFallback = computed(() => appRuntime.platform === 'mobile' && props.mobileCommandDockAvailable !== true)
+const showSidebarFooter = computed(() => appRuntime.platform !== 'mobile' || showMobileFooterFallback.value)
+const commandShellPlatform = (() => {
+  if (appRuntime.platform === 'mobile') return 'mobile' as const
+  if (appRuntime.platform !== 'desktop') return 'web' as const
+  const host = typeof navigator === 'undefined' ? '' : `${navigator.platform} ${navigator.userAgent}`
+  if (/windows|win32|win64/i.test(host)) return 'windows' as const
+  if (/linux/i.test(host)) return 'linux' as const
+  return 'other' as const
+})()
 const workbench = appRuntime.workbench
 const transport = appRuntime.transport
 const projectClient = appRuntime.projectClient || createCoreProjectClient(transport)
@@ -1543,6 +1576,9 @@ const uiPreferences = useCoreUiPreferences('lamtools.core.ui.preferences')
 const { density, contentWidth, theme, themeMode, effectiveThemeMode } = uiPreferences
 const availableModels = ref<RawModel[]>([])
 const availableProviders = ref<RawProvider[]>([])
+const modelGroups = ref<RawModelGroup[]>([])
+const modelGroupsRevision = ref<number | undefined>(undefined)
+const modelCatalogView = ref<CoreModelCatalogView>('provider')
 const defaultModelId = ref('')
 const permissionMode = ref<'read_only' | 'limited_edit' | 'full_edit'>('full_edit')
 const defaultPermissionPreset = ref<CorePermissionPreset>('ask')
@@ -1722,6 +1758,8 @@ const defaultModel = computed(() => (
 const executionControls = useCoreExecutionControlsState({
   models: availableModels,
   providers: availableProviders,
+  groups: modelGroups,
+  catalogView: modelCatalogView,
   defaultModel,
   storage: window.localStorage,
   initial: { thinkingMode: 'high', permissionPreset: defaultPermissionPreset.value },
@@ -2033,7 +2071,14 @@ const canGuideQueuedInput = queueController.canGuide
 async function loadInitialData() {
   try {
     loadError.value = null
-    await Promise.all([loadModelOptions(), loadPermissionMode(), refreshProjects(), refreshSessions()])
+    await Promise.all([
+      loadModelOptions(),
+      loadModelGroups(),
+      loadModelCatalogPreference(),
+      loadPermissionMode(),
+      refreshProjects(),
+      refreshSessions(),
+    ])
     await refreshPluginModes()
     if (coreSessions.value[0]) {
       await selectSession(coreSessions.value[0].id)
@@ -2966,7 +3011,15 @@ function setShallowThinking(enabled: boolean) {
 }
 
 async function createProvider(payload: CoreSettingsProviderPayload) {
-  await mutateConfig('config.provider.create', payload, '供应商已添加')
+  try {
+    loadError.value = null
+    const result = await requestConfigOperation('config.provider.create', payload as unknown as Record<string, unknown>)
+    await loadModelOptions()
+    if (payload.model_group_name) await ensureCreatedModelsInGroup(payload.model_group_name, result)
+    setRuntimeStatus('供应商已添加')
+  } catch (error) {
+    setLoadError(error instanceof Error ? error.message : String(error))
+  }
 }
 
 // ---- 首次启动引导 ----
@@ -3011,8 +3064,9 @@ async function onboardingCreateProvider(payload: CoreSettingsProviderPayload) {
   wizardLoading.value = true
   try {
     loadError.value = null
-    await requestConfigOperation('config.provider.create', payload as unknown as Record<string, unknown>)
+    const result = await requestConfigOperation('config.provider.create', payload as unknown as Record<string, unknown>)
     await loadModelOptions()
+    if (payload.model_group_name) await ensureCreatedModelsInGroup(payload.model_group_name, result)
     setRuntimeStatus('供应商已添加')
   } catch (error) {
     wizardError.value = error instanceof Error ? error.message : String(error)
@@ -3069,6 +3123,108 @@ async function deleteModel(modelRecordId: string) {
 
 async function setDefaultModel(modelId: string) {
   await mutateConfig('config.models.set_default', { scope: 'global', model_id: modelId }, '已设为默认模型')
+}
+
+async function ensureCreatedModelsInGroup(groupName: string, result: Record<string, unknown>) {
+  const createdModels = Array.isArray(result.models) ? result.models : []
+  const createdIds = createdModels.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const id = String((item as Record<string, unknown>).id || '').trim()
+    return id ? [id] : []
+  })
+  if (!createdIds.length) return
+  await loadModelGroups()
+  let group = modelGroups.value.find(item => item.name.toLocaleLowerCase() === groupName.toLocaleLowerCase())
+  if (!group) {
+    await requestConfigOperation('config.model_group.create', {
+      name: groupName,
+      ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
+    })
+    await loadModelGroups()
+    group = modelGroups.value.find(item => item.name.toLocaleLowerCase() === groupName.toLocaleLowerCase())
+  }
+  if (!group) throw new Error(`无法创建模型组 ${groupName}`)
+  await requestConfigOperation('config.model_group.members.set', {
+    group_id: group.id,
+    model_ids: [...new Set([...group.model_ids, ...createdIds])],
+    ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
+  })
+  await loadModelGroups()
+}
+
+async function createModelGroup(payload: { name: string }) {
+  await mutateModelCatalog('config.model_group.create', {
+    ...payload,
+    ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
+  }, '模型组已创建')
+}
+
+async function updateModelGroup(payload: { group_id: string; name: string }) {
+  await mutateModelCatalog('config.model_group.update', {
+    ...payload,
+    ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
+  }, '模型组已更新')
+}
+
+async function deleteModelGroup(groupId: string) {
+  if (!window.confirm('删除模型组只会移除分组关系，不会删除模型。是否继续？')) return
+  await mutateModelCatalog('config.model_group.delete', {
+    group_id: groupId,
+    ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
+  }, '模型组已删除')
+}
+
+async function setModelGroupMembers(payload: { group_id: string; model_ids: string[] }) {
+  await mutateModelCatalog('config.model_group.members.set', {
+    ...payload,
+    ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
+  }, '模型组成员已更新')
+}
+
+async function createModelWithProvider(payload: Record<string, unknown>) {
+  await mutateModelCatalog('config.model.create_with_provider', {
+    ...payload,
+    ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
+  }, '模型已创建并加入分组')
+}
+
+async function mutateModelCatalog(method: string, params: object, successText: string) {
+  try {
+    loadError.value = null
+    await requestConfigOperation(method, params as Record<string, unknown>)
+    await Promise.all([loadModelOptions(), loadModelGroups()])
+    setRuntimeStatus(successText)
+  } catch (error) {
+    setLoadError(error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function loadModelCatalogPreference() {
+  try {
+    const result = await requestConfigOperation('settings.get', { namespace: 'core.modelCatalog' })
+    const value = result.value && typeof result.value === 'object'
+      ? result.value as Record<string, unknown>
+      : {}
+    modelCatalogView.value = value.classification === 'group' ? 'group' : 'provider'
+  } catch {
+    modelCatalogView.value = 'provider'
+  }
+}
+
+async function updateModelCatalogView(value: CoreModelCatalogView) {
+  if (modelCatalogView.value === value) return
+  const previous = modelCatalogView.value
+  modelCatalogView.value = value
+  try {
+    await requestConfigOperation('settings.update', {
+      namespace: 'core.modelCatalog',
+      value: { classification: value },
+    })
+  } catch (error) {
+    modelCatalogView.value = previous
+    const message = error instanceof Error ? error.message : String(error)
+    window.alert(`模型分类方式保存失败，已回滚：${message}`)
+  }
 }
 
 async function loadPermissionMode() {
@@ -3469,6 +3625,34 @@ function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+async function loadModelGroups() {
+  try {
+    const response = await requestConfigOperation('config.model_groups.list')
+    const rawGroups = Array.isArray(response.groups) ? response.groups : []
+    modelGroups.value = rawGroups.flatMap((item) => {
+      if (!item || typeof item !== 'object') return []
+      const record = item as Record<string, unknown>
+      const id = String(record.id || '').trim()
+      if (!id) return []
+      return [{
+        id,
+        name: String(record.name || id),
+        model_ids: Array.isArray(record.model_ids)
+          ? record.model_ids.map(value => String(value)).filter(Boolean)
+          : [],
+        revision: Number.isFinite(Number(record.revision)) ? Number(record.revision) : undefined,
+        is_system: record.is_system === true,
+      }]
+    })
+    const revision = Number(response.revision)
+    modelGroupsRevision.value = Number.isFinite(revision) ? revision : undefined
+  } catch (error) {
+    modelGroups.value = []
+    modelGroupsRevision.value = undefined
+    throw error
+  }
+}
+
 async function encodeMultipartFile(file: File): Promise<{ body: Uint8Array; contentType: string }> {
   const boundary = `----LamToolsBoundary${globalThis.crypto?.randomUUID?.() || Date.now()}`
   const encoder = new TextEncoder()
@@ -3547,6 +3731,8 @@ defineExpose({
   refreshPluginModes,
   openSearch,
   openSettings,
+  openPlugins,
+  openArrange() { showArrange.value = true },
   openProject,
 })
 
@@ -3860,9 +4046,9 @@ onUnmounted(() => {
    positioning (the .workspace-main ancestor is itself position:fixed,
    so a fixed-positioned button would escape the content column). Stays
    below the composer (z-edge-trigger < z-composer) and follows the
-   control-area surface recipe per the design spec. */
+   chat-area text color because the glass reveals the chat surface. */
 .thread-jump-latest {
-  --text: var(--theme-control-text);
+  --text: var(--theme-main-text);
   --optical-glass-overlay: transparent;
   position: sticky;
   bottom: var(--space-2, 8px);

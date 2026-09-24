@@ -58,10 +58,15 @@
         aria-label="模型选项"
         data-model-thinking-submenu="model"
       >
-        <div class="core-model-thinking-menu__model-list" aria-label="按供应商分组的模型">
+        <CoreModelCatalogViewToggle
+          class="core-model-thinking-menu__view-toggle"
+          :model-value="catalogView"
+          @update:model-value="$emit('update:catalogView', $event)"
+        />
+        <div class="core-model-thinking-menu__model-list" :aria-label="catalogView === 'group' ? '按组分类的模型' : '按供应商分类的模型'">
           <section
             v-for="group in modelOptionGroups"
-            :key="group.label"
+            :key="group.key"
             class="core-model-thinking-menu__model-group"
             role="group"
             :aria-label="group.label"
@@ -69,21 +74,21 @@
             <button
               class="core-model-thinking-menu__option core-model-thinking-menu__provider"
               type="button"
-              :aria-expanded="!isProviderCollapsed(group.label)"
+              :aria-expanded="!isCatalogSectionCollapsed(group.key)"
               :data-model-thinking-provider="group.label"
-              @click="toggleProviderGroup(group.label)"
+              @click="toggleCatalogSection(group.key)"
             >
               <span>{{ group.label }}</span>
               <ChevronDown
                 class="core-model-thinking-menu__provider-chevron"
-                :class="{ 'core-model-thinking-menu__provider-chevron--collapsed': isProviderCollapsed(group.label) }"
+                :class="{ 'core-model-thinking-menu__provider-chevron--collapsed': isCatalogSectionCollapsed(group.key) }"
                 :size="14"
                 :stroke-width="2"
                 aria-hidden="true"
               />
             </button>
             <Transition :css="false" @enter="providerOptionsEnter" @leave="providerOptionsLeave">
-              <div v-if="!isProviderCollapsed(group.label)" class="core-model-thinking-menu__provider-options">
+              <div v-if="!isCatalogSectionCollapsed(group.key)" class="core-model-thinking-menu__provider-options">
                 <button
                   v-for="option in group.options"
                   :key="option.value"
@@ -138,13 +143,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { Brain, ChevronDown, ChevronRight } from 'lucide-vue-next'
-import { coreModelDisplayLabel, normalizeCoreThinkingMode, type CoreSelectOption, type CoreThinkingMode, type CoreThinkingModeOption } from '../composer/execution'
+import { coreModelDisplayLabel, normalizeCoreThinkingMode, type CoreModelCatalogView, type CoreSelectOption, type CoreThinkingMode, type CoreThinkingModeOption } from '../composer/execution'
+import CoreModelCatalogViewToggle from './CoreModelCatalogViewToggle.vue'
 import { useComposerMenuMotion } from '../motion/composerMenu'
 import { useComposerMenuViewport } from '../composables/useComposerMenuViewport'
 
 const props = withDefaults(defineProps<{
   modelValue?: string
   modelOptions?: CoreSelectOption[]
+  catalogView?: CoreModelCatalogView
   thinkingMode: CoreThinkingMode | string
   thinkingModeOptions?: CoreThinkingModeOption[]
   shallowThinkingEnabled?: boolean
@@ -155,6 +162,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   modelValue: '',
   modelOptions: () => [],
+  catalogView: 'provider',
   thinkingModeOptions: () => [],
   shallowThinkingEnabled: false,
   modelAriaLabel: '模型',
@@ -165,6 +173,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
+  'update:catalogView': [value: CoreModelCatalogView]
   'update:thinkingMode': [value: string]
   'update:shallowThinkingEnabled': [value: boolean]
 }>()
@@ -177,8 +186,8 @@ const parameterCard = ref<HTMLElement | null>(null)
 const submenuCard = ref<HTMLElement | null>(null)
 const { animatePrimaryCard, animateProviderOptions, animateSubmenuCard, cancel } = useComposerMenuMotion(root)
 const { updateViewportPosition, viewportStyle } = useComposerMenuViewport(root)
-const COLLAPSED_PROVIDER_GROUPS_STORAGE_KEY = 'lamtools.core.modelMenu.collapsedProviders'
-const collapsedProviderGroups = ref<Record<string, boolean>>(readCollapsedProviderGroups())
+const COLLAPSED_CATALOG_SECTIONS_STORAGE_KEY = 'lamtools.core.modelMenu.collapsedSections'
+const collapsedCatalogSections = ref<Record<string, boolean>>(readCollapsedCatalogSections())
 
 const modelLabel = computed(() => {
   const option = props.modelOptions.find((item) => item.value === props.modelValue)
@@ -186,14 +195,15 @@ const modelLabel = computed(() => {
 })
 
 const modelOptionGroups = computed(() => {
-  const groups = new Map<string, CoreSelectOption[]>()
+  const groups = new Map<string, { key: string; label: string; options: CoreSelectOption[] }>()
   for (const option of props.modelOptions) {
     const label = option.group?.trim() || '默认模型'
-    const options = groups.get(label) || []
+    const key = option.groupKey?.trim() || `label:${label}`
+    const options = groups.get(key)?.options || []
     options.push(option)
-    groups.set(label, options)
+    groups.set(key, { key, label, options })
   }
-  return [...groups].map(([label, options]) => ({ label, options }))
+  return [...groups.values()]
 })
 
 const thinkingLabel = computed(() => {
@@ -230,16 +240,17 @@ function activateSection(section: 'model' | 'thinking'): void {
   })
 }
 
-function isProviderCollapsed(label: string): boolean {
-  return collapsedProviderGroups.value[label] === true
+function isCatalogSectionCollapsed(key: string): boolean {
+  return collapsedCatalogSections.value[`${props.catalogView}:${key}`] === true
 }
 
-function toggleProviderGroup(label: string): void {
-  const next = { ...collapsedProviderGroups.value }
-  if (next[label]) delete next[label]
-  else next[label] = true
-  collapsedProviderGroups.value = next
-  persistCollapsedProviderGroups(next)
+function toggleCatalogSection(key: string): void {
+  const storageKey = `${props.catalogView}:${key}`
+  const next = { ...collapsedCatalogSections.value }
+  if (next[storageKey]) delete next[storageKey]
+  else next[storageKey] = true
+  collapsedCatalogSections.value = next
+  persistCollapsedCatalogSections(next)
   void nextTick(updateSubmenuSide)
 }
 
@@ -305,10 +316,10 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateSubmenuSide)
 })
 
-function readCollapsedProviderGroups(): Record<string, boolean> {
+function readCollapsedCatalogSections(): Record<string, boolean> {
   if (typeof localStorage === 'undefined') return {}
   try {
-    const stored = JSON.parse(localStorage.getItem(COLLAPSED_PROVIDER_GROUPS_STORAGE_KEY) || '[]')
+    const stored = JSON.parse(localStorage.getItem(COLLAPSED_CATALOG_SECTIONS_STORAGE_KEY) || '[]')
     if (!Array.isArray(stored)) return {}
     return Object.fromEntries(stored.filter((label): label is string => typeof label === 'string').map((label) => [label, true]))
   } catch {
@@ -316,10 +327,10 @@ function readCollapsedProviderGroups(): Record<string, boolean> {
   }
 }
 
-function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
+function persistCollapsedCatalogSections(groups: Record<string, boolean>): void {
   if (typeof localStorage === 'undefined') return
   try {
-    localStorage.setItem(COLLAPSED_PROVIDER_GROUPS_STORAGE_KEY, JSON.stringify(Object.keys(groups)))
+    localStorage.setItem(COLLAPSED_CATALOG_SECTIONS_STORAGE_KEY, JSON.stringify(Object.keys(groups)))
   } catch {
     // The current menu remains usable when browser storage is unavailable.
   }
@@ -426,6 +437,13 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.core-model-thinking-menu__view-toggle {
+  width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
+  margin-bottom: var(--space-2);
 }
 
 .core-model-thinking-menu__model-list {

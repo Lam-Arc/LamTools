@@ -1,3 +1,5 @@
+export type ProviderPresetGroup = 'standard' | 'free'
+
 export type ProviderPresetModel = {
   modelId: string
   displayName: string
@@ -13,13 +15,34 @@ export type ProviderPreset = {
   id: string
   label: string
   name: string
+  group: ProviderPresetGroup
   apiType: string
   baseUrl: string
   adapterProfile: string
+  apiKeyUrl?: string
+  docsUrl?: string
+  /** Some OpenAI-compatible APIs require an account-specific base URL. */
+  baseUrlEditable?: boolean
   extra?: Record<string, unknown>
   defaultApiKey?: string
   defaultModelId: string
   models: ProviderPresetModel[]
+}
+
+export const PROVIDER_PRESET_GROUP_LABELS: Record<ProviderPresetGroup, string> = {
+  standard: '标准模型',
+  free: 'Free',
+}
+
+/** Keep upstream reasoning/request mappings model-specific on mixed gateways. */
+export function providerPresetModelExtra(model: ProviderPresetModel): Record<string, unknown> {
+  const extra = { ...(model.extra || {}) }
+  if (typeof extra.adapter_profile_id === 'string' && extra.adapter_profile_id) return extra
+  const id = model.modelId.toLowerCase()
+  if (id.includes('deepseek')) extra.adapter_profile_id = 'deepseek-chat'
+  else if (id.includes('qwen') || id.includes('qwq')) extra.adapter_profile_id = 'qwen'
+  else if (id.includes('glm') || id.includes('chatglm')) extra.adapter_profile_id = 'glm'
+  return extra
 }
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
@@ -27,6 +50,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'openai',
     label: 'OpenAI',
     name: 'OpenAI',
+    group: 'standard',
     apiType: 'openai',
     baseUrl: 'https://api.openai.com/v1',
     adapterProfile: 'openai-chat',
@@ -47,6 +71,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'anthropic',
     label: 'Claude / Anthropic',
     name: 'Anthropic',
+    group: 'standard',
     apiType: 'anthropic',
     baseUrl: 'https://api.anthropic.com/v1',
     adapterProfile: 'anthropic-messages',
@@ -67,6 +92,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'deepseek',
     label: 'DeepSeek',
     name: 'DeepSeek',
+    group: 'standard',
     apiType: 'openai',
     baseUrl: 'https://api.deepseek.com',
     adapterProfile: 'deepseek-chat',
@@ -98,6 +124,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'zhipu',
     label: '智谱 GLM',
     name: '智谱 GLM',
+    group: 'standard',
     apiType: 'openai',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     adapterProfile: 'openai-chat',
@@ -118,6 +145,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'xfyun-coding',
     label: '讯飞 Coding',
     name: '讯飞 MaaS',
+    group: 'standard',
     apiType: 'openai',
     baseUrl: 'https://maas-coding-api.cn-huabei-1.xf-yun.com/v2',
     adapterProfile: 'xfyun-coding-plan',
@@ -148,6 +176,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'opencode-zen',
     label: 'OpenCode Zen',
     name: 'OpenCode Zen',
+    group: 'standard',
     apiType: 'openai',
     baseUrl: 'https://opencode.ai/zen/v1',
     adapterProfile: 'openai-chat',
@@ -212,6 +241,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'opencode-go',
     label: 'OpenCode Go',
     name: 'OpenCode Go',
+    group: 'standard',
     apiType: 'openai',
     baseUrl: 'https://opencode.ai/zen/go/v1',
     adapterProfile: 'openai-chat',
@@ -248,20 +278,140 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'opencode-free',
     label: 'OpenCode Free',
     name: 'OpenCode Free',
+    group: 'free',
     apiType: 'openai',
     baseUrl: 'https://opencode.ai/zen/v1',
     adapterProfile: 'openai-chat',
-    defaultApiKey: 'public',
+    apiKeyUrl: 'https://opencode.ai/auth',
+    docsUrl: 'https://opencode.ai/docs/zen/',
     defaultModelId: 'deepseek-v4-flash-free',
     models: [
-      { modelId: 'deepseek-v4-flash-free', displayName: 'DeepSeek V4 Flash (Free)', contextWindow: 1048576, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+      { modelId: 'deepseek-v4-flash-free', displayName: 'DeepSeek V4 Flash (Free)', contextWindow: 1048576, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text', adapter_profile_id: 'deepseek-chat' } },
       { modelId: 'mimo-v2.5-free', displayName: 'MiMo V2.5 (Free)', contextWindow: 1050000, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'multimodal' } },
-      { modelId: 'ling-3.0-flash-free', displayName: 'Ling 3.0 Flash (Free)', contextWindow: 262144, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
-      { modelId: 'ling-3.0-tiny-free', displayName: 'Ling 3.0 Tiny (Free)', contextWindow: 262144, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+      { modelId: 'ling-3.0-flash-fin-free', displayName: 'Ling 3.0 Flash Fin (Free)', contextWindow: 262144, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
       { modelId: 'nemotron-3-ultra-free', displayName: 'Nemotron 3 Ultra (Free)', contextWindow: 512288, maxOutputTokens: 16384, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
-      { modelId: 'north-mini-code-free', displayName: 'North Mini Code (Free)', contextWindow: 256000, maxOutputTokens: 64000, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
-      { modelId: 'laguna-s-2.1-free', displayName: 'Laguna S 2.1 (Free)', contextWindow: 1048576, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
-      { modelId: 'longcat-2.0-free', displayName: 'LongCat 2.0 (Free)', contextWindow: 1048756, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+      { modelId: 'nemotron-3.5-lightning-free', displayName: 'Nemotron 3.5 Lightning (Free)', contextWindow: 1048576, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+      { modelId: 'big-pickle', displayName: 'Big Pickle (Free)', contextWindow: 400000, maxOutputTokens: 16384, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+    ],
+  },
+  {
+    id: 'command-code',
+    label: 'Command Code',
+    name: 'Command Code',
+    group: 'standard',
+    apiType: 'openai',
+    baseUrl: 'https://api.commandcode.ai/provider/v1',
+    adapterProfile: 'openai-chat',
+    apiKeyUrl: 'https://commandcode.ai/settings/keys',
+    docsUrl: 'https://commandcode.ai/docs/provider',
+    defaultModelId: 'deepseek/deepseek-v4-flash',
+    models: [
+      { modelId: 'deepseek/deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', contextWindow: 1000000, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text', adapter_profile_id: 'deepseek-chat' } },
+      { modelId: 'deepseek/deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', contextWindow: 1000000, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'multimodal', adapter_profile_id: 'deepseek-chat' } },
+      { modelId: 'deepseek/deepseek-v4.1-flash', displayName: 'DeepSeek V4.1 Flash', contextWindow: 1000000, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'multimodal', adapter_profile_id: 'deepseek-chat' } },
+      { modelId: 'Qwen/Qwen3.8-Max', displayName: 'Qwen 3.8 Max', contextWindow: 1000000, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'multimodal', adapter_profile_id: 'qwen' } },
+      { modelId: 'Qwen/Qwen3.8-Omni-Flash', displayName: 'Qwen 3.8 Omni Flash', contextWindow: 1000000, maxOutputTokens: 65536, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'multimodal', adapter_profile_id: 'qwen' } },
+      { modelId: 'Qwen/Qwen3.7-Plus', displayName: 'Qwen 3.7 Plus', contextWindow: 1000000, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'multimodal', adapter_profile_id: 'qwen' } },
+      { modelId: 'zai-org/GLM-5.3', displayName: 'GLM-5.3', contextWindow: 1000000, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text', adapter_profile_id: 'glm' } },
+      { modelId: 'z-ai/glm-5.3-flash', displayName: 'GLM-5.3 Flash', contextWindow: 1048576, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text', adapter_profile_id: 'glm' } },
+      { modelId: 'z-ai/glm-5.3-flashx', displayName: 'GLM-5.3 FlashX', contextWindow: 1000000, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text', adapter_profile_id: 'glm' } },
+    ],
+  },
+  {
+    id: 'command-code-free',
+    label: 'Command Code Free',
+    name: 'Command Code Free',
+    group: 'free',
+    apiType: 'openai',
+    baseUrl: 'https://api.commandcode.ai/provider/v1',
+    adapterProfile: 'openai-chat',
+    apiKeyUrl: 'https://commandcode.ai/settings/keys',
+    docsUrl: 'https://commandcode.ai/docs/provider',
+    defaultModelId: 'poolside/laguna-s-2.1-free',
+    models: [
+      { modelId: 'poolside/laguna-s-2.1-free', displayName: 'Laguna S 2.1 (Free)', contextWindow: 256000, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+      { modelId: 'inclusionai/ling-3.0-flash-sante:free', displayName: 'Ling 3.0 Flash Sante (Free)', contextWindow: 262144, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+    ],
+  },
+  {
+    id: 'sambanova-free',
+    label: 'SambaNova Free',
+    name: 'SambaNova Cloud',
+    group: 'free',
+    apiType: 'openai',
+    baseUrl: 'https://api.sambanova.ai/v1',
+    adapterProfile: 'openai-chat',
+    apiKeyUrl: 'https://cloud.sambanova.ai/',
+    docsUrl: 'https://docs.sambanova.ai/docs/en/get-started/api-keys-urls',
+    defaultModelId: 'DeepSeek-V3.1',
+    models: [
+      { modelId: 'DeepSeek-V3.1', displayName: 'DeepSeek-V3.1', contextWindow: 131072, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text', adapter_profile_id: 'deepseek-chat' } },
+      { modelId: 'Meta-Llama-3.3-70B-Instruct', displayName: 'Llama 3.3 70B Instruct', contextWindow: 131072, maxOutputTokens: 32768, thinkingSupported: false, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+      { modelId: 'gpt-oss-120b', displayName: 'GPT OSS 120B', contextWindow: 131072, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+    ],
+  },
+  {
+    id: 'groq-free',
+    label: 'Groq Free',
+    name: 'Groq',
+    group: 'free',
+    apiType: 'openai',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    adapterProfile: 'openai-chat',
+    apiKeyUrl: 'https://console.groq.com/keys',
+    docsUrl: 'https://console.groq.com/docs/openai',
+    defaultModelId: 'openai/gpt-oss-120b',
+    models: [
+      { modelId: 'openai/gpt-oss-120b', displayName: 'GPT OSS 120B', contextWindow: 131072, maxOutputTokens: 65536, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+      { modelId: 'openai/gpt-oss-20b', displayName: 'GPT OSS 20B', contextWindow: 131072, maxOutputTokens: 65536, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+      { modelId: 'qwen/qwen3.8-27b', displayName: 'Qwen 3.8 27B', contextWindow: 131072, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text', adapter_profile_id: 'qwen' } },
+    ],
+  },
+  {
+    id: 'google-gemini-free',
+    label: 'Google Gemini Free',
+    name: 'Google Gemini',
+    group: 'free',
+    apiType: 'openai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    adapterProfile: 'openai-chat',
+    apiKeyUrl: 'https://aistudio.google.com/apikey',
+    docsUrl: 'https://ai.google.dev/gemini-api/docs/openai',
+    defaultModelId: 'gemini-3.8-flash',
+    models: [
+      { modelId: 'gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', contextWindow: 1048576, maxOutputTokens: 65536, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'multimodal' } },
+      { modelId: 'gemini-3.5-flash-lite', displayName: 'Gemini 3.5 Flash Lite', contextWindow: 1048576, maxOutputTokens: 65536, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'multimodal' } },
+    ],
+  },
+  {
+    id: 'cloudflare-workers-ai-free',
+    label: 'Cloudflare Workers AI Free',
+    name: 'Cloudflare Workers AI',
+    group: 'free',
+    apiType: 'openai',
+    baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1',
+    baseUrlEditable: true,
+    adapterProfile: 'openai-chat',
+    apiKeyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+    docsUrl: 'https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/',
+    defaultModelId: '@cf/meta/llama-3.1-8b-instruct',
+    models: [
+      { modelId: '@cf/meta/llama-3.1-8b-instruct', displayName: 'Llama 3.1 8B Instruct', contextWindow: 131072, maxOutputTokens: 8192, thinkingSupported: false, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+    ],
+  },
+  {
+    id: 'openrouter-free',
+    label: 'OpenRouter Free',
+    name: 'OpenRouter',
+    group: 'free',
+    apiType: 'openai',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    adapterProfile: 'openai-chat',
+    apiKeyUrl: 'https://openrouter.ai/settings/keys',
+    docsUrl: 'https://openrouter.ai/docs/api-reference/overview',
+    defaultModelId: 'openrouter/free',
+    models: [
+      { modelId: 'openrouter/free', displayName: 'Free Models Router', contextWindow: 200000, maxOutputTokens: 32768, thinkingSupported: false, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text', dynamic_catalog: true } },
     ],
   },
 ]

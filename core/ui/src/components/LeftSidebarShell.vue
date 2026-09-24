@@ -83,7 +83,7 @@
       </div>
     </div>
 
-    <footer class="drawer-footer">
+    <footer v-if="props.showSearchAction || props.showPluginsAction || props.showSettingsAction || $slots['sidebar-footer']" class="drawer-footer">
       <button v-if="props.showSearchAction" class="settings-entry" type="button" aria-label="打开搜索" @click="emit('search')">
         <span aria-hidden="true"><Search :size="14" :stroke-width="1.8" /></span>
         <span>搜索</span>
@@ -136,7 +136,6 @@ const emit = defineEmits<{
   search: []
   mouseleave: [event: MouseEvent]
 }>()
-
 // Keep these host commands available for a future in-drawer close/pin
 // control without moving ownership of layout state out of useShellLayout.
 function close() {

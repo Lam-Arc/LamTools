@@ -54,8 +54,7 @@
   --optical-glass-reflection: 10%;
   --optical-glass-refraction-color: rgb(82 104 91);
   --optical-glass-refraction: 13%;
-  --optical-glass-edge-color: rgb(115 132 121);
-  --optical-glass-edge: 15%;
+  --theme-optical-glass-border-color: rgb(95 95 95);
   --optical-glass-inset-top: 56%;
   --optical-glass-inset-bottom: 14%;
   --optical-glass-shadow: 0 7px 14px rgba(30, 40, 35, .12), 0 1px 4px rgba(30, 40, 35, .06);

@@ -10,7 +10,7 @@
   background:
     var(--optical-glass-overlay, transparent),
     color-mix(in srgb, var(--text, var(--theme-main-text, #f2efeb)) var(--optical-glass-tint), transparent);
-  border: 1px solid color-mix(in srgb, var(--optical-glass-edge-color) var(--optical-glass-edge), transparent);
+  border: 2px solid var(--theme-optical-glass-border-color);
   box-shadow: var(--optical-glass-shadow);
   overflow: hidden;
   -webkit-backdrop-filter:

@@ -474,6 +474,46 @@ function normalizeOrder(ids: string[], preferred: readonly string[]): string[] {
   return result
 }
 
+function normalizeSessionOrder(sessions: readonly SessionItem[], preferred: readonly string[]): string[] {
+  const available = new Set(sessions.map((session) => session.id))
+  const seen = new Set<string>()
+  const result: string[] = []
+  const newestFirst = sessions
+    .map((session, index) => ({
+      id: session.id,
+      index,
+      createdAt: Date.parse(session.createdAt || ''),
+    }))
+    .sort((left, right) => {
+      const leftTime = Number.isFinite(left.createdAt) ? left.createdAt : 0
+      const rightTime = Number.isFinite(right.createdAt) ? right.createdAt : 0
+      return rightTime - leftTime || left.index - right.index
+    })
+
+  // Newly discovered sessions are placed above any persisted/manual order.
+  // This keeps drag ordering stable while ensuring a freshly created session
+  // never appears at the bottom of the project.
+  for (const session of newestFirst) {
+    if (!preferred.includes(session.id) && !seen.has(session.id)) {
+      seen.add(session.id)
+      result.push(session.id)
+    }
+  }
+  for (const id of preferred) {
+    if (available.has(id) && !seen.has(id)) {
+      seen.add(id)
+      result.push(id)
+    }
+  }
+  for (const session of newestFirst) {
+    if (!seen.has(session.id)) {
+      seen.add(session.id)
+      result.push(session.id)
+    }
+  }
+  return result
+}
+
 function moveId(ids: readonly string[], sourceId: string, targetId: string, position: DragPosition): string[] {
   const sourceIndex = ids.indexOf(sourceId)
   const targetIndex = ids.indexOf(targetId)
@@ -519,7 +559,7 @@ function syncOrderWithProps(groups: ProjectGroup[]): void {
   let changed = false
   for (const group of groups) {
     const current = sessionOrderIds.value[group.id] || []
-    const next = normalizeOrder(group.sessions.map((session) => session.id), current)
+    const next = normalizeSessionOrder(group.sessions, current)
     if (!sameOrder(next, current)) {
       nextSessions[group.id] = next
       changed = true
@@ -1031,10 +1071,7 @@ function dropSession(groupId: string, sessionId: string, sectionId: string): voi
 }
 
 function orderedSessionIds(group: ProjectGroup): string[] {
-  return normalizeOrder(
-    group.sessions.map((session) => session.id),
-    sessionOrderIds.value[group.id] || [],
-  )
+  return normalizeSessionOrder(group.sessions, sessionOrderIds.value[group.id] || [])
 }
 
 function previewSessionOrderIds(group: ProjectGroup, sectionId = 'default'): string[] {

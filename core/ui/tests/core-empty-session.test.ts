@@ -55,6 +55,7 @@ describe('Core empty-session host wiring', () => {
     expect(appSource).toContain("label: '粘贴'")
     expect(appSource).toContain("label: '全选'")
     expect(appSource).toContain('await navigator.clipboard.readText()')
+    expect(appSource).toContain("if (appRuntime.platform === 'mobile') return")
     expect(appSource).not.toContain('composer-context-menu-style')
   })
 })

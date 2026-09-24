@@ -57,17 +57,6 @@ function setVisualMode(mode: ActionMode) {
   visualMode.value = mode
 }
 
-function buttonColors() {
-  const button = buttonElement.value
-  if (!button) return { send: 'var(--theme-composer-text)', stop: 'var(--theme-composer-text)' }
-  const styles = getComputedStyle(button)
-  const composerTextColor = styles.getPropertyValue('--theme-composer-text').trim() || 'var(--theme-composer-text)'
-  return {
-    send: composerTextColor,
-    stop: composerTextColor,
-  }
-}
-
 function settleButton(timeline: gsap.core.Timeline, position: number) {
   timeline
     .to(buttonElement.value, {
@@ -110,7 +99,6 @@ function animateTo(mode: ActionMode) {
   if (prefersReducedMotion()) {
     setVisualMode(mode)
     gsap.set(button, {
-      backgroundColor: mode === 'stop' ? buttonColors().stop : buttonColors().send,
       '--glyph-x': '0px',
       '--glyph-y': '0px',
       '--glyph-scale-x': 1,
@@ -126,7 +114,6 @@ function animateTo(mode: ActionMode) {
   }
 
   busy = true
-  const colors = buttonColors()
   const timeline = gsap.timeline({
     defaults: { overwrite: 'auto' },
     onComplete: finishTransition,
@@ -167,7 +154,6 @@ function animateTo(mode: ActionMode) {
         })
       }, [], 0.205)
       .to(button, {
-        backgroundColor: colors.stop,
         '--glyph-y': '0px',
         '--glyph-scale-x': 1,
         '--glyph-scale-y': 1,
@@ -208,7 +194,6 @@ function animateTo(mode: ActionMode) {
       })
     }, [], 0.125)
     .to(button, {
-      backgroundColor: colors.send,
       '--glyph-x': '0px',
       '--glyph-y': '0px',
       '--glyph-scale-x': 1,
@@ -262,7 +247,6 @@ onMounted(() => {
   const button = buttonElement.value
   if (!button) return
   mounted = true
-  gsap.set(button, { backgroundColor: buttonColors().send })
   animationContext = gsap.context(() => {
     xTo = gsap.quickTo(button, 'x', { duration: 0.24, ease: 'power3.out' })
     yTo = gsap.quickTo(button, 'y', { duration: 0.24, ease: 'power3.out' })
@@ -301,7 +285,6 @@ onUnmounted(() => {
   display: grid;
   place-items: center;
   flex: 0 0 28px;
-  color: var(--theme-composer-background);
   background: var(--theme-composer-text);
   box-shadow: var(--shadow-sm);
   font-size: 0;
@@ -325,7 +308,7 @@ onUnmounted(() => {
 .core-send-stop-button::before {
   width: 13px;
   height: 13px;
-  background: currentColor;
+  background: var(--theme-composer-background);
   clip-path: polygon(4% 45%, 94% 7%, 68% 95%, 48% 62%, 31% 79%, 31% 57%);
   opacity: var(--glyph-opacity);
   transform: translate(calc(-50% + var(--glyph-x)), calc(-50% + var(--glyph-y)))
@@ -339,7 +322,7 @@ onUnmounted(() => {
   width: 18px;
   height: 5px;
   border-radius: 999px;
-  background: currentColor;
+  background: var(--theme-composer-background);
   opacity: var(--trail-opacity);
   filter: blur(3px);
   transform: translate(calc(-50% + var(--trail-x)), -50%) scaleX(var(--trail-scale));
@@ -348,7 +331,6 @@ onUnmounted(() => {
 }
 
 .core-send-stop-button--stop {
-  color: var(--theme-composer-background);
   background: var(--theme-composer-text);
   border-radius: var(--radius-sm);
 }

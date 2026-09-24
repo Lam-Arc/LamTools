@@ -29,10 +29,31 @@ describe('core composer execution helpers', () => {
     expect(selectCoreExecutionModel(models, 'model-other', models[0])).toBe(models[1])
     expect(selectCoreExecutionModel(models, '', models[0])).toBe(models[0])
     expect(options).toEqual([
-      { value: '', label: '当前：Kimi K2.6', selectedLabel: 'Kimi K2.6', group: '' },
-      { value: 'model-default', label: 'Kimi K2.6', selectedLabel: 'Kimi K2.6', group: 'Provider One' },
-      { value: 'model-other', label: 'GLM', selectedLabel: 'GLM', group: 'Provider One' },
+      { value: '', label: '当前：Kimi K2.6', selectedLabel: 'Kimi K2.6', group: '', groupKey: 'default' },
+      { value: 'model-default', label: 'Kimi K2.6', selectedLabel: 'Kimi K2.6', group: 'Provider One', groupKey: 'provider:provider-1' },
+      { value: 'model-other', label: 'GLM', selectedLabel: 'GLM', group: 'Provider One', groupKey: 'provider:provider-1' },
     ])
+  })
+
+  it('projects models into multiple user groups and keeps ungrouped models visible', () => {
+    const models = [
+      { id: 'record-a', provider_id: 'provider-1', model_id: 'upstream/a', display_name: 'A' },
+      { id: 'record-b', provider_id: 'provider-1', model_id: 'upstream/b', display_name: 'B' },
+    ]
+    const options = coreModelSelectOptions({
+      models,
+      view: 'group',
+      groups: [
+        { id: 'free', name: 'Free', model_ids: ['record-a'] },
+        { id: 'coding', name: 'Coding', model_ids: ['record-a'] },
+      ],
+    })
+
+    expect(options.filter(option => option.value === 'record-a').map(option => option.group)).toEqual(['Free', 'Coding'])
+    expect(options.find(option => option.value === 'record-b')).toMatchObject({
+      group: '未分组',
+      groupKey: 'group:__ungrouped__',
+    })
   })
 
   it('limits thinking options from model and provider capabilities', () => {

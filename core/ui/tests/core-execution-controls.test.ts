@@ -58,4 +58,21 @@ describe('CoreExecutionControls', () => {
     expect(wrapper.find('[data-model-thinking-shallow-option]').exists()).toBe(false)
     expect(wrapper.emitted('update:shallowThinkingEnabled')).toBeUndefined()
   })
+
+  it('uses the shared compact classification toggle in the model menu', async () => {
+    const wrapper = mount(CoreExecutionControls, {
+      props: {
+        modelValue: 'model-1',
+        catalogView: 'group',
+        thinkingMode: 'off',
+        modelOptions: [{ value: 'model-1', label: 'Model', group: 'Free', groupKey: 'group:free' }],
+        thinkingModeOptions: [{ value: 'off', label: '关闭' }],
+      },
+    })
+    await wrapper.get('.core-model-thinking-menu__trigger').trigger('click')
+    await wrapper.get('[data-model-thinking-section="model"]').trigger('mouseenter')
+    expect(wrapper.get('[data-model-catalog-view="group"]').attributes('aria-pressed')).toBe('true')
+    await wrapper.get('[data-model-catalog-view="provider"]').trigger('click')
+    expect(wrapper.emitted('update:catalogView')).toEqual([['provider']])
+  })
 })

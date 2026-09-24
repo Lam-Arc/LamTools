@@ -9,6 +9,8 @@ import {
   writeStoredCoreShallowThinking,
   writeStoredCoreThinkingMode,
   type CoreExecutionModelSource,
+  type CoreExecutionModelGroupSource,
+  type CoreModelCatalogView,
   type CoreExecutionProviderSource,
   type CorePermissionPreset,
   type CoreSelectOption,
@@ -51,6 +53,8 @@ export interface UseCoreExecutionControlsStateOptions<
 > {
   models: Readonly<Ref<TModel[]>>
   providers: Readonly<Ref<TProvider[]>>
+  groups?: Readonly<Ref<CoreExecutionModelGroupSource[]>>
+  catalogView?: Readonly<Ref<CoreModelCatalogView>>
   defaultModel: Readonly<Ref<TModel | null>>
   storage?: CoreExecutionControlsStorage | null
   storageKeys?: Partial<Record<keyof typeof CORE_EXECUTION_CONTROLS_STORAGE_KEYS, string>>
@@ -120,6 +124,8 @@ export function useCoreExecutionControlsState<
   const modelOptions = computed(() => coreModelSelectOptions({
     models: options.models.value,
     providers: options.providers.value,
+    groups: options.groups?.value,
+    view: options.catalogView?.value,
     defaultModel: options.defaultModel.value,
     currentLabelPrefix: options.labels?.currentModelPrefix,
     fallbackProviderLabel: options.labels?.fallbackProviderLabel,

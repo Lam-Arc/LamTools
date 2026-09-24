@@ -38,6 +38,14 @@ export interface CoreExecutionModelSource {
   max_output_tokens?: number
 }
 
+export type CoreModelCatalogView = 'group' | 'provider'
+
+export interface CoreExecutionModelGroupSource {
+  id: string
+  name?: string
+  model_ids?: string[]
+}
+
 export interface CoreExecutionProviderSource {
   id?: string
   name?: string
@@ -49,6 +57,7 @@ export interface CoreSelectOption {
   label: string
   selectedLabel?: string
   group?: string
+  groupKey?: string
   disabled?: boolean
 }
 
@@ -112,6 +121,8 @@ export function coreModelSelectOptions<TModel extends CoreExecutionModelSource, 
   params: {
     models: TModel[]
     providers?: TProvider[]
+    groups?: CoreExecutionModelGroupSource[]
+    view?: CoreModelCatalogView
     defaultModel?: TModel | null
     currentLabelPrefix?: string
     fallbackProviderLabel?: string
@@ -133,7 +144,47 @@ export function coreModelSelectOptions<TModel extends CoreExecutionModelSource, 
       label: `${params.currentLabelPrefix ?? 'Current: '}${defaultLabel}`,
       selectedLabel: defaultLabel,
       group: '',
+      groupKey: 'default',
     })
+  }
+
+  if (params.view === 'group') {
+    const modelById = new Map<string, TModel>()
+    for (const model of params.models) {
+      const recordId = String(model.id || model.model_id || '')
+      if (recordId) modelById.set(recordId, model)
+    }
+    const groupedIds = new Set<string>()
+    for (const group of params.groups ?? []) {
+      for (const modelId of group.model_ids ?? []) {
+        const model = modelById.get(String(modelId))
+        if (!model) continue
+        groupedIds.add(String(model.id || model.model_id || ''))
+        const label = coreModelDisplayLabel(model)
+        if (!label) continue
+        options.push({
+          value: String(model.id || model.model_id || label),
+          label,
+          selectedLabel: label,
+          group: group.name || group.id,
+          groupKey: `group:${group.id}`,
+        })
+      }
+    }
+    for (const model of params.models) {
+      const recordId = String(model.id || model.model_id || '')
+      if (!recordId || groupedIds.has(recordId)) continue
+      const label = coreModelDisplayLabel(model)
+      if (!label) continue
+      options.push({
+        value: recordId,
+        label,
+        selectedLabel: label,
+        group: '未分组',
+        groupKey: 'group:__ungrouped__',
+      })
+    }
+    return options
   }
 
   const pushProviderModels = (provider: TProvider | null, models: TModel[]) => {
@@ -145,6 +196,7 @@ export function coreModelSelectOptions<TModel extends CoreExecutionModelSource, 
         label,
         selectedLabel: label,
         group: provider?.name || model.provider_id || params.fallbackProviderLabel || 'Provider',
+        groupKey: `provider:${provider?.id || model.provider_id || '__unknown__'}`,
       })
     }
   }

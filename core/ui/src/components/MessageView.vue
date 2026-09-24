@@ -39,7 +39,7 @@
             </div>
           </div>
           <template v-else>
-            <div class="user-bubble">
+            <div class="user-bubble" data-context-selection-scope>
               {{ msg.content }}
             </div>
           </template>
@@ -87,7 +87,7 @@
 
       <!-- System message (lifecycle, status, errors) -->
       <div v-else-if="msg.role === 'system'" class="system-row">
-        <div class="system-bubble" :class="systemBubbleClass(msg)">
+        <div class="system-bubble" :class="systemBubbleClass(msg)" data-context-selection-scope>
           <span class="system-icon">
             <component :is="systemIcon(msg)" :size="14" :stroke-width="1.8" aria-hidden="true" />
           </span>
@@ -99,6 +99,7 @@
       <div v-else class="assistant-row">
         <div
           class="assistant-message"
+          data-context-selection-scope
           :class="{ 'assistant-message--live': isLiveMessage(msg), 'assistant-message--complete': !isLiveMessage(msg) }"
         >
           <div class="assistant-meta">
@@ -148,6 +149,11 @@
             <span class="mobile-turn-progress__track" aria-hidden="true">
               <span class="mobile-turn-progress__fill" />
             </span>
+          </div>
+
+          <div v-if="mobileRuntimeWarnings.length" class="mobile-runtime-warning" role="status">
+            <span class="mobile-runtime-warning__label">扩展提示</span>
+            <span v-for="warning in mobileRuntimeWarnings" :key="warning">{{ warning }}</span>
           </div>
 
           <div v-if="terminalErrorText(msg)" class="assistant-terminal-error" role="alert">
@@ -1025,6 +1031,10 @@ const mobileProgress = computed<MobileTurnProgress | null>(() => {
   const progress = raw as Record<string, unknown>
   if (typeof progress.label !== 'string' || !['running', 'completed', 'failed', 'cancelled'].includes(String(progress.status))) return null
   return progress as MobileTurnProgress
+})
+const mobileRuntimeWarnings = computed(() => {
+  const raw = (props.msg.metadata as Record<string, unknown> | undefined)?.mobile_runtime_warnings
+  return Array.isArray(raw) ? raw.filter((warning): warning is string => typeof warning === 'string') : []
 })
 const mobileProgressVisible = ref(false)
 let mobileProgressTimer: ReturnType<typeof setTimeout> | undefined
@@ -3649,6 +3659,22 @@ function formatContextSummary(c: ContextCounts): string {
 </script>
 
 <style>
+.mobile-runtime-warning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  max-width: 560px;
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--orange) 35%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--theme-main-text);
+  background: color-mix(in srgb, var(--orange) 9%, transparent);
+  font-size: 12px;
+}
+
+.mobile-runtime-warning__label { font-weight: 600; }
+
 .mobile-turn-progress {
   --text: var(--theme-main-text);
   display: grid;

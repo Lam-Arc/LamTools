@@ -303,6 +303,7 @@ interface PluginToolDecl {
 
 interface PluginItem {
   name: string
+  builtin?: boolean
   version: string
   description: string
   root: string
@@ -431,10 +432,8 @@ let pendingBrowseResolve: ((path: string | null) => void) | null = null
 
 const enabledCount = computed(() => plugins.value.filter((p) => p.enabled).length)
 
-const BUNDLED = ['git', 'websearch', 'imagegen']
-
 function isBundled(plugin: PluginItem): boolean {
-  return BUNDLED.includes(plugin.name)
+  return plugin.builtin === true || ['git', 'websearch', 'imagegen', 'study', 'workflow'].includes(plugin.name)
 }
 
 function toolCount(plugin: PluginItem): number {

@@ -102,6 +102,8 @@ describe('LeftSidebarShell', () => {
   it('keeps only the left body scrollable', () => {
     expect(workspaceShellCss).toMatch(/--left-visible-width: min\(var\(--left-card-width\), var\(--main-left\)\);/)
     expect(workspaceShellCss).toMatch(/\.drawer-left \{[\s\S]*?width: var\(--left-visible-width\);/)
+    expect(workspaceShellCss).toMatch(/\.drawer-left\.open \{[\s\S]*?width: var\(--left-card-width\);/)
+    expect(workspaceShellCss).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.drawer-left \{[\s\S]*?width: var\(--sidebar-width\);[\s\S]*?\.drawer-left\.open \{[\s\S]*?transform: translateX\(0\);[\s\S]*?pointer-events: auto;/)
     expect(workspaceShellCss).toMatch(/\.drawer-left \{[\s\S]*?overflow: hidden;/)
     expect(workspaceShellCss).toMatch(/\.drawer-left \.drawer-head,[\s\S]*?\.drawer-left \.drawer-footer \{[\s\S]*?flex: 0 0 auto;/)
     expect(workspaceShellCss).toMatch(/\.drawer-left > \.sidebar-scroll-shell > \.drawer-body \{[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;[\s\S]*?overflow-x: hidden;/)
@@ -141,5 +143,20 @@ describe('LeftSidebarShell', () => {
     expect(wrapper.find('[aria-label="打开设置"]').exists()).toBe(false)
     expect(wrapper.get('[aria-label="打开插件"]').text()).toContain('插件')
     expect(wrapper.get('[data-footer]').text()).toBe('长期安排')
+  })
+
+  it('omits the footer entirely when mobile actions and footer content are unavailable', () => {
+    const wrapper = mount(LeftSidebarShell, {
+      props: {
+        id: 'left-drawer',
+        open: true,
+        pinned: false,
+        showSearchAction: false,
+        showPluginsAction: false,
+        showSettingsAction: false,
+      },
+    })
+
+    expect(wrapper.find('.drawer-footer').exists()).toBe(false)
   })
 })

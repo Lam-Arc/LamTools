@@ -31,14 +31,13 @@
           <h2 class="onboarding-title">配置模型供应商</h2>
           <p class="onboarding-subtitle">选择官方模板，或手动填写服务信息。</p>
           <p class="onboarding-hint">
-            目前如果你没有 api key 可以选择 OpenCode Free 并添加，它由 opencode 团队免费提供，但有限额，如有需要可以前往
-            <a
-              class="onboarding-link"
-              href="https://opencode.ai/docs/zh-cn/go/"
-              target="_blank"
-              rel="noopener noreferrer"
-            >https://opencode.ai/docs/zh-cn/go/</a>
-            详细了解并购买进阶订阅
+            选择模板后，按官方页面申请 API key；免费模型通常有额度或容量限制。
+            <template v-if="selectedPreset?.apiKeyUrl">
+              <a class="onboarding-link" href="#" @click.prevent="openPresetUrl(selectedPreset.apiKeyUrl)">点此申请 API key</a>
+            </template>
+            <template v-if="selectedPreset?.docsUrl">
+              <a class="onboarding-link" href="#" @click.prevent="openPresetUrl(selectedPreset.docsUrl)">查看官方文档</a>
+            </template>
           </p>
 
           <form class="onboarding-form" @submit.prevent="submitProvider">
@@ -53,17 +52,17 @@
               />
             </label>
 
-            <div v-if="presetId" class="preset-summary">
+            <div v-if="presetId && !selectedPreset?.baseUrlEditable" class="preset-summary">
               <strong>{{ providerName }}</strong>
               <span>{{ providerBaseUrl }} · 将自动添加模板内模型</span>
             </div>
 
-            <template v-else>
+            <template v-if="!presetId || selectedPreset?.baseUrlEditable">
               <label class="field">名称
-                <input v-model.trim="providerName" data-onboarding-provider-name type="text" required placeholder="如：我的 DeepSeek" />
+                <input v-model.trim="providerName" data-onboarding-provider-name type="text" required :placeholder="presetId ? selectedPreset?.name : '如：我的 DeepSeek'" />
               </label>
               <label class="field">服务地址
-                <input v-model.trim="providerBaseUrl" data-onboarding-provider-base-url type="url" required placeholder="https://api.deepseek.com" />
+                <input v-model.trim="providerBaseUrl" data-onboarding-provider-base-url type="url" required :placeholder="selectedPreset?.baseUrl || 'https://api.deepseek.com'" />
               </label>
             </template>
 
@@ -124,8 +123,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, Check, Sparkles } from 'lucide-vue-next'
-import { PROVIDER_PRESETS } from '../data/provider-presets'
+import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '../data/provider-presets'
 import { themeToCSSVars, type ThemeData } from '../helpers/theme'
+import { openExternalUrl } from '../helpers/openUrl'
 import UiSelect from './UiSelect.vue'
 import type { CoreSettingsProvider, CoreSettingsModel, CoreSettingsProviderPayload } from './CoreSettings.vue'
 
@@ -156,8 +156,14 @@ const providerPresets = PROVIDER_PRESETS
 
 const onboardingPresetOptions = computed(() => [
   { value: '', label: '自定义' },
-  ...PROVIDER_PRESETS.map(preset => ({ value: preset.id, label: preset.label })),
+  ...PROVIDER_PRESETS.map(preset => ({
+    value: preset.id,
+    label: preset.label,
+    group: PROVIDER_PRESET_GROUP_LABELS[preset.group],
+  })),
 ])
+
+const selectedPreset = computed(() => providerPresets.find((preset) => preset.id === presetId.value))
 
 function onPresetChange(value: string) {
   presetId.value = value
@@ -168,7 +174,6 @@ const overlayStyle = computed(() => ({ ...themeToCSSVars(props.theme) }))
 
 const canSubmit = computed(() => {
   if (!apiKey.value.trim()) return false
-  if (presetId.value) return true
   return Boolean(providerName.value.trim() && providerBaseUrl.value.trim())
 })
 
@@ -181,18 +186,28 @@ const defaultModelName = computed(() => {
 
 function applyPreset() {
   const preset = providerPresets.find((candidate) => candidate.id === presetId.value)
-  if (!preset) return
+  if (!preset) {
+    providerName.value = ''
+    providerBaseUrl.value = ''
+    providerApiType.value = 'openai'
+    apiKey.value = ''
+    return
+  }
   providerName.value = preset.name
   providerBaseUrl.value = preset.baseUrl
   providerApiType.value = preset.apiType
-  // 模板可预置 API Key（如 OpenCode Free 的 public），用户可覆盖
+  // 仅允许未来明确声明的模板预填 key；外部免费服务仍需用户申请自己的 key。
   apiKey.value = preset.defaultApiKey || ''
+}
+
+function openPresetUrl(url: string | undefined) {
+  if (url) void openExternalUrl(url)
 }
 
 function submitProvider() {
   if (!canSubmit.value) return
   createdProviderName.value = providerName.value
-  const payload: CoreSettingsProviderPayload = {
+  const payload: CoreSettingsProviderPayload & { model_group_name?: string } = {
     name: providerName.value,
     api_type: providerApiType.value,
     base_url: providerBaseUrl.value,
@@ -202,6 +217,7 @@ function submitProvider() {
   if (presetId.value) {
     const preset = providerPresets.find((candidate) => candidate.id === presetId.value)
     if (preset) {
+      if (preset.group === 'free') payload.model_group_name = 'Free'
       payload.preset_id = preset.id
       payload.extra = { ...(preset.extra || {}), adapter_profile_id: preset.adapterProfile }
       payload.models = preset.models.map((model) => ({
@@ -213,7 +229,8 @@ function submitProvider() {
         thinking_supported: model.thinkingSupported,
         thinking_budget: model.thinkingBudget,
         temperature: model.temperature,
-        extra: model.extra,
+        is_default: model.modelId === preset.defaultModelId,
+        extra: providerPresetModelExtra(model),
       }))
     }
   }

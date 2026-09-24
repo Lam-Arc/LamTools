@@ -1,5 +1,5 @@
 <template>
-  <nav v-show="!hidden" ref="root" class="mobile-top-bar" aria-label="移动端快捷操作">
+  <nav v-show="available && !hidden" ref="root" class="mobile-top-bar" aria-label="移动端快捷操作">
     <button
       class="mobile-top-bar__button mobile-top-bar__sidebar-button"
       type="button"
@@ -87,6 +87,14 @@
             <Settings :size="16" :stroke-width="1.8" aria-hidden="true" />
             <span>设置</span>
           </button>
+          <button type="button" data-mobile-plugins-button @click="runAction('open-plugins')">
+            <Puzzle :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <span>插件</span>
+          </button>
+          <button type="button" data-mobile-arrange-button @click="runAction('open-arrange')">
+            <CalendarClock :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <span>长期安排</span>
+          </button>
           <button type="button" data-mobile-account-button @click="runAction('open-account')">
             <UserRound :size="16" :stroke-width="1.8" aria-hidden="true" />
             <span>{{ accountLabel }}</span>
@@ -99,7 +107,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Blocks, Check, PanelLeft, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
+import { Blocks, CalendarClock, Check, PanelLeft, Puzzle, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
 import { gsap } from 'gsap'
 
 export interface MobileModeOption {
@@ -108,12 +116,14 @@ export interface MobileModeOption {
 }
 
 const props = withDefaults(defineProps<{
+  available?: boolean
   hidden?: boolean
   syncing?: boolean
   modeOptions?: MobileModeOption[]
   activeModeId?: string
   accountLabel?: string
 }>(), {
+  available: true,
   hidden: false,
   syncing: false,
   modeOptions: () => [],
@@ -126,6 +136,8 @@ const emit = defineEmits<{
   'open-account': []
   'open-search': []
   'open-settings': []
+  'open-plugins': []
+  'open-arrange': []
   'select-mode': [id: string]
 }>()
 
@@ -186,10 +198,12 @@ function selectMode(id: string): void {
   closePanel()
 }
 
-function runAction(event: 'open-search' | 'open-settings' | 'open-account'): void {
+function runAction(event: 'open-search' | 'open-settings' | 'open-account' | 'open-plugins' | 'open-arrange'): void {
   if (event === 'open-search') emit('open-search')
   else if (event === 'open-settings') emit('open-settings')
-  else emit('open-account')
+  else if (event === 'open-account') emit('open-account')
+  else if (event === 'open-plugins') emit('open-plugins')
+  else emit('open-arrange')
   closePanel()
 }
 
@@ -206,8 +220,8 @@ function handleViewportResize(): void {
   updatePanelDirection()
 }
 
-watch(() => props.hidden, (hidden) => {
-  if (hidden) closePanel()
+watch(() => [props.hidden, props.available] as const, ([hidden, available]) => {
+  if (hidden || !available) closePanel()
 })
 
 watch(panelOpen, async (open) => {
@@ -228,13 +242,13 @@ onMounted(() => {
   motion.add('(prefers-reduced-motion: no-preference)', () => {
     motionAllowed = true
     const stop = watch(
-      () => [props.syncing, props.hidden] as const,
-      ([syncing, hidden]) => {
+      () => [props.syncing, props.hidden, props.available] as const,
+      ([syncing, hidden, available]) => {
         syncTween?.kill()
         syncTween = null
         const icon = syncIcon.value
         if (!icon) return
-        if (!syncing || hidden) {
+        if (!syncing || hidden || !available) {
           gsap.set(icon, { rotation: 0 })
           return
         }

@@ -109,7 +109,7 @@ onUnmounted(() => {
 }
 
 .attachment-source__menu {
-  --text: var(--theme-control-text);
+  --text: var(--theme-composer-text);
   position: absolute;
   bottom: calc(100% + var(--space-2));
   left: 0;

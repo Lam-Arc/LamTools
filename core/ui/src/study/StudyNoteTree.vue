@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, ref, type PropType, type VNode } from 'vue'
-import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, RefreshCw } from 'lucide-vue-next'
+import { ArrowLeft, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, RefreshCw } from 'lucide-vue-next'
 import type { StudyNoteTreeNode } from './types'
 
 const props = withDefaults(defineProps<{
@@ -10,7 +10,8 @@ const props = withDefaults(defineProps<{
   error?: string
   onSelect?: (node: StudyNoteTreeNode) => void | Promise<void>
   onRefresh?: () => void | Promise<void>
-}>(), { activeId: '', loading: false, error: '', onSelect: undefined, onRefresh: undefined })
+  onBack?: () => void | Promise<void>
+}>(), { activeId: '', loading: false, error: '', onSelect: undefined, onRefresh: undefined, onBack: undefined })
 
 const expanded = ref<Set<string>>(new Set())
 const roots = computed(() => props.tree)
@@ -64,6 +65,9 @@ const TreeRows = defineComponent({
 
 <template>
   <nav class="study-note-tree" aria-label="笔记文件树">
+    <button v-if="onBack" class="study-note-tree-row study-note-tree-back" type="button" @click="onBack">
+      <ArrowLeft :size="16" aria-hidden="true" /><span>返回学习</span>
+    </button>
     <header class="study-note-tree-head">
       <span class="study-note-tree-title">笔记库</span>
       <button v-if="onRefresh" class="study-sidebar-icon-button" type="button" aria-label="刷新笔记文件树" title="刷新" :disabled="loading" @click="onRefresh">

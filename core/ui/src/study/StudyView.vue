@@ -336,6 +336,24 @@ async function requestNoteNavigation(action: () => void | Promise<void>): Promis
   return manager.requestNavigation(action)
 }
 
+async function leaveNotes(): Promise<void> {
+  try {
+    await requestNoteNavigation(async () => {
+      await saveLayout()
+      const binding = await ensureMapBinding()
+      if (!binding) throw new Error('无法打开学习会话，请重试')
+      saveDraftForSession(currentBinding.value?.sessionId || ctx.activeSessionId.value)
+      // Commit the page change only after the learning session is available.
+      // A notes binding would otherwise keep the file tree active in chat.
+      await activateBinding(binding, null, true)
+      if (disposed) return
+      selected.value = null
+      page.value = 'chat'
+      notesReturnPending.value = false
+    })
+  } catch (cause) { report(cause) }
+}
+
 async function selectNoteFromTree(node: StudyNoteTreeNode): Promise<void> {
   const target = String(node.noteId || node.note_id || node.id || node.path || '').trim()
   if (!target || node.kind === 'folder') return
@@ -396,6 +414,7 @@ const unregister = usePluginModeRuntime().register(`${props.pluginId}:${props.mo
       noteTreeError: notesTreeError.value,
       selectNote: selectNoteFromTree,
       refreshNoteTree: loadNoteTree,
+      leaveNotes,
       notesEnabled: notesEnabled.value,
     })),
     primaryActionLabel: '',

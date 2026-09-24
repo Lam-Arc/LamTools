@@ -92,6 +92,8 @@ describe('theme gradient normalization', () => {
     const darkVars = themeToCSSVars(SUNDAY_DARK_THEME)
     expect(lightVars['--theme-main-border']).toBe('#D2D8E6')
     expect(darkVars['--theme-main-border']).toBe('#818289')
+    expect(lightVars['--theme-optical-glass-border-color']).toBe('rgb(184 184 184)')
+    expect(darkVars['--theme-optical-glass-border-color']).toBe('rgb(95 95 95)')
     expect(lightVars['--theme-backdrop-background']).toBe('rgba(210, 216, 230, 1)')
     expect(darkVars['--theme-backdrop-background']).toBe('rgba(58, 59, 63, 1)')
     expect(lightVars['--theme-control-background']).toBe('rgba(46, 49, 56, 1)')

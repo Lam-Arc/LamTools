@@ -157,6 +157,7 @@
 .study-note-tree { --text: var(--theme-backdrop-text); display: flex; flex-direction: column; min-height: 0; gap: var(--space-2); padding: var(--space-2); color: var(--text); }
 .study-note-tree-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-1) var(--space-2); }
 .study-note-tree-title { color: var(--text); font-size: 12px; font-weight: 700; }
+.study-note-tree .study-note-tree-back { width: 100%; min-height: calc(var(--space-5) + var(--space-4)); }
 .study-sidebar-icon-button { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; min-height: 26px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--text) 58%, transparent); cursor: pointer; }
 .study-sidebar-icon-button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
 .study-sidebar-icon-button:active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); }

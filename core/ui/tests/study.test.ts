@@ -9,6 +9,7 @@ import { CORE_PLUGIN_MODE_CONTEXT, CORE_PLUGIN_MODE_RUNTIME, createPluginModeRun
 import StudyView from '../src/study/StudyView.vue'
 import NotesManager from '../src/study/NotesManager.vue'
 import StudySidebar from '../src/study/StudySidebar.vue'
+import StudySidebarHost from '../src/study/StudySidebarHost.vue'
 import StudyNoteRelationGraph from '../src/study/StudyNoteRelationGraph.vue'
 import StudyGraph from '../src/study/StudyGraph.vue'
 import SelectionAssistant from '../src/study/SelectionAssistant.vue'
@@ -16,7 +17,7 @@ import MarkdownRenderer from '../src/components/MarkdownRenderer.vue'
 import { contextMenuState, closeContextMenu } from '../src/components/context-menu/context-menu'
 import { marks, selectionEvents, showMark } from '../src/study/annotations'
 import { extractMarkdownHeadings, normalizeNote } from '../src/study/api'
-import type { KnowledgeItem, MarkAnchor, Relation, StudyMark } from '../src/study/types'
+import type { Course, KnowledgeItem, MarkAnchor, Relation, StudyMark } from '../src/study/types'
 import type { CoreSessionListItem } from '../src/types'
 
 vi.mock('@vue-flow/core', () => ({
@@ -89,6 +90,32 @@ describe('Study anchoring', () => {
 })
 
 describe('Study mode', () => {
+  it('offers the Notes workspace only when the host declares the capability', async () => {
+    // The Note vault is a host capability: a host without it must not render a
+    // navigation entry that can only fail.
+    const courses: Course[] = []
+    const declared = mount(StudySidebar, { props: { courses, active: 'chat', select: vi.fn() } })
+    expect(declared.findAll('button').some(button => button.text() === '笔记')).toBe(true)
+
+    const undeclared = mount(StudySidebar, {
+      props: { courses, active: 'chat', select: vi.fn(), notesEnabled: false },
+    })
+    expect(undeclared.findAll('button').some(button => button.text() === '笔记')).toBe(false)
+    // Everything else in the Study navigator stays available.
+    expect(undeclared.findAll('button').some(button => button.text() === '图谱')).toBe(true)
+    expect(undeclared.findAll('button').some(button => button.text() === '搜索')).toBe(true)
+  })
+
+  it('reads the host capability declaration and refuses the Notes workspace without it', () => {
+    const studySource = readFileSync(resolve(import.meta.dirname, '../src/study/StudyView.vue'), 'utf8')
+    // The declaration drives the gate rather than a host name or a flag.
+    expect(studySource).toContain('ctx.modeCapabilities')
+    expect(studySource).toContain("capabilities.includes('notes')")
+    // Every entry into the workspace goes through the guarded navigation.
+    expect(studySource).toContain('if (!notesEnabled.value) return')
+    expect(studySource).toContain('notesEnabled: notesEnabled.value')
+  })
+
   it('expands sidebar modules through the course/module hierarchy contract', async () => {
     const loadChildren = vi.fn(async (parent: { id: string; kind: 'course' | 'module'; courseId?: string }): Promise<KnowledgeItem[]> => (
       parent.kind === 'course'
@@ -446,6 +473,32 @@ describe('Study mode', () => {
 })
 
 describe('Study v2 layout and notes', () => {
+  it('returns from the note tree and notes chat to the learning sidebar', async () => {
+    const rpc = vi.fn(async (method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      if (method === 'study.session') return { session_id: params?.scope === 'notes' ? 'study:notes' : 'study:main', scope: params?.scope || 'map' }
+      if (method === 'study.notes') return { tree: [], notes: [], nodes: [], edges: [] }
+      return { revision: 1, total: 0, courses: [] }
+    })
+    const ctx = context(rpc), runtime = createPluginModeRuntime()
+    const wrapper = mount(StudyView, { global: { stubs: { Teleport: true }, provide: { [CORE_PLUGIN_MODE_CONTEXT as symbol]: ctx, [CORE_PLUGIN_MODE_RUNTIME as symbol]: runtime } } })
+    await flushPromises()
+    const sidebar = runtime.get('study:study')!.sidebar!.componentProps as { value: InstanceType<typeof StudySidebarHost>['$props'] }
+    for (const chat of [false, true]) {
+      await sidebar.value.select('notes'); await flushPromises()
+      if (chat) {
+        await wrapper.get('.study-note-header-chat').trigger('click'); await flushPromises()
+      }
+      const host = mount(StudySidebarHost, { props: sidebar.value, global: { stubs: { Teleport: true } } })
+      expect(host.find('.study-note-tree').exists()).toBe(true)
+      await host.get('.study-note-tree-back').trigger('click'); await flushPromises()
+      expect(ctx.selectSession).toHaveBeenLastCalledWith('study:main')
+      await host.setProps(sidebar.value)
+      expect(host.find('.study-note-tree').exists()).toBe(false)
+      expect(host.findComponent(StudySidebar).exists()).toBe(true)
+      host.unmount()
+    }
+    wrapper.unmount()
+  })
   it('opens the notes workspace and keeps the current note session for dialog handoff', async () => {
     const rpc = vi.fn(async (method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> => {
       if (method === 'study.session') return { session_id: params?.scope === 'notes' ? 'study:notes' : 'study:main', scope: params?.scope || 'map' }
@@ -679,7 +732,20 @@ describe('Study v2 layout and notes', () => {
     expect(confirm).toHaveBeenCalledTimes(3)
     expect(wrapper.find('[data-study-header] .study-note-header-chat').exists()).toBe(true)
 
+    const noteSidebar = toValue(surface.sidebar!.componentProps) as { leaveNotes: () => Promise<void>; noteWorkspaceActive: boolean }
+    await noteSidebar.leaveNotes(); await flushPromises()
+    expect(confirm).toHaveBeenCalledTimes(4)
+    expect(wrapper.find('.study-note-full-editor').element).toHaveProperty('value', '# 未保存草稿')
+    expect((toValue(surface.sidebar!.componentProps) as { noteWorkspaceActive: boolean }).noteWorkspaceActive).toBe(true)
+    expect(ctx.selectSession).toHaveBeenLastCalledWith('study:notes')
+
     confirm.mockReturnValue(true)
+    ctx.selectSession.mockRejectedValueOnce(new Error('session unavailable'))
+    await noteSidebar.leaveNotes(); await flushPromises()
+    expect(wrapper.find('.study-note-full-editor').element).toHaveProperty('value', '# 未保存草稿')
+    expect((toValue(surface.sidebar!.componentProps) as { noteWorkspaceActive: boolean }).noteWorkspaceActive).toBe(true)
+    expect(wrapper.get('.study-error').text()).toContain('session unavailable')
+
     await wrapper.find('[data-study-header] .study-note-header-chat').trigger('click'); await flushPromises()
     expect(ctx.selectSession).toHaveBeenLastCalledWith('study:notes')
     expect(wrapper.find('[data-study-header] .study-note-header-chat').exists()).toBe(false)

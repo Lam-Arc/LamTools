@@ -15,6 +15,7 @@
     <CoreModelThinkingMenu
       :model-value="modelValue"
       :model-options="modelOptions"
+      :catalog-view="catalogView"
       :thinking-mode="thinkingMode"
       :thinking-mode-options="thinkingModeOptions"
       :shallow-thinking-enabled="shallowThinkingEnabled"
@@ -23,6 +24,7 @@
       :shallow-label="shallowLabel"
       :disabled="disabled"
       @update:model-value="$emit('update:modelValue', $event)"
+      @update:catalog-view="$emit('update:catalogView', $event)"
       @update:thinking-mode="$emit('update:thinkingMode', $event)"
       @update:shallow-thinking-enabled="$emit('update:shallowThinkingEnabled', $event)"
     />
@@ -33,6 +35,7 @@
 <script setup lang="ts">
 import type {
   CorePermissionPreset,
+  CoreModelCatalogView,
   CoreSelectOption,
   CoreThinkingMode,
   CoreThinkingModeOption,
@@ -43,6 +46,7 @@ import CoreRuntimeMenu from './CoreRuntimeMenu.vue'
 const props = withDefaults(defineProps<{
   modelValue?: string
   modelOptions?: CoreSelectOption[]
+  catalogView?: CoreModelCatalogView
   thinkingMode: CoreThinkingMode | string
   thinkingModeOptions: CoreThinkingModeOption[]
   shallowThinkingEnabled?: boolean
@@ -59,6 +63,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   modelValue: '',
   modelOptions: () => [],
+  catalogView: 'provider',
   shallowThinkingEnabled: false,
   activeMode: '',
   modeOptions: () => [],
@@ -74,6 +79,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
+  'update:catalogView': [value: CoreModelCatalogView]
   'update:thinkingMode': [value: string]
   'update:shallowThinkingEnabled': [value: boolean]
   'update:activeMode': [value: string]

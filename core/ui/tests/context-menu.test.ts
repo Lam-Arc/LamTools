@@ -229,15 +229,19 @@ describe('ContextMenuHost', () => {
   it('keeps the native long-press menu when no LamTools context handler accepts it', () => {
     vi.useFakeTimers()
     const target = document.createElement('input')
+    const contextHandler = vi.fn()
+    target.addEventListener('contextmenu', contextHandler)
     document.body.appendChild(target)
 
     try {
       target.dispatchEvent(touchPointerEvent('pointerdown', 32, 44))
       vi.advanceTimersByTime(LONG_PRESS_CONTEXT_MENU_DELAY_MS)
+      expect(contextHandler).not.toHaveBeenCalled()
 
       const nativeEvent = contextEvent(32, 44)
       target.dispatchEvent(nativeEvent)
       expect(nativeEvent.defaultPrevented).toBe(false)
+      expect(contextHandler).toHaveBeenCalledTimes(1)
     } finally {
       target.remove()
       vi.runOnlyPendingTimers()
@@ -245,7 +249,22 @@ describe('ContextMenuHost', () => {
     }
   })
 
-  it('suppresses the WebView default menu outside native targets and selected text', () => {
+  it('preserves the native editing menu even when textarea text is selected', () => {
+    const target = document.createElement('textarea')
+    target.value = 'paste here'
+    target.setSelectionRange(0, 5)
+    document.body.appendChild(target)
+    try {
+      const event = contextEvent()
+      target.dispatchEvent(event)
+      expect(event.defaultPrevented).toBe(false)
+      expect(menuPanel()).toBeNull()
+    } finally {
+      target.remove()
+    }
+  })
+
+  it('opens copy and select-all actions for selected text while preserving unselected native targets', async () => {
     const plain = document.createElement('div')
     const button = document.createElement('button')
     const input = document.createElement('input')
@@ -272,13 +291,58 @@ describe('ContextMenuHost', () => {
     selection?.addRange(range)
     const selectedEvent = contextEvent()
     selected.dispatchEvent(selectedEvent)
-    expect(selectedEvent.defaultPrevented).toBe(false)
+    await settleRender()
+    expect(selectedEvent.defaultPrevented).toBe(true)
+    expect(menuPanel()?.hasAttribute('data-text-selection-menu')).toBe(true)
+    expect(menuButton(0).textContent).toContain('复制')
+    expect(menuButton(1).textContent).toContain('全选')
 
     selection?.removeAllRanges()
     plain.remove()
     button.remove()
     input.remove()
     selected.remove()
+  })
+
+  it('copies the exact selected text and lets select-all expand the selection', async () => {
+    const scope = document.createElement('section')
+    const first = document.createElement('span')
+    const second = document.createElement('span')
+    const outside = document.createElement('aside')
+    first.textContent = 'selected text'
+    second.textContent = 'more text'
+    outside.textContent = 'outside text'
+    scope.append(first, second)
+    document.body.append(scope, outside)
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+
+    const selection = window.getSelection()!
+    const range = document.createRange()
+    range.selectNodeContents(first)
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    first.dispatchEvent(contextEvent())
+    await settleRender()
+    menuButton(0).click()
+    await settleRender()
+    expect(writeText).toHaveBeenCalledWith('selected text')
+
+    selection.removeAllRanges()
+    range.selectNodeContents(first)
+    selection.addRange(range)
+    first.dispatchEvent(contextEvent())
+    await settleRender()
+    menuButton(1).click()
+    await settleRender()
+    expect(selection.toString()).toContain('selected text')
+    expect(selection.toString()).toContain('more text')
+    expect(selection.toString()).not.toContain('outside text')
+
+    selection.removeAllRanges()
+    scope.remove()
+    outside.remove()
   })
 
   it('uses roving tabindex and skips separators, labels, and disabled entries', async () => {

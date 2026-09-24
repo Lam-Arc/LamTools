@@ -16,6 +16,7 @@ const arrangeOverlayEl = ref<HTMLElement | null>(null)
 const arrangeDialogEl = ref<HTMLElement | null>(null)
 
 const jobs = ref<CoreArrangeJob[]>([])
+const schedulerNotice = ref('')
 const loading = ref(false)
 const error = ref('')
 const busyIds = ref(new Set<string>())
@@ -272,7 +273,14 @@ async function submitForm() {
 async function loadJobs() {
   loading.value = true
   error.value = ''
-  try { jobs.value = await durable.listArrangeJobs(props.workRoot) }
+  try {
+    const result = await props.requestRpc('arrange.list', props.workRoot ? { work_root: props.workRoot } : {}) as {
+      jobs?: CoreArrangeJob[]
+      scheduler_notice?: string
+    }
+    jobs.value = result.jobs ?? []
+    schedulerNotice.value = result.scheduler_notice || ''
+  }
   catch (cause) { error.value = cause instanceof Error ? cause.message : '读取安排失败' }
   finally { loading.value = false }
 }
@@ -469,6 +477,8 @@ useOutsidePointerDismiss({
         <button class="quiet-button" :disabled="loading" @click="loadJobs">{{ loading ? '刷新中…' : '刷新' }}</button>
       </div>
     </header>
+
+    <p v-if="schedulerNotice" class="arrange-subtitle" role="status">{{ schedulerNotice }}</p>
 
     <p v-if="loading" class="arrange-loading" role="status">正在读取安排…</p>
 

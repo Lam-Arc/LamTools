@@ -1,4 +1,5 @@
 import { shallowReactive } from 'vue'
+import { copyText } from '../../helpers/clipboard'
 import type { ContextMenuEntry, ContextMenuAttributes, OpenContextMenuOptions } from './types'
 
 export interface ContextMenuState {
@@ -38,6 +39,13 @@ const NATIVE_CONTEXT_TARGET_SELECTOR = [
   'pre',
   'code',
 ].join(', ')
+const TEXT_EDITING_TARGET_SELECTOR = 'input, textarea, select, .cm-editor, [contenteditable]'
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  return typeof Element !== 'undefined'
+    && target instanceof Element
+    && Boolean(target.closest(TEXT_EDITING_TARGET_SELECTOR))
+}
 
 /** Elements whose browser editing/media context menu must remain available. */
 export function isNativeContextTarget(target: EventTarget | null): boolean {
@@ -46,29 +54,88 @@ export function isNativeContextTarget(target: EventTarget | null): boolean {
     && Boolean(target.closest(NATIVE_CONTEXT_TARGET_SELECTOR))
 }
 
-function hasTextSelectionAtTarget(target: EventTarget | null): boolean {
-  if (typeof window === 'undefined' || typeof Node === 'undefined' || !(target instanceof Node)) return false
+interface TextSelectionContext {
+  text: string
+  selectAll: () => void
+}
+
+function selectionScopeAtTarget(target: Node): HTMLElement | null {
+  const element = target instanceof Element ? target : target.parentElement
+  if (!element) return null
+  return element.closest<HTMLElement>([
+    '[data-context-selection-scope]',
+    '[contenteditable]',
+    '[role="article"]',
+    'article',
+    '[role="region"]',
+    'section',
+    'main',
+  ].join(', ')) || element.parentElement
+}
+
+function textSelectionAtTarget(target: EventTarget | null): TextSelectionContext | null {
+  if (typeof window === 'undefined' || typeof Node === 'undefined' || !(target instanceof Node)) return null
+
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    const start = target.selectionStart
+    const end = target.selectionEnd
+    if (start !== null && end !== null && end > start) {
+      const text = target.value.slice(start, end)
+      if (text) return { text, selectAll: () => target.select() }
+    }
+  }
+
   const selection = window.getSelection()
-  if (!selection || selection.isCollapsed || !selection.toString().trim()) return false
+  const text = selection?.toString() || ''
+  if (!selection || selection.isCollapsed || !text.trim()) return null
 
   try {
-    return selection.containsNode(target, true)
+    const containsTarget = selection.containsNode(target, true)
       || Boolean(selection.anchorNode && target.contains(selection.anchorNode))
       || Boolean(selection.focusNode && target.contains(selection.focusNode))
+    if (!containsTarget) return null
+
+    const scope = selectionScopeAtTarget(target)
+    return {
+      text,
+      selectAll: () => {
+        const currentSelection = window.getSelection()
+        if (!scope || !currentSelection) return
+        currentSelection.removeAllRanges()
+        currentSelection.selectAllChildren(scope)
+      },
+    }
   } catch {
-    return false
+    return null
   }
 }
 
 /** Whether the browser should keep its editing/selection/media context menu. */
 export function shouldPreserveNativeContextMenu(event: MouseEvent): boolean {
-  return isNativeContextTarget(event.target) || hasTextSelectionAtTarget(event.target)
+  return isNativeContextTarget(event.target)
 }
 
 let contextMenuGuardConsumers = 0
 let contextMenuGuardInstalled = false
 
 function handleDocumentContextMenu(event: MouseEvent): void {
+  // Editing controls need the platform menu so Android can paste without the
+  // WebView Clipboard API. Keep this check before selected-text handling.
+  if (isTextEditingTarget(event.target)) return
+  const selection = textSelectionAtTarget(event.target)
+  if (selection) {
+    openContextMenu({
+      event,
+      ariaLabel: '文本操作',
+      panelAttributes: { 'data-text-selection-menu': true },
+      items: [
+        { id: 'copy-selection', label: '复制', action: () => copyText(selection.text) },
+        { id: 'select-all', label: '全选', action: selection.selectAll },
+      ],
+    })
+    event.stopImmediatePropagation()
+    return
+  }
   if (!shouldPreserveNativeContextMenu(event)) event.preventDefault()
 }
 
@@ -130,7 +197,7 @@ function targetsOverlap(left: EventTarget | null, right: Element | null): boolea
 
 function handleLongPressPointerDown(event: PointerEvent): void {
   if (event.pointerType !== 'touch' || !event.isPrimary || event.button !== 0) return
-  if (!(event.target instanceof Element) || isContextMenuElement(event.target)) return
+  if (!(event.target instanceof Element) || isContextMenuElement(event.target) || isTextEditingTarget(event.target)) return
 
   clearLongPressCandidate()
   longPressPointerId = event.pointerId

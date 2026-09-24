@@ -514,6 +514,7 @@ export interface ThemeCSSVars {
   '--theme-main-subtle-background': string
   '--theme-main-sunken-background': string
   '--theme-main-border': string
+  '--theme-optical-glass-border-color': string
   '--theme-composer-background': string
   '--theme-composer-text': string
   '--theme-composer-soft-background': string
@@ -558,6 +559,7 @@ export function themeToCSSVars(theme: ThemeData): ThemeCSSVars {
     '--theme-main-subtle-background': lightMain ? 'rgba(255, 254, 250, 0.52)' : 'rgba(255, 255, 255, 0.028)',
     '--theme-main-sunken-background': lightMain ? 'rgba(31, 31, 31, 0.06)' : 'rgba(0, 0, 0, 0.32)',
     '--theme-main-border': mainBorder,
+    '--theme-optical-glass-border-color': lightMain ? 'rgb(184 184 184)' : 'rgb(95 95 95)',
     '--theme-composer-background': gradientFromStops(theme.composerAngle, theme.composerStops, theme.composerOpacity),
     '--theme-composer-text': theme.composerText,
     '--theme-composer-soft-background': lightComposer ? 'rgba(255, 254, 250, 0.70)' : 'rgba(255, 255, 255, 0.045)',

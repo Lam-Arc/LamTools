@@ -64,12 +64,14 @@ describe('MobileTopBar', () => {
     wrapper.unmount()
   })
 
-  it('routes search, settings, and account actions from the expanded card', async () => {
+  it('routes search, settings, plugins, arrangements, and account actions from the expanded card', async () => {
     const wrapper = mount(MobileTopBar, { props: { accountLabel: 'alice' } })
 
     for (const [selector, event] of [
       ['[data-mobile-search-button]', 'open-search'],
       ['[data-mobile-settings-button]', 'open-settings'],
+      ['[data-mobile-plugins-button]', 'open-plugins'],
+      ['[data-mobile-arrange-button]', 'open-arrange'],
       ['[data-mobile-account-button]', 'open-account'],
     ] as const) {
       await wrapper.get('[data-mobile-command-button]').trigger('click')
@@ -88,6 +90,14 @@ describe('MobileTopBar', () => {
     expect(wrapper.get('[data-mobile-command-button]').attributes('aria-expanded')).toBe('true')
     await wrapper.setProps({ hidden: true })
     expect(wrapper.get('[data-mobile-command-button]').attributes('aria-expanded')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('does not render the floating dock when the host reports that it is unavailable', async () => {
+    const wrapper = mount(MobileTopBar, { props: { available: false } })
+    expect(wrapper.get('.mobile-top-bar').attributes('style')).toContain('display: none')
+    await wrapper.setProps({ available: true })
+    expect(wrapper.get('.mobile-top-bar').attributes('style')).not.toContain('display: none')
     wrapper.unmount()
   })
 

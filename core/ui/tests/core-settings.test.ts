@@ -24,12 +24,21 @@ const providers = [{
 
 function mountSettings(
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>,
-  overrides: { models?: typeof models; providers?: typeof providers } = {},
+  overrides: {
+    models?: typeof models
+    providers?: typeof providers
+    modelGroups?: Array<{ id: string; name: string; model_ids: string[] }>
+    catalogView?: 'group' | 'provider'
+    commandShellPlatform?: 'windows' | 'linux' | 'mobile' | 'web' | 'other'
+  } = {},
 ) {
   return mount(CoreSettings, {
     props: {
       models: overrides.models ?? models,
       providers: overrides.providers ?? providers,
+      modelGroups: overrides.modelGroups ?? [],
+      catalogView: overrides.catalogView ?? 'provider',
+      commandShellPlatform: overrides.commandShellPlatform ?? 'other',
       density: 'standard',
       theme: structuredClone(DEFAULT_THEME),
       requestRpc,
@@ -167,6 +176,61 @@ describe('CoreSettings', () => {
     expect(wrapper.emitted('update:density')).toEqual([['loose']])
     expect(wrapper.emitted('update:theme-mode')).toEqual([['dark']])
     expect(wrapper.emitted('update-process-icon-color')).toEqual([['#6755e8']])
+  })
+
+  it('marks free presets for the durable Free group and opens the API key page externally', async () => {
+    const openUrl = vi.fn(async () => true)
+    window.__LAMTOOLS_OPEN_URL__ = openUrl
+    const wrapper = mountSettings()
+    await wrapper.get('[data-provider-create]').trigger('click')
+    await selectUiOption(wrapper, '[data-provider-preset]', 'OpenCode Free')
+    await wrapper.get('[data-provider-api-key-link]').trigger('click')
+    expect(openUrl).toHaveBeenCalledWith('https://opencode.ai/auth')
+    await wrapper.get('[data-provider-api-key]').setValue('test-key')
+    await wrapper.get('[data-provider-form="create"]').trigger('submit')
+    expect(wrapper.emitted('create-provider')?.[0]?.[0]).toMatchObject({ model_group_name: 'Free' })
+    delete window.__LAMTOOLS_OPEN_URL__
+  })
+
+  it('manages group membership and creates a grouped model with a required provider URL', async () => {
+    const wrapper = mountSettings(undefined, {
+      catalogView: 'group',
+      modelGroups: [{ id: 'free', name: 'Free', model_ids: ['model-1'] }],
+    })
+
+    expect(wrapper.get('[data-model-catalog-view="group"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.text()).toContain('Free')
+    expect(wrapper.text()).toContain('GPT Test')
+
+    await wrapper.get('[data-model-group-remove="model-1"]').trigger('click')
+    expect(wrapper.emitted('set-model-group-members')).toContainEqual([{ group_id: 'free', model_ids: [] }])
+
+    await wrapper.get('[data-model-group-members]').trigger('click')
+    expect(wrapper.find('[data-model-group-members-form]').exists()).toBe(true)
+    await wrapper.get('[data-model-group-members-form]').trigger('submit')
+    expect(wrapper.emitted('set-model-group-members')).toContainEqual([{ group_id: 'free', model_ids: ['model-1'] }])
+
+    await wrapper.get('[data-group-model-create]').trigger('click')
+    expect((wrapper.get('[data-model-base-url]').element as HTMLInputElement).value).toBe('https://api.openai.com/v1')
+    await wrapper.get('[data-model-id]').setValue('upstream/new')
+    await wrapper.get('[data-model-display-name]').setValue('New')
+    await wrapper.get('[data-model-form="create"]').trigger('submit')
+    expect(wrapper.emitted('create-model-with-provider')?.[0]?.[0]).toMatchObject({
+      group_id: 'free',
+      model: { model_id: 'upstream/new' },
+      provider: { mode: 'existing', provider_id: 'provider-1', base_url: 'https://api.openai.com/v1' },
+    })
+  })
+
+  it('emits group CRUD and catalog classification changes', async () => {
+    const wrapper = mountSettings(undefined, { catalogView: 'group' })
+    await wrapper.get('[data-model-catalog-view="provider"]').trigger('click')
+    expect(wrapper.emitted('update:catalogView')).toEqual([['provider']])
+
+    await wrapper.get('[data-model-group-create]').trigger('click')
+    await wrapper.get('[data-model-group-name]').setValue('Coding')
+    await wrapper.get('[data-model-group-form]').trigger('submit')
+    expect(wrapper.emitted('create-model-group')).toEqual([[{ name: 'Coding' }]])
   })
 
   it('opens the matching floating editor from the theme preview', async () => {
@@ -327,6 +391,88 @@ describe('CoreSettings', () => {
 
     wrapper.unmount()
   })
+
+  it('loads and persists the Windows command shell preference', async () => {
+    const rpc = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'settings.get' && params?.namespace === 'core.commandShell') {
+        return { value: { preference: 'git-bash' } }
+      }
+      return {}
+    })
+    const wrapper = mountSettings(rpc, { commandShellPlatform: 'windows' })
+    await flushPromises()
+    await wrapper.get('[data-settings-section="loadtools"]').trigger('click')
+
+    expect(rpc).toHaveBeenCalledWith('settings.get', { namespace: 'core.commandShell' })
+    const select = wrapper.get('[data-command-shell-card] .ui-select-trigger')
+    expect(select.text()).toContain('Git Bash')
+    await select.trigger('click')
+    const option = wrapper.findAll('.ui-select-option').find(item => item.text() === 'WSL')
+    expect(option).toBeTruthy()
+    await option!.trigger('click')
+    await flushPromises()
+
+    expect(rpc).toHaveBeenCalledWith('settings.update', {
+      namespace: 'core.commandShell',
+      value: { preference: 'wsl' },
+    })
+    expect(wrapper.get('[data-command-shell-card] .ui-select-trigger').text()).toContain('WSL')
+    expect(wrapper.text()).toContain('WSL → Git Bash → PowerShell')
+    expect(wrapper.text()).toContain('手动选择的 shell 不可用时也会按此顺序回退')
+    wrapper.unmount()
+  })
+
+  it('reverts a failed shell save and shows platform-specific visibility', async () => {
+    const failingRpc = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'settings.get' && params?.namespace === 'core.commandShell') {
+        return { value: { preference: 'powershell' } }
+      }
+      if (method === 'settings.update' && params?.namespace === 'core.commandShell') {
+        throw new Error('write failed')
+      }
+      return {}
+    })
+    const windows = mountSettings(failingRpc, { commandShellPlatform: 'windows' })
+    await flushPromises()
+    await windows.get('[data-settings-section="loadtools"]').trigger('click')
+    await windows.get('[data-command-shell-card] .ui-select-trigger').trigger('click')
+    const wslOption = windows.findAll('.ui-select-option').find(item => item.text() === 'WSL')
+    await wslOption!.trigger('click')
+    await flushPromises()
+    expect(windows.get('[data-command-shell-card] .ui-select-trigger').text()).toContain('PowerShell')
+    expect(windows.get('[data-command-shell-error]').text()).toContain('write failed')
+    windows.unmount()
+
+    const linux = mountSettings(undefined, { commandShellPlatform: 'linux' })
+    await linux.get('[data-settings-section="loadtools"]').trigger('click')
+    expect(linux.find('[data-command-shell-card]').text()).toContain('Linux 直接运行本机命令')
+    expect(linux.find('[data-command-shell-card] .ui-select-trigger').exists()).toBe(false)
+    linux.unmount()
+
+    const mobile = mountSettings(undefined, { commandShellPlatform: 'mobile' })
+    await mobile.get('[data-settings-section="loadtools"]').trigger('click')
+    expect(mobile.find('[data-command-shell-card]').exists()).toBe(false)
+    mobile.unmount()
+  })
+
+  it('shows mobile-local context storage copy and keeps desktop paths and CLI guidance', async () => {
+    const mobile = mountSettings(undefined, { commandShellPlatform: 'mobile' })
+    await mobile.get('[data-settings-section="agents"]').trigger('click')
+    const mobileCopy = mobile.get('.settings-panel').text()
+    expect(mobileCopy).toContain('应用私有 SQLite 配置')
+    expect(mobileCopy).not.toContain('.lam/core/config')
+    expect(mobileCopy).not.toContain('CLI：')
+    mobile.unmount()
+
+    const desktop = mountSettings(undefined, { commandShellPlatform: 'windows' })
+    await desktop.get('[data-settings-section="agents"]').trigger('click')
+    const desktopCopy = desktop.get('.settings-panel').text()
+    expect(desktopCopy).toContain('.lam/core/config/AGENTS.md')
+    expect(desktopCopy).toContain('core memory get/set')
+    expect(desktopCopy).toContain('core load-context get/set')
+    expect(desktopCopy).toContain('core memory dream show/config')
+    desktop.unmount()
+  })
 })
 
 describe('Core settings permission contract', () => {
@@ -371,5 +517,22 @@ describe('Shared Core App settings entry', () => {
     expect(source).toContain("'config.models.upsert'")
     expect(source).toContain("'config.models.delete'")
     expect(source).toContain("'config.models.set_default'")
+    expect(source).toContain("namespace: 'core.modelCatalog'")
+    expect(source).toContain('@update:catalog-view="updateModelCatalogView"')
+    expect(source).toContain("'config.model_group.members.set'")
+  })
+
+  it('keeps account-specific preset URLs editable', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/CoreSettings.vue'), 'utf8')
+    expect(source).toContain("selectedProviderPreset?.baseUrlEditable")
+    expect(source).toContain('data-provider-base-url')
+  })
+
+  it('passes the host command-shell platform to CoreSettings', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
+    expect(source).toContain(':command-shell-platform="commandShellPlatform"')
+    expect(source).toContain("if (appRuntime.platform === 'mobile') return 'mobile'")
+    expect(source).toContain("return 'windows' as const")
+    expect(source).toContain("return 'linux' as const")
   })
 })

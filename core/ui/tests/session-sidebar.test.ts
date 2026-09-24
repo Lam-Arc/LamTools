@@ -498,6 +498,40 @@ describe('SessionSidebar sections', () => {
     expect(pinned.get('[data-session-row="newer"]')).toBeTruthy()
   })
 
+  it('shows newly created sessions at the top', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        pinStorageKey: 'test.sidebar.newest-first',
+        projectGroups: [{
+          id: 'project',
+          name: 'Project',
+          sessions: [
+            { id: 'older', title: 'Older', createdAt: '2026-07-01T08:00:00Z' },
+            { id: 'newer', title: 'Newer', createdAt: '2026-07-12T08:00:00Z' },
+          ],
+        }],
+      },
+    })
+
+    expect(wrapper.findAll('[data-sidebar-section="default"] [data-session-row]').map(row => row.attributes('data-session-row')))
+      .toEqual(['newer', 'older'])
+
+    await wrapper.setProps({
+      projectGroups: [{
+        id: 'project',
+        name: 'Project',
+        sessions: [
+          { id: 'older', title: 'Older', createdAt: '2026-07-01T08:00:00Z' },
+          { id: 'newer', title: 'Newer', createdAt: '2026-07-12T08:00:00Z' },
+          { id: 'newest', title: 'Newest', createdAt: '2026-07-20T08:00:00Z' },
+        ],
+      }],
+    })
+
+    expect(wrapper.findAll('[data-sidebar-section="default"] [data-session-row]').map(row => row.attributes('data-session-row')))
+      .toEqual(['newest', 'newer', 'older'])
+  })
+
   it('reorders projects and sessions by drag and persists both orders', async () => {
     const projectGroups = [
       { id: 'project-a', name: 'Project A', sessions: [{ id: 'a-1', title: 'A1' }] },
