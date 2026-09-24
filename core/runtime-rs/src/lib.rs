@@ -7,6 +7,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub mod compaction;
@@ -32,7 +33,29 @@ pub mod workflow_ops;
 pub mod workflow_runner;
 pub mod workflow_store;
 
-const MAX_TOOL_ROUNDS: usize = 8;
+/// How many consecutive tool-only rounds the model may run before it is asked
+/// for a visible progress note. Desktop parity for
+/// `LoopPolicy.max_tool_only_rounds_without_progress`.
+///
+/// There is deliberately no cap on tool rounds: the desktop kernel has none
+/// either, because a real task can take dozens of steps. What the desktop does
+/// instead is require a short report from a model that keeps calling tools
+/// without saying anything, and stop a model that keeps repeating one step.
+pub const DEFAULT_TOOL_ONLY_ROUND_LIMIT: usize = 8;
+/// Desktop parity for `LoopPolicy.max_identical_tool_results`: how often one
+/// exact call-and-result pair may repeat inside the window below before the
+/// turn is wound down.
+pub const DEFAULT_IDENTICAL_TOOL_RESULT_LIMIT: usize = 10;
+/// Desktop parity for `LoopPolicy.identical_tool_result_window`.
+pub const DEFAULT_IDENTICAL_TOOL_RESULT_WINDOW: usize = 12;
+/// The desktop's progress note, verbatim (`kernel/loop.py`), so a model that
+/// learned one host's recovery path recovers the same way on the other.
+const TOOL_PROGRESS_REQUIRED: &str = concat!(
+    "[TOOL_PROGRESS_REQUIRED] Before using more tools, briefly report ",
+    "[已确认事实] [剩余不确定性] [下一步]. Do not repeat prior evidence, and do not ",
+    "claim a result that has not been observed."
+);
+
 pub const MAX_MODEL_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_MODEL_IMAGE_TOTAL_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_MODEL_IMAGES: usize = 8;
@@ -190,6 +213,17 @@ pub struct TurnOptions {
     /// desktop treats as full access — mean the mode restricts nothing.
     #[serde(default)]
     pub mode_tools: Option<Vec<String>>,
+    /// Tool-only rounds before the model must report progress. `None` keeps the
+    /// desktop default, `Some(0)` turns the request off.
+    #[serde(default)]
+    pub tool_only_round_limit: Option<usize>,
+    /// Repetitions of one exact call-and-result pair that end the turn. `None`
+    /// keeps the desktop default, `Some(0)` turns the stop off.
+    #[serde(default)]
+    pub identical_tool_result_limit: Option<usize>,
+    /// How many recent tool results the repetition count looks at.
+    #[serde(default)]
+    pub identical_tool_result_window: Option<usize>,
 }
 
 impl TurnOptions {
@@ -199,6 +233,33 @@ impl TurnOptions {
             Some(tools) if !tools.is_empty() => Some(tools.as_slice()),
             _ => None,
         }
+    }
+
+    /// The progress-note threshold, or `None` when the host disabled it.
+    pub fn tool_only_round_limit(&self) -> Option<usize> {
+        match self.tool_only_round_limit {
+            Some(0) => None,
+            Some(limit) => Some(limit),
+            None => Some(DEFAULT_TOOL_ONLY_ROUND_LIMIT),
+        }
+    }
+
+    /// The repetition threshold, or `None` when the host disabled the stop.
+    pub fn identical_tool_result_limit(&self) -> Option<usize> {
+        match self.identical_tool_result_limit {
+            Some(0) => None,
+            Some(limit) => Some(limit),
+            None => Some(DEFAULT_IDENTICAL_TOOL_RESULT_LIMIT),
+        }
+    }
+
+    /// The repetition window, never smaller than the threshold so a threshold
+    /// below the desktop window cannot make the stop unreachable.
+    pub fn identical_tool_result_window(&self) -> usize {
+        let window = self
+            .identical_tool_result_window
+            .unwrap_or(DEFAULT_IDENTICAL_TOOL_RESULT_WINDOW);
+        window.max(self.identical_tool_result_limit().unwrap_or(0))
     }
 
     /// The refusal a disallowed call gets, worded exactly like the desktop so a
@@ -319,16 +380,47 @@ pub struct TurnContinuation {
     #[serde(default)]
     pub runtime_warnings: Vec<String>,
     pub tool_rounds: usize,
+    /// Consecutive rounds that called tools without the model saying anything.
+    /// Kept on the continuation so an approval pause does not lose the streak.
+    #[serde(default)]
+    pub tool_only_rounds: usize,
+    /// Fingerprints of the most recent tool results, oldest first, trimmed to
+    /// `identical_tool_result_window`.
+    #[serde(default)]
+    pub identical_tool_results: Vec<String>,
+    /// Set when a result crossed the repetition threshold; read once its round
+    /// has finished, so a batch of calls is never cut in half.
+    #[serde(default)]
+    pub duplicate_result_stop: Option<usize>,
     pub pending_calls: Vec<ToolCall>,
     pub next_call_index: usize,
     #[serde(default)]
     pub compaction: Option<compaction::CompactionReport>,
 }
 
+impl TurnContinuation {
+    /// Whether the round that just finished called tools without narration.
+    ///
+    /// The round's own assistant message is the newest one in the transcript,
+    /// so this reads what the model actually said rather than a copy that could
+    /// drift.
+    fn round_was_tool_only(&self) -> bool {
+        self.messages
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                Message::AssistantToolCalls { content, .. } => Some(content.trim().is_empty()),
+                _ => None,
+            })
+            // No tool-call message: treat the round as narrated, so a bookkeeping
+            // edge case cannot inject a progress demand nobody earned.
+            .unwrap_or(false)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "status", rename_all = "snake_case")]
-pub enum TurnProgress {
-    Completed {
+pub enum TurnProgress {    Completed {
         result: TurnResult,
     },
     ApprovalRequired {
@@ -343,8 +435,6 @@ pub enum RuntimeError {
     Model(String),
     #[error("tool error: {0}")]
     Tool(String),
-    #[error("tool call limit exceeded")]
-    ToolLimit,
     #[error("tool approval required: {0}")]
     ApprovalRequired(String),
 }
@@ -522,6 +612,9 @@ where
             hook_status_messages: Vec::new(),
             runtime_warnings: Vec::new(),
             tool_rounds: 0,
+            tool_only_rounds: 0,
+            identical_tool_results: Vec::new(),
+            duplicate_result_stop: None,
             pending_calls: Vec::new(),
             next_call_index: 0,
             compaction,
@@ -593,7 +686,7 @@ where
             }
             ApprovalDecision::Deny | ApprovalDecision::OtherGuidance => {
                 append_tool_result(
-                    &mut continuation.messages,
+                    &mut continuation,
                     &call,
                     json_object([
                         ("ok", Value::Bool(false)),
@@ -626,7 +719,7 @@ where
                 // Refuse it with the desktop's wording instead of running it.
                 if let Some(reason) = continuation.options.mode_block_reason(&call.name) {
                     append_tool_result(
-                        &mut continuation.messages,
+                        &mut continuation,
                         &call,
                         json_object([
                             ("ok", Value::Bool(false)),
@@ -653,7 +746,7 @@ where
                 }
                 if pre_decision.decision == "block" || pre_decision.permission_decision == "deny" {
                     append_tool_result(
-                        &mut continuation.messages,
+                        &mut continuation,
                         &call,
                         json_object([
                             ("ok", Value::Bool(false)),
@@ -680,7 +773,7 @@ where
                 match tool_permission {
                     ToolPermission::HardBlock => {
                         append_tool_result(
-                            &mut continuation.messages,
+                            &mut continuation,
                             &call,
                             json_object([
                                 ("ok", Value::Bool(false)),
@@ -721,7 +814,7 @@ where
                             || permission_decision.permission_decision == "deny"
                         {
                             append_tool_result(
-                                &mut continuation.messages,
+                                &mut continuation,
                                 &call,
                                 json_object([
                                     ("ok", Value::Bool(false)),
@@ -767,6 +860,26 @@ where
                 continuation.tool_rounds += 1;
                 continuation.pending_calls.clear();
                 continuation.next_call_index = 0;
+                // Desktop parity (`kernel/loop.py`): a round counts as
+                // tool-only when the model called tools without saying
+                // anything, and the streak resets as soon as it speaks.
+                if continuation.round_was_tool_only() {
+                    continuation.tool_only_rounds += 1;
+                } else {
+                    continuation.tool_only_rounds = 0;
+                }
+                if let Some(count) = continuation.duplicate_result_stop.take() {
+                    return self
+                        .finish_after_repeated_results(continuation, count)
+                        .await;
+                }
+                if let Some(limit) = continuation.options.tool_only_round_limit() {
+                    if continuation.tool_only_rounds >= limit {
+                        continuation.messages.push(Message::User {
+                            content: TOOL_PROGRESS_REQUIRED.into(),
+                        });
+                    }
+                }
             }
 
             if let Some(guidance) = &self.guidance {
@@ -814,31 +927,13 @@ where
                         content: text.clone(),
                         provider_state: provider_state.clone(),
                     });
-                    let runtime_history = continuation.messages.iter().skip(1).cloned().collect();
-                    return Ok(TurnProgress::Completed {
-                        result: TurnResult {
-                            text,
-                            reasoning,
-                            runtime_model_id: self
-                                .model
-                                .runtime_model_id(&continuation.model_record_id),
-                            tool_rounds: continuation.tool_rounds,
-                            provider_state,
-                            session_approved_tools: continuation.options.session_approved_tools,
-                            hook_audit_events: continuation.hook_audit_events,
-                            hook_status_messages: continuation.hook_status_messages,
-                            runtime_warnings: continuation.runtime_warnings,
-                            runtime_history,
-                            compaction: continuation.compaction,
-                            dreaming: None,
-                        },
-                    });
+                    return self.finish_turn(continuation, text, reasoning, provider_state);
                 }
                 ModelTurn::ToolCalls {
                     text,
                     calls,
                     provider_state,
-                } if continuation.tool_rounds < MAX_TOOL_ROUNDS => {
+                } => {
                     continuation.messages.push(Message::AssistantToolCalls {
                         content: text,
                         calls: calls.clone(),
@@ -847,7 +942,6 @@ where
                     continuation.pending_calls = calls;
                     continuation.next_call_index = 0;
                 }
-                ModelTurn::ToolCalls { .. } => return Err(RuntimeError::ToolLimit),
             }
         }
     }
@@ -857,6 +951,112 @@ where
             Some(executor) => executor.run(event).await,
             None => hooks::HookDecision::default(),
         }
+    }
+
+    /// Close the turn with the model's answer and everything it accumulated.
+    fn finish_turn(
+        &self,
+        continuation: TurnContinuation,
+        text: String,
+        reasoning: String,
+        provider_state: Value,
+    ) -> Result<TurnProgress, RuntimeError> {
+        let runtime_history = continuation.messages.iter().skip(1).cloned().collect();
+        Ok(TurnProgress::Completed {
+            result: TurnResult {
+                text,
+                reasoning,
+                runtime_model_id: self.model.runtime_model_id(&continuation.model_record_id),
+                tool_rounds: continuation.tool_rounds,
+                provider_state,
+                session_approved_tools: continuation.options.session_approved_tools,
+                hook_audit_events: continuation.hook_audit_events,
+                hook_status_messages: continuation.hook_status_messages,
+                runtime_warnings: continuation.runtime_warnings,
+                runtime_history,
+                compaction: continuation.compaction,
+                dreaming: None,
+            },
+        })
+    }
+
+    /// End a turn whose model keeps repeating one exact step.
+    ///
+    /// The desktop pauses the run here and waits for the user. A mobile turn
+    /// cannot wait for a resume, so this ends recoverably instead: no error and
+    /// nothing dropped, the reason travels on the warning channel, and the
+    /// model gets one last request — with no tools on offer — to answer from
+    /// the evidence it already has.
+    async fn finish_after_repeated_results(
+        &self,
+        mut continuation: TurnContinuation,
+        count: usize,
+    ) -> Result<TurnProgress, RuntimeError> {
+        let window = continuation.options.identical_tool_result_window();
+        let reason = format!(
+            "No progress observed: the same exact tool call and result occurred {count} times \
+             within the last {window} tool results. The turn was ended and the model was asked to \
+             answer with the evidence already collected."
+        );
+        continuation.runtime_warnings.push(reason.clone());
+        continuation.messages.push(Message::User {
+            content: format!(
+                "No progress observed: the same exact tool call and result occurred {count} times \
+                 within the last {window} tool results. Stop repeating it: report what you have \
+                 confirmed, what is still uncertain and what you would do differently, then answer \
+                 with the evidence already collected."
+            ),
+        });
+        self.report("runtime_model_start");
+        let turn = self
+            .model
+            .complete(
+                &continuation.model_record_id,
+                &continuation.messages,
+                &[],
+                &continuation.options,
+            )
+            .await?;
+        self.report("runtime_model_done");
+        let stop_decision = self
+            .run_hook(hooks::HookEvent::new(
+                hooks::EVENT_STOP,
+                &continuation.turn_id,
+                &continuation.hook_context,
+            ))
+            .await;
+        absorb_hook_decision(&mut continuation, &stop_decision);
+        if stop_decision.decision == "block" {
+            // The normal path refuses to complete when a hook blocks it, but a
+            // wind-down cannot keep working: it is ending because the model
+            // stopped making progress. Record the objection and finish anyway.
+            continuation.runtime_warnings.push(if stop_decision.reason.is_empty() {
+                "turn completion blocked by hook".into()
+            } else {
+                stop_decision.reason
+            });
+        }
+        let (text, reasoning, provider_state) = match turn {
+            ModelTurn::Text {
+                text,
+                reasoning,
+                provider_state,
+            } => (text, reasoning, provider_state),
+            // A provider that calls a tool nobody offered still said something;
+            // keep its words instead of discarding a diagnosed turn.
+            ModelTurn::ToolCalls {
+                text,
+                provider_state,
+                ..
+            } => (text, String::new(), provider_state),
+        };
+        if !text.trim().is_empty() {
+            continuation.messages.push(Message::Assistant {
+                content: text.clone(),
+                provider_state: provider_state.clone(),
+            });
+        }
+        self.finish_turn(continuation, text, reasoning, provider_state)
     }
 
     async fn execute_tool_with_hooks(
@@ -923,7 +1123,7 @@ where
                 .unwrap_or(true);
             observer.finished(call, &result, ok);
         }
-        append_tool_result(&mut continuation.messages, call, result)
+        append_tool_result(continuation, call, result)
     }
 }
 
@@ -975,17 +1175,58 @@ fn approval_request(continuation: &TurnContinuation) -> Result<ApprovalRequest, 
 }
 
 fn append_tool_result(
-    messages: &mut Vec<Message>,
+    continuation: &mut TurnContinuation,
     call: &ToolCall,
     result: Value,
 ) -> Result<(), RuntimeError> {
-    messages.push(Message::Tool {
+    let content = serde_json::to_string(&result)
+        .map_err(|error| RuntimeError::Tool(error.to_string()))?;
+    record_tool_result(continuation, call, &content);
+    continuation.messages.push(Message::Tool {
         tool_call_id: call.id.clone(),
         name: call.name.clone(),
-        content: serde_json::to_string(&result)
-            .map_err(|error| RuntimeError::Tool(error.to_string()))?,
+        content,
     });
     Ok(())
+}
+
+/// Remember one exact call-and-result pair and flag the turn when it keeps
+/// repeating. This is the desktop's `max_identical_tool_results` guard: it is
+/// what keeps an unlimited tool loop from running forever on a stuck model,
+/// and it fires on the evidence (same call, same answer) rather than on a step
+/// count.
+fn record_tool_result(continuation: &mut TurnContinuation, call: &ToolCall, content: &str) {
+    let Some(limit) = continuation.options.identical_tool_result_limit() else {
+        return;
+    };
+    let window = continuation.options.identical_tool_result_window();
+    let fingerprint = tool_result_fingerprint(call, content);
+    continuation.identical_tool_results.push(fingerprint.clone());
+    if continuation.identical_tool_results.len() > window {
+        let excess = continuation.identical_tool_results.len() - window;
+        continuation.identical_tool_results.drain(..excess);
+    }
+    let count = continuation
+        .identical_tool_results
+        .iter()
+        .filter(|seen| **seen == fingerprint)
+        .count();
+    if count >= limit {
+        continuation.duplicate_result_stop = Some(count);
+    }
+}
+
+/// Hash of everything the desktop compares for a repeat: the tool, its exact
+/// arguments and the exact result it produced. Hashed rather than kept whole so
+/// a long result cannot grow the continuation a host has to carry.
+fn tool_result_fingerprint(call: &ToolCall, content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(call.name.as_bytes());
+    hasher.update([0]);
+    hasher.update(serde_json::to_vec(&call.arguments).unwrap_or_default());
+    hasher.update([0]);
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 fn json_object<const N: usize>(entries: [(&str, Value); N]) -> Value {
@@ -1542,10 +1783,329 @@ mod tests {
         assert_eq!(result.tool_rounds, 1);
     }
 
+    /// A model that calls tools for `tool_rounds` rounds and then answers, with
+    /// narration on one chosen round when a test needs the streak to reset.
+    struct StreakModel {
+        tool_rounds: usize,
+        narrate_round: Option<usize>,
+        /// Repeat one identical call and arguments every round.
+        repeat_call: bool,
+        requests: Mutex<Vec<Vec<Message>>>,
+        offered_tools: Mutex<Vec<usize>>,
+        step: Mutex<usize>,
+    }
+
+    impl StreakModel {
+        fn new(tool_rounds: usize) -> Self {
+            Self {
+                tool_rounds,
+                narrate_round: None,
+                repeat_call: false,
+                requests: Mutex::new(Vec::new()),
+                offered_tools: Mutex::new(Vec::new()),
+                step: Mutex::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelBackend for StreakModel {
+        async fn complete(
+            &self,
+            _model_record_id: &str,
+            messages: &[Message],
+            tools: &[ToolDefinition],
+            _options: &TurnOptions,
+        ) -> Result<ModelTurn, RuntimeError> {
+            self.requests.lock().unwrap().push(messages.to_vec());
+            self.offered_tools.lock().unwrap().push(tools.len());
+            // A request with no tools can only be the wind-down after a repeated
+            // step, and a model answers it with what it already has.
+            if tools.is_empty() {
+                return Ok(ModelTurn::Text {
+                    text: "按现有证据作答。".into(),
+                    reasoning: String::new(),
+                    provider_state: Value::Null,
+                });
+            }
+            let mut step = self.step.lock().unwrap();
+            let index = *step;
+            *step += 1;
+            if index >= self.tool_rounds {
+                return Ok(ModelTurn::Text {
+                    text: "完成了。".into(),
+                    reasoning: String::new(),
+                    provider_state: Value::Null,
+                });
+            }
+            Ok(ModelTurn::ToolCalls {
+                text: if self.narrate_round == Some(index) {
+                    "我先看一下".into()
+                } else {
+                    String::new()
+                },
+                calls: vec![ToolCall {
+                    id: format!("call-{index}"),
+                    name: "read_file".into(),
+                    arguments: if self.repeat_call {
+                        serde_json::json!({"path":"same.txt"})
+                    } else {
+                        serde_json::json!({"path": format!("file-{index}.txt")})
+                    },
+                }],
+                provider_state: Value::Null,
+            })
+        }
+    }
+
+    fn streak_request(turn_id: &str, options: TurnOptions) -> TurnRequest {
+        TurnRequest {
+            turn_id: turn_id.into(),
+            model_record_id: "fixture".into(),
+            history: vec![Message::User {
+                content: "读一批文件".into(),
+            }],
+            capabilities: DeviceCapabilities {
+                project_files: true,
+                ..Default::default()
+            },
+            context: AgentContext::default(),
+            hook_context: hooks::HookRunContext::default(),
+            options,
+        }
+    }
+
+    fn count<F: Fn(&Message) -> bool>(messages: &[Message], predicate: F) -> usize {
+        messages.iter().filter(|message| predicate(message)).count()
+    }
+
+    const PROGRESS_NOTE: &str = "[TOOL_PROGRESS_REQUIRED] Before using more tools, briefly report \
+[已确认事实] [剩余不确定性] [下一步]. Do not repeat prior evidence, and do not claim a result \
+that has not been observed.";
+
+    /// The old runtime abandoned the whole turn on the ninth tool round
+    /// (`MAX_TOOL_ROUNDS`), so every round before it was lost. The desktop has
+    /// no such cap, and neither does this loop.
+    #[tokio::test]
+    async fn a_long_tool_streak_runs_to_the_end_without_losing_a_round() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let model = Arc::new(StreakModel::new(12));
+        let runtime = AgentRuntime::new(
+            model.clone(),
+            CountingTools {
+                executions: executions.clone(),
+            },
+        );
+        let result = runtime
+            .run_turn(streak_request("turn-streak", TurnOptions::default()))
+            .await
+            .unwrap();
+
+        assert_eq!(result.text, "完成了。");
+        assert_eq!(result.tool_rounds, 12);
+        assert_eq!(executions.load(Ordering::SeqCst), 12);
+        assert!(result.runtime_warnings.is_empty());
+        // Every round's call and result survives into the durable history.
+        assert_eq!(
+            count(&result.runtime_history, |message| matches!(
+                message,
+                Message::AssistantToolCalls { .. }
+            )),
+            12
+        );
+        assert_eq!(
+            count(&result.runtime_history, |message| matches!(
+                message,
+                Message::Tool { .. }
+            )),
+            12
+        );
+        // And the model sees all of them, not just the last eight.
+        let final_request = model.requests.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(
+            count(&final_request, |message| matches!(
+                message,
+                Message::Tool { .. }
+            )),
+            12
+        );
+    }
+
+    /// Desktop parity: after eight tool-only rounds the model is asked for a
+    /// short progress note, once per round until it says something.
+    #[tokio::test]
+    async fn tool_only_rounds_are_asked_for_progress_and_a_narrated_round_resets_the_streak() {
+        let silent = AgentRuntime::new(
+            Arc::new(StreakModel::new(12)),
+            CountingTools {
+                executions: Arc::new(AtomicUsize::new(0)),
+            },
+        )
+        .run_turn(streak_request("turn-gate", TurnOptions::default()))
+        .await
+        .unwrap();
+        let notes = silent
+            .runtime_history
+            .iter()
+            .filter(|message| matches!(message, Message::User { content } if content == PROGRESS_NOTE))
+            .collect::<Vec<_>>();
+        // Rounds 8, 9, 10, 11 and 12 are past the threshold.
+        assert_eq!(notes.len(), 5);
+        // The demand must be the desktop's sentence, word for word.
+
+        let narrated = AgentRuntime::new(
+            Arc::new(StreakModel {
+                narrate_round: Some(9),
+                ..StreakModel::new(12)
+            }),
+            CountingTools {
+                executions: Arc::new(AtomicUsize::new(0)),
+            },
+        )
+        .run_turn(streak_request("turn-gate-reset", TurnOptions::default()))
+        .await
+        .unwrap();
+        let notes = narrated
+            .runtime_history
+            .iter()
+            .filter(|message| matches!(message, Message::User { content } if content == PROGRESS_NOTE))
+            .count();
+        // The narrated round clears the streak, so only rounds 8 and 9 demand it.
+        assert_eq!(notes, 2);
+    }
+
+    /// A host may tune or switch off the two thresholds, like every other
+    /// desktop policy knob the runtime reads from `TurnOptions`.
+    #[test]
+    fn tool_round_policy_defaults_to_the_desktop_and_can_be_switched_off() {
+        assert_eq!(
+            TurnOptions::default().tool_only_round_limit(),
+            Some(DEFAULT_TOOL_ONLY_ROUND_LIMIT)
+        );
+        assert_eq!(
+            TurnOptions::default().identical_tool_result_limit(),
+            Some(DEFAULT_IDENTICAL_TOOL_RESULT_LIMIT)
+        );
+        assert_eq!(
+            TurnOptions::default().identical_tool_result_window(),
+            DEFAULT_IDENTICAL_TOOL_RESULT_WINDOW
+        );
+        let disabled = TurnOptions {
+            tool_only_round_limit: Some(0),
+            identical_tool_result_limit: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(disabled.tool_only_round_limit(), None);
+        assert_eq!(disabled.identical_tool_result_limit(), None);
+        // A threshold below the window still has to be reachable.
+        assert_eq!(
+            TurnOptions {
+                identical_tool_result_limit: Some(20),
+                ..Default::default()
+            }
+            .identical_tool_result_window(),
+            20
+        );
+    }
+
+    /// The stop that replaces the cap: the same call and result ten times in the
+    /// last twelve results ends the turn. Nothing is discarded and nothing is
+    /// reported as an error — the model is asked to answer with what it has.
+    #[tokio::test]
+    async fn a_repeated_tool_result_ends_the_turn_recoverably() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let model = Arc::new(StreakModel {
+            repeat_call: true,
+            ..StreakModel::new(15)
+        });
+        let runtime = AgentRuntime::new(
+            model.clone(),
+            CountingTools {
+                executions: executions.clone(),
+            },
+        );
+        let result = runtime
+            .run_turn(streak_request("turn-repeat", TurnOptions::default()))
+            .await
+            .unwrap();
+
+        assert_eq!(result.tool_rounds, DEFAULT_IDENTICAL_TOOL_RESULT_LIMIT);
+        assert_eq!(executions.load(Ordering::SeqCst), 10);
+        assert_eq!(result.text, "按现有证据作答。");
+        assert_eq!(result.runtime_warnings.len(), 1);
+        assert!(
+            result.runtime_warnings[0].contains("No progress observed")
+                && result.runtime_warnings[0].contains("10 times"),
+            "unexpected warning: {}",
+            result.runtime_warnings[0]
+        );
+        // The ten rounds that ran are all still there.
+        assert_eq!(
+            count(&result.runtime_history, |message| matches!(
+                message,
+                Message::AssistantToolCalls { .. }
+            )),
+            10
+        );
+        assert_eq!(
+            count(&result.runtime_history, |message| matches!(
+                message,
+                Message::Tool { .. }
+            )),
+            10
+        );
+        // The last request offered no tools, so the model had to answer.
+        assert_eq!(*model.offered_tools.lock().unwrap().last().unwrap(), 0);
+    }
+
+    /// A Stop hook still observes the wind-down, but its objection cannot turn a
+    /// recoverable end back into a failure.
+    #[tokio::test]
+    async fn a_hook_objection_is_recorded_when_a_repeated_step_ends_the_turn() {
+        struct BlockingStop;
+
+        #[async_trait]
+        impl hooks::HookExecutor for BlockingStop {
+            async fn run(&self, event: hooks::HookEvent) -> hooks::HookDecision {
+                if event.event_name == hooks::EVENT_STOP {
+                    return hooks::HookDecision {
+                        decision: "block".into(),
+                        reason: "stop rule".into(),
+                        ..Default::default()
+                    };
+                }
+                hooks::HookDecision::default()
+            }
+        }
+
+        let runtime = AgentRuntime::new(
+            Arc::new(StreakModel {
+                repeat_call: true,
+                ..StreakModel::new(15)
+            }),
+            CountingTools {
+                executions: Arc::new(AtomicUsize::new(0)),
+            },
+        )
+        .with_hook_executor(Arc::new(BlockingStop));
+        let result = runtime
+            .run_turn(streak_request("turn-repeat-hook", TurnOptions::default()))
+            .await
+            .unwrap();
+        assert_eq!(result.text, "按现有证据作答。");
+        assert_eq!(
+            result.runtime_warnings,
+            ["No progress observed: the same exact tool call and result occurred 10 times \
+              within the last 12 tool results. The turn was ended and the model was asked to \
+              answer with the evidence already collected."
+                .to_owned(),
+             "stop rule".to_owned()]
+        );
+    }
+
     struct GatedTools {
         executions: Arc<AtomicUsize>,
     }
-
     #[async_trait]
     impl ToolRuntime for GatedTools {
         fn definitions(&self, _capabilities: &DeviceCapabilities) -> Vec<ToolDefinition> {
