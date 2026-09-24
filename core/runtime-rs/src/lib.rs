@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 
 pub mod compaction;
+pub mod fetch_tools;
 pub mod hooks;
 pub mod mcp;
 pub mod image_gen;

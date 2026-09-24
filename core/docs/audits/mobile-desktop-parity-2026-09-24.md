@@ -98,9 +98,9 @@
 | 桌面工具 | 移动端 | 影响 |
 |---|---|---|
 | `list_dir` / `read_file` / `write_file` | `list_files` / `read_text_file` / `write_text_file` | 有，但**名称不同** |
-| `edit_file` | **无** | 没有定点编辑，只能整文件重写 —— 真实改代码的基本能力 |
-| `search_files` / `search_content` | **无** | 不能列文件、不能搜内容（我在桌面验证跑里它第一件事就是 `search_files` 三次）|
-| `web_fetch` | **无** | 不能抓取页面；Study 提示词要求"核验来源页"在移动端无法执行 |
+| `edit_file` | **已补**（0.1.14）：定点替换，要求唯一匹配，支持 `occurrence`、`before_context`/`after_context` 与 sha256 校验 |
+| `search_files` / `search_content` | **已补**（0.1.14）：glob（含 `**`）与字面内容搜索，跳过 node_modules/.git/target，最多 200 条 |
+| `web_fetch` | **已补**（0.1.14）：抓取并转成可读文本，`ask_user` 权限，512 KiB / 2 万字符上限 |
 | `run_command` | 无（`capabilities.shell=false`） | Android 无 shell，属设计 |
 | `write_checklist` / `update_checklist` | **无** | 任务清单功能整体缺失（UI 侧也看不到）|
 | `question` | **无** | 没有"向用户提问"工具，只有审批流 |

@@ -1,4 +1,5 @@
 use lamtools_runtime::{
+    fetch_tools::WebFetchTools,
     hooks::{HookEngine, HookListPayload, HookRegistry, HookRunContext},
     mcp::{load_server_configs, CompositeToolRuntime, McpLoadReport, McpServerConfig, McpToolRuntime},
     memory::{dream_with_model, DreamingConfig, DreamingOutcome},
@@ -874,8 +875,14 @@ async fn sunday_agent_turn_inner(
     // Web search needs only the network, and the desktop host offers it in Study
     // sessions too, so it is not gated on the Study workspace. The runtime drops
     // the definition when the device reports no network.
-    let mut shared_tools: Vec<Arc<dyn ToolRuntime>> =
-        vec![project_runtime, mcp_runtime, skill_runtime];
+    // Fetching a URL is a network action the user approves per call, so it is
+    // registered wherever the network exists rather than gated on Study.
+    let mut shared_tools: Vec<Arc<dyn ToolRuntime>> = vec![
+        project_runtime,
+        mcp_runtime,
+        skill_runtime,
+        Arc::new(WebFetchTools::new()),
+    ];
     if !payload
         .disabled_plugin_names
         .iter()
@@ -1161,8 +1168,14 @@ async fn sunday_agent_resume_inner(
     } else {
         payload.session_id.clone()
     };
-    let mut shared_tools: Vec<Arc<dyn ToolRuntime>> =
-        vec![project_runtime, mcp_runtime, skill_runtime];
+    // Fetching a URL is a network action the user approves per call, so it is
+    // registered wherever the network exists rather than gated on Study.
+    let mut shared_tools: Vec<Arc<dyn ToolRuntime>> = vec![
+        project_runtime,
+        mcp_runtime,
+        skill_runtime,
+        Arc::new(WebFetchTools::new()),
+    ];
     if !payload
         .disabled_plugin_names
         .iter()
