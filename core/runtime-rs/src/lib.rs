@@ -15,6 +15,7 @@ pub mod hooks;
 pub mod mcp;
 pub mod image_gen;
 pub mod memory;
+pub mod plan_tools;
 pub mod plugin_catalog;
 mod profiles;
 pub mod project_tools;
@@ -69,6 +70,10 @@ pub enum ToolPermission {
     #[default]
     AutoAllow,
     AskUser,
+    /// Always asks, whatever the session's permission preset is. A control tool
+    /// like `question` has no meaning if it runs without an answer, so the
+    /// desktop pauses for it even under full access and this matches that.
+    AlwaysAsk,
     HardBlock,
 }
 
@@ -688,8 +693,9 @@ where
                         )?;
                         continuation.next_call_index += 1;
                     }
-                    ToolPermission::AskUser | ToolPermission::AutoAllow
+                    ToolPermission::AskUser | ToolPermission::AlwaysAsk | ToolPermission::AutoAllow
                         if hook_ask_user
+                            || tool_permission == ToolPermission::AlwaysAsk
                             || (tool_permission == ToolPermission::AskUser
                                 && continuation.options.permission_preset
                                     == PermissionPreset::Ask
@@ -746,6 +752,14 @@ where
                         self.execute_tool_with_hooks(&mut continuation, &call)
                             .await?;
                         continuation.next_call_index += 1;
+                    }
+                    // Handled by the asking arm above; reached only if the guard
+                    // there stops covering it, which is why it asks again.
+                    ToolPermission::AlwaysAsk => {
+                        return Ok(TurnProgress::ApprovalRequired {
+                            request: approval_request(&continuation)?,
+                            continuation,
+                        });
                     }
                 }
             }

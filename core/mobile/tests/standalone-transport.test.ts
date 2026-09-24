@@ -73,6 +73,74 @@ function fakeStudy(overrides: Record<string, (params: Record<string, unknown>) =
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
+describe('checklist projection', () => {
+  it('turns a checklist tool call into a plan part the transcript can render', async () => {
+    const repository = createLocalRepository(new MemoryDatabase())
+    const created = await repository.createLocalSession(undefined, 'Checklist')
+    const config = {
+      handleRpc: async () => null,
+      activeModel: async () => ({
+        provider: { id: 'p', name: 'P', api_type: 'openai', base_url: 'https://m.invalid/v1' },
+        model: { id: 'm', model_id: 'm', display_name: 'M' },
+        apiKey: 'k',
+      }),
+      runtimeModels: async () => [],
+      settings: async () => ({}),
+      subAgentRuntime: async () => ({ enabled: false, guide: '' }),
+      modePlan: async () => ({ tools: null, promptLine: '' }),
+    } as unknown as StandaloneConfigStore
+    const runAgent = vi.fn(async () => new Promise<never>(() => {}))
+    let onStream: ((payload: unknown) => void) | undefined
+    const transport = new StandaloneTransport(
+      repository, config, runAgent, undefined, undefined, undefined, undefined, undefined, undefined,
+      async handler => { onStream = handler; return vi.fn() },
+    )
+    const snapshots: CoreAppSnapshot[] = []
+    transport.subscribe((message: TransportMessage) => {
+      if (message.method === 'thread/snapshot' && message.params) snapshots.push(message.params as unknown as CoreAppSnapshot)
+    })
+    await transport.request({ method: 'turn/start', params: {
+      thread_id: created.id, input: [{ type: 'text', text: '做个计划' }],
+    } })
+    await vi.waitFor(() => expect(onStream).toBeTypeOf('function'))
+    const { turn_id: turnId } = (await vi.waitFor(() => {
+      const turn = Object.values(snapshots.at(-1)?.core?.turns || {})[0]
+      expect(turn?.turn_id).toBeTruthy()
+      return turn!
+    }))
+    const items = () => snapshots.at(-1)?.core?.items || {}
+
+    onStream!({ turnId, kind: 'tool_call', data: {
+      id: 'call-plan', name: 'write_checklist', arguments: '{"steps":[{"id":"s1","description":"第一步"}]}',
+    } })
+    onStream!({ turnId, kind: 'tool_result', data: {
+      id: 'call-plan', name: 'write_checklist', ok: true,
+      preview: JSON.stringify({ ok: true, plan: {
+        design_summary: '对齐移动端',
+        current_step_id: 's2',
+        files: ['a.rs'],
+        steps: [
+          { id: 's1', description: '第一步', status: 'completed', deliverables: ['x'] },
+          { id: 's2', description: '第二步', status: 'in_progress', deliverables: [] },
+        ],
+      } }),
+    } })
+
+    await vi.waitFor(() => {
+      const item = items()[`${turnId}:tool:call-plan`]
+      // A plan part is what the transcript renders as checkboxes.
+      expect(item?.type).toBe('plan')
+      const taskPlan = (item?.metadata as Record<string, unknown>)?.task_plan as Record<string, unknown>
+      expect((taskPlan?.steps as unknown[]).length).toBe(2)
+      expect(taskPlan?.current_step_id).toBe('s2')
+      expect(item?.payload?.plan_steps).toBeTruthy()
+    })
+    // An ordinary tool call is still an ordinary card.
+    onStream!({ turnId, kind: 'tool_call', data: { id: 'call-read', name: 'read_file', arguments: '{"path":"a"}' } })
+    await vi.waitFor(() => expect(items()[`${turnId}:tool:call-read`]?.type).toBe('dynamicToolCall'))
+  })
+})
+
 describe('StandaloneTransport', () => {
   it('keeps provider execution behind the embedded Rust core', () => {
     const source = readFileSync(new URL('../src/standalone/StandaloneTransport.ts', import.meta.url), 'utf8')

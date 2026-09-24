@@ -1,5 +1,6 @@
 use lamtools_runtime::{
     fetch_tools::WebFetchTools,
+    plan_tools::PlanTools,
     hooks::{HookEngine, HookListPayload, HookRegistry, HookRunContext},
     mcp::{load_server_configs, CompositeToolRuntime, McpLoadReport, McpServerConfig, McpToolRuntime},
     memory::{dream_with_model, DreamingConfig, DreamingOutcome},
@@ -1367,6 +1368,9 @@ async fn sunday_agent_turn_inner(
         project_runtime,
         mcp_runtime,
         skill_runtime,
+        // The checklist and the question the model can ask the user; both are
+        // model-facing control tools on the desktop too.
+        Arc::new(PlanTools::new()),
         Arc::new(WebFetchTools::new()),
     ];
     if !payload
@@ -1668,6 +1672,9 @@ async fn sunday_agent_resume_inner(
         project_runtime,
         mcp_runtime,
         skill_runtime,
+        // The checklist and the question the model can ask the user; both are
+        // model-facing control tools on the desktop too.
+        Arc::new(PlanTools::new()),
         Arc::new(WebFetchTools::new()),
     ];
     if !payload

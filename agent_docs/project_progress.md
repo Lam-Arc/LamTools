@@ -29,7 +29,7 @@ and the opaque Relay tunnel.
 
 - ✅ 0.1.19 4b：`artifact.open`（复用附件面板的缓存+intent 桥，Android-only）+ Goal 存储（状态机/乐观并发/校验语与桌面一致，`goal.create|get|list|update` patch 语义）
 - ✅ 0.1.20 5：检查点（每回合边界记项目文件清单哈希，图/头/节点形状照桌面）+ 恢复（先记 undo 检查点，从 artifact blob 写回并记新版本，删除检查点之后新建的文件）+ fork（按回合派生分支会话）+ rollback（恢复文件并截断该回合之后的对话，无 turn 时取最新检查点）
-- 6：`write_checklist` / `update_checklist` / `question` 三个工具
+- ✅ 0.1.21 6：`write_checklist`/`update_checklist`（桌面同款 action 集合与 schema，计划存在运行时、工具结果即计划；完成后指针自动移到下一步）+ `question`（新增 `ToolPermission::AlwaysAsk`，任何权限预设下都暂停）+ 转录里按 `plan` 部件渲染清单
 - 7：Office 渲染，或在移动端改写依赖 CLI 的技能
 - 8：切会话丢过程（会话状态归属分裂：TS 快照 + Rust `rust_runtime_history` 两份状态）
 

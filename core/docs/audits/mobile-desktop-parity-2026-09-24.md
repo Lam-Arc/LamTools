@@ -102,8 +102,8 @@
 | `search_files` / `search_content` | **已补**（0.1.14）：glob（含 `**`）与字面内容搜索，跳过 node_modules/.git/target，最多 200 条 |
 | `web_fetch` | **已补**（0.1.14）：抓取并转成可读文本，`ask_user` 权限，512 KiB / 2 万字符上限 |
 | `run_command` | 无（`capabilities.shell=false`） | Android 无 shell，属设计 |
-| `write_checklist` / `update_checklist` | **无** | 任务清单功能整体缺失（UI 侧也看不到）|
-| `question` | **无** | 没有"向用户提问"工具，只有审批流 |
+| `write_checklist` / `update_checklist` | **已对齐**（0.1.21）：桌面同款 schema 与 action 集合，计划存运行时、工具结果即计划，转录按 `plan` 部件渲染 |
+| `question` | **已对齐**（0.1.21）：`AlwaysAsk` 权限，任何预设下都暂停等答复 |
 | `mcp_activate` / `mcp_tool` | **语义不同**（见下） | — |
 | `sub_agent` / `sub_agent_message` | 有 | ✓ |
 | `load_skill` | 有（另加 `read_skill_reference`） | ✓ |

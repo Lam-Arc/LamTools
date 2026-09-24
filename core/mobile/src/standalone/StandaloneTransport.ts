@@ -1575,13 +1575,20 @@ export class StandaloneTransport implements LamToolsTransport {
       const outcome = finished
         ? ok ? { tool_result: preview } : { error: preview }
         : { message: argsPreview }
+      // The checklist tools project to a plan part, which is what the shared
+      // transcript renders as checkboxes; the plan itself travels in the tool
+      // result, so the card and the result cannot disagree.
+      const isChecklist = name === 'write_checklist' || name === 'update_checklist'
+      const plan = isChecklist ? planFromToolResult(data, args) : undefined
+      const itemType = isChecklist ? 'plan' : 'dynamicToolCall'
       // The shared process card builds its row from the item payload, so every
       // display field has to live there as well as on the item itself.
       const payload: Record<string, unknown> = {
         ...(isRecord(existing?.payload) ? existing.payload : {}),
-        type: 'dynamicToolCall',
+        type: itemType,
         tool_name: name,
         ...(args === undefined ? {} : { arguments: args }),
+        ...(plan ? { plan_steps: plan.steps, ...(plan.design_summary ? { design_summary: plan.design_summary } : {}) } : {}),
         ...outcome,
       }
       core.items[itemId] = {
@@ -1589,7 +1596,8 @@ export class StandaloneTransport implements LamToolsTransport {
         item_id: itemId,
         turn_id: turnId,
         kind: 'tool_call',
-        type: 'dynamicToolCall',
+        type: itemType,
+        ...(plan ? { metadata: { task_plan: plan } } : {}),
         status: finished ? 'completed' : 'running',
         seq: Number(existing?.seq ?? core.items[assistantItemId]?.seq ?? 0),
         tool_name: name,
@@ -1941,6 +1949,38 @@ function insertItemBeforeLive(
  * a structured object (path, command, query, …), so recover it when the preview
  * is still valid JSON and let a truncated preview fall back to plain text.
  */
+/**
+ * The plan a checklist tool call produced.
+ *
+ * The host returns the current plan in the tool result, so the transcript shows
+ * exactly the plan the agent is working from; the arguments are the fallback
+ * while the call is still running.
+ */
+function planFromToolResult(
+  data: Record<string, unknown>,
+  args: unknown,
+): { steps: unknown[]; design_summary: string; current_step_id: string; files: unknown[] } | undefined {
+  let plan: Record<string, unknown> | undefined
+  const preview = typeof data.preview === 'string' ? data.preview : ''
+  if (preview) {
+    try {
+      const parsed = JSON.parse(preview) as unknown
+      if (isRecord(parsed) && isRecord(parsed.plan)) plan = parsed.plan
+    } catch { /* a partial preview is not a plan yet */ }
+  }
+  const fallback = isRecord(args) ? args : {}
+  const steps = Array.isArray(plan?.steps)
+    ? plan.steps
+    : Array.isArray(fallback.steps) ? fallback.steps : []
+  if (!steps.length) return undefined
+  return {
+    steps,
+    design_summary: String(plan?.design_summary ?? fallback.design_summary ?? ''),
+    current_step_id: String(plan?.current_step_id ?? ''),
+    files: Array.isArray(plan?.files) ? plan.files : Array.isArray(fallback.files) ? fallback.files : [],
+  }
+}
+
 function parseToolArguments(preview: unknown): Record<string, unknown> | undefined {
   if (typeof preview !== 'string' || !preview.trim()) return undefined
   try {
