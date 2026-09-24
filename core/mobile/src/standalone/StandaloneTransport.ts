@@ -994,13 +994,14 @@ export class StandaloneTransport implements LamToolsTransport {
       if (studyEnabled && !skillState.studyEnabled) throw new Error('Study 插件已禁用，请启用后重试')
       trace.record('js_extensions_ready')
       if (this.generations.get(threadId) !== generation) return
-      const [models, dreaming, subAgent, retryConfig, loadContextConfig, imagegenConfig] = await Promise.all([
+      const [models, dreaming, subAgent, retryConfig, loadContextConfig, imagegenConfig, websearchConfig] = await Promise.all([
         this.config.runtimeModels().then(value => { trace.record('js_model_keys_ready'); return value }),
         this.config.settings('core.dreaming').then(value => { trace.record('js_settings_ready'); return value }),
         this.config.subAgentRuntime(projectId).then(value => { trace.record('js_subagent_ready'); return value }),
         this.config.settings('core.modelRetry'),
         this.config.settings('core.loadContext'),
         this.config.settings('core.imagegen'),
+        this.config.settings('core.websearch'),
       ])
       trace.record('js_models_ready')
       if (this.generations.get(threadId) !== generation) return
@@ -1023,6 +1024,7 @@ export class StandaloneTransport implements LamToolsTransport {
           disabledSkillNames: skillState.disabledSkillNames,
           disabledPluginNames: skillState.disabledPluginNames,
           imagegenConfig,
+          websearchConfig,
           retryConfig,
           loadContextConfig,
           continuation: hydratedContinuation,
@@ -1225,7 +1227,7 @@ export class StandaloneTransport implements LamToolsTransport {
     const studyEnabled = isStudySession(snapshot, options)
     if (studyEnabled && !skillState.studyEnabled) throw new Error('Study 插件已禁用，请启用后重试')
     recordStage('js_extensions_ready')
-    const [models, [dreaming, contextCompaction], subAgent, retryConfig, globalContext, loadContextConfig, imagegenConfig] = await Promise.all([
+    const [models, [dreaming, contextCompaction], subAgent, retryConfig, globalContext, loadContextConfig, imagegenConfig, websearchConfig] = await Promise.all([
       this.config.runtimeModels().then(value => { recordStage('js_model_keys_ready'); return value }),
       Promise.all([
         this.config.settings('core.dreaming'),
@@ -1238,6 +1240,9 @@ export class StandaloneTransport implements LamToolsTransport {
       // The image API is configured in the shared 设置 → 生图 panel, which writes
       // this namespace; the host resolves it so the runtime stays config-agnostic.
       this.config.settings('core.imagegen'),
+      // The websearch kernel settings the plugin panel writes; the host turns
+      // them into the provider order the runtime searches with.
+      this.config.settings('core.websearch'),
     ])
     recordStage('js_models_ready')
     if (signal.aborted) throw new Error('操作已取消')
@@ -1271,6 +1276,7 @@ export class StandaloneTransport implements LamToolsTransport {
         disabledSkillNames: skillState.disabledSkillNames,
         disabledPluginNames: skillState.disabledPluginNames,
         imagegenConfig,
+        websearchConfig,
         retryConfig,
         loadContextConfig,
         history,

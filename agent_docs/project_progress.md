@@ -15,12 +15,13 @@ and the opaque Relay tunnel.
 
 1. ✅ 0.1.14 核心工具：`edit_file`、`search_files`、`search_content`、`web_fetch`
 2. ✅ 0.1.15 HTTP 路由：`/projects/{id}/agents-md`、`/files`、`/files/content`、`/files/raw`、`/browse-directory`。桌面 56 条注册已逐条对照（parity 文档新增章节）；路由与移动端 project client 共用同一实现，`files/raw` 返回真实字节与 MIME，消息/舞台的图片视频 PDF 预览从 403 变为可用
-3. 🟡 0.1.16 模式与命名（配置面第一半）：工具改名对齐桌面（`list_dir`/`read_file`/`write_file`）+ `config.loadtools.get/set` + 运行时模式白名单（广告与执行两侧都生效，拒绝语与桌面逐字一致）+ `sunday_tool_catalog`；未实现的 RPC 由静默 `{ok:false}` 改为抛错。剩下：`skill.create/delete`、`plugin.config.get/update`、`plugin.widget.get/invoke`、`websearch.config.*`
-4. ⏳ artifact 存储（含版本/回滚/打开）与 Goal 存储
-5. ⏳ 会话检查点 / fork / rollback
-6. ⏳ `write_checklist`、`update_checklist`、`question` 工具
-7. ⏳ Office 渲染（或在移动端改写依赖 CLI 的技能）
-8. ⏳ 切会话丢过程（会话状态归属分裂）
+3. ✅ 0.1.16 模式与命名：工具改名对齐桌面（`list_dir`/`read_file`/`write_file`）+ `config.loadtools.get/set` + 运行时模式白名单（广告与执行两侧都生效，拒绝语与桌面逐字一致）+ `sunday_tool_catalog`；未实现的 RPC 由静默 `{ok:false}` 改为抛错
+4. ✅ 0.1.17 配置面收尾：`skill.create/delete`（用户技能落在运行时扫描的目录并挂载进每次装配）、`plugin.config.get/update`（宿主内嵌 imagegen/websearch schema，写入运行时真正读取的命名空间，密钥打码与保留）、`websearch.config.*`（JSONC 文档编辑，设置驱动 Rust 搜索内核与回退顺序）。`plugin.install/uninstall`、`plugin.widget.*` 移动端无宿主，明确报错
+5. ⏳ artifact 存储（含版本/回滚/打开）与 Goal 存储
+6. ⏳ 会话检查点 / fork / rollback
+7. ⏳ `write_checklist`、`update_checklist`、`question` 工具
+8. ⏳ Office 渲染（或在移动端改写依赖 CLI 的技能）
+9. ⏳ 切会话丢过程（会话状态归属分裂）
 
 不做的：git 工具（用户决定）、workflow 工具（用户决定）、桌面宠物、CLI 本身（移动端无 CLI）。
 

@@ -4,11 +4,16 @@ import {
 } from './StandaloneStateStorage'
 import {
   hasEmbeddedRustCore,
+  createEmbeddedUserSkill,
+  deleteEmbeddedUserSkill,
   listEmbeddedHooks,
   listEmbeddedPluginInventory,
   listEmbeddedStudySkills,
+  listEmbeddedUserSkills,
+  readEmbeddedPluginSchemas,
   type EmbeddedHookListPayload,
   type EmbeddedPluginInventory,
+  type EmbeddedPluginSchema,
   type EmbeddedStudySkill,
 } from '../native/rustAgent'
 import { cloneState } from '../storage/cloneState'
@@ -52,6 +57,8 @@ export class StandaloneExtensionsStore {
   private state: ExtensionState | null = null
   private inventory = new Map<string, EmbeddedPluginInventory>()
   private inventoryStatus: 'idle' | 'ready' | 'failed' = 'idle'
+  private schemas = new Map<string, EmbeddedPluginSchema>()
+  private schemasStatus: 'idle' | 'ready' | 'failed' = 'idle'
 
   constructor(
     private readonly storage: StandaloneStateStorage<ExtensionState> = createStandaloneStateStorage({
@@ -61,6 +68,7 @@ export class StandaloneExtensionsStore {
     }),
     private readonly studySkillCatalog: () => Promise<EmbeddedStudySkill[]> = listEmbeddedStudySkills,
     private readonly pluginInventory: () => Promise<EmbeddedPluginInventory[]> = listEmbeddedPluginInventory,
+    private readonly pluginSchemas: () => Promise<Record<string, EmbeddedPluginSchema>> = readEmbeddedPluginSchemas,
   ) {}
 
   /**
@@ -85,10 +93,29 @@ export class StandaloneExtensionsStore {
     return this.inventory.get(name)?.note || ''
   }
 
+  /**
+   * Read the schemas the host ships once per store instance.
+   *
+   * The panel offers a configuration entry only where a schema exists, so an
+   * unreadable schema map must not look like "this plugin has no settings".
+   */
+  private async loadSchemas(): Promise<void> {
+    if (this.schemasStatus !== 'idle') return
+    try {
+      for (const [name, entry] of Object.entries(await this.pluginSchemas())) {
+        this.schemas.set(name, entry)
+      }
+      this.schemasStatus = 'ready'
+    } catch (error) {
+      this.schemasStatus = 'failed'
+      console.error('Failed to read the bundled plugin schemas', error)
+    }
+  }
+
   async handleRpc(method: string, params: Record<string, unknown>): Promise<Record<string, unknown> | null> {
     const state = await this.load()
     if (method === 'plugin.list') {
-      await this.loadInventory()
+      await Promise.all([this.loadInventory(), this.loadSchemas()])
       return {
         plugins: plugins.map(plugin => {
           // Report only what the runtime actually assembles. A hand-written
@@ -119,7 +146,10 @@ export class StandaloneExtensionsStore {
             tools_note: this.inventoryNote(plugin.name),
             operations: [], commands: [],
             skill_names: 'skills' in plugin ? [...plugin.skills] : [],
-            hook_summary: [], dependencies: [], deps_status: 'none', config_schema: '',
+            hook_summary: [], dependencies: [], deps_status: 'none',
+            // A plugin with no schema shows no configuration entry rather than
+            // an empty one; the path names the file the schema came from.
+            config_schema: this.schemas.get(plugin.name)?.path || '',
           }
         }),
         errors: [],
@@ -137,17 +167,46 @@ export class StandaloneExtensionsStore {
     if (method === 'skill.list') {
       const studyEnabled = !state.disabledPlugins.includes('study')
       const skills = [
-        ...coreSkills.map(([name, description]) => ({ name, description, location: `bundled://skills/${name}/SKILL.md`, source: 'core' })),
+        ...coreSkills.map(([name, description]) => ({ name, description, location: `bundled://skills/${name}/SKILL.md`, source: 'core', deletable: false })),
         ...(await this.studySkillCatalog()).map(skill => ({
           ...skill,
           source: 'plugin',
+          deletable: false,
+        })),
+        // User skills live in the app-private skill root the runtime scans, and
+        // they are the only skills this host can delete.
+        ...(await listEmbeddedUserSkills()).map(skill => ({
+          ...skill,
+          source: 'user',
+          deletable: true,
         })),
       ].map(skill => ({
         ...skill,
         enabled: !state.disabledSkills.includes(skill.name) && (skill.source !== 'plugin' || studyEnabled),
-        deletable: false,
       }))
       return { skills, total_count: skills.length, enabled_count: skills.filter(skill => skill.enabled).length }
+    }
+    if (method === 'skill.create') {
+      // A new skill starts enabled: the runtime loads everything present unless
+      // it was switched off, and nothing has switched this one off.
+      const created = await createEmbeddedUserSkill({
+        name: String(params.name || ''),
+        description: String(params.description || ''),
+        content: String(params.content || ''),
+      })
+      return { name: created.name, location: created.location, created: true }
+    }
+    if (method === 'skill.delete') {
+      const name = String(params.name || '')
+      if (!(await listEmbeddedUserSkills()).some(skill => skill.name === name)) {
+        // Bundled and plugin skills live inside the binary; the panel must not
+        // be able to report them deleted.
+        throw new Error(`技能 '${name}' 不可删除（只允许删除自建技能）`)
+      }
+      const deleted = await deleteEmbeddedUserSkill(name)
+      state.disabledSkills = state.disabledSkills.filter(item => item !== name)
+      await this.persist()
+      return { name: deleted.name, location: deleted.location, deleted: true }
     }
     if (method === 'skill.enable' || method === 'skill.disable') {
       const name = String(params.name || '')

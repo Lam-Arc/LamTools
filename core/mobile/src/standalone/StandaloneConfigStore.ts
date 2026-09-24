@@ -2,9 +2,18 @@ import { secureStorage, type SecureStorage } from '../native/secureStorage'
 import {
   hasEmbeddedRustCore,
   listEmbeddedPluginModeTools,
+  readEmbeddedPluginSchemas,
   readEmbeddedToolCatalog,
   type EmbeddedCatalogTool,
+  type EmbeddedPluginSchema,
 } from '../native/rustAgent'
+import {
+  hasSecretField,
+  maskPluginSecrets,
+  pluginConfigNamespace,
+  preservePluginSecrets,
+  validatePluginConfig,
+} from './pluginSchema'
 import {
   createStandaloneStateStorage,
   type StandaloneStateStorage,
@@ -98,6 +107,7 @@ const SUB_AGENT_DEFAULT_GUIDE = 'Use reusable sub-agents for bounded independent
 
 export class StandaloneConfigStore {
   private state: StandaloneConfigState | null = null
+  private pluginSchemas: Record<string, EmbeddedPluginSchema> | null = null
 
   constructor(
     private readonly secrets: SecureStorage = secureStorage(),
@@ -181,6 +191,57 @@ export class StandaloneConfigStore {
       state.settings['core.loadContext'] = config
       await this.persist()
       return { ...cloneState(config), exists: true }
+    }
+    if (method === 'websearch.config.get') {
+      // The desktop forwards this to the websearch plugin config and hands back
+      // the JSONC document; the editor edits that text, so the phone answers in
+      // the same shape from the namespace the runtime reads.
+      const stored = await this.pluginConfig('websearch')
+      return {
+        content: Object.keys(stored).length ? `${JSON.stringify(stored, null, 2)}
+` : '',
+        path: 'mobile://config/websearch.jsonc',
+      }
+    }
+    if (method === 'websearch.config.update') {
+      const content = String(params.content ?? '')
+      let parsed: unknown = {}
+      if (content.trim()) {
+        try {
+          parsed = JSON.parse(stripJsoncComments(content))
+        } catch (error) {
+          throw new Error(`Invalid JSON/JSONC: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      if (!isRecord(parsed)) throw new Error('websearch 配置必须是对象')
+      const state2 = await this.load()
+      state2.settings[pluginConfigNamespace('websearch')] = parsed
+      await this.persist()
+      return { path: 'mobile://config/websearch.jsonc', saved: true }
+    }
+    if (method === 'plugin.config.get') {
+      const name = String(params.name || '')
+      const entry = await this.pluginSchema(name)
+      return {
+        name,
+        config: maskPluginSecrets(entry.schema, await this.pluginConfig(name)),
+        schema: entry.schema,
+        config_schema_path: entry.path,
+        has_secrets: hasSecretField(entry.schema),
+        work_root: '',
+      }
+    }
+    if (method === 'plugin.config.update') {
+      const name = String(params.name || '')
+      const entry = await this.pluginSchema(name)
+      if (!isRecord(params.config)) throw new Error('config 必须是对象')
+      const errors = validatePluginConfig(entry.schema, params.config)
+      if (errors.length) throw new Error(`config validation failed: ${errors.join('; ')}`)
+      const current = await this.pluginConfig(name)
+      const merged = preservePluginSecrets(entry.schema, params.config, current)
+      state.settings[pluginConfigNamespace(name)] = merged
+      await this.persist()
+      return { name, config: merged, validated: true }
     }
     if (method === 'config.loadtools.get') {
       const { modes, source } = await this.loadTools()
@@ -375,6 +436,32 @@ export class StandaloneConfigStore {
   async toolCatalog(): Promise<StandaloneToolCatalogEntry[]> {
     if (!hasEmbeddedRustCore()) return []
     return await readEmbeddedToolCatalog()
+  }
+
+  /** The plugin's settings document, from the namespace the runtime reads. */
+  private async pluginConfig(name: string): Promise<Record<string, unknown>> {
+    const state = await this.load()
+    return cloneState(state.settings[pluginConfigNamespace(name)] || {})
+  }
+
+  /**
+   * The schema the host ships for one plugin.
+   *
+   * A plugin without one has nothing to configure on this device, and saying so
+   * is better than showing a form whose values nothing reads.
+   */
+  private async pluginSchema(name: string): Promise<EmbeddedPluginSchema> {
+    if (this.pluginSchemas === null) {
+      try {
+        this.pluginSchemas = hasEmbeddedRustCore() ? await readEmbeddedPluginSchemas() : {}
+      } catch (error) {
+        this.pluginSchemas = null
+        throw new Error(`插件配置结构读取失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    const entry = this.pluginSchemas[name]
+    if (!entry) throw new Error(`插件 '${name}' 没有可配置项`)
+    return entry
   }
 
   async subAgentRuntime(projectId: string): Promise<{ enabled: boolean; guide: string }> {
@@ -1128,6 +1215,42 @@ function restrictModesToCatalog(modes: LoadToolModes, known: Set<string>): LoadT
     }
   }
   return restricted
+}
+
+/**
+ * Strip `//` and `/* *\/` comments so a JSONC document can be parsed.
+ *
+ * String-aware: a `//` inside a quoted value (a URL) must survive, which is the
+ * rule the desktop's stripper follows too.
+ */
+function stripJsoncComments(content: string): string {
+  let result = ''
+  let inString = false
+  let inLineComment = false
+  let inBlockComment = false
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content[index]
+    const next = content[index + 1]
+    if (inLineComment) {
+      if (character === '\n') { inLineComment = false; result += character }
+      continue
+    }
+    if (inBlockComment) {
+      if (character === '*' && next === '/') { inBlockComment = false; index += 1 }
+      continue
+    }
+    if (inString) {
+      result += character
+      if (character === '\\') { result += next ?? ''; index += 1; continue }
+      if (character === '"') inString = false
+      continue
+    }
+    if (character === '"') { inString = true; result += character; continue }
+    if (character === '/' && next === '/') { inLineComment = true; index += 1; continue }
+    if (character === '/' && next === '*') { inBlockComment = true; index += 1; continue }
+    result += character
+  }
+  return result
 }
 
 function uniqueStrings(values: string[]): string[] {

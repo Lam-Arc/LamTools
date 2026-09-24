@@ -743,6 +743,10 @@ struct MobileTurnPayload {
     /// unaware of where a platform keeps configuration.
     #[serde(default)]
     imagegen_config: Value,
+    /// `core.websearch` settings, shaped like the bundled websearch plugin's
+    /// schema (provider / fallback_providers / limit / timeout).
+    #[serde(default)]
+    websearch_config: Value,
 }
 
 #[tauri::command]
@@ -799,6 +803,34 @@ fn sunday_tool_catalog() -> Vec<lamtools_runtime::tool_catalog::CatalogTool> {
     lamtools_runtime::tool_catalog::catalog_tools()
 }
 
+/// Config schema each bundled plugin declares, for the plugin config panel.
+///
+/// The desktop discovers these by scanning the plugin's `config/schema.jsonc`;
+/// the mobile host has no plugin loader, so the same files are embedded and
+/// parsed here. A plugin with no schema is reported without one, and the panel
+/// then shows no configuration entry rather than an empty form.
+#[tauri::command]
+fn sunday_plugin_schemas() -> Value {
+    let schemas = [
+        ("imagegen", include_str!("../../../src/lamtools_core/plugins/bundled/imagegen/config/schema.jsonc")),
+        ("websearch", include_str!("../../../src/lamtools_core/plugins/bundled/websearch/config/schema.jsonc")),
+    ];
+    let mut payload = serde_json::Map::new();
+    for (name, raw) in schemas {
+        let Ok(schema) = json5::from_str::<Value>(raw) else {
+            continue;
+        };
+        payload.insert(
+            name.to_owned(),
+            serde_json::json!({
+                "schema": schema,
+                "path": format!("bundled://{name}/config/schema.jsonc"),
+            }),
+        );
+    }
+    Value::Object(payload)
+}
+
 /// Tool names the bundled Study plugin grants its own mode (`study:study`).
 #[tauri::command]
 fn sunday_plugin_mode_tools(mode: String) -> Vec<String> {
@@ -806,6 +838,33 @@ fn sunday_plugin_mode_tools(mode: String) -> Vec<String> {
         return lamtools_runtime::tool_catalog::study_mode_tools();
     }
     Vec::new()
+}
+
+/// The bundled websearch settings, resolved the way the desktop resolves the
+/// plugin's `config/schema.jsonc`: provider, fallback order, result limit and
+/// timeout. Missing or malformed values keep the runtime defaults.
+fn web_search_tools(config: &Value) -> WebSearchTools {
+    let provider = config
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let fallback: Vec<String> = config
+        .get("fallback_providers")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    WebSearchTools::new().with_config(
+        provider,
+        &fallback,
+        config.get("limit").and_then(Value::as_u64),
+        config.get("timeout").and_then(Value::as_u64),
+    )
 }
 
 fn apply_study_skill_context(context: &mut AgentContext, disabled: &[String]) {
@@ -937,7 +996,7 @@ async fn sunday_agent_turn_inner(
         .iter()
         .any(|name| name == "websearch")
     {
-        shared_tools.push(Arc::new(WebSearchTools::new()));
+        shared_tools.push(Arc::new(web_search_tools(&payload.websearch_config)));
     }
     if !payload
         .disabled_plugin_names
@@ -1116,6 +1175,10 @@ struct MobileResumePayload {
     /// unaware of where a platform keeps configuration.
     #[serde(default)]
     imagegen_config: Value,
+    /// `core.websearch` settings, shaped like the bundled websearch plugin's
+    /// schema (provider / fallback_providers / limit / timeout).
+    #[serde(default)]
+    websearch_config: Value,
 }
 
 #[tauri::command]
@@ -1230,7 +1293,7 @@ async fn sunday_agent_resume_inner(
         .iter()
         .any(|name| name == "websearch")
     {
-        shared_tools.push(Arc::new(WebSearchTools::new()));
+        shared_tools.push(Arc::new(web_search_tools(&payload.websearch_config)));
     }
     if !payload
         .disabled_plugin_names
@@ -2702,6 +2765,160 @@ fn native_project_root(
         .join(project_id))
 }
 
+/// User skills, in the desktop layout: `{root}/skills/<name>/SKILL.md`.
+///
+/// The desktop keeps them under `lam_home()`; the phone has no home directory,
+/// so the app-private data directory takes its place and the same scanner finds
+/// them. This root is what the 新建技能 panel writes and what the agent loads.
+fn native_user_skill_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("skills"))
+}
+
+fn safe_skill_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("标题（name）是必填的".into());
+    }
+    if !name
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-'))
+    {
+        return Err("技能名只允许字母/数字/._-（将作为目录名）".into());
+    }
+    Ok(name.to_owned())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeUserSkill {
+    name: String,
+    description: String,
+    location: String,
+}
+
+/// Every skill in the app-private skill root.
+///
+/// Reads the same frontmatter the runtime's scanner reads (`description:`), so
+/// the panel shows what the agent would load rather than a second opinion.
+#[tauri::command]
+async fn sunday_user_skills(app: tauri::AppHandle) -> Result<Vec<NativeUserSkill>, String> {
+    list_user_skills(&native_user_skill_root(&app)?).await
+}
+
+async fn list_user_skills(root: &std::path::Path) -> Result<Vec<NativeUserSkill>, String> {
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut skills = Vec::new();
+    let mut directories = tokio::fs::read_dir(&root)
+        .await
+        .map_err(|error| error.to_string())?;
+    while let Some(entry) = directories
+        .next_entry()
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        let skill_file = entry.path().join("SKILL.md");
+        let Ok(body) = tokio::fs::read_to_string(&skill_file).await else {
+            continue;
+        };
+        skills.push(NativeUserSkill {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            description: skill_description(&body),
+            location: skill_file.display().to_string(),
+        });
+    }
+    skills.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(skills)
+}
+
+/// The frontmatter `description:` value, matching the runtime's parser.
+fn skill_description(body: &str) -> String {
+    body.lines()
+        .skip(1)
+        .take_while(|line| *line != "---")
+        .find_map(|line| {
+            line.strip_prefix("description:")
+                .map(|value| value.trim().trim_matches(['\'', '"']).to_owned())
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Specialized capability.".into())
+}
+
+#[tauri::command]
+async fn sunday_skill_create(
+    app: tauri::AppHandle,
+    name: String,
+    description: String,
+    content: String,
+) -> Result<NativeUserSkill, String> {
+    create_user_skill(&native_user_skill_root(&app)?, &name, &description, &content).await
+}
+
+async fn create_user_skill(
+    root: &std::path::Path,
+    name: &str,
+    description: &str,
+    content: &str,
+) -> Result<NativeUserSkill, String> {
+    let name = safe_skill_name(name)?;
+    let description = description.trim().to_owned();
+    let content = content.trim().to_owned();
+    if description.is_empty() {
+        return Err("描述（description）是必填的".into());
+    }
+    if content.is_empty() {
+        return Err("内容（content）是必填的".into());
+    }
+    let skill_dir = root.join(&name);
+    tokio_create_dir_all(root).await?;
+    if skill_dir.exists() {
+        return Err(format!("技能 '{name}' 已存在（{}）", skill_dir.display()));
+    }
+    tokio_create_dir_all(&skill_dir).await?;
+    // Same document shape the desktop writes, so a skill copied between hosts
+    // keeps its name and description.
+    let body = format!("---\nname: {name}\ndescription: {description}\n---\n\n{content}\n");
+    let target = skill_dir.join("SKILL.md");
+    let written = body.clone();
+    tokio::task::spawn_blocking(move || write_memory_atomic(&target, written.as_bytes()))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    Ok(NativeUserSkill {
+        name,
+        description,
+        location: skill_dir.join("SKILL.md").display().to_string(),
+    })
+}
+
+#[tauri::command]
+async fn sunday_skill_delete(app: tauri::AppHandle, name: String) -> Result<Value, String> {
+    delete_user_skill(&native_user_skill_root(&app)?, &name).await
+}
+
+async fn delete_user_skill(root: &std::path::Path, name: &str) -> Result<Value, String> {
+    let name = safe_skill_name(name)?;
+    let skill_dir = root.join(&name);
+    // Only the app-private skill root is deletable: bundled and plugin skills
+    // live inside the binary and must not be reported as removable.
+    if !skill_dir.is_dir() {
+        return Err(format!("技能 '{name}' 不存在或不可删除"));
+    }
+    tokio::fs::remove_dir_all(&skill_dir)
+        .await
+        .map_err(|error| format!("删除失败: {error}"))?;
+    Ok(serde_json::json!({
+        "name": name,
+        "location": skill_dir.join("SKILL.md").display().to_string(),
+        "deleted": true,
+    }))
+}
+
 fn safe_project_relative_path(
     root: &std::path::Path,
     value: &str,
@@ -2849,6 +3066,10 @@ pub fn run() {
         sunday_plugin_inventory,
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
+        sunday_plugin_schemas,
+        sunday_user_skills,
+        sunday_skill_create,
+        sunday_skill_delete,
         project_agents_md,
         sunday_workflow_rpc,
         load_legacy_mobile_state,
@@ -2883,6 +3104,10 @@ pub fn run() {
         sunday_plugin_inventory,
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
+        sunday_plugin_schemas,
+        sunday_user_skills,
+        sunday_skill_create,
+        sunday_skill_delete,
         project_agents_md,
         sunday_workflow_rpc,
         load_legacy_mobile_state,
@@ -2909,6 +3134,106 @@ mod tests {
     use lamtools_runtime::{study_skills::catalog_prompt, ModelTurn, ToolCall};
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn bundled_schemas_parse_and_the_search_settings_reach_the_runtime() {
+        let schemas = sunday_plugin_schemas();
+        // The panel only offers a configuration entry where a schema exists, so
+        // both plugins that have one must survive parsing (they are JSONC).
+        for name in ["imagegen", "websearch"] {
+            let entry = schemas.get(name).unwrap_or_else(|| panic!("missing {name}"));
+            assert_eq!(
+                entry["path"],
+                Value::String(format!("bundled://{name}/config/schema.jsonc"))
+            );
+            assert!(entry["schema"]["properties"].is_object());
+        }
+        assert!(schemas.get("git").is_none(), "git declares no schema");
+
+        // Settings shaped like the websearch schema must select the kernel the
+        // panel chose, and missing settings must keep search usable.
+        let configured = web_search_tools(&serde_json::json!({
+            "provider": "bing",
+            "fallback_providers": ["baidu", "unknown"],
+            "limit": 9,
+            "timeout": 4,
+        }));
+        assert_eq!(configured.limit(), 9);
+        assert_eq!(configured.timeout_secs(), 4);
+        let empty = web_search_tools(&Value::Null);
+        assert_eq!(empty.limit(), 5);
+        assert_eq!(empty.timeout_secs(), 30);
+    }
+
+    #[tokio::test]
+    async fn user_skills_round_trip_in_the_layout_the_runtime_scans() {
+        let root = std::env::temp_dir().join(format!("sunday-skills-{}", uuid::Uuid::new_v4()));
+        assert!(list_user_skills(&root).await.unwrap().is_empty());
+
+        let created = create_user_skill(
+            &root,
+            "my-skill",
+            "何时使用这个技能",
+            "加载后应遵循的指引",
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.name, "my-skill");
+        // The scanner reads `{root}/<name>/SKILL.md` and takes the description
+        // from the frontmatter, so both have to be what the panel shows.
+        let body = std::fs::read_to_string(root.join("my-skill").join("SKILL.md")).unwrap();
+        assert!(body.starts_with("---
+name: my-skill
+description: 何时使用这个技能
+---
+"));
+        assert!(body.contains("加载后应遵循的指引"));
+
+        let listed = list_user_skills(&root).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].description, "何时使用这个技能");
+        assert!(listed[0].location.ends_with("SKILL.md"));
+
+        // A duplicate, an empty field and a path-shaped name are refused.
+        assert!(create_user_skill(&root, "my-skill", "d", "c").await.is_err());
+        assert!(create_user_skill(&root, "other", "", "c").await.is_err());
+        assert!(create_user_skill(&root, "other", "d", "  ").await.is_err());
+        assert!(create_user_skill(&root, "../escape", "d", "c").await.is_err());
+        assert!(create_user_skill(&root, "", "d", "c").await.is_err());
+
+        let deleted = delete_user_skill(&root, "my-skill").await.unwrap();
+        assert_eq!(deleted["deleted"], Value::Bool(true));
+        assert!(list_user_skills(&root).await.unwrap().is_empty());
+        // Deleting again reports the miss instead of pretending.
+        assert!(delete_user_skill(&root, "my-skill").await.is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn skill_frontmatter_description_matches_the_runtime_parser() {
+        assert_eq!(
+            skill_description("---
+name: a
+description: 说明
+---
+
+body"),
+            "说明"
+        );
+        assert_eq!(
+            skill_description("---
+description: \"quoted\"
+---
+"),
+            "quoted"
+        );
+        // Missing or empty descriptions fall back exactly like the runtime.
+        assert_eq!(skill_description("---
+name: a
+---
+"), "Specialized capability.");
+        assert_eq!(skill_description("no frontmatter"), "Specialized capability.");
+    }
 
     #[test]
     fn the_mode_editor_catalog_and_study_mode_come_from_the_runtime() {

@@ -25,6 +25,9 @@ const DEFAULT_LIMIT: usize = 5;
 /// Search order used when the caller does not name a kernel. `ddg` is blocked on
 /// mainland networks, which is why the chain falls through to `baidu` and `bing`.
 const DEFAULT_FALLBACK_PROVIDERS: [&str; 3] = ["ddg", "baidu", "bing"];
+/// Kernels this host implements. The desktop schema lists the same three plus a
+/// `custom` option that needs a Python-side adapter, so it is not accepted here.
+const KNOWN_PROVIDERS: [&str; 3] = ["ddg", "baidu", "bing"];
 
 const DDG_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 const BAIDU_ENDPOINT: &str = "https://www.baidu.com/s";
@@ -473,12 +476,24 @@ async fn run_provider(
 
 /// The desktop `web_search` tool, backed by the ported kernels.
 pub struct WebSearchTools {
+    /// Caller-chosen kernel, or empty to use [`Self::fallback`] in order.
+    provider: String,
+    fallback: Vec<String>,
+    limit: usize,
     timeout_secs: u64,
 }
 
 impl Default for WebSearchTools {
     fn default() -> Self {
-        Self { timeout_secs: 30 }
+        Self {
+            provider: String::new(),
+            fallback: DEFAULT_FALLBACK_PROVIDERS
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+            limit: DEFAULT_LIMIT,
+            timeout_secs: 30,
+        }
     }
 }
 
@@ -490,6 +505,85 @@ impl WebSearchTools {
     pub fn with_timeout_secs(mut self, timeout_secs: u64) -> Self {
         self.timeout_secs = timeout_secs.max(1);
         self
+    }
+
+    /// Apply the bundled websearch plugin's settings.
+    ///
+    /// The desktop reads them from the plugin's `config/schema.jsonc`
+    /// (provider, limit, timeout, fallback order); the host resolves the values
+    /// and hands them over, so the kernel chosen in the panel is the one that
+    /// runs. Unknown kernels and out-of-range numbers fall back to the defaults
+    /// rather than leaving search unusable.
+    pub fn with_config(
+        mut self,
+        provider: &str,
+        fallback: &[String],
+        limit: Option<u64>,
+        timeout_secs: Option<u64>,
+    ) -> Self {
+        let provider = provider.trim().to_lowercase();
+        self.provider = if KNOWN_PROVIDERS.contains(&provider.as_str()) {
+            provider
+        } else {
+            String::new()
+        };
+        let fallback: Vec<String> = fallback
+            .iter()
+            .map(|name| name.trim().to_lowercase())
+            .filter(|name| KNOWN_PROVIDERS.contains(&name.as_str()))
+            .collect();
+        if !fallback.is_empty() {
+            self.fallback = fallback;
+        }
+        if let Some(limit) = limit {
+            self.limit = (limit as usize).clamp(1, MAX_RESULT_COUNT);
+        }
+        if let Some(timeout_secs) = timeout_secs {
+            self.timeout_secs = timeout_secs.max(1);
+        }
+        self
+    }
+
+    /// Effective configuration, for hosts that report what is in force.
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    pub fn timeout_secs(&self) -> u64 {
+        self.timeout_secs
+    }
+
+    /// Kernel order for one call: an explicit per-call override wins, otherwise
+    /// the configured provider runs first and the configured chain follows —
+    /// the same order the Python host builds.
+    fn provider_order(&self, requested: &str) -> Result<Vec<String>, RuntimeError> {
+        let requested = requested.trim().to_lowercase();
+        if !requested.is_empty() {
+            if !KNOWN_PROVIDERS.contains(&requested.as_str()) {
+                return Err(RuntimeError::Tool(format!(
+                    "未知搜索内核: {requested}（可选: ddg/baidu/bing）"
+                )));
+            }
+            return Ok(vec![requested]);
+        }
+        let mut candidates: Vec<String> = Vec::new();
+        if !self.provider.is_empty() {
+            candidates.push(self.provider.clone());
+        }
+        for name in &self.fallback {
+            if !candidates.iter().any(|existing| existing == name) {
+                candidates.push(name.clone());
+            }
+        }
+        // Nothing configured must still search: fall back to the default chain.
+        Ok(if candidates.is_empty() {
+            DEFAULT_FALLBACK_PROVIDERS
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect()
+        } else {
+            candidates
+        })
     }
 }
 
@@ -566,7 +660,7 @@ impl ToolRuntime for WebSearchTools {
             .and_then(|map| map.get("limit"))
             .and_then(Value::as_u64)
             .map(|value| value as usize)
-            .unwrap_or(DEFAULT_LIMIT)
+            .unwrap_or(self.limit)
             .clamp(1, MAX_RESULT_COUNT);
         let domains = arguments
             .and_then(|map| map.get("domains"))
@@ -588,20 +682,12 @@ impl ToolRuntime for WebSearchTools {
             .trim()
             .to_lowercase();
 
-        let providers: Vec<&str> = if requested.is_empty() {
-            DEFAULT_FALLBACK_PROVIDERS.to_vec()
-        } else if DEFAULT_FALLBACK_PROVIDERS.contains(&requested.as_str()) {
-            vec![requested.as_str()]
-        } else {
-            return Err(RuntimeError::Tool(format!(
-                "未知搜索内核: {requested}（可选: ddg/baidu/bing）"
-            )));
-        };
+        let providers = self.provider_order(&requested)?;
 
         let mut errors: Vec<String> = Vec::new();
         let mut attempted: Vec<&str> = Vec::new();
         let mut results: Vec<SearchResult> = Vec::new();
-        let mut used = providers[0];
+        let mut used = providers[0].as_str();
         for provider in &providers {
             attempted.push(provider);
             match run_provider(provider, self.timeout_secs, &query, limit, &domains).await {
@@ -669,6 +755,48 @@ impl ToolRuntime for WebSearchTools {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_kernels_decide_what_runs() {
+        // The panel's provider choice runs first, followed by the default chain
+        // (Python builds `[provider] + fallback_providers`, deduplicated).
+        let tools = WebSearchTools::new().with_config("bing", &[], None, None);
+        assert_eq!(
+            tools.provider_order("").unwrap(),
+            vec!["bing".to_owned(), "ddg".to_owned(), "baidu".to_owned()]
+        );
+        // ... a per-call override still wins ...
+        assert_eq!(tools.provider_order("baidu").unwrap(), vec!["baidu".to_owned()]);
+        // ... and an unknown kernel is refused, like the Python host refuses it.
+        assert!(tools.provider_order("google").is_err());
+
+        // An empty configuration falls back to the documented chain.
+        let bare = WebSearchTools::new();
+        assert_eq!(
+            bare.provider_order("").unwrap(),
+            vec!["ddg".to_owned(), "baidu".to_owned(), "bing".to_owned()]
+        );
+
+        // Configured values are normalised, unknown fallbacks are dropped, and
+        // the chain keeps the configured provider first (Python's order).
+        let normalised = WebSearchTools::new().with_config(
+            "BING",
+            &["baidu".into(), "GOOGLE".into(), " ".into(), "bing".into()],
+            Some(999),
+            Some(0),
+        );
+        assert_eq!(
+            normalised.provider_order("").unwrap(),
+            vec!["bing".to_owned(), "baidu".to_owned()]
+        );
+        assert_eq!(normalised.limit, MAX_RESULT_COUNT);
+        assert_eq!(normalised.timeout_secs, 1);
+        let ignored = WebSearchTools::new().with_config("", &["nope".into()], None, None);
+        assert_eq!(
+            ignored.provider_order("").unwrap(),
+            vec!["ddg".to_owned(), "baidu".to_owned(), "bing".to_owned()]
+        );
+    }
 
     #[test]
     fn domain_filters_match_the_python_query_shaping() {

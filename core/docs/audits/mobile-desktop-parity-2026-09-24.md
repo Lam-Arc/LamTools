@@ -49,12 +49,12 @@
 | 方法 | 桌面端作用 | 移动端现状 |
 |---|---|---|
 | `artifact.list`、`artifact.open`、`artifact.revisions`、`artifact.restore`、`artifact.revision.restore` | 工件列表、打开、版本与回滚（生成图片等产物的版本化） | 快照里只有空的 `artifacts: {}` 字段，**无任何 artifact RPC** |
-| `plugin.install`、`plugin.uninstall` | 安装/卸载插件 | 无（移动端插件表是内置静态清单） |
-| `plugin.config.get`、`plugin.config.update` | 读/写插件配置（`configSchema` 驱动表单） | 无（`CoreImageGenEditor` 走通用 settings 绕过了它，但其它插件的配置面缺失）。桌面契约：get 返回 `{name, config, schema, config_schema_path, has_secrets, work_root}`，密钥字段打码；update 按 schema 校验、掩码/空值保留原键 |
-| `plugin.widget.get`、`plugin.widget.invoke` | 右侧栏插件挂件的读取与调用 | 只有 `plugin.widget.list` |
-| `skill.create`、`skill.delete` | 新建/删除技能 | 无（只能 enable/disable）；0.1.16 起该 RPC 会明确抛错，不再假装成功。桌面契约：三字段必填、名字限 `^[A-Za-z0-9._-]+$`、写 `{user_root}/skills/<name>/SKILL.md`（frontmatter 含 name/description）、已存在报错；删除只允许可写技能（prune 目录并清状态） |
+| `plugin.install`、`plugin.uninstall` | 安装/卸载插件 | 无宿主：移动端没有插件加载器（Python 后端/依赖装不进 APK），插件表是内置清单。0.1.16 起该 RPC 明确抛错并在面板显示，不再假装成功 |
+| `plugin.config.get`、`plugin.config.update` | 读/写插件配置（`configSchema` 驱动表单） | **已对齐**（0.1.17）：宿主内嵌 imagegen/websearch 的 `config/schema.jsonc`，`plugin.list` 因此出现配置入口（无 schema 的插件不显示入口）；写入的命名空间就是运行时读取的那个（`core.imagegen` / `core.websearch`），密钥打码/保留与桌面一致 |
+| `plugin.widget.get`、`plugin.widget.invoke` | 右侧栏插件挂件的读取与调用 | 只有 `plugin.widget.list`（返回空）。移动端没有插件 UI 宿主，没有挂件可读；调用会明确抛错 |
+| `skill.create`、`skill.delete` | 新建/删除技能 | **已对齐**（0.1.17）：三字段必填、名字限 `^[A-Za-z0-9._-]+$`、写 `{app_data}/skills/<name>/SKILL.md`（frontmatter 含 name/description）、已存在报错；删除只允许用户技能。该目录同时挂载进每次技能装配，新建后下一轮即可 `load_skill` |
 | `config.loadtools.get`、`config.loadtools.set` | 模式工具集配置 | **已对齐**（0.1.16）：内置模式逐字一致、`source` 区分 builtin/config、`catalog` 来自 `sunday_tool_catalog`（本机真实装配）；运行时按白名单过滤并拒绝越权调用 |
-| `websearch.config.get`、`websearch.config.update` | 搜索内核配置（provider/回退/限额） | 无（Rust 搜索用内置默认值，不可配）。桌面实现是转发到 `plugin.config.*`，schema 在 `plugins/bundled/websearch/config/schema.jsonc` |
+| `websearch.config.get`、`websearch.config.update` | 搜索内核配置（provider/回退/限额） | **已对齐**（0.1.17）：JSONC 文档读写（注释与 URL 里的 `//` 都能过），设置真正进入 Rust 搜索——`provider` + `fallback_providers` 组成与 Python 相同的 `[provider] + fallback` 顺序，`limit`/`timeout` 生效；`proxy_port` 是桌面本地代理字段，移动端忽略 |
 | `websearch.widget.health`、`websearch.widget.snapshot` | 右侧栏搜索健康与快照 | 无 |
 | `rag.docs.search`、`rag.sessions.search` | RAG 检索 | 无（桌面端在无 provider 时也报不可用） |
 | `thread.outline`、`thread/read` | 会话大纲与按条目读取 | 无 |

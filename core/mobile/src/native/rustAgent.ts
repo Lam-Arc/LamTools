@@ -134,6 +134,49 @@ export async function listEmbeddedPluginModeTools(mode: string): Promise<string[
   return await invoke<string[]>('sunday_plugin_mode_tools', { mode })
 }
 
+/** One bundled plugin's config schema, embedded and parsed by the host. */
+export interface EmbeddedPluginSchema {
+  schema: Record<string, unknown>
+  path: string
+}
+
+export async function readEmbeddedPluginSchemas(): Promise<Record<string, EmbeddedPluginSchema>> {
+  if (!hasEmbeddedRustCore()) return {}
+  return await invoke<Record<string, EmbeddedPluginSchema>>('sunday_plugin_schemas')
+}
+
+/** One skill the user created on this device. */
+export interface EmbeddedUserSkill {
+  name: string
+  description: string
+  location: string
+}
+
+export async function listEmbeddedUserSkills(): Promise<EmbeddedUserSkill[]> {
+  if (!hasEmbeddedRustCore()) return []
+  return await invoke<EmbeddedUserSkill[]>('sunday_user_skills')
+}
+
+export async function createEmbeddedUserSkill(input: {
+  name: string
+  description: string
+  content: string
+}): Promise<EmbeddedUserSkill> {
+  return await invoke<EmbeddedUserSkill>('sunday_skill_create', {
+    name: input.name,
+    description: input.description,
+    content: input.content,
+  })
+}
+
+export async function deleteEmbeddedUserSkill(name: string): Promise<EmbeddedUserSkill> {
+  const deleted = await invoke<{ name: string; location: string; deleted: boolean }>(
+    'sunday_skill_delete',
+    { name },
+  )
+  return { name: deleted.name, description: '', location: deleted.location }
+}
+
 /** One tool the mobile agent can actually call, as reported by the runtime. */
 export interface EmbeddedPluginTool {
   name: string
@@ -185,6 +228,7 @@ export async function runEmbeddedSundayTurn(input: {
   disabledSkillNames?: string[]
   disabledPluginNames?: string[]
   imagegenConfig?: Record<string, unknown>
+  websearchConfig?: Record<string, unknown>
   retryConfig?: Record<string, unknown>
   loadContextConfig?: Record<string, unknown>
   context?: {
@@ -232,6 +276,7 @@ export async function runEmbeddedSundayTurn(input: {
       disabledSkillNames: input.disabledSkillNames || [],
       disabledPluginNames: input.disabledPluginNames || [],
       imagegenConfig: input.imagegenConfig || {},
+      websearchConfig: input.websearchConfig || {},
       retryConfig: input.retryConfig || {},
       loadContextConfig: input.loadContextConfig || {},
     },
@@ -258,6 +303,7 @@ export async function resumeEmbeddedSundayTurn(input: {
   disabledSkillNames?: string[]
   disabledPluginNames?: string[]
   imagegenConfig?: Record<string, unknown>
+  websearchConfig?: Record<string, unknown>
   retryConfig?: Record<string, unknown>
   loadContextConfig?: Record<string, unknown>
 }): Promise<RustTurnProgress> {
@@ -286,6 +332,7 @@ export async function resumeEmbeddedSundayTurn(input: {
       disabledSkillNames: input.disabledSkillNames || [],
       disabledPluginNames: input.disabledPluginNames || [],
       imagegenConfig: input.imagegenConfig || {},
+      websearchConfig: input.websearchConfig || {},
       retryConfig: input.retryConfig || {},
       loadContextConfig: input.loadContextConfig || {},
     },
