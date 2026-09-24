@@ -165,4 +165,50 @@ describe('standalone reachable RPCs', () => {
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2))
     await vi.waitFor(async () => expect((await transport.request<any>({ method: 'thread/resume', params: { thread_id: thread.id } })).snapshot.queue).toHaveLength(0))
   })
+
+  it('answers an idle queue/create with the queue envelope and sends the message', async () => {
+    const repo = createLocalRepository(new MemoryDatabase())
+    const config = new StandaloneConfigStore(new MemorySecureStorage())
+    await config.handleRpc('config.provider.create', { name: 'Test', api_key: 'secret', models: [{ model_id: 'm1' }] })
+    await repo.init()
+    const thread = await repo.createLocalSession()
+    const run = vi.fn().mockResolvedValue({ text: 'done', runtimeModelId: 'm1', toolRounds: 0 })
+    const transport = new StandaloneTransport(repo, config, run)
+
+    const response = await transport.request<any>({ method: 'queue/create', params: {
+      thread_id: thread.id, input: [{ type: 'text', text: 'hello' }],
+    } })
+    // This used to answer with turn/start's {accepted, turn_id, revision}, which
+    // is another method's contract applied as a queue response.
+    expect(response.accepted).toBeUndefined()
+    expect(typeof response.queue_item_id).toBe('string')
+    expect(Array.isArray(response.snapshot.queue)).toBe(true)
+
+    // With nothing running there is no dispatcher to wait for, so the item must
+    // have gone out by the time the call answers.
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1))
+    await vi.waitFor(async () => {
+      const snapshot = await repo.loadThreadSnapshot(thread.id)
+      expect(snapshot?.status).toBe('completed')
+      expect(snapshot?.queue || []).toHaveLength(0)
+    })
+    expect(String(run.mock.calls[0][0].history.at(-1)?.content)).toContain('hello')
+  })
+
+  it('refuses to steer a thread with no active turn', async () => {
+    const repo = createLocalRepository(new MemoryDatabase())
+    const config = new StandaloneConfigStore(new MemorySecureStorage())
+    await config.handleRpc('config.provider.create', { name: 'Test', api_key: 'secret', models: [{ model_id: 'm1' }] })
+    await repo.init()
+    const thread = await repo.createLocalSession()
+    const run = vi.fn().mockResolvedValue({ text: 'done', runtimeModelId: 'm1', toolRounds: 0 })
+    const transport = new StandaloneTransport(repo, config, run)
+
+    await expect(transport.request({ method: 'turn/steer', params: {
+      thread_id: thread.id, turn_id: 'turn-that-never-existed', input: [{ type: 'text', text: 'steer' }],
+    } })).rejects.toThrow('当前轮次已结束，无法引导')
+    // A refused steer must not have queued or sent anything.
+    expect(run).not.toHaveBeenCalled()
+    expect((await repo.loadThreadSnapshot(thread.id))?.queue || []).toHaveLength(0)
+  })
 })

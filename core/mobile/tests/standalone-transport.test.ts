@@ -1628,6 +1628,26 @@ describe('StandaloneTransport', () => {
     expect(bindings[0].params).toEqual(expect.objectContaining({ kind: 'map', session_id: first.session_id }))
   })
 
+  it('opens one Study session when two calls race for the same scope', async () => {
+    const repository = createLocalRepository(new MemoryDatabase())
+    const study = fakeStudy()
+    const transport = new StandaloneTransport(
+      repository, new StandaloneConfigStore(new MemorySecureStorage()),
+      undefined, undefined, undefined, study.call,
+    )
+
+    // Both taps start before either has written anything: the check-then-create
+    // used to run twice, and the loser left an orphan session behind.
+    const [first, second] = await Promise.all([
+      transport.request<Record<string, unknown>>({ method: 'study.session', params: { kind: 'node', id: 'node-1' } }),
+      transport.request<Record<string, unknown>>({ method: 'study.session', params: { kind: 'node', id: 'node-1' } }),
+    ])
+    expect(second.session_id).toBe(first.session_id)
+    await expect(repository.listSessions()).resolves.toEqual([
+      expect.objectContaining({ metadata: expect.objectContaining({ study_scope: 'node', study_node_id: 'node-1' }) }),
+    ])
+  })
+
   it('reads the graph from the shared runtime instead of returning empty data', async () => {
     const repository = createLocalRepository(new MemoryDatabase())
     const study = fakeStudy()

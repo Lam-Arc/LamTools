@@ -151,6 +151,8 @@ export class StandaloneTransport implements LamToolsTransport {
   private readonly generations = new Map<string, number>()
   private readonly snapshotSaves = new Map<string, Promise<void>>()
   private readonly snapshotRecoveries = new Map<string, Promise<void>>()
+  /** In-flight Study scope opens, so a double tap cannot create two sessions. */
+  private readonly studySessionOpens = new Map<string, Promise<Record<string, unknown>>>()
   private readonly activeStageListeners = new Map<string, () => void>()
   private readonly activeStreamListeners = new Map<string, () => void>()
   private readonly activeSnapshots = new Map<string, SnapshotWithSession>()
@@ -393,11 +395,37 @@ export class StandaloneTransport implements LamToolsTransport {
       throw new Error('Study session scope must be map, notes or node')
     }
     let subjectId = String(params.node_id || params.id || (kind === 'notes' ? 'notes' : 'map'))
-    let nodeName = ''
     if (kind === 'node') {
       if (!subjectId || subjectId.length > 512 || /[\u0000-\u001f]/.test(subjectId)) {
         throw new Error('Invalid Study node id')
       }
+    } else {
+      subjectId = kind === 'notes' ? 'notes' : 'map'
+    }
+    // Opening a scope is check-then-create, and the check awaits the store. Two
+    // taps on the same node used to run both halves twice: both saw no session,
+    // both created one, and the caller kept whichever id won while the other
+    // session stayed behind. One in-flight open per scope; the wait covers the
+    // node lookup as well as the write.
+    const key = `${kind}:${subjectId}`
+    const inFlight = this.studySessionOpens.get(key)
+    if (inFlight) return await inFlight
+    const opening = this.createStudySession(kind, subjectId, params)
+    this.studySessionOpens.set(key, opening)
+    try {
+      return await opening
+    } finally {
+      if (this.studySessionOpens.get(key) === opening) this.studySessionOpens.delete(key)
+    }
+  }
+
+  private async createStudySession(
+    kind: string,
+    subjectId: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    let nodeName = ''
+    if (kind === 'node') {
       const node = await this.callStudy<{ node?: Record<string, unknown> }>({
         method: 'study.get',
         params: { node_id: subjectId },
@@ -406,8 +434,6 @@ export class StandaloneTransport implements LamToolsTransport {
       if (payload.deleted_at) throw new Error(`Unknown node: ${subjectId}`)
       if (payload.learnable === false) throw new Error('GROUP_HAS_NO_SESSION')
       nodeName = String(payload.name || '')
-    } else {
-      subjectId = kind === 'notes' ? 'notes' : 'map'
     }
 
     const sessions = await this.repository.listSessions()
@@ -588,7 +614,6 @@ export class StandaloneTransport implements LamToolsTransport {
       const input = Array.isArray(params.input) ? params.input as CoreAppInputItem[] : []
       if (!input.length) throw new Error('发送内容不能为空')
       if (method === 'turn/steer' && (!active || active.turn_id !== params.turn_id)) throw new Error('当前轮次已结束，无法引导')
-      if (!active && method === 'queue/create') return await this.startTurn(params)
       const queued = {
         queue_item_id: globalThis.crypto?.randomUUID?.() || `queue-${Date.now()}`,
         status: 'queued', mode: method === 'turn/steer' ? 'steer_after_turn' : 'next_turn',
@@ -599,6 +624,15 @@ export class StandaloneTransport implements LamToolsTransport {
       else queue.push(queued)
       await this.saveSnapshot(snapshot)
       this.emitSnapshot(snapshot)
+      if (!active) {
+        // Nothing is running, so this item is dispatched here and now: the native
+        // host has no idle dispatcher, and a message left in the queue looks like
+        // a send that went nowhere. When no turn is running this used to answer
+        // with turn/start's shape instead of this method's, which the caller
+        // applies as a queue response either way — one message, two contracts.
+        await this.dispatchQueued(threadId)
+        return { snapshot, queue_item_id: queued.queue_item_id }
+      }
       return {
         snapshot, queue_item_id: queued.queue_item_id,
         ...(method === 'turn/steer' ? { applied: false, queued: true, reason: 'native_turn_cannot_steer_live' } : {}),

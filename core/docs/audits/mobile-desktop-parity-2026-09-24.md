@@ -189,6 +189,63 @@ Rust 只支持 `command` / `http` / `prompt` 三种处理器；`command` 在移�
 
 修复：`snapshotFor` 先看活快照；该线程存在 running/waiting 回合时，这个对象就是状态的所有者（与桌面「服务器持有运行中回合、resume 从它回答」同形），只把新读到的会话元数据合并上去。没有在跑回合的线程仍走库。回归测试覆盖原路径。
 
+## 行为审计补充（8 条，0.1.24–0.1.28 修复）
+
+上面各节对照的是「移动端有没有这个能力」——方法面、路由、工具清单、面板数据源。它看不见**已存在代码内部**的行为缺陷：常量、线上形状、错误与取消路径、竞态、失效注释。真机按严重度报出 8 条，全部落在这一层。
+
+### P1-1 应用内「检查更新」必然失败（0.1.26）
+
+- 根因：客户端固定请求 `https://47.114.43.99.nip.io/downloads/mobile-update.json`（`StandaloneUpdate.ts`），而该文件从未上线——发版流程只 bump 本地 `core/mobile/update-manifest.json`，`deploy.py`、`site_deploy.py`、`verify_public.py` 都不生成、不上传、不校验它，连续 10 个版本如此。2026-09-24 的服务器预检仍打印 `no update manifest published`。
+- 修复：0.1.24 起把清单作为发布步骤——内容由**构建出的 APK 元数据**生成（`aapt` 读回 versionName），与仓库副本比对（不一致即中止），随 APK 用同一把受限密钥上传并原子安装；`verify_public.py` 断言清单 200、版本等于本次发布、字节哈希一致、`download_url` 200 且长度等于本次 APK。0.1.26 补齐客户端：所有失败自述地址（HTTP 状态、不可达/超时、非 JSON、三项内容校验），非对象 body 不再以 `TypeError` 形式出现。
+- 证据：`core/mobile/artifacts/release-1024/RELEASE.md`（首次上线）、`release-1026/RELEASE.md`（客户端）。发布后用**线上函数**跑真实地址：已装 0.1.26 → `up_to_date`，已装 0.1.0 → `update_available`（latest 0.1.26 + APK 地址）。
+- 残留：地址是编译期常量，换域名需重新发版。
+
+### P1-2 工具轮次硬上限把整轮判为失败（0.1.24）
+
+- 根因：`runtime-rs/src/lib.rs` 的 `MAX_TOOL_ROUNDS = 8` 与 `RuntimeError::ToolLimit`——第 9 轮工具调用直接 `return Err`，连同 `TurnContinuation` 一起丢弃：8 轮工具结果、第 9 轮模型输出、`runtime_history` 全部蒸发。桌面 Python kernel 无此上限（`kernel/loop.py` 明说不设步数预算）。
+- 修复：删掉常量与错误变体；按桌面语义实现两道基于证据的闸门——纯工具轮计数（桌面 `max_tool_only_rounds_without_progress`，默认 8，达阈值后每轮注入桌面原文 `[TOOL_PROGRESS_REQUIRED]`，模型说话即归零），以及重复结果停止（桌面 `max_identical_tool_results` 10/窗口 12，指纹 = 工具名 + 精确参数 + 精确结果的 SHA-256）。桌面在重复处**暂停等用户**，移动端没有暂停面，改为**可恢复收尾**：不报错、不丢消息、原因进 `runtime_warnings`（transcript 已有展示路径），并给模型一次不带工具的收尾请求。两个阈值都可由 `TurnOptions` 调整（缺省 = 桌面默认，0 = 关闭）。
+- 证据：runtime-rs 146 项（新增 4 项：12 连纯工具轮全部执行且历史完整、闸门正好落在第 8–12 轮且被叙述轮归零、重复 10 次后停止且 10 轮完整 + 1 条告警 + 最后一次请求无工具、阈值默认与关闭）；注入文案与 `kernel/loop.py` 字面量逐字节一致。
+- 残留：桌面还有一层「进度回复不完整则再要求」的校验（`TOOL_PROGRESS_INCOMPLETE`）未移植；重复停止按「轮末窗口计数」评估，与桌面「逐结果即停」在极端混合批次上略有差异。
+
+### P2-3 取消 / 失败一次后整条会话上下文退化为纯文本（0.1.25）
+
+- 根因：`conversationMessages` 只在「最近一个已结束回合是 completed 且正是它写的库」时才用持久化的 `rust_runtime_history`，否则回退到只认 `userMessage`/`agentMessage` 的 item 投影——工具调用与结果静默丢弃；而 `persistRuntimeState` 只在成功路径调用，于是一次取消或失败就抹掉整条会话的工具上下文。
+- 修复：门槛改为「写它的那个回合仍是本会话的 completed 回合」；该回合之后各回合的消息（用户内容与**已完成**的回答）按 seq 顺序补上。持久化历史写在源回合结束时、不可能包含更晚回合，所以不会重复；竞态测试（取消回合在写库途中落盘）保持原期望。
+- 证据：两轮会话断言完整数组；对旧实现 stash 后重跑，两个新测试分别给出 5 条（缺工具步）与 5 条（含错误文案）而失败。
+
+### P2-4 附件走 JSON 数字数组、历史图片每轮重读（0.1.27）
+
+- 根因：`sunday_attachment_save/read` 的 `bytes: Vec<u8>` 走 JSON 数字数组（50 MiB → 150+ MB 文本），TS 侧再 `Array.from`/`Uint8Array.from` 转一遍；`hydrateImageMessages` 在每个回合、每次审批续传都重读历史里**所有**图片（`nativeAttachments.read` + base64），无缓存。
+- 修复：两条命令改 `dataBase64`（与 `sunday_artifact_file`、`project_file_read_raw` 同形；命令面上已无 `Vec<u8>`），客户端对外签名保持 `Uint8Array`（调用方零改动），50 MiB 限制改为按解码后长度判断；附件正文按 id 有界缓存（32 MiB，最旧淘汰，`delete` 与再次 `save` 都正确失效）。
+- 证据：上传后下载不再读盘、两轮之间同一图片只读一次两条测试；三处钉旧协议的断言随线上形状更新。
+- 残留：未引入 `tauri::ipc::Response` 裸字节通道（base64 是本仓既有形状，50 MiB 最坏情形从约 4 倍降到约 1.33 倍）。
+
+### P3-5 Workflow 模式入口被失效注释挡住（0.1.28）
+
+- 根因：`StandaloneExtensionsStore.ts` 注释写「native host has no Workflow RPC/backend yet」，而 RPC 与 Rust 后端早已存在。
+- 处理（按你的决定：继续隐藏）：注释改为如实描述——已实现 list/list_grouped/create/get/document.get/save/compile/semantic/import.comfyui/export.comfyui/run/cancel/rename/expose/unexpose/object_info/activation.list/queue.*/human_task.list/delete；缺 `workflow.tools.list`，`activate`/`deactivate` 需 Arrange 调度器，`human_task.get|complete|timeout`/`signal` 需完整执行后端，`pause`/`resume` 需可暂停 runner。入口保持关闭，`standalone-extensions.test.ts` 的「workflow 模式不出现」断言不变。
+
+### P3-6 失败轮次的错误文案作为 assistant 消息回灌（0.1.25）
+
+- 根因：同一处投影只跳过 `cancelled`、不跳过 `failed`，于是上一轮错误文案（如 `工具调用轮次已达上限`）被当成模型说过的话喂回下一轮。
+- 修复：投影同时跳过 failed，且**只**影响模型历史——用户仍看得到失败（测试断言快照里 failed item 仍在）。
+
+### P3-7 空闲时 `queue/create` 返回另一个方法的形状（0.1.28）
+
+- 根因：没有活跃回合时 `queue/create` 直接 `return await this.startTurn(params)`，返回 `turn/start` 的 `{accepted, turn_id, revision}`，而共享 UI 的 `queueInput` 按 queue 响应处理（桌面 `queue/create` 永远入队并返回 `{queue_item, events, snapshot}`）。
+- 修复：一律先入队，空闲时立即 `dispatchQueued`（移动端没有空闲派发器，留在队列里的消息看起来像发送丢失），返回本方法的 `{snapshot, queue_item_id}` 信封；派发失败仍由 `dispatchQueued` 把消息放回队列。
+- 证据：新测试断言应答无 `accepted`、有 `queue_item_id`，返回时消息已作为回合发出且队列已空；对旧实现该测试失败（`expected true to be undefined`）。`turn/steer` 在无活跃回合时拒绝的测试在新旧实现下都通过（守卫本就存在），保留为契约覆盖。
+
+### P3-8 `openStudySession` 先查后建且无锁（0.1.28）
+
+- 根因：查（`listSessions`）→ 建（`createLocalSession`）之间隔着 await，两次点同一个节点会各建一个会话，调用方拿到其中一个，另一个成为孤儿。
+- 修复：按 `${kind}:${subjectId}` 在途去重（覆盖 `study.get` 的 await），完成后释放；节点校验前置到去重之前，语义与错误文案不变。
+- 证据：`Promise.all` 并发两次 `study.session`，断言只建一个会话且两个 `session_id` 相同；对旧实现该测试给出两个不同 id 而失败。
+
+### 结论：为什么「能力对齐」没看出这 8 条
+
+对齐核查的输入是**面**（方法是否存在、路由是否注册、工具是否在清单里），输出是「移动端有没有」。这 8 条全部发生在**已经存在**的代码内部：一个常量、一个线上形状、一个失败分支、一次 await 间的竞态、一条没跟着实现走的注释。面核查发现不了它们，而当时的验证也只到「测试全绿 + 包能装」，没有真机跑一条会触发这些路径的任务。后续同类审计应把「行为契约」（阈值 / 形状 / 错误与取消路径 / 并发）作为独立一层，并要求每条都有能对着旧实现失败的回归测试。
+
 ## 核查覆盖度
 
 已完成：桌面完整方法面（164）、UI 契约与面板归位、核心工具集、MCP 语义、Hook 类型、技能数量与文本引用、

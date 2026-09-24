@@ -279,8 +279,20 @@ export class StandaloneExtensionsStore {
       return {
         modes: [
           ...(enabled('study') ? [{ id: 'study', pluginId: 'study', plugin_id: 'study', title: 'Study', icon: 'book-open', capabilities: ['notes'] }] : []),
-          // The native host has no Workflow RPC/backend yet. Keep the plugin
-          // catalog entry for configuration, but do not expose a broken mode.
+          // Workflow is not offered as a mode here, and the reason is not a
+          // missing backend — this comment used to say that and it was wrong.
+          // The RPC and the Rust store exist and work: list, list_grouped,
+          // create, get, document.get, document.save, compile, semantic,
+          // import.comfyui, export.comfyui, run, cancel, rename, expose,
+          // unexpose, object_info/node_types, activation.list, queue.enqueue/
+          // list/history/get/cancel/clear, human_task.list and delete. What is
+          // missing is the rest of what the mode promises the model:
+          // `workflow.tools.list` has no mobile answer, `activate`/`deactivate`
+          // need the Arrange scheduler, `human_task.get|complete|timeout` and
+          // `signal` need the full execution backend, and `pause`/`resume` need
+          // a runner that can be paused. Opening the mode would advertise tools
+          // this host refuses, so the entry stays closed on purpose — see
+          // core/docs/audits/mobile-desktop-parity-2026-09-24.md.
         ],
         widgets: [],
       }
