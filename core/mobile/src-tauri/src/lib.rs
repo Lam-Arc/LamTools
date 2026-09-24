@@ -754,6 +754,36 @@ fn sunday_study_skill_catalog() -> Vec<StudySkillRecord> {
 ///
 /// Derived from the manifests and the runtimes this host actually assembles, so
 /// the panel cannot advertise a tool the agent would refuse to run.
+/// The project's AGENTS.md, the same file the desktop project panel edits.
+/// The desktop serves it under ; the mobile host has
+/// no HTTP server for the WebView, so the transport exposes this command on that
+/// path instead. The path is validated by [].
+/// The project's AGENTS.md, the same file the desktop panel edits.
+#[tauri::command]
+async fn project_agents_md(
+    app: tauri::AppHandle,
+    project_id: String,
+    content: Option<String>,
+) -> Result<Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let root = native_project_root(&app, &project_id)?;
+        let target = safe_project_relative_path(&root, "AGENTS.md", false)?;
+        if let Some(content) = content {
+            std::fs::write(&target, content.as_bytes()).map_err(|error| error.to_string())?;
+            return Ok(serde_json::json!({"content": content, "exists": true}));
+        }
+        match std::fs::read_to_string(&target) {
+            Ok(existing) => Ok(serde_json::json!({"content": existing, "exists": true})),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(serde_json::json!({"content": "", "exists": false}))
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 fn sunday_plugin_inventory() -> Vec<lamtools_runtime::plugin_catalog::PluginInventory> {
     lamtools_runtime::plugin_catalog::bundled_plugin_inventory()
@@ -2716,6 +2746,7 @@ pub fn run() {
         sunday_study_rpc,
         sunday_study_skill_catalog,
         sunday_plugin_inventory,
+        project_agents_md,
         sunday_workflow_rpc,
         load_legacy_mobile_state,
         local_state_read,
@@ -2746,6 +2777,7 @@ pub fn run() {
         sunday_study_rpc,
         sunday_study_skill_catalog,
         sunday_plugin_inventory,
+        project_agents_md,
         sunday_workflow_rpc,
         load_legacy_mobile_state,
         local_state_read,

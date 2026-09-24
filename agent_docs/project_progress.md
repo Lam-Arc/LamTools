@@ -9,6 +9,22 @@ and the opaque Relay tunnel.
 
 ## Overall Progress
 
+**Active goal (2026-09-24): 移动端与桌面端功能对齐。** 依据
+`core/docs/audits/mobile-desktop-parity-2026-09-24.md`，桌面 164 个操作中共享 UI 调用 88 个，移动端
+曾有 28 个未实现，另有核心工具集、HTTP 路由与整块子系统缺口。按批次推进，每批一个版本、逐批出包：
+
+1. ✅ 0.1.14 核心工具：`edit_file`、`search_files`、`search_content`、`web_fetch`
+2. ⏳ HTTP：`/projects/{id}/files/raw`、`files/content`、`agents-md`
+3. ⏳ 配置面：`config.loadtools`、`skill.create/delete`、`websearch.config.*`/`widget.*`、`plugin.config.*`/`install`/`uninstall`/`widget.get`/`invoke`
+4. ⏳ artifact 存储（含版本/回滚/打开）与 Goal 存储
+5. ⏳ 会话检查点 / fork / rollback
+6. ⏳ `write_checklist`、`update_checklist`、`question` 工具与工具命名对齐
+7. ⏳ Office 渲染（或在移动端改写依赖 CLI 的技能）
+8. ⏳ 切会话丢过程（会话状态归属分裂）
+
+不做的：git 工具（用户决定）、workflow 工具（用户决定）、桌面宠物、CLI 本身（移动端无 CLI）。
+
+
 The shared-UI and multi-transport architecture has substantial existing
 implementation, but the current Rust/mobile refactor is still incomplete.
 Desktop and mobile work must be tracked against the active Rust migration
