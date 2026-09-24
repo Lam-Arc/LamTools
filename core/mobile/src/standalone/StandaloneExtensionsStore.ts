@@ -243,11 +243,18 @@ export class StandaloneExtensionsStore {
     }
   }
 
-  async runtimeSkills(): Promise<{ studyEnabled: boolean; disabledSkillNames: string[] }> {
+  async runtimeSkills(): Promise<{
+    studyEnabled: boolean
+    disabledSkillNames: string[]
+    disabledPluginNames: string[]
+  }> {
     const state = await this.load()
     return {
       studyEnabled: !state.disabledPlugins.includes('study'),
       disabledSkillNames: [...state.disabledSkills],
+      // Plugin switches must reach the runtime, otherwise the panel offers a
+      // control that changes nothing.
+      disabledPluginNames: [...state.disabledPlugins],
     }
   }
 

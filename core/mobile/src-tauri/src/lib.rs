@@ -16,6 +16,7 @@ use lamtools_runtime::{
     },
     workflow_ops,
     workflow_store::WorkflowStore,
+    web_search::WebSearchTools,
     AgentContext, AgentRuntime, ApprovalResponse, DeviceCapabilities, Message, ModelBackend,
     ToolCall, ToolObserver, ToolRuntime, TurnContinuation, TurnOptions, TurnProgress, TurnRequest,
 };
@@ -698,6 +699,10 @@ struct MobileTurnPayload {
     study_tools: bool,
     #[serde(default)]
     disabled_skill_names: Vec<String>,
+    /// Bundled plugins the user switched off. Plugin tools must respect it, or
+    /// the switch would be a control that changes nothing.
+    #[serde(default)]
+    disabled_plugin_names: Vec<String>,
 }
 
 #[tauri::command]
@@ -827,8 +832,18 @@ async fn sunday_agent_turn_inner(
         context.mode_context.push_str("\n\n");
         context.mode_context.push_str(&skill_prompt);
     }
+    // Web search needs only the network, and the desktop host offers it in Study
+    // sessions too, so it is not gated on the Study workspace. The runtime drops
+    // the definition when the device reports no network.
     let mut shared_tools: Vec<Arc<dyn ToolRuntime>> =
         vec![project_runtime, mcp_runtime, skill_runtime];
+    if !payload
+        .disabled_plugin_names
+        .iter()
+        .any(|name| name == "websearch")
+    {
+        shared_tools.push(Arc::new(WebSearchTools::new()));
+    }
     if payload.study_tools {
         shared_tools.push(Arc::new(StudyTools::new(native_study_store(&app)?)));
     }
@@ -981,6 +996,10 @@ struct MobileResumePayload {
     study_tools: bool,
     #[serde(default)]
     disabled_skill_names: Vec<String>,
+    /// Bundled plugins the user switched off. Plugin tools must respect it, or
+    /// the switch would be a control that changes nothing.
+    #[serde(default)]
+    disabled_plugin_names: Vec<String>,
 }
 
 #[tauri::command]
@@ -1073,8 +1092,18 @@ async fn sunday_agent_resume_inner(
             Vec::new(),
         ))
     };
+    // Web search needs only the network, and the desktop host offers it in Study
+    // sessions too, so it is not gated on the Study workspace. The runtime drops
+    // the definition when the device reports no network.
     let mut shared_tools: Vec<Arc<dyn ToolRuntime>> =
         vec![project_runtime, mcp_runtime, skill_runtime];
+    if !payload
+        .disabled_plugin_names
+        .iter()
+        .any(|name| name == "websearch")
+    {
+        shared_tools.push(Arc::new(WebSearchTools::new()));
+    }
     if payload.study_tools {
         shared_tools.push(Arc::new(StudyTools::new(native_study_store(&app)?)));
     }

@@ -21,6 +21,7 @@ pub mod skills;
 pub mod study;
 pub mod study_skills;
 pub mod sub_agent;
+pub mod web_search;
 pub mod workflow_data_packet;
 pub mod workflow_document;
 pub mod workflow_ops;

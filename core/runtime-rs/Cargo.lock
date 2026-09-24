@@ -681,7 +681,9 @@ name = "lamtools-runtime"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "chrono",
+ "regex-lite",
  "reqwest",
  "rusqlite",
  "serde",
@@ -898,6 +900,12 @@ checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
 dependencies = [
  "rand_core",
 ]
+
+[[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
 name = "reqwest"

@@ -23,7 +23,12 @@ describe('standalone bundled extensions', () => {
     ]))
     await store.handleRpc('skill.disable', { name: 'teach' })
     await store.handleRpc('plugin.disable', { name: 'study' })
-    expect(await store.runtimeSkills()).toEqual({ studyEnabled: false, disabledSkillNames: ['teach'] })
+    // The plugin switch has to reach the runtime, not just the panel.
+    expect(await store.runtimeSkills()).toEqual({
+      studyEnabled: false,
+      disabledSkillNames: ['teach'],
+      disabledPluginNames: ['study'],
+    })
     expect((await store.handleRpc('skill.list', {}))!.skills).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'teach', enabled: false }),
       expect.objectContaining({ name: 'curate-notes', enabled: false }),

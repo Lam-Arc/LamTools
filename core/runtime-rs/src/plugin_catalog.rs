@@ -130,7 +130,7 @@ pub fn bundled_plugin_inventory() -> Vec<PluginInventory> {
         entry(
             "websearch",
             WEBSEARCH_TOOLS,
-            &[],
+            &["web_search"],
             "移动端未装配：搜索内核尚未移植到 Rust",
         ),
         entry(
@@ -169,9 +169,36 @@ mod tests {
     }
 
     #[test]
+    fn assembled_web_search_matches_the_runtime_definitions() {
+        use crate::web_search::WebSearchTools;
+        use crate::ToolRuntime;
+        let inventory = bundled_plugin_inventory();
+        let entry = inventory
+            .iter()
+            .find(|item| item.plugin == "websearch")
+            .expect("websearch entry");
+        let runtime: Vec<String> = WebSearchTools::new()
+            .definitions(&crate::DeviceCapabilities {
+                network: true,
+                ..Default::default()
+            })
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        let reported: Vec<String> = entry
+            .assembled
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect();
+        assert_eq!(reported, runtime);
+        assert_eq!(entry.declared_count, 1);
+        assert!(entry.note.is_empty());
+    }
+
+    #[test]
     fn unavailable_plugins_report_no_tools_and_a_reason() {
         let inventory = bundled_plugin_inventory();
-        for name in ["git", "imagegen", "websearch", "workflow"] {
+        for name in ["git", "imagegen", "workflow"] {
             let item = inventory
                 .iter()
                 .find(|entry| entry.plugin == name)
