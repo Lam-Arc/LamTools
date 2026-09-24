@@ -6,8 +6,15 @@ import type {
   StandaloneRuntimeModel,
 } from '../standalone/StandaloneConfigStore'
 
+export interface RustAgentImage {
+  attachment_id: string
+  mime_type: string
+  data_base64?: string
+}
+
 export type RustAgentMessage =
   | { role: 'system' | 'user'; content: string }
+  | { role: 'user_multimodal'; content: string; images: RustAgentImage[] }
   | { role: 'assistant'; content: string; providerState?: unknown }
   | { role: 'assistant_tool_calls'; calls: unknown[]; providerState?: unknown }
   | { role: 'tool'; tool_call_id: string; name?: string; content: string }
@@ -21,6 +28,7 @@ export interface RustTurnResult {
   sessionApprovedTools?: string[]
   hookAuditEvents?: unknown[]
   hookStatusMessages?: string[]
+  runtimeWarnings?: string[]
   runtimeHistory?: RustAgentMessage[]
   compaction?: {
     originalTokens: number
@@ -58,9 +66,16 @@ export interface RustTurnContinuation {
   messages: unknown[]
   capabilities: Record<string, unknown>
   options: Record<string, unknown>
+  context?: {
+    globalInstructions?: string
+    projectInstructions?: string
+    memory?: string
+    modeContext?: string
+  }
   hookContext?: Record<string, unknown>
   hookAuditEvents?: unknown[]
   hookStatusMessages?: string[]
+  runtimeWarnings?: string[]
   toolRounds: number
   pendingCalls: unknown[]
   nextCallIndex: number
@@ -76,12 +91,29 @@ export interface EmbeddedProjectFile {
 }
 
 export interface EmbeddedProjectFileEntry {
-  path: string
+  name: string
+  type: 'directory' | 'file'
   size: number
+  ext: string
+}
+
+export interface EmbeddedProjectDirectoryListing {
+  path: string
+  entries: EmbeddedProjectFileEntry[]
 }
 
 export function hasEmbeddedRustCore(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+export interface EmbeddedStudySkill {
+  name: string
+  description: string
+  location: string
+}
+
+export async function listEmbeddedStudySkills(): Promise<EmbeddedStudySkill[]> {
+  return await invoke<EmbeddedStudySkill[]>('sunday_study_skill_catalog')
 }
 
 export async function runEmbeddedSundayTurn(input: {
@@ -107,6 +139,9 @@ export async function runEmbeddedSundayTurn(input: {
   contextCompaction?: { retained_steps?: number }
   subAgent?: { enabled?: boolean; guide?: string }
   study?: { enabled?: boolean }
+  disabledSkillNames?: string[]
+  retryConfig?: Record<string, unknown>
+  loadContextConfig?: Record<string, unknown>
   context?: {
     globalInstructions?: string
     projectInstructions?: string
@@ -147,6 +182,9 @@ export async function runEmbeddedSundayTurn(input: {
       subAgentEnabled: input.subAgent?.enabled !== false,
       subAgentGuide: String(input.subAgent?.guide || ''),
       studyTools: input.study?.enabled === true,
+      disabledSkillNames: input.disabledSkillNames || [],
+      retryConfig: input.retryConfig || {},
+      loadContextConfig: input.loadContextConfig || {},
     },
   })
 }
@@ -168,6 +206,9 @@ export async function resumeEmbeddedSundayTurn(input: {
   dreaming?: { enabled?: boolean; min_turns?: number }
   subAgent?: { enabled?: boolean; guide?: string }
   study?: { enabled?: boolean }
+  disabledSkillNames?: string[]
+  retryConfig?: Record<string, unknown>
+  loadContextConfig?: Record<string, unknown>
 }): Promise<RustTurnProgress> {
   return await invoke<RustTurnProgress>('sunday_agent_resume', {
     payload: {
@@ -191,6 +232,9 @@ export async function resumeEmbeddedSundayTurn(input: {
       subAgentEnabled: input.subAgent?.enabled !== false,
       subAgentGuide: String(input.subAgent?.guide || ''),
       studyTools: input.study?.enabled === true,
+      disabledSkillNames: input.disabledSkillNames || [],
+      retryConfig: input.retryConfig || {},
+      loadContextConfig: input.loadContextConfig || {},
     },
   })
 }
@@ -261,6 +305,7 @@ function rustProvider(provider: StandaloneProvider, model: StandaloneModel, apiK
     baseUrl: provider.base_url,
     apiKey,
     apiModelId: model.model_id,
+    notes: model.notes || '',
     maxOutputTokens: model.max_output_tokens,
     temperature: model.temperature,
     providerName: provider.name,
@@ -291,6 +336,12 @@ export async function listEmbeddedProjectFiles(
   return await invoke<EmbeddedProjectFileEntry[]>('project_file_list', { projectId, path })
 }
 
+export async function browseEmbeddedProjectDirectory(
+  path = '',
+): Promise<EmbeddedProjectDirectoryListing> {
+  return await invoke<EmbeddedProjectDirectoryListing>('project_directory_browse', { path })
+}
+
 export async function readEmbeddedProjectFile(
   projectId: string,
   path: string,
@@ -317,6 +368,7 @@ export interface EmbeddedStudyCall {
     model: StandaloneModel
     apiKey: string
   }
+  retryConfig?: Record<string, unknown>
 }
 
 /**
@@ -339,6 +391,7 @@ export async function callEmbeddedStudy<T = Record<string, unknown>>(
         provider: call.provider
           ? rustProvider(call.provider.provider, call.provider.model, call.provider.apiKey)
           : undefined,
+        retryConfig: call.retryConfig || {},
       },
     })
   } catch (cause) {

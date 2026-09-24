@@ -6,6 +6,8 @@ import { createLocalRepository, type LocalState } from '../src/storage'
 import { MemorySecureStorage } from '../src/native/secureStorage'
 import { createStandaloneProjectClient } from '../src/standalone/StandaloneProjectClient'
 import { StandaloneConfigStore } from '../src/standalone/StandaloneConfigStore'
+import { StandaloneExtensionsStore } from '../src/standalone/StandaloneExtensionsStore'
+import { MemoryStandaloneStateStorage } from '../src/standalone/StandaloneStateStorage'
 import { StandaloneTransport, type StudyCall } from '../src/standalone/StandaloneTransport'
 
 class MemoryDatabase implements LocalDatabase<LocalState> {
@@ -212,6 +214,39 @@ describe('StandaloneTransport', () => {
     })
     expect(await repository.listProjects()).toHaveLength(1)
     expect(await repository.listSessions(created.project.id)).toHaveLength(1)
+  })
+
+  it.each([
+    { label: 'a thinking model uses the desktop default', thinking_supported: true, expected: 'max' },
+    { label: 'a model without thinking support stays off', thinking_supported: false, expected: 'off' },
+  ])('$label when the caller chose nothing', async ({ thinking_supported, expected }) => {
+    const repository = createLocalRepository(new MemoryDatabase())
+    const config = new StandaloneConfigStore(new MemorySecureStorage())
+    await config.handleRpc('config.provider.create', {
+      name: 'Test',
+      api_type: 'openai',
+      base_url: 'https://model.invalid/v1',
+      api_key: 'secret',
+      models: [{ model_id: 'level-model', display_name: 'Level Model', thinking_supported }],
+    })
+    const runAgent = vi.fn(async () => ({
+      text: 'ok', runtimeModelId: 'level-model', toolRounds: 0,
+    }))
+    const projectClient = createStandaloneProjectClient(repository)
+    const created = await projectClient.create({ name: '手机项目', work_root: '' })
+    const transport = new StandaloneTransport(repository, config, runAgent)
+    await transport.connect()
+    await transport.request({ method: 'initialize', params: {} })
+
+    await transport.request({
+      method: 'turn/start',
+      params: { thread_id: created.session.id, input: [{ type: 'text', text: '你好' }] },
+    })
+
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalled())
+    // Mobile has no level picker, so it must follow the desktop resolution
+    // instead of silently disabling thinking on every turn.
+    expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({ reasoningLevel: expected }))
   })
 
   it('shows bounded native text and reasoning deltas, resets provisional output, then trusts the final result', async () => {
@@ -454,7 +489,7 @@ describe('StandaloneTransport', () => {
     ])
   })
 
-  it('persists a Rust tool approval and resumes the same continuation', async () => {
+  it.each([undefined, 'study:study'])('retains mode %s and skill switches across a tool approval', async (activeMode) => {
     const repository = createLocalRepository(new MemoryDatabase())
     const created = await createStandaloneProjectClient(repository).create({ name: '审批项目', work_root: '' })
     const config = new StandaloneConfigStore(new MemorySecureStorage())
@@ -479,9 +514,10 @@ describe('StandaloneTransport', () => {
     const resumedResult = deferred<any>()
     const resumeAgent = vi.fn(() => resumedResult.promise)
     let onStream: ((payload: unknown) => void) | undefined
+    const extensions = new StandaloneExtensionsStore(new MemoryStandaloneStateStorage({ disabledPlugins: [], disabledSkills: ['teach'] }))
     const transport = new StandaloneTransport(
-      repository, config, runAgent, undefined, resumeAgent,
-      undefined, undefined, undefined, undefined,
+      repository, config, runAgent, extensions, resumeAgent,
+      fakeStudy().call, undefined, undefined, undefined,
       async handler => { onStream = handler; return () => {} },
     )
     const snapshots: CoreAppSnapshot[] = []
@@ -492,6 +528,7 @@ describe('StandaloneTransport', () => {
     const start = await transport.request<Record<string, unknown>>({ method: 'turn/start', params: {
       thread_id: created.session.id, input: [{ type: 'text', text: '创建 a.txt' }],
       permission_preset: 'ask',
+      active_mode: activeMode,
     } })
     const turnId = String(start.turn_id)
     const requestId = `${turnId}:approval:0:0:call-1`
@@ -540,6 +577,8 @@ describe('StandaloneTransport', () => {
       decision: 'approve_once',
       projectId: created.project.id,
       models: [expect.objectContaining({ id: 'test:tool-model', apiKey: 'secret' })],
+      study: { enabled: activeMode === 'study:study' },
+      disabledSkillNames: ['teach'],
     }))
     const completed = await repository.loadThreadSnapshot(created.session.id)
     const assistant = completed?.core?.items?.[`${turnId}:assistant`]
@@ -1312,7 +1351,7 @@ describe('StandaloneTransport', () => {
     }))
   })
 
-  it('runs unbound Study conversations as Sunday with an isolated session workspace', async () => {
+  it.each(['study', 'study:study'])('assembles Study prompt and tools for mode %s', async (activeMode) => {
     const repository = createLocalRepository(new MemoryDatabase())
     const config = new StandaloneConfigStore(new MemorySecureStorage())
     await config.handleRpc('config.provider.create', {
@@ -1330,13 +1369,14 @@ describe('StandaloneTransport', () => {
     const threadId = String(binding.session_id)
 
     await transport.request({ method: 'turn/start', params: {
-      thread_id: threadId, input: [{ type: 'text', text: '讲解这个知识点' }], active_mode: 'study',
+      thread_id: threadId, input: [{ type: 'text', text: '讲解这个知识点' }], active_mode: activeMode,
     } })
 
     await vi.waitFor(() => expect(runAgent).toHaveBeenCalled())
     expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({
       projectId: `session-${threadId}`,
       study: { enabled: true },
+      disabledSkillNames: [],
       // The Study system prompt and latest context come from the shared
       // runtime rather than a hand-written string in this host.
       context: {

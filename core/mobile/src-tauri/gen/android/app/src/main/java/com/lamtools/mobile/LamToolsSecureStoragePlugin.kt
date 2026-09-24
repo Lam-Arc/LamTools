@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.util.Base64
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -15,6 +16,7 @@ import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.AEADBadTagException
 import javax.crypto.spec.GCMParameterSpec
 
 @InvokeArg
@@ -37,6 +39,12 @@ class LamToolsSecureStoragePlugin(private val activity: Activity): Plugin(activi
             val result = JSObject()
             result.put("value", encrypted?.let { decrypt(it, args.key) })
             invoke.resolve(result)
+        } catch (error: AEADBadTagException) {
+            // A device transfer may restore ciphertext without its non-exportable
+            // AndroidKeyStore key. Never return corrupted plaintext as an identity.
+            invoke.reject("SECURE_STORAGE_KEY_INVALIDATED")
+        } catch (error: KeyPermanentlyInvalidatedException) {
+            invoke.reject("SECURE_STORAGE_KEY_INVALIDATED")
         } catch (error: Exception) { invoke.reject(error.message ?: "secure storage read failed") }
     }
 

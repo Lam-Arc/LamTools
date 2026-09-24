@@ -1,6 +1,7 @@
 import type {
   CoreAppInputItem,
   CoreAppSnapshot,
+  CoreThinkingMode,
   LamToolsTransport,
   TransportConnectionState,
   TransportHttpRequest,
@@ -8,8 +9,16 @@ import type {
   TransportMessage,
   TransportRequest,
 } from '@lamtools/ui'
+import {
+  CORE_EXECUTION_CONTROLS_STORAGE_KEYS,
+  coreThinkingPayload,
+  normalizeCoreThinkingMode,
+  readStoredCoreThinkingMode,
+} from '@lamtools/ui'
+import b4a from 'b4a'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { AttachmentRequestError, nativeAttachments, parseMultipartFile, type NativeAttachmentData } from '../native/attachments'
 import type { LocalRepository, LocalThread } from '../storage'
 import {
   callEmbeddedStudy,
@@ -19,18 +28,28 @@ import {
   respondEmbeddedSubAgentApproval,
   resumeEmbeddedSundayTurn,
   runEmbeddedSundayTurn,
+  type RustAgentImage,
   type RustAgentMessage,
   type RustAgentStreamEvent,
   type RustTurnContinuation,
   type RustTurnProgress,
   type RustTurnResult,
 } from '../native/rustAgent'
-import { StandaloneConfigStore } from './StandaloneConfigStore'
+import { StandaloneConfigStore, type StandaloneModel } from './StandaloneConfigStore'
 import { StandaloneExtensionsStore } from './StandaloneExtensionsStore'
+import { StandaloneArrangeStore } from './StandaloneArrangeStore'
+import { searchStandaloneWorkspace } from './StandaloneWorkspaceSearch'
+import { exportStandaloneSession } from './StandaloneSessionExport'
+import { checkStandaloneUpdate } from './StandaloneUpdate'
 
 type SnapshotWithSession = CoreAppSnapshot & {
   session?: { id: string; title: string; metadata: Record<string, unknown>; created_at: string; updated_at: string }
 }
+
+const MAX_MODEL_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_MODEL_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
+const MAX_MODEL_IMAGES = 8
+const MODEL_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 
 type RunAgentTurn = (
   input: Parameters<typeof runEmbeddedSundayTurn>[0],
@@ -67,6 +86,7 @@ const stageLabels: Record<string, string> = {
   native_hooks_ready: '运行钩子已就绪',
   native_mcp_start: '正在准备 MCP',
   native_mcp_ready: 'MCP 已就绪',
+  native_mcp_partial: '部分 MCP 服务未能启动，请检查扩展配置',
   native_subagents_ready: '子代理已就绪',
   native_runtime_start: '开始执行代理',
   native_runtime_done: '代理执行结束',
@@ -123,6 +143,9 @@ export class StandaloneTransport implements LamToolsTransport {
   private readonly snapshotRecoveries = new Map<string, Promise<void>>()
   private readonly activeStageListeners = new Map<string, () => void>()
   private readonly activeStreamListeners = new Map<string, () => void>()
+  private readonly activeSnapshots = new Map<string, SnapshotWithSession>()
+  private connecting: Promise<void> | null = null
+  private readonly arrange: StandaloneArrangeStore
 
   constructor(
     private readonly repository: LocalRepository,
@@ -135,18 +158,29 @@ export class StandaloneTransport implements LamToolsTransport {
     private readonly callWorkflow: WorkflowCall = callEmbeddedWorkflow,
     private readonly listenTurnStage: ListenTurnStage = defaultListenTurnStage,
     private readonly listenTurnStream: ListenTurnStream = defaultListenTurnStream,
-  ) {}
+  ) { this.arrange = new StandaloneArrangeStore(repository) }
 
   async connect(): Promise<void> {
-    await this.repository.init()
-    const sessions = await this.repository.listSessions()
-    await Promise.all(sessions.filter(session => session.status === 'running')
-      .map(session => this.recoverOrphanedTurn(session.id)))
-    this.setState('connected')
+    if (this.state === 'connected') return
+    if (this.connecting) return await this.connecting
+    const connecting = (async () => {
+      await this.repository.init()
+      const sessions = await this.repository.listSessions()
+      await Promise.all(sessions.filter(session => session.status === 'running')
+        .map(session => this.recoverOrphanedTurn(session.id)))
+      // A WebView restart cancels the orphaned native turn above. Queued user
+      // messages are durable and can continue once recovery has settled.
+      await Promise.all(sessions.map(session => this.dispatchQueued(session.id)))
+      this.setState('connected')
+    })()
+    this.connecting = connecting
+    try { await connecting }
+    finally { if (this.connecting === connecting) this.connecting = null }
   }
 
   async close(): Promise<void> {
-    for (const [threadId, generation] of this.generations) this.generations.set(threadId, generation + 1)
+    this.generations.clear()
+    this.activeSnapshots.clear()
     for (const controller of this.aborts.values()) controller.abort()
     this.aborts.clear()
     for (const stop of this.activeStageListeners.values()) stop()
@@ -185,6 +219,20 @@ export class StandaloneTransport implements LamToolsTransport {
     const studyResult = await this.handleStudyRpc(method, params)
     if (studyResult) return studyResult
     if (method.startsWith('workflow.')) return await this.handleWorkflowRpc(method, params)
+    const arrangeResult = await this.arrange.handleRpc(method, params)
+    if (arrangeResult) return arrangeResult
+    if (method === 'workspace.search') return await searchStandaloneWorkspace(this.repository, params)
+    if (method === 'update.check') return await checkStandaloneUpdate()
+    if (method === 'project.list') {
+      return { projects: (await this.repository.listProjects()).map(project => ({
+        id: project.id, name: project.name, work_root: project.workRoot || project.path,
+      })) }
+    }
+    if (method === 'project.sessions.list') {
+      const projectId = String(params.project_id || '')
+      if (!await this.repository.getLocalProject(projectId)) throw new Error('项目不存在')
+      return { sessions: await this.repository.listSessions(projectId) }
+    }
     if (method === 'initialize') return { protocol_version: 'core.app_server.v1', capabilities: { standalone: true } }
     if (method === 'thread/resume') {
       const threadId = String(params.thread_id || '')
@@ -194,7 +242,7 @@ export class StandaloneTransport implements LamToolsTransport {
       const threadId = String(params.thread_id || '')
       return { snapshot_page: await this.snapshotFor(threadId) }
     }
-    if (method === 'command.catalog') return { commands: [] }
+    if (method === 'command.catalog') throw new Error('移动端独立模式尚不支持命令目录')
     if (method === 'sub_agent.list' || method === 'sub_agent.snapshot') {
       const threadId = String(params.thread_id || params.session_id || '')
       if (!threadId) throw new Error('会话不存在')
@@ -218,9 +266,7 @@ export class StandaloneTransport implements LamToolsTransport {
     if (method === 'turn/interrupt' || method === 'turn/force_reset') {
       return await this.interruptTurn(String(params.thread_id || ''))
     }
-    if (method === 'queue/create' || method === 'turn/steer') {
-      throw new Error('移动端独立模式暂不支持该操作')
-    }
+    if (method.startsWith('queue/') || method === 'turn/steer') return await this.handleQueueRpc(method, params)
     if (method === 'session.permissions.set') {
       const threadId = String(params.thread_id || '')
       const permissionPreset = normalizePermissionPreset(params.permission_preset || params.approval)
@@ -244,11 +290,13 @@ export class StandaloneTransport implements LamToolsTransport {
     const activeModel = method === 'study.text'
       ? await this.config.activeModel(String(params.model_id || ''))
       : null
+    const retryConfig = activeModel ? await this.config.settings('core.modelRetry') : undefined
     return await this.callStudy({
       method,
       params,
       sessionMetadata: await this.studySessionMetadata(params),
       sessionTargets: await this.studySessionTargets(),
+      ...(retryConfig ? { retryConfig } : {}),
       ...(activeModel
         ? {
             provider: {
@@ -419,6 +467,9 @@ export class StandaloneTransport implements LamToolsTransport {
     }
     if (segments[0] === 'sessions' && segments[1]) {
       const threadId = decodeURIComponent(segments[1])
+      if (segments.length === 3 && segments[2] === 'export' && request.method === 'POST') {
+        return await exportStandaloneSession(this.repository, threadId, decodeJson(request.body))
+      }
       if (segments.length === 2 && request.method === 'PATCH') {
         const body = decodeJson(request.body)
         const thread = await this.repository.updateLocalSession(threadId, {
@@ -432,33 +483,159 @@ export class StandaloneTransport implements LamToolsTransport {
         await this.repository.deleteLocalSession(threadId)
         return jsonResponse({}, 204)
       }
-      if (segments[2] === 'attachments' && request.method === 'POST') {
-        return jsonResponse({
-          id: globalThis.crypto?.randomUUID?.() || `attachment-${Date.now()}`,
-          filename: multipartFilename(request.body) || '移动端附件',
-          mime_type: request.headers?.['Content-Type'] || 'application/octet-stream',
-          size: request.body?.byteLength || 0,
-          preview_type: 'file',
-        }, 201)
+      if (segments.length === 3 && segments[2] === 'attachments') {
+        if (!await this.repository.listSessions().then(sessions => sessions.some(session => session.id === threadId))) {
+          return jsonResponse({ error: '会话不存在' }, 404)
+        }
+        try {
+          if (request.method === 'POST') {
+            const contentType = Object.entries(request.headers || {})
+              .find(([name]) => name.toLowerCase() === 'content-type')?.[1]
+            const file = parseMultipartFile(request.body, contentType)
+            const metadata = await nativeAttachments.save({ sessionId: threadId, ...file })
+            return jsonResponse(metadata, 201)
+          }
+          if (request.method === 'GET') return jsonResponse(await nativeAttachments.list(threadId))
+        } catch (error) { return attachmentErrorResponse(error) }
       }
     }
+    if (segments[0] === 'attachments' && segments[1] && segments.length <= 3) {
+      const id = decodeURIComponent(segments[1])
+      try {
+        if (segments.length === 2 && request.method === 'GET') {
+          return jsonResponse((await nativeAttachments.read(id)).metadata)
+        }
+        if (segments.length === 2 && request.method === 'DELETE') {
+          return (await nativeAttachments.delete(id))
+            ? jsonResponse({}, 204) : jsonResponse({ error: '附件不存在' }, 404)
+        }
+        if (segments[2] === 'download' && request.method === 'GET') {
+          const { metadata, bytes } = await nativeAttachments.read(id)
+          return {
+            status: 200,
+            headers: {
+              'Content-Type': metadata.mime_type,
+              'Content-Disposition': `attachment; filename*=UTF-8''${encodeRfc5987Value(metadata.filename)}`,
+            },
+            body: bytes,
+          }
+        }
+        if (segments[2] === 'preview' && request.method === 'GET') {
+          const attachment = await nativeAttachments.read(id)
+          return jsonResponse({
+            id: attachment.metadata.id,
+            filename: attachment.metadata.filename,
+            preview_type: attachment.metadata.preview_type,
+            mime_type: attachment.metadata.mime_type,
+            text: attachment.metadata.preview_type === 'text' ? decodeAttachmentText(attachment) : null,
+          })
+        }
+        if (segments[2] === 'open' && request.method === 'POST') {
+          await nativeAttachments.open(id)
+          return jsonResponse({ opened: true })
+        }
+      } catch (error) { return attachmentErrorResponse(error) }
+    }
     return jsonResponse({ error: '设备拒绝了您的请求' }, 403)
+  }
+
+  private async handleQueueRpc(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const threadId = String(params.thread_id || '')
+    if (!threadId) throw new Error('会话不存在')
+    const snapshot = this.activeSnapshots.get(threadId) || await this.snapshotFor(threadId)
+    const active = Object.values(snapshot.core?.turns || {}).find(turn => turn.status === 'running' || turn.status === 'waiting')
+    const queue = snapshot.queue || (snapshot.queue = [])
+    const queueItemId = String(params.queue_item_id || '')
+    const item = queue.find(value => value.queue_item_id === queueItemId && value.status === 'queued')
+    if (method === 'queue/create' || method === 'turn/steer') {
+      const input = Array.isArray(params.input) ? params.input as CoreAppInputItem[] : []
+      if (!input.length) throw new Error('发送内容不能为空')
+      if (method === 'turn/steer' && (!active || active.turn_id !== params.turn_id)) throw new Error('当前轮次已结束，无法引导')
+      if (!active && method === 'queue/create') return await this.startTurn(params)
+      const queued = {
+        queue_item_id: globalThis.crypto?.randomUUID?.() || `queue-${Date.now()}`,
+        status: 'queued', mode: method === 'turn/steer' ? 'steer_after_turn' : 'next_turn',
+        input, created_at: new Date().toISOString(),
+        runtime_options: { ...params, input: undefined, thread_id: undefined, turn_id: undefined },
+      }
+      if (method === 'turn/steer') queue.unshift(queued)
+      else queue.push(queued)
+      await this.saveSnapshot(snapshot)
+      this.emitSnapshot(snapshot)
+      return {
+        snapshot, queue_item_id: queued.queue_item_id,
+        ...(method === 'turn/steer' ? { applied: false, queued: true, reason: 'native_turn_cannot_steer_live' } : {}),
+      }
+    }
+    if (method === 'queue/update') {
+      if (!item) throw new Error('排队消息不存在')
+      const text = String(params.text || '').trim()
+      if (!text) throw new Error('排队消息不能为空')
+      item.input = [{ type: 'text', text }]
+    } else if (method === 'queue/delete') {
+      if (!item) throw new Error('排队消息不存在')
+      snapshot.queue = queue.filter(value => value.queue_item_id !== queueItemId)
+    } else if (method === 'queue/guide') {
+      if (!item || !active || active.turn_id !== params.turn_id) {
+        return { applied: false, reason: 'queue_item_or_active_turn_unavailable', snapshot }
+      }
+      if (String(params.text || '').trim()) item.input = [{ type: 'text', text: String(params.text).trim() }]
+      item.mode = 'steer_after_turn'
+      snapshot.queue = [item, ...queue.filter(value => value !== item)]
+      await this.saveSnapshot(snapshot)
+      this.emitSnapshot(snapshot)
+      return { applied: false, queued: true, reason: 'native_turn_cannot_steer_live', snapshot }
+    } else throw new Error(`本机模式不支持 ${method}`)
+    await this.saveSnapshot(snapshot)
+    this.emitSnapshot(snapshot)
+    return { snapshot }
+  }
+
+  private async dispatchQueued(threadId: string): Promise<void> {
+    const snapshot = this.activeSnapshots.get(threadId) || await this.snapshotFor(threadId)
+    const next = snapshot.queue?.find(item => item.status === 'queued')
+    if (!next) return
+    snapshot.queue = snapshot.queue?.filter(item => item.queue_item_id !== next.queue_item_id) || []
+    await this.saveSnapshot(snapshot)
+    this.emitSnapshot(snapshot)
+    try {
+      const options = isRecord(next.runtime_options) ? next.runtime_options : {}
+      await this.startTurn({ ...options, thread_id: threadId, input: next.input })
+    } catch (error) {
+      // Keep the message available for editing/retry if a model or native
+      // invocation fails before a turn was accepted.
+      const latest = await this.snapshotFor(threadId)
+      latest.queue = [next, ...(latest.queue || [])]
+      await this.saveSnapshot(latest)
+      this.emitSnapshot(latest)
+      console.error('Failed to dispatch standalone queue item', error)
+    }
   }
 
   private async startTurn(params: Record<string, unknown>): Promise<Record<string, unknown>> {
     const threadId = String(params.thread_id || '')
     if (!threadId) throw new Error('会话不存在')
+    const prior = this.activeSnapshots.get(threadId) || await this.snapshotFor(threadId)
+    if (Object.values(prior.core?.turns || {}).some(turn => turn.status === 'running' || turn.status === 'waiting')) {
+      throw new Error('当前会话仍在运行，请使用排队发送')
+    }
     const generation = (this.generations.get(threadId) || 0) + 1
     this.generations.set(threadId, generation)
-    const snapshot = await this.snapshotFor(threadId)
     if (this.generations.get(threadId) !== generation) throw new Error('操作已取消')
+    const input = Array.isArray(params.input) ? params.input as CoreAppInputItem[] : []
+    const currentMessage = await inputMessage(input, threadId)
+    const priorHistory = await conversationMessages(prior)
+    if (this.generations.get(threadId) !== generation) throw new Error('操作已取消')
+    const modelHistory = [...priorHistory, ...(currentMessage ? [currentMessage] : [])]
+    validateConversationImageBudget(modelHistory)
+    const snapshot = prior
+    this.activeSnapshots.set(threadId, snapshot)
     const turnId = globalThis.crypto?.randomUUID?.() || `turn-${Date.now()}`
     const userItemId = `${turnId}:user`
     const assistantItemId = `${turnId}:assistant`
-    const input = Array.isArray(params.input) ? params.input as CoreAppInputItem[] : []
     let activeModel = null as Awaited<ReturnType<StandaloneConfigStore['activeModel']>> | null
     if (this.generations.get(threadId) !== generation) throw new Error('操作已取消')
-    const reasoningLevel = normalizeReasoningLevel(params.reasoning_level)
+    const reasoningLevel = resolveReasoningLevel(params.reasoning_level, null)
     const permissionPreset = normalizePermissionPreset(
       params.permission_preset
         || snapshot.session?.metadata?.permission_preset
@@ -532,6 +709,8 @@ export class StandaloneTransport implements LamToolsTransport {
         const runtimeSnapshot = core.turns[turnId].runtime_snapshot as Record<string, unknown>
         runtimeSnapshot.model_id = activeModel.model.model_id
         runtimeSnapshot.model_record_id = activeModel.model.id
+        // Refine the level once the model's thinking capability is known.
+        runtimeSnapshot.reasoning_level = resolveReasoningLevel(params.reasoning_level, activeModel.model)
         if (activeModel.model.thinking_budget != null) runtimeSnapshot.thinking_budget = activeModel.model.thinking_budget
         if (runtimeSnapshot.max_tokens == null && activeModel.model.max_output_tokens != null) {
           runtimeSnapshot.max_tokens = activeModel.model.max_output_tokens
@@ -549,6 +728,7 @@ export class StandaloneTransport implements LamToolsTransport {
             text: error instanceof Error ? error.message : String(error), runtimeModelId: '', toolRounds: 0,
           }, 'failed')
           void this.publishBackgroundSnapshot(snapshot, generation)
+          this.activeSnapshots.delete(threadId)
         }
         throw error
       }
@@ -556,7 +736,7 @@ export class StandaloneTransport implements LamToolsTransport {
     if (this.generations.get(threadId) !== generation) throw new Error('操作已取消')
     this.emitSnapshot(snapshot)
 
-    void this.completeTurn(snapshot, turnId, assistantItemId, activeModel!, generation, trace)
+    void this.completeTurn(snapshot, turnId, assistantItemId, activeModel!, generation, trace, modelHistory)
       .catch(error => console.error('Failed to complete standalone turn', error))
     return { accepted: true, turn_id: turnId, revision: snapshot.revision }
   }
@@ -568,13 +748,16 @@ export class StandaloneTransport implements LamToolsTransport {
     activeModel: Awaited<ReturnType<StandaloneConfigStore['activeModel']>>,
     generation: number,
     existingTrace?: { record: (stage: string) => void; stop: () => Promise<void> },
+    preparedHistory?: RustAgentMessage[],
   ): Promise<void> {
     const threadId = snapshot.thread_id
     const controller = new AbortController()
     this.aborts.set(threadId, controller)
     const trace = existingTrace || await this.startTurnTrace(snapshot, turnId, assistantItemId, generation)
     try {
-      const answer = asTurnProgress(await this.requestModel(snapshot, turnId, activeModel, controller.signal, trace.record))
+      const answer = asTurnProgress(await this.requestModel(
+        snapshot, turnId, activeModel, controller.signal, trace.record, preparedHistory,
+      ))
       await trace.stop()
       if (this.generations.get(threadId) !== generation) return
       if (answer.status === 'completed') {
@@ -603,6 +786,10 @@ export class StandaloneTransport implements LamToolsTransport {
     }
     if (this.generations.get(threadId) !== generation) return
     await this.publishBackgroundSnapshot(snapshot, generation)
+    if (snapshot.status !== 'running' && snapshot.status !== 'waiting') {
+      this.activeSnapshots.delete(threadId)
+      await this.dispatchQueued(threadId)
+    }
   }
 
   private pauseForApproval(
@@ -663,7 +850,7 @@ export class StandaloneTransport implements LamToolsTransport {
         assistant_item_id: assistantItemId,
         model_record_id: progress.continuation.modelRecordId,
         project_id: String(snapshot.session?.metadata?.project_id || ''),
-        continuation: progress.continuation,
+        continuation: withoutTransientImageBytes(progress.continuation),
       } as any,
     }
     core.status = 'waiting'
@@ -695,7 +882,7 @@ export class StandaloneTransport implements LamToolsTransport {
   ): Promise<void> {
     if (!Array.isArray(result.runtimeHistory) || !result.runtimeHistory.length) return
     const metadata = {
-      rust_runtime_history: jsonClone(result.runtimeHistory),
+      rust_runtime_history: jsonClone(withoutTransientImageBytes(result.runtimeHistory)),
       rust_runtime_history_turn_id: turnId,
       ...(result.compaction ? { rust_compaction: jsonClone(result.compaction) } : {}),
     }
@@ -709,7 +896,8 @@ export class StandaloneTransport implements LamToolsTransport {
     const threadId = String(params.thread_id || '')
     const requestId = String(params.request_id || '')
     if (!threadId || !requestId) throw new Error('审批请求不完整')
-    const snapshot = await this.snapshotFor(threadId)
+    const snapshot = this.activeSnapshots.get(threadId) || await this.snapshotFor(threadId)
+    this.activeSnapshots.set(threadId, snapshot)
     const core = snapshot.core!
     const request = core.requests?.[requestId] as Record<string, any> | undefined
     if (!request || request.status !== 'open') throw new Error('审批请求已失效')
@@ -786,16 +974,23 @@ export class StandaloneTransport implements LamToolsTransport {
     try {
       trace.record('js_preflight_start')
       const hookState = await this.extensions.runtimeHooks()
+      const skillState = await this.extensions.runtimeSkills()
+      const savedOptions = snapshot.core?.turns?.[turnId]?.runtime_snapshot
+      const studyEnabled = isStudySession(snapshot, isRecord(savedOptions) ? savedOptions : {})
+      if (studyEnabled && !skillState.studyEnabled) throw new Error('Study 插件已禁用，请启用后重试')
       trace.record('js_extensions_ready')
       if (this.generations.get(threadId) !== generation) return
-      const [models, dreaming, subAgent] = await Promise.all([
+      const [models, dreaming, subAgent, retryConfig, loadContextConfig] = await Promise.all([
         this.config.runtimeModels().then(value => { trace.record('js_model_keys_ready'); return value }),
         this.config.settings('core.dreaming').then(value => { trace.record('js_settings_ready'); return value }),
         this.config.subAgentRuntime(projectId).then(value => { trace.record('js_subagent_ready'); return value }),
+        this.config.settings('core.modelRetry'),
+        this.config.settings('core.loadContext'),
       ])
       trace.record('js_models_ready')
       if (this.generations.get(threadId) !== generation) return
       trace.record('js_study_ready')
+      const hydratedContinuation = await hydrateContinuationImages(continuation, threadId)
       trace.record('js_native_invoking')
       const stopStream = await this.startTurnStream(snapshot, turnId, assistantItemId, generation)
       let progress: RustTurnProgress
@@ -809,8 +1004,11 @@ export class StandaloneTransport implements LamToolsTransport {
           models,
           dreaming,
           subAgent,
-          study: { enabled: isStudySession(snapshot) },
-          continuation,
+          study: { enabled: studyEnabled },
+          disabledSkillNames: skillState.disabledSkillNames,
+          retryConfig,
+          loadContextConfig,
+          continuation: hydratedContinuation,
           requestId,
           decision,
           guidance,
@@ -848,6 +1046,10 @@ export class StandaloneTransport implements LamToolsTransport {
     }
     if (this.generations.get(threadId) !== generation) return
     await this.publishBackgroundSnapshot(snapshot, generation)
+    if (snapshot.status !== 'running' && snapshot.status !== 'waiting') {
+      this.activeSnapshots.delete(threadId)
+      await this.dispatchQueued(threadId)
+    }
   }
 
   private finishSnapshot(
@@ -873,6 +1075,7 @@ export class StandaloneTransport implements LamToolsTransport {
         ? metadata[MOBILE_PROGRESS_KEY] as Record<string, unknown> : {}
       item.metadata = {
         ...(isRecord(item.metadata) ? item.metadata : {}),
+        ...(result.runtimeWarnings?.length ? { mobile_runtime_warnings: result.runtimeWarnings } : {}),
         [MOBILE_PROGRESS_KEY]: {
           stage: String(previous.stage || 'js_native_returned'),
           label: status === 'completed' ? '已完成' : status === 'cancelled' ? '已取消' : '运行失败',
@@ -970,7 +1173,9 @@ export class StandaloneTransport implements LamToolsTransport {
     core.revision = snapshot.revision
     await this.saveSnapshot(snapshot)
     if (this.generations.get(threadId) !== generation) return { snapshot }
+    this.activeSnapshots.delete(threadId)
     this.emitSnapshot(snapshot)
+    await this.dispatchQueued(threadId)
     return { snapshot }
   }
 
@@ -980,24 +1185,31 @@ export class StandaloneTransport implements LamToolsTransport {
     activeModel: Awaited<ReturnType<StandaloneConfigStore['activeModel']>>,
     signal: AbortSignal,
     recordStage: (stage: string) => void = () => {},
+    preparedHistory?: RustAgentMessage[],
   ): Promise<RustTurnProgress | RustTurnResult> {
     recordStage('js_preflight_start')
     const { provider, model, apiKey } = activeModel
-    const history = conversationMessages(snapshot, turnId)
+    const history = preparedHistory || await conversationMessages(snapshot, turnId)
     const threadId = snapshot.thread_id
     const projectId = String(snapshot.session?.metadata?.project_id || '')
     const workspaceId = projectId || `session-${threadId.replace(/[^a-zA-Z0-9_-]+/g, '-')}`
     const runtimeSnapshot = snapshot.core?.turns?.[turnId]?.runtime_snapshot
     const options = isRecord(runtimeSnapshot) ? runtimeSnapshot : {}
     const hookState = await this.extensions.runtimeHooks()
+    const skillState = await this.extensions.runtimeSkills()
+    const studyEnabled = isStudySession(snapshot, options)
+    if (studyEnabled && !skillState.studyEnabled) throw new Error('Study 插件已禁用，请启用后重试')
     recordStage('js_extensions_ready')
-    const [models, [dreaming, contextCompaction], subAgent] = await Promise.all([
+    const [models, [dreaming, contextCompaction], subAgent, retryConfig, globalContext, loadContextConfig] = await Promise.all([
       this.config.runtimeModels().then(value => { recordStage('js_model_keys_ready'); return value }),
       Promise.all([
         this.config.settings('core.dreaming'),
         this.config.settings('core.contextCompaction'),
       ]).then(value => { recordStage('js_settings_ready'); return value }),
       this.config.subAgentRuntime(workspaceId).then(value => { recordStage('js_subagent_ready'); return value }),
+      this.config.settings('core.modelRetry'),
+      this.config.settings('core.globalContext'),
+      this.config.settings('core.loadContext'),
     ])
     recordStage('js_models_ready')
     if (signal.aborted) throw new Error('操作已取消')
@@ -1022,16 +1234,25 @@ export class StandaloneTransport implements LamToolsTransport {
         dreaming,
         contextCompaction,
         subAgent,
-        study: { enabled: isStudySession(snapshot, options) },
+        study: { enabled: studyEnabled },
+        disabledSkillNames: skillState.disabledSkillNames,
+        retryConfig,
+        loadContextConfig,
         history,
-        reasoningLevel: String(options.reasoning_level || 'off'),
+        reasoningLevel: resolveReasoningLevel(options.reasoning_level, model),
         thinkingBudget: finiteNumber(options.thinking_budget) ?? model.thinking_budget,
         maxOutputTokens: finiteNumber(options.max_tokens) ?? model.max_output_tokens,
         temperature: finiteNumber(options.temperature) ?? model.temperature,
         permissionPreset: normalizePermissionPreset(options.permission_preset),
         sessionApprovedTools: stringArray(options.session_approved_tools),
         ...hookState,
-        context: { modeContext },
+        context: {
+          modeContext,
+          ...(!studyEnabled ? {
+            globalInstructions: String(globalContext.instructions || '').slice(0, 20_000),
+            memory: String(globalContext.memory || '').slice(0, 20_000),
+          } : {}),
+        },
       }), recordStage, signal)
     } finally {
       stopStream()
@@ -1327,7 +1548,7 @@ export class StandaloneTransport implements LamToolsTransport {
   ): Promise<string> {
     const metadata = snapshot.session?.metadata || {}
     const activeMode = String(options.active_mode || metadata.owner_plugin || metadata.plugin_id || '').trim()
-    if (activeMode !== 'study') {
+    if (!isStudySession(snapshot, options)) {
       return activeMode ? `Active application mode: ${activeMode}.` : ''
     }
     try {
@@ -1360,7 +1581,7 @@ function isStudySession(
 ): boolean {
   const metadata = snapshot.session?.metadata || {}
   const activeMode = String(options.active_mode || metadata.owner_plugin || metadata.plugin_id || '').trim()
-  return activeMode === 'study'
+  return activeMode === 'study' || activeMode === 'study:study'
 }
 
 function emptySnapshot(threadId: string): SnapshotWithSession {
@@ -1435,7 +1656,7 @@ async function withNativeWaitMarkers<T>(
   }
 }
 
-function conversationMessages(snapshot: SnapshotWithSession, activeTurnId = ''): RustAgentMessage[] {
+async function conversationMessages(snapshot: SnapshotWithSession, activeTurnId = ''): Promise<RustAgentMessage[]> {
   const core = snapshot.core
   if (!core) return []
   const persisted = snapshot.session?.metadata?.rust_runtime_history
@@ -1446,23 +1667,24 @@ function conversationMessages(snapshot: SnapshotWithSession, activeTurnId = ''):
   const latestTurn = previousTurns.at(-1)
   const persistedBelongsToLatestCompletedTurn = latestTurn?.status === 'completed'
     && (sourceTurnId == null || sourceTurnId === latestTurn.turn_id)
-  if (Array.isArray(persisted) && persisted.every(isRustAgentMessage)
-    && activeTurnId && persistedBelongsToLatestCompletedTurn) {
+  if (Array.isArray(persisted) && persisted.every(isRustAgentMessage) && persistedBelongsToLatestCompletedTurn) {
+    const history = await hydrateImageMessages(jsonClone(persisted) as RustAgentMessage[], snapshot.thread_id)
+    if (!activeTurnId) return history
     const current = core.turns?.[activeTurnId]
     const currentUser = (current?.items || [])
       .map(id => core.items?.[id])
       .find(item => isRecord(item?.payload) && item.payload.type === 'userMessage')
     const payload = isRecord(currentUser?.payload) ? currentUser.payload : {}
-    const content = inputContent(payload.content)
-    return [...jsonClone(persisted) as RustAgentMessage[], ...(content ? [{ role: 'user' as const, content }] : [])]
+    const message = await inputMessage(payload.content, snapshot.thread_id)
+    return [...history, ...(message ? [message] : [])]
   }
   const messages: RustAgentMessage[] = []
   for (const id of core.item_order || []) {
     const item = core.items?.[id]
     const payload = isRecord(item?.payload) ? item.payload : {}
     if (payload.type === 'userMessage') {
-      const content = inputContent(payload.content)
-      if (content) messages.push({ role: 'user', content })
+      const message = await inputMessage(payload.content, snapshot.thread_id)
+      if (message) messages.push(message)
       continue
     }
     if (payload.type === 'agentMessage') {
@@ -1481,18 +1703,161 @@ function conversationMessages(snapshot: SnapshotWithSession, activeTurnId = ''):
   return messages
 }
 
-function inputContent(value: unknown): string {
+async function inputMessage(value: unknown, sessionId: string): Promise<RustAgentMessage | null> {
   const input = Array.isArray(value) ? value : []
-  return input.map((part) => {
-    if (!isRecord(part)) return ''
-    if (part.type === 'text') return String(part.text || '')
-    if (part.type === 'attachment') return `[附件: ${String(part.filename || part.attachment_id || '')}]`
-    return ''
-  }).filter(Boolean).join('\n')
+  const content: string[] = []
+  const images: RustAgentImage[] = []
+  let imageBytes = 0
+  for (const part of input) {
+    if (!isRecord(part)) continue
+    if (part.type === 'text') { content.push(String(part.text || '')); continue }
+    if (part.type !== 'attachment') continue
+    const id = String(part.attachment_id || '')
+    if (!id) throw new Error('附件缺少有效 ID，无法读取内容')
+    const attachment = await nativeAttachments.read(id)
+    if (attachment.metadata.session_id !== sessionId) throw new Error('附件不属于当前会话')
+    const filename = attachment.metadata.filename
+    if (attachment.metadata.preview_type === 'text') {
+      content.push(`[附件 ${filename} 的文本内容]\n${decodeAttachmentText(attachment)}\n[附件内容结束]`)
+    } else if (MODEL_IMAGE_MIME_TYPES.has(attachment.metadata.mime_type)) {
+      if (attachment.bytes.length > MAX_MODEL_IMAGE_BYTES) {
+        throw new Error(`图片 ${filename} 超过每张 10 MiB 的模型输入限制`)
+      }
+      if (!imageBytesMatchMime(attachment.metadata.mime_type, attachment.bytes)) {
+        throw new Error(`附件 ${filename} 的实际内容与声明的图片类型 ${attachment.metadata.mime_type} 不符`)
+      }
+      if (images.length >= MAX_MODEL_IMAGES) {
+        throw new Error(`单条消息最多支持 ${MAX_MODEL_IMAGES} 张图片`)
+      }
+      imageBytes += attachment.bytes.length
+      if (imageBytes > MAX_MODEL_IMAGE_TOTAL_BYTES) {
+        throw new Error('单条消息中的图片总大小超过 20 MiB 模型输入限制')
+      }
+      images.push({
+        attachment_id: id,
+        mime_type: attachment.metadata.mime_type,
+        data_base64: b4a.toString(attachment.bytes, 'base64'),
+      })
+      content.push(`[附件图片：${filename}]`)
+    } else {
+      throw new Error(
+        `移动端当前模型输入不支持附件 ${filename}（${attachment.metadata.mime_type}）；请先转换为文本或 JPEG、PNG、GIF、WebP 图片`,
+      )
+    }
+  }
+  const text = content.filter(Boolean).join('\n')
+  if (images.length) return { role: 'user_multimodal', content: text, images }
+  return text ? { role: 'user', content: text } : null
+}
+
+async function hydrateImageMessages(
+  messages: RustAgentMessage[],
+  sessionId: string,
+): Promise<RustAgentMessage[]> {
+  return await Promise.all(messages.map(async message => {
+    if (message.role !== 'user_multimodal') return message
+    const images = await Promise.all(message.images.map(image => hydrateModelImage(image, sessionId)))
+    return { ...message, images }
+  }))
+}
+
+async function hydrateContinuationImages(
+  continuation: RustTurnContinuation,
+  sessionId: string,
+): Promise<RustTurnContinuation> {
+  const messages = await Promise.all(continuation.messages.map(async value => {
+    if (!isRecord(value) || value.role !== 'user_multimodal' || !Array.isArray(value.images)) return value
+    const images = await Promise.all(value.images.map(image => hydrateModelImage(image as RustAgentImage, sessionId)))
+    return { ...value, images }
+  }))
+  validateConversationImageBudget(messages.filter(isRustAgentMessage))
+  return { ...continuation, messages }
+}
+
+async function hydrateModelImage(image: RustAgentImage, sessionId: string): Promise<RustAgentImage> {
+  if (!image.attachment_id) throw new Error('历史图片缺少有效附件 ID，无法重放')
+  const attachment = await nativeAttachments.read(image.attachment_id)
+  if (attachment.metadata.session_id !== sessionId) throw new Error('历史图片不属于当前会话')
+  if (attachment.metadata.mime_type !== image.mime_type) throw new Error('历史图片类型与已保存附件不一致')
+  if (!MODEL_IMAGE_MIME_TYPES.has(attachment.metadata.mime_type)) {
+    throw new Error(`历史图片类型 ${attachment.metadata.mime_type} 不受模型支持`)
+  }
+  if (attachment.bytes.length > MAX_MODEL_IMAGE_BYTES) {
+    throw new Error(`历史图片超过每张 10 MiB 的模型输入限制`)
+  }
+  if (!imageBytesMatchMime(attachment.metadata.mime_type, attachment.bytes)) {
+    throw new Error(`历史图片内容与保存的类型 ${attachment.metadata.mime_type} 不符`)
+  }
+  return { ...image, data_base64: b4a.toString(attachment.bytes, 'base64') }
+}
+
+function imageBytesMatchMime(mime: string, bytes: Uint8Array): boolean {
+  const startsWith = (...signature: number[]) => signature.every((byte, index) => bytes[index] === byte)
+  switch (mime) {
+    case 'image/jpeg': return startsWith(0xff, 0xd8, 0xff)
+    case 'image/png': return startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
+    case 'image/gif': return startsWith(0x47, 0x49, 0x46, 0x38) && (bytes[4] === 0x37 || bytes[4] === 0x39) && bytes[5] === 0x61
+    case 'image/webp': return startsWith(0x52, 0x49, 0x46, 0x46) && bytes.length >= 12
+      && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+    default: return false
+  }
+}
+
+function validateConversationImageBudget(messages: RustAgentMessage[]): void {
+  let totalBytes = 0
+  for (const message of messages) {
+    if (message.role !== 'user_multimodal') continue
+    if (message.images.length === 0 || message.images.length > MAX_MODEL_IMAGES) {
+      throw new Error(`单条消息最多支持 ${MAX_MODEL_IMAGES} 张图片`)
+    }
+    for (const image of message.images) {
+      if (!MODEL_IMAGE_MIME_TYPES.has(image.mime_type)) {
+        throw new Error(`模型输入不支持图片类型 ${image.mime_type}`)
+      }
+      const byteLength = decodedBase64Length(image.data_base64 || '')
+      if (byteLength == null || byteLength > MAX_MODEL_IMAGE_BYTES) {
+        throw new Error('图片缺少有效内容，或超过每张 10 MiB 的模型输入限制')
+      }
+      totalBytes += byteLength
+      if (totalBytes > MAX_MODEL_IMAGE_TOTAL_BYTES) {
+        throw new Error('当前对话图片总大小超过 20 MiB 模型输入限制')
+      }
+    }
+  }
+}
+
+function decodedBase64Length(value: string): number | null {
+  if (!value || value.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    return null
+  }
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  return (value.length / 4) * 3 - padding
+}
+
+function withoutTransientImageBytes<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(item => withoutTransientImageBytes(item)) as T
+  if (!isRecord(value)) return value
+  if (value.role === 'user_multimodal' && Array.isArray(value.images)) {
+    return {
+      ...value,
+      images: value.images.map((image: unknown) => {
+        if (!isRecord(image)) return image
+        const { data_base64: _transientBytes, ...reference } = image
+        return reference
+      }),
+    } as T
+  }
+  return value
 }
 
 function isRustAgentMessage(value: unknown): value is RustAgentMessage {
   if (!isRecord(value) || typeof value.role !== 'string') return false
+  if (value.role === 'user_multimodal') {
+    return typeof value.content === 'string' && Array.isArray(value.images)
+      && value.images.length > 0 && value.images.every((image: unknown) => isRecord(image)
+        && typeof image.attachment_id === 'string' && typeof image.mime_type === 'string'
+        && (image.data_base64 == null || typeof image.data_base64 === 'string'))
+  }
   if (value.role === 'assistant_tool_calls') return Array.isArray(value.calls)
   if (value.role === 'tool') return typeof value.tool_call_id === 'string' && typeof value.content === 'string'
   return ['system', 'user', 'assistant'].includes(value.role) && typeof value.content === 'string'
@@ -1517,6 +1882,48 @@ function jsonResponse(value: unknown, status = 200): TransportHttpResponse {
   }
 }
 
+function attachmentErrorResponse(error: unknown): TransportHttpResponse {
+  const message = error instanceof Error ? error.message : String(error)
+  const status = error instanceof AttachmentRequestError ? error.status
+    : /not found|no such file|cannot find|does not exist|不存在/i.test(message) ? 404
+    : /exceeds the 50 mib limit/i.test(message) ? 413
+    : /invalid attachment (?:id|session id|filename|mime type)/i.test(message) ? 400
+    : 500
+  return jsonResponse({ error: message }, status)
+}
+
+function decodeAttachmentText(attachment: NativeAttachmentData): string {
+  const limit = Math.min(attachment.bytes.length, 200_000)
+  const bytes = attachment.bytes.subarray(0, limit)
+  let text: string
+  try {
+    text = decodeTextBytes(bytes)
+  } catch {
+    // Match desktop preview behavior for malformed text: keep the readable
+    // portions and replace invalid byte sequences instead of losing the file.
+    text = new TextDecoder('utf-8').decode(bytes)
+  }
+  return attachment.bytes.length > limit ? `${text}\n[附件文本已截断至前 200000 字节]` : text
+}
+
+function decodeTextBytes(bytes: Uint8Array): string {
+  for (const [encoding, maxTrim] of [['utf-8', 3], ['gb18030', 3], ['utf-16', 1]] as const) {
+    let decoder: TextDecoder
+    try { decoder = new TextDecoder(encoding, { fatal: true }) }
+    catch { continue }
+    for (let trim = 0; trim <= Math.min(maxTrim, bytes.length); trim++) {
+      try { return decoder.decode(bytes.subarray(0, bytes.length - trim)) }
+      catch { /* Try a shorter suffix, then the next desktop-compatible encoding. */ }
+    }
+  }
+  throw new Error('Attachment text is not valid in a supported encoding')
+}
+
+function encodeRfc5987Value(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, character =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
+}
+
 function decodeJson(body: Uint8Array | undefined): Record<string, unknown> {
   if (!body?.length) return {}
   try {
@@ -1525,12 +1932,6 @@ function decodeJson(body: Uint8Array | undefined): Record<string, unknown> {
   } catch {
     return {}
   }
-}
-
-function multipartFilename(body: Uint8Array | undefined): string {
-  if (!body?.length) return ''
-  const prefix = new TextDecoder().decode(body.slice(0, Math.min(body.length, 2048)))
-  return /filename="([^"]+)"/.exec(prefix)?.[1] || ''
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
@@ -1543,11 +1944,35 @@ function finiteNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
-function normalizeReasoningLevel(value: unknown): 'off' | 'light' | 'medium' | 'high' | 'xhigh' | 'max' {
-  const normalized = String(value || '').trim().toLowerCase()
-  if (normalized === 'light' || normalized === 'medium' || normalized === 'high'
-    || normalized === 'xhigh' || normalized === 'max') return normalized
-  return 'off'
+/**
+ * Resolve a turn's thinking level the way the desktop execution controls do.
+ *
+ * An explicit per-turn `reasoning_level` wins; otherwise the shared stored
+ * thinking mode applies, and with nothing stored the desktop default is used.
+ * Model capability still downgrades the result, so a model without thinking
+ * support stays at `off` while one that cannot disable thinking never reports
+ * `off`. Mobile has no level picker of its own, so this keeps it aligned with
+ * the desktop rather than silently running every turn with thinking disabled.
+ */
+function resolveReasoningLevel(
+  choice: unknown,
+  model: StandaloneModel | null | undefined,
+): CoreThinkingMode {
+  const mode = normalizeCoreThinkingMode(choice ?? storedThinkingMode())
+  // Without a resolved model there is no capability to honour, so keep the
+  // chosen level and let the model-aware pass refine it.
+  return model ? coreThinkingPayload({ mode, model }).reasoning_level : mode
+}
+
+/** Shared desktop thinking-mode key, defaulting to the desktop default. */
+function storedThinkingMode(): CoreThinkingMode {
+  let storage: Pick<Storage, 'getItem'> | undefined
+  try {
+    storage = globalThis.localStorage
+  } catch {
+    storage = undefined
+  }
+  return readStoredCoreThinkingMode(storage, CORE_EXECUTION_CONTROLS_STORAGE_KEYS.thinkingMode)
 }
 
 function normalizePermissionPreset(value: unknown): 'ask' | 'auto' | 'full_access' {

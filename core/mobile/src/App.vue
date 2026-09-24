@@ -7,7 +7,7 @@
       ref="lamToolsAppRef"
       :runtime="runtime"
       :account-context="accountContext"
-      :mobile-top-bar-hidden="topBarHidden"
+      :mobile-command-dock-available="mobileCommandDockAvailable"
       @left-drawer-change="leftDrawerOpen = $event"
       @mobile-mode-state="mobileModeState = $event"
       @sync-request="openSyncPanel()"
@@ -16,6 +16,7 @@
       @open-account="accessPanelOpen = true"
     />
     <MobileTopBar
+      :available="mobileCommandDockAvailable"
       :hidden="topBarHidden"
       :syncing="isSyncing"
       :mode-options="mobileModeState.options"
@@ -25,7 +26,29 @@
       @open-account="accessPanelOpen = true"
       @open-search="lamToolsAppRef?.openSearch()"
       @open-settings="lamToolsAppRef?.openSettings()"
+      @open-plugins="lamToolsAppRef?.openPlugins()"
+      @open-arrange="lamToolsAppRef?.openArrange()"
       @select-mode="lamToolsAppRef?.selectAppModeByKey($event)"
+    />
+    <button
+      v-if="!topBarHidden"
+      class="mobile-diagnostics-trigger"
+      :class="{ 'mobile-diagnostics-trigger--with-dock': mobileCommandDockAvailable }"
+      type="button"
+      aria-label="打开诊断日志"
+      title="诊断日志"
+      @click="diagnosticsOpen = true"
+    >
+      <FileDown :size="18" :stroke-width="1.8" aria-hidden="true" />
+    </button>
+    <MobileDiagnosticsPanel
+      v-if="diagnosticsOpen"
+      :entry-count="diagnosticEntries.length"
+      :busy="diagnosticsExporting"
+      :message="diagnosticsMessage"
+      @close="diagnosticsOpen = false"
+      @clear="clearDiagnostics"
+      @export="exportDiagnostics"
     />
     <div v-if="accessPanelOpen" class="mobile-access-overlay">
       <PairingScreen
@@ -68,6 +91,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { Capacitor } from '@capacitor/core'
+import { FileDown } from 'lucide-vue-next'
 import { createCoreProjectClient, createLamToolsRuntime, MobileTopBar, type CoreAppSnapshot, type CoreProject, type MobileControlAccountContext, type MobileControlAccountDevice, type MobileControlAccountPayload } from '@lamtools/ui'
 import { CoreAppServerClient } from '@lamtools/ui/appServer'
 import { mergeCoreHistorySnapshot } from '@lamtools/ui/appServer/store'
@@ -95,6 +119,11 @@ import { loadLegacyMobileState } from './native/rustAgent'
 import { createStandaloneProjectClient } from './standalone/StandaloneProjectClient'
 import { SyncEngine } from './sync'
 import MobileSyncPanel, { type MobileSyncDevice } from './sync/MobileSyncPanel.vue'
+import { useMobileCommandDockAvailability } from './useMobileCommandDockAvailability'
+import MobileDiagnosticsPanel from './diagnostics/MobileDiagnosticsPanel.vue'
+import { MobileDiagnostics } from './diagnostics/MobileDiagnostics'
+import { exportMobileDiagnostics } from './diagnostics/exportDiagnostics'
+import { listenForNativeAgentStages } from './diagnostics/nativeStages'
 
 const MANUAL_GATEWAY_STORAGE_KEY = 'lamtools.mobile.manual-gateway-v1'
 const SYNC_OFFLINE_DEVICES_STORAGE_KEY = 'lamtools.mobile.sync-offline-devices-v1'
@@ -119,6 +148,7 @@ const syncOfflineDeviceIds = ref<Set<string>>(readSyncOfflineDeviceIds())
 const syncProjectTargets = new Map<string, { projectId: string; workspaceId: string }>()
 const accessPanelOpen = ref(false)
 const leftDrawerOpen = ref(false)
+const mobileCommandDockAvailable = useMobileCommandDockAvailability()
 const topBarHidden = computed(() => leftDrawerOpen.value || accessPanelOpen.value)
 const activeTrustedDevice = ref<TrustedDevice | null>(null)
 const trustedDevices = ref<TrustedDevice[]>([])
@@ -130,6 +160,14 @@ const accountError = ref('')
 const mobileAccountLabel = computed(() => accountClient.value?.session?.username || '登录 / 账号')
 const manualGatewayUrl = ref(readManualGatewayUrl())
 const activeWorkspaceId = ref('')
+const diagnosticsOpen = ref(false)
+const diagnosticsExporting = ref(false)
+const diagnosticsMessage = ref('')
+const mobileDiagnostics = new MobileDiagnostics()
+const diagnosticEntries = shallowRef(mobileDiagnostics.snapshot())
+const removeDiagnosticObserver = mobileDiagnostics.subscribe((entries) => {
+  diagnosticEntries.value = [...entries]
+})
 let accountOperationGeneration = 0
 let workspaceSelectionGeneration = 0
 let appDisposed = false
@@ -173,9 +211,11 @@ const accountContext = computed<MobileControlAccountContext>(() => {
 })
 const connectionManager = new ConnectionManager({
   relayEndpoint: import.meta.env.VITE_LAMTOOLS_RELAY_URL,
+  diagnosticSink: (event) => mobileDiagnostics.recordTransport(event),
 })
 const syncConnectionManager = new ConnectionManager({
   relayEndpoint: import.meta.env.VITE_LAMTOOLS_RELAY_URL,
+  diagnosticSink: (event) => mobileDiagnostics.recordTransport(event),
 })
 const syncRemoteProjectClient = createCoreProjectClient(syncConnectionManager.getTransport())
 const localRepository = createLocalRepository(createLocalDatabase('lamtools-mobile-local'))
@@ -267,6 +307,31 @@ const removeRemoteRepositoryListener = remoteRepository.subscribe(() => {
 
 function isAppAlive(): boolean {
   return !appDisposed
+}
+
+function clearDiagnostics(): void {
+  mobileDiagnostics.clear()
+  diagnosticsMessage.value = '已清除本次应用运行期间收集的诊断记录。'
+}
+
+async function exportDiagnostics(): Promise<void> {
+  if (diagnosticsExporting.value) return
+  diagnosticsExporting.value = true
+  diagnosticsMessage.value = ''
+  try {
+    const destination = await exportMobileDiagnostics(mobileDiagnostics.serialize())
+    diagnosticsMessage.value = destination === 'android-share'
+      ? '已打开 Android 分享面板。分享目标保存的副本由你选择的目标应用或位置管理。'
+      : destination === 'web-share'
+        ? '已打开系统分享面板。分享目标保存的副本由你选择的目标应用或位置管理。'
+        : '已开始下载诊断日志；保存位置由设备的下载设置决定。'
+  } catch (error) {
+    diagnosticsMessage.value = error instanceof DOMException && error.name === 'AbortError'
+      ? '已取消分享。'
+      : error instanceof Error ? error.message : '导出诊断日志失败。'
+  } finally {
+    diagnosticsExporting.value = false
+  }
 }
 
 function isSelectionCurrent(generation: number): boolean {
@@ -954,6 +1019,13 @@ function localProjectToCoreProject(
 
 let removeResumeListener: (() => void) | null = null
 let removeWindowInsetsListener: (() => void) | null = null
+let removeNativeStageListener: (() => void) | null = null
+let secureStorageRecovered = false
+
+function onSecureStorageRecovered(): void {
+  secureStorageRecovered = true
+  statusMessage.value = '设备密钥已更换，请重新登录或配对电脑'
+}
 
 function syncNativeWindowInsets(insets: { top: number }): void {
   // The Android bridge reports CSS pixels. Keeping the value on :root lets
@@ -964,17 +1036,30 @@ function syncNativeWindowInsets(insets: { top: number }): void {
 }
 
 onMounted(async () => {
+  window.addEventListener('lamtools:secure-storage-recovered', onSecureStorageRecovered)
   removeWindowInsetsListener = observeNativeWindowInsets(syncNativeWindowInsets)
+  try {
+    removeNativeStageListener = await listenForNativeAgentStages(mobileDiagnostics)
+  } catch {
+    // Stage diagnostics are optional and must not delay app initialization.
+  }
   await initialize()
   if (!isAppAlive()) return
+  if (secureStorageRecovered) {
+    statusMessage.value = '设备密钥已更换，请重新登录或配对电脑'
+    accessPanelOpen.value = true
+  }
   removeResumeListener = onMobileResume(() => { void restoreActiveConnection() })
 })
 
 onUnmounted(() => {
+  window.removeEventListener('lamtools:secure-storage-recovered', onSecureStorageRecovered)
   appDisposed = true
   accountOperationGeneration += 1
   workspaceSelectionGeneration += 1
   stopAccountDiscovery()
+  removeNativeStageListener?.()
+  removeDiagnosticObserver()
   removeResumeListener?.()
   removeWindowInsetsListener?.()
   document.documentElement.style.removeProperty('--native-safe-area-top')
@@ -1016,6 +1101,41 @@ onUnmounted(() => {
 
 .mobile-host--left-drawer-open::before {
   background: var(--theme-backdrop-background);
+}
+
+.mobile-diagnostics-trigger {
+  position: fixed;
+  top: max(var(--space-2), var(--mobile-header-offset, env(safe-area-inset-top, 0px)));
+  right: var(--space-3);
+  z-index: var(--z-popover);
+  display: grid;
+  width: 40px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--theme-main-text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-diagnostics-trigger--with-dock {
+  right: calc(var(--space-3) + 44px + var(--space-1));
+}
+
+.mobile-diagnostics-trigger:hover {
+  background: color-mix(in srgb, var(--theme-main-text) 7%, transparent);
+}
+
+.mobile-diagnostics-trigger:active {
+  transform: scale(.98);
+}
+
+.mobile-diagnostics-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--theme-main-text) 72%, transparent);
+  outline-offset: 2px;
 }
 
 @media (max-width: 640px) {

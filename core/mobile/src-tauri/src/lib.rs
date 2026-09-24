@@ -1,10 +1,15 @@
 use lamtools_runtime::{
     hooks::{HookEngine, HookListPayload, HookRegistry, HookRunContext},
-    mcp::{load_server_configs, CompositeToolRuntime, McpServerConfig, McpToolRuntime},
+    mcp::{load_server_configs, CompositeToolRuntime, McpLoadReport, McpServerConfig, McpToolRuntime},
     memory::{dream_with_model, DreamingConfig, DreamingOutcome},
     project_tools::ProjectFileTools,
-    provider::{HttpModelBackend, ProviderConfig},
-    study::{immutable_raw_id, NoteWriter, StudyScope, StudyStore, StudyTools},
+    provider::{HttpModelBackend, ProviderConfig, RetryPolicy},
+    skills::{CombinedSkillTools, SkillTools},
+    study::{
+        immutable_raw_id, NoteWriter, StudyScope, StudySearchMessage, StudySearchSession,
+        StudyStore, StudyTools,
+    },
+    study_skills::{self, BundledStudySkillTools, StudySkillRecord},
     sub_agent::{
         SubAgentHub, SubAgentMail, SubAgentModelEntry, SubAgentParentConfig, SubAgentRecord,
         SubAgentStore,
@@ -29,7 +34,11 @@ use tauri::Emitter;
 use tauri::Manager;
 
 mod cancellation;
+mod attachments;
+mod context_loader;
 use cancellation::{RegisterError, TurnCancellationRegistry};
+use attachments::{AttachmentMetadata, AttachmentStore};
+use context_loader::load_project_context;
 
 /// Stage events contain only an opaque turn id and fixed stage names.
 /// Message text, request bodies, provider URLs and credentials stay out of the
@@ -39,6 +48,56 @@ fn emit_agent_stage(app: &tauri::AppHandle, turn_id: &str, stage: &'static str) 
         "sunday-agent-stage",
         serde_json::json!({ "turnId": turn_id, "stage": stage }),
     );
+}
+
+fn mcp_load_warnings(report: &McpLoadReport) -> Vec<String> {
+    if report.errors.is_empty() {
+        return Vec::new();
+    }
+    // MCP startup errors may contain executable paths or child stderr. Keep
+    // the UI warning useful without copying untrusted payloads or secrets.
+    let mut kinds = BTreeSet::new();
+    for error in &report.errors {
+        let kind = if error.contains("timed out") {
+            "响应超时"
+        } else if error.contains("could not start") {
+            "启动失败"
+        } else if error.contains("closed the connection") {
+            "连接中断"
+        } else if error.contains("invalid JSON") {
+            "返回数据无效"
+        } else {
+            "工具发现失败"
+        };
+        kinds.insert(kind);
+    }
+    vec![format!(
+        "{} 个 MCP 服务未就绪（{}）；请检查扩展配置。",
+        report.errors.len(),
+        kinds.into_iter().collect::<Vec<_>>().join("、")
+    )]
+}
+
+fn append_runtime_warnings(progress: &mut TurnProgress, warnings: &[String]) {
+    if warnings.is_empty() {
+        return;
+    }
+    match progress {
+        TurnProgress::Completed { result } => {
+            for warning in warnings {
+                if !result.runtime_warnings.contains(warning) {
+                    result.runtime_warnings.push(warning.clone());
+                }
+            }
+        }
+        TurnProgress::ApprovalRequired { continuation, .. } => {
+            for warning in warnings {
+                if !continuation.runtime_warnings.contains(warning) {
+                    continuation.runtime_warnings.push(warning.clone());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -68,6 +127,32 @@ mod window_insets;
 struct MobileSecureStorage<R: Runtime>(PluginHandle<R>);
 
 #[cfg(target_os = "android")]
+struct MobileDiagnosticsShare<R: Runtime>(PluginHandle<R>);
+
+#[cfg(target_os = "android")]
+struct MobileAttachmentOpen<R: Runtime>(PluginHandle<R>);
+
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct AttachmentCacheDirectory {
+    path: String,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachmentOpenRequest<'a> {
+    file_name: &'a str,
+    mime_type: &'a str,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+struct DiagnosticsShareRequest<'a> {
+    contents: &'a str,
+}
+
+#[cfg(target_os = "android")]
 #[derive(serde::Serialize)]
 struct SecureKeyRequest<'a> {
     key: &'a str,
@@ -90,6 +175,115 @@ struct MobileAgentState {
     sub_agents: Arc<SubAgentHub>,
     dreaming: Arc<SqliteDreamStateStore>,
     turn_cancellations: TurnCancellationRegistry,
+}
+
+#[derive(Serialize)]
+struct MobileAttachmentData {
+    metadata: AttachmentMetadata,
+    bytes: Vec<u8>,
+}
+
+fn native_attachment_store(app: &tauri::AppHandle) -> Result<AttachmentStore, String> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("attachments");
+    AttachmentStore::new(root).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn sunday_attachment_save(
+    app: tauri::AppHandle,
+    session_id: String,
+    filename: String,
+    mime: String,
+    bytes: Vec<u8>,
+) -> Result<AttachmentMetadata, String> {
+    tokio::task::spawn_blocking(move || {
+        native_attachment_store(&app)?
+            .save(&session_id, &filename, &mime, &bytes)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn sunday_attachment_read(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<MobileAttachmentData, String> {
+    tokio::task::spawn_blocking(move || {
+        let data = native_attachment_store(&app)?
+            .read(&id)
+            .map_err(|error| error.to_string())?;
+        Ok(MobileAttachmentData {
+            metadata: data.metadata,
+            bytes: data.bytes,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn sunday_attachment_list(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<Vec<AttachmentMetadata>, String> {
+    tokio::task::spawn_blocking(move || {
+        native_attachment_store(&app)?
+            .list(&session_id)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn sunday_attachment_delete(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        native_attachment_store(&app)?
+            .delete(&id)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn sunday_attachment_open(
+    app: tauri::AppHandle,
+    opener: tauri::State<'_, MobileAttachmentOpen<tauri::Wry>>,
+    id: String,
+) -> Result<(), String> {
+    let directory = opener
+        .0
+        .run_mobile_plugin::<AttachmentCacheDirectory>("cacheDirectory", serde_json::json!({}))
+        .map_err(|_| "无法准备附件缓存".to_owned())?;
+    let (file_name, mime_type) = tokio::task::spawn_blocking(move || {
+        native_attachment_store(&app)?
+            .write_open_cache(&id, std::path::Path::new(&directory.path))
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    opener
+        .0
+        .run_mobile_plugin::<Value>(
+            "open",
+            AttachmentOpenRequest {
+                file_name: &file_name,
+                mime_type: &mime_type,
+            },
+        )
+        .map(|_| ())
+        .map_err(|_| "无法使用系统应用打开附件".to_owned())
 }
 
 struct SqliteSubAgentStore {
@@ -417,10 +611,14 @@ struct MobileTurnPayload {
     model_record_id: String,
     provider: ProviderConfig,
     #[serde(default)]
+    retry_config: Value,
+    #[serde(default)]
     models: Vec<SubAgentModelEntry>,
     history: Vec<Message>,
     #[serde(default)]
     context: AgentContext,
+    #[serde(default)]
+    load_context_config: Value,
     #[serde(default)]
     options: TurnOptions,
     #[serde(default)]
@@ -439,6 +637,31 @@ struct MobileTurnPayload {
     /// this decision because it reads the session's Study metadata.
     #[serde(default)]
     study_tools: bool,
+    #[serde(default)]
+    disabled_skill_names: Vec<String>,
+}
+
+#[tauri::command]
+fn sunday_study_skill_catalog() -> Vec<StudySkillRecord> {
+    study_skills::catalog()
+}
+
+fn apply_study_skill_context(context: &mut AgentContext, disabled: &[String]) {
+    if !context
+        .mode_context
+        .contains(lamtools_runtime::study::STUDY_SYSTEM_PROMPT.trim())
+    {
+        if !context.mode_context.trim().is_empty() {
+            context.mode_context.push_str("\n\n");
+        }
+        context
+            .mode_context
+            .push_str(lamtools_runtime::study::STUDY_SYSTEM_PROMPT.trim());
+    }
+    context.mode_context.push_str("\n\n");
+    context
+        .mode_context
+        .push_str(&study_skills::catalog_prompt(disabled));
 }
 
 #[tauri::command]
@@ -468,11 +691,10 @@ async fn sunday_agent_turn_inner(
     let project_root = native_project_root(&app, &payload.project_id)?;
     tokio_create_dir_all(&project_root).await?;
     let mut context = payload.context;
-    if context.project_instructions.trim().is_empty() {
-        context.project_instructions = read_optional_utf8(project_root.join("AGENTS.md")).await?;
-    }
-    if context.memory.trim().is_empty() {
-        context.memory = read_optional_utf8(project_root.join("MEMORY.md")).await?;
+    if payload.study_tools {
+        apply_study_skill_context(&mut context, &payload.disabled_skill_names);
+    } else {
+        context = load_project_context(&project_root, context, &payload.load_context_config)?;
     }
     emit_agent_stage(&app, &trace_turn_id, "native_project_ready");
     apply_sub_agent_context(
@@ -501,18 +723,49 @@ async fn sunday_agent_turn_inner(
     emit_agent_stage(&app, &trace_turn_id, "native_hooks_ready");
     let capabilities = android_capabilities();
     emit_agent_stage(&app, &trace_turn_id, "native_mcp_start");
-    let mcp_runtime = Arc::new(
-        McpToolRuntime::load(load_mobile_mcp_configs(&project_root, &payload.mcp_config).await)
-            .await,
+    let (mcp_configs, invalid_mcp_configs) =
+        load_mobile_mcp_configs(&project_root, &payload.mcp_config).await;
+    let mcp_runtime = Arc::new(McpToolRuntime::load(mcp_configs).await);
+    let mut mcp_warnings = mcp_load_warnings(mcp_runtime.report());
+    if invalid_mcp_configs > 0 {
+        mcp_warnings.push(format!(
+            "{} 个 MCP 配置缺少可执行命令或格式无效，请检查扩展配置。",
+            invalid_mcp_configs
+        ));
+    }
+    emit_agent_stage(
+        &app,
+        &trace_turn_id,
+        if mcp_warnings.is_empty() {
+            "native_mcp_ready"
+        } else {
+            "native_mcp_partial"
+        },
     );
-    emit_agent_stage(&app, &trace_turn_id, "native_mcp_ready");
     let hook_engine = Arc::new(HookEngine::new(hooks).with_mcp_caller(mcp_runtime.clone()));
     let project_runtime: Arc<dyn ToolRuntime> =
         Arc::new(ProjectFileTools::new(project_root.clone()));
-    let child_tools: Arc<dyn ToolRuntime> = Arc::new(CompositeToolRuntime::new(
-        &capabilities,
-        vec![project_runtime.clone(), mcp_runtime.clone()],
-    ));
+    let (skill_runtime, skill_prompt): (Arc<dyn ToolRuntime>, String) = if payload.study_tools {
+        let skills = CombinedSkillTools::new(payload.disabled_skill_names.clone(), Vec::new());
+        let prompt = SkillTools::new(payload.disabled_skill_names.clone(), Vec::new())
+            .catalog_prompt();
+        (Arc::new(skills), prompt)
+    } else {
+        let skills = SkillTools::new(payload.disabled_skill_names.clone(), Vec::new());
+        let prompt = skills.catalog_prompt();
+        (Arc::new(skills), prompt)
+    };
+    if !skill_prompt.is_empty() {
+        context.mode_context.push_str("\n\n");
+        context.mode_context.push_str(&skill_prompt);
+    }
+    let mut shared_tools: Vec<Arc<dyn ToolRuntime>> =
+        vec![project_runtime, mcp_runtime, skill_runtime];
+    if payload.study_tools {
+        shared_tools.push(Arc::new(StudyTools::new(native_study_store(&app)?)));
+    }
+    let child_tools: Arc<dyn ToolRuntime> =
+        Arc::new(CompositeToolRuntime::new(&capabilities, shared_tools.clone()));
     let models = with_active_model(
         payload.models,
         &payload.model_record_id,
@@ -534,10 +787,7 @@ async fn sunday_agent_turn_inner(
         )
         .await?;
     emit_agent_stage(&app, &trace_turn_id, "native_subagents_ready");
-    let mut tool_runtimes: Vec<Arc<dyn ToolRuntime>> = vec![project_runtime, mcp_runtime];
-    if payload.study_tools {
-        tool_runtimes.push(Arc::new(StudyTools::new(native_study_store(&app)?)));
-    }
+    let mut tool_runtimes = shared_tools;
     if payload.sub_agent_enabled {
         tool_runtimes.push(Arc::new(
             agent_state.sub_agents.tools(parent_thread_id.clone()),
@@ -548,7 +798,10 @@ async fn sunday_agent_turn_inner(
     let progress_turn_id = trace_turn_id.clone();
     let foreground_model = Arc::new(AtomicBool::new(false));
     let model = Arc::new(
-        HttpModelBackend::new(payload.provider)
+        HttpModelBackend::with_retry_policy(
+            payload.provider,
+            RetryPolicy::from_config(&payload.retry_config),
+        )
             .map_err(|error| error.to_string())?
             .with_progress(move |stage| {
                 emit_agent_stage(&progress_app, &progress_turn_id, stage);
@@ -606,6 +859,7 @@ async fn sunday_agent_turn_inner(
         })
         .await
         .map_err(|error| error.to_string())?;
+    append_runtime_warnings(&mut progress, &mcp_warnings);
     emit_agent_stage(&app, &trace_turn_id, "native_runtime_done");
     apply_dreaming_with_options(
         agent_state,
@@ -630,6 +884,10 @@ struct MobileResumePayload {
     project_id: String,
     provider: ProviderConfig,
     #[serde(default)]
+    retry_config: Value,
+    #[serde(default)]
+    load_context_config: Value,
+    #[serde(default)]
     models: Vec<SubAgentModelEntry>,
     continuation: TurnContinuation,
     response: ApprovalResponse,
@@ -649,6 +907,8 @@ struct MobileResumePayload {
     /// this decision because it reads the session's Study metadata.
     #[serde(default)]
     study_tools: bool,
+    #[serde(default)]
+    disabled_skill_names: Vec<String>,
 }
 
 #[tauri::command]
@@ -688,18 +948,66 @@ async fn sunday_agent_resume_inner(
     emit_agent_stage(&app, &trace_turn_id, "native_hooks_ready");
     let capabilities = payload.continuation.capabilities.clone();
     emit_agent_stage(&app, &trace_turn_id, "native_mcp_start");
-    let mcp_runtime = Arc::new(
-        McpToolRuntime::load(load_mobile_mcp_configs(&project_root, &payload.mcp_config).await)
-            .await,
+    let (mcp_configs, invalid_mcp_configs) =
+        load_mobile_mcp_configs(&project_root, &payload.mcp_config).await;
+    let mcp_runtime = Arc::new(McpToolRuntime::load(mcp_configs).await);
+    let mut mcp_warnings = mcp_load_warnings(mcp_runtime.report());
+    if invalid_mcp_configs > 0 {
+        mcp_warnings.push(format!(
+            "{} 个 MCP 配置缺少可执行命令或格式无效，请检查扩展配置。",
+            invalid_mcp_configs
+        ));
+    }
+    emit_agent_stage(
+        &app,
+        &trace_turn_id,
+        if mcp_warnings.is_empty() {
+            "native_mcp_ready"
+        } else {
+            "native_mcp_partial"
+        },
     );
-    emit_agent_stage(&app, &trace_turn_id, "native_mcp_ready");
     let hook_engine = Arc::new(HookEngine::new(hooks).with_mcp_caller(mcp_runtime.clone()));
     let project_runtime: Arc<dyn ToolRuntime> =
         Arc::new(ProjectFileTools::new(project_root.clone()));
-    let child_tools: Arc<dyn ToolRuntime> = Arc::new(CompositeToolRuntime::new(
-        &capabilities,
-        vec![project_runtime.clone(), mcp_runtime.clone()],
-    ));
+    let mut context = payload.continuation.context.clone();
+    // Continuations saved before context persistence need a one-time rebuild.
+    if context == AgentContext::default() {
+        if payload.study_tools {
+            apply_study_skill_context(&mut context, &payload.disabled_skill_names);
+        } else {
+            context = load_project_context(&project_root, context, &payload.load_context_config)?;
+        }
+        apply_sub_agent_context(
+            &mut context,
+            payload.sub_agent_enabled,
+            &payload.sub_agent_guide,
+        );
+        let skill_prompt = SkillTools::new(payload.disabled_skill_names.clone(), Vec::new())
+            .catalog_prompt();
+        if !skill_prompt.is_empty() {
+            context.mode_context.push_str("\n\n");
+            context.mode_context.push_str(&skill_prompt);
+        }
+    }
+    let skill_runtime: Arc<dyn ToolRuntime> = if payload.study_tools {
+        Arc::new(CombinedSkillTools::new(
+            payload.disabled_skill_names.clone(),
+            Vec::new(),
+        ))
+    } else {
+        Arc::new(SkillTools::new(
+            payload.disabled_skill_names.clone(),
+            Vec::new(),
+        ))
+    };
+    let mut shared_tools: Vec<Arc<dyn ToolRuntime>> =
+        vec![project_runtime, mcp_runtime, skill_runtime];
+    if payload.study_tools {
+        shared_tools.push(Arc::new(StudyTools::new(native_study_store(&app)?)));
+    }
+    let child_tools: Arc<dyn ToolRuntime> =
+        Arc::new(CompositeToolRuntime::new(&capabilities, shared_tools.clone()));
     let parent_thread_id = if payload.session_id.trim().is_empty() {
         payload.continuation.hook_context.session_id.clone()
     } else {
@@ -710,12 +1018,6 @@ async fn sunday_agent_resume_inner(
         &payload.continuation.model_record_id,
         payload.provider.clone(),
     );
-    let mut child_context = AgentContext::default();
-    apply_sub_agent_context(
-        &mut child_context,
-        payload.sub_agent_enabled,
-        &payload.sub_agent_guide,
-    );
     agent_state
         .sub_agents
         .configure_parent(
@@ -724,7 +1026,7 @@ async fn sunday_agent_resume_inner(
                 models,
                 child_tools,
                 capabilities: capabilities.clone(),
-                context: child_context,
+                context,
                 options: payload.continuation.options.clone(),
                 hook_context: payload.continuation.hook_context.clone(),
                 hooks: Some(hook_engine.clone()),
@@ -732,10 +1034,7 @@ async fn sunday_agent_resume_inner(
         )
         .await?;
     emit_agent_stage(&app, &trace_turn_id, "native_subagents_ready");
-    let mut tool_runtimes: Vec<Arc<dyn ToolRuntime>> = vec![project_runtime, mcp_runtime];
-    if payload.study_tools {
-        tool_runtimes.push(Arc::new(StudyTools::new(native_study_store(&app)?)));
-    }
+    let mut tool_runtimes = shared_tools;
     if payload.sub_agent_enabled {
         tool_runtimes.push(Arc::new(
             agent_state.sub_agents.tools(parent_thread_id.clone()),
@@ -746,7 +1045,10 @@ async fn sunday_agent_resume_inner(
     let progress_turn_id = trace_turn_id.clone();
     let foreground_model = Arc::new(AtomicBool::new(false));
     let model = Arc::new(
-        HttpModelBackend::new(payload.provider)
+        HttpModelBackend::with_retry_policy(
+            payload.provider,
+            RetryPolicy::from_config(&payload.retry_config),
+        )
             .map_err(|error| error.to_string())?
             .with_progress(move |stage| {
                 emit_agent_stage(&progress_app, &progress_turn_id, stage);
@@ -796,6 +1098,7 @@ async fn sunday_agent_resume_inner(
         .resume_turn(payload.continuation, payload.response)
         .await
         .map_err(|error| error.to_string())?;
+    append_runtime_warnings(&mut progress, &mcp_warnings);
     emit_agent_stage(&app, &trace_turn_id, "native_runtime_done");
     apply_dreaming_with_options(
         agent_state,
@@ -1099,6 +1402,8 @@ struct MobileStudyRpcPayload {
     session_targets: Option<Value>,
     #[serde(default)]
     provider: Option<ProviderConfig>,
+    #[serde(default)]
+    retry_config: Value,
 }
 
 #[tauri::command]
@@ -1125,7 +1430,12 @@ async fn sunday_study_rpc(
             .map_err(study_failure)?;
         }
     }
-    dispatch_study(
+    let search_sessions = if payload.method == "study.search" {
+        mobile_study_search_sessions(&app).map_err(study_failure)?
+    } else {
+        Vec::new()
+    };
+    dispatch_study_with_sessions(
         &store,
         &payload.method,
         &payload.params,
@@ -1137,6 +1447,8 @@ async fn sunday_study_rpc(
             .cloned()
             .unwrap_or_default(),
         payload.provider.clone(),
+        &search_sessions,
+        &payload.retry_config,
     )
     .await
     .map_err(study_failure)
@@ -1161,7 +1473,7 @@ fn capture_mobile_note_raw(
         .and_then(Value::as_str)
         .unwrap_or("");
     let state = read_mobile_local_state(app)?;
-    let message = mobile_messages(&state).find(|message| {
+    let message = mobile_messages(&state).into_iter().find(|message| {
         message.get("id").and_then(Value::as_str) == Some(origin_id)
             && message_thread_id(message) == session_id
     });
@@ -1194,7 +1506,7 @@ fn sync_mobile_note_messages(
     let state = read_mobile_local_state(app)?;
     for message in mobile_messages(&state) {
         let message_id = message.get("id").and_then(Value::as_str).unwrap_or("");
-        let session_id = message_thread_id(message);
+        let session_id = message_thread_id(&message);
         if message_id.is_empty() || !targets.contains_key(session_id) {
             continue;
         }
@@ -1228,12 +1540,56 @@ fn read_mobile_local_state(
         .ok_or_else(|| lamtools_runtime::study::StudyError::new("UNKNOWN_RAW_SOURCE"))
 }
 
-fn mobile_messages(state: &Value) -> impl Iterator<Item = &Value> {
-    state
-        .get("messages")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|messages| messages.values())
+fn mobile_messages(state: &Value) -> Vec<Value> {
+    let mut result = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(messages) = state.get("messages").and_then(Value::as_object) {
+        for (key, message) in messages {
+            if message.get("deleted").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
+            let id = message.get("id").and_then(Value::as_str).unwrap_or(key);
+            let thread_id = message_thread_id(message);
+            if !id.is_empty() && !thread_id.is_empty() && seen.insert((thread_id.to_owned(), id.to_owned())) {
+                result.push(message.clone());
+            }
+        }
+    }
+    if let Some(snapshots) = state.get("snapshots").and_then(Value::as_object) {
+        for (thread_id, snapshot) in snapshots {
+            let core = snapshot.get("core").unwrap_or(snapshot);
+            let Some(items) = core.get("items").and_then(Value::as_object) else { continue };
+            for (key, item) in items {
+                if item.get("status").and_then(Value::as_str) == Some("cancelled") { continue; }
+                let payload = item.get("payload").unwrap_or(&Value::Null);
+                let (role, content) = match payload.get("type").and_then(Value::as_str) {
+                    Some("userMessage") => (
+                        "user",
+                        payload.get("content").and_then(Value::as_array).map(|parts| {
+                            parts.iter()
+                                .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                                .collect::<Vec<_>>().join("\n")
+                        }).unwrap_or_default(),
+                    ),
+                    Some("agentMessage") => (
+                        "assistant",
+                        payload.get("content").or_else(|| item.get("content"))
+                            .and_then(Value::as_str).unwrap_or("").to_owned(),
+                    ),
+                    _ => continue,
+                };
+                let id = item.get("id").and_then(Value::as_str).unwrap_or(key);
+                if id.is_empty() || content.is_empty() || !seen.insert((thread_id.to_owned(), id.to_owned())) {
+                    continue;
+                }
+                result.push(serde_json::json!({
+                    "id": id, "threadId": thread_id, "role": role, "content": content,
+                }));
+            }
+        }
+    }
+    result
 }
 
 fn message_thread_id(message: &Value) -> &str {
@@ -1242,6 +1598,114 @@ fn message_thread_id(message: &Value) -> &str {
         .or_else(|| message.get("thread_id"))
         .and_then(Value::as_str)
         .unwrap_or("")
+}
+
+fn mobile_study_search_sessions(
+    app: &tauri::AppHandle,
+) -> Result<Vec<StudySearchSession>, lamtools_runtime::study::StudyError> {
+    let path = native_state_path(app, "lamtools-mobile")
+        .map_err(lamtools_runtime::study::StudyError::new)?;
+    let Some(state) = read_native_state(&path, None)
+        .map_err(lamtools_runtime::study::StudyError::new)?
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(study_search_sessions_from_state(&state))
+}
+
+fn study_search_sessions_from_state(state: &Value) -> Vec<StudySearchSession> {
+    let mut sessions = Vec::new();
+    let Some(threads) = state.get("threads").and_then(Value::as_object) else {
+        return sessions;
+    };
+    for (thread_key, thread) in threads {
+        if thread.get("deleted").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let Some(metadata) = thread.get("metadata").and_then(Value::as_object) else {
+            continue;
+        };
+        if metadata.get("owner_plugin").and_then(Value::as_str) != Some("study") {
+            continue;
+        }
+        let id = thread.get("id").and_then(Value::as_str).unwrap_or(thread_key);
+        if id.is_empty() {
+            continue;
+        }
+        let mut messages = Vec::new();
+        let mut seen = BTreeSet::new();
+        if let Some(stored) = state.get("messages").and_then(Value::as_object) {
+            for (key, message) in stored {
+                if message_thread_id(message) != id
+                    || message.get("deleted").and_then(Value::as_bool) == Some(true)
+                {
+                    continue;
+                }
+                let message_id = message.get("id").and_then(Value::as_str).unwrap_or(key);
+                let content = message.get("content").and_then(Value::as_str).unwrap_or("");
+                if !content.is_empty() && seen.insert(message_id.to_owned()) {
+                    messages.push(StudySearchMessage {
+                        id: message_id.to_owned(),
+                        content: content.to_owned(),
+                    });
+                }
+            }
+        }
+        // Standalone sessions write Core snapshots, while paired sessions may
+        // write the separate messages map. Search both trusted state sources.
+        if let Some(snapshot) = state.get("snapshots").and_then(|snapshots| snapshots.get(id)) {
+            let core = snapshot.get("core").unwrap_or(snapshot);
+            if let Some(items) = core.get("items").and_then(Value::as_object) {
+                for (key, item) in items {
+                    if item.get("status").and_then(Value::as_str) == Some("cancelled") {
+                        continue;
+                    }
+                    let payload = item.get("payload").unwrap_or(&Value::Null);
+                    let kind = payload.get("type").and_then(Value::as_str).unwrap_or("");
+                    let content = match kind {
+                        "userMessage" => payload
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .map(|parts| {
+                                parts
+                                    .iter()
+                                    .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .unwrap_or_default(),
+                        "agentMessage" => payload
+                            .get("content")
+                            .or_else(|| item.get("content"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                        _ => String::new(),
+                    };
+                    let message_id = item.get("id").and_then(Value::as_str).unwrap_or(key);
+                    if !content.is_empty() && seen.insert(message_id.to_owned()) {
+                        messages.push(StudySearchMessage {
+                            id: message_id.to_owned(),
+                            content,
+                        });
+                    }
+                }
+            }
+        }
+        sessions.push(StudySearchSession {
+            scope: StudyScope::local_compatibility(),
+            id: id.to_owned(),
+            title: thread.get("title").and_then(Value::as_str).unwrap_or(id).to_owned(),
+            node_name: metadata
+                .get("study_node_name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
+            messages,
+        });
+    }
+    sessions
 }
 
 /// Route one Study operation onto the shared store.
@@ -1256,6 +1720,29 @@ async fn dispatch_study(
     session_targets: &serde_json::Map<String, Value>,
     provider: Option<ProviderConfig>,
 ) -> Result<Value, lamtools_runtime::study::StudyError> {
+    dispatch_study_with_sessions(
+        store,
+        method,
+        raw_params,
+        session_metadata,
+        session_targets,
+        provider,
+        &[],
+        &Value::Null,
+    )
+    .await
+}
+
+async fn dispatch_study_with_sessions(
+    store: &StudyStore,
+    method: &str,
+    raw_params: &Value,
+    session_metadata: Option<&serde_json::Map<String, Value>>,
+    session_targets: &serde_json::Map<String, Value>,
+    provider: Option<ProviderConfig>,
+    search_sessions: &[StudySearchSession],
+    retry_config: &Value,
+) -> Result<Value, lamtools_runtime::study::StudyError> {
     let params = if raw_params.is_null() {
         Value::Object(Default::default())
     } else {
@@ -1264,7 +1751,7 @@ async fn dispatch_study(
     match method {
         "study.get" => store.read(&params),
         "study.build" => store.build(&params),
-        "study.search" => store.search(&params),
+        "study.search" => store.search_with_sessions(&params, search_sessions),
         "study.pin" => store.pins(&params, &session_targets),
         "study.layout" => store.layout(&params),
         "study.current" => store.current(params.get("node_id").and_then(Value::as_str)),
@@ -1312,7 +1799,10 @@ async fn dispatch_study(
                 .to_owned();
             match provider {
                 Some(provider) => {
-                    let backend = HttpModelBackend::new(provider).map_err(|error| {
+                    let backend = HttpModelBackend::with_retry_policy(
+                        provider,
+                        RetryPolicy::from_config(retry_config),
+                    ).map_err(|error| {
                         lamtools_runtime::study::StudyError::new(error.to_string())
                     })?;
                     store.answer(&params, Some(&backend), &model_id, "").await
@@ -1411,7 +1901,7 @@ fn android_capabilities() -> DeviceCapabilities {
         platform: "android".into(),
         project_files: true,
         network: true,
-        notifications: true,
+        notifications: false,
         ..Default::default()
     }
 }
@@ -1419,7 +1909,8 @@ fn android_capabilities() -> DeviceCapabilities {
 async fn load_mobile_mcp_configs(
     project_root: &std::path::Path,
     global_config: &Value,
-) -> Vec<McpServerConfig> {
+) -> (Vec<McpServerConfig>, usize) {
+    let mut invalid_count = invalid_mcp_entries(global_config);
     let mut configs = load_server_configs(global_config)
         .into_iter()
         .map(|config| (config.name.clone(), config))
@@ -1429,17 +1920,45 @@ async fn load_mobile_mcp_configs(
         project_root.join(".mcp.json"),
         project_root.join("mcp.json"),
     ] {
-        let Ok(content) = tokio::fs::read_to_string(&path).await else {
-            continue;
+        let content = match tokio::fs::read_to_string(&path).await {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                invalid_count += 1;
+                continue;
+            }
         };
         let Ok(value) = json5::from_str::<Value>(&content) else {
+            invalid_count += 1;
             continue;
         };
+        invalid_count += invalid_mcp_entries(&value);
         for config in load_server_configs(&value) {
             configs.insert(config.name.clone(), config);
         }
     }
-    configs.into_values().collect()
+    (configs.into_values().collect(), invalid_count)
+}
+
+fn invalid_mcp_entries(value: &Value) -> usize {
+    value
+        .get("mcpServers")
+        .or_else(|| value.get("servers"))
+        .unwrap_or(value)
+        .as_object()
+        .map(|servers| {
+            servers
+                .values()
+                .filter(|entry| {
+                    entry.get("enabled").and_then(Value::as_bool) != Some(false)
+                        && entry
+                            .get("command")
+                            .and_then(Value::as_str)
+                            .is_none_or(|command| command.trim().is_empty())
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Serialize)]
@@ -1452,8 +1971,53 @@ struct NativeProjectFile {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeProjectFileEntry {
-    path: String,
+    name: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
     size: u64,
+    ext: String,
+}
+
+async fn list_project_directory(
+    root: &std::path::Path,
+    path: &str,
+) -> Result<Vec<NativeProjectFileEntry>, String> {
+    let requested = safe_project_relative_path(root, path, true)?;
+    let mut directory = tokio::fs::read_dir(&requested)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut entries = Vec::new();
+    while let Some(entry) = directory.next_entry().await.map_err(|error| error.to_string())? {
+        // Do not expose a link as a traversable directory or follow it for size.
+        let metadata = tokio::fs::symlink_metadata(entry.path())
+            .await
+            .map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_dir = metadata.is_dir();
+        entries.push(NativeProjectFileEntry {
+            ext: if is_dir {
+                String::new()
+            } else {
+                std::path::Path::new(&name)
+                    .extension()
+                    .map(|ext| ext.to_string_lossy().to_lowercase())
+                    .unwrap_or_default()
+            },
+            name,
+            kind: if is_dir { "directory" } else { "file" },
+            size: if is_dir { 0 } else { metadata.len() },
+        });
+    }
+    entries.sort_by(|left, right| {
+        (left.kind != "directory")
+            .cmp(&(right.kind != "directory"))
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(entries)
 }
 
 #[tauri::command]
@@ -1464,42 +2028,39 @@ async fn project_file_list(
 ) -> Result<Vec<NativeProjectFileEntry>, String> {
     let root = native_project_root(&app, &project_id)?;
     tokio_create_dir_all(&root).await?;
-    let requested = safe_project_relative_path(&root, path.as_deref().unwrap_or(""), true)?;
-    let mut pending = vec![requested];
-    let mut files = Vec::new();
-    while let Some(directory) = pending.pop() {
-        let mut entries = match tokio::fs::read_dir(&directory).await {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error.to_string()),
-        };
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            let metadata = entry.metadata().await.map_err(|error| error.to_string())?;
-            if metadata.is_dir() {
-                pending.push(entry.path());
-                continue;
-            }
-            if !metadata.is_file() {
-                continue;
-            }
-            let relative = entry
-                .path()
-                .strip_prefix(&root)
-                .map_err(|error| error.to_string())?
-                .to_string_lossy()
-                .replace('\\', "/");
-            files.push(NativeProjectFileEntry {
-                path: relative,
-                size: metadata.len(),
-            });
-        }
-    }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(files)
+    list_project_directory(&root, path.as_deref().unwrap_or("")).await
+}
+
+#[derive(Debug, Serialize)]
+struct NativeProjectDirectoryListing {
+    path: String,
+    entries: Vec<NativeProjectFileEntry>,
+}
+
+#[tauri::command]
+async fn project_directory_browse(
+    app: tauri::AppHandle,
+    path: Option<String>,
+) -> Result<NativeProjectDirectoryListing, String> {
+    // The browser is deliberately limited to the app-private project tree.
+    let requested = path.as_deref().unwrap_or("");
+    let relative = requested.strip_prefix("mobile://").unwrap_or(requested);
+    let relative = relative.trim_matches('/');
+    let projects_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("projects");
+    tokio_create_dir_all(&projects_root).await?;
+    let entries = list_project_directory(&projects_root, relative).await?;
+    Ok(NativeProjectDirectoryListing {
+        path: if relative.is_empty() {
+            "mobile://".into()
+        } else {
+            format!("mobile://{relative}")
+        },
+        entries,
+    })
 }
 
 #[tauri::command]
@@ -1529,8 +2090,10 @@ async fn project_file_write(
     if let Some(parent) = resolved.parent() {
         tokio_create_dir_all(parent).await?;
     }
-    tokio::fs::write(resolved, content.as_bytes())
+    let written = content.clone();
+    tokio::task::spawn_blocking(move || write_memory_atomic(&resolved, written.as_bytes()))
         .await
+        .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
     Ok(NativeProjectFile { path, content })
 }
@@ -1741,6 +2304,22 @@ fn secure_storage_get(
 
 #[cfg(target_os = "android")]
 #[tauri::command]
+fn mobile_diagnostics_share(
+    share: tauri::State<'_, MobileDiagnosticsShare<tauri::Wry>>,
+    contents: String,
+) -> Result<(), String> {
+    if contents.is_empty() || contents.len() > 256 * 1024 {
+        return Err("invalid diagnostics export".into());
+    }
+    share
+        .0
+        .run_mobile_plugin::<Value>("share", DiagnosticsShareRequest { contents: &contents })
+        .map(|_| ())
+        .map_err(|_| "unable to share diagnostics".into())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
 fn secure_storage_set(
     storage: tauri::State<'_, MobileSecureStorage<tauri::Wry>>,
     key: String,
@@ -1815,6 +2394,18 @@ fn safe_project_relative_path(
     {
         return Err("path must stay inside the current project".into());
     }
+    let mut resolved = root.to_path_buf();
+    for component in relative.components() {
+        resolved.push(component);
+        match std::fs::symlink_metadata(&resolved) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err("project path cannot follow a symbolic link".into())
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
     Ok(root.join(relative))
 }
 
@@ -1859,6 +2450,44 @@ pub fn run() {
             })
             .build(),
     );
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new("lamtools-diagnostics-share")
+            .setup(|app, api| {
+                let handle = api.register_android_plugin(
+                    "com.lamtools.mobile",
+                    "LamToolsDiagnosticsSharePlugin",
+                )?;
+                app.manage(MobileDiagnosticsShare(handle));
+                Ok(())
+            })
+            .build(),
+    );
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new("lamtools-attachment-open")
+            .setup(|app, api| {
+                let handle = api.register_android_plugin(
+                    "com.lamtools.mobile",
+                    "LamToolsAttachmentOpenPlugin",
+                )?;
+                app.manage(MobileAttachmentOpen(handle));
+                Ok(())
+            })
+            .build(),
+    );
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new("lamtools-lan-discovery")
+            .setup(|_app, api| {
+                api.register_android_plugin(
+                    "com.lamtools.mobile",
+                    "LamToolsLanDiscoveryPlugin",
+                )?;
+                Ok(())
+            })
+            .build(),
+    );
     let builder = builder.setup(|app| {
         let database_path = app
             .path()
@@ -1889,14 +2518,22 @@ pub fn run() {
         sunday_sub_agent_list,
         sunday_sub_agent_approval,
         sunday_study_rpc,
+        sunday_study_skill_catalog,
         sunday_workflow_rpc,
         load_legacy_mobile_state,
         local_state_read,
         local_state_write,
+        sunday_attachment_save,
+        sunday_attachment_read,
+        sunday_attachment_list,
+        sunday_attachment_delete,
+        sunday_attachment_open,
         project_file_list,
+        project_directory_browse,
         project_file_read,
         project_file_write,
         secure_storage_get,
+        mobile_diagnostics_share,
         secure_storage_set,
         secure_storage_remove,
         window_insets::window_insets_get,
@@ -1910,11 +2547,17 @@ pub fn run() {
         sunday_sub_agent_list,
         sunday_sub_agent_approval,
         sunday_study_rpc,
+        sunday_study_skill_catalog,
         sunday_workflow_rpc,
         load_legacy_mobile_state,
         local_state_read,
         local_state_write,
+        sunday_attachment_save,
+        sunday_attachment_read,
+        sunday_attachment_list,
+        sunday_attachment_delete,
         project_file_list,
+        project_directory_browse,
         project_file_read,
         project_file_write
     ]);
@@ -1926,7 +2569,181 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lamtools_runtime::{study_skills::catalog_prompt, ModelTurn, ToolCall};
     use serde_json::json;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn study_search_collects_only_trusted_study_sessions_and_snapshot_messages() {
+        let state = json!({
+            "threads": {
+                "study-1": {"id":"study-1","title":"Geometry","metadata":{"owner_plugin":"study","study_node_name":"Angles"}},
+                "other": {"id":"other","title":"Secret","metadata":{"owner_plugin":"other"}}
+            },
+            "messages": {
+                "m1": {"id":"m1","threadId":"study-1","content":"stored needle"},
+                "m2": {"id":"m2","threadId":"other","content":"private needle"}
+            },
+            "snapshots": {
+                "study-1": {"core":{"items":{
+                    "i1":{"id":"i1","payload":{"type":"userMessage","content":[{"type":"text","text":"snapshot needle"}]}},
+                    "i2":{"id":"i2","payload":{"type":"agentMessage","content":"reply needle"}},
+                    "i3":{"id":"i3","status":"cancelled","payload":{"type":"agentMessage","content":"cancelled"}}
+                }}}
+            }
+        });
+        let sessions = study_search_sessions_from_state(&state);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title, "Geometry");
+        assert_eq!(sessions[0].node_name, "Angles");
+        assert_eq!(sessions[0].messages.len(), 3);
+        assert!(sessions[0].messages.iter().any(|message| message.content == "snapshot needle"));
+        assert!(!sessions[0].messages.iter().any(|message| message.content == "private needle"));
+        let raw_messages = mobile_messages(&state);
+        assert!(raw_messages.iter().any(|message| {
+            message.get("id").and_then(Value::as_str) == Some("i1")
+                && message.get("content").and_then(Value::as_str) == Some("snapshot needle")
+        }));
+    }
+
+    #[test]
+    fn invalid_mcp_config_is_reported_without_leaking_command_text() {
+        assert_eq!(invalid_mcp_entries(&json!({
+            "mcpServers": {
+                "missing": {"url":"https://example.invalid"},
+                "disabled": {"enabled":false},
+                "valid": {"command":"mcp-server"}
+            }
+        })), 1);
+        let warnings = mcp_load_warnings(&McpLoadReport {
+            servers: Vec::new(), tools: Vec::new(),
+            errors: vec!["MCP server 'private' could not start '/secret/path': token".into()],
+        });
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("启动失败"));
+        assert!(!warnings[0].contains("/secret/path"));
+        assert!(!warnings[0].contains("token"));
+    }
+
+    struct ScriptedStudyModel {
+        step: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelBackend for ScriptedStudyModel {
+        async fn complete(
+            &self,
+            _: &str,
+            messages: &[Message],
+            tools: &[lamtools_runtime::ToolDefinition],
+            _: &TurnOptions,
+        ) -> Result<ModelTurn, lamtools_runtime::RuntimeError> {
+            let step = self.step.fetch_add(1, Ordering::SeqCst);
+            if step == 0 {
+                let Message::System { content } = &messages[0] else {
+                    panic!("missing system message")
+                };
+                assert!(content.contains(lamtools_runtime::study::STUDY_SYSTEM_PROMPT.trim()));
+                assert!(content.contains(&catalog_prompt(&[])));
+                for name in [
+                    "get_knowledge_net",
+                    "build_knowledge_net",
+                    "sign",
+                    "exam",
+                    "notes",
+                    "load_skill",
+                    "read_skill_reference",
+                ] {
+                    assert!(tools.iter().any(|tool| tool.name == name), "missing {name}");
+                }
+            }
+            let (name, arguments) = match step {
+                0 => ("load_skill", json!({"name":"build-map"})),
+                1 => {
+                    assert!(
+                        matches!(messages.last(), Some(Message::Tool { content, .. }) if content.contains("<skill_content name=\\\"build-map\\\">"))
+                    );
+                    (
+                        "read_skill_reference",
+                        json!({"name":"build-map","path":"references/curriculum.md"}),
+                    )
+                }
+                2 => {
+                    assert!(
+                        matches!(messages.last(), Some(Message::Tool { content, .. }) if content.contains("curriculum"))
+                    );
+                    (
+                        "build_knowledge_net",
+                        json!({"revision":0,"operations":[{"action":"create","kind":"course","id":"course-a","data":{"name":"Linear Algebra"}}]}),
+                    )
+                }
+                3 => {
+                    assert!(
+                        matches!(messages.last(), Some(Message::Tool { content, .. }) if content.contains("revision"))
+                    );
+                    ("get_knowledge_net", json!({}))
+                }
+                _ => {
+                    assert!(
+                        matches!(messages.last(), Some(Message::Tool { content, .. }) if content.contains("Linear Algebra"))
+                    );
+                    return Ok(ModelTurn::Text {
+                        text: "done".into(),
+                        reasoning: String::new(),
+                        provider_state: Value::Null,
+                    });
+                }
+            };
+            Ok(ModelTurn::ToolCalls {
+                calls: vec![ToolCall {
+                    id: format!("call-{step}"),
+                    name: name.into(),
+                    arguments,
+                }],
+                provider_state: Value::Null,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn study_agent_request_loads_skill_reference_and_builds_graph() {
+        let store = temp_study_store("agent-skills");
+        let capabilities = DeviceCapabilities {
+            platform: "android".into(),
+            project_files: true,
+            ..Default::default()
+        };
+        let tools = CompositeToolRuntime::new(
+            &capabilities,
+            vec![
+                Arc::new(StudyTools::new(store)),
+                Arc::new(BundledStudySkillTools::new(Vec::new())),
+            ],
+        );
+        let mut context = AgentContext::default();
+        apply_study_skill_context(&mut context, &[]);
+        let result = AgentRuntime::new(
+            ScriptedStudyModel {
+                step: AtomicUsize::new(0),
+            },
+            tools,
+        )
+        .run_turn(TurnRequest {
+            turn_id: "study-turn".into(),
+            model_record_id: "fixture".into(),
+            history: vec![Message::User {
+                content: "Build a linear algebra map".into(),
+            }],
+            capabilities,
+            context,
+            hook_context: Default::default(),
+            options: Default::default(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.text, "done");
+        assert_eq!(result.tool_rounds, 4);
+    }
 
     #[test]
     fn project_ids_cannot_escape_app_storage() {
@@ -1957,6 +2774,54 @@ mod tests {
         assert!(safe_project_relative_path(root, "/outside.txt", false).is_err());
         assert!(safe_project_relative_path(root, "", false).is_err());
         assert_eq!(safe_project_relative_path(root, "", true).unwrap(), root);
+    }
+
+    #[tokio::test]
+    async fn project_directory_listing_is_immediate_and_skips_links() {
+        let root = std::env::temp_dir().join(format!(
+            "lamtools-project-tree-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("notes/deep")).unwrap();
+        std::fs::write(root.join("README.MD"), "root").unwrap();
+        std::fs::write(root.join("notes/a.txt"), "hello").unwrap();
+        std::fs::write(root.join("notes/deep/b.txt"), "nested").unwrap();
+
+        let top = list_project_directory(&root, "").await.unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!((top[0].name.as_str(), top[0].kind, top[0].size), ("notes", "directory", 0));
+        assert_eq!((top[1].name.as_str(), top[1].kind, top[1].ext.as_str()), ("README.MD", "file", "md"));
+        let nested = list_project_directory(&root, "notes").await.unwrap();
+        assert_eq!(nested.len(), 2);
+        assert_eq!(nested[0].name, "deep");
+        assert_eq!((nested[1].name.as_str(), nested[1].size), ("a.txt", 5));
+        assert!(list_project_directory(&root, "../outside").await.is_err());
+        assert!(list_project_directory(&root, "README.MD").await.is_err());
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.parent().unwrap(), root.join("escape")).unwrap();
+            assert!(list_project_directory(&root, "escape").await.is_err());
+            assert!(!list_project_directory(&root, "")
+                .await
+                .unwrap()
+                .iter()
+                .any(|entry| entry.name == "escape"));
+        }
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_dir(root.parent().unwrap(), root.join("escape")).is_ok() {
+            assert!(list_project_directory(&root, "escape").await.is_err());
+            assert!(!list_project_directory(&root, "")
+                .await
+                .unwrap()
+                .iter()
+                .any(|entry| entry.name == "escape"));
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

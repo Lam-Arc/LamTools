@@ -639,11 +639,13 @@ export function createLocalRepository(
   }
 
   async function replaceState(next: LocalState): Promise<void> {
-    state.value = normalizeState(next)
-    activeScope = scopeFor(state.value.accountScope, state.value.desktopId, state.value.workspaceId)
-    localScopes.set(activeScope, clone(state.value))
-    if (database.writeScope) await database.writeScope(activeScope, state.value)
-    else await database.write(state.value)
+    const committed = normalizeState(next)
+    const committedScope = scopeFor(committed.accountScope, committed.desktopId, committed.workspaceId)
+    if (database.writeScope) await database.writeScope(committedScope, committed)
+    else await database.write(committed)
+    state.value = committed
+    activeScope = committedScope
+    localScopes.set(committedScope, clone(committed))
     for (const listener of listeners) listener(state.value)
   }
 

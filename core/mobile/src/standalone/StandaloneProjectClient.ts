@@ -11,6 +11,7 @@ import {
 import type { LocalProject, LocalRepository, LocalThread } from '../storage'
 import {
   hasEmbeddedRustCore,
+  browseEmbeddedProjectDirectory,
   listEmbeddedProjectFiles,
   readEmbeddedProjectFile,
   writeEmbeddedProjectFile,
@@ -76,36 +77,19 @@ export function createStandaloneProjectClient(repository: LocalRepository): Core
     },
     async listFiles(projectId, path = '') {
       if (hasEmbeddedRustCore()) {
-        let files = await listEmbeddedProjectFiles(projectId, path)
-        const nativePaths = new Set(files.map(file => file.path))
         const legacyFiles = await repository.listProjectFiles(projectId, path)
+        // The native listing is one level deep. Probe full legacy paths before
+        // migrating so an older snapshot cannot replace a newer native edit.
         for (const legacy of legacyFiles) {
-          if (nativePaths.has(legacy.path)) continue
-          await writeEmbeddedProjectFile(projectId, legacy.path, legacy.content)
+          let existing
+          try { existing = await readEmbeddedProjectFile(projectId, legacy.path) }
+          catch { continue } // An unreadable native file must never be replaced by legacy text.
+          if (!existing) await writeEmbeddedProjectFile(projectId, legacy.path, legacy.content)
         }
-        if (legacyFiles.some(file => !nativePaths.has(file.path))) {
-          files = await listEmbeddedProjectFiles(projectId, path)
-        }
-        return {
-          path,
-          entries: files.map(file => ({
-            name: file.path,
-            type: 'file' as const,
-            size: file.size,
-            ext: file.path.includes('.') ? file.path.split('.').pop() || '' : '',
-          })),
-        }
+        return { path, entries: await listEmbeddedProjectFiles(projectId, path) }
       }
       const files = await repository.listProjectFiles(projectId, path)
-      return {
-        path,
-        entries: files.map(file => ({
-          name: file.path,
-          type: 'file' as const,
-          size: new TextEncoder().encode(file.content).length,
-          ext: file.path.includes('.') ? file.path.split('.').pop() || '' : '',
-        })),
-      }
+      return { path, entries: immediateLegacyEntries(files, path) }
     },
     async readFile(projectId, path) {
       if (hasEmbeddedRustCore()) {
@@ -144,8 +128,51 @@ export function createStandaloneProjectClient(repository: LocalRepository): Core
       if (!file) return { status: 404, headers: {} as Record<string, string>, body: new Uint8Array() }
       return { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: new TextEncoder().encode(file.content) }
     },
-    async browseDirectory(path = '') { return { entries: [], path } },
+    async browseDirectory(path = '') {
+      const projects = await repository.listProjects()
+      const relative = path.replace(/^mobile:\/\//, '').replace(/^\/+|\/+$/g, '')
+      if (!relative) {
+        return {
+          path: 'mobile://',
+          entries: projects.map(project => ({ name: project.id, type: 'directory' as const, size: 0, ext: '' })),
+        }
+      }
+      const [projectId, ...parts] = relative.split('/')
+      if (!projects.some(project => project.id === projectId)) throw new Error('项目不存在')
+      const projectPath = parts.join('/')
+      if (hasEmbeddedRustCore()) {
+        if (!projectPath) await listEmbeddedProjectFiles(projectId, '')
+        return await browseEmbeddedProjectDirectory(`mobile://${relative}`)
+      }
+      const files = await repository.listProjectFiles(projectId, projectPath)
+      return { path: `mobile://${relative}`, entries: immediateLegacyEntries(files, projectPath) }
+    },
   }
+}
+
+function immediateLegacyEntries(files: Array<{ path: string; content: string }>, path: string) {
+  const prefix = path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+  const entries = new Map<string, { name: string; type: 'directory' | 'file'; size: number; ext: string }>()
+  for (const file of files) {
+    const relative = prefix ? file.path.slice(prefix.length + 1) : file.path
+    if (!relative || (prefix && !file.path.startsWith(`${prefix}/`))) continue
+    const [name, ...rest] = relative.split('/')
+    if (rest.length) {
+      entries.set(name, { name, type: 'directory', size: 0, ext: '' })
+    } else if (!entries.has(name)) {
+      entries.set(name, {
+        name,
+        type: 'file',
+        size: new TextEncoder().encode(file.content).length,
+        ext: name.includes('.') ? name.split('.').pop()?.toLowerCase() || '' : '',
+      })
+    }
+  }
+  return [...entries.values()].sort((left, right) =>
+    Number(right.type === 'directory') - Number(left.type === 'directory')
+      || left.name.toLowerCase().localeCompare(right.name.toLowerCase())
+      || left.name.localeCompare(right.name),
+  )
 }
 
 function toProject(project: LocalProject): CoreProject {

@@ -5,7 +5,9 @@ import {
 import {
   hasEmbeddedRustCore,
   listEmbeddedHooks,
+  listEmbeddedStudySkills,
   type EmbeddedHookListPayload,
+  type EmbeddedStudySkill,
 } from '../native/rustAgent'
 import { cloneState } from '../storage/cloneState'
 
@@ -53,6 +55,7 @@ export class StandaloneExtensionsStore {
       scope: 'extensions',
       legacyKey: EXTENSION_STATE_KEY,
     }),
+    private readonly studySkillCatalog: () => Promise<EmbeddedStudySkill[]> = listEmbeddedStudySkills,
   ) {}
 
   async handleRpc(method: string, params: Record<string, unknown>): Promise<Record<string, unknown> | null> {
@@ -65,7 +68,7 @@ export class StandaloneExtensionsStore {
           builtin: true,
           root: `bundled://${plugin.name}`,
           enabled: !state.disabledPlugins.includes(plugin.name),
-          skills: 'skills' in plugin ? [`bundled://${plugin.name}/skills`] : [],
+          skills: 'skills' in plugin ? [`bundled://${plugin.name}/skills`, `bundled://${plugin.name}/future`] : [],
           hooks: [], mcp: [], tools: [], operations: [], commands: [],
           skill_names: 'skills' in plugin ? [...plugin.skills] : [],
           hook_summary: [], dependencies: [], deps_status: 'none', config_schema: '',
@@ -86,10 +89,8 @@ export class StandaloneExtensionsStore {
       const studyEnabled = !state.disabledPlugins.includes('study')
       const skills = [
         ...coreSkills.map(([name, description]) => ({ name, description, location: `bundled://skills/${name}/SKILL.md`, source: 'core' })),
-        ...plugins.find(plugin => plugin.name === 'study')!.skills.map(name => ({
-          name,
-          description: `Study · ${name}`,
-          location: `bundled://study/skills/${name}/SKILL.md`,
+        ...(await this.studySkillCatalog()).map(skill => ({
+          ...skill,
           source: 'plugin',
         })),
       ].map(skill => ({
@@ -190,6 +191,14 @@ export class StandaloneExtensionsStore {
       hookConfig: cloneState(state.hookConfig),
       trustedHookHashes: [...state.trustedHookHashes],
       mcpConfig: cloneState(state.mcpConfig),
+    }
+  }
+
+  async runtimeSkills(): Promise<{ studyEnabled: boolean; disabledSkillNames: string[] }> {
+    const state = await this.load()
+    return {
+      studyEnabled: !state.disabledPlugins.includes('study'),
+      disabledSkillNames: [...state.disabledSkills],
     }
   }
 

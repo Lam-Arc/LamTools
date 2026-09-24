@@ -25,6 +25,34 @@ class ScopedFakeDatabase extends FakeDatabase {
 }
 
 describe('LocalRepository', () => {
+  it('does not publish a project when durable storage rejects the write', async () => {
+    class FailingDatabase extends FakeDatabase {
+      rejectNextWrite = true
+      override async write(state: LocalState): Promise<void> {
+        if (this.rejectNextWrite) {
+          this.rejectNextWrite = false
+          throw new Error('disk full')
+        }
+        await super.write(state)
+      }
+    }
+    const database = new FailingDatabase()
+    const repository = createLocalRepository(database)
+    await repository.init()
+    let published = 0
+    repository.subscribe(() => { published += 1 })
+
+    await expect(repository.createLocalProject({ name: '未持久化项目' })).rejects.toThrow('disk full')
+    expect(repository.state.value.projects).toEqual({})
+    expect(await repository.listProjects()).toEqual([])
+    expect(database.value).toBeNull()
+    expect(published).toBe(0)
+
+    await repository.createLocalProject({ name: '已持久化项目' })
+    expect((await repository.listProjects())[0]?.name).toBe('已持久化项目')
+    expect(published).toBe(1)
+  })
+
   it('imports a legacy Capacitor state once without overwriting Tauri data', async () => {
     const repository = createLocalRepository(new FakeDatabase())
     await repository.init()

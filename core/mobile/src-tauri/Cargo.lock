@@ -3462,8 +3462,10 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sunday-mobile"
-version = "0.1.6"
+version = "0.1.8"
 dependencies = [
+ "async-trait",
+ "infer",
  "jni 0.22.4",
  "json5",
  "lamtools-runtime",
@@ -3474,6 +3476,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

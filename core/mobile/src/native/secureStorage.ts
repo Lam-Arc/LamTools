@@ -72,7 +72,18 @@ export class TauriSecureStorage implements SecureStorage {
   private readonly prefix = 'lamtools.mobile.'
 
   async get<T>(key: string): Promise<T | null> {
-    const raw = await invoke<string | null>('secure_storage_get', { key: `${this.prefix}${key}` })
+    let raw: string | null
+    try {
+      raw = await invoke<string | null>('secure_storage_get', { key: `${this.prefix}${key}` })
+    } catch (error) {
+      // AndroidKeyStore keys do not survive cloud/device restore. The old
+      // ciphertext cannot be recovered; clear only that invalid entry so the
+      // device identity can be recreated and pairing can continue.
+      if (!String(error).includes('SECURE_STORAGE_KEY_INVALIDATED')) throw error
+      await this.remove(key)
+      globalThis.dispatchEvent?.(new Event('lamtools:secure-storage-recovered'))
+      return null
+    }
     if (raw == null) return null
     return JSON.parse(raw) as T
   }

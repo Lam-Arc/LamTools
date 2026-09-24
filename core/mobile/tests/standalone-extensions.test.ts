@@ -1,10 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { StandaloneExtensionsStore } from '../src/standalone/StandaloneExtensionsStore'
 import { MemoryStandaloneStateStorage } from '../src/standalone/StandaloneStateStorage'
 
 describe('standalone bundled extensions', () => {
-  it('exposes the desktop bundled plugin and skill catalog including Study', async () => {
-    const store = new StandaloneExtensionsStore()
+  it('uses the native bundled Study catalog with canonical descriptions and resource paths', async () => {
+    const catalog = vi.fn(async () => [
+      { name: 'teach', description: 'Teach a learning topic', location: 'bundled://study/skills/teach/SKILL.md' },
+      { name: 'curate-notes', description: 'Organize study notes', location: 'bundled://study/future/curate-notes/SKILL.md' },
+    ])
+    const store = new StandaloneExtensionsStore(undefined, catalog)
     const pluginResult = (await store.handleRpc('plugin.list', {}))!
     expect((pluginResult.plugins as Array<{ name: string; builtin: boolean }>).map(item => item.name))
       .toEqual(['git', 'imagegen', 'study', 'websearch', 'workflow'])
@@ -13,6 +17,17 @@ describe('standalone bundled extensions', () => {
     const skillResult = (await store.handleRpc('skill.list', {}))!
     expect((skillResult.skills as Array<{ name: string }>).map(item => item.name)).toContain('teach')
     expect(skillResult.total_count).toBeGreaterThan(5)
+    expect(catalog).toHaveBeenCalledOnce()
+    expect(skillResult.skills).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'curate-notes', description: 'Organize study notes', location: 'bundled://study/future/curate-notes/SKILL.md' }),
+    ]))
+    await store.handleRpc('skill.disable', { name: 'teach' })
+    await store.handleRpc('plugin.disable', { name: 'study' })
+    expect(await store.runtimeSkills()).toEqual({ studyEnabled: false, disabledSkillNames: ['teach'] })
+    expect((await store.handleRpc('skill.list', {}))!.skills).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'teach', enabled: false }),
+      expect.objectContaining({ name: 'curate-notes', enabled: false }),
+    ]))
   })
 
   it('registers Study and persists extension switches', async () => {
