@@ -292,10 +292,16 @@ struct MobileAgentState {
     turn_cancellations: TurnCancellationRegistry,
 }
 
+/// Attachment bytes travel as base64, not as a JSON array of numbers.
+///
+/// The same bytes as `[1,2,3,…]` cost several times their size on the wire and
+/// again in the webview's JSON parser, which is what made attaching a large
+/// photo slow enough to notice. Every other byte-carrying command in this host
+/// (`sunday_artifact_file`, `project_file_read_raw`) already sends base64.
 #[derive(Serialize)]
 struct MobileAttachmentData {
     metadata: AttachmentMetadata,
-    bytes: Vec<u8>,
+    data_base64: String,
 }
 
 fn native_attachment_store(app: &tauri::AppHandle) -> Result<AttachmentStore, String> {
@@ -313,8 +319,12 @@ async fn sunday_attachment_save(
     session_id: String,
     filename: String,
     mime: String,
-    bytes: Vec<u8>,
+    data_base64: String,
 ) -> Result<AttachmentMetadata, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|error| format!("attachment payload is not valid base64: {error}"))?;
     tokio::task::spawn_blocking(move || {
         native_attachment_store(&app)?
             .save(&session_id, &filename, &mime, &bytes)
@@ -330,12 +340,13 @@ async fn sunday_attachment_read(
     id: String,
 ) -> Result<MobileAttachmentData, String> {
     tokio::task::spawn_blocking(move || {
+        use base64::Engine;
         let data = native_attachment_store(&app)?
             .read(&id)
             .map_err(|error| error.to_string())?;
         Ok(MobileAttachmentData {
             metadata: data.metadata,
-            bytes: data.bytes,
+            data_base64: base64::engine::general_purpose::STANDARD.encode(&data.bytes),
         })
     })
     .await

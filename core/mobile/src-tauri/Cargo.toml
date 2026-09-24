@@ -1,6 +1,6 @@
 [package]
 name = "sunday-mobile"
-version = "0.1.26"
+version = "0.1.27"
 description = "Sunday mobile host"
 authors = ["Lam"]
 edition = "2021"

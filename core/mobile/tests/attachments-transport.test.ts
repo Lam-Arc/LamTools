@@ -3,7 +3,7 @@ import type { LocalDatabase } from '../src/storage/Database'
 import { createLocalRepository, type LocalState } from '../src/storage'
 import type { StandaloneConfigStore } from '../src/standalone/StandaloneConfigStore'
 import { StandaloneTransport } from '../src/standalone/StandaloneTransport'
-import { parseMultipartFile, type NativeAttachmentMetadata } from '../src/native/attachments'
+import { clearAttachmentReadCache, parseMultipartFile, type NativeAttachmentMetadata } from '../src/native/attachments'
 import b4a from 'b4a'
 
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }))
@@ -31,7 +31,7 @@ function multipart(filename: string, mime: string, bytes: Uint8Array) {
 
 function decode(body: Uint8Array) { return JSON.parse(new TextDecoder().decode(body)) }
 
-beforeEach(() => { invokeMock.mockReset() })
+beforeEach(() => { invokeMock.mockReset(); clearAttachmentReadCache() })
 
 describe('standalone attachment transport', () => {
   it('extracts exact binary bytes and per-file MIME, then waits for durable save before 201', async () => {
@@ -50,7 +50,8 @@ describe('standalone attachment transport', () => {
       kind: 'http', method: 'POST', path: `/sessions/${session.id}/attachments`, ...request,
     })
     await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledWith('sunday_attachment_save', {
-      sessionId: session.id, filename: 'picture.png', mime: 'image/png', bytes: Array.from(bytes),
+      sessionId: session.id, filename: 'picture.png', mime: 'image/png',
+      dataBase64: b4a.toString(bytes, 'base64'),
     }))
     let settled = false
     void pending.then(() => { settled = true })
@@ -68,7 +69,7 @@ describe('standalone attachment transport', () => {
     const metadata = { id: 'b'.repeat(32), session_id: session.id, filename: "héllo's.txt", mime_type: 'text/plain', size: 5, preview_type: 'text' }
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'sunday_attachment_list') return [metadata]
-      if (command === 'sunday_attachment_read') return { metadata, bytes: Array.from(new TextEncoder().encode('hello')) }
+      if (command === 'sunday_attachment_read') return { metadata, data_base64: b4a.toString(new TextEncoder().encode('hello'), 'base64') }
       if (command === 'sunday_attachment_delete') return true
       if (command === 'sunday_attachment_open') return undefined
       throw new Error(`unexpected ${command}`)
@@ -115,6 +116,32 @@ describe('standalone attachment transport', () => {
     expect(missing.status).toBe(404)
   })
 
+  it('reads back a freshly uploaded attachment without going to the store again', async () => {
+    const repository = createLocalRepository(new MemoryDatabase())
+    const session = await repository.createLocalSession(undefined, 'Attachments')
+    const bytes = Uint8Array.of(1, 2, 3, 4)
+    const metadata = {
+      id: 'f'.repeat(32), session_id: session.id, filename: 'a.txt',
+      mime_type: 'text/plain', size: bytes.length, preview_type: 'text',
+    }
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'sunday_attachment_save') return metadata
+      throw new Error(`unexpected ${command}`)
+    })
+    const transport = new StandaloneTransport(repository)
+    const uploaded = await transport.request<{ status: number }>({
+      kind: 'http', method: 'POST', path: `/sessions/${session.id}/attachments`,
+      ...multipart('a.txt', 'text/plain', bytes),
+    })
+    expect(uploaded.status).toBe(201)
+    const download = await transport.request<{ body: Uint8Array }>({
+      kind: 'http', method: 'GET', path: `/attachments/${metadata.id}/download`,
+    })
+    expect(Array.from(download.body)).toEqual([1, 2, 3, 4])
+    // The upload bytes were kept, so nothing re-read the file.
+    expect(invokeMock.mock.calls.map(call => call[0])).toEqual(['sunday_attachment_save'])
+  })
+
   it('passes bounded text and real image bytes to the model, rehydrates image history, and rejects other binary before acceptance', async () => {
     const repository = createLocalRepository(new MemoryDatabase())
     const session = await repository.createLocalSession(undefined, 'Attachments')
@@ -141,10 +168,10 @@ describe('standalone attachment transport', () => {
     invokeMock.mockImplementation(async (command: string, args: { id?: string }) => {
       if (command !== 'sunday_attachment_read') throw new Error(`unexpected ${command}`)
       return args.id === textMetadata.id
-        ? { metadata: textMetadata, bytes: Array.from(textBytes) }
+        ? { metadata: textMetadata, data_base64: b4a.toString(textBytes, 'base64') }
         : args.id === imageMetadata.id
-          ? { metadata: imageMetadata, bytes: Array.from(imageBytes) }
-          : { metadata: pdfMetadata, bytes: [0, 255, 0, 1] }
+          ? { metadata: imageMetadata, data_base64: imageBase64 }
+          : { metadata: pdfMetadata, data_base64: b4a.toString(Uint8Array.of(0, 255, 0, 1), 'base64') }
     })
     const runAgent = vi.fn(async (input: any) => ({
       text: 'done', runtimeModelId: 'fixture-model', toolRounds: 0,
@@ -188,6 +215,9 @@ describe('standalone attachment transport', () => {
       role: 'user_multimodal',
       images: [{ attachment_id: imageMetadata.id, mime_type: 'image/png', data_base64: imageBase64 }],
     }))
+    // Replaying the history read the image body from the store exactly once: the
+    // second turn reused what the first one had already read.
+    expect(invokeMock.mock.calls.filter(call => call[1]?.id === imageMetadata.id)).toHaveLength(1)
 
     const beforeUnsupported = await repository.loadThreadSnapshot(session.id)
     await expect(transport.request({ method: 'turn/start', params: {
