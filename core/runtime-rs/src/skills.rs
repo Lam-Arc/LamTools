@@ -214,6 +214,18 @@ impl SkillTools {
     }
 
     pub fn catalog_prompt(&self) -> String {
+        self.catalog_prompt_for(&DeviceCapabilities::default())
+    }
+
+    /// The skill list, told whether this host can run the commands a skill
+    /// documents.
+    ///
+    /// Several office skills describe a validation and rendering step through
+    /// `py -3.14 -m lamtools_core.cli office …`. A host without a shell cannot
+    /// run it, and saying so beats letting the model announce a step it will then
+    /// fail; the capability line the system prompt already carries stays the
+    /// single source of truth for what this device can do.
+    pub fn catalog_prompt_for(&self, capabilities: &DeviceCapabilities) -> String {
         let rows = self
             .entries
             .values()
@@ -221,10 +233,20 @@ impl SkillTools {
             .map(|entry| format!("- {}: {}", entry.record.name, entry.record.description))
             .collect::<Vec<_>>();
         if rows.is_empty() {
-            String::new()
-        } else {
-            format!("Available skills:\nUse load_skill only when the task matches a trigger below; full instructions load on demand.\n{}", rows.join("\n"))
+            return String::new();
         }
+        let mut prompt = format!(
+            "Available skills:\nUse load_skill only when the task matches a trigger below; full instructions load on demand.\n{}",
+            rows.join("\n")
+        );
+        if !capabilities.shell {
+            prompt.push_str(
+                "\nSkills that describe a `py -3.14 -m lamtools_core.cli office …` step need a desktop host: \
+                 this device has no shell, so produce the source files directly and say in your reply that \
+                 validation and rendering have to run on the desktop.",
+            );
+        }
+        prompt
     }
 
     fn lookup(&self, name: &str) -> Result<&Entry, RuntimeError> {
@@ -361,6 +383,54 @@ fn implicit_allowed(dir: &Path) -> bool {
     })
 }
 
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+
+    fn tools() -> SkillTools {
+        SkillTools::new(Vec::new(), Vec::new())
+    }
+
+    #[test]
+    fn a_host_without_a_shell_is_told_which_steps_it_cannot_run() {
+        let with_shell = DeviceCapabilities {
+            shell: true,
+            ..Default::default()
+        };
+        let without_shell = DeviceCapabilities {
+            shell: false,
+            ..Default::default()
+        };
+        let desktop = tools().catalog_prompt_for(&with_shell);
+        let phone = tools().catalog_prompt_for(&without_shell);
+        // The skill list is the same on both: the instructions are shared.
+        assert!(desktop.contains("office-documents"));
+        assert!(phone.contains("office-documents"));
+        // Only the host that cannot run the CLI says so.
+        assert!(!desktop.contains("need a desktop host"));
+        assert!(phone.contains("need a desktop host"));
+        assert!(phone.contains("lamtools_core.cli office"));
+        assert!(phone.contains("has no shell"));
+    }
+
+    #[test]
+    fn the_combined_catalog_carries_the_same_note() {
+        let without_shell = DeviceCapabilities {
+            shell: false,
+            ..Default::default()
+        };
+        let combined = CombinedSkillTools::new(Vec::new(), Vec::new()).catalog_prompt_for(&without_shell);
+        assert!(combined.contains("need a desktop host"));
+        // Study skills are appended after the core list, as before.
+        let with_shell = CombinedSkillTools::new(Vec::new(), Vec::new())
+            .catalog_prompt_for(&DeviceCapabilities {
+                shell: true,
+                ..Default::default()
+            });
+        assert!(!with_shell.contains("need a desktop host"));
+    }
+}
+
 #[async_trait]
 impl ToolRuntime for SkillTools {
     fn definitions(&self, _capabilities: &DeviceCapabilities) -> Vec<ToolDefinition> {
@@ -449,9 +519,14 @@ impl CombinedSkillTools {
     }
 
     pub fn catalog_prompt(&self) -> String {
+        self.catalog_prompt_for(&DeviceCapabilities::default())
+    }
+
+    /// The combined list, told whether this host can run documented commands.
+    pub fn catalog_prompt_for(&self, capabilities: &DeviceCapabilities) -> String {
         format!(
             "{}\n{}",
-            self.core.catalog_prompt(),
+            self.core.catalog_prompt_for(capabilities),
             study_skills::catalog_prompt(&self.disabled)
         )
         .trim()

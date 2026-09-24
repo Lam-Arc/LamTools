@@ -1348,11 +1348,11 @@ async fn sunday_agent_turn_inner(
     let (skill_runtime, skill_prompt): (Arc<dyn ToolRuntime>, String) = if payload.study_tools {
         let skills = CombinedSkillTools::new(payload.disabled_skill_names.clone(), Vec::new());
         let prompt = SkillTools::new(payload.disabled_skill_names.clone(), Vec::new())
-            .catalog_prompt();
+            .catalog_prompt_for(&capabilities);
         (Arc::new(skills), prompt)
     } else {
         let skills = SkillTools::new(payload.disabled_skill_names.clone(), Vec::new());
-        let prompt = skills.catalog_prompt();
+        let prompt = skills.catalog_prompt_for(&capabilities);
         (Arc::new(skills), prompt)
     };
     if !skill_prompt.is_empty() {
@@ -1640,7 +1640,7 @@ async fn sunday_agent_resume_inner(
             &payload.sub_agent_guide,
         );
         let skill_prompt = SkillTools::new(payload.disabled_skill_names.clone(), Vec::new())
-            .catalog_prompt();
+            .catalog_prompt_for(&capabilities);
         if !skill_prompt.is_empty() {
             context.mode_context.push_str("\n\n");
             context.mode_context.push_str(&skill_prompt);

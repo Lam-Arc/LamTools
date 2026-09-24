@@ -57,7 +57,7 @@
     </article>
 
     <article v-if="!loading && !skills.length" class="setting-card">
-      <p>未发现任何 Skill。点击「新建技能」创建，或将 SKILL.md 放入 <code>.lam/skills/</code> 目录。</p>
+      <p>未发现任何 Skill。点击「新建技能」创建，或将 SKILL.md 放入技能目录（桌面端为 <code>.lam/skills/</code>，移动端为应用私有技能目录）。</p>
     </article>
 
     <div v-else class="provider-list">
