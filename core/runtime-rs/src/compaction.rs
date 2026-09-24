@@ -567,7 +567,7 @@ mod tests {
             content: String::new(),
             calls: vec![ToolCall {
                 id: "call-1".into(),
-                name: "read_text_file".into(),
+                name: "read_file".into(),
                 arguments: json!({"path": "a.txt"}),
             }],
             provider_state: Value::Null,
@@ -618,14 +618,14 @@ mod tests {
                 content: String::new(),
                 calls: vec![ToolCall {
                     id: format!("call-{index}"),
-                    name: "read_text_file".into(),
+                    name: "read_file".into(),
                     arguments: json!({"path": "a.txt"}),
                 }],
                 provider_state: Value::Null,
             });
             messages.push(Message::Tool {
                 tool_call_id: format!("call-{index}"),
-                name: "read_text_file".into(),
+                name: "read_file".into(),
                 content: "ok".into(),
             });
             messages.push(Message::Assistant {

@@ -789,6 +789,25 @@ fn sunday_plugin_inventory() -> Vec<lamtools_runtime::plugin_catalog::PluginInve
     lamtools_runtime::plugin_catalog::bundled_plugin_inventory()
 }
 
+/// Every tool this host can advertise, for the mode tool-set editor.
+///
+/// The desktop answers `config.loadtools.get` with a catalog derived from its
+/// tool specs; the mobile transport answers the same call from this side,
+/// because only the host knows which runtimes are assembled.
+#[tauri::command]
+fn sunday_tool_catalog() -> Vec<lamtools_runtime::tool_catalog::CatalogTool> {
+    lamtools_runtime::tool_catalog::catalog_tools()
+}
+
+/// Tool names the bundled Study plugin grants its own mode (`study:study`).
+#[tauri::command]
+fn sunday_plugin_mode_tools(mode: String) -> Vec<String> {
+    if mode == "study:study" {
+        return lamtools_runtime::tool_catalog::study_mode_tools();
+    }
+    Vec::new()
+}
+
 fn apply_study_skill_context(context: &mut AgentContext, disabled: &[String]) {
     if !context
         .mode_context
@@ -2828,6 +2847,8 @@ pub fn run() {
         sunday_study_rpc,
         sunday_study_skill_catalog,
         sunday_plugin_inventory,
+        sunday_tool_catalog,
+        sunday_plugin_mode_tools,
         project_agents_md,
         sunday_workflow_rpc,
         load_legacy_mobile_state,
@@ -2860,6 +2881,8 @@ pub fn run() {
         sunday_study_rpc,
         sunday_study_skill_catalog,
         sunday_plugin_inventory,
+        sunday_tool_catalog,
+        sunday_plugin_mode_tools,
         project_agents_md,
         sunday_workflow_rpc,
         load_legacy_mobile_state,
@@ -2886,6 +2909,28 @@ mod tests {
     use lamtools_runtime::{study_skills::catalog_prompt, ModelTurn, ToolCall};
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn the_mode_editor_catalog_and_study_mode_come_from_the_runtime() {
+        let catalog = sunday_tool_catalog();
+        let names: Vec<String> = catalog.iter().map(|tool| tool.name.clone()).collect();
+        // The host command must be the runtime's list, not a second one.
+        assert_eq!(
+            names,
+            lamtools_runtime::tool_catalog::catalog_tools()
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>()
+        );
+        assert!(names.iter().any(|name| name == "read_file"));
+        assert!(catalog.iter().all(|tool| !tool.category.is_empty()));
+
+        let study = sunday_plugin_mode_tools("study:study".into());
+        assert!(study.iter().any(|name| name == "notes"));
+        assert!(study.iter().any(|name| name == "read_file"));
+        // An unknown mode must not invent a whitelist.
+        assert!(sunday_plugin_mode_tools("other:mode".into()).is_empty());
+    }
 
     #[test]
     fn project_file_mime_type_prefers_the_declared_extension() {

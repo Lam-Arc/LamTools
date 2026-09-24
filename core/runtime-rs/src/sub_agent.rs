@@ -732,7 +732,7 @@ impl ToolRuntime for FilteredChildTools {
 }
 
 fn is_read_only_tool(name: &str) -> bool {
-    matches!(name, "read_text_file" | "list_files")
+    matches!(name, "read_file" | "list_dir")
         || name.starts_with("read_")
         || name.starts_with("list_")
         || name.starts_with("search_")

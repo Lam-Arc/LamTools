@@ -128,6 +128,9 @@ describe('standalone attachment transport', () => {
       runtimeModels: async () => [],
       settings: async () => ({}),
       subAgentRuntime: async () => ({ enabled: false, guide: '' }),
+      // The turn resolves the active mode's plan before it runs; this fixture
+      // has no mode, which restricts nothing.
+      modePlan: async () => ({ tools: null, promptLine: '' }),
     } as unknown as StandaloneConfigStore
     const textBytes = new TextEncoder().encode(`actual text${'x'.repeat(200_000)}TAIL-SENTINEL`)
     const textMetadata = { id: 'c'.repeat(32), session_id: session.id, filename: 'truth.txt', mime_type: 'text/plain', size: textBytes.length, preview_type: 'text' }

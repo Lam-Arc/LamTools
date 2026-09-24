@@ -4133,19 +4133,19 @@ mod tests {
                     content: String::new(),
                     calls: vec![ToolCall {
                         id: "call-1".into(),
-                        name: "read_text_file".into(),
+                        name: "read_file".into(),
                         arguments: json!({"path":"a.txt"}),
                     }],
                     provider_state: Value::Null,
                 },
                 Message::Tool {
                     tool_call_id: "call-1".into(),
-                    name: "read_text_file".into(),
+                    name: "read_file".into(),
                     content: "ok".into(),
                 },
             ],
             &[ToolDefinition {
-                name: "read_text_file".into(),
+                name: "read_file".into(),
                 description: "Read".into(),
                 input_schema: json!({"type":"object"}),
             }],
@@ -4165,7 +4165,7 @@ mod tests {
         );
         assert_eq!(
             body.pointer("/tools/0/name"),
-            Some(&json!("read_text_file"))
+            Some(&json!("read_file"))
         );
         assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("high")));
 
@@ -4228,7 +4228,7 @@ mod tests {
                 },
             ],
             &[ToolDefinition {
-                name: "write_text_file".into(),
+                name: "write_file".into(),
                 description: "Write".into(),
                 input_schema: json!({"type":"object"}),
             }],
@@ -4248,7 +4248,7 @@ mod tests {
         );
         assert_eq!(
             body.pointer("/tools/0/functionDeclarations/0/name"),
-            Some(&json!("write_text_file"))
+            Some(&json!("write_file"))
         );
 
         let turn = parse_gemini(

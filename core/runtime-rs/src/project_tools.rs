@@ -54,7 +54,7 @@ impl ToolRuntime for ProjectFileTools {
         }
         vec![
             ToolDefinition {
-                name: "list_files".into(),
+                name: "list_dir".into(),
                 description: "List files in the current project. The result includes the absolute project_root path; on Android this directory is app-private and cannot be browsed in the Android Files app. Omit path, pass an empty path, or use '.' to list the project root; pass a relative path to list a subdirectory.".into(),
                 input_schema: json!({"type":"object","properties":{"path":{"type":"string","description":"Optional directory path relative to the current project. Omit it, use an empty string, or use '.' for the project root."}}}),
             },
@@ -82,12 +82,12 @@ impl ToolRuntime for ProjectFileTools {
                 },"required":["path","old_string","new_string"]}),
             },
             ToolDefinition {
-                name: "read_text_file".into(),
+                name: "read_file".into(),
                 description: "Read a UTF-8 project file".into(),
                 input_schema: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
             },
             ToolDefinition {
-                name: "write_text_file".into(),
+                name: "write_file".into(),
                 description: "Create or overwrite a UTF-8 project file".into(),
                 input_schema: json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}),
             },
@@ -96,8 +96,8 @@ impl ToolRuntime for ProjectFileTools {
 
     fn permission(&self, call: &ToolCall) -> ToolPermission {
         match call.name.as_str() {
-            "list_files" | "read_text_file" => ToolPermission::AutoAllow,
-            "write_text_file" | "edit_file" => ToolPermission::AskUser,
+            "list_dir" | "read_file" => ToolPermission::AutoAllow,
+            "write_file" | "edit_file" => ToolPermission::AskUser,
             // Reading the project the user already opened needs no approval,
             // matching the desktop host.
             "search_files" | "search_content" => ToolPermission::AutoAllow,
@@ -107,7 +107,7 @@ impl ToolRuntime for ProjectFileTools {
 
     async fn execute(&self, call: &ToolCall) -> Result<Value, RuntimeError> {
         match call.name.as_str() {
-            "write_text_file" => {
+            "write_file" => {
                 let path = self.resolve(&call.arguments["path"])?;
                 if let Some(parent) = path.parent() {
                     tokio::fs::create_dir_all(parent)
@@ -120,12 +120,12 @@ impl ToolRuntime for ProjectFileTools {
                     .map_err(tool_error)?;
                 Ok(json!({"ok":true,"path":call.arguments["path"],"bytes":content.len()}))
             }
-            "read_text_file" => {
+            "read_file" => {
                 let path = self.resolve(&call.arguments["path"])?;
                 let content = tokio::fs::read_to_string(path).await.map_err(tool_error)?;
                 Ok(json!({"ok":true,"path":call.arguments["path"],"content":content}))
             }
-            "list_files" => {
+            "list_dir" => {
                 let relative = call
                     .arguments
                     .get("path")
@@ -345,12 +345,12 @@ fn edit_file(root: &Path, path: &Path, arguments: &Value) -> Result<Value, Runti
     let old_string = arguments["old_string"].as_str().unwrap_or_default();
     if old_string.is_empty() {
         return Err(RuntimeError::Tool(
-            "old_string must not be empty; use write_text_file to create a file".into(),
+            "old_string must not be empty; use write_file to create a file".into(),
         ));
     }
     let new_string = arguments["new_string"].as_str().unwrap_or_default();
     let metadata = std::fs::metadata(path).map_err(|_| {
-        RuntimeError::Tool("file does not exist; use write_text_file to create it".into())
+        RuntimeError::Tool("file does not exist; use write_file to create it".into())
     })?;
     if metadata.len() > MAX_FILE_HASH_BYTES {
         return Err(RuntimeError::Tool(format!(
@@ -615,7 +615,7 @@ mod tests {
         let written = tools
             .execute(&ToolCall {
                 id: "write-1".into(),
-                name: "write_text_file".into(),
+                name: "write_file".into(),
                 arguments: json!({"path":"notes/你好.txt","content":"你好，这是测试文档"}),
             })
             .await
@@ -625,7 +625,7 @@ mod tests {
         let read = tools
             .execute(&ToolCall {
                 id: "read-1".into(),
-                name: "read_text_file".into(),
+                name: "read_file".into(),
                 arguments: json!({"path":"notes/你好.txt"}),
             })
             .await
@@ -635,7 +635,7 @@ mod tests {
         let listed = tools
             .execute(&ToolCall {
                 id: "list-1".into(),
-                name: "list_files".into(),
+                name: "list_dir".into(),
                 arguments: json!({"path":"notes"}),
             })
             .await
@@ -646,7 +646,7 @@ mod tests {
         let root_listed = tools
             .execute(&ToolCall {
                 id: "list-root-empty".into(),
-                name: "list_files".into(),
+                name: "list_dir".into(),
                 arguments: json!({"path":""}),
             })
             .await
@@ -664,7 +664,7 @@ mod tests {
         let omitted_root = tools
             .execute(&ToolCall {
                 id: "list-root-omitted".into(),
-                name: "list_files".into(),
+                name: "list_dir".into(),
                 arguments: json!({}),
             })
             .await
@@ -674,7 +674,7 @@ mod tests {
         let escaped = tools
             .execute(&ToolCall {
                 id: "escape-1".into(),
-                name: "write_text_file".into(),
+                name: "write_file".into(),
                 arguments: json!({"path":"../outside.txt","content":"no"}),
             })
             .await;
@@ -683,7 +683,7 @@ mod tests {
         let empty_read_path = tools
             .execute(&ToolCall {
                 id: "read-empty".into(),
-                name: "read_text_file".into(),
+                name: "read_file".into(),
                 arguments: json!({"path":""}),
             })
             .await;
@@ -692,7 +692,7 @@ mod tests {
         let rewritten = tools
             .execute(&ToolCall {
                 id: "write-2".into(),
-                name: "write_text_file".into(),
+                name: "write_file".into(),
                 arguments: json!({"path":"notes/你好.txt","content":"第二版"}),
             })
             .await
@@ -713,7 +713,7 @@ mod tests {
             let escaped_link = tools
                 .execute(&ToolCall {
                     id: "linked-read".into(),
-                    name: "read_text_file".into(),
+                    name: "read_file".into(),
                     arguments: json!({"path":"linked/secret.txt"}),
                 })
                 .await;

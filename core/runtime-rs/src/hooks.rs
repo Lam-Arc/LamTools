@@ -859,7 +859,7 @@ mod tests {
     #[test]
     fn registry_loads_supported_handlers_and_requires_per_definition_trust() {
         let raw = serde_json::json!({
-            "hooks": {"PreToolUse": [{"matcher": "write_text_file", "hooks": [
+            "hooks": {"PreToolUse": [{"matcher": "write_file", "hooks": [
                 {"type": "prompt", "prompt": "Review ${TOOL_NAME}"},
                 {"type": "socket", "url": "x"}
             ]}]}
@@ -887,11 +887,11 @@ mod tests {
                 ..Default::default()
             },
         );
-        event.tool_name = "write_text_file".into();
+        event.tool_name = "write_file".into();
         let decision = engine.run(event).await;
         assert_eq!(
             decision.additional_context,
-            "First write_text_file\nSecond /project"
+            "First write_file\nSecond /project"
         );
         assert_eq!(decision.audit_events.len(), 2);
     }

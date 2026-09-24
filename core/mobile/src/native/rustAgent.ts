@@ -118,6 +118,22 @@ export async function listEmbeddedStudySkills(): Promise<EmbeddedStudySkill[]> {
   return await invoke<EmbeddedStudySkill[]>('sunday_study_skill_catalog')
 }
 
+/** One selectable tool in the mode editor, derived from the real runtimes. */
+export interface EmbeddedCatalogTool {
+  name: string
+  category: string
+}
+
+export async function readEmbeddedToolCatalog(): Promise<EmbeddedCatalogTool[]> {
+  return await invoke<EmbeddedCatalogTool[]>('sunday_tool_catalog')
+}
+
+/** Tool names a bundled plugin grants its own mode; empty when unknown. */
+export async function listEmbeddedPluginModeTools(mode: string): Promise<string[]> {
+  if (!hasEmbeddedRustCore()) return []
+  return await invoke<string[]>('sunday_plugin_mode_tools', { mode })
+}
+
 /** One tool the mobile agent can actually call, as reported by the runtime. */
 export interface EmbeddedPluginTool {
   name: string
@@ -155,6 +171,10 @@ export async function runEmbeddedSundayTurn(input: {
   temperature?: number
   permissionPreset?: 'ask' | 'auto' | 'full_access'
   sessionApprovedTools?: string[]
+  /** Name of the active mode, used verbatim when a call is refused. */
+  activeMode?: string
+  /** Mode tool whitelist; omit or pass an empty list for an unrestricted mode. */
+  modeTools?: string[]
   hookConfig?: Record<string, unknown>
   trustedHookHashes?: string[]
   mcpConfig?: Record<string, unknown>
@@ -196,6 +216,8 @@ export async function runEmbeddedSundayTurn(input: {
         ),
         permissionPreset: input.permissionPreset || 'ask',
         sessionApprovedTools: input.sessionApprovedTools || [],
+        activeMode: input.activeMode || '',
+        modeTools: input.modeTools && input.modeTools.length ? input.modeTools : null,
       },
       hookConfig: input.hookConfig || {},
       trustedHookHashes: input.trustedHookHashes || [],

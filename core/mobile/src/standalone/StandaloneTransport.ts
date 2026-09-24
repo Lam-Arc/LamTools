@@ -285,7 +285,11 @@ export class StandaloneTransport implements LamToolsTransport {
       return { ok: true, permission_preset: permissionPreset, session: toRawSession(thread) }
     }
     if (method === 'sync.start') return { ok: false, error: '本地模式无需同步' }
-    return { ok: false, error: `移动端独立模式不支持 ${method}` }
+    // An unimplemented method has to fail loudly. Returning a soft `ok:false`
+    // let a panel report success while nothing was saved, which is how a missing
+    // surface stayed invisible; the desktop answers an unknown method with an
+    // error, so the phone does too.
+    throw new Error(`移动端独立模式不支持 ${method}`)
   }
 
   private async handleStudyRpc(method: string, params: Record<string, unknown>): Promise<Record<string, unknown> | null> {
@@ -1237,7 +1241,12 @@ export class StandaloneTransport implements LamToolsTransport {
     ])
     recordStage('js_models_ready')
     if (signal.aborted) throw new Error('操作已取消')
-    const modeContext = await this.studyModeContext(snapshot, options)
+    const baseModeContext = await this.studyModeContext(snapshot, options)
+    // The active mode is enforced by the runtime, which has to be told which mode
+    // it is in and what that mode allows. Resolved here because the transport owns
+    // configuration on this platform.
+    const modePlan = await this.config.modePlan(String(options.active_mode || ''))
+    const modeContext = [baseModeContext, modePlan.promptLine].filter(Boolean).join('\n\n')
     recordStage('js_study_ready')
     if (signal.aborted) throw new Error('操作已取消')
     recordStage('js_native_invoking')
@@ -1271,6 +1280,8 @@ export class StandaloneTransport implements LamToolsTransport {
         temperature: finiteNumber(options.temperature) ?? model.temperature,
         permissionPreset: normalizePermissionPreset(options.permission_preset),
         sessionApprovedTools: stringArray(options.session_approved_tools),
+        activeMode: String(options.active_mode || ''),
+        modeTools: modePlan.tools || undefined,
         ...hookState,
         context: {
           modeContext,

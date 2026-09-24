@@ -21,6 +21,7 @@ pub mod project_tools;
 pub mod provider;
 pub mod skills;
 pub mod study;
+pub mod tool_catalog;
 pub mod study_skills;
 pub mod sub_agent;
 pub mod web_search;
@@ -177,6 +178,51 @@ pub struct TurnOptions {
     pub permission_preset: PermissionPreset,
     #[serde(default)]
     pub session_approved_tools: Vec<String>,
+    /// Name of the active execution mode, used verbatim in the refusal below.
+    #[serde(default)]
+    pub active_mode: String,
+    /// Tool names the active mode allows. `None` — and an empty list, which the
+    /// desktop treats as full access — mean the mode restricts nothing.
+    #[serde(default)]
+    pub mode_tools: Option<Vec<String>>,
+}
+
+impl TurnOptions {
+    /// The mode whitelist, or `None` when this mode does not restrict tools.
+    pub fn mode_whitelist(&self) -> Option<&[String]> {
+        match &self.mode_tools {
+            Some(tools) if !tools.is_empty() => Some(tools.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// The refusal a disallowed call gets, worded exactly like the desktop so a
+    /// model that learned one host's recovery path recovers the same way here.
+    pub fn mode_block_reason(&self, name: &str) -> Option<String> {
+        let allowed = self.mode_whitelist()?;
+        if allowed.iter().any(|allowed| allowed == name) {
+            return None;
+        }
+        Some(format!(
+            "You are in the {} mode, you can't use {name}. Please make the plan prepared and ask user to switch mode.",
+            self.active_mode
+        ))
+    }
+}
+
+/// Drop the tools a mode does not allow. The model is never told about a tool
+/// it would be refused at execution time.
+fn mode_filtered_definitions(
+    definitions: Vec<ToolDefinition>,
+    options: &TurnOptions,
+) -> Vec<ToolDefinition> {
+    let Some(allowed) = options.mode_whitelist() else {
+        return definitions;
+    };
+    definitions
+        .into_iter()
+        .filter(|definition| allowed.iter().any(|name| name == &definition.name))
+        .collect()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -431,7 +477,10 @@ where
         &self,
         request: TurnRequest,
     ) -> Result<TurnProgress, RuntimeError> {
-        let definitions = self.tools.definitions(&request.capabilities);
+        let definitions = mode_filtered_definitions(
+            self.tools.definitions(&request.capabilities),
+            &request.options,
+        );
         let user_message = request
             .history
             .iter()
@@ -507,7 +556,10 @@ where
         mut continuation: TurnContinuation,
         response: ApprovalResponse,
     ) -> Result<TurnProgress, RuntimeError> {
-        let definitions = self.tools.definitions(&continuation.capabilities);
+        let definitions = mode_filtered_definitions(
+            self.tools.definitions(&continuation.capabilities),
+            &continuation.options,
+        );
         let expected = approval_request(&continuation)?;
         if response.request_id != expected.request_id {
             return Err(RuntimeError::Tool(
@@ -565,6 +617,21 @@ where
         loop {
             while continuation.next_call_index < continuation.pending_calls.len() {
                 let mut call = continuation.pending_calls[continuation.next_call_index].clone();
+                // A model can still name a tool the mode keeps out of its list.
+                // Refuse it with the desktop's wording instead of running it.
+                if let Some(reason) = continuation.options.mode_block_reason(&call.name) {
+                    append_tool_result(
+                        &mut continuation.messages,
+                        &call,
+                        json_object([
+                            ("ok", Value::Bool(false)),
+                            ("blocked", Value::Bool(true)),
+                            ("error", Value::String(reason)),
+                        ]),
+                    )?;
+                    continuation.next_call_index += 1;
+                    continue;
+                }
                 let mut pre_event = hooks::HookEvent::new(
                     hooks::EVENT_PRE_TOOL_USE,
                     &continuation.turn_id,
@@ -999,7 +1066,7 @@ mod tests {
             assert!(
                 matches!(&messages[0], Message::System { content } if content.contains("PROJECT_RULE"))
             );
-            assert_eq!(tools[0].name, "write_text_file");
+            assert_eq!(tools[0].name, "write_file");
             let mut calls = self.calls.lock().unwrap();
             *calls += 1;
             if *calls == 1 {
@@ -1007,7 +1074,7 @@ mod tests {
                     text: String::new(),
                     calls: vec![ToolCall {
                         id: "call-1".into(),
-                        name: "write_text_file".into(),
+                        name: "write_file".into(),
                         arguments: serde_json::json!({"path":"你好.txt","content":"你好"}),
                     }],
                     provider_state: Value::Null,
@@ -1052,7 +1119,7 @@ mod tests {
                 return Vec::new();
             }
             vec![ToolDefinition {
-                name: "write_text_file".into(),
+                name: "write_file".into(),
                 description: "Write a project text file".into(),
                 input_schema: serde_json::json!({"type":"object"}),
             }]
@@ -1061,6 +1128,195 @@ mod tests {
         async fn execute(&self, call: &ToolCall) -> Result<Value, RuntimeError> {
             Ok(serde_json::json!({"ok": true, "path": call.arguments["path"]}))
         }
+    }
+
+    /// A mode that allows reading but not writing, and a model that asks to
+    /// write anyway: the call must come back blocked with the desktop wording,
+    /// and the tool list must not have offered it in the first place.
+    struct AskingModel {
+        seen_tools: Mutex<Vec<String>>,
+        seen_system: Mutex<String>,
+        calls: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl ModelBackend for AskingModel {
+        async fn complete(
+            &self,
+            _model_record_id: &str,
+            messages: &[Message],
+            tools: &[ToolDefinition],
+            _options: &TurnOptions,
+        ) -> Result<ModelTurn, RuntimeError> {
+            *self.seen_tools.lock().unwrap() = tools
+                .iter()
+                .map(|definition| definition.name.clone())
+                .collect();
+            if let Some(Message::System { content }) = messages.first() {
+                *self.seen_system.lock().unwrap() = content.clone();
+            }
+            let mut calls = self.calls.lock().unwrap();
+            *calls += 1;
+            if *calls == 1 {
+                Ok(ModelTurn::ToolCalls {
+                    text: String::new(),
+                    calls: vec![ToolCall {
+                        id: "call-1".into(),
+                        name: "write_file".into(),
+                        arguments: serde_json::json!({"path":"a.txt","content":"x"}),
+                    }],
+                    provider_state: Value::Null,
+                })
+            } else {
+                Ok(ModelTurn::Text {
+                    text: "已改为只读操作。".into(),
+                    reasoning: String::new(),
+                    provider_state: Value::Null,
+                })
+            }
+        }
+    }
+
+    struct CountingTools {
+        executions: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ToolRuntime for CountingTools {
+        fn definitions(&self, _capabilities: &DeviceCapabilities) -> Vec<ToolDefinition> {
+            vec![
+                ToolDefinition {
+                    name: "read_file".into(),
+                    description: "Read a project text file".into(),
+                    input_schema: serde_json::json!({"type":"object"}),
+                },
+                ToolDefinition {
+                    name: "write_file".into(),
+                    description: "Write a project text file".into(),
+                    input_schema: serde_json::json!({"type":"object"}),
+                },
+            ]
+        }
+
+        async fn execute(&self, _call: &ToolCall) -> Result<Value, RuntimeError> {
+            self.executions.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({"ok": true}))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_mode_whitelist_hides_and_blocks_every_tool_it_excludes() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let model = Arc::new(AskingModel {
+            seen_tools: Mutex::new(Vec::new()),
+            seen_system: Mutex::new(String::new()),
+            calls: Mutex::new(0),
+        });
+        let runtime = AgentRuntime::new(
+            model.clone(),
+            CountingTools {
+                executions: executions.clone(),
+            },
+        );
+        let result = runtime
+            .run_turn(TurnRequest {
+                turn_id: "turn-mode".into(),
+                model_record_id: "fixture:model".into(),
+                history: vec![Message::User {
+                    content: "写个文件".into(),
+                }],
+                capabilities: DeviceCapabilities {
+                    project_files: true,
+                    ..Default::default()
+                },
+                context: AgentContext::default(),
+                hook_context: hooks::HookRunContext::default(),
+                options: TurnOptions {
+                    active_mode: "consider".into(),
+                    mode_tools: Some(vec!["read_file".into()]),
+                    permission_preset: PermissionPreset::FullAccess,
+                    ..Default::default()
+                },
+            })
+            .await
+            .unwrap();
+        // Advertised: only what the mode allows.
+        assert_eq!(
+            model.seen_tools.lock().unwrap().clone(),
+            vec!["read_file".to_owned()]
+        );
+        // The system prompt must agree with the same list.
+        assert!(
+            model
+                .seen_system
+                .lock()
+                .unwrap()
+                .contains("Available tools: read_file."),
+            "the prompt must list exactly the tools the mode allows"
+        );
+        // Executed: nothing, and the refusal is the desktop sentence.
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        let refusal = result
+            .runtime_history
+            .iter()
+            .find_map(|message| match message {
+                Message::Tool { content, .. } if content.contains("write_file") => Some(content.clone()),
+                _ => None,
+            })
+            .expect("the blocked call must be reported back to the model");
+        assert!(
+            refusal.contains(
+                "You are in the consider mode, you can't use write_file. \
+                 Please make the plan prepared and ask user to switch mode."
+            ),
+            "unexpected refusal text: {refusal}"
+        );
+        assert!(refusal.contains("\"blocked\":true"));
+    }
+
+    #[tokio::test]
+    async fn a_full_access_mode_still_advertises_every_tool() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let model = Arc::new(AskingModel {
+            seen_tools: Mutex::new(Vec::new()),
+            seen_system: Mutex::new(String::new()),
+            calls: Mutex::new(0),
+        });
+        let runtime = AgentRuntime::new(
+            model.clone(),
+            CountingTools {
+                executions: executions.clone(),
+            },
+        );
+        runtime
+            .run_turn(TurnRequest {
+                turn_id: "turn-execute".into(),
+                model_record_id: "fixture:model".into(),
+                history: vec![Message::User {
+                    content: "写个文件".into(),
+                }],
+                capabilities: DeviceCapabilities {
+                    project_files: true,
+                    ..Default::default()
+                },
+                context: AgentContext::default(),
+                hook_context: hooks::HookRunContext::default(),
+                options: TurnOptions {
+                    active_mode: "execute".into(),
+                    mode_tools: Some(Vec::new()),
+                    ..Default::default()
+                },
+            })
+            .await
+            .unwrap();
+        let mut seen = model.seen_tools.lock().unwrap().clone();
+        seen.sort();
+        assert_eq!(seen, vec!["read_file".to_owned(), "write_file".to_owned()]);
+        assert_eq!(
+            executions.load(Ordering::SeqCst),
+            1,
+            "an unrestricted mode must run the call"
+        );
     }
 
     #[tokio::test]
@@ -1183,7 +1439,7 @@ mod tests {
                     text: "我先看一下文件".into(),
                     calls: vec![ToolCall {
                         id: "call-1".into(),
-                        name: "write_text_file".into(),
+                        name: "write_file".into(),
                         arguments: serde_json::json!({"path":"a.txt","content":"x"}),
                     }],
                     provider_state: Value::Null,
@@ -1267,7 +1523,7 @@ mod tests {
         // Hosts can show which tool is running without waiting for the turn.
         assert_eq!(
             *observer.events.lock().unwrap(),
-            ["start:write_text_file", "finish:write_text_file:true"]
+            ["start:write_file", "finish:write_file:true"]
         );
         assert_eq!(result.tool_rounds, 1);
     }
@@ -1280,7 +1536,7 @@ mod tests {
     impl ToolRuntime for GatedTools {
         fn definitions(&self, _capabilities: &DeviceCapabilities) -> Vec<ToolDefinition> {
             vec![ToolDefinition {
-                name: "write_text_file".into(),
+                name: "write_file".into(),
                 description: "Write".into(),
                 input_schema: serde_json::json!({"type":"object"}),
             }]
@@ -1335,7 +1591,7 @@ mod tests {
             _ => panic!("expected approval"),
         };
         assert_eq!(executions.load(Ordering::SeqCst), 0);
-        assert_eq!(request.tool_call.name, "write_text_file");
+        assert_eq!(request.tool_call.name, "write_file");
 
         let resumed = runtime
             .resume_turn(
@@ -1366,7 +1622,7 @@ mod tests {
     impl ToolRuntime for AutoCountingTools {
         fn definitions(&self, _: &DeviceCapabilities) -> Vec<ToolDefinition> {
             vec![ToolDefinition {
-                name: "write_text_file".into(),
+                name: "write_file".into(),
                 description: "fixture".into(),
                 input_schema: serde_json::json!({"type":"object"}),
             }]
@@ -1489,7 +1745,7 @@ mod tests {
                 hook_context: Default::default(),
                 options: TurnOptions {
                     permission_preset: PermissionPreset::FullAccess,
-                    session_approved_tools: vec!["write_text_file".into()],
+                    session_approved_tools: vec!["write_file".into()],
                     ..Default::default()
                 },
             })

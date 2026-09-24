@@ -1,5 +1,11 @@
 import { secureStorage, type SecureStorage } from '../native/secureStorage'
 import {
+  hasEmbeddedRustCore,
+  listEmbeddedPluginModeTools,
+  readEmbeddedToolCatalog,
+  type EmbeddedCatalogTool,
+} from '../native/rustAgent'
+import {
   createStandaloneStateStorage,
   type StandaloneStateStorage,
 } from './StandaloneStateStorage'
@@ -27,6 +33,18 @@ export interface StandaloneModel {
   reasoning_off_supported?: boolean
   temperature?: number
   extra?: Record<string, unknown>
+}
+
+export interface LoadToolMode {
+  description: string
+  tools: string[]
+}
+
+export type LoadToolModes = Record<string, LoadToolMode>
+
+export interface StandaloneToolCatalogEntry {
+  name: string
+  category: string
 }
 
 export interface StandaloneRuntimeModel {
@@ -164,6 +182,26 @@ export class StandaloneConfigStore {
       await this.persist()
       return { ...cloneState(config), exists: true }
     }
+    if (method === 'config.loadtools.get') {
+      const { modes, source } = await this.loadTools()
+      return { modes: cloneState(modes), source, catalog: await this.toolCatalog() }
+    }
+    if (method === 'config.loadtools.set') {
+      const raw = params.modes
+      if (!isRecord(raw)) throw new Error('modes 不能为空')
+      const modes = normalizeLoadToolModes(raw, { requireNonEmpty: true })
+      if (Object.keys(modes).length === 0) throw new Error('至少需要一个模式')
+      // Stored exactly as sent — a name this host cannot run stays on disk so a
+      // later version that implements it does not have to ask again — but the
+      // answer reports what is actually in force, which is what the panel shows.
+      state.settings[LOAD_TOOLS_NAMESPACE] = { modes }
+      await this.persist()
+      const known = new Set((await this.toolCatalog()).map(tool => tool.name))
+      return {
+        modes: cloneState(known.size ? restrictModesToCatalog(modes, known) : modes),
+        source: 'config',
+      }
+    }
     if (method === 'config.subagent.guide.get') {
       const scope = params.scope === 'project' ? 'project' : 'global'
       const projectKey = this.subAgentProjectKey(String(params.work_root || params.project_id || ''))
@@ -280,6 +318,63 @@ export class StandaloneConfigStore {
     // Hand back a copy: the caller must not mutate stored state, and a
     // reactive copy of it must not be able to leak back in either.
     return cloneState(state.settings[namespace] || {})
+  }
+
+  /**
+   * Mode tool-sets, with the source they came from.
+   *
+   * The desktop reads `loadtools.jsonc` and falls back to its built-in modes;
+   * the phone has no config directory, so the same document lives in this store
+   * under one namespace and the shape stays identical.
+   *
+   * Tool names the host cannot run are dropped, so a mode can never promise the
+   * model a tool that would be refused: the desktop's built-in `consider` mode
+   * names `git_status`, which has no implementation here.
+   */
+  async loadTools(): Promise<{ modes: LoadToolModes; source: 'builtin' | 'config' }> {
+    const state = await this.load()
+    const stored = state.settings[LOAD_TOOLS_NAMESPACE]
+    const modes = stored && isRecord(stored.modes) && Object.keys(stored.modes).length > 0
+      ? normalizeLoadToolModes(stored.modes)
+      : builtinLoadToolModes()
+    const source = stored && isRecord(stored.modes) && Object.keys(stored.modes).length > 0
+      ? 'config' as const
+      : 'builtin' as const
+    const known = new Set((await this.toolCatalog()).map(tool => tool.name))
+    if (!known.size) return { modes, source }
+    return { modes: restrictModesToCatalog(modes, known), source }
+  }
+
+  /**
+   * Everything a turn needs to enforce the active mode.
+   *
+   * `tools` is the whitelist, or `null` when the mode restricts nothing — the
+   * same answer the desktop's `mode_tool_set` gives for an unknown mode or a
+   * full-access (empty) whitelist. `promptLine` mirrors the desktop's
+   * `mode_prompt_line`, so the model is told which mode it is running in.
+   */
+  async modePlan(activeMode: string): Promise<{ tools: string[] | null; promptLine: string }> {
+    const mode = activeMode.trim()
+    if (!mode) return { tools: null, promptLine: '' }
+    if (mode.includes(':')) {
+      // Plugin modes are declared by the plugin rather than by loadtools.jsonc,
+      // and the plugin speaks for its own prompt.
+      const declared = await listEmbeddedPluginModeTools(mode)
+      return { tools: declared.length ? declared : null, promptLine: '' }
+    }
+    const { modes } = await this.loadTools()
+    const entry = modes[mode]
+    if (!entry) return { tools: null, promptLine: '' }
+    return {
+      tools: entry.tools.length ? [...entry.tools] : null,
+      promptLine: `Current mode: ${mode} — ${entry.description || mode}`,
+    }
+  }
+
+  /** Tool names and categories for the mode editor's checklist. */
+  async toolCatalog(): Promise<StandaloneToolCatalogEntry[]> {
+    if (!hasEmbeddedRustCore()) return []
+    return await readEmbeddedToolCatalog()
   }
 
   async subAgentRuntime(projectId: string): Promise<{ enabled: boolean; guide: string }> {
@@ -967,6 +1062,72 @@ function modelResponse(model: StandaloneModel): Record<string, unknown> {
     notes: model.notes || '',
     extra,
   }
+}
+
+const LOAD_TOOLS_NAMESPACE = 'core.loadTools'
+
+/**
+ * The desktop's built-in modes, verbatim — same names, same descriptions, so a
+ * mode means the same thing on both hosts. Names this host does not implement
+ * are removed by `loadTools` against the catalog.
+ */
+function builtinLoadToolModes(): LoadToolModes {
+  return {
+    consider: {
+      description: 'Consider mode: use read-only tools for analysis and research; do not modify files',
+      tools: [
+        'read_file', 'list_dir', 'search_files', 'search_content',
+        'web_search', 'web_fetch', 'git_status', 'git_diff',
+        'load_skill', 'message',
+      ],
+    },
+    execute: {
+      description: 'Execute mode: use all tools for complete code operations',
+      tools: [],
+    },
+  }
+}
+
+/**
+ * Accept only well-formed modes. A malformed entry is a hard error when the
+ * caller is saving (`requireNonEmpty`) and is dropped when reading stored state,
+ * so one bad record cannot take the whole panel down.
+ */
+function normalizeLoadToolModes(
+  raw: Record<string, unknown>,
+  options: { requireNonEmpty?: boolean } = {},
+): LoadToolModes {
+  const modes: LoadToolModes = {}
+  for (const [rawName, entry] of Object.entries(raw)) {
+    const name = rawName.trim()
+    if (!name) continue
+    if (!isRecord(entry)) {
+      if (options.requireNonEmpty) throw new Error(`模式 ${name} 必须是对象`)
+      continue
+    }
+    const tools = entry.tools
+    if (!Array.isArray(tools)) {
+      if (options.requireNonEmpty) throw new Error(`模式 ${name} 的 tools 必须是数组`)
+      continue
+    }
+    modes[name] = {
+      description: String(entry.description || '').trim(),
+      tools: uniqueStrings(tools.filter((tool): tool is string => typeof tool === 'string' && tool.trim().length > 0)),
+    }
+  }
+  return modes
+}
+
+/** Keep only tool names the host can run; a full-access mode stays empty. */
+function restrictModesToCatalog(modes: LoadToolModes, known: Set<string>): LoadToolModes {
+  const restricted: LoadToolModes = {}
+  for (const [name, mode] of Object.entries(modes)) {
+    restricted[name] = {
+      description: mode.description,
+      tools: mode.tools.filter(tool => known.has(tool)),
+    }
+  }
+  return restricted
 }
 
 function uniqueStrings(values: string[]): string[] {

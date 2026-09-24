@@ -50,11 +50,11 @@
 |---|---|---|
 | `artifact.list`、`artifact.open`、`artifact.revisions`、`artifact.restore`、`artifact.revision.restore` | 工件列表、打开、版本与回滚（生成图片等产物的版本化） | 快照里只有空的 `artifacts: {}` 字段，**无任何 artifact RPC** |
 | `plugin.install`、`plugin.uninstall` | 安装/卸载插件 | 无（移动端插件表是内置静态清单） |
-| `plugin.config.get`、`plugin.config.update` | 读/写插件配置（`configSchema` 驱动表单） | 无（`CoreImageGenEditor` 走通用 settings 绕过了它，但其它插件的配置面缺失） |
+| `plugin.config.get`、`plugin.config.update` | 读/写插件配置（`configSchema` 驱动表单） | 无（`CoreImageGenEditor` 走通用 settings 绕过了它，但其它插件的配置面缺失）。桌面契约：get 返回 `{name, config, schema, config_schema_path, has_secrets, work_root}`，密钥字段打码；update 按 schema 校验、掩码/空值保留原键 |
 | `plugin.widget.get`、`plugin.widget.invoke` | 右侧栏插件挂件的读取与调用 | 只有 `plugin.widget.list` |
-| `skill.create`、`skill.delete` | 新建/删除技能 | 无（只能 enable/disable） |
-| `config.loadtools.get`、`config.loadtools.set` | 模式工具集配置 | 无 |
-| `websearch.config.get`、`websearch.config.update` | 搜索内核配置（provider/回退/限额） | 无（Rust 搜索用内置默认值，不可配） |
+| `skill.create`、`skill.delete` | 新建/删除技能 | 无（只能 enable/disable）；0.1.16 起该 RPC 会明确抛错，不再假装成功。桌面契约：三字段必填、名字限 `^[A-Za-z0-9._-]+$`、写 `{user_root}/skills/<name>/SKILL.md`（frontmatter 含 name/description）、已存在报错；删除只允许可写技能（prune 目录并清状态） |
+| `config.loadtools.get`、`config.loadtools.set` | 模式工具集配置 | **已对齐**（0.1.16）：内置模式逐字一致、`source` 区分 builtin/config、`catalog` 来自 `sunday_tool_catalog`（本机真实装配）；运行时按白名单过滤并拒绝越权调用 |
+| `websearch.config.get`、`websearch.config.update` | 搜索内核配置（provider/回退/限额） | 无（Rust 搜索用内置默认值，不可配）。桌面实现是转发到 `plugin.config.*`，schema 在 `plugins/bundled/websearch/config/schema.jsonc` |
 | `websearch.widget.health`、`websearch.widget.snapshot` | 右侧栏搜索健康与快照 | 无 |
 | `rag.docs.search`、`rag.sessions.search` | RAG 检索 | 无（桌面端在无 provider 时也报不可用） |
 | `thread.outline`、`thread/read` | 会话大纲与按条目读取 | 无 |
@@ -97,7 +97,7 @@
 
 | 桌面工具 | 移动端 | 影响 |
 |---|---|---|
-| `list_dir` / `read_file` / `write_file` | `list_files` / `read_text_file` / `write_text_file` | 有，但**名称不同** |
+| `list_dir` / `read_file` / `write_file` | **已对齐**（0.1.16）：移动端原名 `list_files` / `read_text_file` / `write_text_file`，因模式工具集按名匹配而必须统一 |
 | `edit_file` | **已补**（0.1.14）：定点替换，要求唯一匹配，支持 `occurrence`、`before_context`/`after_context` 与 sha256 校验 |
 | `search_files` / `search_content` | **已补**（0.1.14）：glob（含 `**`）与字面内容搜索，跳过 node_modules/.git/target，最多 200 条 |
 | `web_fetch` | **已补**（0.1.14）：抓取并转成可读文本，`ask_user` 权限，512 KiB / 2 万字符上限 |
@@ -107,6 +107,10 @@
 | `mcp_activate` / `mcp_tool` | **语义不同**（见下） | — |
 | `sub_agent` / `sub_agent_message` | 有 | ✓ |
 | `load_skill` | 有（另加 `read_skill_reference`） | ✓ |
+
+工具名统一后，桌面内置模式（`loadtools.jsonc` 的 consider/execute）在移动端逐字可用：0.1.16 起
+`config.loadtools.get` 返回同样的模式与描述，`sunday_tool_catalog` 只列出本机真正装配的工具，
+范围之外的旧名字（`git_status` 等）不会出现在模式里。
 
 技能文本基本不依赖桌面工具名：14 个 Core 技能＋Study 技能里只有 `plugin-manager/SKILL.md` 提到一次 `edit_file`，
 `search_files`/`search_content`/`web_fetch`/`run_command`/`write_checklist` 均无提及。技能数量也对上：Core 14 + Study 5。
