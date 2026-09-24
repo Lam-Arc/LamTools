@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { selectChatMessages, type CoreAppSnapshot, type TransportMessage } from '@lamtools/ui'
+import { selectChatMessages, selectCoreWorkbenchMessages, type CoreAppSnapshot, type TransportMessage } from '@lamtools/ui'
 import type { LocalDatabase } from '../src/storage/Database'
 import { createLocalRepository, type LocalState } from '../src/storage'
 import { MemorySecureStorage } from '../src/native/secureStorage'
@@ -247,6 +247,108 @@ describe('StandaloneTransport', () => {
     // Mobile has no level picker, so it must follow the desktop resolution
     // instead of silently disabling thinking on every turn.
     expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({ reasoningLevel: expected }))
+  })
+
+  it('keeps each tool round visible instead of letting the next round replace it', async () => {
+    const repository = createLocalRepository(new MemoryDatabase())
+    const config = new StandaloneConfigStore(new MemorySecureStorage())
+    await config.handleRpc('config.provider.create', {
+      name: 'Test', api_type: 'openai', base_url: 'https://model.invalid/v1', api_key: 'secret',
+      models: [{ model_id: 'stream-model', display_name: 'Stream Model' }],
+    })
+    const created = await createStandaloneProjectClient(repository).create({ name: '流式项目', work_root: '' })
+    const result = deferred<{ text: string; runtimeModelId: string; toolRounds: number }>()
+    const runAgent = vi.fn(() => result.promise)
+    let onStream: ((payload: unknown) => void) | undefined
+    const transport = new StandaloneTransport(
+      repository, config, runAgent, undefined, undefined, undefined, undefined, undefined, undefined,
+      async handler => { onStream = handler; return vi.fn() },
+    )
+    const snapshots: CoreAppSnapshot[] = []
+    transport.subscribe((message: TransportMessage) => {
+      if (message.method === 'thread/snapshot' && message.params) snapshots.push(message.params as unknown as CoreAppSnapshot)
+    })
+
+    await transport.request({ method: 'turn/start', params: {
+      thread_id: created.session.id, input: [{ type: 'text', text: '看一下文件' }],
+    } })
+    await vi.waitFor(() => expect(onStream).toBeTypeOf('function'))
+    const { turn_id: turnId } = (await vi.waitFor(() => {
+      const turn = Object.values(snapshots.at(-1)?.core?.turns || {})[0]
+      expect(turn?.turn_id).toBeTruthy()
+      return turn!
+    }))
+    const items = () => snapshots.at(-1)?.core?.items || {}
+    const order = () => snapshots.at(-1)?.core?.item_order || []
+
+    // Round one narrates, thinks, then calls a tool.
+    onStream!({ turnId, kind: 'text_delta', delta: '我先读一下文件' })
+    onStream!({ turnId, kind: 'reasoning_delta', delta: '需要先确认内容' })
+    await vi.waitFor(() => {
+      expect(items()[`${turnId}:assistant`]?.payload?.content).toBe('我先读一下文件')
+      expect(items()[`${turnId}:reasoning`]?.content).toBe('需要先确认内容')
+    })
+    onStream!({ turnId, kind: 'tool_call', data: {
+      id: 'call-1', name: 'read_text_file', arguments: '{"path":"a.txt"}',
+    } })
+    await vi.waitFor(() => {
+      const tool = items()[`${turnId}:tool:call-1`]
+      expect(tool?.tool_name).toBe('read_text_file')
+      expect(tool?.status).toBe('running')
+      expect(tool?.kind).toBe('tool_call')
+      // The shared card reads the display fields from the payload, and a
+      // structured preview lets it show the target instead of raw JSON.
+      expect(tool?.payload?.type).toBe('dynamicToolCall')
+      expect(tool?.payload?.arguments).toEqual({ path: 'a.txt' })
+    })
+    onStream!({ turnId, kind: 'tool_result', data: {
+      id: 'call-1', name: 'read_text_file', ok: true, preview: '文件内容',
+    } })
+    await vi.waitFor(() => {
+      expect(items()[`${turnId}:tool:call-1`]?.status).toBe('completed')
+      expect(items()[`${turnId}:tool:call-1`]?.payload?.tool_result).toBe('文件内容')
+    })
+
+    // The next round must not erase what the user already read.
+    onStream!({ turnId, kind: 'reset' })
+    const afterReset = items()
+    const narration = Object.values(afterReset).find(item => item.payload?.final_response === false)
+    expect(narration?.content).toBe('我先读一下文件')
+    expect(Object.values(afterReset).some(
+      item => item.type === 'reasoning' && item.content === '需要先确认内容' && item.status === 'completed',
+    )).toBe(true)
+    expect(afterReset[`${turnId}:assistant`]?.payload?.content).toBe('')
+    expect(afterReset[`${turnId}:reasoning`]).toBeUndefined()
+    expect(afterReset[`${turnId}:tool:call-1`]?.status).toBe('completed')
+
+    // Round two answers, and the archived process stays ahead of the answer.
+    onStream!({ turnId, kind: 'text_delta', delta: '文件里写的是 x' })
+    result.resolve({ text: '文件里写的是 x', runtimeModelId: 'stream-model', toolRounds: 1 })
+
+    await vi.waitFor(() => expect(snapshots.at(-1)?.status).toBe('completed'))
+    expect(items()[`${turnId}:assistant`]?.payload?.content).toBe('文件里写的是 x')
+    const finalOrder = order()
+    expect(finalOrder.indexOf(`${turnId}:tool:call-1`)).toBeGreaterThanOrEqual(0)
+    expect(finalOrder.indexOf(`${turnId}:tool:call-1`)).toBeLessThan(finalOrder.indexOf(`${turnId}:assistant`))
+    expect(finalOrder.indexOf(String(narration?.item_id))).toBeLessThan(finalOrder.indexOf(`${turnId}:assistant`))
+
+    // Proof the shared renderer actually draws the step: the same projection the
+    // transcript uses must yield a tool card carrying the result, and the
+    // narration must survive next to it.
+    const parts = selectCoreWorkbenchMessages(snapshots.at(-1)!)
+      .flatMap(message => message.parts || [])
+    expect(parts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        partType: 'tool_call',
+        toolName: 'read_text_file',
+        toolResult: '文件内容',
+        status: 'completed',
+      }),
+      expect.objectContaining({
+        partType: 'model_text',
+        content: '我先读一下文件',
+      }),
+    ]))
   })
 
   it('shows bounded native text and reasoning deltas, resets provisional output, then trusts the final result', async () => {

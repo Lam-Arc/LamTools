@@ -108,6 +108,13 @@ current operating system and shell.
 - PowerShell 涉及中文必须使用 UTF-8。
 - **观测环境只有 Tauri**（`core/desktop`），一切 UI 验证以 Tauri 窗口为准，不折腾浏览器/dev.ps1 体系。
 
+## 移动端发布节奏
+
+- **0.1.x 就是移动端测试通道**：每完成一次修复，补丁号直接 +1（0.1.9 → 0.1.10 → 0.1.11 …），出包并上传，供真机验证；不需要每次再问是否发版。
+- 版本号 8 处同步：`core/mobile/package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（`sunday-mobile`）、`gen/android/app/build.gradle.kts`（versionCode/versionName 默认值）、`gen/android/app/tauri.properties`、`update-manifest.json`，以及官网 `website/src/components/Download.vue` 的 `VITE_SUNDAY_MOBILE_VERSION` 默认值。
+- Android versionCode = major*1000000 + minor*1000 + patch（0.1.9 → 1009）；`scripts/package-mobile.ps1` 会校验它。
+- 发布流程与审计沿用 `core/mobile/artifacts/release-0NN/`：出包 → 独立校验 APK → 上传 APK 与官网 → 公开校验。注意 `package-mobile.ps1` 的 stdout 会被 Gradle daemon 持有，管道读取会等不到 EOF（表现为"卡住"），应改为重定向到文件并轮询产物。
+
 ## 官网（website/）
 
 - 技术栈：Vue 3.5 + Vite 8 + TS 6 + anime.js v4（动效）+ lucide-vue-next（图标）。

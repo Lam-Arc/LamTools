@@ -1552,10 +1552,14 @@ fn openai_message(message: &Message, model: &str, profile_id: &str) -> Value {
             provider_state: _,
         } => json!({"role":"assistant","content":content}),
         Message::AssistantToolCalls {
+            content,
             calls,
             provider_state: _,
         } => json!({
-            "role":"assistant", "content": Value::Null,
+            "role":"assistant",
+            // A tool-call response may also carry narration; providers expect
+            // it on the same assistant message as the calls.
+            "content": if content.is_empty() { Value::Null } else { Value::String(content.clone()) },
             "tool_calls": calls.iter().map(|call| json!({
                 "id":call.id, "type":"function",
                 "function":{"name":call.name,"arguments":serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".into())}
@@ -1630,6 +1634,7 @@ fn responses_body(
                 }
             }
             Message::AssistantToolCalls {
+                content,
                 calls,
                 provider_state,
             } => {
@@ -1640,6 +1645,13 @@ fn responses_body(
                 ) {
                     input.extend(output);
                 } else {
+                    if !content.is_empty() {
+                        input.push(json!({
+                            "type":"message",
+                            "role":"assistant",
+                            "content":[{"type":"input_text","text":content}],
+                        }));
+                    }
                     input.extend(calls.iter().map(|call| {
                         json!({
                             "type":"function_call",
@@ -1740,6 +1752,7 @@ fn gemini_body(
                 }
             }
             Message::AssistantToolCalls {
+                content,
                 calls,
                 provider_state,
             } => {
@@ -1750,15 +1763,17 @@ fn gemini_body(
                 ) {
                     contents.push(restored);
                 } else {
-                    contents.push(json!({
-                        "role":"model",
-                        "parts":calls.iter().map(|call| json!({
-                            "functionCall":{
-                                "name":call.name,
-                                "args":call.arguments,
-                            }
-                        })).collect::<Vec<_>>(),
-                    }));
+                    let mut parts = Vec::new();
+                    if !content.is_empty() {
+                        parts.push(json!({"text":content}));
+                    }
+                    parts.extend(calls.iter().map(|call| json!({
+                        "functionCall":{
+                            "name":call.name,
+                            "args":call.arguments,
+                        }
+                    })));
+                    contents.push(json!({"role":"model","parts":parts}));
                 }
             }
             Message::Tool { name, content, .. } => {
@@ -1879,6 +1894,7 @@ fn anthropic_body(
                 converted.push(json!({"role":"assistant","content":blocks}));
             }
             Message::AssistantToolCalls {
+                content,
                 calls,
                 provider_state,
             } => {
@@ -1887,6 +1903,14 @@ fn anthropic_body(
                     &config.api_model_id,
                     profile_id(profile),
                 );
+                // Restored blocks already carry the original text when the raw
+                // payload could be reused; only the reconstructed path needs it.
+                let has_text = blocks
+                    .iter()
+                    .any(|block| block.get("type").and_then(Value::as_str) == Some("text"));
+                if !content.is_empty() && !has_text {
+                    blocks.push(json!({"type":"text","text":content}));
+                }
                 blocks.extend(calls.iter().map(|call| {
                     json!({"type":"tool_use","id":call.id,"name":call.name,"input":call.arguments})
                 }));
@@ -1994,9 +2018,23 @@ fn parse_openai(payload: Value, model: &str, profile_id: &str) -> Result<ModelTu
         });
     };
     let provider_state = openai_provider_state(message, model, profile_id);
+    // Read content before the tool-call branch: a response may carry both, and
+    // the narration must survive into the runtime's history.
+    let text = message
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let reasoning = message
+        .get("reasoning_content")
+        .or_else(|| message.get("reasoning"))
+        .or_else(|| message.get("thinking"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
         if !calls.is_empty() {
             return Ok(ModelTurn::ToolCalls {
+                text: text.into(),
                 calls: calls
                     .iter()
                     .map(|call| {
@@ -2023,17 +2061,6 @@ fn parse_openai(payload: Value, model: &str, profile_id: &str) -> Result<ModelTu
             });
         }
     }
-    let text = message
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let reasoning = message
-        .get("reasoning_content")
-        .or_else(|| message.get("reasoning"))
-        .or_else(|| message.get("thinking"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
     Ok(ModelTurn::Text {
         text: text.into(),
         reasoning,
@@ -2054,6 +2081,13 @@ fn parse_anthropic(
         });
     };
     let provider_state = anthropic_provider_state(content, model, profile_id);
+    // Compute the narration before the tool-call branch so a response carrying
+    // both a text block and tool_use does not lose the text.
+    let text = content
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|item| item.get("text").and_then(Value::as_str))
+        .collect::<String>();
     let calls = content
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("tool_use"))
@@ -2073,15 +2107,11 @@ fn parse_anthropic(
         .collect::<Vec<_>>();
     if !calls.is_empty() {
         return Ok(ModelTurn::ToolCalls {
+            text,
             calls,
             provider_state,
         });
     }
-    let text = content
-        .iter()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|item| item.get("text").and_then(Value::as_str))
-        .collect::<String>();
     let reasoning = content
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("thinking"))
@@ -2159,18 +2189,19 @@ fn parse_responses(
             _ => {}
         }
     }
-    if !calls.is_empty() {
-        return Ok(ModelTurn::ToolCalls {
-            calls,
-            provider_state,
-        });
-    }
     if text.is_empty() {
         text = payload
             .get("output_text")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
+    }
+    if !calls.is_empty() {
+        return Ok(ModelTurn::ToolCalls {
+            text,
+            calls,
+            provider_state,
+        });
     }
     Ok(ModelTurn::Text {
         text,
@@ -2227,6 +2258,7 @@ fn parse_gemini(payload: Value, model: &str, profile_id: &str) -> Result<ModelTu
     }
     if !calls.is_empty() {
         return Ok(ModelTurn::ToolCalls {
+            text,
             calls,
             provider_state,
         });
@@ -2593,6 +2625,7 @@ mod tests {
         assert!(request.contains("\"stream\":true"));
         match turn {
             ModelTurn::ToolCalls {
+                text: _,
                 calls,
                 provider_state,
             } => {
@@ -2648,6 +2681,7 @@ mod tests {
         assert!(request.contains("\"stream\":true"));
         match turn {
             ModelTurn::ToolCalls {
+                text: _,
                 calls,
                 provider_state,
             } => {
@@ -2698,6 +2732,7 @@ mod tests {
         assert!(!request.contains("\"stream\":true"));
         match turn {
             ModelTurn::ToolCalls {
+                text: _,
                 calls,
                 provider_state,
             } => {
@@ -2914,9 +2949,13 @@ mod tests {
         let turn = parse_openai(payload, "configured-model", "openai-chat").unwrap();
         match turn {
             ModelTurn::ToolCalls {
+                text,
                 calls,
                 provider_state,
             } => {
+                // The streamed narration arrives with the tool calls; keeping it
+                // is what lets the transcript retain what the model said.
+                assert_eq!(text, "你好");
                 assert_eq!(calls[0].id, "call_1");
                 assert_eq!(calls[0].name, "test");
                 assert_eq!(calls[0].arguments, json!({"x":1}));
@@ -4084,6 +4123,7 @@ mod tests {
                     content: "hello".into(),
                 },
                 Message::AssistantToolCalls {
+                    content: String::new(),
                     calls: vec![ToolCall {
                         id: "call-1".into(),
                         name: "read_text_file".into(),

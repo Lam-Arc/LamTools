@@ -564,6 +564,7 @@ mod tests {
         assert_eq!(estimate_text_tokens("😀", false), 2);
         // Tool calls carry their name, arguments and a per-call overhead.
         let call = Message::AssistantToolCalls {
+            content: String::new(),
             calls: vec![ToolCall {
                 id: "call-1".into(),
                 name: "read_text_file".into(),
@@ -614,6 +615,7 @@ mod tests {
                 content: format!("step {index} {}", "x".repeat(400)),
             });
             messages.push(Message::AssistantToolCalls {
+                content: String::new(),
                 calls: vec![ToolCall {
                     id: format!("call-{index}"),
                     name: "read_text_file".into(),

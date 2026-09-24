@@ -96,6 +96,12 @@ pub enum ModelTurn {
         provider_state: Value,
     },
     ToolCalls {
+        /// Text the model produced in the same turn before deciding to call
+        /// tools.  Providers can return content and tool calls together, and
+        /// dropping it here would lose the model's own narration for every
+        /// round that ends in a tool call.
+        #[serde(default)]
+        text: String,
         calls: Vec<ToolCall>,
         #[serde(default)]
         provider_state: Value,
@@ -121,6 +127,10 @@ pub enum Message {
         provider_state: Value,
     },
     AssistantToolCalls {
+        /// Narration the model gave before requesting the tools.  Kept so the
+        /// transcript and the next request both see what it said.
+        #[serde(default)]
+        content: String,
         calls: Vec<ToolCall>,
         #[serde(default, rename = "providerState")]
         provider_state: Value,
@@ -359,6 +369,7 @@ pub struct AgentRuntime<M, T> {
     hooks: Option<Arc<dyn hooks::HookExecutor>>,
     guidance: Option<Arc<dyn GuidanceSource>>,
     progress: Option<Arc<dyn Fn(&'static str) + Send + Sync>>,
+    tool_observer: Option<Arc<dyn ToolObserver>>,
 }
 
 impl<M, T> AgentRuntime<M, T>
@@ -373,6 +384,7 @@ where
             hooks: None,
             guidance: None,
             progress: None,
+            tool_observer: None,
         }
     }
 
@@ -388,6 +400,11 @@ where
 
     pub fn with_progress(mut self, report: impl Fn(&'static str) + Send + Sync + 'static) -> Self {
         self.progress = Some(Arc::new(report));
+        self
+    }
+
+    pub fn with_tool_observer(mut self, observer: Arc<dyn ToolObserver>) -> Self {
+        self.tool_observer = Some(observer);
         self
     }
 
@@ -733,10 +750,12 @@ where
                     });
                 }
                 ModelTurn::ToolCalls {
+                    text,
                     calls,
                     provider_state,
                 } if continuation.tool_rounds < MAX_TOOL_ROUNDS => {
                     continuation.messages.push(Message::AssistantToolCalls {
+                        content: text,
                         calls: calls.clone(),
                         provider_state,
                     });
@@ -760,6 +779,9 @@ where
         continuation: &mut TurnContinuation,
         call: &ToolCall,
     ) -> Result<(), RuntimeError> {
+        if let Some(observer) = &self.tool_observer {
+            observer.started(call);
+        }
         let (mut result, event_name, error, error_type) = match self.tools.execute(call).await {
             Ok(result) => (
                 result,
@@ -807,8 +829,27 @@ where
                 ),
             ]);
         }
+        if let Some(observer) = &self.tool_observer {
+            // Tool results report failure with an explicit `ok: false`; anything
+            // else counts as success so arbitrary tool payloads stay valid.
+            let ok = result
+                .get("ok")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            observer.finished(call, &result, ok);
+        }
         append_tool_result(&mut continuation.messages, call, result)
     }
+}
+
+/// Observes individual tool steps of a running turn.
+///
+/// The runtime itself only reports coarse stages, so a host that wants to show
+/// which tool is running — and with what result — needs this narrower channel.
+/// Callbacks are synchronous and must not block.
+pub trait ToolObserver: Send + Sync {
+    fn started(&self, call: &ToolCall);
+    fn finished(&self, call: &ToolCall, result: &Value, ok: bool);
 }
 
 fn absorb_hook_decision(continuation: &mut TurnContinuation, decision: &hooks::HookDecision) {
@@ -959,6 +1000,7 @@ mod tests {
             *calls += 1;
             if *calls == 1 {
                 Ok(ModelTurn::ToolCalls {
+                    text: String::new(),
                     calls: vec![ToolCall {
                         id: "call-1".into(),
                         name: "write_text_file".into(),
@@ -1114,6 +1156,116 @@ mod tests {
             ]
         );
         assert_eq!(result.hook_status_messages, ["checking tool safety..."]);
+    }
+
+    /// Replies with narration plus a tool call first, then a final answer.
+    struct NarratingModel {
+        requests: Mutex<Vec<Vec<Message>>>,
+    }
+
+    #[async_trait]
+    impl ModelBackend for NarratingModel {
+        async fn complete(
+            &self,
+            _model_record_id: &str,
+            messages: &[Message],
+            _tools: &[ToolDefinition],
+            _options: &TurnOptions,
+        ) -> Result<ModelTurn, RuntimeError> {
+            let mut requests = self.requests.lock().unwrap();
+            requests.push(messages.to_vec());
+            if requests.len() == 1 {
+                Ok(ModelTurn::ToolCalls {
+                    text: "我先看一下文件".into(),
+                    calls: vec![ToolCall {
+                        id: "call-1".into(),
+                        name: "write_text_file".into(),
+                        arguments: serde_json::json!({"path":"a.txt","content":"x"}),
+                    }],
+                    provider_state: Value::Null,
+                })
+            } else {
+                Ok(ModelTurn::Text {
+                    text: "完成".into(),
+                    reasoning: String::new(),
+                    provider_state: Value::Null,
+                })
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingToolObserver {
+        events: Mutex<Vec<String>>,
+    }
+
+    impl ToolObserver for RecordingToolObserver {
+        fn started(&self, call: &ToolCall) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("start:{}", call.name));
+        }
+
+        fn finished(&self, call: &ToolCall, _result: &Value, ok: bool) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("finish:{}:{ok}", call.name));
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_round_narration_is_durable_and_tool_steps_are_observed() {
+        let model = Arc::new(NarratingModel {
+            requests: Mutex::new(Vec::new()),
+        });
+        let observer = Arc::new(RecordingToolObserver::default());
+        let runtime = AgentRuntime::new(model.clone(), FixtureTools)
+            .with_tool_observer(observer.clone());
+        let result = runtime
+            .run_turn(TurnRequest {
+                turn_id: "turn-narration".into(),
+                model_record_id: "model".into(),
+                history: vec![Message::User {
+                    content: "改一下文件".into(),
+                }],
+                capabilities: DeviceCapabilities {
+                    project_files: true,
+                    ..Default::default()
+                },
+                context: AgentContext::default(),
+                hook_context: hooks::HookRunContext::default(),
+                options: TurnOptions::default(),
+            })
+            .await
+            .unwrap();
+
+        // The narration of a tool round survives into the durable history, so a
+        // transcript can retain it instead of only showing the final answer.
+        let narration = result
+            .runtime_history
+            .iter()
+            .find_map(|message| match message {
+                Message::AssistantToolCalls { content, .. } => Some(content.clone()),
+                _ => None,
+            });
+        assert_eq!(narration.as_deref(), Some("我先看一下文件"));
+
+        // The follow-up request carries that narration back to the provider.
+        let requests = model.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].iter().any(|message| matches!(
+            message,
+            Message::AssistantToolCalls { content, .. } if content == "我先看一下文件"
+        )));
+
+        // Hosts can show which tool is running without waiting for the turn.
+        assert_eq!(
+            *observer.events.lock().unwrap(),
+            ["start:write_text_file", "finish:write_text_file:true"]
+        );
+        assert_eq!(result.tool_rounds, 1);
     }
 
     struct GatedTools {

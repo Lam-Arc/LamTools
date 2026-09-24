@@ -1125,6 +1125,14 @@ export class StandaloneTransport implements LamToolsTransport {
       const reasoningItem = core.items[`${turnId}:reasoning`]
       if (reasoningItem?.status === 'running') reasoningItem.status = status
     }
+    // A cancelled or failed turn can interrupt a tool step; leaving it running
+    // would strand a spinner in the transcript.
+    if (core.items) {
+      const toolPrefix = `${turnId}:tool:`
+      for (const [itemId, toolItem] of Object.entries(core.items)) {
+        if (itemId.startsWith(toolPrefix) && toolItem?.status === 'running') toolItem.status = status
+      }
+    }
     core.status = status
     snapshot.status = status
     snapshot.snapshot_seq = Number(snapshot.snapshot_seq || 0) + 1
@@ -1352,6 +1360,45 @@ export class StandaloneTransport implements LamToolsTransport {
     let reasoning = ''
     let timer: ReturnType<typeof setTimeout> | undefined
     let unlisten = () => {}
+    // One turn can run several model rounds when the model keeps calling tools.
+    // Each round's narration and thinking are archived before the next round
+    // starts, so the transcript keeps what was already shown instead of only
+    // ever displaying the newest round.
+    let round = 1
+    const liveReasoningId = `${turnId}:reasoning`
+
+    const archiveRound = () => {
+      const core = snapshot.core
+      const turn = core?.turns?.[turnId]
+      if (!core?.items || !turn) return
+      const sequence = Number(core.items[assistantItemId]?.seq || 0)
+      if (reasoning) {
+        const archivedId = `${turnId}:reasoning:${round}`
+        core.items[archivedId] = {
+          item_id: archivedId, turn_id: turnId, kind: 'thinking', type: 'reasoning',
+          status: 'completed', seq: sequence, content: reasoning,
+          payload: { type: 'reasoning', content: reasoning },
+        }
+        insertItemBeforeLive(core, turnId, assistantItemId, archivedId)
+      }
+      if (core.items[liveReasoningId]) {
+        delete core.items[liveReasoningId]
+        turn.items = (turn.items || []).filter(id => id !== liveReasoningId)
+        core.item_order = (core.item_order || []).filter(id => id !== liveReasoningId)
+      }
+      if (text) {
+        const narrationId = `${turnId}:narration:${round}`
+        core.items[narrationId] = {
+          item_id: narrationId, turn_id: turnId, kind: 'message', type: 'agentMessage',
+          status: 'completed', seq: sequence, content: text,
+          // Intermediate narration is process, not this turn's answer.
+          payload: { type: 'agentMessage', content: text, final_response: false },
+        }
+        insertItemBeforeLive(core, turnId, assistantItemId, narrationId)
+      }
+      round += 1
+    }
+
     const flush = () => {
       timer = undefined
       if (!active || this.generations.get(threadId) !== generation) return
@@ -1361,25 +1408,19 @@ export class StandaloneTransport implements LamToolsTransport {
       if (!core || !turn || turn.status !== 'running' || !assistant || assistant.status !== 'running') return
       assistant.content = text
       assistant.payload = { ...(isRecord(assistant.payload) ? assistant.payload : {}), type: 'agentMessage', content: text }
-      const reasoningId = `${turnId}:reasoning`
       if (reasoning) {
-        const existingReasoning = core.items?.[reasoningId]
+        const existingReasoning = core.items?.[liveReasoningId]
         const sequence = Number(existingReasoning?.seq ?? assistant.seq ?? 0)
-        core.items![reasoningId] = {
-          item_id: reasoningId, turn_id: turnId, kind: 'thinking', type: 'reasoning',
+        core.items![liveReasoningId] = {
+          item_id: liveReasoningId, turn_id: turnId, kind: 'thinking', type: 'reasoning',
           status: 'running', seq: sequence, content: reasoning,
           payload: { type: 'reasoning', content: reasoning },
         }
-        turn.items = [...(turn.items || []).filter(id => id !== reasoningId), reasoningId]
-        const assistantIndex = turn.items.indexOf(assistantItemId)
-        if (assistantIndex >= 0) turn.items.splice(assistantIndex, 0, turn.items.pop()!)
-        core.item_order = (core.item_order || []).filter(id => id !== reasoningId)
-        const orderIndex = core.item_order.indexOf(assistantItemId)
-        core.item_order.splice(orderIndex >= 0 ? orderIndex : core.item_order.length, 0, reasoningId)
-      } else if (core.items?.[reasoningId]) {
-        delete core.items[reasoningId]
-        turn.items = (turn.items || []).filter(id => id !== reasoningId)
-        core.item_order = (core.item_order || []).filter(id => id !== reasoningId)
+        insertItemBeforeLive(core, turnId, assistantItemId, liveReasoningId)
+      } else if (core.items?.[liveReasoningId]) {
+        delete core.items[liveReasoningId]
+        turn.items = (turn.items || []).filter(id => id !== liveReasoningId)
+        core.item_order = (core.item_order || []).filter(id => id !== liveReasoningId)
       }
       snapshot.snapshot_seq = Number(snapshot.snapshot_seq || 0) + 1
       core.snapshot_seq = snapshot.snapshot_seq
@@ -1398,6 +1439,53 @@ export class StandaloneTransport implements LamToolsTransport {
     const scheduleFlush = () => {
       if (timer == null) timer = setTimeout(flush, 50)
     }
+    // Tool steps are their own transcript items so the work stays visible
+    // instead of being summarised away by the next round.
+    const applyToolStep = (data: Record<string, unknown>, finished: boolean) => {
+      const core = snapshot.core
+      const turn = core?.turns?.[turnId]
+      if (!core?.items || !turn || turn.status !== 'running') return
+      const callId = String(data.id || '')
+      if (!callId) return
+      const itemId = `${turnId}:tool:${callId}`
+      const existing = core.items[itemId]
+      const name = String(data.name || existing?.tool_name || 'tool')
+      const preview = typeof data.preview === 'string' ? data.preview : ''
+      const ok = data.ok !== false
+      const args = existing?.arguments ?? parseToolArguments(data.arguments)
+      const argsPreview = typeof data.arguments === 'string' ? data.arguments : ''
+      const outcome = finished
+        ? ok ? { tool_result: preview } : { error: preview }
+        : { message: argsPreview }
+      // The shared process card builds its row from the item payload, so every
+      // display field has to live there as well as on the item itself.
+      const payload: Record<string, unknown> = {
+        ...(isRecord(existing?.payload) ? existing.payload : {}),
+        type: 'dynamicToolCall',
+        tool_name: name,
+        ...(args === undefined ? {} : { arguments: args }),
+        ...outcome,
+      }
+      core.items[itemId] = {
+        ...(existing || {}),
+        item_id: itemId,
+        turn_id: turnId,
+        kind: 'tool_call',
+        type: 'dynamicToolCall',
+        status: finished ? 'completed' : 'running',
+        seq: Number(existing?.seq ?? core.items[assistantItemId]?.seq ?? 0),
+        tool_name: name,
+        arguments: args,
+        ...outcome,
+        payload,
+      }
+      if (!existing) insertItemBeforeLive(core, turnId, assistantItemId, itemId)
+      snapshot.snapshot_seq = Number(snapshot.snapshot_seq || 0) + 1
+      core.snapshot_seq = snapshot.snapshot_seq
+      snapshot.revision = Number(snapshot.revision || 0) + 1
+      core.revision = snapshot.revision
+      this.emitSnapshot(snapshot)
+    }
     this.activeStreamListeners.get(threadId)?.()
     this.activeStreamListeners.set(threadId, stopListening)
     try {
@@ -1406,10 +1494,11 @@ export class StandaloneTransport implements LamToolsTransport {
         if (payload.turnId !== turnId) return
         const event = payload as unknown as RustAgentStreamEvent
         if (event.kind === 'reset') {
-          text = ''
-          reasoning = ''
           if (timer != null) clearTimeout(timer)
           timer = undefined
+          archiveRound()
+          text = ''
+          reasoning = ''
           flush()
         } else if (event.kind === 'text_delta' && typeof event.delta === 'string') {
           text += event.delta
@@ -1417,6 +1506,10 @@ export class StandaloneTransport implements LamToolsTransport {
         } else if (event.kind === 'reasoning_delta' && typeof event.delta === 'string') {
           reasoning += event.delta
           scheduleFlush()
+        } else if (event.kind === 'tool_call' && isRecord(event.data)) {
+          applyToolStep(event.data, false)
+        } else if (event.kind === 'tool_result' && isRecord(event.data)) {
+          applyToolStep(event.data, true)
         }
       })
       if (!active) unlisten()
@@ -1689,6 +1782,10 @@ async function conversationMessages(snapshot: SnapshotWithSession, activeTurnId 
     }
     if (payload.type === 'agentMessage') {
       if (item?.status === 'cancelled') continue
+      // A tool round's narration is not a separate assistant message: the
+      // durable runtime history already replays it, so adding it here would
+      // duplicate the text on the next request.
+      if (payload.final_response === false) continue
       // Older snapshots stored diagnostics in content; keep only their saved answer in model history.
       const content = typeof payload.turn_trace_answer === 'string'
         ? payload.turn_trace_answer
@@ -1701,6 +1798,39 @@ async function conversationMessages(snapshot: SnapshotWithSession, activeTurnId 
     }
   }
   return messages
+}
+
+/** Place a finished item directly before its turn's live answer item. */
+function insertItemBeforeLive(
+  core: NonNullable<CoreAppSnapshot['core']>,
+  turnId: string,
+  assistantItemId: string,
+  itemId: string,
+): void {
+  const turn = core.turns?.[turnId]
+  if (!turn) return
+  turn.items = (turn.items || []).filter(id => id !== itemId)
+  const assistantIndex = turn.items.indexOf(assistantItemId)
+  if (assistantIndex >= 0) turn.items.splice(assistantIndex, 0, itemId)
+  else turn.items.push(itemId)
+  core.item_order = (core.item_order || []).filter(id => id !== itemId)
+  const orderIndex = core.item_order.indexOf(assistantItemId)
+  core.item_order.splice(orderIndex >= 0 ? orderIndex : core.item_order.length, 0, itemId)
+}
+
+/**
+ * Tool arguments arrive as a bounded text preview. The shared process card reads
+ * a structured object (path, command, query, …), so recover it when the preview
+ * is still valid JSON and let a truncated preview fall back to plain text.
+ */
+function parseToolArguments(preview: unknown): Record<string, unknown> | undefined {
+  if (typeof preview !== 'string' || !preview.trim()) return undefined
+  try {
+    const parsed = JSON.parse(preview)
+    return isRecord(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
 }
 
 async function inputMessage(value: unknown, sessionId: string): Promise<RustAgentMessage | null> {

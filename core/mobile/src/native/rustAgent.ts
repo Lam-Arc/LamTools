@@ -44,8 +44,10 @@ export interface RustTurnResult {
 
 export type RustAgentStreamEvent = {
   turnId: string
-  kind: 'text_delta' | 'reasoning_delta' | 'reset'
+  kind: 'text_delta' | 'reasoning_delta' | 'reset' | 'tool_call' | 'tool_result'
   delta?: string
+  /** Present for `tool_call` / `tool_result`; carries the tool step detail. */
+  data?: Record<string, unknown>
 }
 
 export async function listenEmbeddedSundayAgentStream(

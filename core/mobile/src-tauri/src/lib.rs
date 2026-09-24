@@ -17,7 +17,7 @@ use lamtools_runtime::{
     workflow_ops,
     workflow_store::WorkflowStore,
     AgentContext, AgentRuntime, ApprovalResponse, DeviceCapabilities, Message, ModelBackend,
-    ToolRuntime, TurnContinuation, TurnOptions, TurnProgress, TurnRequest,
+    ToolCall, ToolObserver, ToolRuntime, TurnContinuation, TurnOptions, TurnProgress, TurnRequest,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,65 @@ fn emit_agent_stage(app: &tauri::AppHandle, turn_id: &str, stage: &'static str) 
         "sunday-agent-stage",
         serde_json::json!({ "turnId": turn_id, "stage": stage }),
     );
+}
+
+/// Tool payloads can carry whole files. The transcript only needs a readable
+/// preview, and an unbounded copy would bloat every stream event and the
+/// persisted snapshot.
+const MAX_TOOL_STREAM_CHARS: usize = 4000;
+
+fn bounded_tool_text(value: &Value) -> String {
+    let text = match value {
+        Value::String(text) => text.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    };
+    if text.chars().count() <= MAX_TOOL_STREAM_CHARS {
+        return text;
+    }
+    let mut bounded = text.chars().take(MAX_TOOL_STREAM_CHARS).collect::<String>();
+    bounded.push_str("\n…（内容过长已截断）");
+    bounded
+}
+
+/// Streams each tool step so the transcript can show the work while the turn is
+/// still running. The runtime reports coarse stages only, so tool progress needs
+/// this narrower channel.
+struct MobileToolObserver {
+    app: tauri::AppHandle,
+    turn_id: String,
+}
+
+impl ToolObserver for MobileToolObserver {
+    fn started(&self, call: &ToolCall) {
+        let _ = self.app.emit(
+            "sunday-agent-stream",
+            serde_json::json!({
+                "turnId": self.turn_id,
+                "kind": "tool_call",
+                "data": {
+                    "id": call.id,
+                    "name": call.name,
+                    "arguments": bounded_tool_text(&call.arguments),
+                },
+            }),
+        );
+    }
+
+    fn finished(&self, call: &ToolCall, result: &Value, ok: bool) {
+        let _ = self.app.emit(
+            "sunday-agent-stream",
+            serde_json::json!({
+                "turnId": self.turn_id,
+                "kind": "tool_result",
+                "data": {
+                    "id": call.id,
+                    "name": call.name,
+                    "ok": ok,
+                    "preview": bounded_tool_text(result),
+                },
+            }),
+        );
+    }
 }
 
 fn mcp_load_warnings(report: &McpLoadReport) -> Vec<String> {
@@ -829,6 +888,10 @@ async fn sunday_agent_turn_inner(
     let runtime = AgentRuntime::new(model.clone(), tools)
         .with_hook_executor(hook_engine)
         .with_guidance_source(agent_state.sub_agents.parent_guidance(parent_thread_id))
+        .with_tool_observer(Arc::new(MobileToolObserver {
+            app: app.clone(),
+            turn_id: trace_turn_id.clone(),
+        }))
         .with_progress(move |stage| {
             emit_agent_stage(&runtime_progress_app, &runtime_progress_turn_id, stage);
             if stage == "runtime_model_start" {
@@ -1076,6 +1139,10 @@ async fn sunday_agent_resume_inner(
     let runtime = AgentRuntime::new(model.clone(), tools)
         .with_hook_executor(hook_engine)
         .with_guidance_source(agent_state.sub_agents.parent_guidance(parent_thread_id))
+        .with_tool_observer(Arc::new(MobileToolObserver {
+            app: app.clone(),
+            turn_id: trace_turn_id.clone(),
+        }))
         .with_progress(move |stage| {
             emit_agent_stage(&runtime_progress_app, &runtime_progress_turn_id, stage);
             if stage == "runtime_model_start" {
@@ -2695,6 +2762,7 @@ mod tests {
                 }
             };
             Ok(ModelTurn::ToolCalls {
+                text: String::new(),
                 calls: vec![ToolCall {
                     id: format!("call-{step}"),
                     name: name.into(),
