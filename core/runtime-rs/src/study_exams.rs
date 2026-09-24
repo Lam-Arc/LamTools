@@ -1775,3 +1775,181 @@ fn run_sign(
     .map_err(|error| StudyError::new(error.to_string()))?;
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A graded question map plus one result per question, in the shape the
+    /// suggestion validator consumes.
+    fn graded(
+        node_ids: &[&str],
+        state: &str,
+        assessed: &[&str],
+        helped: bool,
+    ) -> (Map<String, Value>, Vec<Value>) {
+        let mut questions = Map::new();
+        questions.insert(
+            "q1".into(),
+            json!({
+                "type": "written",
+                "prompt": "解释一下",
+                "node_ids": node_ids,
+                "answer": "参考答案：因为并发",
+                "rubric": "至少提到并发",
+                "max_score": 10,
+            }),
+        );
+        let results = vec![json!({
+            "question_id": "q1",
+            "state": state,
+            "assessed_node_ids": assessed,
+            "helped": helped,
+        })];
+        (questions, results)
+    }
+
+    #[test]
+    fn score_values_reject_non_numbers_and_stay_inside_the_bound() {
+        assert!(score_value(None, "score", false, 10.0).is_err());
+        assert!(score_value(Some(&json!("7")), "score", false, 10.0).is_err());
+        assert!(score_value(Some(&json!(-1)), "score", false, 10.0).is_err());
+        assert!(score_value(Some(&json!(10.5)), "score", false, 10.0).is_err());
+        // A positive score cannot be zero; a score that may be zero can.
+        assert!(score_value(Some(&json!(0)), "score", true, 10.0).is_err());
+        assert_eq!(score_value(Some(&json!(0)), "score", false, 10.0).unwrap(), 0.0);
+        assert_eq!(score_value(Some(&json!(10)), "score", true, 10.0).unwrap(), 10.0);
+    }
+
+    #[test]
+    fn the_public_question_projection_drops_every_grading_field() {
+        let raw = json!({
+            "type": "choice",
+            "prompt": "选一个",
+            "node_ids": ["n1"],
+            "options": ["甲", "乙"],
+            "answer": "甲",
+            "rubric": "选甲给满分",
+            "max_score": 5,
+        });
+        let public = public_question(&raw, "q1");
+        let object = public.as_object().expect("object");
+        for leaked in ["answer", "rubric"] {
+            assert!(
+                !object.contains_key(leaked),
+                "the public projection must not carry '{leaked}'"
+            );
+        }
+        assert_eq!(object["id"], json!("q1"));
+        assert_eq!(object["options"], json!(["甲", "乙"]));
+        assert_eq!(object["max_score"], json!(5));
+
+        // A written question has no options key at all, rather than an empty one.
+        let written = public_question(&json!({"type": "written", "prompt": "写"}), "q2");
+        assert!(written.as_object().unwrap().get("options").is_none());
+        // The default is one point; compare numerically rather than by the
+        // JSON number representation.
+        assert_eq!(written["max_score"].as_f64(), Some(1.0));
+    }
+
+    #[test]
+    fn step_scores_are_bounded_by_the_question_maximum() {
+        assert!(normalize_step_scores(Some(&json!("nope")), 10.0).is_err());
+        assert!(normalize_step_scores(Some(&json!([1])), 10.0).is_err());
+        assert!(
+            normalize_step_scores(Some(&json!([{"step": "", "score": 1}])), 10.0).is_err(),
+            "a step score needs a bounded description"
+        );
+        assert!(
+            normalize_step_scores(Some(&json!([{"step": "思路", "score": 11}])), 10.0).is_err(),
+            "a step cannot exceed its question's max_score"
+        );
+        let oversized = Value::Array(
+            (0..(MAX_STEP_SCORES + 1))
+                .map(|index| json!({"step": format!("s{index}"), "score": 1}))
+                .collect(),
+        );
+        assert!(normalize_step_scores(Some(&oversized), 10.0).is_err());
+
+        assert!(normalize_step_scores(None, 10.0).unwrap().is_empty());
+        let normalized = normalize_step_scores(
+            Some(&json!([{"criterion": "思路", "score": 4, "max_score": 5}])),
+            10.0,
+        )
+        .expect("a valid step score is accepted");
+        assert_eq!(normalized.len(), 1);
+    }
+
+    #[test]
+    fn suggestions_require_independent_assessed_evidence() {
+        // Marking the node without assessing it, or grading a helped or
+        // uncertain answer, is not independent evidence.
+        let (questions, results) = graded(&["n1"], "correct", &[], false);
+        let error = normalize_suggestions(
+            Some(&json!([{"node_id": "n1", "question_ids": ["q1"], "passed": true, "mastery": "high", "reason": "会了"}])),
+            &questions,
+            &results,
+            1,
+        )
+        .expect_err("unassessed evidence must be rejected");
+        assert!(error.to_string().contains("independent assessed question evidence"));
+
+        let (_questions, helped) = graded(&["n1"], "correct", &["n1"], true);
+        assert!(normalize_suggestions(
+            Some(&json!([{"node_id": "n1", "question_ids": ["q1"], "passed": true, "mastery": "high", "reason": "会了"}])),
+            &questions,
+            &helped,
+            1,
+        )
+        .is_err());
+
+        let (_questions, uncertain) = graded(&["n1"], "uncertain", &["n1"], false);
+        assert!(normalize_suggestions(
+            Some(&json!([{"node_id": "n1", "question_ids": ["q1"], "passed": true, "mastery": "high", "reason": "会了"}])),
+            &questions,
+            &uncertain,
+            1,
+        )
+        .is_err());
+
+        // A graded, unassisted, assessed question is acceptable.
+        let (_questions, solid) = graded(&["n1"], "correct", &["n1"], false);
+        let accepted = normalize_suggestions(
+            Some(&json!([{"node_id": "n1", "question_ids": ["q1"], "passed": true, "mastery": "high", "reason": "会了"}])),
+            &questions,
+            &solid,
+            1,
+        )
+        .expect("independent evidence is accepted")
+        .expect("some suggestions");
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0]["node_id"], json!("n1"));
+    }
+
+    #[test]
+    fn suggestions_must_reference_graded_questions_and_known_nodes() {
+        let (questions, results) = graded(&["n1"], "correct", &["n1"], false);
+        for bad in [
+            json!([{"node_id": "n9", "question_ids": ["q1"], "passed": true, "mastery": "high", "reason": "r"}]),
+            json!([{"node_id": "n1", "question_ids": ["q404"], "passed": true, "mastery": "high", "reason": "r"}]),
+            json!([{"node_id": "n1", "question_ids": [], "passed": true, "mastery": "high", "reason": "r"}]),
+            // Mastery has to agree with the pass verdict in both directions.
+            json!([{"node_id": "n1", "question_ids": ["q1"], "passed": true, "mastery": null, "reason": "r"}]),
+            json!([{"node_id": "n1", "question_ids": ["q1"], "passed": false, "mastery": "high", "reason": "r"}]),
+        ] {
+            assert!(
+                normalize_suggestions(Some(&bad), &questions, &results, 1).is_err(),
+                "expected rejection for {bad}"
+            );
+        }
+        assert!(normalize_suggestions(Some(&json!({})), &questions, &results, 1).is_err());
+        assert!(normalize_suggestions(None, &questions, &results, 1).unwrap().is_none());
+    }
+
+    #[test]
+    fn whole_scores_print_without_a_decimal_point() {
+        assert_eq!(format_score(0.0), "0");
+        assert_eq!(format_score(7.0), "7");
+        assert_eq!(format_score(7.5), "7.5");
+    }
+}

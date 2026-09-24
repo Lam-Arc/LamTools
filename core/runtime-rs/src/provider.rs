@@ -983,7 +983,11 @@ impl NativeStream {
             "content_block_start" => {
                 let index = stream_index(event, "index")?;
                 let block = event.get("content_block").cloned().unwrap_or(Value::Null);
-                let blocks = self.payload["content"].as_array_mut().unwrap();
+                // The assembler owns this array; a missing one is a defect in
+                // this code, which an error reports better than a panic mid-stream.
+                let Some(blocks) = self.payload["content"].as_array_mut() else {
+                    return Err("Anthropic stream payload lost its content array".into());
+                };
                 if index != blocks.len() {
                     return Err("out-of-order Anthropic content block".into());
                 }
@@ -1072,7 +1076,9 @@ impl NativeStream {
                     .get("item")
                     .cloned()
                     .ok_or("missing Responses output item")?;
-                let output = self.payload["output"].as_array_mut().unwrap();
+                let Some(output) = self.payload["output"].as_array_mut() else {
+                    return Err("Responses stream payload lost its output array".into());
+                };
                 if index > output.len() {
                     return Err("out-of-order Responses output item".into());
                 }
@@ -1158,12 +1164,11 @@ impl NativeStream {
                 .and_then(Value::as_array)
             {
                 for part in parts {
-                    if self.payload["candidates"][0]["content"]["parts"]
+                    let recorded_parts = self.payload["candidates"][0]["content"]["parts"]
                         .as_array()
-                        .unwrap()
-                        .len()
-                        >= 4096
-                    {
+                        .map(Vec::len)
+                        .unwrap_or_default();
+                    if recorded_parts >= 4096 {
                         return Err("too many Gemini stream parts".into());
                     }
                     let text = part.get("text").and_then(Value::as_str).unwrap_or("");
@@ -1172,10 +1177,12 @@ impl NativeStream {
                     } else {
                         self.delta("text_delta", text, report, progress);
                     }
-                    self.payload["candidates"][0]["content"]["parts"]
+                    let Some(recorded) = self.payload["candidates"][0]["content"]["parts"]
                         .as_array_mut()
-                        .unwrap()
-                        .push(part.clone());
+                    else {
+                        return Err("Gemini stream payload lost its parts array".into());
+                    };
+                    recorded.push(part.clone());
                 }
             }
             if let Some(reason) = candidate.get("finishReason") {
@@ -3015,7 +3022,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
             let mut request = [0u8; 8192];
-            socket.read(&mut request).unwrap();
+            let _ = socket.read(&mut request);
             socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"partial\"}}]},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n").unwrap();
         });
         let response = reqwest::Client::builder()
@@ -3047,7 +3054,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
             let mut request = [0u8; 8192];
-            socket.read(&mut request).unwrap();
+            let _ = socket.read(&mut request);
             let partial = "partial".repeat(40);
             socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
             write!(socket, "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{partial}\"}},\"finish_reason\":\"length\"}}]}}\n\ndata: [DONE]\n\n").unwrap();
@@ -3109,7 +3116,7 @@ mod tests {
             let server = std::thread::spawn(move || {
                 let (mut socket, _) = listener.accept().unwrap();
                 let mut request = [0u8; 8192];
-                socket.read(&mut request).unwrap();
+                let _ = socket.read(&mut request);
                 socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
                 socket.write_all(partial.as_bytes()).unwrap();
             });
@@ -3758,7 +3765,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buffer = [0u8; 4096];
-            stream.read(&mut buffer).unwrap();
+            let _ = stream.read(&mut buffer);
             write!(stream, "HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nUnauthorized").unwrap();
         });
         let mut settings = config("model", json!({}));

@@ -38,23 +38,41 @@ as a permanent regression check; it needed `text: String::new()` after `ModelTur
 that field earlier in the day. Conclusion: fixed between the two audits — the earlier report was not
 wrong, it is simply no longer current.
 
-### F2 · P2 · The real context-compaction summarizer has no test
+### F2 · retracted · A false positive in this audit's own heuristic
 
-`context_compaction/summarizer.py` (13.9 KB) is production-reachable
-(`context_compaction/controller.py:45`, `context_compaction/__init__.py:55` export
-`summarize_context_messages`) and no test imports or names it.
-`core/tests/test_context_compaction_budget.py` drives the controller with a **fake** summarizer, so
-the budget logic is covered while the summarizer's own behaviour — prompt construction, truncation,
-token accounting — is not. Context compaction directly shapes what the model sees, so a silent
-regression here degrades every long conversation. Suggested: a focused test with a scripted model
-asserting the summary request shape and the retained/replaced split.
+An earlier draft of this document claimed `context_compaction/summarizer.py` had no test. That was
+wrong, and the way it was wrong is worth recording: the coverage check looked for a module's *file
+stem* in the test corpus, so it missed tests that reach the module through its package export.
+`core/tests/test_context_compaction.py` imports from `lamtools_core.context_compaction` and covers
+the summarizer's parser (accept/reject/round-trip), the pipeline, budget handling, prefix
+preservation, recursive compaction and the stream fallback — about 25 tests. No gap.
 
-### F3 · P2 · `checkpoint_v2.py` is only reachable through `core_db.py`
+Lesson applied to the two findings below: check symbol references, not file names.
 
-The 11.6 KB module is imported solely by `app/core_db.py` and named by no test. Its v2 checkpoint
-tables are exercised only insofar as `core_db` tests touch them. Session/checkpoint durability is
-the layer that decides whether a crash loses a conversation; an explicit test of the v2
-write/read/materialise path is warranted.
+### F3 · P2 · Three modules have no caller anywhere in the repository
+
+A symbol-level scan of the whole repository (Python, Rust, TypeScript, scripts, manifests) found
+three modules whose public API is referenced only inside its own file:
+
+| Module | Size | What it is |
+| --- | --- | --- |
+| `checkpoint_v2.py` | 11.6 KB | `load_checkpoint_v2`, `migrate_legacy_checkpoints`, `legacy_watermarks`, `CheckpointMigrationReport` — none referenced in production or tests |
+| `tool/spreadsheet.py` | 15 KB | `write_spreadsheet_tool` and its XLSX writer built on `openpyxl` |
+| `app/http_agent_server.py` | 193 B | A Uvicorn entry point building the app at import time |
+
+Evidence for each: the module's dotted path appears in no import statement, its public names appear
+in no other file, and (for the Uvicorn shim) no `.ps1`/`.iss`/`.cmd`/`.yml`/`.toml` launches it —
+the live server entry is `create_core_agent_http_app` through `cli.py serve`.
+
+The spreadsheet module looks **superseded rather than forgotten**: `skills/office-spreadsheets`
+directs the model to the office CLI and the `office-data.json` render contract, so spreadsheets now
+flow through the office renderer. `openpyxl` itself is still a real dependency (the office renderer
+tests use it), so only the module is orphaned. The v2 checkpoint module is the one worth a decision:
+either its API was meant to be wired up and the wiring was lost in `7a354bdd`, or the v2 path was
+abandoned and the module should go.
+
+**No code was deleted.** Removing committed modules is the owner's call, especially where an
+intended migration might be unlanded; this is reported instead.
 
 ### F4 · P2 · `study_exams.rs` (1777 lines) has no unit tests in `runtime-rs`
 
@@ -64,16 +82,29 @@ mentioned in `runtime-rs/tests/study.rs`, so the happy path is verified. What is
 assessment logic's edge cases: score bounds versus `max_score`, partial/uncertain states, and the
 "evidence must belong to the exam" rule that the tool descriptions promise.
 
-### F5 · P3 · Workflow script nodes inherit the full backend environment
+### F5 · P3 (recommendation withdrawn) · Workflow script nodes run with the full backend environment
 
 `plugins/bundled/workflow/backend/runtime.py` builds the script subprocess environment with
-`env = dict(os.environ)`. Anything exported into the backend process (proxy credentials, CI tokens,
-`LAMTOOLS_*`) reaches user-authored workflow scripts. This is inside the documented trust model —
-authoring a node requires `ask_user` (`workflow_add_node`/`connect`/`update`/`delete`;
-`workflow_graph` is read-only `auto_allow`) and `exec`/`eval` in the expression evaluator are
-annotated as trusted user-authored content — but the environment copy is broader than the feature
-needs. Suggested: pass a filtered environment, as the WSL command path already does with
-`forward_names`.
+`env = dict(os.environ)`, so anything exported into the backend process reaches user-authored
+workflow scripts.
+
+**The first draft of this audit proposed filtering that environment. That recommendation is
+withdrawn**, because it would not reduce privilege: a script node runs as arbitrary Python with the
+backend user's full filesystem rights, so it can read the provider records directly — and those hold
+API keys in plaintext by documented design (`providers/*.jsonc`). Filtering environment variables
+would break existing scripts that read them while closing nothing that matters; the keys would still
+be one `open()` away.
+
+The accurate framing is that script nodes are **designed arbitrary code execution on the user's
+machine**, gated by `ask_user` on every authoring tool (`workflow_add_node`/`connect`/`update`/
+`delete`; `workflow_graph` is read-only `auto_allow`). Anyone who wants a harder boundary needs one
+of the real mitigations, none of which is a small change:
+
+- move provider secrets to an OS-backed store (the desktop already uses the Linux Secret Service and
+  mobile has secure storage, so this would be a consistency fix as much as a security one), or
+- run script nodes in a restricted sandbox (separate user, container, or OS sandbox).
+
+No code was changed for this finding.
 
 ### F6 · P3 · `cargo clippy` cannot be used as a gate yet
 
@@ -84,15 +115,26 @@ servers (lines 3018, 3050, 3112, 3761), plus 22 warnings. The warnings are style
 `items after a test module` (`workflow_document.rs:2414`). Fixing the four test errors would let CI
 adopt clippy as a lint gate.
 
-### F7 · P3 · 67 panic-path calls in production Rust code
+### F7 · P3 (partially fixed) · 67 panic-path calls in production Rust code
 
-Non-test `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!` calls, concentrated in
-`workflow_document.rs` (35), then `workflow_store.rs`, `sub_agent.rs`, `study_notes.rs` and
-`provider.rs` (7 each), `profiles.rs` (2), `hooks.rs`/`workflow_runner.rs` (1 each). Mobile and
-desktop hosts are near-clean (2 and 13, the latter in the remote control/relay paths). Most are
-plausibly invariant-backed, but a panic in a turn-handling path aborts the turn — and on mobile it
-can take the app down. Worth a focused pass on `provider.rs` first, since it is on every request.
+Non-test `unwrap`/`expect`/`panic!`/`unreachable!` calls were concentrated in `workflow_document.rs`
+(35), then `workflow_store.rs`, `sub_agent.rs`, `study_notes.rs` and `provider.rs` (7 each),
+`profiles.rs` (2), `hooks.rs`/`workflow_runner.rs` (1 each). Mobile and desktop hosts are near-clean
+(2 and 13, the latter in the remote control/relay paths).
 
+**Fixed: `provider.rs`, the path every model request takes.** Four `as_array_mut().unwrap()` calls in
+the Anthropic, Responses and Gemini stream assemblers indexed arrays the assembler owns. They were
+invariant-backed by construction, which is exactly why they were worth removing: a future edit to
+initialization would panic mid-stream instead of failing the turn, and the surrounding code already
+had the idiom for it (`return Err("out-of-order Anthropic content block".into())`). They now return
+errors naming the lost array. `provider.rs` is down from 7 non-test panic paths to 3, and all three
+are `unreachable!()` in exhaustive match arms whose case the preceding code already handled — the
+conventional, defensible use.
+
+**Remaining: 63 sites, mostly `workflow_document.rs` (35).** These were not touched. The Workflow
+subsystem is excluded from the mobile scope and has its own integration coverage, so the case for
+sweeping them is weaker than it was for the request path; a dedicated pass with the file's invariants
+in mind would be the right way to do it.
 ### F8 · P2 (documentation) · `agent_docs/project_progress.md` is stale enough to mislead
 
 It states that ordinary skill loading and Study subagent tools/context "remain missing" and that the
@@ -133,9 +175,11 @@ escape hatch for out-of-root file access, masked credentials, and a diagnostics 
 redaction contract matches its implementation. The previous audit's P1 is closed with its own
 fixture.
 
-The real residual risk is **verification depth, not known defects**: the context summarizer and the
-v2 checkpoint path — both on the critical path for long sessions — have no direct tests, and the
-largest Rust module in the Study subsystem has only end-to-end coverage. Two hardening items are
-cheap: filter the workflow script environment, and make `clippy` clean enough to gate.
+The residual risk is **maintenance surface, not known defects**: roughly 27 KB of committed code has
+no caller, the largest Rust module in the Study subsystem has only end-to-end coverage, and two
+hardening items are cheap (filter the workflow script environment, make `clippy` clean enough to
+gate). One earlier finding in this document was retracted after a symbol-level recheck — see F2.
 
-Priority order if work continues: F2 → F3 → F4 → F6 → F5 → F7 → F8.
+Fixed in this pass: F6 (clippy now exits clean), F4 (six `study_exams` unit tests), F7 (the request path), F8
+(the stale document, which also carried a corrupted byte). Open: F3 (decide the orphaned modules) and the
+remaining panic paths outside `provider.rs`.

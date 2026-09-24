@@ -30,6 +30,20 @@ canvas into a text dashboard.
 
 ## Current Position
 
+- Mobile plugin tools and full audit (`mobile_plugin_tools_20260924`; 2026-09-24): mobile runs
+  `study` (5 tools), `web_search` (3 ported kernels) and `generate_image` (configuration from the
+  shared 设置 → 生图 panel, output landed as a session attachment). The extensions panel derives its
+  tool counts from the manifests and the assembled runtimes instead of a written list, and plugin
+  switches reach the runtime. `git` and `workflow` are deliberately not assembled on mobile: there is
+  no `git` binary or repository, and workflow is a UI-RPC surface. Published mobile is **0.1.12 /
+  versionCode 1012** at `https://47.114.43.99.nip.io/downloads/Sunday-mobile-latest.apk`; each release
+  since 0.1.9 was verified by a complete public GET matching the local SHA256. The full audit
+  (`core/docs/audits/full-code-audit-2026-09-24.md`) closed the previous P1 with its own fixture
+  (`auto_tool_execute_count=0` for both deny and ask_user), retracted one of its own findings,
+  withdrew one hardening recommendation as ineffective, and recorded three modules with no caller.
+  Entries below describe earlier states: where they say ordinary skill loading or Study subagent
+  tools "remain missing", both were implemented afterwards.
+
 - Mobile/Desktop capability audit and Study assembly repair (`mobile_study_skill_assembly_20260923`): deployment closure is complete for the audit and the specified Study main-agent fixes only; it does not mean the findings are all repaired or the Rust migration is complete. The canonical finding list is [the audit report](../core/docs/mobile-desktop-code-audit-2026-09-23.md), with supporting evidence in `core/docs/audits/mobile-desktop-2026-09-23/`. HEAD remains `9cc013066f6229ce48a0cf4784cdb9e9f6503019`; the fixes and audit were not released. Published mobile remains 0.1.7 / versionCode 1007; next package is 0.1.8 / 1008. Study mode aliases, five skills/fourteen references, disabled-skill filtering, approval-resume context, prompt updates, and two color-token fixes are present in source only. Ordinary skill loading and Study subagent tools/context remain missing. Verification: mobile 175 tests, Rust runtime 130, native 18, and mobile typecheck passed (323 tests total); a local fixture also confirmed PreToolUse `deny` and `ask_user` still execute the tool. Prioritize permission enforcement, attachment bytes, Study concurrency, and backup recovery, then continue the report's ordered scope. Do not satisfy parity by hiding functionality. Full read-only handoff is in [latest session work](latest_session_work.md); preserve the broadly dirty working tree.
 - Mobile sidebar and Study navigation (`mobile_sidebar_navigation_20260923`):
   the narrow viewport keeps the bottom dock available independently of the
@@ -3154,7 +3168,7 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
   (`version_info`). Display version and Windows file version are therefore
   independent, and a stable build's file version is unchanged.
 - Acceptance (project skill `lamtools-setup-install`, Inno
-  `/VERYSILENT /NORESTART /DIR=`): installed to `E:\setuptest .3.7-beta.1`
+  `/VERYSILENT /NORESTART /DIR=`): installed to `E:\setuptest\0.3.7-beta.1`
   and verified `app_file_version = 0.3.7-beta.1` with the main process and the
   packaged `lamcore-backend\LamCore.exe` both running from that directory.
   Installer: `core/desktop/src-tauri/target/release/bundle/inno/Sunday_0.3.7-beta.1_x64-setup.exe`,

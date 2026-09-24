@@ -2410,6 +2410,13 @@ pub fn semantic(value: &Value) -> WorkflowDocumentResult<Value> {
     semantic_graph(value, None, 0, 100)
 }
 
+// Keep the public module's API intentionally data-only.  These aliases make
+// callers migrating from the Python names explicit while preserving a single
+// canonical implementation.
+pub type Document = Value;
+pub type Prompt = Value;
+pub type SemanticGraph = Value;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2426,10 +2433,3 @@ mod tests {
         );
     }
 }
-
-// Keep the public module's API intentionally data-only.  These aliases make
-// callers migrating from the Python names explicit while preserving a single
-// canonical implementation.
-pub type Document = Value;
-pub type Prompt = Value;
-pub type SemanticGraph = Value;
