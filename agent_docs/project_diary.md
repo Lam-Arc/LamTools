@@ -829,3 +829,17 @@ logs.
 - Permission semantics must survive every runtime port. The audit's isolated fixture established that Rust PreToolUse `permissionDecision=deny/ask_user` was ignored for AutoAllow tools; matching hook event names or passing lifecycle tests is insufficient.
 - Successful upload/config responses must mean the payload is durably stored and consumed by the next execution stage. Returning an attachment ID without bytes, or listing a skill without its loader, must never be counted as feature parity.
 - Existing tests passing cannot establish cross-platform parity when they omit the differing behavior. The canonical audit and staged repair boundaries are recorded in `core/docs/mobile-desktop-code-audit-2026-09-23.md`; its source baseline must remain distinct from the currently released APK.
+
+## Behaviour audit beyond surface parity (2026-09-24)
+
+- A capability comparison answers "does mobile have X" and cannot see defects inside code that already exists. Eight real-device defects (a tool-round cap, context lost after a cancel or failure, failure text replayed as an assistant answer, attachments over JSON number arrays, repeated history-image reads, an update manifest that was never published, a queue method answering with another method's shape, a check-then-create race, a stale comment) all lived in that layer. Later audits must treat behaviour contracts — thresholds, wire shapes, error and cancellation paths, concurrency — as their own layer, and every item needs a regression test that fails against the old implementation.
+- Desktop parity is a source, not an excuse: where the desktop pauses a repeated run and waits for the user, a host with no pause surface must decide what "recoverable" means for its own UI (here: end the turn, keep every message, put the reason on the warning channel, ask the model once more with no tools). Record the divergence instead of claiming identical behaviour.
+- An agent loop without a step budget needs an evidence-based stop. Removing a round cap without the desktop's repeated-result guard trades a truncation bug for an unbounded one.
+- Anything the client fetches at runtime belongs in the release steps and in public verification, not only in the repository: the update manifest was bumped locally for ten releases and never published, because no step generated, uploaded or checked it.
+
+## Mobile release operational lessons (2026-09-24)
+
+- Redirecting the packager with `*>` merges stderr into the PowerShell pipeline, and a native command writing there becomes a terminating error under `$ErrorActionPreference = 'Stop'`: the wrapper dies while Gradle keeps building and the log stops mid-file. Redirect stdout only (`>`).
+- `Path.write_text` translates `\n` to `\r\n` on Windows, so a file whose bytes are hashed and verified server-side must be written as bytes.
+- Per-release deploy scripts are copies and carry the previous release's constants. Set the tarball and APK hashes with an assertion that the replacement happened: a stale hash surfaces as an SSH permission error, which sends you looking in the wrong place.
+- A server key the release flow did not add (an Aliyun key pair appeared once) is left alone. Record it as the baseline that authorize and revoke verify against, rather than asserting zero lines and overwriting someone else's access.
