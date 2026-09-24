@@ -12,7 +12,7 @@ struct Model { calls: AtomicUsize }
 impl ModelBackend for Model {
     async fn complete(&self, _: &str, _: &[Message], _: &[ToolDefinition], _: &TurnOptions) -> Result<ModelTurn, RuntimeError> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-            Ok(ModelTurn::ToolCalls { calls: vec![ToolCall { id: "a".into(), name: "auto_test".into(), arguments: json!({}) }], provider_state: Value::Null })
+            Ok(ModelTurn::ToolCalls { text: String::new(), calls: vec![ToolCall { id: "a".into(), name: "auto_test".into(), arguments: json!({}) }], provider_state: Value::Null })
         } else {
             Ok(ModelTurn::Text { text: "done".into(), reasoning: String::new(), provider_state: Value::Null })
         }
