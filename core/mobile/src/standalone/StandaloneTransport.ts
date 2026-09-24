@@ -41,6 +41,7 @@ import { StandaloneArrangeStore } from './StandaloneArrangeStore'
 import { createStandaloneProjectClient } from './StandaloneProjectClient'
 import { createStandaloneProjectRoutes } from './StandaloneProjectRoutes'
 import { artifactRpc, artifactSnapshot, handleStandaloneArtifactHttp } from './StandaloneArtifacts'
+import { goalRpc } from './StandaloneGoals'
 import { searchStandaloneWorkspace } from './StandaloneWorkspaceSearch'
 import { exportStandaloneSession } from './StandaloneSessionExport'
 import { checkStandaloneUpdate } from './StandaloneUpdate'
@@ -232,6 +233,8 @@ export class StandaloneTransport implements LamToolsTransport {
     if (arrangeResult) return arrangeResult
     const artifactResult = await artifactRpc(method, params)
     if (artifactResult) return artifactResult
+    const goalResult = await goalRpc(method, params)
+    if (goalResult) return goalResult
     if (method === 'workspace.search') return await searchStandaloneWorkspace(this.repository, params)
     if (method === 'update.check') return await checkStandaloneUpdate()
     if (method === 'project.list') {

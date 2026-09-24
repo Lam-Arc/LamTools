@@ -5,6 +5,7 @@ import {
   readEmbeddedArtifactRevisions,
   setEmbeddedArtifactsDeleted,
   restoreEmbeddedArtifactRevision,
+  openEmbeddedArtifact,
   listEmbeddedArtifacts,
   type EmbeddedArtifact,
 } from '../native/rustAgent'
@@ -45,6 +46,11 @@ export async function artifactRpc(
     if (!ids.length) throw new Error('artifact_ids is required')
     const deleted = method !== 'artifact.restore'
     return await setEmbeddedArtifactsDeleted(projectId, ids, deleted)
+  }
+  if (method === 'artifact.open') {
+    if (!artifactId) throw new Error('artifact_id is required')
+    const revisionId = String(params.revision_id || params.revisionId || '')
+    return await openEmbeddedArtifact(projectId, artifactId, revisionId || undefined)
   }
   if (method === 'artifact.revision.restore') {
     if (!artifactId) throw new Error('artifact_id is required')

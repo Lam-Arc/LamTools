@@ -65,7 +65,7 @@
 | 模块 | 桌面端 | 移动端现状 |
 |---|---|---|
 | 会话检查点/回滚 | `session.checkpoints.create|list|graph|restore`、`session.fork`、`session.rollback` | **完全没有**（无表、无 RPC、无 UI 数据源） |
-| Goal（持久目标） | `runtime/goal.py` + `goal.*` 操作 | **完全没有** |
+| Goal（持久目标） | `runtime/goal.py` + `goal.*` 操作 | **已对齐**（0.1.19）：字段、状态机（active↔blocked→archived，archived 终态）、乐观并发 revision、`completed_at`、校验语与桌面一致；`goal.create/get/list/update` 齐备 |
 | 定时/编排可视化 | `arrange.*` 有，`CoreArrangeManager.vue` 共享 | 有 store，但**未核实**是否覆盖 occurrence/signal 全部语义 |
 | Office 文档 | `office` CLI（validate/render）+ `office-*` 技能 + 渲染合同 | 只有 `office-*` **技能文本**；无 CLI、无渲染器，技能指向的命令在移动端不可执行 |
 | 命令系统 | `command.catalog`、`command.execute`、`run_command` 工具 | 无 shell 能力（`capabilities.shell=false`），无命令目录 |

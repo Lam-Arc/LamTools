@@ -25,6 +25,16 @@ and the opaque Relay tunnel.
 
 不做的：git 工具（用户决定）、workflow 工具（用户决定）、桌面宠物、CLI 本身（移动端无 CLI）。
 
+**剩余目标（用户 2026-09-24 指定：逐项推进直到全部完成）**
+
+- ✅ 0.1.19 4b：`artifact.open`（复用附件面板的缓存+intent 桥，Android-only）+ Goal 存储（状态机/乐观并发/校验语与桌面一致，`goal.create|get|list|update` patch 语义）
+- 5：会话检查点 / fork / rollback（`session.checkpoints.*`、`session.fork`、`session.rollback`）
+- 6：`write_checklist` / `update_checklist` / `question` 三个工具
+- 7：Office 渲染，或在移动端改写依赖 CLI 的技能
+- 8：切会话丢过程（会话状态归属分裂：TS 快照 + Rust `rust_runtime_history` 两份状态）
+
+每项完成后立即升一个小版本、出包、发布、写 audit、提交，再进入下一项。
+
 
 The shared-UI and multi-transport architecture has substantial existing
 implementation, but the current Rust/mobile refactor is still incomplete.

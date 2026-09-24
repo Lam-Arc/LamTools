@@ -38,6 +38,7 @@ use tauri::Manager;
 
 mod cancellation;
 mod artifacts;
+mod goals;
 mod attachments;
 mod context_loader;
 use cancellation::{RegisterError, TurnCancellationRegistry};
@@ -809,6 +810,28 @@ fn sunday_plugin_inventory() -> Vec<lamtools_runtime::plugin_catalog::PluginInve
     lamtools_runtime::plugin_catalog::bundled_plugin_inventory()
 }
 
+/// An ISO-8601 UTC timestamp, shared by the stores that record one.
+fn timestamp_iso() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or_default();
+    let days = (seconds / 86_400) as i64;
+    let time = seconds % 86_400;
+    let (hour, minute, second) = (time / 3600, (time % 3600) / 60, time % 60);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
 /// The artifact store lives beside the other host databases.
 fn native_artifact_store(app: &tauri::AppHandle) -> Result<artifacts::ArtifactStore, String> {
     let data = app.path().app_data_dir().map_err(|error| error.to_string())?;
@@ -905,6 +928,58 @@ async fn sunday_artifact_restore_revision(
     Ok(serde_json::json!({"artifact": record}))
 }
 
+/// Hand one artifact revision to the system's default application.
+///
+/// Android-only for the same reason the attachment opener is: it goes through
+/// the mobile plugin handle that only exists there.
+///
+/// Android cannot give another app a path inside app-private storage, so the
+/// bytes are written to the plugin's cache directory and opened from there —
+/// the same route the attachment panel uses. Attachment-backed artifacts are
+/// refused, as the desktop refuses them.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn sunday_artifact_open(
+    app: tauri::AppHandle,
+    opener: tauri::State<'_, MobileAttachmentOpen<tauri::Wry>>,
+    project_id: String,
+    artifact_id: String,
+    revision_id: Option<String>,
+) -> Result<Value, String> {
+    let store = native_artifact_store(&app)?;
+    let record = store
+        .artifact(&artifact_id)?
+        .filter(|record| record.project_id == project_id)
+        .ok_or_else(|| "Artifact not found".to_owned())?;
+    if record.path.starts_with("attachment://") {
+        return Err("附件型成果请使用附件打开".into());
+    }
+    let (bytes, mime_type) = store.revision_bytes(&record, revision_id.as_deref())?;
+    let directory = opener
+        .0
+        .run_mobile_plugin::<AttachmentCacheDirectory>("cacheDirectory", serde_json::json!({}))
+        .map_err(|_| "无法准备打开缓存".to_owned())?;
+    let file_name = if record.name.trim().is_empty() {
+        "artifact".to_owned()
+    } else {
+        record.name.clone()
+    };
+    let target = std::path::Path::new(&directory.path).join(&file_name);
+    std::fs::write(&target, &bytes).map_err(|error| error.to_string())?;
+    opener
+        .0
+        .run_mobile_plugin::<Value>(
+            "open",
+            AttachmentOpenRequest {
+                file_name: &file_name,
+                mime_type: &mime_type,
+            },
+        )
+        .map(|_| ())
+        .map_err(|_| "无法使用系统应用打开成果".to_owned())?;
+    Ok(serde_json::json!({"status": "opened", "path": record.path}))
+}
+
 /// Bytes of one artifact revision; `null` when the artifact is not this project's.
 #[tauri::command]
 async fn sunday_artifact_file(
@@ -927,6 +1002,79 @@ async fn sunday_artifact_file(
         "mimeType": mime_type,
         "dataBase64": base64::engine::general_purpose::STANDARD.encode(&bytes),
     })))
+}
+
+/// The goal store, beside the other host databases.
+fn native_goal_store(app: &tauri::AppHandle) -> Result<goals::GoalStore, String> {
+    let data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    goals::GoalStore::open(&data.join("goals.db"))
+}
+
+#[tauri::command]
+async fn sunday_goal_create(
+    app: tauri::AppHandle,
+    thread_id: String,
+    objective: String,
+    completion_criteria: Option<Vec<String>>,
+    metadata: Option<Value>,
+    goal_id: Option<String>,
+) -> Result<Value, String> {
+    let store = native_goal_store(&app)?;
+    let goal = store.create(
+        &thread_id,
+        &objective,
+        &completion_criteria.unwrap_or_default(),
+        metadata.unwrap_or(Value::Null),
+        goal_id.as_deref().unwrap_or_default(),
+    )?;
+    Ok(goals::goal_payload(&goal))
+}
+
+#[tauri::command]
+async fn sunday_goal_get(app: tauri::AppHandle, goal_id: String) -> Result<Value, String> {
+    let store = native_goal_store(&app)?;
+    let goal = store
+        .goal(&goal_id)?
+        .ok_or_else(|| "Goal not found".to_owned())?;
+    Ok(goals::goal_payload(&goal))
+}
+
+#[tauri::command]
+async fn sunday_goal_list(
+    app: tauri::AppHandle,
+    thread_id: Option<String>,
+    status: Option<String>,
+) -> Result<Value, String> {
+    let store = native_goal_store(&app)?;
+    let goals = store.list(thread_id.as_deref(), status.as_deref())?;
+    Ok(serde_json::json!({
+        "goals": goals.iter().map(|goal| goal).map(serde_json::to_value).collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?,
+    }))
+}
+
+/// Patch semantics: an omitted field keeps its stored value, so the panel can
+/// clear a status reason without clearing the objective.
+#[tauri::command]
+async fn sunday_goal_update(
+    app: tauri::AppHandle,
+    goal_id: String,
+    objective: Option<String>,
+    completion_criteria: Option<Vec<String>>,
+    status: Option<String>,
+    status_reason: Option<String>,
+    metadata: Option<Value>,
+) -> Result<Value, String> {
+    let store = native_goal_store(&app)?;
+    let goal = store.update(
+        &goal_id,
+        objective.as_deref(),
+        completion_criteria.as_deref(),
+        status.as_deref(),
+        status_reason.as_deref(),
+        metadata,
+    )?;
+    Ok(goals::goal_payload(&goal))
 }
 
 /// Every tool this host can advertise, for the mode tool-set editor.
@@ -3209,6 +3357,10 @@ pub fn run() {
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
+        sunday_goal_create,
+        sunday_goal_get,
+        sunday_goal_list,
+        sunday_goal_update,
         sunday_artifact_list,
         sunday_artifact_revisions,
         sunday_artifact_set_deleted,
@@ -3252,6 +3404,10 @@ pub fn run() {
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
+        sunday_goal_create,
+        sunday_goal_get,
+        sunday_goal_list,
+        sunday_goal_update,
         sunday_artifact_list,
         sunday_artifact_revisions,
         sunday_artifact_set_deleted,

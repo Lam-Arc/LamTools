@@ -200,6 +200,19 @@ export async function restoreEmbeddedArtifactRevision(
   return await invoke('sunday_artifact_restore_revision', { projectId, artifactId, revisionId })
 }
 
+/** Hand one revision to the system's default app; Android only. */
+export async function openEmbeddedArtifact(
+  projectId: string,
+  artifactId: string,
+  revisionId?: string,
+): Promise<{ status: string; path: string }> {
+  return await invoke('sunday_artifact_open', {
+    projectId,
+    artifactId,
+    revisionId: revisionId || null,
+  })
+}
+
 export async function readEmbeddedArtifactFile(
   projectId: string,
   artifactId: string,
@@ -216,6 +229,67 @@ export async function readEmbeddedArtifactFile(
     mimeType: raw.mimeType,
     bytes: Uint8Array.from(binary, character => character.charCodeAt(0)),
   }
+}
+
+/** One durable goal, shaped like the desktop's `Goal.to_dict()`. */
+export interface EmbeddedGoal {
+  id: string
+  thread_id: string
+  objective: string
+  completion_criteria: string[]
+  status: 'active' | 'blocked' | 'archived'
+  status_reason: string
+  metadata: Record<string, unknown>
+  revision: number
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export async function createEmbeddedGoal(input: {
+  threadId: string
+  objective: string
+  completionCriteria?: string[]
+  metadata?: Record<string, unknown>
+  goalId?: string
+}): Promise<{ goal: EmbeddedGoal }> {
+  return await invoke('sunday_goal_create', {
+    threadId: input.threadId,
+    objective: input.objective,
+    completionCriteria: input.completionCriteria || [],
+    metadata: input.metadata || {},
+    goalId: input.goalId || null,
+  })
+}
+
+export async function readEmbeddedGoal(goalId: string): Promise<{ goal: EmbeddedGoal }> {
+  return await invoke('sunday_goal_get', { goalId })
+}
+
+export async function listEmbeddedGoals(
+  threadId?: string,
+  status?: string,
+): Promise<{ goals: EmbeddedGoal[] }> {
+  return await invoke('sunday_goal_list', { threadId: threadId || null, status: status || null })
+}
+
+/** Only the fields present are changed; the host keeps the stored values. */
+export async function updateEmbeddedGoal(input: {
+  goalId: string
+  objective?: string
+  completionCriteria?: string[]
+  status?: string
+  statusReason?: string
+  metadata?: Record<string, unknown>
+}): Promise<{ goal: EmbeddedGoal }> {
+  return await invoke('sunday_goal_update', {
+    goalId: input.goalId,
+    objective: input.objective ?? null,
+    completionCriteria: input.completionCriteria ?? null,
+    status: input.status ?? null,
+    statusReason: input.statusReason ?? null,
+    metadata: input.metadata ?? null,
+  })
 }
 
 /** One bundled plugin's config schema, embedded and parsed by the host. */
