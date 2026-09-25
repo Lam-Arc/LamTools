@@ -23,7 +23,9 @@ PIP_INSTALL_TIMEOUT = 600
 PIP_DRYRUN_TIMEOUT = 120
 
 _REQUIREMENT_RE = re.compile(
-    r"^\s*([A-Za-z0-9_.-]+)"  # 包名
+    # 包名必须以字母/数字开头：否则 ``-r``、``--target`` 这类 pip 参数会被
+    # 当成合法"包名"（2026-09-25 审计 P2）。
+    r"^\s*([A-Za-z0-9][A-Za-z0-9_.-]*)"
     r"(?:\s*(>=|<=|==|!=|~=|>|<)\s*([0-9][A-Za-z0-9._-]*))?\s*$"
 )
 
@@ -124,17 +126,43 @@ def check_dependencies(dependencies: list[str]) -> dict[str, Any]:
 
 def install_command_hint(dependencies: list[str]) -> str:
     """给用户的安装命令提示（依赖缺失时附在错误信息里）。"""
-    quoted = " ".join(dependencies)
+    requirements, _invalid = validated_requirements(dependencies)
+    quoted = " ".join(requirements)
     return f"{sys.executable} -m pip install {quoted}"
 
 
+def validated_requirements(dependencies: list[str]) -> tuple[list[str], list[str]]:
+    """把清单里的依赖串归一为 ``name[op]version``，返回 (可用项, 非法项)。
+
+    直接把清单字符串交给 pip 等于把命令行交给插件作者：``--index-url=…``
+    （换成第三方源即可装到被篡改的包）、``-r <任意文件>``、``--target=…``
+    都是合法 pip 参数（2026-09-25 审计 P2）。这里只放行"包名[运算符版本]"。
+    """
+    valid: list[str] = []
+    invalid: list[str] = []
+    for raw in dependencies:
+        req = parse_requirement(raw)
+        if req is None:
+            invalid.append(str(raw))
+        else:
+            valid.append(req.requirement_string())
+    return valid, invalid
+
+
+def _invalid_detail(invalid: list[str]) -> str:
+    return "invalid requirement(s): " + ", ".join(f"{item!r}" for item in invalid)
+
+
 async def dry_run_install(dependencies: list[str], *, cwd: Path) -> tuple[bool, list[str], str]:
-    """预演解析依赖安装：True = 可安全安装；False = 与现有包冲突。
+    """预演解析依赖安装：True = 可安全安装；False = 冲突或依赖串非法。
 
     Returns:
         (ok, conflicts, detail) — conflicts 为将被覆盖的包名列表。
     """
-    args = [sys.executable, "-m", "pip", "install", "--dry-run", "--quiet", *dependencies]
+    requirements, invalid = validated_requirements(dependencies)
+    if invalid:
+        return False, [], _invalid_detail(invalid)
+    args = [sys.executable, "-m", "pip", "install", "--dry-run", "--quiet", *requirements]
     execution = await run_subprocess(args, cwd=cwd, timeout=PIP_DRYRUN_TIMEOUT)
     if execution.exit_code != 0:
         return False, [], (execution.stderr or execution.stdout or "pip dry-run failed")
@@ -148,7 +176,10 @@ async def dry_run_install(dependencies: list[str], *, cwd: Path) -> tuple[bool, 
 
 async def install_dependencies(dependencies: list[str], *, cwd: Path) -> tuple[bool, str]:
     """安装依赖到 core 运行环境。失败返回 (False, 错误摘要)。"""
-    args = [sys.executable, "-m", "pip", "install", *dependencies]
+    requirements, invalid = validated_requirements(dependencies)
+    if invalid:
+        return False, _invalid_detail(invalid)
+    args = [sys.executable, "-m", "pip", "install", *requirements]
     execution = await run_subprocess(args, cwd=cwd, timeout=PIP_INSTALL_TIMEOUT)
     if execution.exit_code != 0:
         detail = (execution.stderr or execution.stdout or "").strip()
@@ -159,7 +190,11 @@ async def install_dependencies(dependencies: list[str], *, cwd: Path) -> tuple[b
 async def uninstall_dependencies(packages: list[str], *, cwd: Path) -> tuple[bool, str]:
     if not packages:
         return True, ""
-    args = [sys.executable, "-m", "pip", "uninstall", "-y", *packages]
+    # 只按包名卸载：清单里的版本约束/参数不该决定 pip 的 argv。
+    names = [req.name for req in (parse_requirement(item) for item in packages) if req is not None]
+    if not names:
+        return True, ""
+    args = [sys.executable, "-m", "pip", "uninstall", "-y", *names]
     execution = await run_subprocess(args, cwd=cwd, timeout=PIP_INSTALL_TIMEOUT)
     if execution.exit_code != 0:
         return False, (execution.stderr or execution.stdout or "pip uninstall failed").strip()

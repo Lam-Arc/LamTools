@@ -405,14 +405,25 @@ async function saveHookForm() {
     // 1. Read current config
     const getResult = await props.requestRpc('hook.config.get')
     const rawContent = typeof getResult.content === 'string' ? getResult.content : '{}'
+    const unparsable = 'hooks.json 当前无法解析（不是合法 JSON），已取消保存。请先到「原始配置」视图修复后再添加 Hook。'
     let config: Record<string, unknown>
     try {
       config = JSON.parse(rawContent) || {}
     } catch {
-      // Never fall back to {} — saving that would silently wipe every
-      // existing hook (audit 17 S2). Abort and surface the corruption.
-      error.value = 'hooks.json 当前无法解析（不是合法 JSON），已取消保存。请先到「原始配置」视图修复后再添加 Hook。'
-      return
+      // 随包 hooks.json 是带注释的 JSONC，严格解析必然失败；后端同时给出归一化
+      // 形态（parsed），用它继续。两者都不可解析时才中止——绝不退回 {}，否则
+      // 会静默清空既有 Hook（audit 17 S2）。
+      const normalized = typeof getResult.parsed === 'string' ? getResult.parsed : ''
+      if (!normalized) {
+        error.value = unparsable
+        return
+      }
+      try {
+        config = JSON.parse(normalized) || {}
+      } catch {
+        error.value = unparsable
+        return
+      }
     }
     // 2. Merge the new hook
     const hooksSection = (config.hooks as Record<string, unknown[]>) || {}
@@ -457,7 +468,9 @@ async function toggleConfigView() {
       try {
         configDraft.value = JSON.stringify(JSON.parse(content), null, 2)
       } catch {
-        configDraft.value = content
+        // JSONC（带注释）原文无法直接编辑：优先展示后端归一化后的形态。
+        const normalized = typeof result.parsed === 'string' ? result.parsed : ''
+        configDraft.value = normalized || content
       }
       configOriginal.value = configDraft.value
     } catch (e) {

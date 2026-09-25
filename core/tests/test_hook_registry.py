@@ -142,3 +142,41 @@ def test_hook_registry_tolerates_non_numeric_timeout(tmp_path: Path):
 
     assert len(hooks) == 1
     assert hooks[0].handler.timeout == 10.0
+
+
+def test_hook_registry_loads_jsonc_hooks_file(tmp_path: Path):
+    """带注释/尾逗号的 hooks.json 必须照常加载。
+
+    随包 `config/resources/hooks.json` 就是这种形态，严格 json.loads 会让它
+    永远加载不到任何钩子（2026-09-25 审计 P2）。
+    """
+    project = tmp_path / "project"
+    target = project / ".lamtools" / "hooks.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        """/* 事件钩子配置 — 取消注释即可启用 */
+        {
+          "hooks": {
+            "PreToolUse": [
+              {"matcher": "run_command", "hooks": [{"type": "prompt", "prompt": "step carefully"}]},
+            ],
+          },
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    hooks = HookRegistry(project_root=project).load()
+
+    assert len(hooks) == 1
+    assert hooks[0].event == "PreToolUse"
+    assert hooks[0].handler.prompt == "step carefully"
+
+
+def test_shipped_hooks_file_is_loadable(tmp_path: Path):
+    """随包文件本身必须能被加载器读出来（空配置也不报错）。"""
+    from lamtools_core.plugins._jsonc import load_jsonc_text
+
+    shipped = Path(__file__).resolve().parent.parent / "config" / "resources" / "hooks.json"
+
+    assert load_jsonc_text(shipped) == {}

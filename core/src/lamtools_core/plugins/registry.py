@@ -216,15 +216,16 @@ class PluginRegistry:
         return sorted(items, key=lambda item: item.name)
 
     def _read_manifest(self, manifest_path: Path) -> PluginManifest:
+        from lamtools_core.config.id_validation import validate_path_component
+
         raw = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
         if not isinstance(raw, dict):
             raise ValueError(f"plugin manifest must be an object: {manifest_path}")
-        name = str(raw.get("name") or manifest_path.parent.name).strip()
-        if not name:
-            raise ValueError(f"plugin name is required: {manifest_path}")
-        plugin_id = str(raw.get("id") or name).strip()
-        if not plugin_id:
-            raise ValueError(f"plugin id is required: {manifest_path}")
+        # ``name`` is a display name（允许空格，如 "Display Alpha"），但会同时
+        # 用作插件配置文件的名字与安装目录：必须是单个路径段
+        # （2026-09-25 审计 P1）。``id`` 是规范身份，可自由取用命名空间。
+        name = validate_path_component("plugin", str(raw.get("name") or manifest_path.parent.name))
+        plugin_id = str(raw.get("id") or name).strip() or name
         manifest_version = str(raw.get("manifest_version") or SUPPORTED_MANIFEST_VERSION).strip()
         if manifest_version != SUPPORTED_MANIFEST_VERSION:
             raise ValueError(

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .models import HookDefinition, HookHandler, HookSource, PluginManifest
 from .trust import HookTrustStore
+from ._jsonc import load_jsonc_text
 
 
 SUPPORTED_HANDLER_TYPES = {"command", "http", "mcp", "prompt"}
@@ -89,8 +90,11 @@ class HookRegistry:
         if not path.exists():
             return []
         try:
-            raw = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError):
+            # 随包 hooks.json 是带注释的 JSONC（"取消注释即可启用"），因此这里
+            # 必须按 JSONC 解析——严格 json.loads 会让开箱配置永远加载不到任何
+            # 钩子，而且只在日志里留一行 warning（2026-09-25 审计 P2）。
+            raw = load_jsonc_text(path)
+        except (OSError, ValueError):
             # A corrupt or empty hooks file must never take the whole app down.
             logging.getLogger(__name__).warning("Skipping unreadable hooks file: %s", path)
             return []

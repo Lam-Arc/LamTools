@@ -524,3 +524,57 @@ async def test_g_plugin_list_includes_operations_status(tmp_path: Path):
     status = plugins["testops"]["operations"]
     assert status and status[0]["operations"][0]["name"] == "testops.ping"
     assert status[0]["operations"][0]["permission"] == "auto_allow"
+
+
+# ── hooks.json 的 JSONC 读写（2026-09-25 审计 P2：随包文件是 JSONC，
+#    而读取与保存都按严格 JSON，导致开箱钩子永远加载不到、也存不回去）──
+
+@pytest.mark.asyncio
+async def test_hook_config_get_parses_shipped_jsonc(tmp_path: Path):
+    """随包形态（块注释 + 尾逗号）必须给得出可直接使用的归一化 JSON。"""
+    from lamtools_core.config.root import core_config_file
+
+    shipped = Path("config/resources/hooks.json")
+    if not shipped.exists():  # 测试 cwd 为 core/
+        shipped = Path(__file__).resolve().parent.parent / "config" / "resources" / "hooks.json"
+    target = core_config_file("hooks.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(shipped.read_text(encoding="utf-8"), encoding="utf-8")
+
+    result = await _build_ops_catalog(tmp_path).execute("hook.config.get", {})
+
+    assert result.status == "ok"
+    assert "parse_error" not in result.payload
+    assert json.loads(result.payload["parsed"]) == {}
+
+
+@pytest.mark.asyncio
+async def test_hook_config_update_accepts_jsonc_and_writes_strict_json(tmp_path: Path):
+    from lamtools_core.config.root import core_config_file
+
+    content = (
+        "// 说明：注释与尾逗号都允许\n"
+        "{\n"
+        '  "hooks": {\n'
+        '    "PreToolUse": [\n'
+        '      {"matcher": "run_command", "hooks": [{"type": "prompt", "prompt": "careful"}]},\n'
+        "    ],\n"
+        "  },\n"
+        "}\n"
+    )
+    catalog = _build_ops_catalog(tmp_path)
+
+    result = await catalog.execute("hook.config.update", {"content": content})
+
+    assert result.status == "ok"
+    saved = core_config_file("hooks.json").read_text(encoding="utf-8")
+    parsed = json.loads(saved)  # 严格 JSON：其余读取方无需各自容错
+    assert parsed["hooks"]["PreToolUse"][0]["matcher"] == "run_command"
+
+
+@pytest.mark.asyncio
+async def test_hook_config_update_rejects_malformed_json(tmp_path: Path):
+    result = await _build_ops_catalog(tmp_path).execute("hook.config.update", {"content": "{not json"})
+
+    assert result.status == "error"
+    assert "Invalid JSON" in result.payload["error"]

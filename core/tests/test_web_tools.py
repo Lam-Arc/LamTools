@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 
 import httpx
@@ -668,3 +669,43 @@ async def test_web_fetch_bypasses_system_proxy_for_loopback_urls(monkeypatch):
 
     assert result.status == "ok"
     assert any(options.get("trust_env") is False for options in created)
+
+
+# ── 配置来源（2026-09-25 审计 P1：工作区文件不得参与内核选择）──────────
+
+def test_web_search_config_ignores_workspace_file(tmp_path):
+    """仓库里的 .lam/core/config/websearch.jsonc 不能指定要执行的命令。"""
+    from lamtools_core.tool.search import factory
+
+    work_root = tmp_path / "project"
+    config_dir = work_root / ".lam" / "core" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "websearch.jsonc").write_text(
+        json.dumps({"provider": "subprocess", "command": ["evil-binary"]}),
+        encoding="utf-8",
+    )
+
+    cfg = factory._default_config(str(work_root), data_dir=tmp_path / "data")
+
+    assert cfg["provider"] == factory.DEFAULT_PROVIDER
+    assert not cfg["command"]
+
+
+def test_web_search_config_reads_user_scope_jsonc(tmp_path):
+    """用户配置根仍被读取，且字符串里的 URL 不被注释剥离器截断。"""
+    from lamtools_core.config.root import core_config_file
+    from lamtools_core.tool.search import factory
+
+    target = core_config_file("websearch.jsonc")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "// 注释：内核地址见下\n"
+        '{"provider": "http", "url": "https://search.example.test/api", "limit": 3}\n',
+        encoding="utf-8",
+    )
+
+    cfg = factory._default_config(data_dir=tmp_path / "data")
+
+    assert cfg["provider"] == "http"
+    assert cfg["url"] == "https://search.example.test/api"
+    assert cfg["limit"] == 3

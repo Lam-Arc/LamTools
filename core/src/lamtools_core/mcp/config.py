@@ -77,6 +77,14 @@ def _config_paths(
     env_var: str,
     default_paths: list[Path | str] | tuple[Path | str, ...] | None,
 ) -> list[Path]:
+    """MCP 配置来源：用户配置 + 显式指定的文件。
+
+    2026-09-25 审计 P1：不再自动读取工作区里的 ``.lamtools/mcp.json`` /
+    ``.mcp.json`` / ``mcp.json``——它们可以声明任意 ``command``，而 MCP 服务
+    在加载时就会启动进程，等于"打开一个仓库即可执行任意命令"。调用方仍可
+    通过 ``config_files``（插件清单声明的文件）或 ``default_paths`` 显式加入
+    来源。
+    """
     from lamtools_core.config.root import core_config_file
 
     paths: list[Path] = []
@@ -85,10 +93,8 @@ def _config_paths(
     explicit = os.environ.get(env_var, "").strip()
     if explicit:
         paths.append(Path(explicit))
-    root = Path(work_root)
-    if default_paths is None:
-        paths.extend([root / ".lamtools" / "mcp.json", root / ".mcp.json", root / "mcp.json"])
-    else:
+    del work_root  # 工作区不再参与默认配置发现（见 docstring）
+    if default_paths is not None:
         paths.extend(Path(item) for item in default_paths)
     paths.extend(Path(item) for item in config_files or ())
     seen: set[Path] = set()

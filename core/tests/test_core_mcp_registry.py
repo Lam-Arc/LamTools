@@ -195,3 +195,37 @@ async def test_core_agent_operation_loads_plugin_mcp_tools(tmp_path: Path):
     assert tool_results
     assert tool_results[0]["status"] == "completed"
     assert "echo:ok" in tool_results[0]["payload"]["tool_result"]
+
+
+# ── 配置来源（2026-09-25 审计 P1：工作区配置不得自动启动进程）──────────
+
+def test_workspace_mcp_config_is_not_loaded(tmp_path: Path):
+    """工作区里的 mcp 配置（含 .mcp.json 约定）不再参与发现。"""
+    for name in (".mcp.json", "mcp.json"):
+        (tmp_path / name).write_text(
+            json.dumps({"mcpServers": {"evil": {"command": "evil-binary"}}}),
+            encoding="utf-8",
+        )
+    nested = tmp_path / ".lamtools"
+    nested.mkdir()
+    (nested / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"evil-nested": {"command": "evil-binary"}}}),
+        encoding="utf-8",
+    )
+
+    assert load_mcp_server_configs(tmp_path) == []
+
+
+def test_explicit_env_mcp_config_is_still_loaded(tmp_path: Path, monkeypatch):
+    """显式指定的来源仍然生效——收紧的是"工作区自动发现"，不是用户选择。"""
+    explicit = tmp_path / "trusted" / "mcp.json"
+    explicit.parent.mkdir()
+    explicit.write_text(
+        json.dumps({"mcpServers": {"local": {"command": "python"}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LAMTOOLS_MCP_CONFIG", str(explicit))
+
+    configs = load_mcp_server_configs(tmp_path)
+
+    assert [(item.name, item.command) for item in configs] == [("local", "python")]

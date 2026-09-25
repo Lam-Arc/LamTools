@@ -104,13 +104,22 @@ async def download_to_file(url: str, target: Path, *, timeout: int = 300) -> tup
     return True, digest.hexdigest()
 
 
-def install_from_directory(src_dir: Path, target_dir: Path) -> None:
-    """复制本地插件目录到插件根（重装即更新：先清理旧目录）。"""
+def install_from_directory(src_dir: Path, target_dir: Path, *, root: Path | None = None) -> None:
+    """复制本地插件目录到插件根（重装即更新：先清理旧目录）。
+
+    ``root`` 是插件根；给出时断言目标仍在根内——清单里的 ``name`` 曾可把
+    ``target`` 带出插件根，紧随其后的 rmtree 就能删掉任意已存在目录
+    （2026-09-25 审计 P1）。
+    """
     src = src_dir.resolve()
     target = target_dir.resolve()
     if not src.exists() or not src.is_dir():
         raise ValueError(f"plugin directory not found: {src}")
-    if not src.is_relative_to(target.parent) and src.is_relative_to(target):
+    if root is not None and not target.is_relative_to(Path(root).resolve()):
+        raise ValueError(f"plugin target escapes the plugin root: {target}")
+    # A source inside its own target would delete the source before copying it
+    # (the previous inverted condition could never fire).
+    if src.is_relative_to(target):
         raise ValueError("plugin source cannot be inside its own target")
     if target.exists():
         shutil.rmtree(target)
@@ -128,11 +137,13 @@ def find_plugin_manifest_dir(installed_root: Path) -> Path | None:
     return None
 
 
-def uninstall_plugin_directory(target_dir: Path) -> None:
+def uninstall_plugin_directory(target_dir: Path, *, root: Path | None = None) -> None:
     """删除插件目录（目标必须存在且在插件根下，防误删）。"""
     target = target_dir.resolve()
     if not target.exists():
         return
     if target.name == "plugins" or not target.parent.exists():
         raise ValueError(f"refusing to remove unexpected path: {target}")
+    if root is not None and not target.is_relative_to(Path(root).resolve()):
+        raise ValueError(f"refusing to remove a path outside the plugin root: {target}")
     shutil.rmtree(target)

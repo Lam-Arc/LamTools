@@ -2,10 +2,14 @@
 
 配置来源（优先级从高到低）:
 1. 显式传入的 provider 名（调用侧 web_search 工具参数 provider=...）
-2. websearch.jsonc 配置（可选，位于 .lam/core/config/ 或 work_root）
+2. websearch.jsonc 配置（用户作用域：``{data_dir}/plugins/websearch.jsonc``，
+   回退用户配置根 ``.lam/core/config/websearch.jsonc``）
 3. 内置默认：DuckDuckGo（inproc）；不可用时按配置降级
 
 外部内核（subprocess/http）在配置中显式声明 command/url，不内置任何第三方代码。
+配置只从用户作用域读取：``web_search`` 是免审批工具，而配置文件可以声明要执行
+的 ``command``——若接受工作区里的文件，等于"克隆一个仓库即可执行任意命令"
+（2026-09-25 审计 P1）。
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ import os
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from lamtools_core.plugins._jsonc import strip_jsonc_comments
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult, ToolResultStatus
 from lamtools_core.tool.search.protocol import SearchProvider, SearchResult
 
@@ -25,35 +30,32 @@ _MAX_RESULT_COUNT = 20
 _MAX_CONTENT_LEN = 8000
 
 
-def _strip_jsonc_comments(text: str) -> str:
-    import re
-
-    return re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.DOTALL)
-
-
 def _load_config(work_root: str | None = None, data_dir: str | Path | None = None) -> dict:
     """读取 websearch 配置（可选）。文件缺失返回空 dict。
 
     D5 共识：优先读插件配置位置 ``{data_dir}/plugins/websearch.jsonc``，
-    回退旧位置（.lam/core/config/websearch.jsonc）——迁移后新旧并存期
-    也能读到数据。
+    回退用户配置根 ``{.lam/core/config}/websearch.jsonc``——插件侧
+    （``plugins/operations.py`` 的 websearch.config.get）会把它迁移到新位置。
+
+    ``work_root`` 只为兼容调用签名保留：工作区派生路径不再参与配置发现。
     """
+    del work_root  # 工作区派生路径不再是配置来源（见模块 docstring）
     candidates: list[Path] = []
-    if data_dir:
-        candidates.append(Path(data_dir) / "plugins" / "websearch.jsonc")
-    if work_root:
-        candidates.append(Path(work_root).resolve() / ".lam" / "core" / "config" / "websearch.jsonc")
-    candidates.append(Path(".lam/core/config/websearch.jsonc"))
     env_path = os.environ.get("WEBSEARCH_CONFIG")
     if env_path:
-        candidates.insert(0, Path(env_path))
+        candidates.append(Path(env_path))
+    if data_dir:
+        candidates.append(Path(data_dir) / "plugins" / "websearch.jsonc")
+    from lamtools_core.config.root import core_config_file
+
+    candidates.append(core_config_file("websearch.jsonc"))
     for path in candidates:
         try:
             raw = Path(path).read_text(encoding="utf-8")
         except (FileNotFoundError, OSError):
             continue
         try:
-            data = json.loads(_strip_jsonc_comments(raw))
+            data = json.loads(strip_jsonc_comments(raw))
         except json.JSONDecodeError:
             continue
         if isinstance(data, dict):

@@ -14,6 +14,7 @@ from lamtools_core.config.root import core_config_file
 from lamtools_core.skills import SkillRegistry, SkillStateStore
 
 from ._jsonc import strip_jsonc_comments as _strip_jsonc_comments
+from ._jsonc import strip_trailing_commas as _strip_trailing_commas
 from .deps import check_dependencies
 from .hook_config import HookRegistry
 from .registry import PluginRegistry, PluginStateStore
@@ -870,19 +871,32 @@ def build_plugin_operation_catalog(
                 return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         else:
             content = "{}"
-        return OperationResult(name=request.name, payload={"content": content, "path": str(config_path)})
+        # 随包 hooks.json 带注释：除了原文（原始编辑器要用）再给出归一化形态，
+        # 让 UI 不必自己实现一遍 JSONC 解析（2026-09-25 审计 P2）。
+        payload: dict[str, Any] = {"content": content, "path": str(config_path)}
+        try:
+            data = _json.loads(_strip_jsonc_comments(content)) if content.strip() else {}
+            if isinstance(data, dict):
+                payload["parsed"] = _json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+        except _json.JSONDecodeError as exc:
+            payload["parse_error"] = str(exc)
+        return OperationResult(name=request.name, payload=payload)
 
     async def hook_config_update(request: OperationRequest) -> OperationResult:
         content = str(request.payload.get("content") or "")
         config_path = core_config_file("hooks.json")
+        from lamtools_core.config.root import atomic_write_text
+
         try:
-            # validate – must be valid JSON
-            _json.loads(content) if content.strip() else {}
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(content, encoding="utf-8")
+            # 接受 JSONC（注释、尾逗号），保存时归一到严格 JSON：其余读取方
+            # 不必各自容错，文件也不会在两次保存之间反复变形态。
+            data = _json.loads(_strip_trailing_commas(_strip_jsonc_comments(content))) if content.strip() else {}
+            if not isinstance(data, dict):
+                raise ValueError("hooks config must be a JSON object")
+            atomic_write_text(config_path, _json.dumps(data, ensure_ascii=False, indent=2) + "\n")
         except _json.JSONDecodeError as exc:
             return OperationResult(name=request.name, status="error", payload={"error": f"Invalid JSON: {exc}"})
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         return OperationResult(name=request.name, payload={"path": str(config_path), "saved": True})
 
@@ -1009,10 +1023,10 @@ def build_plugin_operation_catalog(
             return OperationResult(name=request.name, status="error", payload={"error": "描述（description）是必填的"})
         if not content:
             return OperationResult(name=request.name, status="error", payload={"error": "内容（content）是必填的"})
-        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+        if not re.match(r"^[A-Za-z0-9._-]+$", name) or name.startswith("."):
             return OperationResult(
                 name=request.name, status="error",
-                payload={"error": "技能名只允许字母/数字/._-（将作为目录名）"},
+                payload={"error": "技能名只允许字母/数字/._-（将作为目录名，且不能以 . 开头）"},
             )
         from lamtools_core.config.root import lam_home
 
@@ -1111,6 +1125,33 @@ def build_plugin_operation_catalog(
             raise ValueError(f"plugin manifest must be an object: {manifest_path}")
         return raw
 
+    def _resolve_plugin_dir(root: Path, raw_manifest: dict[str, Any], fallback: str) -> Path:
+        """清单身份 → 插件根下的安全目录（2026-09-25 审计 P1）。
+
+        ``name`` 直接参与路径拼接，未经校验时 ``../../x`` 可把安装目标带出
+        插件根，随后的 rmtree/copytree 会作用到任意目录。``id`` 是规范身份、
+        天然是安全标识；没有 ``id`` 时退回显示名（允许空格，但不得带路径
+        语义）；两者都不可用时用来源目录名。
+        """
+        from lamtools_core.config.id_validation import validate_config_id, validate_path_component
+
+        plugin_id = str(raw_manifest.get("id") or "").strip()
+        display_name = str(raw_manifest.get("name") or "").strip()
+        if plugin_id:
+            component = validate_config_id("plugin", plugin_id)
+        elif display_name:
+            component = validate_path_component("plugin", display_name)
+        else:
+            component = validate_path_component("plugin", fallback)
+        final_dir = (root / component).resolve()
+        if not final_dir.is_relative_to(root.resolve()):
+            raise ValueError(f"plugin directory escapes the plugin root: {component}")
+        return final_dir
+
+    def _manifest_display_name(raw_manifest: dict[str, Any], fallback: str) -> str:
+        """清单显示名（state 键与插件配置文件名用它）。"""
+        return str(raw_manifest.get("name") or raw_manifest.get("id") or fallback).strip() or fallback
+
     async def plugin_install(request: OperationRequest) -> OperationResult:
         """安装插件：本地目录 / zip / GitHub Release URL。
 
@@ -1130,10 +1171,16 @@ def build_plugin_operation_catalog(
             sha256_of_file,
         )
 
+        staging: Path | None = None
         try:
             root = _resolve_install_root(target)
             root.mkdir(parents=True, exist_ok=True)
-            staging = root / f".install-{request.metadata.get('tool_call_id', 'tmp')}" if request.metadata else root / ".install-tmp"
+            staging_token = re.sub(
+                r"[^A-Za-z0-9_-]",
+                "",
+                str(request.metadata.get("tool_call_id", "")) if request.metadata else "",
+            )[:64] or "tmp"
+            staging = root / f".install-{staging_token}"
             if not source:
                 return OperationResult(name=request.name, status="error", payload={"error": "source is required (local|zip|url|cc|codex)"})
             warnings: list[str] = []
@@ -1157,8 +1204,8 @@ def build_plugin_operation_catalog(
                         payload={"error": f"adapter failed: {exc}"},
                     )
                 raw_manifest = _read_manifest_raw(staging)
-                name = str(raw_manifest.get("name") or staging.name).strip()
-                final_dir = root / name
+                final_dir = _resolve_plugin_dir(root, raw_manifest, staging.name)
+                name = _manifest_display_name(raw_manifest, final_dir.name)
                 if final_dir.exists():
                     shutil.rmtree(final_dir)
                 final_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -1173,9 +1220,9 @@ def build_plugin_operation_catalog(
                     return OperationResult(name=request.name, status="error", payload={"error": f"plugin directory not found: {src_dir}"})
                 manifest_dir = src_dir
                 raw_manifest = _read_manifest_raw(manifest_dir)
-                name = str(raw_manifest.get("name") or manifest_dir.name).strip()
-                final_dir = root / name
-                install_from_directory(src_dir, final_dir)
+                final_dir = _resolve_plugin_dir(root, raw_manifest, manifest_dir.name)
+                name = _manifest_display_name(raw_manifest, final_dir.name)
+                install_from_directory(src_dir, final_dir, root=root)
             elif source == "zip":
                 zip_path = str(payload.get("path") or "").strip()
                 if not zip_path:
@@ -1191,8 +1238,8 @@ def build_plugin_operation_catalog(
                     if manifest_dir is None:
                         return OperationResult(name=request.name, status="error", payload={"error": "zip contains no plugin.json"})
                     raw_manifest = _read_manifest_raw(manifest_dir)
-                    name = str(raw_manifest.get("name") or manifest_dir.name).strip()
-                    final_dir = root / name
+                    final_dir = _resolve_plugin_dir(root, raw_manifest, manifest_dir.name)
+                    name = _manifest_display_name(raw_manifest, final_dir.name)
                     if final_dir.exists():
                         shutil.rmtree(final_dir)
                     final_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -1215,7 +1262,15 @@ def build_plugin_operation_catalog(
                     )
                 if not url.lower().endswith(".zip"):
                     return OperationResult(name=request.name, status="error", payload={"error": "release asset must be a .zip file"})
-                archive = root / f".download-{parsed['asset']}"
+                # The asset name comes from the URL path and becomes a file name
+                # under the plugin root — keep it a single safe component.
+                asset_name = Path(parsed["asset"]).name
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", asset_name):
+                    return OperationResult(
+                        name=request.name, status="error",
+                        payload={"error": f"unsupported release asset name: {parsed['asset']}"},
+                    )
+                archive = root / f".download-{asset_name}"
                 ok, result = await download_to_file(url, archive)
                 if not ok:
                     return OperationResult(name=request.name, status="error", payload={"error": result})
@@ -1244,8 +1299,8 @@ def build_plugin_operation_catalog(
                     if manifest_dir is None:
                         return OperationResult(name=request.name, status="error", payload={"error": "zip contains no plugin.json"})
                     raw_manifest = _read_manifest_raw(manifest_dir)
-                    name = str(raw_manifest.get("name") or manifest_dir.name).strip()
-                    final_dir = root / name
+                    final_dir = _resolve_plugin_dir(root, raw_manifest, manifest_dir.name)
+                    name = _manifest_display_name(raw_manifest, final_dir.name)
                     if final_dir.exists():
                         shutil.rmtree(final_dir)
                     final_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -1265,6 +1320,10 @@ def build_plugin_operation_catalog(
             if source in ("cc", "claude-code", "codex") and staging.exists():
                 shutil.rmtree(staging)
         except (OSError, ValueError, _json.JSONDecodeError) as exc:
+            # Never leave a half-installed staging directory behind: a failed
+            # install must not change anything under the plugin root.
+            if staging is not None and staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
             return OperationResult(name=request.name, status="error", payload={"error": f"install failed: {exc}"})
 
         # 安装成功：重装即更新（B9）——注册表记录安装信息
@@ -1383,7 +1442,18 @@ def build_plugin_operation_catalog(
                 removed_deps = to_remove
         # 删目录（A2 共识：卸载 = 删目录）
         from .install import uninstall_plugin_directory
+        from .registry import default_project_plugin_root, default_user_plugin_root
 
+        allowed_roots = {default_user_plugin_root().resolve()}
+        if install_root is not None:
+            allowed_roots.add(Path(install_root).resolve())
+        if work_root:
+            allowed_roots.add(default_project_plugin_root(work_root).resolve())
+        if not any(plugin.root.resolve().is_relative_to(item) for item in allowed_roots):
+            return OperationResult(
+                name=request.name, status="error",
+                payload={"error": f"refusing to remove '{plugin.root}' (outside the plugin roots)"},
+            )
         try:
             uninstall_plugin_directory(plugin.root)
         except (OSError, ValueError) as exc:

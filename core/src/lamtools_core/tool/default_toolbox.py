@@ -2050,7 +2050,7 @@ class CoreToolbox:
                 max_text_length=max_text_length,
                 run_subprocess=run_subprocess,
             ),
-            "web_search": build_web_search_handler(str(self.work_root)),
+            "web_search": build_web_search_handler(str(self.work_root), data_dir=self.data_dir),
             "web_fetch": make_web_fetch_handler(str(self.work_root)),
             "generate_image": make_generate_image_handler(
                 imagegen_config,
