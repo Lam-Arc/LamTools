@@ -771,6 +771,36 @@ class TestKernelFailed:
         failed_events = [e for e in sink.events if e.name == "runtime.failed"]
         assert len(failed_events) == 1
 
+    @pytest.mark.asyncio
+    async def test_setup_failure_converges_instead_of_stranding_running(self):
+        """前置段失败（SessionStart hook 抛错）也必须收敛，不能把会话留在 running。
+
+        2026-09-25 审计：mark running / on_run_start / SessionStart /
+        UserPromptSubmit / runtime.started 整段裸露在循环的 try 之外，任一抛错
+        都会留下 status=running 且没有终态事件。
+        """
+        kit = MockRuntimeKit(steps=[MockKitStep(reply="unused", decision="done")])
+        store = InMemoryStateStore()
+        sink = CollectingEventSink()
+        kernel = _make_kernel(kit, state_store=store, event_sink=sink)
+
+        async def exploding_hook(state, turn_input):
+            raise RuntimeError("SessionStart hook exploded")
+
+        kernel._apply_session_start_hook = exploding_hook  # type: ignore[method-assign]
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "failed"
+        assert "run setup failed" in result.error
+        assert "SessionStart hook exploded" in result.error
+        assert result.state is not None
+        assert result.state.status == "failed"
+        failed_events = [e for e in sink.events if e.name == "runtime.failed"]
+        assert len(failed_events) == 1
+        # 收敛序列（Kit on_run_end / Stop hook / 终态事件）照常执行
+        assert kit.on_run_end_called is True
+
 
 class TestKernelToolFailure:
     """Tool failure handling — single failures do NOT trigger diagnosis."""

@@ -529,43 +529,35 @@ class CoreLoopKernel:
         )
         self._run_span = run_span
 
-        # 2. Mark running
-        state.status = "running"
-        await self.state_store.save(state)
-        _logger.info("[kernel:_run] state saved as running sid=%s", state.session_id)
-
-        # 3. Kit on_run_start
-        await self.kit.on_run_start(state, turn_input)
-        # Expose the empty-response retry budget to the Kit (which owns
-        # empty-stop retry logic in decide_next). The Kit reads this from
-        # state.metadata instead of holding a separate policy reference.
-        if state.metadata is None:
-            state.metadata = {}
-        state.metadata.setdefault("empty_response_retries", int(self.policy.empty_response_retries or 0))
-
-        # 3b. SessionStart hook
-        await self._apply_session_start_hook(state, turn_input)
-
-        # 4. Extend persisted conversation history with this user input.
-        current_user_content = (
-            turn_input.user_content
-            if turn_input.user_content is not None
-            else turn_input.user_message
-        )
-        # 4b. UserPromptSubmit hook（先于消息入历史——hook 的
-        # additional_context 注入用户消息并随历史持久化，C2 共识）。
-        hook_user_content = await self._apply_user_prompt_submit_hook(
-            state, turn_input, current_user_content
-        )
-        if hook_user_content:
-            current_user_content = hook_user_content
-        new_messages: list[ChatMessage] = []
-        if current_user_content:
-            user_msg = ChatMessage(role="user", content=current_user_content)
-            history.append(user_msg)
-            new_messages.append(user_msg)
-        await self._append_history_checkpoint(state, new_messages)
-        _logger.info("[kernel:_run] checkpoint saved sid=%s", state.session_id)
+        # 2-4. Mark running, run the start hooks, and persist the user input.
+        # The whole setup sits inside one guard: a failure in any step of it
+        # (state store, Kit, hook, checkpoint) must converge the run instead of
+        # leaving the session marked "running" with no terminal event
+        # (2026-09-25 audit P3).
+        try:
+            new_messages = await self._begin_run(state, turn_input, history)
+        except Exception as exc:  # noqa: BLE001 — the run still needs a terminal state
+            _logger.exception("[kernel:_run] run setup failed sid=%s", state.session_id)
+            state.status = _status_from_decision("failed")
+            state.loop_state = "failed"
+            try:
+                await self._replace_history_checkpoint(state, history)
+            except Exception:  # noqa: BLE001 — the terminal event still has to fire
+                _logger.exception(
+                    "[kernel:_run] failed to persist the terminal state sid=%s", state.session_id
+                )
+            result = KernelResult(
+                session_id=state.session_id,
+                run_id=state.run_id,
+                decision="failed",
+                message="",
+                steps=[],
+                state=state,
+                error=f"run setup failed: {exc or type(exc).__name__}",
+            )
+            await self._finalize_run(state, result, run_span)
+            self._run_span = None
+            return result
 
         steps: list[KernelStep] = []
         latest_message = ""
@@ -1400,6 +1392,57 @@ class CoreLoopKernel:
         self._run_span = None
 
         return result
+
+    async def _begin_run(
+        self,
+        state: RuntimeState,
+        turn_input: RuntimeTurnInput,
+        history: list[ChatMessage],
+    ) -> list[ChatMessage]:
+        """Mark the run running, run the start hooks, persist this turn's input.
+
+        Extracted so ``_run`` can guard the whole setup with one try/except:
+        the caller converges a failed setup into a ``failed`` KernelResult
+        (2026-09-25 audit P3).  Returns the messages appended to history.
+        """
+        # Mark running
+        state.status = "running"
+        await self.state_store.save(state)
+        _logger.info("[kernel:_run] state saved as running sid=%s", state.session_id)
+
+        # Kit on_run_start
+        await self.kit.on_run_start(state, turn_input)
+        # Expose the empty-response retry budget to the Kit (which owns
+        # empty-stop retry logic in decide_next). The Kit reads this from
+        # state.metadata instead of holding a separate policy reference.
+        if state.metadata is None:
+            state.metadata = {}
+        state.metadata.setdefault("empty_response_retries", int(self.policy.empty_response_retries or 0))
+
+        # SessionStart hook
+        await self._apply_session_start_hook(state, turn_input)
+
+        # Extend persisted conversation history with this user input.
+        current_user_content = (
+            turn_input.user_content
+            if turn_input.user_content is not None
+            else turn_input.user_message
+        )
+        # UserPromptSubmit hook（先于消息入历史——hook 的
+        # additional_context 注入用户消息并随历史持久化，C2 共识）。
+        hook_user_content = await self._apply_user_prompt_submit_hook(
+            state, turn_input, current_user_content
+        )
+        if hook_user_content:
+            current_user_content = hook_user_content
+        new_messages: list[ChatMessage] = []
+        if current_user_content:
+            user_msg = ChatMessage(role="user", content=current_user_content)
+            history.append(user_msg)
+            new_messages.append(user_msg)
+        await self._append_history_checkpoint(state, new_messages)
+        _logger.info("[kernel:_run] checkpoint saved sid=%s", state.session_id)
+        return new_messages
 
     async def _finalize_run(
         self, state: RuntimeState, result: KernelResult, run_span: Any | None = None
