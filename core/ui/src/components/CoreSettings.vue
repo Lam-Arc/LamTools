@@ -717,7 +717,7 @@
       <section v-if="activeSection === 'about'" class="settings-panel">
         <header class="settings-title">
           <h1>关于与更新</h1>
-          <p>当前版本与软件更新（更新源：GitHub Releases）。</p>
+          <p>当前版本与软件更新（优先读取官网更新清单，官网不可达时回退 GitHub Releases）。</p>
         </header>
         <div class="settings-surface settings-surface--stack">
         <article class="setting-card">
@@ -728,15 +728,18 @@
               {{ updateStatus === 'checking' ? '正在检查…' : '检查更新' }}
             </button>
           </div>
-          <p v-if="updateStatus === 'up_to_date'" class="about-status" data-update-up-to-date>
-            已是最新版本（v{{ updateLatestVersion }}）
+          <p v-if="updateStatus === 'up_to_date' && updateNoInstallerForPlatform" class="about-status" data-update-no-installer>
+            已发布 v{{ updateLatestVersion }}，但没有适用于本平台的安装包（可到发布页查看）
+          </p>
+          <p v-else-if="updateStatus === 'up_to_date'" class="about-status" data-update-up-to-date>
+            已是最新版本（v{{ updateLatestVersion }}<template v-if="updateSourceLabel"> · 来源：{{ updateSourceLabel }}</template>）
           </p>
           <p v-else-if="updateStatus === 'check_failed'" class="about-status error" data-update-error>
             检查失败：{{ updateError }}（检查网络后重试）
           </p>
         </article>
         <article v-if="updateStatus === 'update_available'" class="setting-card" data-update-available>
-          <h3>发现新版本 v{{ updateLatestVersion }}</h3>
+          <h3>发现新版本 v{{ updateLatestVersion }}<span v-if="updateSourceLabel" class="muted"> · 来源：{{ updateSourceLabel }}</span></h3>
           <p v-if="updateReleaseNotes" class="about-notes">{{ updateReleaseNotes }}</p>
           <div class="about-actions">
             <button class="small-btn primary" type="button" data-download-update @click="downloadUpdate()">下载安装包</button>
@@ -1608,6 +1611,8 @@ const {
   latestVersion: updateLatestVersion,
   releaseNotes: updateReleaseNotes,
   releaseUrl: updateReleaseUrl,
+  sourceLabel: updateSourceLabel,
+  noInstallerForPlatform: updateNoInstallerForPlatform,
   error: updateError,
   check: checkForUpdates,
   download: downloadUpdate,

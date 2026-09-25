@@ -44,7 +44,10 @@ export async function checkStandaloneUpdate(installedVersion?: string): Promise<
     const manifest = parsed as Partial<MobileUpdateManifest>
     const latestVersion = String(manifest.version || '').trim().replace(/^v/i, '')
     const downloadUrl = String(manifest.download_url || '')
-    if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(latestVersion)) throw manifestError('移动版发布清单版本号无效')
+    // 与桌面的 compare_versions 同口径：数字段可以是任意层（尾零按补零比较），
+    // 允许预发布/构建后缀（0.1.31-beta.1）。原先只认三段，会把 0.1.30.0 这类
+    // 写法直接判成"清单无效"，与桌面端行为不一致。
+    if (!/^\d+(?:\.\d+)*(?:[-+][\w.-]+)?$/.test(latestVersion)) throw manifestError('移动版发布清单版本号无效')
     if (!isHttpsUrl(downloadUrl)) throw manifestError('移动版发布清单下载地址无效')
     const releaseUrl = String(manifest.release_url || '')
     if (releaseUrl && !isHttpsUrl(releaseUrl)) throw manifestError('移动版发布清单发布地址无效')
@@ -77,11 +80,50 @@ function isHttpsUrl(value: string): boolean {
   catch { return false }
 }
 
+/**
+ * Version comparison shared in spirit with the desktop's
+ * `lamtools_core.update.checker.compare_versions` — the two hosts must not
+ * disagree about which of two versions is newer.
+ *
+ * Numeric cores are compared with the shorter one padded by zeros; a
+ * pre-release (`-beta.1`) ranks *below* its release (`0.3.7-beta.1 < 0.3.7`),
+ * and pre-release identifiers follow semver (numeric before alphanumeric,
+ * numeric compared as numbers). Build metadata is ignored.
+ */
 function compareVersion(left: string, right: string): number {
-  const a = left.match(/\d+/g)?.map(Number) || []
-  const b = right.match(/\d+/g)?.map(Number) || []
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) - (b[i] || 0)
+  const split = (value: string): { numbers: number[]; identifiers: string[] } => {
+    const text = String(value || '').trim().replace(/^v/i, '').split('+', 1)[0]
+    const dash = text.indexOf('-')
+    const core = dash >= 0 ? text.slice(0, dash) : text
+    const pre = dash >= 0 ? text.slice(dash + 1) : ''
+    const numbers = core.match(/\d+/g)?.map(Number) || [0]
+    return { numbers, identifiers: pre ? pre.split('.').filter(Boolean) : [] }
+  }
+  const a = split(left)
+  const b = split(right)
+  for (let i = 0; i < Math.max(a.numbers.length, b.numbers.length); i += 1) {
+    const x = a.numbers[i] || 0
+    const y = b.numbers[i] || 0
+    if (x !== y) return x < y ? -1 : 1
+  }
+  const aHasPre = a.identifiers.length > 0
+  const bHasPre = b.identifiers.length > 0
+  if (aHasPre !== bHasPre) return aHasPre ? -1 : 1   // 正式版 > 预发布
+  if (aHasPre) {
+    for (let i = 0; i < Math.max(a.identifiers.length, b.identifiers.length); i += 1) {
+      const x = a.identifiers[i]
+      const y = b.identifiers[i]
+      if (x === undefined) return -1
+      if (y === undefined) return 1
+      const xNumeric = /^\d+$/.test(x)
+      const yNumeric = /^\d+$/.test(y)
+      if (xNumeric && yNumeric) {
+        if (Number(x) !== Number(y)) return Number(x) < Number(y) ? -1 : 1
+        continue
+      }
+      if (xNumeric !== yNumeric) return xNumeric ? -1 : 1   // 数字段 < 字母段
+      if (x !== y) return x < y ? -1 : 1
+    }
   }
   return 0
 }

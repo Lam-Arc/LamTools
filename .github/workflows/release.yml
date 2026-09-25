@@ -31,8 +31,10 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
-          if (-not ($tag -match '^v\d+\.\d+\.\d+$')) {
-            Write-Error "Tag '$tag' is not a vX.Y.Z tag"
+          # 预发布 tag（v0.3.7-beta.1）同样允许：树里的版本号就是这个形态，
+          # 拒绝它等于这个版本永远发不出去（2026-09-25 审计 P1）。
+          if (-not ($tag -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')) {
+            Write-Error "Tag '$tag' is not a vX.Y.Z[-pre] tag"
             exit 1
           }
           $expected = $tag.Substring(1)
@@ -202,6 +204,23 @@ jobs:
             exit 1
           }
           Write-Host "Installer: $installer ($([math]::Round((Get-Item $installer).Length / 1MB, 1)) MB)"
+
+      # ---------- 4.1 官网更新清单 ----------
+      # desktop-update.json 是桌面端更新检查的首选来源（官网优先、GitHub 回退）。
+      # 清单由刚构建出的安装包生成，版本必须与 tauri.conf.json 一致（脚本自带守卫）。
+      # 上传到站点 downloads/ 仍由发布流程人工完成——但清单落后不再会屏蔽新版本：
+      # checker 现在两源都问、取版本较高者（2026-09-25 审计 P1）。
+      - name: Build official-site update manifest
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "core/desktop/src-tauri/target/release/bundle/inno/Sunday_*_x64-setup.exe" -ErrorAction Stop | Select-Object -First 1
+          python scripts/build-desktop-update.py --installer $installer.FullName
+
+      - name: Upload update manifest as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-update-manifest
+          path: core/desktop/update-manifest.json
 
       # ---------- 4.5 安装 / 运行 / 升级 / 卸载真冒烟 ----------
       - name: Smoke Sunday installer lifecycle and data preservation

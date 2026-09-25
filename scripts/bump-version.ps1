@@ -24,8 +24,11 @@ param([Parameter(Mandatory = $true)][string]$NewVersion)
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
-if ($NewVersion -notmatch '^\d+\.\d+\.\d+$') {
-    Write-Host "[FAIL] Version must be x.y.z (e.g. 0.3.0), got: $NewVersion" -ForegroundColor Red
+# 预发布后缀（-beta.1 / -rc.2，含 build 元数据）与正式版走同一条同步链：
+# 树里的版本可能是 0.3.7-beta.1，拒绝它会让"单一入口"既发不出预发布、
+# 也无法为它做任何版本同步（2026-09-25 审计 P1）。
+if ($NewVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+    Write-Host "[FAIL] Version must be x.y.z or x.y.z-<pre> (e.g. 0.3.0, 0.3.1-beta.1), got: $NewVersion" -ForegroundColor Red
     exit 1
 }
 

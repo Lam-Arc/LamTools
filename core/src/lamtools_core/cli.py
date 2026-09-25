@@ -1417,7 +1417,7 @@ def build_parser(
 
     update = sub.add_parser("update", help="Check for a newer Sunday release (设置 → 关于与更新)")
     update_sub = update.add_subparsers(dest="update_command", required=True)
-    update_check = update_sub.add_parser("check", help="Check GitHub Releases for a newer version")
+    update_check = update_sub.add_parser("check", help="Check the official site (then GitHub) for a newer version")
     update_check.add_argument("--json", action="store_true", help="Print the raw check result as JSON")
     update_check.set_defaults(func=cmd_update_check)
 
@@ -4500,8 +4500,8 @@ def normalize_remote_server_base_url(value: str) -> str:
 
 
 async def cmd_update_check(args: argparse.Namespace) -> int:
-    """Check GitHub Releases for a newer Sunday build (--json for scripting)."""
-    from lamtools_core.update.checker import check_update
+    """Check the official-site manifest and GitHub Releases (--json for scripting)."""
+    from lamtools_core.update.checker import check_update, source_label
 
     result = check_update()
     if args.json:
@@ -4511,6 +4511,7 @@ async def cmd_update_check(args: argparse.Namespace) -> int:
     print(f"current:   {result.get('current_version') or '?'}")
     if status == "update_available":
         print(f"latest:    {result.get('latest_version')}（有更新可用）")
+        print(f"source:    {source_label(result.get('source')) or '?'}")
         if result.get("release_notes"):
             print(f"notes:     {result.get('release_notes')}")
         print(f"download:  {result.get('download_url')}")
@@ -4518,7 +4519,13 @@ async def cmd_update_check(args: argparse.Namespace) -> int:
         print("提示: 下载安装包后关闭 Sunday 再运行安装。")
         return 0
     if status == "up_to_date":
-        print(f"latest:    {result.get('latest_version')}（已是最新）")
+        if result.get("reason") == "no_installer_for_platform":
+            print(f"latest:    {result.get('latest_version')}（已发布，但没有适用于本平台的安装包）")
+        else:
+            print(f"latest:    {result.get('latest_version')}（已是最新）")
+        label = source_label(result.get("source"))
+        if label:
+            print(f"source:    {label}")
         return 0
     print(f"error:     检查失败 — {result.get('error') or 'unknown error'}", file=sys.stderr)
     return 1

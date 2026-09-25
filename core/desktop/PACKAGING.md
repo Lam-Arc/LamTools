@@ -142,9 +142,35 @@ setup。安装时仅在未检测到 WebView2 Runtime 时运行该 bootstrapper�
 
     .\scripts\bump-version.ps1 0.3.3
 
+预发布版本（`0.3.7-beta.1`）走同一条链：`bump-version.ps1` 与 release.yml 的
+tag 校验都接受 `X.Y.Z[-pre][+build]`，`update.check` 的版本比较也按 semver
+排序（正式版高于同名预发布）。Cargo.lock 里 `sunday`/`lamcore` 的版本随
+`cargo build` 自动跟上，提交前确认已同步。
+
 推送 vX.Y.Z tag 后，.github/workflows/release.yml 会完成版本一致性校验、
 前端与 sidecar 构建、后端冒烟、Tauri --no-bundle 构建、安装器编译，以及
 真实的静默安装、启动、同目录升级、卸载和数据保留验证。发布资产只匹配
 Sunday_*_x64-setup.exe；应用内更新检查也只选择这一命名。
 
 手动触发 workflow 时不会发布 Release，只上传 sunday-installer 构建产物。
+
+## 站点下载与更新清单
+
+桌面端更新检查的首选来源是官网清单
+`https://47.114.43.99.nip.io/downloads/desktop-update.json`，GitHub Releases
+是回退（且始终是更新说明的来源）。
+
+发布后需要把两样东西放到站点的 `downloads/` 目录：
+
+1. `Sunday_<版本>_x64-setup.exe`（版本化文件名，清单里的
+   `download_url` 指向它）
+2. `desktop-update.json` —— 构建产物 `desktop-update-manifest`
+   （release.yml 的「Build official-site update manifest」步骤产出并上传为
+   Actions artifact；本地构建也可用
+   `py -3.14 scripts/build-desktop-update.py` 从
+   `core/desktop/src-tauri/target/release/bundle/inno/` 里最新的安装包生成）。
+
+清单也可以先不传：检查器现在两源都问、取版本较高者，落后的清单只会让下载
+地址回退到 GitHub，不会再屏蔽新版本（2026-09-25 审计 P1）。反向的坑也要
+记住：清单一旦落后且不再更新，用户侧的「来源」标签会一直显示 GitHub。
+

@@ -37,6 +37,29 @@ describe('standalone reachable RPCs', () => {
     vi.unstubAllGlobals()
   })
 
+  it('ranks a pre-release below its release, so beta installs still get updates', async () => {
+    // 桌面的 compare_versions 与这里必须同语义：0.1.30-beta.1 < 0.1.30。
+    const manifest = {
+      version: '0.1.30-beta.1',
+      download_url: 'https://example.test/downloads/Sunday-mobile-latest.apk',
+      release_url: 'https://example.test/#download',
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => manifest })))
+
+    // 同版本预发布：已最新
+    expect((await checkStandaloneUpdate('0.1.30-beta.1')).status).toBe('up_to_date')
+    // 预发布用户看到正式版 → 有更新（旧实现把它判成"已是最新"）
+    manifest.version = '0.1.30'
+    expect((await checkStandaloneUpdate('0.1.30-beta.1')).status).toBe('update_available')
+    // 正式版不会因为清单是预发布而"降级"
+    manifest.version = '0.1.30-beta.1'
+    expect((await checkStandaloneUpdate('0.1.30')).status).toBe('up_to_date')
+    // 尾零补齐：相同版本的不同写法视为相等
+    manifest.version = '0.1.30.0'
+    expect((await checkStandaloneUpdate('0.1.30')).status).toBe('up_to_date')
+    vi.unstubAllGlobals()
+  })
+
   it('names the address that failed when the update manifest cannot be read', async () => {
     // Every one of these was the on-device result until the manifest was
     // actually published, so the error has to say where the app looked.

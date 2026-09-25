@@ -1,1 +1,1 @@
-"""Software update check (GitHub Releases source)."""
+"""Software update check (official-site manifest first, GitHub Releases fallback)."""
