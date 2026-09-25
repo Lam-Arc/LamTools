@@ -4,7 +4,7 @@ import asyncio
 import ipaddress
 import re
 from typing import Awaitable, Callable
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -20,13 +20,21 @@ _FETCH_USER_AGENT = (
 )
 _HTTP_CLIENT: httpx.AsyncClient | None = None
 
+#: Redirect hops followed while fetching one URL (matches httpx's default budget).
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+
+class BlockedTargetError(Exception):
+    """A fetch target (or one of its redirect hops) is not a public http(s) address."""
+
 
 def _http_session() -> httpx.AsyncClient:
     global _HTTP_CLIENT
     if _HTTP_CLIENT is None:
         _HTTP_CLIENT = httpx.AsyncClient(
             timeout=httpx.Timeout(_DEFAULT_FETCH_TIMEOUT),
-            follow_redirects=True,
+            follow_redirects=False,
             headers={"User-Agent": _FETCH_USER_AGENT},
         )
     return _HTTP_CLIENT
@@ -42,16 +50,96 @@ def _is_loopback_url(url: str) -> bool:
         return False
 
 
+def _address_of(host: str) -> ipaddress._BaseAddress | None:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    mapped = getattr(address, "ipv4_mapped", None)
+    return mapped if mapped is not None else address
+
+
+def _unsafe_redirect_reason(url: str) -> str:
+    """Explain why a redirect hop must not be followed, or return '' when it is fine.
+
+    ``web_fetch`` starts from a URL the model wrote, so following redirects blindly
+    let any public page bounce the fetcher into the local machine — the Core server
+    on 127.0.0.1, a LAN host, or a cloud metadata address (2026-09-25 audit P2).
+    Hops are held to plain public http(s) targets; a deliberately local start
+    (loopback or a private literal) keeps its own redirect chain, which is the
+    documented "serve the file locally and fetch it" workflow.
+    """
+    parts = urlsplit(url)
+    scheme = (parts.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return f"scheme '{scheme or '?'}' is not fetchable"
+    host = (parts.hostname or "").strip().lower()
+    if not host:
+        return "no host"
+    if host == "localhost" or host.endswith(".localhost"):
+        return "loopback host"
+    address = _address_of(host)
+    if address is None:
+        return ""
+    if (
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    ):
+        return f"non-public address {address}"
+    return ""
+
+
+def _is_local_target(url: str) -> bool:
+    """True when the caller pointed the fetch at a local address on purpose."""
+    host = (urlsplit(url).hostname or "").strip().lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    address = _address_of(host)
+    return bool(address) and bool(_unsafe_redirect_reason(url))
+
+
+async def _get_following_safe_redirects(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    allow_local_hops: bool,
+    max_redirects: int = _MAX_REDIRECTS,
+) -> httpx.Response:
+    """GET ``url``, following only redirect hops that pass :func:`_unsafe_redirect_reason`."""
+    current = url
+    for hop in range(max_redirects + 1):
+        if not allow_local_hops:
+            reason = _unsafe_redirect_reason(current)
+            if reason:
+                raise BlockedTargetError(f"refusing {current}: {reason}")
+        response = await client.get(current, follow_redirects=False)
+        location = None
+        if response.status_code in _REDIRECT_STATUSES:
+            location = (response.headers.get("location") or "").strip()
+        if not location:
+            return response
+        if hop == max_redirects:
+            break
+        current = urljoin(str(response.url), location)
+    raise BlockedTargetError(f"too many redirects (>{max_redirects}) starting at {url}")
+
+
 async def _fetch_with_loopback_bypass(url: str) -> httpx.Response:
     if not _is_loopback_url(url):
-        return await _http_session().get(url)
+        return await _get_following_safe_redirects(
+            _http_session(), url, allow_local_hops=_is_local_target(url)
+        )
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(_DEFAULT_FETCH_TIMEOUT),
-        follow_redirects=True,
+        follow_redirects=False,
         headers={"User-Agent": _FETCH_USER_AGENT},
         trust_env=False,
     ) as client:
-        return await client.get(url)
+        return await _get_following_safe_redirects(client, url, allow_local_hops=True)
 
 
 def make_web_search_handler(work_root: str) -> Callable[[ToolCall], Awaitable[ToolResult]]:
@@ -86,6 +174,13 @@ def make_web_fetch_handler(work_root: str) -> Callable[[ToolCall], Awaitable[Too
 
         try:
             resp = await _fetch_with_loopback_bypass(url)
+        except BlockedTargetError as exc:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error=f"web_fetch refused target: {exc}",
+            )
         except httpx.HTTPError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"web_fetch network error: {exc}")
         except Exception as exc:
@@ -216,7 +311,9 @@ def make_web_fetch_handler(work_root: str) -> Callable[[ToolCall], Awaitable[Too
         if expect:
             info += f"\n\nexpect: {expect}\nexpect_found: {str(expect_found).lower()}"
         metadata = {
-            "url": url,
+            # The final URL, so a redirected fetch reports where the content
+            # actually came from (the requested one is kept when they differ).
+            "url": str(resp.url),
             "status_code": resp.status_code,
             "content_type": content_type,
             "text_length": len(clean),
@@ -225,6 +322,8 @@ def make_web_fetch_handler(work_root: str) -> Callable[[ToolCall], Awaitable[Too
             "expect_found": expect_found,
             "image_candidates": image_candidates,
         }
+        if str(resp.url) != url:
+            metadata["requested_url"] = url
 
         status: ToolResultStatus = "ok"
         error = ""

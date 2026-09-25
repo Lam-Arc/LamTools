@@ -709,3 +709,142 @@ def test_web_search_config_reads_user_scope_jsonc(tmp_path):
     assert cfg["provider"] == "http"
     assert cfg["url"] == "https://search.example.test/api"
     assert cfg["limit"] == 3
+
+
+def test_unsafe_redirect_reason_classifies_local_and_public_targets():
+    """Redirect 目标分类：内网/环回/元数据地址必须被点名拒绝，公开地址放行。"""
+    from lamtools_core.tool.web_tools import _unsafe_redirect_reason
+
+    for blocked in (
+        "http://127.0.0.1:5172/api/health",
+        "http://localhost:5172/",
+        "http://[::1]:5172/",
+        "http://10.0.0.5/",
+        "http://192.168.1.20:8000/file",
+        "http://172.16.4.4/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[::ffff:127.0.0.1]/",
+        "http://0.0.0.0/",
+        "file:///etc/passwd",
+    ):
+        assert _unsafe_redirect_reason(blocked), blocked
+
+    assert _unsafe_redirect_reason("https://example.test/doc") == ""
+    assert _unsafe_redirect_reason("http://93.184.216.34/") == ""
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_refuses_redirect_into_the_local_network(monkeypatch):
+    """公开页面把抓取器重定向到本机服务：必须拒绝，且不得发出第二跳请求。"""
+    seen: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(
+            302,
+            headers={"location": "http://127.0.0.1:5172/api/health"},
+            request=request,
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=httpx.Timeout(5.0))
+    monkeypatch.setattr(web_tools, "_HTTP_CLIENT", client)
+    try:
+        tool = make_web_fetch_handler("")
+        result = await tool(
+            ToolCall(id="fetch-ssrf", name="web_fetch", arguments={"url": "https://example.test/doc"})
+        )
+    finally:
+        await client.aclose()
+        monkeypatch.setattr(web_tools, "_HTTP_CLIENT", None)
+
+    assert result.status == "failed"
+    assert "refused target" in result.error
+    assert "127.0.0.1" in result.error
+    assert seen == ["https://example.test/doc"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_refuses_redirect_to_cloud_metadata(monkeypatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            301,
+            headers={"location": "http://169.254.169.254/latest/meta-data/iam/"},
+            request=request,
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=httpx.Timeout(5.0))
+    monkeypatch.setattr(web_tools, "_HTTP_CLIENT", client)
+    try:
+        tool = make_web_fetch_handler("")
+        result = await tool(
+            ToolCall(id="fetch-meta", name="web_fetch", arguments={"url": "https://example.test/doc"})
+        )
+    finally:
+        await client.aclose()
+        monkeypatch.setattr(web_tools, "_HTTP_CLIENT", None)
+
+    assert result.status == "failed"
+    assert "169.254.169.254" in result.error
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_still_follows_a_public_redirect(monkeypatch):
+    """正常的公开跳转照旧跟随（只加内网目标这一道门）。"""
+    seen: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if str(request.url).endswith("/doc"):
+            return httpx.Response(
+                302, headers={"location": "https://cdn.example.test/final"}, request=request
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text="<html><body><main>Final body</main></body></html>",
+            request=request,
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=httpx.Timeout(5.0))
+    monkeypatch.setattr(web_tools, "_HTTP_CLIENT", client)
+    try:
+        tool = make_web_fetch_handler("")
+        result = await tool(
+            ToolCall(id="fetch-redirect", name="web_fetch", arguments={"url": "https://example.test/doc"})
+        )
+    finally:
+        await client.aclose()
+        monkeypatch.setattr(web_tools, "_HTTP_CLIENT", None)
+
+    assert result.status == "ok"
+    assert seen == ["https://example.test/doc", "https://cdn.example.test/final"]
+    assert "Final body" in str(result.artifacts[0].content)
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_keeps_relative_redirects_on_public_hosts(monkeypatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).endswith("/start"):
+            return httpx.Response(302, headers={"location": "/moved"}, request=request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text="<html><body><main>Moved body</main></body></html>",
+            request=request,
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=httpx.Timeout(5.0))
+    monkeypatch.setattr(web_tools, "_HTTP_CLIENT", client)
+    try:
+        tool = make_web_fetch_handler("")
+        result = await tool(
+            ToolCall(id="fetch-rel", name="web_fetch", arguments={"url": "https://example.test/start"})
+        )
+    finally:
+        await client.aclose()
+        monkeypatch.setattr(web_tools, "_HTTP_CLIENT", None)
+
+    assert result.status == "ok"
+    assert result.metadata["url"] == "https://example.test/moved"
+    assert result.metadata["requested_url"] == "https://example.test/start"
+
