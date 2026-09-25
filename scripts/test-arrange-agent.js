@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 
 (async () => {
-  const BASE = process.env.LAMTOOLS_GUI_URL || 'http://127.0.0.1:6174';
+  const BASE = process.env.LAMTOOLS_GUI_URL || 'http://127.0.0.1:5173';
   const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR || process.cwd();
   const TIMEOUT = parseInt(process.env.TEST_TIMEOUT || '120000', 10); // 2 min default
 

@@ -1,5 +1,9 @@
 # LamTools 全面代码审计 · 汇总索引
 
+> 后续全场审计：`core/docs/audits/full-code-audit-2026-09-24.md` 与
+> `core/docs/audits/full-code-audit-2026-09-25.md`。后者是边审边记的实时日志，
+> 对本文件 400 条结论逐条判定 fixed / still-open / regressed，并新增 2026-09-25 的发现。
+
 - 审计日期：2026-08-13
 - 范围：Core（Python 后端 52.3k 行 + UI 34.2k 行 + Tauri 桌面壳 + 全部测试 43.2k 行）+ website/（1.9k 行）+ 依赖 CVE（联网）+ CI/仓库卫生
 - 方法：24 个只读审计 agent 分 4 波并行（Wave1 后端核心 8 / Wave2 配置·集成·测试·发布 6 / Wave3 前端+桌面 6 / Wave4 交叉·外围·website 4），统一严重度口径（S1=严重缺陷/安全隐患，S2=中等，S3=轻微，S4=建议），统一输出格式（概况 / 问题清单 file:line / Top3 / 亮点 / 方法），关键结论均经只读复现或交叉核对。

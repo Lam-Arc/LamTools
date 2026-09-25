@@ -32,8 +32,10 @@ dependency inventories belong to the package manifests and module documents.
   a trusted loader registry. Declarative plugin widgets use bounded JSON
   snapshots and schema-driven actions; trusted Vue contributions are loaded
   in-process only from registered modules.
-- Tauri `2.x` provides the desktop shell and native bridge; the configured
-  Windows bundle target is NSIS; Linux targets AppImage and Debian bundles.
+- Tauri `2.x` provides the desktop shell and native bridge; the Windows
+  installer is the repository-owned Inno Setup script
+  (`core/desktop/installer/Sunday.iss`), not Tauri's NSIS bundler; Linux
+  targets AppImage and Debian bundles.
   The website uses anime.js `4.x` for motion.
 - The mobile client is being moved to a Tauri host with Rust runtime commands;
   its Stop and snapshot-recovery paths are implemented. Sidebar and system

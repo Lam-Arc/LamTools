@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sunday Setup 验证"
+  short_description: "安装并启动新 setup 构建，校验版本和进程状态"
+  default_prompt: "Use $lamtools-setup-install after building a new Sunday setup package to install and verify it."
+policy:
+  allow_implicit_invocation: true

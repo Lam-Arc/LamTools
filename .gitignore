@@ -175,6 +175,19 @@ dist-plugins/
 /0.3.1/
 /0.3.2/
 
+# 未跟踪但未忽略的产物目录（2026-09-25 审计：曾包含发布私钥/APK/大体积二进制）
+/core/mobile/artifacts/
+/core/experiments/
+/MyProject/
+/artifacts/
+core/mobile/src-tauri/gen/schemas/
+# 由 scripts/build-desktop-update.py 生成的更新清单（上传用副本随构建产出）
+core/desktop/update-manifest.json
+
+# 临时文件与归档
+*.7z
+.tmp_*
+
 # codex-workflow-managed-start
 .codex_workflow_hidden_resources/
 AGENTS.md

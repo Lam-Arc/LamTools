@@ -74,7 +74,8 @@ for _plugin_dir in sorted(_BUNDLED_PLUGINS_ROOT.iterdir()):
 
 # ---------------------------------------------------------------------------
 # Hidden imports — every submodule reachable in lamtools_core
-# (133 Core modules + 3rd-party runtime deps)
+# (every module under src/lamtools_core + 3rd-party runtime deps;
+#  the explicit list below is what the spec actually pins)
 # ---------------------------------------------------------------------------
 _hiddenimports = [
     # === 3rd-party runtime dependencies ===

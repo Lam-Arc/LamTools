@@ -89,14 +89,14 @@ current operating system and shell.
 
 ## Setup 后置验收
 
-- 每次完成 Core Windows NSIS setup 构建或 setup 版本更新后，使用项目技能
+- 每次完成 Core Windows Inno Setup 构建（`core/desktop/installer/Sunday.iss`）或 setup 版本更新后，使用项目技能
   `.agents/skills/lamtools-setup-install`，将对应版本安装到
   `E:\setuptest\<版本号>`，启动并校验主程序与后端进程；不要改用开发模式启动代替。
 
 ## 项目结构
 
 - **Core** (`core/`)：Agent 基座，一个基础独立可用的 Agent。当前唯一活跃产品。
-- **Website** (`website/`)：官网（Vue 3 + Vite + anime.js），独立构建，不参与 core 开发链路。
+- **Website** (`website/`)：官网（Vue 3 + Vite + anime.js）。独立构建，但展示区通过 alias 复用 `core/ui/src` 与 `core/ui/node_modules`，构建前需先 `cd core/ui && npm ci`。
 - **Archive** (`archive/members/`)：已归档的 member 产品（Writer / Sage / Imager），保留历史可追溯，不再维护。
 
 ## 核心规则
@@ -118,11 +118,11 @@ current operating system and shell.
 ## 官网（website/）
 
 - 技术栈：Vue 3.5 + Vite 8 + TS 6 + anime.js v4（动效）+ lucide-vue-next（图标）。
-- **产品展示区 = 真实 UI 直挂**：`Showcase.vue` 直接 import `core/ui/src` 的真实组件（WorkspaceShell/SessionSidebar/ChatThread/CoreExecutionControls/CoreResourceStats/CoreSessionTitleEditor/TitleBar）与真实 CSS（variables/base/layout），用 `transform: translateZ(0)` 把 position:fixed 的 shell 装进窗口卡片，模拟数据按真实 `CoreMessage/MessagePart` 形状驱动。改 UI 前先看这里，勿手写仿造。
-- 关键坑：① vue 必须 alias 到 website 自己的单例（否则 core/ui 组件加载第二份 vue 白屏）；② ChatThread 消息列表 `v-memo` 依赖消息对象引用——原地改 parts 不重渲染，每次变更要提交**新消息对象**（`commitMsg`）；③ 答案 part 用 `model_text`，`msg.content` 存最终全文（真实数据模型）；④ 覆盖真实组件 DOM 的样式要放全局（如 `.mock-window .thread { align-content: end }` 贴底呈现——scoped 属性选择器匹配不到 WorkspaceShell 渲染的节点）。
+- **产品展示区 = 真实 UI（iframe 预览）**：`preview.html` + `src/preview-main.ts` 在同一站点内挂载真实的 `core/ui` `LamToolsApp`（含内置 Workflow UI），`Showcase.vue` 用一个常驻 iframe 承载它并用 postMessage 同步主题（换 URL 会让宿主页面滚动）；真实组件与 CSS 仍来自 `core/ui/src`，模拟数据按真实 `CoreMessage/MessagePart` 形状驱动。改 UI 前先看这里，勿手写仿造。
+- 关键坑：① vue 必须 alias 到 website 自己的单例（否则 core/ui 组件加载第二份 vue 白屏）；② ChatThread 消息列表 `v-memo` 依赖消息对象引用——原地改 parts 不重渲染，每次变更要提交**新消息对象**（`commitMsg`）；③ 答案 part 用 `model_text`，`msg.content` 存最终全文（真实数据模型）；④ 覆盖真实组件 DOM 的样式要放全局（如 `preview.html` 里的 `.core-preview-document .thread` 贴底呈现——scoped 属性选择器匹配不到 WorkspaceShell 渲染的节点）；⑤ `@vue-flow/*` 等依赖由 vite alias 指向 `core/ui/node_modules`，构建前必须先装 core/ui。
 - 开发：`cd website && npm run dev`（5199，不碰 5172/5173）；构建 `npm run build`（纯 vite build，因 core/ui 跨项目类型检查噪音大未挂 vue-tsc）；产物 `website/dist/`。
-- 注意：本仓库 headless 验证环境里 IntersectionObserver 只在 observe 时回调一次——入场动效统一走 `utils/inView.ts` 的 scroll+rAF 检测（`useScrollReveal` / Architecture 均用它），新增动效不要依赖 IO。
-- 全部文案是占位，标 `TODO(文案)`；下载区安装包路径待发布后替换。
+- 版本引用：`Download.vue` 的 `VITE_SUNDAY_VERSION`（桌面）与 `VITE_SUNDAY_MOBILE_VERSION`（移动端）默认值随发布更新，`.env.example` 与 `src/mock/runtime.ts` 里的预览版本同步跟着走。
+- 文案不再使用 `TODO(文案)` 占位标记；下载区安装包路径指向站点 `downloads/`（`Sunday-latest-x64-setup.exe` 与版本化文件都在站点上）。
 
 ## 开发启动
 

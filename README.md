@@ -118,11 +118,12 @@ LamTools/
 
 - Core Loop Kernel（主循环）
 - DeepSeek / OpenAI / Claude 多模型预设
-- Windows 桌面安装包（Tauri + NSIS）
+- Windows 桌面安装包（Tauri + Inno Setup）
 - Arrange 长期任务调度
 - 多用户协作会话（规划中）
 - 插件市场（规划中）
-- macOS / Linux 安装包（规划中）
+- Linux 安装包（AppImage / deb，随 Release 发布）
+- macOS 安装包（规划中）
 
 ## Research outputs / Citation
 

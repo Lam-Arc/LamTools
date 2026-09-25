@@ -118,11 +118,12 @@ LamTools/
 
 - Core Loop Kernel (main loop)
 - DeepSeek / OpenAI / Claude multi-model presets
-- Windows desktop installer (Tauri + NSIS)
+- Windows desktop installer (Tauri + Inno Setup)
 - Arrange long-running task scheduling
 - Multi-user collaborative sessions (planned)
 - Plugin marketplace (planned)
-- macOS / Linux installers (planned)
+- Linux installers (AppImage / deb, published with each release)
+- macOS installer (planned)
 
 ## Research outputs / Citation
 
