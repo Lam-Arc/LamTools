@@ -468,13 +468,32 @@ export function normalizeNote(value: unknown): StudyNote {
 
 export function normalizeDictionary(value: unknown): StudyDictionaryEntry | null {
   if (!isRecord(value)) return null
+  const senses = Array.isArray(value.senses)
+    ? value.senses.filter(isRecord).map(sense => {
+      const example = isRecord(sense.example) ? sense.example : null
+      return {
+        pos: text(sense.pos),
+        zh: text(sense.zh),
+        en: text(sense.en),
+        ...(example ? { example: { en: text(example.en), zh: text(example.zh) } } : {}),
+      }
+    }).filter(sense => sense.zh || sense.en)
+    : []
+  const forms = isRecord(value.forms)
+    ? Object.fromEntries(Object.entries(value.forms).map(([key, item]) => [key, text(item)]).filter(([, item]) => item))
+    : {}
   return {
     word: text(value.word),
     phonetic: text(value.phonetic),
+    phonetic_uk: text(value.phonetic_uk),
+    phonetic_us: text(value.phonetic_us),
     pos: text(value.pos),
     zh: text(value.zh),
     en: text(value.en),
     example: text(value.example),
+    ...(senses.length ? { senses } : {}),
+    ...(Object.keys(forms).length ? { forms } : {}),
+    ...(value.source ? { source: text(value.source) } : {}),
   }
 }
 

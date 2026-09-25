@@ -10,7 +10,7 @@ import pytest
 
 from lamtools_core.plugins.bundled.study.store import StudyScope, StudyStore
 from lamtools_core.plugins.bundled.study.exams import exam
-from lamtools_core.plugins.bundled.study.marks import SELECTION_MAX_TOKENS, SELECTION_PROMPT_VERSION, answer, dictionary, mark_operation
+from lamtools_core.plugins.bundled.study.marks import SELECTION_PROMPT_VERSION, answer, dictionary, mark_operation
 from lamtools_core.plugins.bundled.study.backend import create_plugin, operation
 from lamtools_core.plugins.context import PluginContext
 from lamtools_core.app.operation_catalog import OperationRequest
@@ -329,6 +329,99 @@ def test_marks_distinguish_repeated_text_and_reuse_same_anchor(store):
     assert dictionary('run a test') is None
 
 
+def test_dictionary_reads_the_bundled_table_through_morphology(tmp_path, monkeypatch):
+    from lamtools_core.plugins.bundled.study import lexicon
+
+    table = tmp_path / 'en-zh.jsonl'
+    table.write_text(json.dumps({
+        'word': 'motion',
+        'phonetic_uk': '/ˈməʊʃn/',
+        'phonetic_us': '/ˈmoʊʃn/',
+        'senses': [{'pos': 'noun', 'zh': '运动，移动', 'en': 'a change of position',
+                    'example': {'en': 'The motion of the planets.', 'zh': '行星的运动。'}}],
+        'forms': {'pl': 'motions'},
+    }, ensure_ascii=False) + '\n', encoding='utf-8')
+    monkeypatch.setattr(lexicon, '_TABLE_PATH', table)
+    monkeypatch.setattr(lexicon, '_TABLE', None)
+
+    entry = dictionary('motions')
+    assert entry['word'] == 'motion'
+    assert entry['source'] == 'bundled'
+    assert entry['phonetic'] == '/ˈməʊʃn/' and entry['phonetic_us'] == '/ˈmoʊʃn/'
+    assert entry['pos'] == 'noun' and entry['zh'] == '运动，移动'
+    assert entry['example'] == 'The motion of the planets.'
+    assert entry['senses'][0]['example']['zh'] == '行星的运动。'
+    assert entry['forms'] == {'pl': 'motions'}
+    # Curated entries keep winning over the generated table and keep their shape.
+    assert dictionary('run')['source'] == 'curated'
+    assert dictionary('the')['source'] == 'curated'
+
+
+@pytest.mark.asyncio
+async def test_translate_learns_unknown_words_so_the_next_lookup_is_local(tmp_path):
+    calls = []
+    entry = {
+        'word': 'flurble',
+        'phonetic_uk': '/ˈflɜːbl/',
+        'phonetic_us': '/ˈflɜːrbl/',
+        'senses': [{'pos': 'v.', 'zh': '胡诌', 'en': 'to talk nonsense',
+                    'example': {'en': 'Stop flurbling.', 'zh': '别胡说了。'}}],
+        'forms': {'ing': 'flurbling'},
+    }
+
+    class Model:
+        async def complete(self, request):
+            calls.append(request)
+            return SimpleNamespace(content=json.dumps({'kind': 'word', 'entry': entry}, ensure_ascii=False))
+
+    context = PluginContext(work_root=tmp_path, data_dir=tmp_path, llm_client=Model())
+    runtime = create_plugin(context)
+    context.set_service('study', runtime)
+    first = mark_operation(runtime.store, {'action': 'create', 'anchor': anchor(quote='flurble', document_id='msg1')})['mark']
+    second = mark_operation(runtime.store, {'action': 'create', 'anchor': anchor(quote='flurble', document_id='msg2')})['mark']
+
+    answered = await answer(context, runtime.store, {'id': first['id'], 'action': 'translate'})
+    assert len(calls) == 1
+    assert calls[0].response_format['json_schema']['schema']['properties']['kind']
+    mark = answered['mark']
+    assert mark['dictionary']['word'] == 'flurble'
+    assert mark['dictionary']['senses'][0]['zh'] == '胡诌'
+    assert mark['dictionary']['phonetic'] == '/ˈflɜːbl/'
+    assert 'flurble' in mark['translate'] and '胡诌' in mark['translate']
+
+    # The learned entry answers the same word for every later mark, model-free.
+    again = await answer(context, runtime.store, {'id': second['id'], 'action': 'translate'})
+    assert len(calls) == 1
+    assert again['mark']['dictionary']['senses'][0]['zh'] == '胡诌'
+    assert again['mark']['dictionary']['source'] == 'learned'
+
+
+@pytest.mark.asyncio
+async def test_translate_keeps_plain_text_for_phrases_and_prose(tmp_path):
+    class Model:
+        def __init__(self, content):
+            self.content = content
+            self.calls = 0
+
+        async def complete(self, request):
+            self.calls += 1
+            return SimpleNamespace(content=self.content)
+
+    for content, expected in (
+        (json.dumps({'kind': 'text', 'translation': '这是一句话'}, ensure_ascii=False), '这是一句话'),
+        ('这是一段散文式回答', '这是一段散文式回答'),
+    ):
+        model = Model(content)
+        context = PluginContext(work_root=tmp_path, data_dir=tmp_path, llm_client=model)
+        runtime = create_plugin(context)
+        context.set_service('study', runtime)
+        mark = mark_operation(runtime.store, {'action': 'create', 'anchor': anchor(quote='run a test')})['mark']
+        answered = await answer(context, runtime.store, {'id': mark['id'], 'action': 'translate'})
+        assert model.calls == 1
+        assert answered['mark']['translate'] == expected
+        assert not answered['mark']['dictionary']
+
+
 @pytest.mark.asyncio
 async def test_lightweight_calls_are_isolated_and_local_dictionary_skips_model(tmp_path):
     calls = []
@@ -348,7 +441,7 @@ async def test_lightweight_calls_are_isolated_and_local_dictionary_skips_model(t
     assert any(m.content == '如何使用？' for m in calls[-1].messages)
     await answer(context, runtime.store, {'id': second['id'], 'action': 'ask', 'question': '什么意思？'})
     assert all(m.content != '如何使用？' for m in calls[-1].messages)
-    assert not calls[-1].tools and calls[-1].max_tokens == SELECTION_MAX_TOKENS['ask']
+    assert not calls[-1].tools and calls[-1].max_tokens is None
     restored = mark_operation(StudyStore(runtime.store.path), {'action': 'get', 'id': first['id']})['mark']
     assert len(restored['thread']) == 4 and restored['dictionary']['word'] == 'run'
 
@@ -388,11 +481,9 @@ async def test_selection_target_stays_primary_and_old_cached_answers_are_migrate
     await answer(context, runtime.store, {'id': mark['id'], 'action': 'translate'})
     await answer(context, runtime.store, {'id': mark['id'], 'action': 'ask', 'question': '这个词是什么意思？'})
     assert len(calls) == 3
-    assert [request.max_tokens for request in calls] == [
-        SELECTION_MAX_TOKENS['explain'],
-        SELECTION_MAX_TOKENS['translate'],
-        SELECTION_MAX_TOKENS['ask'],
-    ]
+    # Selection actions inherit the model config's output budget instead of a
+    # local cap, so a reasoning model can finish thinking before writing text.
+    assert [request.max_tokens for request in calls] == [None, None, None]
     for request in calls:
         target = request.messages[1].content
         assert '[SELECTED TEXT | PRIMARY TARGET | PROCESS ONLY THIS PASSAGE]' in target

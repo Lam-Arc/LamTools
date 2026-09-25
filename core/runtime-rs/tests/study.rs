@@ -6,7 +6,7 @@
 use lamtools_runtime::{
     study::{
         dictionary, study_tool_definitions, NoteWriter, StudyScope, StudySearchMessage,
-        StudySearchSession, StudyStore, StudyTools,
+        StudySearchSession, StudyStore, StudyTools, SELECTION_PROMPT_VERSION,
     },
     DeviceCapabilities, Message, ModelBackend, ModelTurn, RuntimeError, ToolCall, ToolDefinition,
     ToolPermission, ToolRuntime, TurnOptions,
@@ -514,7 +514,7 @@ fn marks_are_deduplicated_and_carry_the_current_prompt_version() {
     let created = store
         .marks(&json!({"action": "create", "anchor": anchor}))
         .unwrap();
-    assert_eq!(created["mark"]["prompt_version"], json!(3));
+    assert_eq!(created["mark"]["prompt_version"], json!(SELECTION_PROMPT_VERSION));
     assert_eq!(
         created["mark"]["anchor"]["prefix"]
             .as_str()
@@ -562,7 +562,8 @@ impl ModelBackend for FixtureModel {
         assert!(
             matches!(&messages[1], Message::User { content } if content.contains("<<<BEGIN SELECTED TEXT>>>"))
         );
-        assert_eq!(options.max_output_tokens, Some(600));
+        // No selection-local cap: the model config owns the output budget.
+        assert_eq!(options.max_output_tokens, None);
         Ok(ModelTurn::Text {
             text: "这是选中文本的解释。".into(),
             reasoning: String::new(),
@@ -590,10 +591,12 @@ async fn text_actions_use_the_lexicon_or_the_configured_model() {
         .await
         .unwrap();
     assert_eq!(translated["mark"]["dictionary"]["word"], json!("run"));
+    // The shipped table answers this word, so the gloss is Chinese and local;
+    // the exact wording belongs to the dictionary data, not to this contract.
     assert!(translated["mark"]["translate"]
         .as_str()
         .unwrap()
-        .contains("跑；运行"));
+        .contains('跑'));
 
     let explained = store
         .answer(

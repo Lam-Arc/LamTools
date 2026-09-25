@@ -1,28 +1,59 @@
 """Persistent anchored annotations and bounded independent model conversations."""
 import asyncio
-import re
+import json
+import time
+from dataclasses import replace
 
 from lamtools_core.llm import ChatMessage, LLMRequest
 from .store import identifier
-from .lexicon import ENTRIES
+from .lexicon import flatten, lemmas, lookup, normalize_entry
 
 # Bump this whenever the selection grounding contract changes. Marks created
 # before the target/context prompt split may contain answers that treated the
 # nearby paragraph as the response target, so those cached fields must not be
 # reused after an upgrade.
-SELECTION_PROMPT_VERSION = 3
+SELECTION_PROMPT_VERSION = 4
 
-# Original concise definitions, not copied dictionary entries. Hosts can extend
-# this local lexicon with openly licensed entries without changing the API.
-LEXICON = {
-    'run': ('/rʌn/', 'v.', '跑；运行', 'Move quickly on foot; operate a program.', 'I run every morning.'),
-    'study': ('/ˈstʌdi/', 'v. / n.', '学习；研究', 'Spend time learning about a subject.', 'We study mathematics.'),
-    'learn': ('/lɜːn/', 'v.', '学习；学会', 'Gain knowledge or a new skill.', ''),
-    'knowledge': ('/ˈnɒlɪdʒ/', 'n.', '知识', 'What a person knows or understands.', ''),
-    'theorem': ('/ˈθɪərəm/', 'n.', '定理', 'A statement established by a mathematical proof.', ''),
-    'function': ('/ˈfʌŋkʃən/', 'n.', '函数；功能', 'A mapping from each input to an output; a purpose.', ''),
-    'data': ('/ˈdeɪtə/', 'n.', '数据', 'Values collected for analysis or processing.', ''),
-    'model': ('/ˈmɒdl/', 'n.', '模型', 'A simplified representation used to explain or predict.', ''),
+# Queries are answered from the shipped dictionary when possible; anything the
+# table does not know is asked of the model in this fixed shape and then stored
+# as a learned entry, so the next lookup of the same word is local and free.
+TRANSLATE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'kind': {'enum': ['word', 'text']},
+        'translation': {'type': 'string'},
+        'entry': {
+            'type': 'object',
+            'properties': {
+                'word': {'type': 'string'},
+                'phonetic_uk': {'type': 'string'},
+                'phonetic_us': {'type': 'string'},
+                'senses': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'pos': {'type': 'string'},
+                            'zh': {'type': 'string'},
+                            'en': {'type': 'string'},
+                            'example': {
+                                'type': 'object',
+                                'properties': {'en': {'type': 'string'}, 'zh': {'type': 'string'}},
+                            },
+                        },
+                        'required': ['pos', 'zh', 'en'],
+                    },
+                },
+                'forms': {
+                    'type': 'object',
+                    'properties': {key: {'type': 'string'} for key in
+                                   ('pl', 'pt', 'pp', 'ing', '3sg', 'comparative', 'superlative')},
+                },
+            },
+            'required': ['word', 'senses'],
+        },
+    },
+    'required': ['kind'],
 }
 
 
@@ -47,35 +78,60 @@ def _migrate_mark(mark):
 
 
 def dictionary(text):
-    word = text.strip().lower()
-    if not re.fullmatch(r'[a-z]+', word):
-        return None
-    irregular = {'ran': 'run', 'running': 'run', 'studies': 'study', 'studied': 'study', 'learnt': 'learn', 'learned': 'learn',
-                 'went': 'go', 'gone': 'go', 'was': 'be', 'were': 'be', 'is': 'be', 'are': 'be', 'been': 'be', 'has': 'have', 'had': 'have',
-                 'did': 'do', 'done': 'do', 'made': 'make', 'took': 'take', 'taken': 'take', 'gave': 'give', 'given': 'give',
-                 'saw': 'see', 'seen': 'see', 'knew': 'know', 'known': 'know', 'thought': 'think', 'wrote': 'write', 'written': 'write',
-                 'spoke': 'speak', 'spoken': 'speak', 'understood': 'understand', 'matrices': 'matrix', 'hypotheses': 'hypothesis'}
-    candidates = [irregular.get(word, ''), word]
-    if word.endswith('ies'):
-        candidates.append(word[:-3] + 'y')
-    for suffix in ('ing', 'ed', 'es', 's'):
-        if word.endswith(suffix):
-            stem = word[:-len(suffix)]
-            candidates.extend([stem, stem + 'e', stem[:-1] if len(stem) > 1 and stem[-1] == stem[-2] else ''])
-    for lemma in candidates:
-        if lemma in LEXICON or lemma in ENTRIES:
-            phonetic, pos, zh, en, example = LEXICON.get(lemma) or ENTRIES[lemma]
-            return {'word': lemma, 'phonetic': phonetic, 'pos': pos, 'zh': zh, 'en': en, 'example': example}
+    """Resolve a selection against the dictionary layers that ship with the plugin."""
+    return lookup(text)
+
+
+def learned_dictionary(store, db, text):
+    """Return an entry a previous model answer stored, without touching the model."""
+    for lemma in lemmas(text):
+        try:
+            record = store.get(db, f'dictionary:{lemma}', 'dictionary')
+        except (ValueError, KeyError):
+            continue
+        entry = record.get('entry')
+        if isinstance(entry, dict) and entry.get('senses'):
+            return {**flatten(entry, 'learned'), 'word': str(entry.get('word') or lemma)}
     return None
+
+
+def remember_dictionary(store, db, entry):
+    """Store a model-produced entry so the next lookup of the word is local."""
+    word = str(entry.get('word') or '')
+    if not word:
+        return
+    store.put(db, 'dictionary', {
+        'id': f'dictionary:{word}',
+        'word': word,
+        'entry': entry,
+        'source': 'model',
+        'created_at': int(time.time()),
+    })
+
+
+def dictionary_text(entry):
+    """Render a dictionary entry as the plain text fields the card also shows."""
+    senses = entry.get('senses') or []
+    if not senses:
+        return str(entry.get('translate') or '')
+    lines = [f"{entry.get('word', '')} {entry.get('phonetic', '')} {senses[0].get('pos', '')}".strip()]
+    lines.extend(str(sense.get('zh') or '') for sense in senses if sense.get('zh'))
+    lines.append(str(senses[0].get('en') or ''))
+    example = senses[0].get('example') or {}
+    if isinstance(example, dict) and example.get('en'):
+        lines.append(str(example['en']))
+    return '\n'.join(line for line in lines if line)
 
 
 SELECTION_PROMPTS = {
     'explain': 'Explain only the short passage marked SELECTED TEXT. Use nearby context only to resolve ambiguity or references; do not treat the surrounding paragraph as the target. Do not repeat the selected text, context, title, citation markers, or unrelated source text in the answer.',
-    'translate': 'Translate only the short passage marked SELECTED TEXT. Use nearby context, including the prefix and suffix, only to resolve ambiguity; do not translate, summarize, or rewrite the surrounding paragraph. Output only the translation. Do not repeat the selected text, context, title, citation markers, or source text.',
+    'translate': (
+        'Translate only the short passage marked SELECTED TEXT. Use nearby context, including the prefix and suffix, only to resolve ambiguity; do not translate, summarize, or rewrite the surrounding paragraph. '
+        'Answer as JSON. When SELECTED TEXT is a single English word, return {"kind":"word","entry":{…}} where entry holds "word" (the base form), "phonetic_uk" and "phonetic_us" in slashes, "senses" (up to three, most common first, each with "pos", a concise simplified-Chinese "zh", a short English "en" and one "example" {"en","zh"}), and "forms" using only the keys pl, pt, pp, ing, 3sg (plus comparative, superlative); never invent a sense or a form the word does not have. '
+        'Otherwise return {"kind":"text","translation":"…"} with the translation only. Do not repeat the selected text, context, title, citation markers, or source text.'
+    ),
     'ask': 'Answer the user’s question only about the passage marked SELECTED TEXT. Use nearby context only to resolve ambiguity or references; do not treat the surrounding paragraph as the subject of the question. Keep later follow-up answers anchored to this same selection. Do not repeat the selected text, context, title, citation markers, or unrelated source text.',
 }
-
-SELECTION_MAX_TOKENS = {'translate': 256, 'explain': 600, 'ask': 1200}
 
 
 def _selection_messages(action, anchor):
@@ -151,6 +207,28 @@ def mark_operation(store, p):
         return {'mark': mark}
 
 
+def _translate_payload(content: str):
+    """Return ``(entry, text)`` for a translate answer.
+
+    The fixed shape is ``{"kind": "word", "entry": {...}}`` for a single word
+    and ``{"kind": "text", "translation": "…"}`` for anything longer.  A model
+    that answers in prose still lands on the text branch, so an unexpected
+    format degrades to a plain translation instead of an error.
+    """
+    try:
+        payload = json.loads(content)
+    except ValueError:
+        return None, content
+    if not isinstance(payload, dict):
+        return None, content
+    if payload.get('kind') == 'word':
+        entry = normalize_entry(payload.get('entry'))
+        if entry is not None:
+            return entry, ''
+    translation = str(payload.get('translation') or '').strip()
+    return None, translation or content
+
+
 async def answer(context, store, p):
     # Serialize per mark, not globally: simultaneous actions never erase a reply.
     runtime = context.service('study')
@@ -162,10 +240,12 @@ async def answer(context, store, p):
         action = p['action']
         if action not in ('explain', 'translate', 'ask'):
             raise ValueError('Unknown text action')
-        entry = dictionary(mark['anchor']['quote']) if action == 'translate' else None
+        quote = str(mark['anchor'].get('quote') or '')
+        with store.db() as db:
+            entry = (dictionary(quote) or learned_dictionary(store, db, quote)) if action == 'translate' else None
         if entry:
             mark['dictionary'] = entry
-            mark['translate'] = f"{entry['word']} {entry['phonetic']} {entry['pos']}\n{entry['zh']}\n{entry['en']}" + (f"\n{entry['example']}" if entry['example'] else '')
+            mark['translate'] = dictionary_text(entry)
         else:
             messages = _selection_messages(action, mark['anchor'])
             question = str(p.get('question') or '').strip()
@@ -187,12 +267,29 @@ async def answer(context, store, p):
             client = context.llm_client
             if client is None or not hasattr(client, 'complete'):
                 raise ValueError('Configure a model first')
-            response = await asyncio.wait_for(client.complete(LLMRequest(messages=messages, model=str(p.get('model_id') or context.model_id), max_tokens=SELECTION_MAX_TOKENS[action], timeout=60, metadata={'thinking_enabled': False})), timeout=65)
+            # No selection-local output cap: reasoning tokens are charged to
+            # max_tokens by some providers, and a small cap then truncates the
+            # answer before any visible text exists.  The model config owns the
+            # budget for every other call, so it owns this one too.
+            request = LLMRequest(messages=messages, model=str(p.get('model_id') or context.model_id), timeout=60, metadata={'thinking_enabled': False})
+            if action == 'translate':
+                request = replace(request, response_format={'type': 'json_schema', 'json_schema': {'name': 'selection', 'schema': TRANSLATE_SCHEMA, 'strict': False}})
+            response = await asyncio.wait_for(client.complete(request), timeout=65)
             content = response.content.strip()
             if not content:
                 raise ValueError('Model returned an empty response')
             if action == 'ask':
                 mark['thread'].extend([{'role': 'user', 'content': question}, {'role': 'assistant', 'content': content}])
+            elif action == 'translate':
+                word_entry, text = _translate_payload(content)
+                if word_entry is None:
+                    mark['translate'] = text
+                else:
+                    resolved = flatten(word_entry, 'model')
+                    mark['dictionary'] = resolved
+                    mark['translate'] = dictionary_text(resolved)
+                    with store.db() as db:
+                        remember_dictionary(store, db, word_entry)
             else:
                 mark[action] = content
         with store.db() as db:

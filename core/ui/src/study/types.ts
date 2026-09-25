@@ -137,13 +137,28 @@ export interface MarkAnchor {
   rects?: number[][]
 }
 
+export interface StudyDictionarySense {
+  pos: string
+  zh: string
+  en: string
+  example?: { en: string; zh?: string }
+}
+
 export interface StudyDictionaryEntry {
   word: string
+  /** Primary phonetic; the British one when the entry carries both. */
   phonetic: string
+  phonetic_uk?: string
+  phonetic_us?: string
   pos: string
   zh: string
   en: string
   example: string
+  /** Full entries carry every sense; older cached entries only the first. */
+  senses?: StudyDictionarySense[]
+  forms?: Record<string, string>
+  /** Which layer answered: curated, bundled (shipped table) or model/learned. */
+  source?: string
 }
 
 export interface StudyMark {

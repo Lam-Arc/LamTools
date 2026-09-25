@@ -1,10 +1,37 @@
-"""Original compact bilingual learning lexicon; no copied dictionary definitions.
+"""Bundled Study English→Chinese dictionary.
 
-These entries are intentionally concise. Unknown words use the lightweight
-translation endpoint; no guessed lemma is treated as a dictionary hit.
+Three layers answer a lookup, in this order:
+
+``ENTRIES``  the original hand-written lexicon below: concise definitions
+             written in-house, kept for the words the Study surfaces rely on.
+``TABLE``    ``dictionary/en-zh.jsonl`` — the generated CET-6 table shipped
+             with the plugin.  ``scripts/build_study_dictionary.py`` produces
+             it; the sibling manifest records the model, counts and hash.
+learned      entries a model answer produced at query time, stored in the study
+             database so a repeat lookup of the same word never calls a model.
+
+Nothing here copies third-party dictionary text.  Matching resolves ordinary
+morphology first (plurals, verb forms, comparatives); a word that no layer
+knows is reported as unknown so the caller can fall back to the model.
 """
 
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
 ENTRIES = {
+    # Kept from the original hand-written lexicon; these are the words the Study
+    # surfaces were designed around and carry verified example sentences.
+    'run': ('/rʌn/', 'v.', '跑；运行', 'Move quickly on foot; operate a program.', 'I run every morning.'),
+    'study': ('/ˈstʌdi/', 'v. / n.', '学习；研究', 'Spend time learning about a subject.', 'We study mathematics.'),
+    'learn': ('/lɜːn/', 'v.', '学习；学会', 'Gain knowledge or a new skill.', ''),
+    'knowledge': ('/ˈnɒlɪdʒ/', 'n.', '知识', 'What a person knows or understands.', ''),
+    'theorem': ('/ˈθɪərəm/', 'n.', '定理', 'A statement established by a mathematical proof.', ''),
+    'function': ('/ˈfʌŋkʃən/', 'n.', '函数；功能', 'A mapping from each input to an output; a purpose.', ''),
+    'data': ('/ˈdeɪtə/', 'n.', '数据', 'Values collected for analysis or processing.', ''),
+    'model': ('/ˈmɒdl/', 'n.', '模型', 'A simplified representation used to explain or predict.', ''),
     'a': ('/ə/', 'art.', '一个；某个', 'Introduces one unspecified thing.', ''),
     'the': ('/ðə/', 'art.', '这个；那个', 'Points to a particular thing already identifiable.', ''),
     'be': ('/biː/', 'v.', '是；存在', 'Have an identity, state, or existence.', ''),
@@ -106,3 +133,205 @@ ENTRIES = {
     'force': ('/fɔːs/', 'n.', '力', 'An interaction that can change motion.', ''),
     'mass': ('/mæs/', 'n.', '质量', 'A physical quantity measuring inertia.', ''),
 }
+
+_TABLE_PATH = Path(__file__).with_name('dictionary') / 'en-zh.jsonl'
+_WORD_RE = re.compile(r"^[a-z][a-z'-]*$")
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_IPA_MARKS = 'ˈˌəɪʊɛæʌɒɔɑɜθðʃʒŋɹ'
+_IPA_BRACKETS = {'[': ']', '(': ')', '《': '》'}
+FORM_KEYS = {'pl', 'pt', 'pp', 'ing', '3sg', 'comparative', 'superlative'}
+# Providers and models name the same form differently; map every spelling onto
+# the shipped keys so an entry never loses its inflections to a naming choice.
+FORM_ALIASES = {
+    'plural': 'pl',
+    'past': 'pt',
+    'past_tense': 'pt',
+    'past_participle': 'pp',
+    'present_participle': 'ing',
+    'gerund': 'ing',
+    'present': '3sg',
+    'third_person': '3sg',
+    'third_person_singular': '3sg',
+    '3rd_person_singular': '3sg',
+    '3rd_singular': '3sg',
+}
+IRREGULAR = {
+    'ran': 'run', 'running': 'run', 'studies': 'study', 'studied': 'study', 'learnt': 'learn', 'learned': 'learn',
+    'went': 'go', 'gone': 'go', 'was': 'be', 'were': 'be', 'is': 'be', 'are': 'be', 'been': 'be', 'has': 'have', 'had': 'have',
+    'did': 'do', 'done': 'do', 'made': 'make', 'took': 'take', 'taken': 'take', 'gave': 'give', 'given': 'give',
+    'saw': 'see', 'seen': 'see', 'knew': 'know', 'known': 'know', 'thought': 'think', 'wrote': 'write', 'written': 'write',
+    'spoke': 'speak', 'spoken': 'speak', 'understood': 'understand', 'matrices': 'matrix', 'hypotheses': 'hypothesis',
+}
+
+_TABLE: dict[str, dict] | None = None
+
+
+def table() -> dict[str, dict]:
+    """Return the generated table, parsed once per process.
+
+    A missing or damaged file yields an empty table instead of retrying on
+    every lookup: the curated layer and the model fallback still work, and a
+    half-written file must not be able to break the Study surface.
+    """
+    global _TABLE
+    if _TABLE is not None:
+        return _TABLE
+    loaded: dict[str, dict] = {}
+    try:
+        lines = _TABLE_PATH.read_text(encoding='utf-8').splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        word = str(entry.get('word') or '')
+        if word and word not in loaded:
+            loaded[word] = entry
+    _TABLE = loaded
+    return loaded
+
+
+def lemmas(text: str) -> list[str]:
+    """Candidate headwords for a selection, most specific first."""
+    word = text.strip().lower()
+    if not _WORD_RE.match(word):
+        return []
+    candidates = [IRREGULAR.get(word, ''), word]
+    if word.endswith('ies'):
+        candidates.append(word[:-3] + 'y')
+    for suffix in ('ing', 'ed', 'es', 's'):
+        if word.endswith(suffix):
+            stem = word[:-len(suffix)]
+            candidates.extend([stem, stem + 'e', stem[:-1] if len(stem) > 1 and stem[-1] == stem[-2] else ''])
+    return [lemma for lemma in dict.fromkeys(candidates) if lemma]
+
+
+def normalize_phonetic(value: object) -> str:
+    """Return a ``/…/`` IPA string, or '' when the value is not usable IPA."""
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    if text.startswith('/') and text.endswith('/') and len(text) > 2:
+        return text[:60]
+    for opening, closing in _IPA_BRACKETS.items():
+        if text.startswith(opening) and text.endswith(closing):
+            text = text[1:-1].strip()
+            break
+    # An unwrapped value still counts when it carries IPA marks; a bare word (or
+    # a dot-separated respelling) must not be presented as a phonetic.
+    if any(mark in text for mark in _IPA_MARKS) or re.search(r'[a-z]+[ˈˌ]', text):
+        return f'/{text}/'[:60]
+    return ''
+
+
+def normalize_forms(raw: object) -> dict[str, str]:
+    forms: dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return forms
+    for key, value in raw.items():
+        key = str(key).strip().lower().replace(' ', '_').strip('_')
+        value = str(value or '').strip()
+        canonical = key if key in FORM_KEYS else FORM_ALIASES.get(key, '')
+        if canonical and value and canonical not in forms:
+            forms[canonical] = value[:40]
+    return forms
+
+
+def normalize_entry(raw: object, expected: str | None = None) -> dict | None:
+    """Normalize one model-produced entry, or None when it is unusable.
+
+    ``expected`` pins the headword for generated tables; query-time callers pass
+    None and accept whatever base form the model returned.
+    """
+    if not isinstance(raw, dict):
+        return None
+    word = str(raw.get('word') or '').strip().lower()
+    if not _WORD_RE.match(word) or (expected is not None and word != expected):
+        return None
+    senses = []
+    for item in raw.get('senses') or []:
+        if not isinstance(item, dict):
+            continue
+        pos = str(item.get('pos') or '').strip()
+        zh = str(item.get('zh') or '').strip()
+        en = str(item.get('en') or '').strip()
+        if not pos or not zh or not en or not _CJK_RE.search(zh):
+            continue
+        sense = {'pos': pos[:24], 'zh': zh[:160], 'en': en[:320]}
+        example = item.get('example')
+        if isinstance(example, dict):
+            example_en = str(example.get('en') or '').strip()
+            example_zh = str(example.get('zh') or '').strip()
+            if example_en and example_zh:
+                sense['example'] = {'en': example_en[:240], 'zh': example_zh[:240]}
+        senses.append(sense)
+    if not senses:
+        return None
+    entry = {
+        'word': word,
+        'phonetic_uk': normalize_phonetic(raw.get('phonetic_uk')),
+        'phonetic_us': normalize_phonetic(raw.get('phonetic_us')),
+        'senses': senses[:3],
+    }
+    forms = normalize_forms(raw.get('forms'))
+    if forms:
+        entry['forms'] = forms
+    return entry
+
+
+def curated(word: str, values: tuple[str, str, str, str, str]) -> dict:
+    """Present a hand-written tuple as the card contract."""
+    phonetic, pos, zh, en, example = values
+    sense: dict = {'pos': pos, 'zh': zh, 'en': en}
+    if example:
+        sense['example'] = {'en': example}
+    return {
+        'word': word,
+        'phonetic': phonetic,
+        'phonetic_uk': phonetic,
+        'phonetic_us': '',
+        'pos': pos,
+        'zh': zh,
+        'en': en,
+        'example': example,
+        'senses': [sense],
+        'forms': {},
+        'source': 'curated',
+    }
+
+
+def lookup(text: str) -> dict | None:
+    """Resolve a selection against the layers that ship with the plugin."""
+    for lemma in lemmas(text):
+        values = ENTRIES.get(lemma)
+        if values:
+            return curated(lemma, values)
+        entry = table().get(lemma)
+        if entry:
+            return flatten(entry, str(entry.get('source') or 'bundled'))
+    return None
+
+
+def flatten(entry: dict, source: str) -> dict:
+    """Present a stored entry as the card contract (flat fields + senses)."""
+    senses = [sense for sense in entry.get('senses') or [] if isinstance(sense, dict)]
+    first = senses[0] if senses else {}
+    example = first.get('example')
+    return {
+        'word': str(entry.get('word') or ''),
+        'phonetic': str(entry.get('phonetic_uk') or entry.get('phonetic_us') or ''),
+        'phonetic_uk': str(entry.get('phonetic_uk') or ''),
+        'phonetic_us': str(entry.get('phonetic_us') or ''),
+        'pos': str(first.get('pos') or ''),
+        'zh': str(first.get('zh') or ''),
+        'en': str(first.get('en') or ''),
+        'example': str((example or {}).get('en') or '') if isinstance(example, dict) else '',
+        'senses': senses,
+        'forms': entry.get('forms') or {},
+        'source': source,
+    }
