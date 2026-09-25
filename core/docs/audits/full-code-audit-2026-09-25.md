@@ -348,5 +348,77 @@
 2. **测试要对着旧实现验证**：本轮 16 条新测试里 15 条在 `git stash` 掉源改动后失败、恢复后通过，证明它们钉住的是缺陷而不是实现细节；唯一通过的是资产级守卫（随包文件可加载），已在命名上区分。
 3. **收紧"来源"要连带检查消费方**：删掉 websearch 的 work_root 候选后，`default_toolbox` 的 handlers 表原本根本没传 `data_dir`——只改一处会让用户作用域配置静默失效。同类：MCP 收紧后要确证 `env` 与 `config_files` 仍生效。
 
+## 9. 修复复核（独立验证轮，同日）
+
+**方法**：不采信提交信息，逐条读当前代码 + 实跑四条测试链 + 实测 `git check-ignore` 与线上 URL。复核基线 `255bcaa6..82ce54f6`：6 个提交、76 文件、+2,817/−231，工作树干净。
+
+**测试基线（本次实跑）**：`core` pytest **2315 passed / 2 skipped**（原 2286）· `core/ui` vitest **99 文件 / 805**（原 804）· `core/runtime-rs` cargo **208 passed**（原 205）· `core/mobile` vitest **44 文件 / 246**（原 242）。全绿。
+
+**P1 六条：全部修完，逐条已在当前代码里验证**
+
+1. 插件安装穿越 — `plugins/operations.py:1225` 传 `root=root`；`install.py:107-126` 修好反转守卫 + 新增越根断言（越根/源在目标内各有测试）；`registry.py` 校验 `name`/`id` 并经 `discover_errors` 暴露。
+2. websearch 仓库注入 — `tool/search/factory.py:36-58` 已 `del work_root`，候选只剩 `WEBSEARCH_CONFIG` / `{data_dir}/plugins/` / 用户配置根；注释剥离统一到共享 `strip_jsonc_comments`。
+3. MCP 工作区自动启动 — `mcp/config.py:80-98` 已 `del work_root`，工作区三种文件不再是来源；显式 `default_paths`/`config_files`/`env` 仍有效（含"别收过头"的守卫测试）。
+4. 更新通道冻结 — `update/checker.py:299-356` 改为**两源都问、取版本更高者**（同版本时下载地址取官网），更新说明优先 GitHub（`notes_source`）；`release.yml:209-223` 在 Inno 构建后生成清单并作为构建产物上传；`core/desktop/update-manifest.json` 入 `.gitignore`。
+5. 预发布闭环 — `release.yml:36`、`bump-version.ps1:30` 放行 `X.Y.Z[-pre][+build]`；`compare_versions` 重写为 semver 语义（预发布低于正式版、核心补零、预发布段按 semver），`test_update_check.py:180-188` 钉住新语义。
+6. 私钥与未跟踪物 — `git check-ignore` 实测命中 `.gitignore:179-189`。
+
+**P2 已修并已验证**：hooks.json 走 `load_jsonc_text`（`hook_config.py:96`）且保存写严格 JSON + 编辑器兼容 · pip 依赖过 `validated_requirements()`（`deps.py:150-170`）· checkpoint blob 回收（`checkpoint.py:995` 删 BlobRef + `_gc_checkpoint_blobs()` 以"活清单 ∪ BlobRef"为活引用集，unlink + 删行；整会话删除同样回收）· live 事件落库段包 try/except（`default_agent.py:2531`）· Rust `read_file` 50,000 字符 + 截断标记、`list_dir` 100 条 + `total`/`truncated`、`search_files` 50 且 glob 右对齐（`glob_matches`，`*.rs` 可命中 `src/main.rs`）· `update_checklist` 恢复强制 `reason` · 盘符相对路径拒绝 · UI hydrate 原地推进 `revision`/`snapshot_seq` 保住 item 身份（`store.ts:246-258`）、`flushFrame` 不再自续、`partMemo` 补 `live`/`autoPlotMath` · CI 装 `.[dev,server]`（`ci.yml:38`，真 WS e2e 不再被跳过）+ concurrency/timeout/pip cache + `git diff --check` 改差分 + 移动端版本守卫脚本 · `sunday_artifact_open` 与 `lan_discovery_discover` 进 Android handler 列表（`lib.rs:3527-3528`），LAN 发现改走 app 命令 · 移动端 CSP 加 `http: ws:` 且 Android 允许明文 · `.agents/skills/lamtools-setup-install` 与 `scripts/build-desktop-update.py` 已入库 · 零断言的 live 驱动脚本改名移出 `testpaths`。
+
+**P2 漏项（既未修，也未出现在 §7 的"记录但本轮未修"清单里）**
+
+- **测试 fixtures 未瘦身** `[已验证]`：`git ls-files core/tests/fixtures/context_compaction` 仍 38 个跟踪文件、`du` 52 MB，含真实模型 transcript（见 §3 批次 G）。
+- **两个死模块仍在** `[已验证]`：`core/src/lamtools_core/kernel/hooks.py`、`core/src/lamtools_core/tool/verification.py` 仍在源码树与 spec 打包清单（见 §3 批次 G）。
+
+**能力未上线（危害已解除）**：线上 `desktop-update.json` 实测仍 **404**；CI 只产出清单作为构建产物，上传站点仍是人工步骤（`PACKAGING.md:157+` 已写明）。因检查器已改为两源取高版本，"清单落后即冻结更新"的故障模式不再存在，剩余差距只是"官网优先"这条通道尚未真正启用。
+
+**复核中新发现的两条残留（修复引入的取舍）**
+
+1. **移动端明文放开是全局的**：`network_security_config.xml` 的 `base-config cleartextTrafficPermitted="true"` 与 CSP 的 `http:`/`ws:` 允许任意主机，而不只是局域网地址（Android 配置与静态 CSP 都无法表达私网段，收敛需要运行时校验）。
+2. **两个命令只注册在 Android 列表**：`sunday_artifact_open` / `lan_discovery_discover` 仅出现在 `#[cfg(target_os = "android")]` 的列表，非 Android 列表（`lib.rs:3541`）没有——对出货目标正确，但若以后在桌面宿主或测试里跑这套 RPC 会缺命令。
+
+**待用户拍板（非缺陷）**：`e2e/`（277 文件 / 54 MB，指向已下线的 Writer）、`output/`（v0.2.6 论文产物）、`kbtool-task/`（无人运行的 demo）的删除或归档。
+
+## 10. 收尾批次（用户授权"你看着办"，同日）
+
+用户授权：两条漏项补掉、三件删除类事项由主审决定、其余遗留按判断处理；并告知"Writer 已死，不用管它"（解除了 §7 曾顾虑的归档依赖）。
+
+### 10.1 两条漏项
+
+- **死模块（P2）已删** `c93ac3b4`：`kernel/hooks.py`、`tool/verification.py`、`tests/test_tool_verification.py`，以及 spec 里两行 hiddenimports。删除前核实：真实树内唯一的导入来自 `archive/members/writer/...`（`hooks.py` 的 7 个常量、`core_kernel_adapter.py:107` 的 `verify_written_tool_results`）与 verification 自己的测试——按用户"Writer 已死"的判定，归档侧的导入不再是保留理由。**后果已记录**：归档 Writer 的这两处导入从此不可解析，仅影响追溯阅读，不影响任何活代码与打包。
+- **测试 fixtures 已移出跟踪** `88a20ce6`：`core/tests/fixtures/context_compaction/real_api_runs`（38 文件 / 52 MB 真实模型 transcript）不再入库并加入 `.gitignore`；文件留在本机，由 `tests/experiments/context_compaction_real_api.py` 按需重建。
+
+### 10.2 三件删除类事项（决定与依据）
+
+| 对象 | 决定 | 依据 |
+|---|---|---|
+| `e2e/real-task-runs/`（194 文件 / 36 MB） | 移出跟踪 + 忽略 | 日期化的运行产物，非用例资产 |
+| `e2e/` 的 Writer 冒烟套件与 Playwright 脚手架（spec + config + package.json/lock） | 删除 | 唯一 spec 指向已归档 Writer 的前端路径（该路径早已不存在），任何 workflow 都不跑它；README 已声明废弃 |
+| `e2e/rag-eval/`（语料 + 黄金集 + 报告）与 `e2e/test-apps/`（20 个微型示例应用，60 文件） | **保留** | 核查发现这两块与 Writer 无关：`rag-eval/run_retrieval_eval.py` 是自带的检索评测台（recall@k / MRR，14 问黄金集），`test-apps/` 是任务素材。原先"整个 e2e 都指向 Writer"的描述不准确，故不整体删除 |
+| `e2e/README.md` | 重写 | 原文的 Setup/Run 段落指引已不存在的目录；现在写明剩余资产、评测台用法与"活 e2e 是 `core/tests/test_core_live_client_e2e.py`" |
+| `output/`（v0.2.6 论文 PDF + 补充包） | 移出跟踪 | 是 `docs/paper/build_*.py` 的产物，且该目录本来就在 `.gitignore` 里（tracked-while-ignored） |
+| `kbtool-task/`（7 文件） | 删除 | 独立笔记 demo，无 runner、无任何活引用；可从历史取回 |
+
+### 10.3 顺路修掉的遗留缺陷（设计已明确、改动可控）
+
+- **`web_fetch` 重定向可被弹进内网（P2）** `fix(tool):` 提交：原实现 `follow_redirects=True` 且只筛查入参 URL，任何公开页面都能把抓取器导向 `127.0.0.1`（本机 Core 服务）、局域网主机或云元数据地址。现改为逐跳遍历：跳转目标必须是公开 http(s)（含 IPv4 映射、`0.0.0.0`、`169.254.169.254`、`localhost`/`.localhost` 等），而"故意访问本地服务"的既有用法（loopback 起始）保留自己的跳转链，不受影响；被拒的跳转直接失败并在错误里给出原因，且**不会发出那一跳请求**；结果 metadata 现在报告最终 URL（发生跳转时另附 `requested_url`）。新增 5 条测试（分类函数 + 公开跳转照常 + 内网/元数据拒绝 + 相对跳转）。
+- **`SubAgentSupervisor` 短连接泄漏（P3）**：`sqlite3` 的连接上下文只提交不关闭，`_load/_save/_mail/_list` 每次调用泄漏一个句柄。改为 `_connection()` 统一关闭；新增测试断言一轮读写后所有连接均不可用。
+- **kernel 前置段不收敛（P3）**：`mark running / on_run_start / SessionStart / UserPromptSubmit / checkpoint` 整段在循环 try 之外，抛错即把会话留在 `running` 且无终态事件。抽成 `_begin_run()` 并由统一 guard 包裹：失败时置 `failed`、尽力持久化、走 `_finalize_run` 收敛；新增测试用"SessionStart hook 抛错"复现，断言终态事件与 Kit `on_run_end` 都发生。
+- **UI 产物预览路径未收敛（P2）**：`imageSrc` 把消息里的 `uri` 直接拼到 `work_root` 再交给桌面 asset protocol，`../..` 或盘符绝对路径可指到工作区之外，当时只有外壳的 asset scope 兜底。新增 `workspaceRelativePath()`（拒绝 `..`、盘符绝对、`file:` 形态）并在预览处兜底回落到 HTTP 路由；新增 4 条前端测试。
+- **顺带发现并修掉一个 typecheck 失败**（上一批修复引入）：`appServer/store.ts:254` 把 `CoreSessionState` 传给了期待快照类型的 `sessionSnapshotRevision`，`vue-tsc` 报 TS2345——而 CI 的链路是 typecheck→contract→build→pytest，也就是说上一批的改动会让 **CI 变红**（该批只报了 vitest 通过）。已改为用会话状态自带的 `revision`。
+
+### 10.4 复核与验证（本批）
+
+- `core` pytest **2318 passed / 2 skipped**（上批 2315；新增 6 条、删除 verification 的 3 条）；`core/ui` vitest **100 文件 / 809 用例**（上批 99/805）；`npx vue-tsc --noEmit`、`npm run typecheck`（三条链）**全部干净**。
+- `runtime-rs` 与 `core/mobile` 本轮未改动，未重跑（上一轮结果仍适用）。
+- 提交序列：`c93ac3b4`（死模块）→ `64a98f3d`（e2e/kbtool 清理 + README 重写）→ `88a20ce6`（运行产物移出跟踪）→ `8cf97ed4`（web_fetch）→ `2927b9b2`（supervisor 连接）→ `9fc4c74d`（kernel 前置段）→ `73b06df7`（UI 路径收敛 + 类型修复）。
+
+### 10.5 仍未处理（附原因，保持可见）
+
+- `web_fetch` 的 DNS 重绑定形态（公开域名解析到内网）仍需在连接层钉住解析结果才能根治；本轮只堵住字面地址与跳转。
+- 移动端明文放开的**全局**范围（§9 残留 1）与两个命令只在 Android 列表（§9 残留 2）：均需产品决策，未改。
+- §7 已记录的"记录但未修"清单（`SubAgentSupervisor` 的 supervisor 淘汰、状态口径、`kernel_steps` 上限、覆盖率工具、测试计时断言等）保持不变；`session.delete` 路径已会淘汰 supervisor，项目管理路径仍不会。
+
+
 
 
