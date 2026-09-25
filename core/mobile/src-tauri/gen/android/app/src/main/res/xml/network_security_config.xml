@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
+    <!-- 局域网直连（ws://）与配对（http://）走明文，正式包必须放行；
+         账户/中继通道始终是 https/wss。c.pki.goog 段是平台 CRL 校验的既有例外。 -->
+    <base-config cleartextTrafficPermitted="true" />
     <!-- The Android platform verifier fetches signed GTS CRLs over HTTP.
          Source: rustls-platform-verifier commit 7c3e664, generated CRL host list. -->
     <domain-config cleartextTrafficPermitted="true">

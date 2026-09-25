@@ -25,14 +25,23 @@ const tauriConfig = JSON.parse(readFileSync(
 const entrySource = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8')
 
 describe('Android release identity contract', () => {
-  it('allows the native verifier to fetch only the GTS signed HTTP CRL in release', () => {
+  it('permits LAN cleartext in release and keeps the GTS CRL exception', () => {
+    // 局域网直连（ws://）与配对（http://）是既定功能，正式包必须放行明文；
+    // 账户/中继通道仍是 https/wss（2026-09-25 审计：原先 release 双重禁止，
+    // 只有 debug 包能用局域网直连）。
     expect(tauriAndroidManifest).toContain('android:networkSecurityConfig="@xml/network_security_config"')
-    expect(releaseNetworkSecurityConfig).toMatch(/<base-config\s+cleartextTrafficPermitted="false"\s*\/>/)
+    expect(releaseNetworkSecurityConfig).toMatch(/<base-config\s+cleartextTrafficPermitted="true"\s*\/>/)
     expect([...releaseNetworkSecurityConfig.matchAll(/<domain(?:\s+[^>]*)?>([^<]+)<\/domain>/g)]
       .map((match) => match[1])).toEqual(['c.pki.goog'])
     expect(releaseNetworkSecurityConfig).toContain('<domain includeSubdomains="false">c.pki.goog</domain>')
     expect(releaseNetworkSecurityConfig).toMatch(/<domain-config\s+cleartextTrafficPermitted="true"\s*>/)
     expect(debugNetworkSecurityConfig).toMatch(/<base-config\s+cleartextTrafficPermitted="true"\s*\/>/)
+    // AndroidManifest 的占位默认值必须与网络安全策略一致
+    const gradle = readFileSync(
+      new URL('../src-tauri/gen/android/app/build.gradle.kts', import.meta.url),
+      'utf8',
+    )
+    expect(gradle).toContain('manifestPlaceholders["usesCleartextTraffic"] = "true"')
   })
 
   it('uses Sunday for the launcher and activity labels', () => {
@@ -55,6 +64,18 @@ describe('Android release identity contract', () => {
     const csp = tauriConfig.app?.security?.csp || ''
     expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'")
     expect(csp).not.toMatch(/script-src[^;]*'unsafe-eval'/)
+  })
+
+  it('lets the webview reach LAN hosts over plain http/ws', () => {
+    const csp = tauriConfig.app?.security?.csp || ''
+    const connectSrc = csp.split(';').map((part) => part.trim()).find((part) => part.startsWith('connect-src')) || ''
+    // 局域网直连与配对的目标是 http://<ip>:<port> / ws://<ip>:<port>（CSP 无法
+    // 表达 IP 段，所以放行整类协议；桌面的 connect-src 出于同一原因也列了
+    // http://127.0.0.1:* 与 ws://127.0.0.1:*）。
+    expect(connectSrc).toContain('http:')
+    expect(connectSrc).toContain('ws:')
+    expect(connectSrc).toContain('https:')
+    expect(connectSrc).toContain('wss:')
   })
 
   it('renders a visible startup failure instead of leaving an empty black webview', () => {

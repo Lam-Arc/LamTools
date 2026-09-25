@@ -18,11 +18,13 @@ export async function discoverNativeLanDevices(timeoutMs: number): Promise<LanDe
   }
 
   // The shipped Android shell is Tauri, where Capacitor reports false. Keep
-  // the existing Capacitor path for legacy/iOS builds and use Tauri's native
-  // Android NSD plugin when running inside the embedded Rust host.
+  // the existing Capacitor path for legacy/iOS builds; inside the embedded
+  // Rust host the native NSD plugin is reached through an app command —
+  // `plugin:` commands invoked straight from the webview need an ACL
+  // permission this inline plugin does not ship (2026-09-25 审计 P2).
   if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
     const result = await invoke<{ devices?: unknown }>(
-      'plugin:lamtools-lan-discovery|discover',
+      'lan_discovery_discover',
       { timeoutMs: boundedTimeoutMs },
     )
     return normalizeDevices(result)

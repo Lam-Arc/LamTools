@@ -91,6 +91,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { Capacitor } from '@capacitor/core'
+import { getVersion } from '@tauri-apps/api/app'
 import { FileDown } from 'lucide-vue-next'
 import { createCoreProjectClient, createLamToolsRuntime, MobileTopBar, type CoreAppSnapshot, type CoreProject, type MobileControlAccountContext, type MobileControlAccountDevice, type MobileControlAccountPayload } from '@lamtools/ui'
 import { CoreAppServerClient } from '@lamtools/ui/appServer'
@@ -528,10 +529,35 @@ async function loadSyncProjects(deviceId: string): Promise<void> {
   }
 }
 
+declare global {
+  interface Window {
+    __LAMTOOLS_APP_VERSION__?: string
+  }
+}
+
+/**
+ * 宿主版本，单一来源：既注入共享 UI 的 `__LAMTOOLS_APP_VERSION__` 桥
+ * （core/ui/src/helpers/update.ts 用它显示"当前版本"），也用于同步客户端标识。
+ * 写死的 '0.1.1' 曾比真实版本落后 8 个发布。
+ */
+async function loadAppVersion(): Promise<string> {
+  try {
+    const version = await getVersion()
+    window.__LAMTOOLS_APP_VERSION__ = version
+    return version
+  } catch {
+    return window.__LAMTOOLS_APP_VERSION__ || '0.0.0-dev'
+  }
+}
+
 async function syncRemoteSnapshot(projectId: string): Promise<void> {
   const client = new CoreAppServerClient({
     transport: syncConnectionManager.getTransport(),
-    clientInfo: { name: 'lamtools_mobile_import', title: 'LamTools Mobile Import', version: '0.1.1' },
+    clientInfo: {
+      name: 'lamtools_mobile_import',
+      title: 'LamTools Mobile Import',
+      version: await loadAppVersion(),
+    },
   })
   try {
     await client.connect()
@@ -1038,6 +1064,8 @@ function syncNativeWindowInsets(insets: { top: number }): void {
 onMounted(async () => {
   window.addEventListener('lamtools:secure-storage-recovered', onSecureStorageRecovered)
   removeWindowInsetsListener = observeNativeWindowInsets(syncNativeWindowInsets)
+  // 版本桥先于共享 UI 需要的任何展示落位（关于与更新读它）。
+  void loadAppVersion()
   try {
     removeNativeStageListener = await listenForNativeAgentStages(mobileDiagnostics)
   } catch {

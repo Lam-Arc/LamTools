@@ -252,6 +252,13 @@ struct MobileDiagnosticsShare<R: Runtime>(PluginHandle<R>);
 #[cfg(target_os = "android")]
 struct MobileAttachmentOpen<R: Runtime>(PluginHandle<R>);
 
+// Wrapped as an app command so it passes the IPC ACL: plugin commands invoked
+// straight from the webview are rejected unless the capability grants a
+// permission, and this inline plugin has no permission manifest
+// (2026-09-25 审计 P2 — every other Android plugin here is wrapped the same way).
+#[cfg(target_os = "android")]
+struct MobileLanDiscovery<R: Runtime>(PluginHandle<R>);
+
 #[cfg(target_os = "android")]
 #[derive(Deserialize)]
 struct AttachmentCacheDirectory {
@@ -3119,6 +3126,19 @@ fn mobile_diagnostics_share(
 
 #[cfg(target_os = "android")]
 #[tauri::command]
+fn lan_discovery_discover(
+    discovery: tauri::State<'_, MobileLanDiscovery<tauri::Wry>>,
+    timeout_ms: Option<u64>,
+) -> Result<Value, String> {
+    let timeout_ms = timeout_ms.unwrap_or(1200).clamp(250, 5000);
+    discovery
+        .0
+        .run_mobile_plugin::<Value>("discover", serde_json::json!({ "timeoutMs": timeout_ms }))
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
 fn secure_storage_set(
     storage: tauri::State<'_, MobileSecureStorage<tauri::Wry>>,
     key: String,
@@ -3432,11 +3452,12 @@ pub fn run() {
     #[cfg(target_os = "android")]
     let builder = builder.plugin(
         tauri::plugin::Builder::<tauri::Wry, ()>::new("lamtools-lan-discovery")
-            .setup(|_app, api| {
-                api.register_android_plugin(
+            .setup(|app, api| {
+                let handle = api.register_android_plugin(
                     "com.lamtools.mobile",
                     "LamToolsLanDiscoveryPlugin",
                 )?;
+                app.manage(MobileLanDiscovery(handle));
                 Ok(())
             })
             .build(),
@@ -3503,6 +3524,8 @@ pub fn run() {
         sunday_attachment_list,
         sunday_attachment_delete,
         sunday_attachment_open,
+        sunday_artifact_open,
+        lan_discovery_discover,
         project_file_list,
         project_directory_browse,
         project_file_read,

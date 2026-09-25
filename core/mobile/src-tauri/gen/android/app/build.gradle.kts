@@ -65,7 +65,7 @@ android {
     compileSdk = 36
     namespace = "com.lamtools.mobile"
     defaultConfig {
-        manifestPlaceholders["usesCleartextTraffic"] = "false"
+        manifestPlaceholders["usesCleartextTraffic"] = "true"
         applicationId = "com.lamtools.mobile"
         minSdk = 26
         targetSdk = 36

@@ -36,7 +36,7 @@ describe('native LAN discovery adapters', () => {
       { deviceId: 'desktop-a', host: '192.168.1.10', port: 55791, protocolVersion: '1' },
     ])
     expect(native.invoke).toHaveBeenCalledWith(
-      'plugin:lamtools-lan-discovery|discover',
+      'lan_discovery_discover',
       { timeoutMs: 250 },
     )
   })
