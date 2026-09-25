@@ -13,6 +13,7 @@ import StudySidebarHost from '../src/study/StudySidebarHost.vue'
 import StudyNoteRelationGraph from '../src/study/StudyNoteRelationGraph.vue'
 import StudyGraph from '../src/study/StudyGraph.vue'
 import SelectionAssistant from '../src/study/SelectionAssistant.vue'
+import ContextMenuHost from '../src/components/context-menu/ContextMenuHost.vue'
 import MarkdownRenderer from '../src/components/MarkdownRenderer.vue'
 import { contextMenuState, closeContextMenu } from '../src/components/context-menu/context-menu'
 import { marks, selectionEvents, showMark } from '../src/study/annotations'
@@ -615,6 +616,36 @@ describe('Study v2 layout and notes', () => {
     wrapper.unmount()
   })
 
+  it('locks a reading-view selection from the shared text menu without turning it into a study mark', async () => {
+    const note = normalizeNote({ id: 'note-preview', title: 'Preview', path: 'Preview.md', body_md: '前言：受保护片段。结尾', revision: 1, content_hash: 'h1', resource_ids: ['resource-1'], resources: [{ id: 'resource-1' }], locks: [], links: [], backlinks: [] })
+    const onLockRange = vi.fn().mockResolvedValue(undefined)
+    const rpc = vi.fn(async (method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      if (method === 'study.marks' && params?.action === 'list') return { marks: [], total: 0 }
+      return { mark: { id: 'mark-preview', anchor: { quote: '受保护片段' }, explain: '', translate: '', thread: [] } }
+    })
+    const host = mount(ContextMenuHost, { attachTo: document.body })
+    const wrapper = mount(NotesManager, { props: { notes: [note], selected: note, onSelect: vi.fn(), onLockRange }, attachTo: document.body })
+    const assistant = mount(SelectionAssistant, { props: { sessionId: 'study:main', mode: 'study:study', themeMode: 'light', jump: vi.fn() }, attachTo: document.body, global: { provide: { [CORE_PLUGIN_MODE_CONTEXT as symbol]: context(rpc) } } })
+    await flushPromises()
+
+    const text = document.querySelector('.study-note-reading p')!.firstChild!
+    const range = document.createRange(); range.setStart(text, 3); range.setEnd(text, 8)
+    const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range)
+    document.querySelector('.study-note-reading')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }))
+
+    expect(contextMenuState.items.filter(entry => entry.type !== 'separator').map(entry => 'label' in entry && entry.label))
+      .toEqual(['复制', '全选', '锁定选中内容'])
+    const lock = contextMenuState.items.find(entry => 'label' in entry && entry.label === '锁定选中内容')!
+    if ('action' in lock) await lock.action()
+    await flushPromises()
+    expect(onLockRange).toHaveBeenCalledWith(note, expect.objectContaining({ start: 3, end: 8, quote: '受保护片段' }))
+    expect(rpc.mock.calls.some(([name, params]) => name === 'study.marks' && params?.action === 'create')).toBe(false)
+
+    assistant.unmount()
+    wrapper.unmount()
+    host.unmount()
+  })
+
   it('keeps layered positions deterministic and preserves user coordinates', () => {
     const item = (id: string): KnowledgeItem => ({
       id,
@@ -823,7 +854,7 @@ describe('Global selection assistant', () => {
     }
   })
 
-  it('keeps copy, invokes the independent endpoint and restores a mark mini thread', async () => {
+  it('keeps copy and select-all beside the study marks, invokes the independent endpoint and restores a mark mini thread', async () => {
     vi.stubGlobal('CSS', { escape: (value: string) => value, highlights: new Map() })
     const anchor = fixture()
     const mark: StudyMark = { id: 'mark1', anchor, explain: '', translate: '', thread: [] }
@@ -833,10 +864,16 @@ describe('Global selection assistant', () => {
       return { mark }
     })
     const ctx = context(rpc)
+    const host = mount(ContextMenuHost, { attachTo: document.body })
     const wrapper = mount(SelectionAssistant, { props: { sessionId: 'study:main', mode: 'core:agent', themeMode: 'light', jump: vi.fn() }, attachTo: document.body, global: { provide: { [CORE_PLUGIN_MODE_CONTEXT as symbol]: ctx } } })
     await flushPromises()
     document.querySelector('.markdown-renderer__content')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 900, clientY: 700 }))
-    expect(contextMenuState.items.filter(e => e.type !== 'separator').map(e => 'label' in e && e.label)).toEqual(['复制', '标记', '解释', '询问', '翻译'])
+    expect(contextMenuState.items.filter(e => e.type !== 'separator').map(e => 'label' in e && e.label)).toEqual(['复制', '全选', '标记', '解释', '询问', '翻译'])
+    const copy = contextMenuState.items.find(e => 'label' in e && e.label === '复制')!
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    if ('action' in copy) await copy.action()
+    expect(writeText).toHaveBeenCalledWith(window.getSelection()!.toString())
     const markAction = contextMenuState.items.find(e => 'label' in e && e.label === '标记')!
     if ('action' in markAction) await markAction.action()
     await flushPromises()
@@ -859,6 +896,50 @@ describe('Global selection assistant', () => {
     expect(document.querySelector('.selection-assistant-markdown strong')?.textContent).toBe('因为…')
     expect(document.querySelector('.selection-card')?.classList.contains('optical-glass')).toBe(true)
     expect(ctx.composerText.value).toBe('')
+    wrapper.unmount()
+    host.unmount()
+  })
+
+  it('renders a full dictionary entry and keeps the older flat shape working', async () => {
+    vi.stubGlobal('CSS', { escape: (value: string) => value, highlights: new Map() })
+    const anchor = fixture()
+    const rpc = vi.fn(async (method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      if (method === 'study.marks' && params?.action === 'list') return { marks: [], total: 0 }
+      return { mark: {} }
+    })
+    const wrapper = mount(SelectionAssistant, { props: { sessionId: 'study:main', mode: 'study:study', themeMode: 'light', jump: vi.fn() }, attachTo: document.body, global: { provide: { [CORE_PLUGIN_MODE_CONTEXT as symbol]: context(rpc) } } })
+    await flushPromises()
+
+    const entry: StudyMark = {
+      id: 'dict-1', anchor, explain: '', translate: '运动，移动', thread: [], prompt_version: 4,
+      dictionary: {
+        word: 'motion', phonetic: '/ˈməʊʃn/', phonetic_uk: '/ˈməʊʃn/', phonetic_us: '/ˈmoʊʃn/',
+        pos: 'noun', zh: '运动，移动', en: 'a change of position', example: 'The motion of the planets.',
+        senses: [
+          { pos: 'noun', zh: '运动，移动', en: 'a change of position', example: { en: 'The motion of the planets.', zh: '行星的运动。' } },
+          { pos: 'noun', zh: '提议', en: 'a formal proposal', example: { en: 'She proposed a motion.', zh: '她提出了一项动议。' } },
+        ],
+        forms: { pl: 'motions' }, source: 'bundled',
+      },
+    }
+    showMark(entry, 'translate'); await nextTick()
+    const card = document.querySelector('.selection-card')!
+    expect(card.querySelector('.selection-dictionary-phonetic')?.textContent).toBe('英 /ˈməʊʃn/ 美 /ˈmoʊʃn/')
+    expect(card.querySelectorAll('.selection-dictionary-sense')).toHaveLength(2)
+    expect(card.textContent).toContain('提议')
+    expect(card.textContent).toContain('行星的运动。')
+    expect(card.querySelector('.selection-dictionary-forms')?.textContent).toContain('复数 motions')
+
+    // Entries cached before the sense array existed still render their flat fields.
+    const legacy: StudyMark = {
+      id: 'dict-2', anchor, explain: '', translate: '跑', thread: [], prompt_version: 4,
+      dictionary: { word: 'run', phonetic: '/rʌn/', pos: 'v.', zh: '跑；运行', en: 'move quickly on foot', example: 'I run every morning.' },
+    }
+    showMark(legacy, 'translate'); await nextTick()
+    const flat = document.querySelector('.selection-card')!
+    expect(flat.querySelectorAll('.selection-dictionary-sense')).toHaveLength(0)
+    expect(flat.textContent).toContain('跑；运行')
+    expect(flat.textContent).toContain('I run every morning.')
     wrapper.unmount()
   })
 })

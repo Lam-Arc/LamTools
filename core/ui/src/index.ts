@@ -184,6 +184,7 @@ export {
   isNativeContextTarget,
   isContextMenuOpen,
   openContextMenu,
+  registerTextSelectionMenuContributor,
 } from './components/context-menu';
 export type {
   ContextMenuAction,
@@ -196,6 +197,8 @@ export type {
   ContextMenuSeparator,
   ContextMenuSubmenu as ContextMenuSubmenuEntry,
   OpenContextMenuOptions,
+  TextSelectionMenuContext,
+  TextSelectionMenuContributor,
 } from './components/context-menu';
 export type {
   CoreSettingsDensity,

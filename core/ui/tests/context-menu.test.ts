@@ -11,6 +11,7 @@ import {
   isNativeContextTarget,
   LONG_PRESS_CONTEXT_MENU_DELAY_MS,
   openContextMenu,
+  registerTextSelectionMenuContributor,
 } from '../src/components/context-menu/context-menu'
 import type { ContextMenuEntry } from '../src/components/context-menu/types'
 
@@ -302,6 +303,66 @@ describe('ContextMenuHost', () => {
     button.remove()
     input.remove()
     selected.remove()
+  })
+
+  it('appends surface contributions to the shared text-selection menu', async () => {
+    const selected = document.createElement('span')
+    selected.textContent = 'selected text'
+    document.body.appendChild(selected)
+    const selection = window.getSelection()!
+    const range = document.createRange()
+    range.selectNodeContents(selected)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const mark = vi.fn()
+    const release = registerTextSelectionMenuContributor('test-surface', () => [
+      { id: 'mark', label: '标记', action: mark },
+    ])
+
+    try {
+      selected.dispatchEvent(contextEvent())
+      await settleRender()
+      expect(contextMenuState.items.filter(entry => entry.type !== 'separator').map(entry => 'label' in entry && entry.label))
+        .toEqual(['复制', '全选', '标记'])
+      expect(contextMenuState.items.some(entry => entry.type === 'separator')).toBe(true)
+      expect(menuButton(3).textContent).toContain('标记')
+    } finally {
+      release()
+      selection.removeAllRanges()
+      selected.remove()
+    }
+  })
+
+  it('keeps copy and select-all when a contributor declines or fails', async () => {
+    const selected = document.createElement('span')
+    selected.textContent = 'selected text'
+    document.body.appendChild(selected)
+    const selection = window.getSelection()!
+    const range = document.createRange()
+    range.selectNodeContents(selected)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const releaseDeclining = registerTextSelectionMenuContributor('test-declining', () => null)
+    const releaseThrowing = registerTextSelectionMenuContributor('test-throwing', () => { throw new Error('no selection scope') })
+
+    try {
+      selected.dispatchEvent(contextEvent())
+      await settleRender()
+      expect(contextMenuState.items.filter(entry => entry.type !== 'separator').map(entry => 'label' in entry && entry.label))
+        .toEqual(['复制', '全选'])
+      expect(contextMenuState.items.some(entry => entry.type === 'separator')).toBe(false)
+
+      releaseThrowing()
+      selected.dispatchEvent(contextEvent())
+      await settleRender()
+      expect(contextMenuState.items.filter(entry => entry.type !== 'separator').map(entry => 'label' in entry && entry.label))
+        .toEqual(['复制', '全选'])
+    } finally {
+      releaseDeclining()
+      releaseThrowing()
+      selection.removeAllRanges()
+      selected.remove()
+    }
   })
 
   it('copies the exact selected text and lets select-all expand the selection', async () => {

@@ -59,6 +59,47 @@ interface TextSelectionContext {
   selectAll: () => void
 }
 
+/** Selected text plus the node it was selected in, as seen by the shared menu. */
+export interface TextSelectionMenuContext {
+  /** Exactly the text the built-in 复制 entry copies. */
+  text: string
+  /** The event target that owns the selection. */
+  target: Node
+  event: MouseEvent
+  selectAll: () => void
+}
+
+/**
+ * Surface-specific entries appended after 复制/全选. Returning `null` or an
+ * empty list keeps the shared menu unchanged, so a surface only shows its own
+ * actions when it can actually resolve the current selection.
+ */
+export type TextSelectionMenuContributor = (context: TextSelectionMenuContext) => ContextMenuEntry[] | null
+
+const textSelectionMenuContributors = new Map<string, TextSelectionMenuContributor>()
+
+/** Contribute entries to the shared text-selection menu; returns the disposer. */
+export function registerTextSelectionMenuContributor(id: string, contributor: TextSelectionMenuContributor): () => void {
+  textSelectionMenuContributors.set(id, contributor)
+  return () => {
+    if (textSelectionMenuContributors.get(id) === contributor) textSelectionMenuContributors.delete(id)
+  }
+}
+
+function textSelectionContributedItems(context: TextSelectionMenuContext): ContextMenuEntry[] {
+  const items: ContextMenuEntry[] = []
+  for (const contributor of textSelectionMenuContributors.values()) {
+    try {
+      const entries = contributor(context)
+      if (entries?.length) items.push(...entries)
+    } catch {
+      // A surface that cannot resolve this selection loses only its own entries;
+      // 复制/全选 must survive a broken contributor.
+    }
+  }
+  return items
+}
+
 function selectionScopeAtTarget(target: Node): HTMLElement | null {
   const element = target instanceof Element ? target : target.parentElement
   if (!element) return null
@@ -123,15 +164,20 @@ function handleDocumentContextMenu(event: MouseEvent): void {
   // WebView Clipboard API. Keep this check before selected-text handling.
   if (isTextEditingTarget(event.target)) return
   const selection = textSelectionAtTarget(event.target)
-  if (selection) {
+  if (selection && event.target instanceof Node) {
+    // One menu owns the selection: copy/select-all are the shared baseline and
+    // surfaces (study marks, note locks) append their own entries instead of
+    // opening a second menu that would displace these two.
+    const baseline: ContextMenuEntry[] = [
+      { id: 'copy-selection', label: '复制', action: () => copyText(selection.text) },
+      { id: 'select-all', label: '全选', action: selection.selectAll },
+    ]
+    const contributed = textSelectionContributedItems({ text: selection.text, target: event.target, event, selectAll: selection.selectAll })
     openContextMenu({
       event,
       ariaLabel: '文本操作',
       panelAttributes: { 'data-text-selection-menu': true },
-      items: [
-        { id: 'copy-selection', label: '复制', action: () => copyText(selection.text) },
-        { id: 'select-all', label: '全选', action: selection.selectAll },
-      ],
+      items: contributed.length ? [...baseline, { type: 'separator' }, ...contributed] : baseline,
     })
     event.stopImmediatePropagation()
     return

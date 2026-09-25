@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, render, watch } from 'vue'
-import { Bookmark, Copy, Languages, Lightbulb, MessageCircle, Send, X } from 'lucide-vue-next'
+import { Bookmark, Languages, Lightbulb, MessageCircle, Send, X } from 'lucide-vue-next'
 import { useCorePluginModeContext } from '../plugins/context'
-import { openContextMenu } from '../components/context-menu'
+import { registerTextSelectionMenuContributor } from '../components/context-menu'
+import type { ContextMenuEntry, TextSelectionMenuContext } from '../components/context-menu'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
 import { captureAnchor, anchorRange, splitRangeForFormulaHighlight } from './anchors'
 import { normalizeMark } from './api'
 import { marks, selectionEvents } from './annotations'
-import type { MarkAnchor, StudyMark, TextAction } from './types'
+import type { MarkAnchor, StudyDictionaryEntry, StudyMark, TextAction } from './types'
 import './study.css'
 
 const props = defineProps<{ sessionId: string | null; mode: string; themeMode: string; jump: (anchor: MarkAnchor) => Promise<void> }>()
@@ -22,6 +23,7 @@ const hover = ref(false)
 const x = ref(24), y = ref(80)
 const card = ref<HTMLElement>()
 let observer: MutationObserver | undefined
+let releaseSelectionMenu: (() => void) | undefined
 let timer: ReturnType<typeof setTimeout> | undefined
 let hoverTimer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
@@ -32,6 +34,24 @@ const ranges = new Map<string, Range>()
 const decorations = new Map<string, HTMLSpanElement>()
 const content = computed(() => selected.value?.[action.value === 'ask' ? 'explain' : action.value] || '')
 const titles: Record<DisplayAction, string> = { explain: '解释', translate: '翻译', ask: '询问' }
+const FORM_LABELS: Record<string, string> = { pl: '复数', pt: '过去式', pp: '过去分词', ing: '现在分词', '3sg': '第三人称单数', comparative: '比较级', superlative: '最高级' }
+
+/** British and American IPA, collapsed to one value when they agree. */
+function dictionaryPhonetics(entry: StudyDictionaryEntry): string {
+  const primary = entry.phonetic_uk || entry.phonetic || ''
+  const american = entry.phonetic_us || ''
+  if (primary && american && american !== primary) return `英 ${primary} 美 ${american}`
+  return primary || american
+}
+
+/** Inflected forms as a compact labelled list. */
+function dictionaryForms(entry: StudyDictionaryEntry): string {
+  const forms = entry.forms || {}
+  return Object.keys(FORM_LABELS)
+    .filter(key => forms[key])
+    .map(key => `${FORM_LABELS[key]} ${forms[key]}`)
+    .join(' · ')
+}
 
 function updateMark(mark: StudyMark) {
   const index = marks.value.findIndex(m => m.id === mark.id)
@@ -81,25 +101,21 @@ async function createPureMark(anchor: MarkAnchor): Promise<void> {
     updateMark(normalizeMark(result.mark))
   } catch (e) { ctx.setRuntimeStatus(e instanceof Error ? e.message : String(e), 5000) }
 }
-function menu(event: MouseEvent) {
+/** Study entries appended to the shared text-selection menu. */
+function contributeSelectionMenu(context: TextSelectionMenuContext): ContextMenuEntry[] | null {
   // A note document owns its own context menu (lock/unlock). The global mark
   // assistant must never turn a Markdown editing selection into a study mark.
-  if ((event.target as Element | null)?.closest?.('[data-study-note-document]')) return
+  if (context.target instanceof Element && context.target.closest('[data-study-note-document]')) return null
   const selection = window.getSelection()
-  if (!selection || selection.isCollapsed || !selection.toString().trim()) return
-  if (!(event.target instanceof Node) || !(selection.containsNode(event.target, true) || event.target.contains(selection.anchorNode))) return
+  if (!selection || selection.isCollapsed || !selection.toString().trim()) return null
   const anchor = captureAnchor(selection, props.sessionId || '', props.mode)
-  if (!anchor) return
-  const copiedText = selection.toString()
-  event.stopImmediatePropagation()
-  openContextMenu({ event, ariaLabel: '选文', items: [
-    { label: '复制', icon: Copy, action: () => navigator.clipboard.writeText(copiedText) },
-    { type: 'separator' },
+  if (!anchor) return null
+  return [
     { label: '标记', icon: Bookmark, action: () => createPureMark(anchor) },
-    { label: '解释', icon: Lightbulb, action: () => create(anchor, 'explain', event) },
-    { label: '询问', icon: MessageCircle, action: () => create(anchor, 'ask', event) },
-    { label: '翻译', icon: Languages, action: () => create(anchor, 'translate', event) },
-  ] })
+    { label: '解释', icon: Lightbulb, action: () => create(anchor, 'explain', context.event) },
+    { label: '询问', icon: MessageCircle, action: () => create(anchor, 'ask', context.event) },
+    { label: '翻译', icon: Languages, action: () => create(anchor, 'translate', context.event) },
+  ]
 }
 function clearDecorations() {
   const parents = new Set<Node>()
@@ -241,7 +257,7 @@ watch(() => [props.sessionId, props.mode, props.themeMode], () => { close(); sch
 watch(ctx.lastEvent, (event) => { if (event?.method === 'study/changed' && ['study.marks', 'study.text'].includes(String(event.payload.operation))) void loadMarks() })
 onMounted(() => {
   void loadMarks()
-  document.addEventListener('contextmenu', menu, true)
+  releaseSelectionMenu = registerTextSelectionMenuContributor('study-marks', contributeSelectionMenu)
   document.addEventListener('click', click)
   document.addEventListener('mousemove', move, { passive: true })
   document.addEventListener('pointermove', move as EventListener, { passive: true })
@@ -257,7 +273,8 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true; observer?.disconnect(); clearTimeout(timer); clearTimeout(hoverTimer)
-  document.removeEventListener('contextmenu', menu, true); document.removeEventListener('click', click); document.removeEventListener('mousemove', move); document.removeEventListener('pointermove', move as EventListener); document.removeEventListener('keydown', key); window.removeEventListener('resize', resize)
+  releaseSelectionMenu?.()
+  document.removeEventListener('click', click); document.removeEventListener('mousemove', move); document.removeEventListener('pointermove', move as EventListener); document.removeEventListener('keydown', key); window.removeEventListener('resize', resize)
   window.visualViewport?.removeEventListener('resize', resize)
   window.visualViewport?.removeEventListener('scroll', resize)
   selectionEvents.removeEventListener('open', handleOpen); selectionEvents.removeEventListener('jump', handleJump); selectionEvents.removeEventListener('delete', handleDelete)
@@ -290,8 +307,21 @@ onBeforeUnmount(() => {
           <p v-if="!selected.thread.length">想了解什么？</p>
         </template>
         <template v-else-if="action === 'translate' && selected.dictionary">
-          <strong>{{ selected.dictionary.word }}</strong> <span>{{ selected.dictionary.phonetic }}</span>
-          <p><em>{{ selected.dictionary.pos }}</em> {{ selected.dictionary.zh }}</p><p>{{ selected.dictionary.en }}</p><p v-if="selected.dictionary.example">{{ selected.dictionary.example }}</p>
+          <p class="selection-dictionary-word">
+            <strong>{{ selected.dictionary.word }}</strong>
+            <span v-if="dictionaryPhonetics(selected.dictionary)" class="selection-dictionary-phonetic">{{ dictionaryPhonetics(selected.dictionary) }}</span>
+          </p>
+          <template v-if="selected.dictionary.senses?.length">
+            <p v-for="(sense, index) in selected.dictionary.senses" :key="index" class="selection-dictionary-sense">
+              <em>{{ sense.pos }}</em> {{ sense.zh }}
+              <span v-if="sense.en" class="selection-dictionary-en">{{ sense.en }}</span>
+              <span v-if="sense.example" class="selection-dictionary-example">{{ sense.example.en }}<template v-if="sense.example.zh"> — {{ sense.example.zh }}</template></span>
+            </p>
+          </template>
+          <template v-else>
+            <p><em>{{ selected.dictionary.pos }}</em> {{ selected.dictionary.zh }}</p><p>{{ selected.dictionary.en }}</p><p v-if="selected.dictionary.example">{{ selected.dictionary.example }}</p>
+          </template>
+          <p v-if="dictionaryForms(selected.dictionary)" class="selection-dictionary-forms">{{ dictionaryForms(selected.dictionary) }}</p>
         </template>
         <MarkdownRenderer v-else-if="content" class="selection-assistant-markdown" :content="content" :mermaid="false" />
         <button v-else-if="!busy" class="text-btn" @click="invoke">{{ titles[action] }}</button>
@@ -336,6 +366,12 @@ onBeforeUnmount(() => {
 .selection-answer { min-height: 32px; overflow: auto; flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
 .selection-answer p { margin: 0 0 var(--space-2); }
 .selection-answer .selection-question { font-weight: 650; }
+.selection-dictionary-word { margin: 0 0 var(--space-1); }
+.selection-dictionary-phonetic { margin-left: var(--space-2); opacity: .75; font-size: 12px; }
+.selection-dictionary-sense { margin: 0 0 var(--space-2); }
+.selection-dictionary-en { display: block; opacity: .8; font-size: 12px; }
+.selection-dictionary-example { display: block; opacity: .7; font-size: 12px; font-style: italic; }
+.selection-dictionary-forms { margin: 0; opacity: .7; font-size: 12px; }
 .selection-answer .markdown-body { white-space: normal; line-height: 1.35; }
 .selection-answer .markdown-body :is(p, ul, ol) { margin-block: var(--space-1); }
 .selection-answer .markdown-body :is(p, ul, ol):first-child { margin-block-start: 0; }

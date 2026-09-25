@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Braces, Code2, Eye, FilePlus2, GitBranch, ListTree, LockKeyhole, MessageSquare, Pencil, Quote, Save, Table2, UnlockKeyhole } from 'lucide-vue-next'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
-import { openContextMenu } from '../components/context-menu'
+import { openContextMenu, registerTextSelectionMenuContributor } from '../components/context-menu'
+import type { ContextMenuEntry, TextSelectionMenuContext } from '../components/context-menu'
 import { extractMarkdownHeadings } from './api'
 import StudyNoteReferences from './StudyNoteReferences.vue'
 import type { StudyMarkdownHeading } from './api'
@@ -266,7 +267,13 @@ function openLockMenu(event: MouseEvent, range: NoteRange | null): void {
   openContextMenu({ event, ariaLabel: '笔记内容保护', items: [{ label: '锁定选中内容', icon: LockKeyhole, action: () => lockSelection(range) }] })
 }
 function handleEditorContextMenu(event: MouseEvent): void { openLockMenu(event, rangeFromTextarea()) }
-function handlePreviewContextMenu(event: MouseEvent): void { openLockMenu(event, rangeFromPreview()) }
+/** Note entries appended to the shared text-selection menu of the reading view. */
+function contributeSelectionMenu(context: TextSelectionMenuContext): ContextMenuEntry[] | null {
+  if (!(context.target instanceof Element) || !context.target.closest('[data-study-note-document]')) return null
+  const range = rangeFromPreview()
+  if (!range || !props.onLockRange) return null
+  return [{ label: '锁定选中内容', icon: LockKeyhole, action: () => lockSelection(range) }]
+}
 async function unlock(lock: StudyNoteLock): Promise<void> {
   if (!props.selected || !props.onUnlockRange) return
   try { await props.onUnlockRange(props.selected, lock) } catch (cause) { lockError.value = saveErrorMessage(cause) }
@@ -311,8 +318,15 @@ function handleKeydown(event: KeyboardEvent): void {
 }
 watch(bodyMd, syncOutline, { immediate: true })
 watch(() => props.selected?.id, () => { editMode.value = false; saveState.value = 'idle'; saveError.value = ''; lockError.value = ''; void nextTick(syncOutline) })
-onMounted(() => window.addEventListener('keydown', handleKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
+let releaseSelectionMenu: (() => void) | undefined
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
+  releaseSelectionMenu = registerTextSelectionMenuContributor('study-note-locks', contributeSelectionMenu)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  releaseSelectionMenu?.()
+})
 
 defineExpose({ requestNavigation, isDirty: dirty })
 </script>
@@ -353,7 +367,7 @@ defineExpose({ requestNavigation, isDirty: dirty })
         <aside v-if="outline.length" class="study-note-outline" aria-label="文档大纲"><h3>大纲</h3><button v-for="heading in outline" :key="heading.id" class="study-note-outline-link" type="button" :style="{ paddingLeft: `calc(var(--space-2) + (var(--space-2) * ${heading.level - 1}))` }" @click="scrollHeading(heading)">{{ heading.text }}</button></aside>
         <main class="study-note-main">
           <div v-if="editMode" class="study-note-editor-shell" data-study-note-document><textarea ref="editor" class="study-note-full-editor" aria-label="编辑笔记全文" :value="bodyMd" spellcheck="true" @input="updateBody(($event.target as HTMLTextAreaElement).value)" @contextmenu="handleEditorContextMenu" /></div>
-          <div v-else ref="preview" class="study-note-reading study-note-document" data-study-note-document @click="handleDocumentClick" @contextmenu="handlePreviewContextMenu"><MarkdownRenderer :content="renderedBody" :mermaid="true" /></div>
+          <div v-else ref="preview" class="study-note-reading study-note-document" data-study-note-document @click="handleDocumentClick"><MarkdownRenderer :content="renderedBody" :mermaid="true" /></div>
           <section v-if="selected.locks.length" class="study-note-locks" aria-label="已锁定区域"><h3><LockKeyhole :size="13" />Agent 保护区域</h3><ul><li v-for="lock in selected.locks" :key="lock.id"><span class="study-note-lock-quote">{{ lock.quote || `${lock.start}–${lock.end}` }}</span><button v-if="onUnlockRange" class="text-btn" type="button" :aria-label="`解锁 ${lock.quote || lock.id}`" @click="unlock(lock)"><UnlockKeyhole :size="13" />解锁</button></li></ul></section>
           <StudyNoteReferences :resources="selected.resources" />
         </main>
