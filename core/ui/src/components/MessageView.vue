@@ -865,6 +865,7 @@ import {
 } from 'lucide-vue-next'
 import { assistantSegmentTurnId, projectAssistantMessageParts } from '../appServer'
 import { copyText } from '../helpers/clipboard'
+import { workspaceRelativePath } from '../helpers/workspacePath'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 import AutoTextarea from './AutoTextarea.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
@@ -2468,14 +2469,15 @@ function imageSrc(artifact: { uri?: string; artifact_id?: string; metadata?: Rec
   // Tauri 桌面端：work_root 内相对路径（.lam/artifacts/...）直接读本地文件
   // （asset protocol），不绕后端 HTTP——新旧消息的 uri 均为无前缀相对路径
   const localFileSrc = (window as { __LAMTOOLS_FILE_SRC__?: (abs: string) => string }).__LAMTOOLS_FILE_SRC__
+  const relative = workspaceRelativePath(path)
   if (
     typeof localFileSrc === 'function'
     && props.workRoot
-    && path
-    && !path.startsWith('attachment://')
-    && !/^https?:\/\//i.test(path)
+    && relative
+    && !relative.startsWith('attachment://')
+    && !/^https?:\/\//i.test(relative)
   ) {
-    const abs = `${String(props.workRoot).replace(/\\+$/, '')}\\${path.replace(/\//g, '\\')}`
+    const abs = `${String(props.workRoot).replace(/\\+$/, '')}\\${relative.replace(/\//g, '\\')}`
     const src = localFileSrc(abs)
     if (src) return src
   }

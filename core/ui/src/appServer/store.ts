@@ -251,7 +251,7 @@ export function createCoreAppServerRuntimeController<
       // incoming items, and every item identity is the projection's cache key,
       // so the whole thread would be rebuilt for a snapshot the content
       // comparison already rejected (2026-09-25 审计 P2).
-      if (currentState && incomingVersion.revision > sessionSnapshotRevision(currentState)) {
+      if (currentState && incomingVersion.revision > currentState.revision) {
         currentState.revision = incomingVersion.revision
         currentState.snapshotSeq = Math.max(currentState.snapshotSeq, incomingVersion.snapshotSeq)
         // `runtime.state` is this very snapshot object, so the server's
