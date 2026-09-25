@@ -1,5 +1,0 @@
-﻿{
-    "work_root":  "E:\\LamTools\\e2e\\real-task-runs\\writer-long-reliability-20260619-frontend-observe",
-    "message":  "在当前工作目录创建一个可运行的本地 Markdown 知识库整理工具。\n\n要求：\n1. 扫描指定目录下的 .md 文件，提取标题、标签、内部链接、待办项\n2. 生成一个 index.md，按标签和文件标题组织索引\n3. 检测坏链：[[不存在的页面]] 或指向不存在文件的 Markdown 链接\n4. 支持命令行使用：\n   - python kbtool.py scan ./notes\n   - python kbtool.py report ./notes\n5. report 输出包含：文件数、标签数、坏链列表、待办项数量\n6. 写 README.md，说明安装、运行、示例输出\n7. 写测试，至少覆盖：\n   - 正常扫描\n   - 标签提取\n   - 内部链接解析\n   - 坏链检测\n   - index.md 生成\n8. 创建一组 demo notes 用于 smoke test\n9. 最后运行测试和一次真实 smoke test，并汇报结果\n\n约束：\n- 不使用外部服务\n- 优先标准库\n- 不要只写伪代码或 TODO\n- 文件结构要清晰\n- 如果中途发现计划不合理，要更新计划再继续",
-    "mode":  "EXECUTE"
-}
