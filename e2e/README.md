@@ -1,62 +1,35 @@
-﻿# LamTools E2E Tests
+# LamTools E2E Assets
 
-> **⚠️ DEPRECATED（2026-08-13，audit 24 S2）**：本套件已过期，指向已归档的
-> Writer 产品（`archive/members/`），不在任何 CI 工作流中运行，且依赖已被移除
-> 的产品外壳。请勿在此之上新增用例；重写为 Core（Tauri 观测环境）端到端
-> 用例的计划见 `docs/code-audit/24-*.md`，落地前以 `core/tests/` 的
-> `test_core_live_client_e2e.py`（真实 WS server）为准。
+> **状态（2026-09-25）**：旧的 Writer 冒烟套件已删除。它指向已归档的 Writer 前端
+> （`members/writer/frontend`，该路径早已不存在），也不在任何 CI 工作流中运行。
+> Core 端到端用例的现行权威是 `core/tests/test_core_live_client_e2e.py`（真实
+> WebSocket server；CI 的 backend 作业装 `.[dev,server]` 后会真正执行它）。
+> 本目录只保留下面两类仍在使用的资产，Playwright 脚手架（`playwright.config.ts`、
+> `package.json`、writer spec）随套件一并移除。
 
-Playwright E2E smoke tests for the active LamTools frontend.
+## rag-eval/ — 检索侧 RAG 评测（不调用 LLM）
 
-## Setup
-
-```bash
-cd E:\LamTools\e2e
-npm install
-npx playwright install chromium
-```
-
-## Run Smoke Tests
-
-### 1. Start frontend dev servers
-
-Open one terminal:
+用固定语料 + 黄金集量化检索质量（recall@k / precision@k / MRR）：
 
 ```bash
-# Terminal 1 — Writer frontend (port 6174)
-cd E:\LamTools\members\writer\frontend
-npm run dev
+cd E:\LamTools
+py -3.14 e2e/rag-eval/run_retrieval_eval.py --help
 ```
 
-### 2. Run smoke tests
+| 路径 | 内容 |
+|---|---|
+| `rag-eval/corpus/` | 8 份中文合同/协议语料（保秘、借款、劳务、技术服务、租赁、股权转让、采购、销售） |
+| `rag-eval/golden/retrieval_golden.jsonl` | 14 问的黄金集 |
+| `rag-eval/reports/` | 历次评测报告（JSON，按 `retrieval-<mode>-<时间戳>.json` 命名） |
 
-```bash
-cd E:\LamTools\e2e
-npm run test:smoke
-```
+## test-apps/ — 端到端任务素材
 
-Or run the Writer smoke spec directly:
+20 个很小的示例应用（`ai-chat*`、`ai-pipeline`、`quicknotes`、`zero-touch*`、
+`stream*`、`verify`、`tiny`…），用作「让 agent 读写/改造一个小项目」的任务素材。
+每个目录自带最小文件集，不含依赖安装产物。
 
-```bash
-npx playwright test --project=writer-smoke
-```
+## real-task-runs/ — 本地运行产物（已移出版本库）
 
-## Ports
-
-| Frontend | Dev port | Playwright project |
-|----------|----------|--------------------|
-| Writer   | 6174     | writer-smoke       |
-
-## What smoke tests check
-
-- Page shell loads (body visible)
-- Left sidebar drawer exists (`.drawer-left`)
-- Brand text in sidebar header (LamWriter)
-- Composer textarea exists (`.floating-composer textarea`)
-- Main content area exists (`.writer-main`)
-
-Smoke tests do **not** connect to any LLM or test AI functionality.
-
-## Failure policy
-
-Smoke tests fail hard. If the page cannot open, a selector does not exist, or brand text does not match, the test fails. There is no soft failure.
+2026-06 的真实任务运行日志（Writer 时代）。已 `git rm --cached` 并写入
+`.gitignore`：文件仍在本机磁盘上，可直接删除以回收约 36 MB；历史上需要时用
+`git log --diff-filter=D -- e2e/real-task-runs` 追溯。

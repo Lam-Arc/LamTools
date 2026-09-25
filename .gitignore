@@ -184,6 +184,10 @@ core/mobile/src-tauri/gen/schemas/
 # 由 scripts/build-desktop-update.py 生成的更新清单（上传用副本随构建产出）
 core/desktop/update-manifest.json
 
+# 运行/实验输出：日期化的产物目录不入库（生成脚本按需重建）
+core/tests/fixtures/context_compaction/real_api_runs/
+/e2e/real-task-runs/
+
 # 临时文件与归档
 *.7z
 .tmp_*
