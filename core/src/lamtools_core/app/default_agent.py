@@ -2518,15 +2518,25 @@ async def _persist_core_event_live(
         envelopes = await persistence.append_batch(db, run_item_events=run_items)
         return envelopes
 
-    envelopes = await persistence.write(write)
-    if app_event_hub is None:
-        return
-    for envelope in envelopes:
-        publish = getattr(app_event_hub, "publish", None)
-        if callable(publish):
-            result = publish(envelope)
-            if hasattr(result, "__await__"):
-                await result
+    try:
+        envelopes = await persistence.write(write)
+        if app_event_hub is None:
+            return
+        for envelope in envelopes:
+            publish = getattr(app_event_hub, "publish", None)
+            if callable(publish):
+                result = publish(envelope)
+                if hasattr(result, "__await__"):
+                    await result
+    except Exception:  # noqa: BLE001 — 事件落库/广播失败不能杀死整轮
+        # 模型与工具都成功了，却因为一次事件写入失败把整轮判成 failed
+        # （2026-09-25 审计 P2）。快照与下一次写入仍会补上后续事件。
+        _logger.warning(
+            "[default:live_event] persistence failed for thread_id=%s event=%s",
+            thread_id,
+            type(event).__name__,
+            exc_info=True,
+        )
 
 
 def _plugin_toolbox_contributions(plugin_assembly: Mapping[str, Any]) -> dict[str, Any]:

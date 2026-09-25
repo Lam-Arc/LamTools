@@ -12,7 +12,7 @@ from lamtools_core.session import MessageRecord, SessionRecord
 
 from .core_db import (
     CoreAppDb, CoreAppEvent, CoreAttachment, CoreArrangeJob, CoreArrangeOccurrence,
-    CoreCheckpoint, CoreCheckpointAttachmentRef, CoreCheckpointBlobRef, CoreCheckpointV2,
+    CoreCheckpoint, CoreCheckpointAttachmentRef, CoreCheckpointBlob, CoreCheckpointBlobRef, CoreCheckpointV2,
     CoreCheckpointV2Materialized,
     CoreCheckpointV2SessionMessages,
     CoreCheckpointV2SessionHistory,
@@ -618,6 +618,15 @@ async def delete_session_records(connection, session_ids: list[str]) -> None:
     attachment_rows = list((await connection.execute(
         select(CoreAttachment.storage_path).where(CoreAttachment.session_id.in_(owned_ids))
     )).all())
+    # Blobs are content-addressed and shared between checkpoints of any session,
+    # so collect a blob only when nothing references it any more
+    # (2026-09-25 审计 P2: deleting a session removed the refs but kept the
+    # rows and every file on disk).
+    orphan_blob_rows = list((await connection.execute(
+        select(CoreCheckpointBlob.hash, CoreCheckpointBlob.storage_path).where(
+            CoreCheckpointBlob.hash.not_in(select(CoreCheckpointBlobRef.blob_hash).distinct())
+        )
+    )).all())
     await connection.execute(delete(CoreAppEvent).where(CoreAppEvent.thread_id.in_(owned_ids)))
     await connection.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id.in_(owned_ids)))
     await connection.execute(delete(CoreHandoffContext).where(CoreHandoffContext.thread_id.in_(owned_ids)))
@@ -652,6 +661,16 @@ async def delete_session_records(connection, session_ids: list[str]) -> None:
             # Database ownership is still removed; a missing/unremovable blob
             # is an operational cleanup warning, not a reason to resurrect a
             # deleted session.
+            continue
+    for (blob_hash, storage_path) in orphan_blob_rows:
+        await connection.execute(
+            delete(CoreCheckpointBlob).where(CoreCheckpointBlob.hash == blob_hash)
+        )
+        if not storage_path:
+            continue
+        try:
+            Path(str(storage_path)).unlink(missing_ok=True)
+        except OSError:
             continue
 
 

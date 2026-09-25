@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 import httpx
 
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
+from lamtools_core.tool.workspace import is_within_path
 
 _IMAGE_TIMEOUT = httpx.Timeout(
     connect=30.0,
@@ -256,6 +257,10 @@ async def _reference_image_bytes(
     if not candidate.is_absolute():
         candidate = work_root / candidate
     candidate = candidate.resolve()
+    # 与命令工具同一条边界：参考图是文件内容，路径逃出工作区就等于"用一句提示词
+    # 把本机任意文件当图片发给远端模型"（2026-09-25 审计 P3）。
+    if not is_within_path(candidate, work_root):
+        raise RuntimeError(f"参考图必须位于工作区内: {ref}")
     if not candidate.is_file():
         raise RuntimeError(f"参考图文件不存在: {ref}")
     mime = mimetypes.guess_type(str(candidate))[0] or "image/png"

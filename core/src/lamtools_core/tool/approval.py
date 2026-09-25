@@ -57,13 +57,13 @@ TierTools = dict[PermissionMode, set[str]]
 def load_access_tools(path: Path | str) -> TierTools:
     """Load access_tools.jsonc and return {tier: set of auto-allowed tool names}."""
     tier_tools: TierTools = {"read_only": set(), "limited_edit": set(), "full_edit": set()}
+    # 文件名叫 .jsonc、随包副本也带注释：严格 json.loads 会把整份 tier 静默
+    # 清空（所有工具降级为需审批），2026-09-25 审计 P3。
+    from lamtools_core.plugins._jsonc import load_jsonc_text
+
     try:
-        raw = Path(path).read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError):
-        return tier_tools
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
+        data = load_jsonc_text(path)
+    except (OSError, ValueError):
         return tier_tools
     tiers = data.get("tiers") if isinstance(data, dict) else None
     if not isinstance(tiers, dict):

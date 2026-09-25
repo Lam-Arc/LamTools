@@ -4229,8 +4229,10 @@ class WorkflowRunner:
             port_key = name.split(".", 1)[-1] if "." in name else name
             if port_key in bound_inputs:
                 result[name] = bound_inputs[port_key]
-            elif first_val is not None and name not in result:
-                result[name] = first_val
+            else:
+                # 未连接的多输入端口留空：此前会填上第一个绑定值，等于把 A 的
+                # 输入悄悄喂给 B（2026-09-25 审计 P3）。
+                result[name] = None
         return result
 
     async def _execute_command(

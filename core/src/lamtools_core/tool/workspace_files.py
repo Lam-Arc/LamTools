@@ -64,6 +64,9 @@ SKIP_SEARCH_DIRS = frozenset({
 
 _FILE_LOCKS: dict[str, asyncio.Lock] = {}
 _FILE_LOCKS_GUARD = threading.Lock()
+#: Upper bound on the lock table so a long-lived process touching many distinct
+#: paths cannot grow it without limit (2026-09-25 审计 P3).
+_MAX_FILE_LOCKS = 512
 
 
 def read_file_bytes(path: str | Path) -> bytes:
@@ -133,6 +136,13 @@ def _get_file_lock(path: str | Path) -> asyncio.Lock:
     with _FILE_LOCKS_GUARD:
         lock = _FILE_LOCKS.get(key)
         if lock is None:
+            if len(_FILE_LOCKS) >= _MAX_FILE_LOCKS:
+                # 每个不同路径一个锁，进程内只增不减（2026-09-25 审计 P3）：
+                # 超限时先丢掉当前没被持有的锁。
+                for stale in [item for item, held in _FILE_LOCKS.items() if not held.locked()]:
+                    del _FILE_LOCKS[stale]
+                    if len(_FILE_LOCKS) < _MAX_FILE_LOCKS:
+                        break
             lock = asyncio.Lock()
             _FILE_LOCKS[key] = lock
         return lock

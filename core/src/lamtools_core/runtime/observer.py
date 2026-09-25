@@ -262,7 +262,12 @@ class ObserverSupervisor:
                     result = self.wake_runner()
                     if hasattr(result, "__await__"):
                         await result
-            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            except Exception as exc:  # noqa: BLE001 — 单行处理失败不能杀死读取循环
+                # 之前只捕解析类异常：存储/IO 一失败，读取任务就静默结束，
+                # 观察日志从此不再更新（2026-09-25 审计 P3）。
+                logging.getLogger(__name__).warning(
+                    "arrange observer read failed for %s", job.id, exc_info=True
+                )
                 self._set_state(job.id, last_error=str(exc))
 
     async def _read_stderr(self, job: ArrangeJob, process: asyncio.subprocess.Process) -> None:

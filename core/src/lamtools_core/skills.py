@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -182,7 +183,9 @@ class SkillRegistry:
 
     def _read_skill(self, path: Path) -> Skill | None:
         try:
-            raw = path.read_text(encoding="utf-8")
+            # BOM 会让 frontmatter 的正则失配，name/description 双双丢失
+            # （2026-09-25 审计 P3）。
+            raw = path.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError:
             raw = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -268,12 +271,19 @@ class SkillStateStore:
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
             return {"skills": {}}
-        data = json.loads(self.path.read_text(encoding="utf-8-sig"))
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            # 与信任账本同理：损坏的状态文件不该让技能索引抛错
+            # （2026-09-25 审计 P3）。
+            logging.getLogger(__name__).warning("unreadable skill state: %s", self.path, exc_info=True)
+            return {"skills": {}}
         return data if isinstance(data, dict) else {"skills": {}}
 
     def _save(self, data: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        from lamtools_core.config.root import atomic_write_text
+
+        atomic_write_text(self.path, json.dumps(data, ensure_ascii=False, indent=2) + chr(10))
 
     def is_enabled(self, name: str) -> bool:
         skills = self._load().get("skills", {})

@@ -172,7 +172,13 @@ def start_next_pending_step(plan: dict[str, Any]) -> None:
             plan["status"] = "active"
             return
     plan["current_step_id"] = ""
-    if steps:
+    if steps and not any(
+        isinstance(step, dict) and str(step.get("status") or "") in {"blocked", "failed"}
+        for step in steps
+    ):
+        # A plan whose steps are blocked or failed is finished but not
+        # completed; marking it completed hid the outstanding work
+        # (2026-09-25 审计 P3).
         plan["status"] = "completed"
 
 

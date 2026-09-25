@@ -199,8 +199,11 @@ class ArtifactRegistry:
         # attachment://<id> — exact match against path
         if ref.startswith(ATTACHMENT_PREFIX):
             target_id = ref[len(ATTACHMENT_PREFIX):].strip()
+            canonical = f"{ATTACHMENT_PREFIX}{target_id}"
             for record in self.list(include_deleted=True):
-                if record.path == ref or record.path.endswith(target_id):
+                # Exact match only: `endswith` matched any artifact whose path
+                # merely ended with the same id text (2026-09-25 审计 P3).
+                if record.path == ref or record.path == canonical:
                     return record.artifact_id
             return None
         # workspace://rel or plain relative path → normalize to workspace URI

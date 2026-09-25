@@ -1436,7 +1436,14 @@ class SqlAlchemyArrangeStore:
         when = _utc_datetime(now)
 
         async def write(db):
-            event_id = str(signal.get("event_id") or "")
+            event_id = str(signal.get("event_id") or "").strip()
+            if not event_id:
+                raise ValueError("arrange signal requires event_id")
+            if not str(signal.get("occurred_at") or "").strip():
+                # 之前直接 signal["occurred_at"]：KeyError 从写事务里冒出来，
+                # 变成一条读不懂的错误；event_id 为空则会以主键 "" 入库
+                # （2026-09-25 审计 P3）。
+                raise ValueError("arrange signal requires occurred_at")
             existing = await db.get(CoreArrangeSignal, event_id)
             if existing is not None:
                 return SignalEmission(signal=_json_safe(existing.envelope_json), created=False)

@@ -247,3 +247,66 @@ async def test_manual_rpc_checkpoints_do_not_consume_the_turn_window(tmp_path: P
         assert extra[0] in {n.id for n in graph.nodes}
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_prune_collects_blobs_and_manifests_that_nothing_live_references(tmp_path: Path) -> None:
+    """裁掉检查点后，只有它引用的备份 blob 与清单要连行带文件一起回收。
+
+    审计 2026-09-25 P2：prune 只删检查点，blob 行与文件永远留在磁盘上，
+    checkpoint 存储只增不减。回滚是通过清单里的 digest 找内容的，所以
+    "还被活着的清单引用"必须保护住。
+    """
+    from sqlalchemy import select as sa_select
+
+    from lamtools_core.app.core_db import CoreCheckpointBlob, CoreWorkspaceManifest
+
+    core_db = tmp_path / "core.db"
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db, coordinator = await _make_coordinator(core_db, work_root)
+    try:
+        target = work_root / "notes.txt"
+        target.write_text("first", encoding="utf-8")
+        await _save_chain(coordinator, 1)
+        await coordinator.backup_file(session_id="prune-session", path=target)  # 属于即将被裁掉的检查点
+
+        async with db.session_factory() as session:
+            doomed_blobs = [Path(item) for item in (
+                await session.execute(sa_select(CoreCheckpointBlob.storage_path))
+            ).scalars().all()]
+        assert doomed_blobs and all(item.is_file() for item in doomed_blobs)
+
+        # 窗口滑过：备份所属的检查点被裁掉，它的 blob 行与文件都要回收
+        await _save_chain(coordinator, MAX_CHECKPOINTS_PER_SESSION + 1)
+        async with db.session_factory() as session:
+            remaining = [Path(item) for item in (
+                await session.execute(sa_select(CoreCheckpointBlob.storage_path))
+            ).scalars().all()]
+        assert remaining == []
+        assert all(not item.exists() for item in doomed_blobs)
+
+        # 反例守卫：活着的检查点上的备份不能被收走
+        target.write_text("second", encoding="utf-8")
+        await coordinator.backup_file(session_id="prune-session", path=target)
+        async with db.session_factory() as session:
+            alive = [Path(item) for item in (
+                await session.execute(sa_select(CoreCheckpointBlob.storage_path))
+            ).scalars().all()]
+        assert alive and all(item.is_file() for item in alive)
+
+        # 再滑一格（新备份所属的检查点仍在窗口内）→ 必须原样活着
+        await _save_chain(coordinator, 1)
+        async with db.session_factory() as session:
+            still_alive = set((await session.execute(
+                sa_select(CoreCheckpointBlob.storage_path)
+            )).scalars().all())
+            remaining_manifests = set((await session.execute(
+                sa_select(CoreWorkspaceManifest.hash)
+            )).scalars().all())
+        assert still_alive == set(str(item) for item in alive)
+        assert all(item.is_file() for item in alive)
+        # 共享的空清单（hash ""）不能被误删
+        assert "" in remaining_manifests
+    finally:
+        await db.close()

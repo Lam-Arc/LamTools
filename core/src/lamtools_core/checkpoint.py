@@ -988,6 +988,15 @@ class CoreCheckpointCoordinator:
                 CoreCheckpointArtifactRef.checkpoint_id.in_(deleted_sorted)
             )
         )
+        # Blob refs of the pruned checkpoints, then the blobs they leave behind
+        # (2026-09-25 审计 P2: pruning dropped checkpoints but kept every backup
+        # file and row forever, so checkpoint storage only ever grew).
+        await db.execute(
+            delete(CoreCheckpointBlobRef).where(
+                CoreCheckpointBlobRef.checkpoint_id.in_(deleted_sorted)
+            )
+        )
+        await self._gc_checkpoint_blobs(db)
         # Drop restore operations that reference pruned checkpoints (their
         # undo/redo targets no longer exist).
         await db.execute(
@@ -997,6 +1006,55 @@ class CoreCheckpointCoordinator:
                 | CoreRestoreOperation.derived_checkpoint_id.in_(deleted_sorted)
             )
         )
+
+    async def _gc_checkpoint_blobs(self, db: Any) -> int:
+        """Drop manifests and blobs that no live checkpoint references.
+
+        A rollback resolves file content through its checkpoint's manifest
+        (``CoreWorkspaceManifest.entries_json[relative]["hash"]``), *not*
+        through ``CoreCheckpointBlobRef`` — so both count as references.
+        Everything here is content-addressed and shared between checkpoints,
+        hence the "no live reference" test rather than "was referenced by a
+        pruned checkpoint".
+        """
+        live_manifests = {
+            str(item)
+            for item in (await db.execute(select(CoreCheckpoint.manifest_hash).distinct())).scalars().all()
+        }
+        referenced = {
+            str(item)
+            for item in (await db.execute(select(CoreCheckpointBlobRef.blob_hash).distinct())).scalars().all()
+        }
+        for manifest_hash, entries in (await db.execute(
+            select(CoreWorkspaceManifest.hash, CoreWorkspaceManifest.entries_json)
+        )).all():
+            if str(manifest_hash) not in live_manifests:
+                # Unreachable: nothing can look its blobs up any more.
+                await db.execute(
+                    delete(CoreWorkspaceManifest).where(CoreWorkspaceManifest.hash == manifest_hash)
+                )
+                continue
+            for entry in (entries or {}).values():
+                digest = str((entry or {}).get("hash") or "") if isinstance(entry, dict) else ""
+                if digest:
+                    referenced.add(digest)
+
+        stale = (await db.execute(
+            select(CoreCheckpointBlob).where(
+                CoreCheckpointBlob.hash.not_in(referenced or {"__no_reference__"})
+            )
+        )).scalars().all()
+        removed = 0
+        for row in stale:
+            try:
+                Path(str(row.storage_path)).unlink(missing_ok=True)
+            except OSError:
+                # Database ownership still goes away; a missing file is a
+                # cleanup warning, not a reason to keep the row.
+                _logger.warning("checkpoint blob unlink failed: %s", row.storage_path, exc_info=True)
+            await db.delete(row)
+            removed += 1
+        return removed
 
     async def _resolve_parent(
         self,

@@ -9,9 +9,12 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 import inspect
 import json
+import logging
 from typing import Any, Literal, Protocol, runtime_checkable
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+_logger = logging.getLogger(__name__)
 
 
 ArrangeKind = Literal["focus", "routine"]
@@ -1104,8 +1107,11 @@ class ArrangeRunner:
                     ),
                     expected_revision=current.revision,
                 )
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — 取消失败必须留痕，否则任务会一直 running
+            # 这里静默吞掉正是它要防的场景：落库失败后任务仍是 running，
+            # 租约到期会被重新领取（2026-09-25 审计 P3）。
+            _logger.warning("arrange cancel could not be persisted for %s", job.id, exc_info=True)
+            return False
         return True
 
     def wake(self) -> None:
@@ -1126,12 +1132,18 @@ class ArrangeRunner:
             self._active_fences[job.id] = job.fencing_token
             task = asyncio.create_task(self._execute(job), name=f"arrange-job:{job.id}")
             self._active_tasks[job.id] = task
-            task.add_done_callback(
-                lambda _task, job_id=job.id: (
-                    self._active_tasks.pop(job_id, None),
-                    self._active_fences.pop(job_id, None),
-                )
-            )
+            def _note_task_result(finished: asyncio.Task, *, job_id: str = job.id) -> None:
+                self._active_tasks.pop(job_id, None)
+                self._active_fences.pop(job_id, None)
+                if finished.cancelled():
+                    return
+                # 取回异常：否则 asyncio 只打一行 "Task exception was never
+                # retrieved"，失败在日志里不可见（2026-09-25 审计 P3）。
+                error = finished.exception()
+                if error is not None:
+                    _logger.warning("arrange job %s failed: %s", job_id, error, exc_info=error)
+
+            task.add_done_callback(_note_task_result)
         return len(jobs)
 
     async def checkpoint(self, job_id: str, checkpoint: dict[str, Any]) -> ArrangeJob:

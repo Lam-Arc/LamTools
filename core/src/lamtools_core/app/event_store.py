@@ -248,6 +248,9 @@ class SqlAlchemyAppEventStore:
         )
 
     def _row_kwargs(self, event: AppEventInput, *, event_id: str, seq: int) -> dict[str, Any]:
+        # 延迟导入：core_db 在模块级导入本模块，模块级反向导入会成环
+        from .core_db import _json_safe
+
         values = {
             "event_id": event_id,
             "thread_id": event.thread_id,
@@ -257,7 +260,9 @@ class SqlAlchemyAppEventStore:
             "parent_item_id": event.parent_item_id,
             "client_message_id": event.client_message_id,
             "method": event.method,
-            "payload_json": dict(event.payload or {}),
+            # 其余列都走 _json_safe；payload 里混入不可序列化对象时，
+            # 写入会在 SQLite 绑定阶段炸掉整批事件（2026-09-25 审计 P3）。
+            "payload_json": _json_safe(dict(event.payload or {})),
             "workspace_id": str(event.workspace_id or self.workspace_id),
             "entity_type": str(event.entity_type or "thread.event"),
             "entity_id": str(event.entity_id or event.thread_id),

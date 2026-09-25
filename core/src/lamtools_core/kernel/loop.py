@@ -628,7 +628,10 @@ class CoreLoopKernel:
                     while cut > 0 and history[cut].role == "tool":
                         cut -= 1
                     if cut > 0:
-                        trimmed = len(history) - cut
+                        # `trimmed` is what was dropped, not what is left —
+                        # computing it before the delete reported the remainder
+                        # (2026-09-25 审计 P3).
+                        trimmed = cut
                         del history[:cut]
                         await self._replace_history_checkpoint(state, history)
                         await self._emit_history_compacted(state, trimmed, len(history))
