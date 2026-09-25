@@ -119,6 +119,20 @@ impl PlanTools {
                 "no active checklist; call write_checklist first".into(),
             ));
         }
+        // 桌面（tool/default_toolbox.py 的 update_checklist）把 reason 作为必填项，
+        // 每一次更新都要留下"为什么"；移动端此前只有 block_step 才读它
+        // （2026-09-25 审计 P2）。
+        if arguments
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            return Err(RuntimeError::Tool(
+                "Checklist update requires a reason".into(),
+            ));
+        }
         match action.as_str() {
             "add_step" => {
                 let step = plan_step(arguments)?
@@ -223,8 +237,9 @@ impl PlanTools {
                 state.steps = steps;
             }
             other => {
+                // 与桌面逐字一致（tool/default_toolbox.py）
                 return Err(RuntimeError::Tool(format!(
-                    "unknown checklist action: {other}"
+                    "Unsupported checklist update action: {other}"
                 )));
             }
         }
@@ -380,7 +395,7 @@ fn checklist_definitions() -> Vec<ToolDefinition> {
                     "design_summary": {"type": "string"},
                     "reason": {"type": "string"}
                 },
-                "required": ["action"]
+                "required": ["action", "reason"]
             }),
         },
     ]
@@ -525,7 +540,7 @@ mod tests {
         let updated = tools
             .execute(&call(
                 "update_checklist",
-                json!({"action": "complete_step", "step_id": "s1"}),
+                json!({"action": "complete_step", "step_id": "s1", "reason": "第一步已完成"}),
             ))
             .await
             .unwrap();
@@ -536,7 +551,7 @@ mod tests {
         let added = tools
             .execute(&call(
                 "update_checklist",
-                json!({"action": "add_step", "step_id": "s3", "description": "第三步"}),
+                json!({"action": "add_step", "step_id": "s3", "description": "第三步", "reason": "补充一步"}),
             ))
             .await
             .unwrap();
@@ -544,7 +559,7 @@ mod tests {
         let split = tools
             .execute(&call(
                 "update_checklist",
-                json!({"action": "split_step", "step_id": "s3", "steps": [
+                json!({"action": "split_step", "step_id": "s3", "reason": "一步拆两步", "steps": [
                     {"id": "s3a", "description": "第三步之一"},
                     {"id": "s3b", "description": "第三步之二"},
                 ]}),
@@ -563,7 +578,7 @@ mod tests {
         let replaced = tools
             .execute(&call(
                 "update_checklist",
-                json!({"action": "replace_plan", "design_summary": "新目标", "steps": [
+                json!({"action": "replace_plan", "design_summary": "新目标", "reason": "目标变更", "steps": [
                     {"id": "n1", "description": "新第一步"},
                 ]}),
             ))
@@ -572,6 +587,43 @@ mod tests {
         assert_eq!(replaced["plan"]["design_summary"], "新目标");
         assert_eq!(replaced["plan"]["steps"].as_array().unwrap().len(), 1);
         assert_eq!(replaced["plan"]["current_step_id"], "n1");
+    }
+
+    #[tokio::test]
+    async fn checklist_updates_require_a_reason_like_the_desktop() {
+        // 桌面（tool/default_toolbox.py）把 reason 列为必填并在缺失时拒绝，
+        // 移动端此前只有 block_step 才读它（2026-09-25 审计 P2）。
+        let tools = PlanTools::new();
+        tools
+            .execute(&call(
+                "write_checklist",
+                json!({"design_summary": "x", "steps": [{"id": "s1", "description": "一"}]}),
+            ))
+            .await
+            .unwrap();
+
+        let missing = tools
+            .execute(&call("update_checklist", json!({"action": "complete_step", "step_id": "s1"})))
+            .await
+            .expect_err("missing reason must be refused");
+        assert!(missing.to_string().contains("Checklist update requires a reason"));
+
+        let blank = tools
+            .execute(&call(
+                "update_checklist",
+                json!({"action": "complete_step", "step_id": "s1", "reason": "   "}),
+            ))
+            .await
+            .expect_err("blank reason must be refused");
+        assert!(blank.to_string().contains("Checklist update requires a reason"));
+
+        let unknown = tools
+            .execute(&call("update_checklist", json!({"action": "nope", "reason": "试试"})))
+            .await
+            .expect_err("unknown action must be refused");
+        assert!(unknown
+            .to_string()
+            .contains("Unsupported checklist update action: nope"));
     }
 
     #[tokio::test]

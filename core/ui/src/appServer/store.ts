@@ -198,6 +198,7 @@ export function createCoreAppServerRuntimeController<
     runtime.state = null
     sessionStateStore.clear()
     pendingEvents.length = 0
+    eventFrameScheduled = false
     runtime.connectionState = 'closed'
   }
 
@@ -245,12 +246,18 @@ export function createCoreAppServerRuntimeController<
     const shouldReplace = !current || shouldHydrateSnapshot(current, incoming, receivedEventIds)
     if (!shouldReplace) {
       // A snapshot can be redundant at the content level while still carrying
-      // a newer CAS revision (for example after a remote queue mutation). Keep
-      // the local projection object stable, but advance its revision so the
-      // next mutation is based on the server's latest version.
-      if (current && incomingVersion.revision > sessionSnapshotRevision(current)) {
-        sessionStateStore.applySnapshot(incoming)
-        runtime.state = sessionStateStore.get(incoming.thread_id)?.snapshot as Snapshot
+      // a newer CAS revision (for example after a remote queue mutation).
+      // Advance the stored revision *in place*: `applySnapshot` would adopt the
+      // incoming items, and every item identity is the projection's cache key,
+      // so the whole thread would be rebuilt for a snapshot the content
+      // comparison already rejected (2026-09-25 审计 P2).
+      if (currentState && incomingVersion.revision > sessionSnapshotRevision(currentState)) {
+        currentState.revision = incomingVersion.revision
+        currentState.snapshotSeq = Math.max(currentState.snapshotSeq, incomingVersion.snapshotSeq)
+        // `runtime.state` is this very snapshot object, so the server's
+        // revision also becomes the next CAS `expectedRevision`.
+        currentState.snapshot.revision = incomingVersion.revision
+        currentState.snapshot.snapshot_seq = incomingVersion.snapshotSeq
       }
       return
     }
@@ -333,6 +340,10 @@ export function createCoreAppServerRuntimeController<
       // not part of any snapshot, so dropping them permanently truncated the
       // running turn and the hydrate skip check could not heal it
       // (audit 16 S2).
+      // But with nothing left to hold (e.g. after a disconnect cleared the
+      // queue) the retry loop must end instead of waking the main thread
+      // forever (2026-09-25 审计 P3).
+      if (!pendingEvents.length) return
       eventFrameScheduled = true
       scheduleFrame(flushFrame)
       return

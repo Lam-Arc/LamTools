@@ -1168,6 +1168,11 @@ function partMemo(part: MessagePart, live: boolean): unknown[] {
   return [
     part,
     isPartExpanded(part, live),
+    // `live` 与 `autoPlotMath` 都参与 v-memo 子树里的渲染（streaming 样式、
+    // 推理时长、数学自动绘图），漏掉它们时这两者变化不会重渲染
+    // （2026-09-25 审计 P3）。
+    live,
+    props.autoPlotMath,
     fullyExpandedPartIds.value.has(part.id),
     processTitleSnapshot(part),
     toolExpandedIds.value.has(part.id),

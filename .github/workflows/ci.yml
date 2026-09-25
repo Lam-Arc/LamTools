@@ -6,9 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# 同一分支的旧运行没有价值：新推送直接取代它（2026-09-25 审计建议）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -17,22 +23,30 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: core/pyproject.toml
 
       - name: Check whitespace
-        run: git diff --check
+        run: git diff --check ${{ github.event.pull_request.base.sha || 'HEAD^' }} HEAD
 
       - name: Install Core backend (editable) + test deps
+        # server extra 里有 uvicorn/websockets：缺了它，tests/test_core_live_client_e2e.py
+        # 会在 importorskip 处恒被跳过，唯一的真实 WebSocket e2e 等于不存在
+        # （2026-09-25 审计 P2）。
         run: |
           cd core
-          pip install -e ".[dev]"
+          pip install -e ".[dev,server]"
 
       - name: Run Core backend tests
         run: |
           cd core
           pytest tests/ -v --tb=short
+        # 覆盖率工具（pytest-cov + 阈值）未加：本环境离线装不上，无法验证它与
+        # pytest 9 的兼容性，宁可先不加也不要盲改 CI（2026-09-25 审计遗留）。
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +59,7 @@ jobs:
           cache-dependency-path: core/ui/package-lock.json
 
       - name: Check whitespace
-        run: git diff --check
+        run: git diff --check ${{ github.event.pull_request.base.sha || 'HEAD^' }} HEAD
 
       - name: Install Core UI dependencies
         run: |
@@ -72,6 +86,7 @@ jobs:
     # frontend-only provider loops from returning and compiles the real Tauri
     # Android host whenever shared repository code changes.
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -107,6 +122,11 @@ jobs:
           cd core/mobile
           npm ci
 
+      - name: Verify the mobile version is in step everywhere
+        # 8 处版本号此前没有任何守卫：bump-version.ps1 只管桌面 5 处，release.yml 也不看
+        # 移动端（2026-09-25 审计 P3）。
+        run: python scripts/verify-mobile-version.py
+
       - name: Verify shared Rust boundary and mobile contracts
         run: |
           cd core/mobile
@@ -128,6 +148,7 @@ jobs:
     # Keep a pinned Ubuntu image for the native WebKit/Tauri toolchain. The
     # packaging script owns Node, Python, Rust, sidecar, and bundle setup.
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4

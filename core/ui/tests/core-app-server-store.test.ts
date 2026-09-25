@@ -578,6 +578,30 @@ describe('core appServer runtime store', () => {
     expect(runtime.state?.snapshot_seq).toBe(1)
   })
 
+  it('advances the revision in place when only the CAS revision is newer', async () => {
+    // 内容与已收事件都一样、只有 revision 更新（例如远端改了队列）：必须只推进
+    // 版本号，不能把整批 item 换成新对象——item 身份是投影缓存的键
+    // （2026-09-25 审计 P2）。
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+
+    const initial = snapshot(1, 'running')
+    initial.seen_event_ids = ['e1']
+    initial.revision = 3
+    controller.hydrate(initial)
+    const itemsBefore = runtime.state?.core?.items
+
+    const redundant = snapshot(1, 'running')
+    redundant.seen_event_ids = ['e1']
+    redundant.revision = 4
+    controller.hydrate(redundant)
+
+    expect(runtime.state?.revision).toBe(4)
+    expect(runtime.state?.core?.items).toBe(itemsBefore)
+  })
+
   it('hydrates when the snapshot contains events not seen on the wire', async () => {
     const runtime = createCoreAppServerRuntimeState()
     const controller = createCoreAppServerRuntimeController(runtime, {

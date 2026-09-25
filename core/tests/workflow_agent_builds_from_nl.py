@@ -6,7 +6,7 @@ injects the system prompt + the workflow-mode tool set (active_mode="workflow"
 wires the 5 build tools). The driver injects NO instructions, NO guidance.
 
 Run (from core/):
-    python tests/test_workflow_agent_builds_from_nl.py [--model auto] [--prompt "..."]
+    python tests/workflow_agent_builds_from_nl.py [--model auto] [--prompt "..."]
 """
 from __future__ import annotations
 

@@ -18,8 +18,18 @@ impl ProjectFileTools {
     fn resolve(&self, value: &Value) -> Result<PathBuf, RuntimeError> {
         let relative = value.as_str().unwrap_or_default();
         let path = Path::new(relative);
+        // `C:notes.md` 既不是绝对路径也没有 `..`，但 `PathBuf::push` 遇到带盘符
+        // 前缀的值会替换整个基路径，于是目标落在项目根之外（2026-09-25 审计 P3）。
+        // 只接受普通组件：绝对路径、盘符前缀、根目录一律拒绝。
+        let mut components = path.components();
+        // `.`（项目根）与普通名字可以，盘符/根目录前缀不行。
+        let normal_first = matches!(
+            components.next(),
+            Some(Component::Normal(_)) | Some(Component::CurDir)
+        );
         if relative.is_empty()
             || path.is_absolute()
+            || !normal_first
             || path
                 .components()
                 .any(|part| matches!(part, Component::ParentDir))
@@ -123,7 +133,16 @@ impl ToolRuntime for ProjectFileTools {
             "read_file" => {
                 let path = self.resolve(&call.arguments["path"])?;
                 let content = tokio::fs::read_to_string(path).await.map_err(tool_error)?;
-                Ok(json!({"ok":true,"path":call.arguments["path"],"content":content}))
+                // 一个日志/压缩文件不该把整份内容送进模型与历史：与桌面同为
+                // 50,000 字符 + 同一截断标记（2026-09-25 审计 P2）。
+                let truncated = content.chars().count() > MAX_READ_CHARS;
+                let content = if truncated {
+                    let cut: String = content.chars().take(MAX_READ_CHARS).collect();
+                    format!("{cut}{TRUNCATED_MARKER}")
+                } else {
+                    content
+                };
+                Ok(json!({"ok":true,"path":call.arguments["path"],"content":content,"truncated":truncated}))
             }
             "list_dir" => {
                 let relative = call
@@ -140,10 +159,14 @@ impl ToolRuntime for ProjectFileTools {
                     names.push(entry.file_name().to_string_lossy().to_string());
                 }
                 names.sort();
+                // 与桌面同为 100 条上限，并回报总数（2026-09-25 审计 P2）。
+                let total = names.len();
+                let truncated = total > MAX_DIR_ENTRIES;
+                names.truncate(MAX_DIR_ENTRIES);
                 let project_root =
                     std::fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
                 Ok(
-                    json!({"ok":true,"path":relative,"project_root":project_root.to_string_lossy().to_string(),"entries":names}),
+                    json!({"ok":true,"path":relative,"project_root":project_root.to_string_lossy().to_string(),"entries":names,"total":total,"truncated":truncated}),
                 )
             }
             "search_files" => {
@@ -189,7 +212,17 @@ impl ToolRuntime for ProjectFileTools {
 
 /// Bound the work a single search may do, so a large project cannot turn a
 /// tool call into an unbounded scan.
-const MAX_SEARCH_MATCHES: usize = 200;
+///
+/// Aligned with the desktop's `DEFAULT_MAX_SEARCH_RESULTS` (2026-09-25 审计 P2:
+/// 200 here vs 50 there meant the same question returned different answers).
+const MAX_SEARCH_MATCHES: usize = 50;
+/// Aligned with the desktop's `DEFAULT_MAX_LIST_ITEMS`.
+const MAX_DIR_ENTRIES: usize = 100;
+/// Aligned with the desktop's `DEFAULT_MAX_TEXT_LENGTH`.
+const MAX_READ_CHARS: usize = 50_000;
+/// Same marker the desktop appends when it cuts a file short.
+const TRUNCATED_MARKER: &str = "
+[... truncated]";
 const MAX_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_FILE_HASH_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -289,7 +322,16 @@ fn search_files(from: &Path, root: &Path, pattern: &str) -> Vec<Value> {
     collect_candidates(from)
         .into_iter()
         .map(|path| project_relative(&path, root))
-        .filter(|relative| glob_matches(pattern, relative))
+        // 与桌面同语义：整条相对路径匹配，或者文件名本身匹配（Python 的
+        // `Path(rel).match(p) or Path(name).match(p)` 是右对齐的，所以
+        // `*.rs` 必须能命中 `src/main.rs`）——2026-09-25 审计 P2。
+        .filter(|relative| {
+            glob_matches(pattern, relative)
+                || relative
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|name| glob_matches(pattern, name))
+        })
         .take(MAX_SEARCH_MATCHES)
         .map(Value::String)
         .collect()
@@ -471,6 +513,90 @@ async fn write_atomic(path: &Path, content: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn file_tools_cap_their_output_like_the_desktop() {
+        // 桌面：read_file 50,000 字符、list_dir 100 条、search 50 条。
+        // 移动端此前没有上限（一个日志文件会把整份内容送进模型与历史），
+        // 搜索上限还是 200（2026-09-25 审计 P2）。
+        let root = std::env::temp_dir().join(format!(
+            "lamtools-tool-caps-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("many")).unwrap();
+        std::fs::write(root.join("big.log"), "x".repeat(super::MAX_READ_CHARS + 500)).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}
+").unwrap();
+        for index in 0..(super::MAX_DIR_ENTRIES + 20) {
+            std::fs::write(root.join("many").join(format!("f{index:03}.txt")), "x").unwrap();
+        }
+        let tools = ProjectFileTools::new(root.clone());
+        let call = |name: &str, arguments: Value| ToolCall {
+            id: "call".into(),
+            name: name.into(),
+            arguments,
+        };
+
+        let big = tools
+            .execute(&call("read_file", json!({"path": "big.log"})))
+            .await
+            .unwrap();
+        assert_eq!(big["truncated"], json!(true));
+        let content = big["content"].as_str().unwrap();
+        assert!(content.ends_with(super::TRUNCATED_MARKER));
+        assert_eq!(content.chars().count(), super::MAX_READ_CHARS + super::TRUNCATED_MARKER.chars().count());
+
+        let listed = tools
+            .execute(&call("list_dir", json!({"path": "many"})))
+            .await
+            .unwrap();
+        assert_eq!(listed["entries"].as_array().unwrap().len(), super::MAX_DIR_ENTRIES);
+        assert_eq!(listed["total"], json!(super::MAX_DIR_ENTRIES + 20));
+        assert_eq!(listed["truncated"], json!(true));
+
+        // 右对齐 glob：`*.rs` 必须命中 `src/main.rs`（桌面用 Path.match 的语义）。
+        let found = tools
+            .execute(&call("search_files", json!({"pattern": "*.rs"})))
+            .await
+            .unwrap();
+        let names: Vec<&str> = found["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["src/main.rs"]);
+
+        let capped = tools
+            .execute(&call("search_files", json!({"pattern": "many/*.txt"})))
+            .await
+            .unwrap();
+        assert_eq!(capped["matches"].as_array().unwrap().len(), super::MAX_SEARCH_MATCHES);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn drive_relative_paths_are_refused() {
+        // `C:notes.md` 既非绝对路径也无 `..`，但 PathBuf::push 会用盘符前缀替换
+        // 整个基路径（2026-09-25 审计 P3）。
+        let root = std::env::temp_dir().join(format!("lamtools-drive-path-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let tools = ProjectFileTools::new(root);
+        let error = tools
+            .execute(&ToolCall {
+                id: "call".into(),
+                name: "read_file".into(),
+                arguments: json!({"path": "C:notes.md"}),
+            })
+            .await
+            .expect_err("drive-relative paths must be refused");
+        assert!(error.to_string().contains("inside the current project"));
+    }
 
     #[tokio::test]
     async fn search_and_edit_tools_stay_inside_the_project_and_report_ambiguity() {

@@ -303,9 +303,37 @@
 - `web_fetch` 的 SSRF 面（私网/环回、重定向跟随）——需要与"允许访问本地服务"的既定用法（`_fetch_with_loopback_bypass`）一起设计，属行为决策而非纯缺陷。
 - `SubAgentSupervisor` 的 sqlite 连接不关闭与 supervisor 无淘汰——改动面较大（涉及 `shutdown_parent_sub_agents` 的调用时机），单独一批更稳。
 - `runtime_projection` 与 `_canonical_status` 的状态口径不一致（skipped/blocked 的展示）——是产品语义选择，需先定口径。
-- `snapshot_store` 重建扫描的覆盖索引、事件 id 长度、`kernel_steps` 上限、循环前置段的 try、`artifact` 等其余 P3——纯改进项，未与本次安全/发布批次混提。
-- runtime-rs 与 core/ui 两批（详见 §5 的 P2 清单）与 CI 批次未在本轮执行。
+- `snapshot_store` 重建扫描的覆盖索引、事件 id 长度、`kernel_steps` 上限、循环前置段的 try——纯改进项，未与本次安全/发布批次混提。
+- core/ui 的其余 P3（DEV 诊断每帧全量、`imageSrc` 归一、跨空行代码块、markdownCache LRU、协议版本发送/校验、`kind='status'` 并入、`receivedEventIds` 修剪、`item.deltas` 有界、`base.css` 焦点环、`LamToolsApp` 深监听）与 runtime-rs 的其余项（同步 I/O 下沉 `spawn_blocking`、`study_exams` 死代码、迟到指导投递标记、`MemorySubAgentStore` 上限）——低风险但数量多，留待下一批。
+- 覆盖率工具与阈值：本环境离线装不上 pytest-cov，无法验证它与 pytest 9 的兼容性，宁可先不加也不要盲改 CI。
 - 移动端 0.1.31 出包未执行：等待 runtime-rs 批次一并进包，避免同一批修复出两次包。
+
+### 波次 4 · runtime-rs / core/ui / 测试与 CI（已完成）
+
+**runtime-rs（对齐桌面）**
+
+- 文件工具补上限并统一口径：`read_file` 截断到 50,000 字符 + 桌面同款 `[... truncated]` 标记（原来整个文件进模型与历史），`list_dir` 限 100 条并回报 `total`/`truncated`，`search_files` 上限 200 → 50；`search_files` 的 glob 改为「整条相对路径匹配或文件名匹配」（右对齐），`*.rs` 现在能命中 `src/main.rs`。
+- `update_checklist` 恢复桌面的强制 `reason`（每次更新都要留"为什么"）与逐字一致的错误文案；`resolve` 拒绝盘符相对路径（`C:notes.md` 会让 `PathBuf::push` 换掉基路径），`.`（项目根）仍允许。
+- 测试：新增 2 条（上限/glob 契约、盘符拒绝），并把既有 checklist 测试按新契约补上 reason + 新增一条「缺 reason / 未知 action 必须被拒」；Rust 全量 **208 passed**（154 lib + 集成），clippy 无新增。
+
+**core/ui**
+
+- 仅版本更新的 hydrate 不再换 items：改为原地推进 `revision`/`snapshot_seq`（`runtime.state` 与 store 是同一对象），保住 item 身份即投影缓存键；`flushFrame` 在无待处理事件时停止自续；`disconnect` 复位帧调度标志；`partMemo` 补上 `live` 与 `autoPlotMath`（这两个入参都参与 v-memo 子树渲染）。
+- 测试：新增 1 条「只有 CAS revision 更新时原地推进、item 身份不变」并在旧实现上复现失败；UI 全量 99 文件 / 805 用例通过。
+
+**测试与 CI**
+
+- CI 装上 `.[dev,server]`：此前 `dev` extra 不含 uvicorn/websockets，`tests/test_core_live_client_e2e.py` 在 `importorskip` 处恒被跳过——唯一的真实 WebSocket e2e 等于不存在。
+- 加 `concurrency`（同分支新推送取代旧运行）与各作业 `timeout-minutes`；backend 作业启用 pip 缓存；`git diff --check` 改为对 `HEAD^`/PR base 的差分（干净检出上原本是空操作）。
+- 移动端版本守卫：新增 `scripts/verify-mobile-version.py`（8 处版本 + versionCode 公式 + 官网默认值），本地可跑，CI 的 mobile 作业调用它。
+- `core/tests/test_workflow_agent_builds_from_nl.py` 改名去掉 `test_` 前缀（119 行的 live 驱动脚本、零断言，此前只是让 `--collect-only` 报"no tests collected"）。
+
+**记录但本轮未修（附原因，交由下一批决策）**
+
+- 覆盖率工具与阈值：本环境离线装不上 pytest-cov，无法验证它与 pytest 9 的兼容性，宁可先不加也不要盲改 CI（CI 里已留注释）。
+- 测试计时断言（`test_kernel.py` 的 `elapsed < 0.09`、`test_model_store.py` 的 `time.sleep(0.01)`）与 21-S2 三条缺失回归——需要按行为重写而不是简单删断言。
+- runtime-rs 的同步 I/O 下沉 `spawn_blocking`、`study_exams` 死代码、迟到指导投递标记、`MemorySubAgentStore` 上限；core/ui 的其余 P3 清单（见上）。
+
 
 ### 波次 5 · 卫生与文档（已完成的与剩余）
 
