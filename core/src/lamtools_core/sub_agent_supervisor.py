@@ -14,7 +14,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 from lamtools_core.config.model_store import ModelStore
 from lamtools_core.llm import REASONING_LEVELS
@@ -146,8 +146,23 @@ class SubAgentSupervisor:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        """A short-lived connection that commits (or rolls back) **and closes**.
+
+        sqlite3's own connection context manager only commits — it never closes
+        the handle — so ``with self._connect() as db`` leaked one connection per
+        call, for the life of the process (2026-09-25 audit P3).
+        """
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def _init_db(self) -> None:
-        with self._connect() as db:
+        with self._connection() as db:
             db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS sub_agents (
@@ -187,7 +202,7 @@ class SubAgentSupervisor:
     async def recover(self) -> None:
         """Converge orphaned process-owned work after application restart."""
         async with self._lock:
-            with self._connect() as db:
+            with self._connection() as db:
                 rows = db.execute(
                     "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
                     (self.parent_thread_id,),
@@ -547,7 +562,7 @@ class SubAgentSupervisor:
             else:
                 injected = bool(sink(*sink_args, guidance_metadata))
             if injected:
-                with self._connect() as db:
+                with self._connection() as db:
                     db.execute(
                         "UPDATE sub_agent_mailbox SET delivered_at=? WHERE parent_thread_id=? AND name=? AND direction='child_to_parent' AND message_key=?",
                         (time.time(), self.parent_thread_id, name, message_key),
@@ -563,7 +578,7 @@ class SubAgentSupervisor:
 
     async def list(self) -> list[dict[str, Any]]:
         async with self._lock:
-            with self._connect() as db:
+            with self._connection() as db:
                 rows = db.execute("SELECT payload FROM sub_agents WHERE parent_thread_id=? ORDER BY name", (self.parent_thread_id,)).fetchall()
             return [json.loads(row["payload"]) for row in rows]
 
@@ -588,7 +603,7 @@ class SubAgentSupervisor:
 
     async def drain_parent_mailbox(self) -> list[dict[str, Any]]:
         async with self._lock:
-            with self._connect() as db:
+            with self._connection() as db:
                 rows = db.execute(
                     "SELECT id,name,body,created_at FROM sub_agent_mailbox WHERE parent_thread_id=? AND direction='child_to_parent' AND delivered_at IS NULL ORDER BY created_at,id",
                     (self.parent_thread_id,),
@@ -623,12 +638,12 @@ class SubAgentSupervisor:
         return record
 
     def _load(self, name: str) -> SubAgentRecord | None:
-        with self._connect() as db:
+        with self._connection() as db:
             row = db.execute("SELECT payload FROM sub_agents WHERE parent_thread_id=? AND name=?", (self.parent_thread_id, name)).fetchone()
         return SubAgentRecord(**json.loads(row["payload"])) if row else None
 
     def _save(self, record: SubAgentRecord) -> None:
-        with self._connect() as db:
+        with self._connection() as db:
             db.execute(
                 "INSERT INTO sub_agents(parent_thread_id,name,payload) VALUES(?,?,?) ON CONFLICT(parent_thread_id,name) DO UPDATE SET payload=excluded.payload",
                 (self.parent_thread_id, record.name, json.dumps(record.to_dict(), ensure_ascii=False)),
@@ -636,7 +651,7 @@ class SubAgentSupervisor:
 
     def _mail(self, name: str, direction: str, body: str, *, message_key: str) -> bool:
         digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
-        with self._connect() as db:
+        with self._connection() as db:
             cursor = db.execute(
                 "INSERT OR IGNORE INTO sub_agent_mailbox(id,parent_thread_id,name,direction,body,digest,message_key,created_at) VALUES(?,?,?,?,?,?,?,?)",
                 (

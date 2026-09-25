@@ -9,6 +9,7 @@ import pytest
 from lamtools_core.agent import SubAgentRunResult
 from lamtools_core.agent import SUB_AGENT_TOOL_SPEC
 from lamtools_core.sub_agent_supervisor import (
+    SubAgentRecord,
     SubAgentSupervisor,
     acknowledge_parent_mailbox,
     current_child_identity,
@@ -446,3 +447,43 @@ async def test_finalize_resumed_normalizes_durable_child_status(
         SimpleNamespace(decision=decision, error=error, message="summary"),
     )
     assert record.status == expected
+
+
+@pytest.mark.asyncio
+async def test_supervisor_closes_every_sqlite_connection(tmp_path, monkeypatch):
+    """短连接用完即关（sqlite3 的 ``with`` 只提交不关闭，曾每次调用泄漏一个句柄）。"""
+    import sqlite3
+
+    opened: list[sqlite3.Connection] = []
+    real_connect = sqlite3.connect
+
+    def tracking_connect(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", tracking_connect)
+
+    supervisor = SubAgentSupervisor(
+        parent_thread_id="parent",
+        runner=FakeRunner(tmp_path),
+        database_path=tmp_path / "state.sqlite3",
+    )
+    supervisor._save(
+        SubAgentRecord(
+            parent_thread_id="parent",
+            type="execute",
+            name="worker",
+            model_id="test-model",
+            reasoning_level="medium",
+            status="running",
+        )
+    )
+    assert supervisor._load("worker") is not None
+    assert supervisor._mail("worker", "parent_to_child", "hi", message_key="k1") is True
+
+    assert len(opened) >= 3, "expected the init, save, load and mail connections"
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            connection.execute("SELECT 1")
+
