@@ -116,6 +116,69 @@ describe('standalone attachment transport', () => {
     expect(missing.status).toBe(404)
   })
 
+  it('passes images of any size and count to the model, like the desktop does', async () => {
+    const repository = createLocalRepository(new MemoryDatabase())
+    const session = await repository.createLocalSession(undefined, 'Attachments')
+    const config = {
+      handleRpc: async () => null,
+      activeModel: async () => ({
+        provider: { id: 'fixture-provider', name: 'Fixture', api_type: 'openai', base_url: 'https://model.invalid/v1' },
+        model: { id: 'fixture-model', model_id: 'fixture-model', display_name: 'Fixture' },
+        apiKey: 'secret',
+      }),
+      runtimeModels: async () => [],
+      settings: async () => ({}),
+      subAgentRuntime: async () => ({ enabled: false, guide: '' }),
+      modePlan: async () => ({ tools: null, promptLine: '' }),
+    } as unknown as StandaloneConfigStore
+    // Twelve images, one of them well past the old 10 MiB per-image cap: the
+    // desktop enforces no per-image or per-message image budget (one 50 MiB
+    // attachment limit is all it has), so the phone must not refuse either.
+    const pngHeader = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
+    const big = new Uint8Array(12 * 1024 * 1024)
+    big.set(pngHeader)
+    const images = Array.from({ length: 12 }, (_, index) => ({
+      id: String(index).padStart(2, '0').repeat(16),
+      bytes: index === 0 ? big : pngHeader,
+    }))
+    const metadata = images.map(({ id, bytes }) => ({
+      id, session_id: session.id, filename: `${id}.png`, mime_type: 'image/png',
+      size: bytes.length, preview_type: 'image',
+    }))
+    invokeMock.mockImplementation(async (command: string, args: { id?: string }) => {
+      if (command !== 'sunday_attachment_read') throw new Error(`unexpected ${command}`)
+      const index = images.findIndex(entry => entry.id === args.id)
+      return { metadata: metadata[index], data_base64: b4a.toString(images[index].bytes, 'base64') }
+    })
+    const runAgent = vi.fn(async (input: any) => ({
+      text: 'done', runtimeModelId: 'fixture-model', toolRounds: 0,
+      runtimeHistory: [...input.history, { role: 'assistant', content: 'done' }],
+    }))
+    const transport = new StandaloneTransport(repository, config, runAgent)
+    await transport.request({ method: 'turn/start', params: {
+      thread_id: session.id,
+      input: images.map(({ id }) => ({ type: 'attachment', attachment_id: id, filename: 'x.png' })),
+    } })
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalled())
+    const sent = runAgent.mock.calls[0][0].history.at(-1)
+    expect(sent.role).toBe('user_multimodal')
+    expect(sent.images).toHaveLength(12)
+    expect(sent.images[0].data_base64).toBe(b4a.toString(big, 'base64'))
+
+    // Integrity is still checked: a body that is not valid base64 is refused by
+    // name instead of surfacing as an opaque provider error. The read cache holds
+    // the bytes read above, so it is cleared to make the second read hit the mock.
+    clearAttachmentReadCache()
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== 'sunday_attachment_read') throw new Error(`unexpected ${command}`)
+      return { metadata: metadata[1], data_base64: 'not base64!' }
+    })
+    await expect(transport.request({ method: 'turn/start', params: {
+      thread_id: session.id,
+      input: [{ type: 'attachment', attachment_id: metadata[1].id, filename: 'x.png' }],
+    } })).rejects.toThrow('附件内容无效')
+  })
+
   it('reads back a freshly uploaded attachment without going to the store again', async () => {
     const repository = createLocalRepository(new MemoryDatabase())
     const session = await repository.createLocalSession(undefined, 'Attachments')

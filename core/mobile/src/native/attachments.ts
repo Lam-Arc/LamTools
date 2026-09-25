@@ -105,10 +105,45 @@ export const nativeAttachments: AttachmentClient = {
   },
 }
 
+/**
+ * Whether `value` is a well-formed base64 body.
+ *
+ * Scanned character by character rather than matched with a regex: the
+ * equivalent pattern backtracks quad by quad, and on a multi-megabyte payload
+ * that blows the webview's stack (`RangeError: Maximum call stack size
+ * exceeded`) instead of validating anything. Attachments reach 50 MiB.
+ */
+export function isBase64Body(value: string): boolean {
+  const length = value.length
+  if (length === 0) return true
+  if (length % 4 !== 0) return false
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  const body = length - padding
+  for (let index = 0; index < body; index += 1) {
+    const code = value.charCodeAt(index)
+    const valid = (code >= 0x41 && code <= 0x5a) // A-Z
+      || (code >= 0x61 && code <= 0x7a) // a-z
+      || (code >= 0x30 && code <= 0x39) // 0-9
+      || code === 0x2b // +
+      || code === 0x2f // /
+    if (!valid) return false
+  }
+  for (let index = body; index < length; index += 1) {
+    if (value.charCodeAt(index) !== 0x3d) return false
+  }
+  return true
+}
+
+/** The byte length a base64 body decodes to, or `null` when it is malformed. */
+export function decodedBase64Length(value: string): number | null {
+  if (!isBase64Body(value)) return null
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  return (value.length / 4) * 3 - padding
+}
+
 /** The 50 MiB ceiling still holds: the check moved from the JSON array to the base64 body. */
 function decodeAttachmentBytes(value: unknown): Uint8Array {
-  if (typeof value !== 'string' || value.length % 4 !== 0
-    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+  if (typeof value !== 'string' || !isBase64Body(value)) {
     throw new Error('附件内容无效')
   }
   const bytes = b4a.from(value, 'base64')

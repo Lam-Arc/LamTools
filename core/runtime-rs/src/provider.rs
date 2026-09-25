@@ -1,7 +1,7 @@
 use crate::profiles::{apply_request_profile, resolve_profile};
 use crate::{
     ImageInput, Message, ModelBackend, ModelTurn, RuntimeError, ToolCall, ToolDefinition,
-    TurnOptions, MAX_MODEL_IMAGES, MAX_MODEL_IMAGE_BYTES, MAX_MODEL_IMAGE_TOTAL_BYTES,
+    TurnOptions,
 };
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
@@ -13,8 +13,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Diagnostic only: reports `http_waiting_for_headers` while an attempt is still
+/// waiting. It is not a deadline.
 const RESPONSE_HEADER_WAIT_MARKER: Duration = Duration::from_secs(30);
-const RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(120);
 
 enum HeaderSendError {
     Timeout,
@@ -450,6 +451,16 @@ impl HttpModelBackend {
         }
     }
 
+    /// How long one attempt may wait for response headers.
+    ///
+    /// This is the configured per-attempt timeout (`model_timeout_seconds`), the
+    /// same knob the desktop wraps each attempt in — it is deliberately not a
+    /// smaller hidden cap. A 120 s constant used to live here and made a stalled
+    /// phone connection fail far sooner than the desktop would have.
+    fn header_deadline(&self) -> Duration {
+        self.policy.timeout
+    }
+
     /// One attempt, classified so the caller knows whether a retry can help.
     async fn send_attempt(&self, body: &Value) -> Result<Value, AttemptOutcome> {
         self.report("http_send_start");
@@ -471,7 +482,7 @@ impl HttpModelBackend {
         self.report("http_request_built");
         let response = send_until_headers_with_marker(
             send,
-            self.policy.timeout.min(RESPONSE_HEADER_TIMEOUT),
+            self.header_deadline(),
             RESPONSE_HEADER_WAIT_MARKER,
             || self.report("http_waiting_for_headers"),
         )
@@ -1396,15 +1407,14 @@ impl ModelBackend for HttpModelBackend {
 }
 
 fn validate_model_images(messages: &[Message]) -> Result<(), RuntimeError> {
-    let mut total_bytes = 0usize;
     for message in messages {
         let Message::UserMultimodal { images, .. } = message else {
             continue;
         };
-        if images.is_empty() || images.len() > MAX_MODEL_IMAGES {
-            return Err(RuntimeError::Model(format!(
-                "image input must contain between 1 and {MAX_MODEL_IMAGES} images"
-            )));
+        if images.is_empty() {
+            return Err(RuntimeError::Model(
+                "image input must contain at least one image".into(),
+            ));
         }
         for image in images {
             if image.attachment_id.trim().is_empty() {
@@ -1421,21 +1431,13 @@ fn validate_model_images(messages: &[Message]) -> Result<(), RuntimeError> {
                     image.mime_type
                 )));
             }
-            let decoded_bytes = checked_base64_size(&image.data_base64).ok_or_else(|| {
-                RuntimeError::Model("image input is missing valid base64 bytes".into())
-            })?;
-            if decoded_bytes > MAX_MODEL_IMAGE_BYTES {
-                return Err(RuntimeError::Model(format!(
-                    "image exceeds the {} MiB model-input limit",
-                    MAX_MODEL_IMAGE_BYTES / (1024 * 1024)
-                )));
-            }
-            total_bytes = total_bytes.saturating_add(decoded_bytes);
-            if total_bytes > MAX_MODEL_IMAGE_TOTAL_BYTES {
-                return Err(RuntimeError::Model(format!(
-                    "conversation images exceed the {} MiB model-input limit",
-                    MAX_MODEL_IMAGE_TOTAL_BYTES / (1024 * 1024)
-                )));
+            // Integrity, not budget: the desktop has no per-image or per-message
+            // image limit either (one attachment limit of 50 MiB is all it has),
+            // and a cap here made mobile refuse requests the desktop sends.
+            if checked_base64_size(&image.data_base64).is_none() {
+                return Err(RuntimeError::Model(
+                    "image input is missing valid base64 bytes".into(),
+                ));
             }
         }
     }
@@ -3641,6 +3643,40 @@ mod tests {
         assert!(!error.to_string().contains("secret"));
     }
 
+    /// The pre-header deadline is the configured per-attempt timeout, not a
+    /// smaller hidden constant: a 120 s cap used to sit here and made a stalled
+    /// phone connection give up long before the desktop, which reads the same
+    /// `model_retry.jsonc`, would have.
+    #[test]
+    fn the_header_deadline_is_the_configured_timeout() {
+        let backend = HttpModelBackend::with_retry_policy(
+            config("model", json!({})),
+            RetryPolicy {
+                attempts: 3,
+                timeout: Duration::from_secs(360),
+                delays: vec![0.0],
+                jitter: false,
+                empty_response_retries: 0,
+                stream_idle_timeout: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(backend.header_deadline(), Duration::from_secs(360));
+        let patient = HttpModelBackend::with_retry_policy(
+            config("model", json!({})),
+            RetryPolicy {
+                attempts: 3,
+                timeout: Duration::from_secs(45),
+                delays: vec![0.0],
+                jitter: false,
+                empty_response_retries: 0,
+                stream_idle_timeout: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(patient.header_deadline(), Duration::from_secs(45));
+    }
+
     /// The attempt budget is the configured one, not a hidden constant: raising
     /// `model_retries` has to lengthen the window a pre-header failure survives.
     #[tokio::test]
@@ -4024,7 +4060,7 @@ mod tests {
     }
 
     #[test]
-    fn image_payloads_are_bounded_and_omitted_from_durable_history() {
+    fn image_payloads_are_checked_for_integrity_and_omitted_from_durable_history() {
         let message = Message::UserMultimodal {
             content: "Look".into(),
             images: vec![ImageInput {
@@ -4039,17 +4075,42 @@ mod tests {
         assert_eq!(serialized["images"][0]["mime_type"], "image/png");
         assert!(serialized["images"][0].get("data_base64").is_none());
 
-        let too_large = "A".repeat(((MAX_MODEL_IMAGE_BYTES + 2) / 3) * 4 + 4);
-        let oversized = Message::UserMultimodal {
+        // A large payload is not rejected: the desktop has no per-image limit, so
+        // refusing here would refuse a request the desktop sends. A payload that
+        // is not valid base64 is still refused, with a name.
+        let large = "A".repeat(((12 * 1024 * 1024) / 3) * 4);
+        validate_model_images(&[Message::UserMultimodal {
             content: String::new(),
             images: vec![ImageInput {
                 attachment_id: "attachment-2".into(),
                 mime_type: "image/jpeg".into(),
-                data_base64: too_large,
+                data_base64: large,
+            }],
+        }])
+        .unwrap();
+        let broken = Message::UserMultimodal {
+            content: String::new(),
+            images: vec![ImageInput {
+                attachment_id: "attachment-3".into(),
+                mime_type: "image/jpeg".into(),
+                data_base64: "not base64!".into(),
             }],
         };
-        assert!(validate_model_images(&[oversized]).is_err());
+        assert!(validate_model_images(&[broken]).is_err());
         assert!(checked_base64_size("not base64!").is_none());
+
+        // More images than the old mobile cap of eight are fine too.
+        let many = Message::UserMultimodal {
+            content: String::new(),
+            images: (0..12)
+                .map(|index| ImageInput {
+                    attachment_id: format!("attachment-{index}"),
+                    mime_type: "image/png".into(),
+                    data_base64: "AAEC/w==".into(),
+                })
+                .collect(),
+        };
+        validate_model_images(&[many]).unwrap();
     }
 
     #[test]

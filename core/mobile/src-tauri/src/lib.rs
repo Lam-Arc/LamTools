@@ -60,7 +60,12 @@ fn emit_agent_stage(app: &tauri::AppHandle, turn_id: &str, stage: &'static str) 
 /// Tool payloads can carry whole files. The transcript only needs a readable
 /// preview, and an unbounded copy would bloat every stream event and the
 /// persisted snapshot.
-const MAX_TOOL_STREAM_CHARS: usize = 4000;
+///
+/// The bound is the desktop's (`event/runtime_projection.py`:
+/// `DEFAULT_RUNTIME_PREVIEW_CHARS = 25565`, applied per string). It used to be
+/// 4000 here, so the phone showed a shorter preview of the same tool step than
+/// the desktop did.
+const MAX_TOOL_STREAM_CHARS: usize = 25_565;
 
 fn bounded_tool_text(value: &Value) -> String {
     let text = match value {

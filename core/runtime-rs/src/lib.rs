@@ -56,9 +56,9 @@ const TOOL_PROGRESS_REQUIRED: &str = concat!(
     "claim a result that has not been observed."
 );
 
-pub const MAX_MODEL_IMAGE_BYTES: usize = 10 * 1024 * 1024;
-pub const MAX_MODEL_IMAGE_TOTAL_BYTES: usize = 20 * 1024 * 1024;
-pub const MAX_MODEL_IMAGES: usize = 8;
+// Image input carries no size or count budget here: the desktop has none either
+// (it enforces one 50 MiB limit per attachment and sends what the user attached),
+// so a cap on this side could only refuse requests the desktop accepts.
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DeviceCapabilities {

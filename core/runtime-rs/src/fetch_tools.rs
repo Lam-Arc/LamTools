@@ -14,9 +14,11 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_BYTES: usize = 512 * 1024;
-const MAX_TEXT_CHARS: usize = 20_000;
-const MAX_REDIRECTS: usize = 5;
+/// Desktop `tool/web_tools.py`: `clean[:30000]` for the model-visible text, and
+/// `normalize_pdf_bytes(..., max_text_length=30_000)` for PDFs.
+const MAX_TEXT_CHARS: usize = 30_000;
+/// Desktop fetches with `follow_redirects=True`, which is httpx's default of 20.
+const MAX_REDIRECTS: usize = 20;
 
 pub struct WebFetchTools {
     timeout: Duration,
@@ -181,20 +183,31 @@ impl ToolRuntime for WebFetchTools {
             .bytes()
             .await
             .map_err(|error| RuntimeError::Tool(format!("read failed: {error}")))?;
-        let truncated = body.len() > MAX_BYTES;
-        let slice = &body[..body.len().min(MAX_BYTES)];
-        let raw = String::from_utf8_lossy(slice).into_owned();
+        // The desktop reads the whole body and truncates the model-visible text
+        // afterwards; a byte cap here would silently cut a page the desktop
+        // would have delivered in full.
+        let raw = String::from_utf8_lossy(&body).into_owned();
         let is_html = content_type.contains("html") || raw.trim_start().starts_with("<!DOCTYPE")
             || raw.trim_start().starts_with("<html");
         let text = if is_html { html_to_text(&raw) } else { raw };
-        let clipped = text.chars().count() > MAX_TEXT_CHARS;
-        let text = text.chars().take(MAX_TEXT_CHARS).collect::<String>();
+        let total_chars = text.chars().count();
+        let clipped = total_chars > MAX_TEXT_CHARS;
+        let text = if clipped {
+            // Same marker the desktop appends (`tool/web_tools.py`), so the model
+            // reads the same sentence on either host.
+            format!(
+                "{}\n\n[... truncated at {MAX_TEXT_CHARS} / {total_chars} chars]",
+                text.chars().take(MAX_TEXT_CHARS).collect::<String>()
+            )
+        } else {
+            text
+        };
         Ok(json!({
             "ok": true,
             "url": url,
             "content_type": content_type,
             "content": text,
-            "truncated": truncated || clipped,
+            "truncated": clipped,
         }))
     }
 }
@@ -254,5 +267,111 @@ mod tests {
             .await
             .expect_err("a non-absolute URL must be refused");
         assert!(error.to_string().contains("absolute http(s) URL"));
+    }
+
+    /// Serve one canned response per connection, then keep the socket open until
+    /// the test ends. Returns the base URL.
+    fn serve<F>(handler: F) -> String
+    where
+        F: Fn(&str) -> String + Send + Sync + 'static,
+    {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut buffer = [0u8; 4096];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let path = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                let response = handler(&path);
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        format!("http://{address}")
+    }
+
+    fn ok_response(content_type: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// The desktop truncates the model-visible text at 30 000 chars and says so in
+    /// the same words; a 20 000-char mobile cut delivered less than the desktop.
+    #[tokio::test]
+    async fn long_text_is_truncated_at_the_desktop_limit_with_the_desktop_marker() {
+        let body = format!("{}TAIL-SENTINEL", "x".repeat(40_000));
+        let body_len = body.chars().count();
+        let base = serve(move |_| ok_response("text/plain", &body));
+        let tools = WebFetchTools::new();
+        let result = tools
+            .execute(&ToolCall {
+                id: "call".into(),
+                name: "web_fetch".into(),
+                arguments: json!({"url": base}),
+            })
+            .await
+            .unwrap();
+        let content = result["content"].as_str().unwrap();
+        let marker = format!("\n\n[... truncated at 30000 / {body_len} chars]");
+        assert!(
+            content.ends_with(&marker),
+            "unexpected tail: {}",
+            &content[content.len().saturating_sub(80)..]
+        );
+        assert_eq!(content.chars().count(), 30_000 + marker.chars().count());
+        assert_eq!(result["truncated"], json!(true));
+        assert!(!content.contains("TAIL-SENTINEL"));
+    }
+
+    /// The desktop reads the whole body; the phone used to cut it at 512 KiB, so
+    /// readable content past that point was lost even when the text itself fit.
+    #[tokio::test]
+    async fn a_large_body_is_read_past_the_old_byte_cap() {
+        let body = format!(
+            "<html><body><script>{}</script><p>TAIL-SENTINEL</p></body></html>",
+            "x".repeat(600 * 1024)
+        );
+        let base = serve(move |_| ok_response("text/html", &body));
+        let tools = WebFetchTools::new();
+        let result = tools
+            .execute(&ToolCall {
+                id: "call".into(),
+                name: "web_fetch".into(),
+                arguments: json!({"url": base}),
+            })
+            .await
+            .unwrap();
+        let content = result["content"].as_str().unwrap();
+        assert!(content.contains("TAIL-SENTINEL"), "content past 512 KiB was dropped");
+        assert_eq!(result["truncated"], json!(false));
+    }
+
+    /// httpx follows up to 20 redirects; the phone stopped after five.
+    #[tokio::test]
+    async fn redirect_chain_follows_more_than_five_hops() {
+        let base = serve(|path| {
+            let hop = path.trim_start_matches('/');
+            let next = hop.parse::<u32>().map(|value| value + 1).unwrap_or(1);
+            if next <= 6 {
+                format!("HTTP/1.1 302 Found\r\nLocation: /{next}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            } else {
+                ok_response("text/plain", "ARRIVED")
+            }
+        });
+        let tools = WebFetchTools::new();
+        let result = tools
+            .execute(&ToolCall {
+                id: "call".into(),
+                name: "web_fetch".into(),
+                arguments: json!({"url": format!("{base}/0")}),
+            })
+            .await
+            .unwrap();
+        assert!(result["content"].as_str().unwrap().contains("ARRIVED"));
     }
 }

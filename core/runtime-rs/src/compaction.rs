@@ -9,6 +9,8 @@ const FAST_ESTIMATE_SAFETY_FACTOR: f64 = 8.0;
 const MESSAGE_OVERHEAD_TOKENS: usize = 200;
 const FAST_MESSAGE_OVERHEAD_TOKENS: usize = 100;
 const TOOL_CALL_TOKENS: usize = 50;
+/// Desktop `llm/tokens.py`: `image_tokens: int = 85`.
+const IMAGE_TOKENS: usize = 85;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -406,10 +408,11 @@ fn estimate_message(message: &Message, fast: bool) -> usize {
         }
         Message::UserMultimodal { content, images } => {
             total += estimate_text_tokens(content, fast);
-            // Image token cost varies by model and crop strategy. Reserve a
-            // conservative fixed estimate without counting base64 payloads as
-            // transcript text.
-            total += images.len().saturating_mul(1_000);
+            // One estimate per image, taken from the desktop (`llm/tokens.py`:
+            // `image_tokens: int = 85`, and no caller overrides it). It used to
+            // be 1000 here, which made an image-bearing conversation compact
+            // about twelve times earlier on mobile than on the desktop.
+            total += images.len().saturating_mul(IMAGE_TOKENS);
         }
         Message::AssistantToolCalls { calls, .. } => {
             for call in calls {
@@ -562,6 +565,20 @@ mod tests {
         );
         assert_eq!(estimate_text_tokens("", false), 0);
         assert_eq!(estimate_text_tokens("😀", false), 2);
+        // One image costs the desktop's estimate (85), not a mobile invention:
+        // the number decides when a photo-bearing session compacts.
+        let image_message = Message::UserMultimodal {
+            content: String::new(),
+            images: vec![crate::ImageInput {
+                attachment_id: "attachment".into(),
+                mime_type: "image/png".into(),
+                data_base64: "aGk=".into(),
+            }],
+        };
+        assert_eq!(
+            estimate_messages(&[image_message]),
+            MESSAGE_OVERHEAD_TOKENS + IMAGE_TOKENS
+        );
         // Tool calls carry their name, arguments and a per-call overhead.
         let call = Message::AssistantToolCalls {
             content: String::new(),

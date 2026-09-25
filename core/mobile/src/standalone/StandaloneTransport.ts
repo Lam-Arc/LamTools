@@ -18,7 +18,10 @@ import {
 import b4a from 'b4a'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { AttachmentRequestError, nativeAttachments, parseMultipartFile, type NativeAttachmentData } from '../native/attachments'
+import {
+  AttachmentRequestError, decodedBase64Length, nativeAttachments, parseMultipartFile,
+  type NativeAttachmentData,
+} from '../native/attachments'
 import type { LocalRepository, LocalThread } from '../storage'
 import {
   callEmbeddedStudy,
@@ -56,9 +59,10 @@ type SnapshotWithSession = CoreAppSnapshot & {
   session?: { id: string; title: string; metadata: Record<string, unknown>; created_at: string; updated_at: string }
 }
 
-const MAX_MODEL_IMAGE_BYTES = 10 * 1024 * 1024
-const MAX_MODEL_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
-const MAX_MODEL_IMAGES = 8
+// Image input carries no size or count budget here: the desktop has none either
+// (one 50 MiB limit per attachment is all it enforces, and it sends whatever the
+// user attached). The mime whitelist below stays, because it tells the model
+// which image parts the transport can actually build.
 const MODEL_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 
 type RunAgentTurn = (
@@ -698,7 +702,7 @@ export class StandaloneTransport implements LamToolsTransport {
     const priorHistory = await conversationMessages(prior)
     if (this.generations.get(threadId) !== generation) throw new Error('操作已取消')
     const modelHistory = [...priorHistory, ...(currentMessage ? [currentMessage] : [])]
-    validateConversationImageBudget(modelHistory)
+    validateImageParts(modelHistory)
     const snapshot = prior
     this.activeSnapshots.set(threadId, snapshot)
     const turnId = globalThis.crypto?.randomUUID?.() || `turn-${Date.now()}`
@@ -1349,8 +1353,11 @@ export class StandaloneTransport implements LamToolsTransport {
         context: {
           modeContext,
           ...(!studyEnabled ? {
-            globalInstructions: String(globalContext.instructions || '').slice(0, 20_000),
-            memory: String(globalContext.memory || '').slice(0, 20_000),
+            // Neither is capped here: the desktop passes both through as read
+            // (and its memory file is already trimmed to 20 000 chars on write,
+            // which this host's writer does too).
+            globalInstructions: String(globalContext.instructions || ''),
+            memory: String(globalContext.memory || ''),
           } : {}),
         },
       }), recordStage, signal)
@@ -2084,7 +2091,6 @@ async function inputMessage(value: unknown, sessionId: string): Promise<RustAgen
   const input = Array.isArray(value) ? value : []
   const content: string[] = []
   const images: RustAgentImage[] = []
-  let imageBytes = 0
   for (const part of input) {
     if (!isRecord(part)) continue
     if (part.type === 'text') { content.push(String(part.text || '')); continue }
@@ -2097,18 +2103,11 @@ async function inputMessage(value: unknown, sessionId: string): Promise<RustAgen
     if (attachment.metadata.preview_type === 'text') {
       content.push(`[附件 ${filename} 的文本内容]\n${decodeAttachmentText(attachment)}\n[附件内容结束]`)
     } else if (MODEL_IMAGE_MIME_TYPES.has(attachment.metadata.mime_type)) {
-      if (attachment.bytes.length > MAX_MODEL_IMAGE_BYTES) {
-        throw new Error(`图片 ${filename} 超过每张 10 MiB 的模型输入限制`)
-      }
+      // The declared type has to match the bytes: a mislabelled image would be
+      // sent as an image part the provider rejects, and the user would see a
+      // provider error instead of a usable message.
       if (!imageBytesMatchMime(attachment.metadata.mime_type, attachment.bytes)) {
         throw new Error(`附件 ${filename} 的实际内容与声明的图片类型 ${attachment.metadata.mime_type} 不符`)
-      }
-      if (images.length >= MAX_MODEL_IMAGES) {
-        throw new Error(`单条消息最多支持 ${MAX_MODEL_IMAGES} 张图片`)
-      }
-      imageBytes += attachment.bytes.length
-      if (imageBytes > MAX_MODEL_IMAGE_TOTAL_BYTES) {
-        throw new Error('单条消息中的图片总大小超过 20 MiB 模型输入限制')
       }
       images.push({
         attachment_id: id,
@@ -2147,7 +2146,7 @@ async function hydrateContinuationImages(
     const images = await Promise.all(value.images.map(image => hydrateModelImage(image as RustAgentImage, sessionId)))
     return { ...value, images }
   }))
-  validateConversationImageBudget(messages.filter(isRustAgentMessage))
+  validateImageParts(messages.filter(isRustAgentMessage))
   return { ...continuation, messages }
 }
 
@@ -2158,9 +2157,6 @@ async function hydrateModelImage(image: RustAgentImage, sessionId: string): Prom
   if (attachment.metadata.mime_type !== image.mime_type) throw new Error('历史图片类型与已保存附件不一致')
   if (!MODEL_IMAGE_MIME_TYPES.has(attachment.metadata.mime_type)) {
     throw new Error(`历史图片类型 ${attachment.metadata.mime_type} 不受模型支持`)
-  }
-  if (attachment.bytes.length > MAX_MODEL_IMAGE_BYTES) {
-    throw new Error(`历史图片超过每张 10 MiB 的模型输入限制`)
   }
   if (!imageBytesMatchMime(attachment.metadata.mime_type, attachment.bytes)) {
     throw new Error(`历史图片内容与保存的类型 ${attachment.metadata.mime_type} 不符`)
@@ -2180,35 +2176,29 @@ function imageBytesMatchMime(mime: string, bytes: Uint8Array): boolean {
   }
 }
 
-function validateConversationImageBudget(messages: RustAgentMessage[]): void {
-  let totalBytes = 0
+/**
+ * Every image part has to be one the transport can actually send.
+ *
+ * No size or count budget: the desktop has none either, so a cap here would only
+ * refuse requests the desktop would have sent. What stays is the content check —
+ * an unreadable base64 body or a mime type the runtime cannot build a part from
+ * fails here with a name instead of surfacing as an opaque provider error.
+ */
+function validateImageParts(messages: RustAgentMessage[]): void {
   for (const message of messages) {
     if (message.role !== 'user_multimodal') continue
-    if (message.images.length === 0 || message.images.length > MAX_MODEL_IMAGES) {
-      throw new Error(`单条消息最多支持 ${MAX_MODEL_IMAGES} 张图片`)
+    if (message.images.length === 0) {
+      throw new Error('图片消息缺少图片内容')
     }
     for (const image of message.images) {
       if (!MODEL_IMAGE_MIME_TYPES.has(image.mime_type)) {
         throw new Error(`模型输入不支持图片类型 ${image.mime_type}`)
       }
-      const byteLength = decodedBase64Length(image.data_base64 || '')
-      if (byteLength == null || byteLength > MAX_MODEL_IMAGE_BYTES) {
-        throw new Error('图片缺少有效内容，或超过每张 10 MiB 的模型输入限制')
-      }
-      totalBytes += byteLength
-      if (totalBytes > MAX_MODEL_IMAGE_TOTAL_BYTES) {
-        throw new Error('当前对话图片总大小超过 20 MiB 模型输入限制')
+      if (decodedBase64Length(image.data_base64 || '') == null) {
+        throw new Error('图片缺少有效内容')
       }
     }
   }
-}
-
-function decodedBase64Length(value: string): number | null {
-  if (!value || value.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
-    return null
-  }
-  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
-  return (value.length / 4) * 3 - padding
 }
 
 function withoutTransientImageBytes<T>(value: T): T {
