@@ -9,7 +9,11 @@ description = "LamTools Core SDK - protocols, types, and base interfaces"
 requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.28.1",
-    "sqlalchemy>=2.0.51",
+    # [asyncio] brings greenlet, which sqlalchemy.ext.asyncio imports at runtime.
+    # It was never declared: the packaged backend only started because the
+    # resolver happened to install greenlet, and a fresh environment does not —
+    # the frozen binary then died with ModuleNotFoundError: greenlet.
+    "sqlalchemy[asyncio]>=2.0.51",
     "aiosqlite>=0.22.1",
     "python-docx>=1.2.0",
     "pypdf>=6.15.0",

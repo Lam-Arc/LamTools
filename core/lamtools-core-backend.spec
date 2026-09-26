@@ -82,6 +82,10 @@ _hiddenimports = [
     "httpx",
     "httpcore",
     "sqlalchemy",
+    "sqlalchemy.ext.asyncio",
+    # Conditional import inside sqlalchemy.util.concurrency: static analysis can
+    # miss it, so it is listed explicitly.
+    "greenlet",
     "aiosqlite",
     "aiosqlite.core",
     "sqlite3",
