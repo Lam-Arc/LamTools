@@ -270,6 +270,71 @@ struct AttachmentCacheDirectory {
 #[cfg(target_os = "android")]
 struct MobileShell<R: Runtime>(PluginHandle<R>);
 
+/// The download Android is running for us, remembered across process death:
+/// that is the whole point of handing it to the system service.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedSystemDownload {
+    download_id: String,
+    file_name: String,
+    directory: String,
+    sha256: String,
+    #[serde(default)]
+    verified: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShellDownloadStarted {
+    id: String,
+    file_name: String,
+    directory: String,
+}
+
+/// The system download's own report, mapped by the plugin.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShellDownloadState {
+    state: String,
+    received: i64,
+    total: i64,
+    reason: String,
+}
+
+#[cfg(target_os = "android")]
+fn persisted_download_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("state");
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    Ok(directory.join("update-download.json"))
+}
+
+#[cfg(target_os = "android")]
+fn read_persisted_download(app: &tauri::AppHandle) -> Option<PersistedSystemDownload> {
+    let path = persisted_download_path(app).ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+#[cfg(target_os = "android")]
+fn write_persisted_download(app: &tauri::AppHandle, value: &PersistedSystemDownload) {
+    if let Ok(path) = persisted_download_path(app) {
+        if let Ok(text) = serde_json::to_string(value) {
+            let _ = std::fs::write(path, text);
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+fn clear_persisted_download(app: &tauri::AppHandle) {
+    if let Ok(path) = persisted_download_path(app) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Live update-download state: the UI polls it for progress, and the install
 /// hand-off refuses anything that is not a download this process verified.
 #[derive(Default)]
@@ -323,6 +388,20 @@ struct ShellUrlRequest<'a> {
 #[serde(rename_all = "camelCase")]
 struct ShellFileRequest<'a> {
     file_name: &'a str,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShellDownloadRequest<'a> {
+    url: &'a str,
+    file_name: &'a str,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+struct ShellDownloadIdRequest<'a> {
+    id: &'a str,
 }
 
 #[cfg(target_os = "android")]
@@ -502,10 +581,11 @@ fn validate_update_file_name(value: &str) -> Result<String, String> {
 
 /// Start downloading the update the manifest pointed at.
 ///
-/// Returns as soon as the transfer is under way — a 60 MB download must not hold
-/// the UI's request open — and reports progress through `sunday_update_status`.
-/// The artifact becomes installable only after its digest matches the manifest;
-/// a second call while one is running just watches the first.
+/// The transfer goes to Android's own download service, so it keeps running when
+/// the app is backgrounded or killed and shows up in the notification shade; the
+/// app only needs to be alive again to verify and install it. If the service
+/// refuses, the host downloads it in-process instead — the same transfer, minus
+/// the survival.
 #[cfg(target_os = "android")]
 #[tauri::command]
 fn sunday_update_download(
@@ -516,13 +596,53 @@ fn sunday_update_download(
     file_name: String,
 ) -> Result<Value, String> {
     let file_name = validate_update_file_name(&file_name)?;
-    let state = app.state::<UpdateDownloadState>();
     {
+        let state = app.state::<UpdateDownloadState>();
         let current = state.inner.lock().map_err(|_| "更新状态不可用".to_owned())?;
         if current.state == "downloading" {
             return Ok(serde_json::json!({
                 "ok": true, "state": "downloading", "fileName": current.file_name,
             }));
+        }
+    }
+    // Android may already be downloading one from before this process started;
+    // watch that instead of asking for a second copy.
+    if let Some(persisted) = read_persisted_download(&app) {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "state": if persisted.verified { "verified" } else { "downloading" },
+            "fileName": persisted.file_name,
+        }));
+    }
+    match shell.0.run_mobile_plugin::<ShellDownloadStarted>(
+        "startDownload",
+        ShellDownloadRequest { url: &url, file_name: &file_name },
+    ) {
+        Ok(started) => {
+            write_persisted_download(
+                &app,
+                &PersistedSystemDownload {
+                    download_id: started.id,
+                    file_name: started.file_name.clone(),
+                    directory: started.directory,
+                    sha256: sha256.clone(),
+                    verified: false,
+                },
+            );
+            let state = app.state::<UpdateDownloadState>();
+            let mut current = state.inner.lock().map_err(|_| "更新状态不可用".to_owned())?;
+            *current = UpdateDownloadStatus {
+                state: "downloading".into(),
+                file_name: started.file_name.clone(),
+                sha256,
+                ..Default::default()
+            };
+            return Ok(serde_json::json!({
+                "ok": true, "state": "downloading", "fileName": started.file_name,
+            }));
+        }
+        Err(_) => {
+            // No system service: fall back to the in-process download.
         }
     }
     let directory = shell
@@ -531,6 +651,7 @@ fn sunday_update_download(
         .map_err(|_| "无法准备更新缓存".to_owned())?
         .path;
     {
+        let state = app.state::<UpdateDownloadState>();
         let mut current = state.inner.lock().map_err(|_| "更新状态不可用".to_owned())?;
         *current = UpdateDownloadStatus {
             state: "downloading".into(),
@@ -585,26 +706,168 @@ fn sunday_update_download(
     }))
 }
 
+/// One JSON shape for the in-process and the system download, so the UI reads
+/// progress the same way whichever one ran.
+#[cfg(target_os = "android")]
+fn download_status_json(status: &UpdateDownloadStatus) -> Value {
+    serde_json::json!({
+        "ok": true,
+        "state": status.state,
+        "received": status.received,
+        "total": status.total,
+        "fileName": status.file_name,
+        "sha256": status.sha256,
+        "error": status.error,
+        "message": update_status_message(status),
+    })
+}
+
+#[cfg(target_os = "android")]
+fn failed_status(message: String) -> Value {
+    let status = UpdateDownloadStatus {
+        state: "failed".into(),
+        error: message.clone(),
+        ..Default::default()
+    };
+    download_status_json(&status)
+}
+
 /// How far the download has come, for the progress line in the UI.
+///
+/// A system download outlives this process, so the persisted record is consulted
+/// first: after a restart the only way to know how it went is to ask Android and
+/// then verify the bytes it wrote.
 #[cfg(target_os = "android")]
 #[tauri::command]
-fn sunday_update_status(app: tauri::AppHandle) -> Result<Value, String> {
+async fn sunday_update_status(
+    app: tauri::AppHandle,
+    shell: tauri::State<'_, MobileShell<tauri::Wry>>,
+) -> Result<Value, String> {
+    let persisted = read_persisted_download(&app);
+    if let Some(persisted) = persisted {
+        let report = shell
+            .0
+            .run_mobile_plugin::<ShellDownloadState>(
+                "downloadState",
+                ShellDownloadIdRequest { id: &persisted.download_id },
+            )
+            .map_err(|_| "无法读取下载进度".to_owned())?;
+        // Already checked in an earlier poll: do not hash 60 MB again.
+        if persisted.verified && report.state == "successful" {
+            let status = UpdateDownloadStatus {
+                state: "verified".into(),
+                received: report.total.max(0) as u64,
+                total: Some(report.total.max(0) as u64),
+                file_name: persisted.file_name.clone(),
+                sha256: persisted.sha256.clone(),
+                error: String::new(),
+            };
+            return Ok(download_status_json(&status));
+        }
+        match report.state.as_str() {
+            "successful" => {
+                let path = std::path::Path::new(&persisted.directory).join(&persisted.file_name);
+                let expected = persisted.sha256.clone();
+                // Hashing 60 MB is blocking work: keep it off the runtime's loop.
+                let verified = tauri::async_runtime::spawn_blocking(move || {
+                    lamtools_runtime::update_manifest::verify_file_sha256(&path, &expected)
+                        .map(|digest| (digest, path))
+                })
+                .await
+                .map_err(|error| error.to_string())?;
+                match verified {
+                    Ok((digest, path)) => {
+                        let bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+                        let mut record = persisted.clone();
+                        record.verified = true;
+                        record.sha256 = digest.clone();
+                        write_persisted_download(&app, &record);
+                        // Keep the in-memory view in step for this process.
+                        let state = app.state::<UpdateDownloadState>();
+                        let mut current = state
+                            .inner
+                            .lock()
+                            .map_err(|_| "更新状态不可用".to_owned())?;
+                        current.state = "verified".into();
+                        current.received = bytes;
+                        current.total = Some(bytes);
+                        current.file_name = persisted.file_name.clone();
+                        current.sha256 = digest.clone();
+                        current.error.clear();
+                        drop(current);
+                        let status = UpdateDownloadStatus {
+                            state: "verified".into(),
+                            received: bytes,
+                            total: Some(bytes),
+                            file_name: persisted.file_name.clone(),
+                            sha256: digest,
+                            error: String::new(),
+                        };
+                        return Ok(download_status_json(&status));
+                    }
+                    Err(error) => {
+                        // Whatever Android downloaded is not what the manifest
+                        // described: drop it instead of offering it.
+                        let _ = std::fs::remove_file(
+                            std::path::Path::new(&persisted.directory).join(&persisted.file_name),
+                        );
+                        clear_persisted_download(&app);
+                        return Ok(failed_status(error.to_string()));
+                    }
+                }
+            }
+            "failed" => {
+                clear_persisted_download(&app);
+                return Ok(failed_status(format!(
+                    "系统下载失败（原因代码 {}），请重试",
+                    report.reason
+                )));
+            }
+            "unknown" => {
+                clear_persisted_download(&app);
+                return Ok(failed_status("下载记录已失效，请重新下载".into()));
+            }
+            _ => {
+                let status = UpdateDownloadStatus {
+                    state: "downloading".into(),
+                    received: report.received.max(0) as u64,
+                    total: (report.total > 0).then_some(report.total as u64),
+                    file_name: persisted.file_name.clone(),
+                    sha256: persisted.sha256.clone(),
+                    error: String::new(),
+                };
+                return Ok(download_status_json(&status));
+            }
+        }
+    }
+    let status = {
+        let state = app.state::<UpdateDownloadState>();
+        let current = state
+            .inner
+            .lock()
+            .map_err(|_| "更新状态不可用".to_owned())?;
+        current.clone()
+    };
+    Ok(download_status_json(&status))
+}
+
+/// The file name of a download this host verified, system-owned or in-process.
+///
+/// The persisted record comes first: after the app was killed mid-download, the
+/// system finished it and there is no in-memory state left to consult.
+#[cfg(target_os = "android")]
+fn verified_update_file(app: &tauri::AppHandle) -> Option<String> {
+    if let Some(persisted) = read_persisted_download(app) {
+        if persisted.verified {
+            return Some(persisted.file_name);
+        }
+    }
     let state = app.state::<UpdateDownloadState>();
-    let current = state
-        .inner
-        .lock()
-        .map_err(|_| "更新状态不可用".to_owned())?
-        .clone();
-    Ok(serde_json::json!({
-        "ok": true,
-        "state": current.state,
-        "received": current.received,
-        "total": current.total,
-        "fileName": current.file_name,
-        "sha256": current.sha256,
-        "error": current.error,
-        "message": update_status_message(&current),
-    }))
+    let current = state.inner.lock().ok()?;
+    if current.state == "verified" {
+        return Some(current.file_name.clone());
+    }
+    None
 }
 
 /// Hand the verified APK to Android's package installer. The user confirms
@@ -618,16 +881,8 @@ fn sunday_update_install(
     app: tauri::AppHandle,
     shell: tauri::State<'_, MobileShell<tauri::Wry>>,
 ) -> Result<Value, String> {
-    let state = app.state::<UpdateDownloadState>();
-    let current = state
-        .inner
-        .lock()
-        .map_err(|_| "更新状态不可用".to_owned())?
-        .clone();
-    if current.state != "verified" {
-        return Err("尚未下载并校验安装包".to_owned());
-    }
-    let file_name = validate_update_file_name(&current.file_name)?;
+    let file_name = verified_update_file(&app).ok_or_else(|| "尚未下载并校验安装包".to_owned())?;
+    let file_name = validate_update_file_name(&file_name)?;
     shell
         .0
         .run_mobile_plugin::<Value>("installApk", ShellFileRequest { file_name: &file_name })

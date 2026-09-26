@@ -221,6 +221,42 @@ async fn stream_to_file(
     Ok((received, hex_digest(hasher.finalize().as_slice())))
 }
 
+/// Hash a file already on disk and check it against `expected_sha256`.
+///
+/// A download the platform's own downloader performed still has to be verified
+/// before an installer sees it — the file was written by another process, so the
+/// digest is the only thing tying it to the release that was published.
+pub fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<String, RuntimeError> {
+    use std::io::Read;
+
+    let expected = expected_sha256.trim().to_ascii_lowercase();
+    if expected.len() != 64 || !expected.chars().all(|character| character.is_ascii_hexdigit()) {
+        return Err(RuntimeError::Tool(
+            "the update manifest carries no usable sha256".into(),
+        ));
+    }
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| RuntimeError::Tool(format!("cannot read the downloaded update: {error}")))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 20];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| RuntimeError::Tool(format!("cannot read the downloaded update: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let digest = hex_digest(hasher.finalize().as_slice());
+    if digest != expected {
+        return Err(RuntimeError::Tool(format!(
+            "downloaded update does not match the manifest sha256 (got {digest})"
+        )));
+    }
+    Ok(digest)
+}
+
 /// `Sunday.setup.exe` → `Sunday.setup.exe.part` (kept beside the target so the
 /// rename that publishes it is on the same filesystem).
 fn partial_path(destination: &Path) -> PathBuf {
@@ -322,6 +358,20 @@ mod tests {
         assert!(error.to_string().contains("does not match"), "{error}");
         assert!(!destination.exists(), "the artifact must not be published");
         assert!(!partial_path(&destination).exists(), "the partial must go too");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn verifies_a_file_already_on_disk() {
+        let directory = temporary_directory("verify-file");
+        std::fs::create_dir_all(&directory).expect("mkdir");
+        let path = directory.join("Sunday.setup.exe");
+        std::fs::write(&path, b"installer bytes").expect("write");
+        let digest = hex_digest(Sha256::digest(b"installer bytes").as_slice());
+
+        assert_eq!(verify_file_sha256(&path, &digest).expect("verified"), digest);
+        assert!(verify_file_sha256(&path, &"a".repeat(64)).is_err());
+        assert!(verify_file_sha256(&directory.join("missing"), &digest).is_err());
         let _ = std::fs::remove_dir_all(&directory);
     }
 
