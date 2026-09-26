@@ -138,7 +138,13 @@ jobs:
           $port = Get-Random -Minimum 5300 -Maximum 5900
           $env:LAMCORE_PORT = "$port"
           $env:LAMTOOLS_HOME = "$env:TEMP\lamcore-smoke-$PID"
-          $p = Start-Process -FilePath "core/dist/LamCore/LamCore.exe" -PassThru
+          # A frozen backend that starts but never answers health used to leave
+          # nothing to diagnose: the child's own output went to a console the
+          # runner does not capture. Keep it, and print it when the probe fails.
+          $outLog = Join-Path $env:TEMP "lamcore-smoke-$PID.stdout.log"
+          $errLog = Join-Path $env:TEMP "lamcore-smoke-$PID.stderr.log"
+          $p = Start-Process -FilePath "core/dist/LamCore/LamCore.exe" -PassThru `
+            -RedirectStandardOutput $outLog -RedirectStandardError $errLog
           $ok = $false
           try {
             for ($i = 0; $i -lt 90; $i++) {
@@ -150,6 +156,14 @@ jobs:
               } catch { }
             }
             if (-not $ok) {
+              Write-Host "--- backend stdout (port $port, home $env:LAMTOOLS_HOME) ---"
+              if (Test-Path $outLog) { Get-Content $outLog -Tail 80 | ForEach-Object { Write-Host $_ } }
+              Write-Host "--- backend stderr ---"
+              if (Test-Path $errLog) { Get-Content $errLog -Tail 80 | ForEach-Object { Write-Host $_ } }
+              Write-Host "--- listening sockets ---"
+              Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+                Where-Object { $_.LocalPort -ge 5000 -and $_.LocalPort -le 6000 } |
+                ForEach-Object { Write-Host "$($_.LocalAddress):$($_.LocalPort)" }
               Write-Error "Backend smoke test failed — binary cannot boot (deps / hiddenimports / data missing)"
               exit 1
             }
