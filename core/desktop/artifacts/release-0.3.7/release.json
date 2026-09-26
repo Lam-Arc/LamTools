@@ -1,0 +1,14 @@
+{
+  "version": "0.3.7",
+  "tag": "v0.3.7",
+  "installer_path": "E:\\LamTools\\release\\desktop\\Sunday_0.3.7_x64-setup.exe",
+  "installer_sha256": "93338593d1cc06456fecc4bdff5d05fccbe7e5ca09a76c48c1b355e286eda2d1",
+  "installer_size": 58166212,
+  "old_version": "0.3.6",
+  "old_latest_sha256": "41fedc6c7f14ed7a6b5f9420dd2cda780cd386b499e915b85873f60091711343",
+  "old_latest_size": 94124582,
+  "date_tag": "20260926",
+  "manifest_sha256": "0beae41aad6dc93bab932f90c7109aba93e8c7bd23cfa083652be782f687c725",
+  "authorized_keys_lines": 1,
+  "authorized_keys_note": "Owner's Aliyun key pair (skp-bp19aylqsh2502ocgm9c) is pre-existing; this flow restores the count to this baseline."
+}

@@ -241,7 +241,7 @@ async function handleRpcRequest(
   if (method === 'initialize') {
     return {
       protocolVersion: 'core.app_server.v1',
-      serverInfo: { name: 'Sunday website preview', version: '0.3.6' },
+      serverInfo: { name: 'Sunday website preview', version: '0.3.7' },
     }
   }
 
@@ -302,8 +302,8 @@ async function handleRpcRequest(
   if (method === 'artifact.list' || method === 'artifact.revisions') return { artifacts: [], revisions: [] }
   if (method === 'update.check') return {
     status: 'up_to_date',
-    current_version: '0.3.6',
-    latest_version: '0.3.6',
+    current_version: '0.3.7',
+    latest_version: '0.3.7',
     source: 'github',
   }
 
