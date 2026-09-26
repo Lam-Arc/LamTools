@@ -132,7 +132,8 @@ export interface LocalRepository {
   createLocalSession(projectId?: string, title?: string): Promise<LocalThread>
   updateLocalSession(threadId: string, input: { title?: string; metadata?: Record<string, unknown>; status?: string }): Promise<LocalThread>
   deleteLocalSession(threadId: string): Promise<void>
-  saveLocalSnapshot(snapshot: CoreAppSnapshot): Promise<void>
+  /** `silent` keeps a periodic write from notifying subscribers. */
+  saveLocalSnapshot(snapshot: CoreAppSnapshot, options?: { silent?: boolean }): Promise<void>
   importLocalProject(project: LocalProject, threads: LocalThread[], snapshots: CoreAppSnapshot[]): Promise<LocalProject>
   applySyncSnapshot(payload: Record<string, unknown>): Promise<void>
   applySyncChange(change: LocalSyncChange): Promise<void>
@@ -392,14 +393,17 @@ export function createLocalRepository(
     })
   }
 
-  async function saveLocalSnapshot(snapshot: CoreAppSnapshot): Promise<void> {
+  async function saveLocalSnapshot(
+    snapshot: CoreAppSnapshot,
+    options: { silent?: boolean } = {},
+  ): Promise<void> {
     await init()
     await update((next) => {
       const normalized = normalizeSnapshot(snapshot, snapshot.thread_id)
       next.snapshots[snapshot.thread_id] = normalized
       next.snapshotRevision = Math.max(next.snapshotRevision, numberOrZero(normalized.revision))
       updateThreadFromSnapshot(next, normalized)
-    })
+    }, options)
   }
 
   async function importLocalProject(
@@ -630,15 +634,18 @@ export function createLocalRepository(
     })
   }
 
-  async function update(mutator: (next: LocalState) => void): Promise<void> {
+  async function update(
+    mutator: (next: LocalState) => void,
+    options: { silent?: boolean } = {},
+  ): Promise<void> {
     await enqueue(async () => {
       const next = clone(state.value)
       mutator(next)
-      await replaceState(next)
+      await replaceState(next, options.silent === true)
     })
   }
 
-  async function replaceState(next: LocalState): Promise<void> {
+  async function replaceState(next: LocalState, silent = false): Promise<void> {
     const committed = normalizeState(next)
     const committedScope = scopeFor(committed.accountScope, committed.desktopId, committed.workspaceId)
     if (database.writeScope) await database.writeScope(committedScope, committed)
@@ -646,7 +653,10 @@ export function createLocalRepository(
     state.value = committed
     activeScope = committedScope
     localScopes.set(committedScope, clone(committed))
-    for (const listener of listeners) listener(state.value)
+    // A running turn persists on a timer. Its state came from the live snapshot
+    // the UI is already rendering, so notifying subscribers would only make the
+    // workbench re-read a session list that cannot have changed.
+    if (!silent) for (const listener of listeners) listener(state.value)
   }
 
   async function switchScope(

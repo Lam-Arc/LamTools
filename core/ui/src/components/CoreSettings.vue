@@ -742,10 +742,40 @@
           <h3>发现新版本 v{{ updateLatestVersion }}<span v-if="updateSourceLabel" class="muted"> · 来源：{{ updateSourceLabel }}</span></h3>
           <p v-if="updateReleaseNotes" class="about-notes">{{ updateReleaseNotes }}</p>
           <div class="about-actions">
-            <button class="small-btn primary" type="button" data-download-update @click="downloadUpdate()">下载安装包</button>
+            <!-- 清单带 sha256 时由宿主下载并校验，再交给平台安装器；没有摘要就退回浏览器下载页。 -->
+            <button
+              v-if="updateInstallSupported"
+              class="small-btn primary"
+              type="button"
+              data-download-installer
+              :disabled="updateInstallState === 'downloading' || updateInstallState === 'installing'"
+              @click="downloadInstaller()"
+            >{{ updateInstallState === 'downloading' ? (updateInstallProgressLabel || '正在下载…') : updateInstallState === 'downloaded' ? '重新下载' : '下载安装包' }}</button>
+            <button
+              v-if="updateInstallSupported && updateInstallState === 'downloaded'"
+              class="small-btn primary"
+              type="button"
+              data-run-installer
+              @click="runInstaller()"
+            >立即安装</button>
+            <button
+              v-else-if="!updateInstallSupported"
+              class="small-btn primary"
+              type="button"
+              data-download-update
+              @click="downloadUpdate()"
+            >下载安装包</button>
             <button class="small-btn quiet" type="button" data-open-release-page @click="openUpdateReleasePage">查看发布说明</button>
           </div>
-          <p class="muted">下载完成后请先退出 Sunday，再运行安装包完成升级。</p>
+          <p v-if="updateInstallError" class="about-status error" data-install-error>{{ updateInstallError }}</p>
+          <p v-else-if="updateInstallMessage" class="about-status" data-install-status>{{ updateInstallMessage }}</p>
+          <p v-if="updateInstallState === 'downloading'" class="about-status" data-install-progress>
+            {{ updateInstallProgressLabel || '正在下载…' }}
+          </p>
+          <p v-if="updateInstallSupported" class="muted">
+            {{ updateInstallHint || '下载完成后点击「立即安装」。' }}<template v-if="updatePackageSizeLabel">安装包约 {{ updatePackageSizeLabel }}。</template>
+          </p>
+          <p v-else class="muted">下载完成后请先退出 Sunday，再运行安装包完成升级。</p>
         </article>
         <article class="setting-card">
           <h3>自动检查</h3>
@@ -1614,8 +1644,17 @@ const {
   sourceLabel: updateSourceLabel,
   noInstallerForPlatform: updateNoInstallerForPlatform,
   error: updateError,
+  installSupported: updateInstallSupported,
+  installHint: updateInstallHint,
+  installState: updateInstallState,
+  installMessage: updateInstallMessage,
+  installError: updateInstallError,
+  installProgressLabel: updateInstallProgressLabel,
+  packageSizeLabel: updatePackageSizeLabel,
   check: checkForUpdates,
   download: downloadUpdate,
+  downloadInstaller,
+  runInstaller,
 } = update
 
 const permissionPreset = computed<CorePermissionPreset>(() => (

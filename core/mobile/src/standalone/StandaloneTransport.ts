@@ -127,6 +127,20 @@ const stageLabels: Record<string, string> = {
 
 const MOBILE_PROGRESS_KEY = 'mobile_turn_progress'
 const TERMINAL_PROGRESS_MS = 1500
+/**
+ * An interrupted turn keeps its notice long enough to be read on the next
+ * launch. The other terminal states fade after `TERMINAL_PROGRESS_MS`, but a
+ * turn that was killed is a fact about the transcript — its answer may be
+ * incomplete — so it stays visible for a while instead of for a glance.
+ */
+const INTERRUPTED_PROGRESS_MS = 60_000
+/**
+ * How often a turn that is still running writes itself to the device. See
+ * `TurnPersistScheduler`; `VITE_MOBILE_TURN_PERSIST_MS` lowers it for tests and
+ * for on-device diagnosis of a slow device.
+ */
+const DEFAULT_TURN_PERSIST_MS = 2000
+const MIN_TURN_PERSIST_MS = 250
 
 const defaultListenTurnStage: ListenTurnStage = async handler =>
   await listen('sunday-agent-stage', event => handler(event.payload))
@@ -147,6 +161,130 @@ const callEmbeddedWorkflow: WorkflowCall = async call => await invoke<Record<str
   'sunday_workflow_rpc', { payload: call },
 )
 
+/**
+ * Coalesced durable writes for a turn that is still running.
+ *
+ * A turn used to reach the repository only at its boundaries: once before the
+ * model call — the user message plus an empty answer item — and once when it
+ * ended. Everything produced in between lived in the WebView alone, so an
+ * Android kill during a turn discarded the answer the user had already been
+ * reading, and the transcript came back as a user message with an empty reply.
+ * Writing the live snapshot on a slow interval bounds that loss to one interval.
+ *
+ * The write is coalesced: streaming marks the turn dirty as often as it flushes
+ * and only the first mark starts a timer, so a long answer costs one write per
+ * interval. Deltas arriving during a write leave the turn dirty again and the
+ * next interval picks them up.
+ */
+class TurnPersistScheduler {
+  private readonly pending = new Map<string, {
+    timer: ReturnType<typeof setTimeout> | null
+    lastWriteAt: number
+    dirty: boolean
+  }>()
+
+  constructor(
+    private readonly intervalMs: number,
+    /** The live snapshot of a thread that still has a turn to protect. */
+    private readonly running: (threadId: string) => SnapshotWithSession | null,
+    private readonly write: (snapshot: SnapshotWithSession) => Promise<void>,
+  ) {}
+
+  schedule(threadId: string): void {
+    const state = this.state(threadId)
+    state.dirty = true
+    if (state.timer != null) return
+    const wait = Math.max(0, this.intervalMs - (Date.now() - state.lastWriteAt))
+    state.timer = setTimeout(() => {
+      state.timer = null
+      void this.flush(threadId)
+    }, wait)
+  }
+
+  /**
+   * Write now instead of waiting for the interval. Used when the app is about to
+   * lose its chance to write at all — backgrounded, or torn down.
+   */
+  async flushNow(threadId: string): Promise<void> {
+    const state = this.pending.get(threadId)
+    if (!state) return
+    if (state.timer != null) {
+      clearTimeout(state.timer)
+      state.timer = null
+    }
+    await this.flush(threadId)
+  }
+
+  async flushAll(): Promise<void> {
+    await Promise.all([...this.pending.keys()].map(threadId => this.flushNow(threadId)))
+  }
+
+  stop(threadId: string): void {
+    const state = this.pending.get(threadId)
+    if (state?.timer != null) clearTimeout(state.timer)
+    this.pending.delete(threadId)
+  }
+
+  stopAll(): void {
+    for (const threadId of [...this.pending.keys()]) this.stop(threadId)
+  }
+
+  private state(threadId: string) {
+    const existing = this.pending.get(threadId)
+    if (existing) return existing
+    // The turn-boundary write already covered everything up to the first mark,
+    // so the first periodic write waits a full interval instead of firing at
+    // once. It also keeps the interval honest under a faked clock.
+    const created: { timer: ReturnType<typeof setTimeout> | null; lastWriteAt: number; dirty: boolean } =
+      { timer: null, lastWriteAt: Date.now(), dirty: false }
+    this.pending.set(threadId, created)
+    return created
+  }
+
+  private async flush(threadId: string): Promise<void> {
+    const state = this.pending.get(threadId)
+    if (!state?.dirty) return
+    const snapshot = this.running(threadId)
+    if (!snapshot) {
+      // The turn ended while a write was pending; its own end-of-turn write owns
+      // the final state, so this entry can go.
+      this.pending.delete(threadId)
+      return
+    }
+    state.dirty = false
+    state.lastWriteAt = Date.now()
+    try {
+      await this.write(snapshot)
+    } catch (error) {
+      console.error('Failed to persist a running standalone turn', error)
+      // Keep the turn dirty so the next flush — the next delta, or the
+      // end-of-turn write — tries again instead of dropping the window.
+      state.dirty = true
+    }
+  }
+}
+
+function turnPersistIntervalMs(): number {
+  const configured = Number(import.meta.env.VITE_MOBILE_TURN_PERSIST_MS)
+  if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_TURN_PERSIST_MS
+  return Math.max(MIN_TURN_PERSIST_MS, Math.floor(configured))
+}
+
+/**
+ * The file name an update download writes.
+ *
+ * The release site serves both a versioned APK and `Sunday-mobile-latest.apk`;
+ * the manifest normally points at the latter. Both are acceptable names for the
+ * installer, so the URL's own last segment wins and a versioned name is only a
+ * fallback for a URL that has none.
+ */
+function updateFileName(url: string, version: string): string {
+  const last = url.split('?')[0].split('/').filter(Boolean).at(-1) || ''
+  if (/^[A-Za-z0-9._-]{1,120}\.apk$/.test(last)) return last
+  return `Sunday-mobile_${version || 'update'}.apk`
+}
+
+
 export class StandaloneTransport implements LamToolsTransport {
   private state: TransportConnectionState = 'disconnected'
   private readonly stateListeners = new Set<(state: TransportConnectionState) => void>()
@@ -164,6 +302,10 @@ export class StandaloneTransport implements LamToolsTransport {
   private readonly arrange: StandaloneArrangeStore
   private readonly projectRoutes: ReturnType<typeof createStandaloneProjectRoutes>
   private readonly checkpointRpc: ReturnType<typeof createCheckpointRpc>
+  /** Keeps a running turn durable while it produces content. */
+  private readonly turnPersists: TurnPersistScheduler
+  /** The verified release `update.download` may fetch; cleared by every check. */
+  private pendingUpdate: { version: string; url: string; sha256: string; fileName: string } | null = null
 
   constructor(
     private readonly repository: LocalRepository,
@@ -187,6 +329,20 @@ export class StandaloneTransport implements LamToolsTransport {
       truncateSession: (sessionId, turnId) => this.truncateSessionAfterTurn(sessionId, turnId),
       checkpointTurn: async checkpointId => (await readEmbeddedCheckpoint(checkpointId)).turn_id,
     })
+    this.turnPersists = new TurnPersistScheduler(
+      turnPersistIntervalMs(),
+      threadId => {
+        const snapshot = this.activeSnapshots.get(threadId)
+        if (!snapshot) return null
+        const running = Object.values(snapshot.core?.turns || {})
+          .some(turn => turn.status === 'running' || turn.status === 'waiting')
+        return running ? snapshot : null
+      },
+      // Subscribers are not notified: this state came from the live snapshot the
+      // UI is already rendering, so a periodic write must not look like a change
+      // the workbench has to reload for.
+      snapshot => this.saveSnapshot(snapshot, { silent: true }),
+    )
   }
 
   async connect(): Promise<void> {
@@ -207,7 +363,62 @@ export class StandaloneTransport implements LamToolsTransport {
     finally { if (this.connecting === connecting) this.connecting = null }
   }
 
+  /**
+   * Make every running turn durable right now.
+   *
+   * The interval write bounds what a kill can lose, but a bounded loss is not
+   * zero: the app calls this when it is about to lose the chance to write —
+   * going to the background, where Android may reclaim the process without
+   * another callback — and when the transport is torn down.
+   */
+  async persistActiveSnapshot(): Promise<void> {
+    await this.turnPersists.flushAll()
+  }
+
+  /**
+   * Start the download the last check verified.
+   *
+   * Returns as soon as the host has begun: a 60 MB transfer must not hold the
+   * caller open, so the UI watches `update.status` for progress.
+   */
+  private async downloadUpdate(): Promise<Record<string, unknown>> {
+    const pending = this.pendingUpdate
+    if (!pending) throw new Error('没有已确认的更新可下载，请先检查更新')
+    const started = await invoke<Record<string, unknown>>('sunday_update_download', {
+      url: pending.url,
+      sha256: pending.sha256,
+      fileName: pending.fileName,
+    })
+    return {
+      ok: true,
+      state: String(started.state || 'downloading'),
+      version: pending.version,
+      message: '开始下载安装包',
+    }
+  }
+
+  /** How far the host's download has come, and whether it is verified. */
+  private async updateStatus(): Promise<Record<string, unknown>> {
+    const status = await invoke<Record<string, unknown>>('sunday_update_status')
+    return { ok: true, ...status }
+  }
+
+  /**
+   * Hand the verified APK to the installer.
+   *
+   * No arguments: the host installs the file its own download verified, so the
+   * UI cannot aim the installer at anything else.
+   */
+  private async installUpdate(): Promise<Record<string, unknown>> {
+    const result = await invoke<Record<string, unknown>>('sunday_update_install')
+    return { ok: true, ...result }
+  }
+
   async close(): Promise<void> {
+    // Best effort before the state is dropped: a turn that is still running keeps
+    // whatever it has produced so far.
+    await this.persistActiveSnapshot().catch(() => undefined)
+    this.turnPersists.stopAll()
     this.generations.clear()
     this.activeSnapshots.clear()
     for (const controller of this.aborts.values()) controller.abort()
@@ -257,7 +468,24 @@ export class StandaloneTransport implements LamToolsTransport {
     const checkpointResult = await this.checkpointRpc(method, params)
     if (checkpointResult) return checkpointResult
     if (method === 'workspace.search') return await searchStandaloneWorkspace(this.repository, params)
-    if (method === 'update.check') return await checkStandaloneUpdate()
+    if (method === 'update.check') {
+      const result = await checkStandaloneUpdate()
+      // Remember the release the check verified, so `update.download` needs no
+      // URL and no digest from its caller: only what this host fetched and
+      // checked against the manifest can reach an installer.
+      this.pendingUpdate = result.status === 'update_available' && result.install_supported === true
+        ? {
+            version: String(result.latest_version || ''),
+            url: String(result.download_url || ''),
+            sha256: String(result.sha256 || ''),
+            fileName: updateFileName(String(result.download_url || ''), String(result.latest_version || '')),
+          }
+        : null
+      return result
+    }
+    if (method === 'update.download') return await this.downloadUpdate()
+    if (method === 'update.status') return await this.updateStatus()
+    if (method === 'update.install') return await this.installUpdate()
     if (method === 'project.list') {
       return { projects: (await this.repository.listProjects()).map(project => ({
         id: project.id, name: project.name, work_root: project.workRoot || project.path,
@@ -1219,6 +1447,9 @@ export class StandaloneTransport implements LamToolsTransport {
     core.snapshot_seq = snapshot.snapshot_seq
     snapshot.revision = Number(snapshot.revision || 0) + 1
     core.revision = snapshot.revision
+    // The turn is terminal: every caller writes this snapshot, so the periodic
+    // timer has nothing left to protect.
+    this.turnPersists.stop(snapshot.thread_id)
   }
 
   private async interruptTurn(threadId: string): Promise<Record<string, unknown>> {
@@ -1259,6 +1490,8 @@ export class StandaloneTransport implements LamToolsTransport {
     core.snapshot_seq = snapshot.snapshot_seq
     snapshot.revision = Number(snapshot.revision || 0) + 1
     core.revision = snapshot.revision
+    // Stopping persists this snapshot, so the periodic timer is done with it.
+    this.turnPersists.stop(threadId)
     await this.saveSnapshot(snapshot)
     if (this.generations.get(threadId) !== generation) return { snapshot }
     this.activeSnapshots.delete(threadId)
@@ -1484,6 +1717,9 @@ export class StandaloneTransport implements LamToolsTransport {
       snapshot.revision = Number(snapshot.revision || 0) + 1
       snapshot.core!.revision = snapshot.revision
       this.emitSnapshot(snapshot)
+      // Where the turn had got to is worth keeping across a kill too, so the
+      // restored transcript can say more than "interrupted".
+      this.turnPersists.schedule(snapshot.thread_id)
     }
     let unlisten: () => void = () => {}
     const stopListening = () => {
@@ -1604,6 +1840,8 @@ export class StandaloneTransport implements LamToolsTransport {
       snapshot.revision = Number(snapshot.revision || 0) + 1
       core.revision = snapshot.revision
       this.emitSnapshot(snapshot)
+      // The answer the user is reading right now has to outlive the process.
+      this.turnPersists.schedule(threadId)
     }
     const stopListening = () => {
       if (!active) return
@@ -1670,6 +1908,9 @@ export class StandaloneTransport implements LamToolsTransport {
       snapshot.revision = Number(snapshot.revision || 0) + 1
       core.revision = snapshot.revision
       this.emitSnapshot(snapshot)
+      // A tool step is part of the turn the user is watching; it survives a kill
+      // on the same schedule as the text.
+      this.turnPersists.schedule(threadId)
     }
     this.activeStreamListeners.get(threadId)?.()
     this.activeStreamListeners.set(threadId, stopListening)
@@ -1743,12 +1984,22 @@ export class StandaloneTransport implements LamToolsTransport {
       for (const item of Object.values(core.items || {})) {
         if (item.status === 'running') {
           item.status = 'cancelled'
-          if (item.type === 'agentMessage') item.metadata = {
-            ...(isRecord(item.metadata) ? item.metadata : {}),
-            [MOBILE_PROGRESS_KEY]: {
-              stage: 'cancelled', label: '已取消', status: 'cancelled',
-              expires_at: Date.now() + TERMINAL_PROGRESS_MS,
-            },
+          if (item.type === 'agentMessage') {
+            // A turn whose process died is not a turn the user stopped, and the
+            // answer that was persisted before the kill is all that survives of
+            // it. Say both, so an empty or half-finished reply is not mistaken
+            // for the model having had nothing to say.
+            const saved = String((isRecord(item.payload) ? item.payload.content : '') ?? item.content ?? '')
+            item.metadata = {
+              ...(isRecord(item.metadata) ? item.metadata : {}),
+              interrupted: true,
+              [MOBILE_PROGRESS_KEY]: {
+                stage: 'interrupted',
+                label: saved.trim() ? '已中断，回答可能不完整' : '已中断，未保存到回答',
+                status: 'cancelled',
+                expires_at: Date.now() + INTERRUPTED_PROGRESS_MS,
+              },
+            }
           }
         }
       }
@@ -1783,13 +2034,17 @@ export class StandaloneTransport implements LamToolsTransport {
     this.emitSnapshot(snapshot)
   }
 
-  private async saveSnapshot(snapshot: SnapshotWithSession): Promise<void> {
+  private async saveSnapshot(
+    snapshot: SnapshotWithSession,
+    options: { silent?: boolean } = {},
+  ): Promise<void> {
     const threadId = snapshot.thread_id
     // The repository normalizes only the top level. Capture this revision now
     // so a running turn cannot mutate a previously persisted snapshot by ref.
     const persisted = jsonClone(snapshot) as SnapshotWithSession
     const previous = this.snapshotSaves.get(threadId) || Promise.resolve()
-    const pending = previous.catch(() => {}).then(() => this.repository.saveLocalSnapshot(persisted))
+    const pending = previous.catch(() => {})
+      .then(() => this.repository.saveLocalSnapshot(persisted, options))
     this.snapshotSaves.set(threadId, pending)
     try {
       await pending

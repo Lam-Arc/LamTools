@@ -1774,3 +1774,136 @@ describe('StandaloneTransport', () => {
     }))
   })
 })
+
+/**
+ * A turn used to reach the device only at its boundaries: once before the model
+ * call (the user message plus an empty answer) and once when it ended. An
+ * Android kill during a turn therefore took the whole answer with it, and the
+ * transcript came back as a user message with an empty reply.
+ *
+ * These tests drive the real path with a model call that never returns — the
+ * state a kill interrupts — and assert what the device database holds while the
+ * turn is still running.
+ */
+describe('a running turn is durable on the device', () => {
+  const config = () => ({
+    handleRpc: async () => null,
+    activeModel: async () => ({
+      provider: { id: 'p', name: 'P', api_type: 'openai', base_url: 'https://m.invalid/v1' },
+      model: { id: 'm', model_id: 'm', display_name: 'M' },
+      apiKey: 'k',
+    }),
+    runtimeModels: async () => [],
+    settings: async () => ({}),
+    subAgentRuntime: async () => ({ enabled: false, guide: '' }),
+    modePlan: async () => ({ tools: null, promptLine: '' }),
+  } as unknown as StandaloneConfigStore)
+
+  async function streamingTurn(title: string) {
+    const database = new MemoryDatabase()
+    const repository = createLocalRepository(database)
+    const created = await repository.createLocalSession(undefined, title)
+    const runAgent = vi.fn(async () => new Promise<never>(() => {}))
+    let onStream: ((payload: unknown) => void) | undefined
+    const snapshots: CoreAppSnapshot[] = []
+    const transport = new StandaloneTransport(
+      repository, config(), runAgent, undefined, undefined, undefined, undefined, undefined, undefined,
+      async handler => { onStream = handler; return vi.fn() },
+    )
+    transport.subscribe((message: TransportMessage) => {
+      if (message.method === 'thread/snapshot' && message.params) {
+        snapshots.push(message.params as unknown as CoreAppSnapshot)
+      }
+    })
+    await transport.request({ method: 'turn/start', params: {
+      thread_id: created.id, input: [{ type: 'text', text: '开始' }],
+    } })
+    await vi.waitFor(() => expect(onStream).toBeTypeOf('function'))
+    const turnId = String((await vi.waitFor(() => {
+      expect(runAgent).toHaveBeenCalled()
+      return runAgent.mock.calls[0][0].turnId
+    })))
+    const textOf = (core: CoreAppSnapshot['core']) => Object.values(core?.items || {})
+      .map(item => String((item.payload as Record<string, unknown> | undefined)?.content || ''))
+      .join('')
+    return {
+      database,
+      repository,
+      created,
+      transport,
+      turnId,
+      send: (payload: Record<string, unknown>) => onStream!({ turnId, ...payload }),
+      /** What the user is reading right now. */
+      liveText: () => textOf(snapshots.at(-1)?.core),
+      /** What a kill would leave behind: the device database, not the WebView. */
+      deviceText: () => textOf(database.value?.snapshots?.[created.id]?.core),
+    }
+  }
+
+  it('writes the answer to the device while the turn is still running', async () => {
+    vi.stubEnv('VITE_MOBILE_TURN_PERSIST_MS', '300')
+    const run = await streamingTurn('闪退')
+    run.send({ kind: 'text_delta', delta: '已经写了一半' })
+    await vi.waitFor(() => expect(run.liveText()).toContain('已经写了一半'))
+    // The turn never finished; the partial answer is what a kill must not take.
+    await vi.waitFor(() => expect(run.deviceText()).toContain('已经写了一半'), { timeout: 3000 })
+  })
+
+  it('writes immediately when the app is about to be backgrounded', async () => {
+    // The default interval is two seconds, far longer than this test, so only
+    // the explicit flush can explain the write.
+    const run = await streamingTurn('退后台')
+    run.send({ kind: 'text_delta', delta: '还没到落盘间隔' })
+    await vi.waitFor(() => expect(run.liveText()).toContain('还没到落盘间隔'))
+    expect(run.deviceText()).not.toContain('还没到落盘间隔')
+
+    await run.transport.persistActiveSnapshot()
+    expect(run.deviceText()).toContain('还没到落盘间隔')
+  })
+
+  it('does not make the workbench reload for a periodic write', async () => {
+    vi.stubEnv('VITE_MOBILE_TURN_PERSIST_MS', '300')
+    const run = await streamingTurn('静默落盘')
+    // The write carries the state the UI is already rendering, so the session
+    // list it would otherwise refresh cannot have changed.
+    let notifications = 0
+    const unsubscribe = run.repository.subscribe(() => { notifications += 1 })
+    run.send({ kind: 'text_delta', delta: '一段很长的回答' })
+    await vi.waitFor(() => expect(run.deviceText()).toContain('一段很长的回答'), { timeout: 3000 })
+    unsubscribe()
+    expect(notifications).toBe(0)
+  })
+
+  it('keeps the answer and reports the turn as interrupted after a restart', async () => {
+    vi.stubEnv('VITE_MOBILE_TURN_PERSIST_MS', '300')
+    const run = await streamingTurn('被杀')
+    run.send({ kind: 'text_delta', delta: '半截回答' })
+    await vi.waitFor(() => expect(run.deviceText()).toContain('半截回答'), { timeout: 3000 })
+
+    // The process is gone: a fresh repository over the same device database is
+    // what the next launch reads.
+    const restarted = createLocalRepository(run.database)
+    const cancel = vi.fn(async () => true)
+    const transport = new StandaloneTransport(
+      restarted, config(), async () => new Promise<never>(() => {}),
+      undefined, undefined, undefined, cancel,
+    )
+    const resumed = await transport.request<{ snapshot: CoreAppSnapshot }>({
+      method: 'thread/resume', params: { thread_id: run.created.id },
+    })
+    const assistant = Object.values(resumed.snapshot.core?.items || {})
+      .find(item => item.item_id === `${run.turnId}:assistant`)
+    expect(String(assistant?.content || '')).toBe('半截回答')
+    expect(assistant?.status).toBe('cancelled')
+    const progress = (assistant?.metadata as Record<string, unknown> | undefined)?.mobile_turn_progress
+    expect(String((progress as Record<string, unknown> | undefined)?.label || '')).toContain('中断')
+    expect(cancel).toHaveBeenCalled()
+    // And the transcript the user comes back to renders that answer instead of
+    // an empty bubble.
+    const rendered = selectChatMessages(resumed.snapshot)
+      .filter(message => message.role === 'assistant')
+      .map(message => message.content)
+      .join('')
+    expect(rendered).toContain('半截回答')
+  })
+})

@@ -22,8 +22,22 @@
     <span class="core-update-banner-text">后端进程已停止响应（可能已崩溃）。请重启应用以恢复。</span>
   </div>
   <div v-if="updateBannerVisible" class="core-update-banner" data-update-banner>
-    <span class="core-update-banner-text">发现新版本 v{{ updateLatestVersion }}，是否立即下载？</span>
-    <button class="core-update-banner-action" type="button" data-update-banner-download @click="downloadUpdate()">下载更新</button>
+    <span class="core-update-banner-text">{{ updateBannerText }}</span>
+    <button
+      v-if="updateBannerAction === 'install'"
+      class="core-update-banner-action"
+      type="button"
+      data-update-banner-install
+      @click="installUpdateNow()"
+    >立即安装</button>
+    <button
+      v-else
+      class="core-update-banner-action"
+      type="button"
+      :disabled="updateInstallState === 'downloading'"
+      data-update-banner-download
+      @click="startUpdateDownload()"
+    >{{ updateInstallState === 'downloading' ? '下载中…' : '下载更新' }}</button>
     <button class="core-update-banner-close" type="button" aria-label="关闭提示" @click="dismissUpdateBanner">✕</button>
   </div>
   <CoreSettings
@@ -3316,7 +3330,42 @@ async function requestConfigOperation(method: string, params: Record<string, unk
 // ── 软件更新（设置 → 关于与更新；启动时静默自动检查）──
 const updateState = useCoreUpdateState(requestConfigOperation)
 // 解构到 setup 顶层供模板使用（嵌套 ref 在模板中不会自动解包）
-const { status: updateStatus, latestVersion: updateLatestVersion, download: downloadUpdate } = updateState
+const {
+  status: updateStatus,
+  latestVersion: updateLatestVersion,
+  download: downloadUpdate,
+  installSupported: updateInstallSupported,
+  installState: updateInstallState,
+  installProgressLabel: updateInstallProgressLabel,
+} = updateState
+
+/**
+ * The banner is the first place a new version shows up, so it offers the same
+ * action as the settings card: download and verify in place when the manifest
+ * carries a digest, otherwise the download page.
+ */
+const updateBannerText = computed(() => {
+  if (updateInstallState.value === 'downloading') {
+    return updateInstallProgressLabel.value || `正在下载 v${updateLatestVersion.value}…`
+  }
+  if (updateInstallState.value === 'downloaded') {
+    return `更新 v${updateLatestVersion.value} 已下载并校验，可以安装了`
+  }
+  return `发现新版本 v${updateLatestVersion.value}，是否立即下载？`
+})
+const updateBannerAction = computed<'download' | 'install'>(
+  () => (updateInstallState.value === 'downloaded' ? 'install' : 'download'),
+)
+function startUpdateDownload() {
+  if (updateInstallSupported.value) {
+    void updateState.downloadInstaller()
+    return
+  }
+  void downloadUpdate()
+}
+function installUpdateNow() {
+  void updateState.runInstaller()
+}
 const updateBannerDismissed = ref(false)
 const updateBannerVisible = computed(
   () => updateStatus.value === 'update_available' && !updateBannerDismissed.value,

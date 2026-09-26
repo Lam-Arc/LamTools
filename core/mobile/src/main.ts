@@ -1,6 +1,29 @@
 import { createApp } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 
 const root = document.querySelector<HTMLElement>('#app')
+
+/**
+ * External links leave through the system browser.
+ *
+ * The shared UI routes every external link through `__LAMTOOLS_OPEN_URL__`, and
+ * the desktop shell injects its own. Without one here the fallback is
+ * `window.open(..., '_blank')`, which wry's Android WebView silently drops —
+ * `window.open` needs `setSupportMultipleWindows` plus an `onCreateWindow`
+ * handler that wry does not provide — so "下载安装包" and "查看发布说明" were dead
+ * buttons on the phone until this bridge existed.
+ */
+if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+  window.__LAMTOOLS_OPEN_URL__ = async (url: string): Promise<boolean> => {
+    try {
+      await invoke('sunday_open_external_url', { url })
+      return true
+    } catch {
+      // A shell without that command (non-Android Tauri) keeps the fallback.
+      return false
+    }
+  }
+}
 
 function renderStartupError(error: unknown): void {
   if (!root) return

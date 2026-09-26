@@ -104,7 +104,7 @@ import {
   listTrustedDevices,
   type TrustedDevice,
 } from './pairing/TrustedDevices'
-import { onMobileResume } from './native/lifecycle'
+import { onMobilePause, onMobileResume } from './native/lifecycle'
 import { createMobileFilePicker } from './native/filePicker'
 import { observeNativeWindowInsets } from './native/windowInsets'
 import { loadOrCreateDeviceIdentity } from './pairing/DeviceIdentity'
@@ -1044,6 +1044,7 @@ function localProjectToCoreProject(
 }
 
 let removeResumeListener: (() => void) | null = null
+let removePauseListener: (() => void) | null = null
 let removeWindowInsetsListener: (() => void) | null = null
 let removeNativeStageListener: (() => void) | null = null
 let secureStorageRecovered = false
@@ -1078,6 +1079,9 @@ onMounted(async () => {
     accessPanelOpen.value = true
   }
   removeResumeListener = onMobileResume(() => { void restoreActiveConnection() })
+  // Android may reclaim a backgrounded process without another callback, so a
+  // turn that is still running writes itself to the device on the way out.
+  removePauseListener = onMobilePause(() => { void standaloneTransport.persistActiveSnapshot() })
 })
 
 onUnmounted(() => {
@@ -1089,6 +1093,7 @@ onUnmounted(() => {
   removeNativeStageListener?.()
   removeDiagnosticObserver()
   removeResumeListener?.()
+  removePauseListener?.()
   removeWindowInsetsListener?.()
   document.documentElement.style.removeProperty('--native-safe-area-top')
   runtime.close()

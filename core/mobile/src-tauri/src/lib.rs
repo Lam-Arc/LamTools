@@ -265,6 +265,66 @@ struct AttachmentCacheDirectory {
     path: String,
 }
 
+/// The host hands finished work to the system: external links, and the update
+/// APK to the package installer.
+#[cfg(target_os = "android")]
+struct MobileShell<R: Runtime>(PluginHandle<R>);
+
+/// Live update-download state: the UI polls it for progress, and the install
+/// hand-off refuses anything that is not a download this process verified.
+#[derive(Default)]
+struct UpdateDownloadState {
+    inner: std::sync::Mutex<UpdateDownloadStatus>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateDownloadStatus {
+    /// idle | downloading | verified | failed
+    state: String,
+    received: u64,
+    total: Option<u64>,
+    file_name: String,
+    sha256: String,
+    error: String,
+}
+
+/// One line the UI can show verbatim; the desktop host composes the same text.
+#[cfg(target_os = "android")]
+fn update_status_message(status: &UpdateDownloadStatus) -> String {
+    match status.state.as_str() {
+        "downloading" => match status.total {
+            Some(total) if total > 0 => {
+                let percent = (status.received.saturating_mul(100) / total).min(100);
+                format!(
+                    "正在下载 {percent}%（{:.1} MB / {:.1} MB）",
+                    status.received as f64 / (1024.0 * 1024.0),
+                    total as f64 / (1024.0 * 1024.0)
+                )
+            }
+            _ => format!(
+                "正在下载（{:.1} MB）",
+                status.received as f64 / (1024.0 * 1024.0)
+            ),
+        },
+        "verified" => format!("已下载并校验 {}", status.file_name),
+        _ => String::new(),
+    }
+}
+
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+struct ShellUrlRequest<'a> {
+    url: &'a str,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShellFileRequest<'a> {
+    file_name: &'a str,
+}
+
 #[cfg(target_os = "android")]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -422,6 +482,177 @@ async fn sunday_attachment_open(
         )
         .map(|_| ())
         .map_err(|_| "无法使用系统应用打开附件".to_owned())
+}
+
+/// An update artifact name the installer hand-off will accept.
+#[cfg(target_os = "android")]
+fn validate_update_file_name(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    let valid = !trimmed.is_empty()
+        && trimmed.len() <= 120
+        && trimmed.ends_with(".apk")
+        && trimmed.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        });
+    if !valid {
+        return Err("更新文件名无效".into());
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// Start downloading the update the manifest pointed at.
+///
+/// Returns as soon as the transfer is under way — a 60 MB download must not hold
+/// the UI's request open — and reports progress through `sunday_update_status`.
+/// The artifact becomes installable only after its digest matches the manifest;
+/// a second call while one is running just watches the first.
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn sunday_update_download(
+    app: tauri::AppHandle,
+    shell: tauri::State<'_, MobileShell<tauri::Wry>>,
+    url: String,
+    sha256: String,
+    file_name: String,
+) -> Result<Value, String> {
+    let file_name = validate_update_file_name(&file_name)?;
+    let state = app.state::<UpdateDownloadState>();
+    {
+        let current = state.inner.lock().map_err(|_| "更新状态不可用".to_owned())?;
+        if current.state == "downloading" {
+            return Ok(serde_json::json!({
+                "ok": true, "state": "downloading", "fileName": current.file_name,
+            }));
+        }
+    }
+    let directory = shell
+        .0
+        .run_mobile_plugin::<AttachmentCacheDirectory>("updatesDirectory", serde_json::json!({}))
+        .map_err(|_| "无法准备更新缓存".to_owned())?
+        .path;
+    {
+        let mut current = state.inner.lock().map_err(|_| "更新状态不可用".to_owned())?;
+        *current = UpdateDownloadStatus {
+            state: "downloading".into(),
+            file_name: file_name.clone(),
+            ..Default::default()
+        };
+    }
+    let task_app = app.clone();
+    let task_file_name = file_name.clone();
+    tauri::async_runtime::spawn(async move {
+        let destination = std::path::Path::new(&directory).join(&task_file_name);
+        let progress_app = task_app.clone();
+        let progress = move |received: u64, total: Option<u64>| {
+            if let Some(state) = progress_app.try_state::<UpdateDownloadState>() {
+                if let Ok(mut current) = state.inner.lock() {
+                    current.received = received;
+                    current.total = total;
+                }
+            }
+            let _ = progress_app.emit(
+                "sunday-update-progress",
+                serde_json::json!({ "received": received, "total": total }),
+            );
+        };
+        let outcome = lamtools_runtime::update_manifest::download_update(
+            &url,
+            &destination,
+            &sha256,
+            Some(&progress),
+        )
+        .await;
+        if let Some(state) = task_app.try_state::<UpdateDownloadState>() {
+            if let Ok(mut current) = state.inner.lock() {
+                match outcome {
+                    Ok(done) => {
+                        current.state = "verified".into();
+                        current.received = done.bytes;
+                        current.total = Some(done.bytes);
+                        current.sha256 = done.sha256;
+                        current.error.clear();
+                    }
+                    Err(error) => {
+                        current.state = "failed".into();
+                        current.error = error.to_string();
+                    }
+                }
+            }
+        }
+    });
+    Ok(serde_json::json!({
+        "ok": true, "state": "downloading", "fileName": file_name,
+    }))
+}
+
+/// How far the download has come, for the progress line in the UI.
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn sunday_update_status(app: tauri::AppHandle) -> Result<Value, String> {
+    let state = app.state::<UpdateDownloadState>();
+    let current = state
+        .inner
+        .lock()
+        .map_err(|_| "更新状态不可用".to_owned())?
+        .clone();
+    Ok(serde_json::json!({
+        "ok": true,
+        "state": current.state,
+        "received": current.received,
+        "total": current.total,
+        "fileName": current.file_name,
+        "sha256": current.sha256,
+        "error": current.error,
+        "message": update_status_message(&current),
+    }))
+}
+
+/// Hand the verified APK to Android's package installer. The user confirms
+/// there — Android has no silent install for an ordinary app.
+///
+/// Takes no arguments: the file name comes from the download this process
+/// verified, so the UI cannot point the installer at anything else.
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn sunday_update_install(
+    app: tauri::AppHandle,
+    shell: tauri::State<'_, MobileShell<tauri::Wry>>,
+) -> Result<Value, String> {
+    let state = app.state::<UpdateDownloadState>();
+    let current = state
+        .inner
+        .lock()
+        .map_err(|_| "更新状态不可用".to_owned())?
+        .clone();
+    if current.state != "verified" {
+        return Err("尚未下载并校验安装包".to_owned());
+    }
+    let file_name = validate_update_file_name(&current.file_name)?;
+    shell
+        .0
+        .run_mobile_plugin::<Value>("installApk", ShellFileRequest { file_name: &file_name })
+        .map_err(|_| "无法启动系统安装器".to_owned())?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "message": "已交给系统安装器；请在系统界面确认安装",
+    }))
+}
+
+/// Open an external http(s) link in the system browser.
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn sunday_open_external_url(
+    shell: tauri::State<'_, MobileShell<tauri::Wry>>,
+    url: String,
+) -> Result<Value, String> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err("仅支持 http(s) 链接".into());
+    }
+    shell
+        .0
+        .run_mobile_plugin::<Value>("openUrl", ShellUrlRequest { url: trimmed })
+        .map_err(|_| "无法打开链接".to_owned())
 }
 
 struct SqliteSubAgentStore {
@@ -833,6 +1064,18 @@ async fn project_agents_md(
 #[tauri::command]
 fn sunday_plugin_inventory() -> Vec<lamtools_runtime::plugin_catalog::PluginInventory> {
     lamtools_runtime::plugin_catalog::bundled_plugin_inventory()
+}
+
+/// The in-app update manifest, fetched by the host rather than the WebView.
+///
+/// The app's WebView origin is cross-origin to the release site, so a `fetch`
+/// from the app depends on the site's CORS headers and reports a missing one as
+/// a bare `Failed to fetch` with no status. The host reports the real one.
+#[tauri::command]
+async fn sunday_update_manifest(url: String) -> Result<Value, String> {
+    lamtools_runtime::update_manifest::fetch_update_manifest(&url)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// An ISO-8601 UTC timestamp, shared by the stores that record one.
@@ -3451,6 +3694,17 @@ pub fn run() {
     );
     #[cfg(target_os = "android")]
     let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new("lamtools-shell")
+            .setup(|app, api| {
+                let handle =
+                    api.register_android_plugin("com.lamtools.mobile", "LamToolsShellPlugin")?;
+                app.manage(MobileShell(handle));
+                Ok(())
+            })
+            .build(),
+    );
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
         tauri::plugin::Builder::<tauri::Wry, ()>::new("lamtools-lan-discovery")
             .setup(|app, api| {
                 let handle = api.register_android_plugin(
@@ -3476,6 +3730,7 @@ pub fn run() {
             .map_err(|error| error.to_string())?
             .join("state")
             .join("dreaming.db");
+        app.manage(UpdateDownloadState::default());
         app.manage(MobileAgentState {
             sub_agents: SubAgentHub::new(store),
             dreaming: Arc::new(SqliteDreamStateStore::new(dreaming_path)?),
@@ -3494,6 +3749,11 @@ pub fn run() {
         sunday_study_rpc,
         sunday_study_skill_catalog,
         sunday_plugin_inventory,
+        sunday_update_manifest,
+        sunday_update_download,
+        sunday_update_status,
+        sunday_update_install,
+        sunday_open_external_url,
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
@@ -3548,6 +3808,7 @@ pub fn run() {
         sunday_study_rpc,
         sunday_study_skill_catalog,
         sunday_plugin_inventory,
+        sunday_update_manifest,
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
