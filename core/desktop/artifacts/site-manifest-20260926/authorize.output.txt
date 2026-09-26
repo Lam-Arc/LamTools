@@ -1,0 +1,6 @@
+2026-09-25T16:18:26Z
+active
+active
+no manifest published yet
+2 /root/.ssh/authorized_keys
+2026-09-25T16:18:26Z

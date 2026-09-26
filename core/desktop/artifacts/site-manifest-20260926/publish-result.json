@@ -1,0 +1,42 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06y5bx1p3xq80",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "",
+          "ErrorInfo": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-09-25T16:18:31Z",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Success",
+          "InvokeId": "t-hz06y5bx1pbff9c",
+          "InvokeRecordStatus": "Finished",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "MjAyNi0wOS0yNVQxNjoxODozMFoKL3Zhci90bXAvU3VuZGF5LWRlc2t0b3AtdXBkYXRlLTIwMjYwOTI2Lmpzb246IE9LCi92YXIvd3d3L2xhbXRvb2xzL2Rlc2t0b3AtdXBkYXRlLmpzb24udG1wOiBPSwovdmFyL3d3dy9sYW10b29scy9kZXNrdG9wLXVwZGF0ZS5qc29uOiBPSwotLS0gc2VydmVkIHdpdGggdGhlIFdlYlZpZXcgb3JpZ2luIC0tLQpIVFRQLzIgMjAwIA0KY29udGVudC10eXBlOiBhcHBsaWNhdGlvbi9qc29uDQpjb250ZW50LWxlbmd0aDogMzQ2DQp7CiAgInZlcnNpb24iOiAiMC4zLjYiLAogICJkb3dubG9hZF91cmwiOiAiaHR0cHM6Ly80Ny4xMTQuNDMuOTkubmlwLmlvL2Rvd25sb2Fkcy9TdW5kYXlfMC4zLjZfeDY0LXNldHVwLmV4ZSIsCiAgInJlbGVhc2VfdXJsIjogImh0dHBzOi8vNDcuMTE0LjQzLjk5Lm5pcC5pby8jZG93bmxvYWQiLAogICJyZWxlYXNlX25vdGVzIjogIlN1bmRheSAwLjMuNiIsCiAgInB1Ymxpc2hlZF9hdCI6ICIyMDI2LTA5LTI1VDE2OjE3OjU3WiIsCiAgInNoYTI1NiI6ICIyYzBmNjFjMGQ2MTNkYzBjNTMxM2UzOTNkZTg3YTYyMDJjM2M3ZDEyZWMxMzI3YTgzZWZhMWIzN2FlNjg5MzRhIiwKICAic2l6ZSI6IDk0MDgxODI5Cn0KL3Zhci93d3cvbGFtdG9vbHMvZGVza3RvcC11cGRhdGUuanNvbiAzNDYgMjAyNi0wOS0yNiAwMDoxODozMC42NDk1OTU4NjIgKzA4MDAKMjAyNi0wOS0yNVQxNjoxODozMFoK",
+          "Repeats": 1,
+          "StartTime": "2026-09-25T16:18:31Z",
+          "StopTime": "",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A0D95C-7CE8-5810-A6C2-2F3ABD09D067"
+}

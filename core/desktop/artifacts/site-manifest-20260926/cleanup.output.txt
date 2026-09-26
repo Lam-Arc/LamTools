@@ -1,0 +1,6 @@
+2026-09-25T16:18:45Z
+0
+1 /root/.ssh/authorized_keys
+no stages
+e06c9001cbaedb57744320af7948b0090e4e798685b533899fec458f2a9df98b  /var/www/lamtools/desktop-update.json
+2026-09-25T16:18:45Z

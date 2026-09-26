@@ -1,0 +1,8 @@
+{
+  "manifest": "E:\\LamTools\\core\\desktop\\artifacts\\site-manifest-20260926\\desktop-update.json",
+  "bytes": 346,
+  "sha256": "e06c9001cbaedb57744320af7948b0090e4e798685b533899fec458f2a9df98b",
+  "target": "root@47.114.43.99:/var/tmp/Sunday-desktop-update-20260926.json",
+  "staged": "/var/tmp/Sunday-desktop-update-20260926.json",
+  "returncode": 0
+}

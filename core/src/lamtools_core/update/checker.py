@@ -235,16 +235,26 @@ def _site_candidate() -> dict[str, Any]:
     if not version:
         raise ValueError("manifest has no version")
     # A platform never falls back to another platform's installer.
-    key = {"windows-x64": "download_url", "linux-x64": "linux_download_url"}.get(target, "")
-    download_url = str(manifest.get(key) or "").strip() if key else ""
+    keys = {
+        "windows-x64": ("download_url", "sha256", "size"),
+        "linux-x64": ("linux_download_url", "linux_sha256", "linux_size"),
+    }.get(target, ("", "", ""))
+    url_key, digest_key, size_key = keys
+    download_url = str(manifest.get(url_key) or "").strip() if url_key else ""
     if not download_url:
         raise SourceUnavailable(f"manifest has no installer for {target}", version)
+    # The digest is what a download is verified against before an installer sees
+    # it; a manifest without one simply loses the in-app install path.
+    digest = str(manifest.get(digest_key) or "").strip().lower() if digest_key else ""
+    size_value = str(manifest.get(size_key) or "") if size_key else ""
     return {
         "version": version,
         "download_url": download_url,
         "release_url": str(manifest.get("release_url") or RELEASES_PAGE_URL),
         "release_notes": str(manifest.get("release_notes") or ""),
         "published_at": str(manifest.get("published_at") or ""),
+        "sha256": digest if len(digest) == 64 else "",
+        "size": int(size_value) if size_value.isdigit() else 0,
     }
 
 
@@ -357,6 +367,17 @@ def check_update() -> dict[str, Any]:
     base["download_url"] = chosen["download_url"]
     base["release_url"] = chosen["release_url"]
     base["published_at"] = chosen["published_at"]
+    # The in-app install needs a digest to verify against, and a platform with a
+    # single "run this installer" step. Both hosts apply the same rule, so the
+    # button only appears when downloading and installing can actually work.
+    digest = str(chosen.get("sha256") or "")
+    if digest:
+        base["sha256"] = digest
+        if chosen.get("size"):
+            base["size"] = chosen["size"]
+        if os.name == "nt":
+            base["install_supported"] = True
+            base["install_hint"] = "点「立即安装」会运行安装包；安装向导会要求先退出 Sunday。"
     return base
 
 

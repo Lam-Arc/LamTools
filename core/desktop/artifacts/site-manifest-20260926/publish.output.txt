@@ -1,0 +1,19 @@
+2026-09-25T16:18:30Z
+/var/tmp/Sunday-desktop-update-20260926.json: OK
+/var/www/lamtools/desktop-update.json.tmp: OK
+/var/www/lamtools/desktop-update.json: OK
+--- served with the WebView origin ---
+HTTP/2 200 
+content-type: application/json
+content-length: 346
+{
+  "version": "0.3.6",
+  "download_url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.6_x64-setup.exe",
+  "release_url": "https://47.114.43.99.nip.io/#download",
+  "release_notes": "Sunday 0.3.6",
+  "published_at": "2026-09-25T16:17:57Z",
+  "sha256": "2c0f61c0d613dc0c5313e393de87a6202c3c7d12ec1327a83efa1b37ae68934a",
+  "size": 94081829
+}
+/var/www/lamtools/desktop-update.json 346 2026-09-26 00:18:30.649595862 +0800
+2026-09-25T16:18:30Z

@@ -71,15 +71,6 @@ def _newest_installer() -> Path:
     return candidates[0]
 
 
-def _linux_url(version: str, base_url: str) -> str:
-    """Return the AppImage URL for this version, falling back to the deb."""
-    for folder, pattern in (("appimage", f"Sunday_{version}_amd64.AppImage"), ("deb", f"Sunday_{version}_amd64.deb")):
-        artifact = BUNDLE / folder / pattern
-        if artifact.exists():
-            return f"{base_url.rstrip('/')}/{artifact.name}"
-    return ""
-
-
 def _resolve_installer(args: argparse.Namespace) -> Path:
     """解析要描述的那个安装包（一次；调用方复用它写同目录副本）。"""
     installer = Path(args.installer).resolve() if args.installer else _newest_installer()
@@ -107,11 +98,38 @@ def build_manifest(args: argparse.Namespace, installer: Path | None = None) -> d
         "release_url": args.release_url,
         "release_notes": notes or f"Sunday {version}",
         "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        # The digest is what the host verifies a download against before the
+        # installer sees it, so it is part of the release contract now: without
+        # it the app falls back to opening the download page in a browser.
+        "sha256": _digest(installer),
+        "size": installer.stat().st_size,
     }
-    linux = _linux_url(version, base)
-    if linux:
-        manifest["linux_download_url"] = linux
+    linux = _linux_artifact(version)
+    if linux is not None:
+        manifest["linux_download_url"] = f"{base}/{linux.name}"
+        manifest["linux_sha256"] = _digest(linux)
+        manifest["linux_size"] = linux.stat().st_size
     return manifest
+
+
+def _linux_artifact(version: str) -> Path | None:
+    """The AppImage (preferred) or deb this version was bundled as."""
+    for folder, pattern in (
+        ("appimage", f"Sunday_{version}_amd64.AppImage"),
+        ("deb", f"Sunday_{version}_amd64.deb"),
+    ):
+        artifact = BUNDLE / folder / pattern
+        if artifact.exists():
+            return artifact
+    return None
+
+
+def _digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def main() -> int:
