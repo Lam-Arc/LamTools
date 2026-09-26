@@ -752,12 +752,21 @@ async fn sunday_update_status(
                 ShellDownloadIdRequest { id: &persisted.download_id },
             )
             .map_err(|_| "无法读取下载进度".to_owned())?;
-        // Already checked in an earlier poll: do not hash 60 MB again.
+        // Already checked in an earlier poll: do not hash 60 MB again — but do
+        // confirm the file is still there. Android cleans its own external
+        // directory, and offering an install for a file that is gone just
+        // strands the user on a button that always fails.
         if persisted.verified && report.state == "successful" {
+            let path = std::path::Path::new(&persisted.directory).join(&persisted.file_name);
+            if !path.is_file() {
+                clear_persisted_download(&app);
+                return Ok(failed_status("安装包已不存在，请重新下载".into()));
+            }
+            let bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
             let status = UpdateDownloadStatus {
                 state: "verified".into(),
-                received: report.total.max(0) as u64,
-                total: Some(report.total.max(0) as u64),
+                received: bytes,
+                total: Some(bytes),
                 file_name: persisted.file_name.clone(),
                 sha256: persisted.sha256.clone(),
                 error: String::new(),

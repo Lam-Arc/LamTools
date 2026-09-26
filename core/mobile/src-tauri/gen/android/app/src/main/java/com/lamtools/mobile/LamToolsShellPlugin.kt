@@ -111,14 +111,19 @@ class LamToolsShellPlugin(private val activity: Activity) : Plugin(activity) {
             val uri = Uri.parse(args.url)
             require(uri.scheme == "https")
             val fileName = safeUpdateName(args.fileName)
+            // VISIBILITY_VISIBLE keeps the progress notification but drops the
+            // "tap to install" one at the end: the app verifies the bytes against
+            // the release digest first, so the finished file must not have a
+            // shortcut around that check.
             val request = DownloadManager.Request(uri)
                 .setTitle(fileName)
                 .setDescription("Sunday 更新")
                 .setMimeType("application/vnd.android.package-archive")
-                .setNotificationVisibility(
-                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
-                )
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
                 .setDestinationInExternalFilesDir(activity, null, "sunday-updates/$fileName")
+            // The system downloader creates the file, not the parents: make the
+            // directory first so a nested destination cannot fail the enqueue.
+            File(activity.getExternalFilesDir(null), "sunday-updates").mkdirs()
             val manager = activity.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val id = manager.enqueue(request)
             require(id > 0L)
