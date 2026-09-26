@@ -282,6 +282,7 @@ _hiddenimports = [
     "lamtools_core.tool.search.factory",
     "lamtools_core.tool.search.protocol",
     "lamtools_core.update.checker",
+    "lamtools_core.update.installer",
     "lamtools_core.update.operations",
     "lamtools_core.app",
     "lamtools_core.attachment",
