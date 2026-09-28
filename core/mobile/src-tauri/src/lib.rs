@@ -1,6 +1,7 @@
 use lamtools_runtime::{
     fetch_tools::WebFetchTools,
     plan_tools::PlanTools,
+    plan_package::{revision_summaries as plan_revision_summaries, PlanStore, PLAN_STATUSES},
     hooks::{HookEngine, HookListPayload, HookRegistry, HookRunContext},
     mcp::{load_server_configs, CompositeToolRuntime, McpLoadReport, McpServerConfig, McpToolRuntime},
     memory::{dream_with_model, DreamingConfig, DreamingOutcome},
@@ -1628,6 +1629,108 @@ async fn sunday_goal_update(
         metadata,
     )?;
     Ok(goals::goal_payload(&goal))
+}
+
+/// The plan store, beside the other host databases.
+fn native_plan_store(app: &tauri::AppHandle) -> Result<PlanStore, String> {
+    let data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    PlanStore::open(&data.join("plans.db"))
+}
+
+fn plan_expected_revision(payload: &Value) -> Result<Option<i64>, String> {
+    let value = payload
+        .get("expected_revision")
+        .or_else(|| payload.get("expectedRevision"));
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => Ok(number.as_i64()),
+        Some(Value::String(text)) if text.trim().is_empty() => Ok(None),
+        Some(Value::String(text)) => text
+            .trim()
+            .parse::<i64>()
+            .map(Some)
+            .map_err(|_| "plan expected_revision must be a number".to_owned()),
+        Some(_) => Err("plan expected_revision must be a number".to_owned()),
+    }
+}
+
+fn plan_status_filter(status: Option<String>) -> Result<String, String> {
+    let status = status.unwrap_or_default().trim().to_owned();
+    if status.is_empty() {
+        return Ok(status);
+    }
+    match PLAN_STATUSES.contains(&status.as_str()) {
+        true => Ok(status),
+        false => Err(format!("invalid plan status: {status}")),
+    }
+}
+
+/// Save a plan package. The payload *is* the package: a field it does not
+/// mention keeps its stored value, so the panel can send just what changed.
+#[tauri::command]
+async fn sunday_plan_save(app: tauri::AppHandle, payload: Value) -> Result<Value, String> {
+    let store = native_plan_store(&app)?;
+    let plan = store.save(&payload, "mobile", plan_expected_revision(&payload)?)?;
+    Ok(serde_json::json!({"plan": plan}))
+}
+
+#[tauri::command]
+async fn sunday_plan_get(app: tauri::AppHandle, plan_id: String) -> Result<Value, String> {
+    let store = native_plan_store(&app)?;
+    let plan = store
+        .plan(&plan_id)?
+        .ok_or_else(|| format!("Plan not found: {}", plan_id.trim()))?;
+    Ok(serde_json::json!({"plan": plan}))
+}
+
+#[tauri::command]
+async fn sunday_plan_list(
+    app: tauri::AppHandle,
+    project_id: Option<String>,
+    status: Option<String>,
+    include_deleted: Option<bool>,
+) -> Result<Value, String> {
+    let store = native_plan_store(&app)?;
+    let project = project_id.unwrap_or_default().trim().to_owned();
+    let status = plan_status_filter(status)?;
+    let plans = store.list(
+        (!project.is_empty()).then_some(project.as_str()),
+        (!status.is_empty()).then_some(status.as_str()),
+        include_deleted.unwrap_or(false),
+    )?;
+    Ok(serde_json::json!({"plans": plans}))
+}
+
+#[tauri::command]
+async fn sunday_plan_delete(app: tauri::AppHandle, plan_id: String) -> Result<Value, String> {
+    let store = native_plan_store(&app)?;
+    Ok(serde_json::json!({"plan": store.set_deleted(&plan_id, true)?}))
+}
+
+#[tauri::command]
+async fn sunday_plan_restore(app: tauri::AppHandle, plan_id: String) -> Result<Value, String> {
+    let store = native_plan_store(&app)?;
+    Ok(serde_json::json!({"plan": store.set_deleted(&plan_id, false)?}))
+}
+
+#[tauri::command]
+async fn sunday_plan_revert(
+    app: tauri::AppHandle,
+    plan_id: String,
+    revision: i64,
+) -> Result<Value, String> {
+    let store = native_plan_store(&app)?;
+    Ok(serde_json::json!({"plan": store.revert(&plan_id, revision, "mobile")?}))
+}
+
+#[tauri::command]
+async fn sunday_plan_revisions(app: tauri::AppHandle, plan_id: String) -> Result<Value, String> {
+    let store = native_plan_store(&app)?;
+    store
+        .plan(&plan_id)?
+        .ok_or_else(|| format!("Plan not found: {}", plan_id.trim()))?;
+    let history = store.revisions(&plan_id)?;
+    Ok(serde_json::json!({"revisions": plan_revision_summaries(&history)}))
 }
 
 /// The checkpoint store, beside the other host databases.
@@ -4107,6 +4210,13 @@ pub fn run() {
         sunday_goal_get,
         sunday_goal_list,
         sunday_goal_update,
+        sunday_plan_save,
+        sunday_plan_get,
+        sunday_plan_list,
+        sunday_plan_delete,
+        sunday_plan_restore,
+        sunday_plan_revert,
+        sunday_plan_revisions,
         sunday_artifact_list,
         sunday_artifact_revisions,
         sunday_artifact_set_deleted,
@@ -4163,6 +4273,13 @@ pub fn run() {
         sunday_goal_get,
         sunday_goal_list,
         sunday_goal_update,
+        sunday_plan_save,
+        sunday_plan_get,
+        sunday_plan_list,
+        sunday_plan_delete,
+        sunday_plan_restore,
+        sunday_plan_revert,
+        sunday_plan_revisions,
         sunday_artifact_list,
         sunday_artifact_revisions,
         sunday_artifact_set_deleted,

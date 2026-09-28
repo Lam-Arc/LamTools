@@ -143,10 +143,13 @@ const props = withDefaults(
     sections: SettingsSection[]
     title?: string
     settingsThemeStyle?: Record<string, string>
+    /** Section to open on; falls back to the first section when absent/unknown. */
+    initialSection?: string
   }>(),
   {
     title: '设置',
     settingsThemeStyle: () => ({}),
+    initialSection: undefined,
   },
 )
 
@@ -155,7 +158,11 @@ const emit = defineEmits<{
   'section-change': [id: string]
 }>()
 
-const activeSection = ref(props.sections[0]?.id || '')
+const activeSection = ref(
+  props.initialSection && props.sections.some((section) => section.id === props.initialSection)
+    ? props.initialSection
+    : (props.sections[0]?.id || ''),
+)
 const settingsPageEl = ref<HTMLElement | null>(null)
 const settingsNavEl = ref<HTMLElement | null>(null)
 const settingsContentEl = ref<HTMLElement | null>(null)

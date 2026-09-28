@@ -43,7 +43,10 @@
   --stage-reveal: 0px;
   --keyboard-inset: 0px;
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
-  --composer-bottom-offset: max(var(--keyboard-inset), var(--safe-area-bottom));
+  /* --native-keyboard-inset is published by a host whose window does not shrink
+     with the keyboard (the Android shell runs edge-to-edge), where the shared
+     viewport measurement cannot see it. Either source lifts the composer. */
+  --composer-bottom-offset: max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom));
   --composer-height: 120px;
   --composer-rest-bottom: 16px;
   --composer-clearance: 24px;
@@ -186,7 +189,9 @@
 .drawer-right:not(.open) {
   visibility: hidden;
   pointer-events: none;
-  transition-delay: var(--dur-base);
+  /* The shell only leaves after the body has retracted, so the exit stays
+     visible on the raised layer instead of being cut in half. */
+  transition-delay: var(--right-drawer-retract);
 }
 .drawer-right > .drawer-body {
   opacity: 1;
@@ -196,13 +201,20 @@
 .drawer-right:not(.open) > .drawer-body {
   opacity: 0;
   transform: translateX(10px);
-  transition-duration: var(--dur-base), var(--dur-base);
+  transition-duration: var(--right-drawer-retract), var(--right-drawer-retract);
 }
 .drawer-right.open { visibility: visible; }
 .drawer-right.open:not(.pinned) {
   /* Edge-hover drawers overlay the canvas. Moving the main surface away from
      the pointer made the drawer repeatedly enter/leave and caused a full
      workspace layout oscillation. Only a pinned drawer reserves layout. */
+  z-index: var(--z-popover);
+}
+/* A collapsing drawer keeps that raised layer until the retract has run: the
+   layer used to drop at the first frame of the exit, which put the whole
+   retract behind the opaque main card — the panel seemed to vanish instead of
+   retracting. useShellLayout holds this class for --right-drawer-retract. */
+.drawer-right.drawer-retracting {
   z-index: var(--z-popover);
 }
 
@@ -439,39 +451,166 @@
   flex-direction: column;
   gap: var(--sidebar-row-gap);
 }
-.drawer-footer .settings-entry {
-  width: 100%;
-  height: var(--sidebar-footer-row-height);
-  min-height: var(--sidebar-row-height);
-  color: var(--sidebar-text-secondary);
-  background: transparent;
+.drawer-footer-row {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+}
+/* 手机降级页脚：无 hover 可用，仍是带文字的竖排行（在图标行下方独占一行）。 */
+.drawer-footer-stack {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sidebar-row-gap);
+}
+
+/* 账号入口是带文字的窄条（图标 + 账号名），与只放图标的设置入口同排。 */
+.drawer-footer-account {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--rail-action-size);
+  padding: 0 var(--space-2);
   border: 0;
   border-radius: var(--sidebar-row-radius);
-  padding: 0 var(--space-3);
+  background: transparent;
+  color: var(--sidebar-text-secondary);
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: var(--sidebar-footer-gap);
-  text-align: left;
+  gap: var(--sidebar-item-gap);
   font: inherit;
   font-size: var(--sidebar-font);
   font-weight: 400;
+  text-align: left;
   cursor: pointer;
-  position: relative;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.drawer-footer .settings-entry::before {
-  content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--space-2) * -1); right: calc(var(--space-2) * -1); z-index: -1;
-  border-radius: var(--sidebar-row-radius); background: transparent; pointer-events: none;
-  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
-  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
-}
-.drawer-footer .settings-entry:hover {
+.drawer-footer-account:hover,
+.drawer-footer-account:focus-visible {
+  background: var(--sidebar-hover);
   color: var(--sidebar-text-primary);
 }
-.drawer-footer .settings-entry:hover::before {
-  background: var(--sidebar-hover);
+.drawer-footer-account:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
 }
-.drawer-footer .settings-entry svg,
+.drawer-footer-account > svg {
+  flex: 0 0 auto;
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
+  stroke-width: 1.8;
+  opacity: .75;
+}
+.drawer-footer-account__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-action { flex: 0 0 auto; }
+.rail-action__button {
+  width: var(--rail-action-size);
+  height: var(--rail-action-size);
+  padding: 0;
+  border: 0;
+  border-radius: var(--sidebar-row-radius);
+  background: transparent;
+  color: var(--sidebar-text-secondary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.rail-action__button:hover,
+.rail-action__button:focus-visible {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-primary);
+}
+.rail-action__button:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.rail-action__button svg {
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
+  stroke-width: 1.8;
+  opacity: .75;
+}
+.rail-action__button:hover svg { opacity: 1; }
+
+/* 悬浮提示贴着图标行、占满一行宽度：紧凑栏只有 ~130px 可用，逐图标定位的提示框
+   在靠右的图标上必然越过 drawer 的 overflow 边界被裁掉。提示是触发按钮的后代，
+   指针从按钮移到提示都不会中断悬浮。
+   column-reverse：说明文字渲染在标签行上方，标签行被钉在提示的下沿——展开说明
+   时被 hover 的感叹号必须原地不动，否则指针一离开就收起、收起又被 hover 到，
+   会来回抽搐。
+   方向：底部行向上展开（--above，贴着图标行上沿），顶部工具行向下展开（--below，
+   否则会被 drawer 顶边裁掉）。 */
+.rail-action__tip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: var(--z-popover, 60);
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius);
+  background: var(--theme-main-background);
+  color: var(--theme-main-text);
+  box-shadow: var(--shadow-md);
+}
+.rail-action__tip--above { bottom: 100%; }
+.rail-action__tip--below { top: 100%; }
+.rail-action__tip-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.rail-action__tip-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--sidebar-font);
+  line-height: var(--sidebar-line-height-item);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-action__info {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text) 62%, transparent);
+  display: grid;
+  place-items: center;
+  cursor: help;
+}
+.rail-action__info:hover,
+.rail-action__info:focus-visible {
+  color: var(--theme-main-text);
+}
+.rail-action__info:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.rail-action__tip-body {
+  /* 间距由提示的 flex gap 提供；说明只占上方空间，不推动标签行。 */
+  margin: 0;
+  font-size: var(--sidebar-meta-text-size);
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
+}
+
 .drawer-footer .sidebar-action svg {
   width: var(--sidebar-icon-size);
   height: var(--sidebar-icon-size);
@@ -518,6 +657,16 @@
 /* =========================================================================
    Responsive drawer surfaces
    ========================================================================= */
+/* 左栏宽度分两档：小界面用 70% 紧凑档（--sidebar-width），大界面/全屏回到标准
+   宽度，行内图标入口同步放大一档。1599/1600 两个断点必须成对——session-sidebar.css
+   用同一对断点决定项目行是否让出左侧图标与折叠键。 */
+@media (min-width: 1600px) {
+  .workspace-shell {
+    --sidebar-width: var(--sidebar-width-full);
+    --rail-action-size: var(--rail-action-size-full);
+  }
+}
+
 @media (max-width: 820px) {
   .workspace-shell { --left-card-width: var(--sidebar-width); }
 }
@@ -553,6 +702,11 @@
     opacity: 1;
     pointer-events: auto;
   }
+  /* The scrim stays translucent, so the empty-session hero used to remain half
+     readable beside the drawer edge — a stray line of its description text. */
+  .left-open .empty-session-hero {
+    visibility: hidden;
+  }
   .drawer-right.open { opacity: 1; pointer-events: auto; }
   /* The right rail is a full-width mobile drawer; keep the left project rail
      constrained to its comfortable reading width. */
@@ -579,7 +733,7 @@
   }
   .pin-plain { display: none; }
   .icon-btn,
-  .drawer-footer .settings-entry,
+  .rail-action__button,
   .drawer-footer .sidebar-action,
   .sidebar-create-project {
     min-width: 44px;
@@ -599,4 +753,5 @@
     transition: none !important;
   }
   .workspace-shell .drawer-right > .drawer-body { transition: none !important; }
+  .rail-action__button { transition: none !important; }
 }

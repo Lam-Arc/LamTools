@@ -150,8 +150,11 @@ function requestClose(): void {
 </script>
 
 <style scoped>
-.sync-overlay { position: fixed; inset: 0; z-index: var(--z-fullscreen); display: grid; place-items: end center; padding-top: var(--titlebar-offset, 0); background: color-mix(in srgb, #000 38%, transparent); }
-.sync-panel { width: min(100%, 620px); max-height: calc(100dvh - var(--titlebar-offset, 0)); display: flex; flex-direction: column; border: 1px solid var(--theme-main-border); border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--theme-main-background); color: var(--theme-main-text); box-shadow: var(--shadow-lg); }
+/* The overlay owns one shrinkable track: without it a row whose text cannot
+   wrap (a long project path) sized its own min-content onto the track, which
+   widened the sheet past the screen instead of wrapping the text. */
+.sync-overlay { position: fixed; inset: 0; z-index: var(--z-fullscreen); display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; align-items: end; padding-top: var(--titlebar-offset, 0); background: color-mix(in srgb, #000 38%, transparent); }
+.sync-panel { width: 100%; max-width: 620px; min-width: 0; max-height: calc(100dvh - var(--titlebar-offset, 0)); display: flex; flex-direction: column; border: 1px solid var(--theme-main-border); border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--theme-main-background); color: var(--theme-main-text); box-shadow: var(--shadow-lg); }
 .sync-panel > header, .sync-panel > footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-4); }
 .sync-panel > header { border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text) 9%, transparent); }
 .sync-panel > header button { width: 40px; height: 40px; border-radius: var(--radius-sm); color: var(--theme-control-text); background: transparent; font-size: 24px; }
@@ -159,17 +162,19 @@ function requestClose(): void {
 .sync-panel > header button:active, .sync-cancel:active { background: color-mix(in srgb, var(--theme-control-text) var(--alpha-active), transparent); }
 .sync-kicker { color: color-mix(in srgb, var(--theme-main-text) 52%, transparent); font-size: 11px; letter-spacing: .08em; }
 h2 { margin-top: 2px; font-size: 20px; }
-.sync-body { min-height: 0; display: grid; gap: var(--space-5); padding: var(--space-4); overflow: auto; }
+.sync-body { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); padding: var(--space-4); overflow: auto; }
 h3 { margin-bottom: var(--space-2); color: color-mix(in srgb, var(--theme-main-text) 72%, transparent); font-size: 12px; font-weight: 650; }
-.sync-device-list, .sync-project-list, .sync-mode-list { display: grid; gap: var(--space-2); }
-.sync-device, .sync-project-list button, .sync-mode-list label { min-height: 54px; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent); border-radius: var(--radius); background: var(--theme-main-soft-background); color: var(--theme-main-text); text-align: left; transition: background var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out); }
+.sync-device-list, .sync-project-list, .sync-mode-list { display: grid; min-width: 0; gap: var(--space-2); }
+.sync-device, .sync-project-list button, .sync-mode-list label { min-width: 0; min-height: 54px; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent); border-radius: var(--radius); background: var(--theme-main-soft-background); color: var(--theme-main-text); text-align: left; transition: background var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out); }
 .sync-device:hover, .sync-project-list button:hover, .sync-mode-list label:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), var(--theme-main-soft-background)); }
 .sync-device:active, .sync-project-list button:active, .sync-mode-list label:active { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), var(--theme-main-soft-background)); }
 .sync-device.selected, .sync-project-list button.selected, .sync-mode-list label:has(input:checked) { border-color: color-mix(in srgb, var(--theme-control-text) 55%, transparent); background: color-mix(in srgb, var(--theme-control-text) var(--alpha-hover), var(--theme-main-soft-background)); }
 .sync-device > span, .sync-project-list button > span, .sync-mode-list label > span { min-width: 0; flex: 1; }
-strong, small { display: block; }
-strong { font-size: 13px; }
-small { margin-top: 3px; overflow: hidden; color: color-mix(in srgb, var(--theme-main-text) 58%, transparent); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+strong, small { display: block; min-width: 0; }
+strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The secondary line carries paths and explanations, so it wraps instead of
+   being cut: a phone reads the whole path rather than a taller sheet. */
+small { margin-top: 3px; color: color-mix(in srgb, var(--theme-main-text) 58%, transparent); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .sync-device em { color: var(--green); font-size: 11px; font-style: normal; }
 .sync-device em.offline { color: color-mix(in srgb, var(--theme-main-text) 45%, transparent); }
 .sync-mode-list label.disabled { opacity: .48; }

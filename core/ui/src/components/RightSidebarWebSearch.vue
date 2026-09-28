@@ -1,31 +1,46 @@
 <template>
   <div class="right-sidebar-web-search">
-    <div class="right-sidebar-web-search-row">
-      <span class="right-sidebar-web-search-label">引擎</span>
-      <UiSelect
-        v-model="engine"
-        :options="engineOptions"
-        aria-label="Web Search 引擎"
-        :disabled="!requestRpc || loadingConfig"
-        @update:model-value="saveEngine"
-      />
-    </div>
-    <div class="right-sidebar-web-search-health" :data-state="connectionState">
-      <span class="right-sidebar-web-search-health-dot" aria-hidden="true"></span>
-      <span>{{ connectionLabel }}</span>
-      <span v-if="latencyMs !== null" class="right-sidebar-web-search-latency">{{ latencyMs }} ms</span>
-      <button
-        class="right-sidebar-web-search-action"
-        type="button"
-        :disabled="!requestRpc || healthLoading"
-        @click="checkHealth"
-      >
-        <RefreshCw :size="13" :stroke-width="1.8" :class="{ spinning: healthLoading }" aria-hidden="true" />
-        <span>{{ healthLoading ? '检查中…' : '检查连接' }}</span>
-      </button>
-    </div>
-    <p v-if="message" class="right-sidebar-web-search-message" :data-state="connectionState">{{ message }}</p>
-    <p v-else-if="!requestRpc" class="right-sidebar-web-search-message">未连接到搜索服务</p>
+    <!-- 插件被禁用时只说明状态：留一个可点的引擎下拉会把"关掉的搜索"装成还在
+         运行，而且它写下去的配置没人会用。 -->
+    <template v-if="pluginDisabled">
+      <p class="right-sidebar-web-search-message" data-state="disabled">
+        搜索插件未启用。到「插件」页启用 websearch 后可用。
+      </p>
+      <div class="right-sidebar-web-search-health" data-state="unavailable">
+        <button class="right-sidebar-web-search-action" type="button" :disabled="healthLoading" @click="recheck">
+          <RefreshCw :size="13" :stroke-width="1.8" :class="{ spinning: healthLoading }" aria-hidden="true" />
+          <span>重新检查</span>
+        </button>
+      </div>
+    </template>
+    <template v-else>
+      <div class="right-sidebar-web-search-row">
+        <span class="right-sidebar-web-search-label">引擎</span>
+        <UiSelect
+          v-model="engine"
+          :options="engineOptions"
+          aria-label="Web Search 引擎"
+          :disabled="!requestRpc || loadingConfig"
+          @update:model-value="saveEngine"
+        />
+      </div>
+      <div class="right-sidebar-web-search-health" :data-state="connectionState">
+        <span class="right-sidebar-web-search-health-dot" aria-hidden="true"></span>
+        <span>{{ connectionLabel }}</span>
+        <span v-if="latencyMs !== null" class="right-sidebar-web-search-latency">{{ latencyMs }} ms</span>
+        <button
+          class="right-sidebar-web-search-action"
+          type="button"
+          :disabled="!requestRpc || healthLoading"
+          @click="checkHealth"
+        >
+          <RefreshCw :size="13" :stroke-width="1.8" :class="{ spinning: healthLoading }" aria-hidden="true" />
+          <span>{{ healthLoading ? '检查中…' : '检查连接' }}</span>
+        </button>
+      </div>
+      <p v-if="message" class="right-sidebar-web-search-message" :data-state="connectionState">{{ message }}</p>
+      <p v-else-if="!requestRpc" class="right-sidebar-web-search-message">未连接到搜索服务</p>
+    </template>
   </div>
 </template>
 
@@ -58,12 +73,15 @@ const healthLoading = ref(false)
 const connectionState = ref<ConnectionState>('unknown')
 const latencyMs = ref<number | null>(null)
 const message = ref('')
+const pluginDisabled = ref(false)
 
+// 只列内置内核：外部内核必须在设置页声明 transport/url，这里放一个没有
+// 后端支持的 “Custom” 会把 websearch.jsonc 写成非法内核，之后每轮对话都
+// 在工具箱装配阶段失败（2026-09-26 事故）。
 const engineOptions = [
   { value: 'baidu', label: 'Baidu' },
   { value: 'bing', label: 'Bing' },
   { value: 'ddg', label: 'DuckDuckGo' },
-  { value: 'custom', label: 'Custom' },
 ]
 
 const connectionLabel = computed(() => {
@@ -135,11 +153,26 @@ async function loadSnapshot(): Promise<void> {
     if (state === 'ok') connectionState.value = 'connected'
     else if (state === 'error') connectionState.value = 'error'
     if (typeof snapshot?.summary === 'string') message.value = snapshot.summary
-  } catch {
+    pluginDisabled.value = false
+  } catch (cause) {
     // A missing optional widget operation should not turn the host into an
     // error page; the explicit health action remains available.
+    if (isUnsupportedMethod(cause)) pluginDisabled.value = true
     connectionState.value = 'unavailable'
   }
+}
+
+/** 插件被禁用时它的操作整体不存在——"方法不存在"就是"未启用"的可靠信号；
+ *  网络/超时之类的失败仍按"不可用"处理，不误报成未启用。 */
+function isUnsupportedMethod(cause: unknown): boolean {
+  const text = cause instanceof Error ? cause.message : String(cause ?? '')
+  return /unsupported method/i.test(text)
+}
+
+async function recheck(): Promise<void> {
+  pluginDisabled.value = false
+  await loadConfig()
+  await loadSnapshot()
 }
 
 async function saveEngine(value: string): Promise<void> {

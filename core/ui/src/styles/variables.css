@@ -51,11 +51,9 @@
   --optical-glass-tint: 16%;
   --optical-glass-fallback-tint: 22%;
   --optical-glass-highlight-color: rgb(255 255 255);
-  --optical-glass-reflection: 10%;
   --optical-glass-refraction-color: rgb(82 104 91);
   --optical-glass-refraction: 13%;
   --theme-optical-glass-border-color: rgb(95 95 95);
-  --optical-glass-inset-top: 56%;
   --optical-glass-inset-bottom: 14%;
   --optical-glass-shadow: 0 7px 14px rgba(30, 40, 35, .12), 0 1px 4px rgba(30, 40, 35, .06);
 
@@ -76,9 +74,15 @@
   --ease-out: cubic-bezier(.25, 1, .5, 1);            /* 克制出场 */
   --ease-inout: cubic-bezier(.2, .8, .2, 1);          /* 抽屉/面板往返 */
   --ease-emphasized: cubic-bezier(.16, 1, .3, 1);     /* 强调入场 */
+  /* 右侧栏收起时长：面板先以此时长收回，抬升的层级在收回结束后才下移。
+     与 useShellLayout.ts 的 RIGHT_DRAWER_RETRACT_MS 必须一致。 */
+  --right-drawer-retract: 180ms;
 
   /* —— Core 左侧栏标尺（桌面端紧凑密度）—— */
-  --sidebar-width: 232px;
+  /* 左栏宽度：小界面用紧凑档（标准宽度的 70%），大界面/全屏恢复标准宽度
+     （workspace-shell.css 的 min-width 断点负责切换；手机抽屉另有宽度）。 */
+  --sidebar-width: 162px;
+  --sidebar-width-full: 232px;
   --sidebar-padding-x: 14px;
   --sidebar-padding-y: 0;
   --sidebar-font: 14px;
@@ -87,6 +91,10 @@
   --sidebar-line-height-item: 20px;
   --sidebar-row-height: 34px;
   --sidebar-footer-row-height: 38px;
+  /* 左栏入口（顶部搜索行 + 底部设置/账号行）只放图标按钮；尺寸跟随左栏宽度
+     分档，全屏档在 workspace-shell.css 的断点里放大。 */
+  --rail-action-size: 28px;
+  --rail-action-size-full: 32px;
   --sidebar-row-radius: 8px;
   --sidebar-row-gap: 0;
   --sidebar-item-gap: 6px;
@@ -98,6 +106,9 @@
   --sidebar-icon-size: 18px;
   --sidebar-chevron-size: 16px;
   --sidebar-text-primary: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 90%, transparent);
+  /* 项目名：向背景方向过渡的主题派生色——暗色模式更深、浅色模式更浅，
+     与会话名（--sidebar-text-secondary）拉开一档，替掉原来的加粗与加大。 */
+  --sidebar-text-project: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 62%, var(--theme-backdrop-background, #3A3B3F));
   --sidebar-text-secondary: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 72%, transparent);
   --sidebar-text-muted: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 46%, transparent);
   --sidebar-text-disabled: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 28%, transparent);

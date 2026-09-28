@@ -42,7 +42,21 @@ async def widget_health(
     request: OperationRequest, *, work_root: Path | None, data_dir: Path | None
 ) -> OperationResult:
     config = _default_config(str(work_root) if work_root else None, data_dir=data_dir)
-    provider = get_provider(str(config.get("provider") or "ddg"), config)
+    try:
+        provider = get_provider(str(config.get("provider") or "ddg"), config)
+    except ValueError as exc:
+        # 内核名不被支持是"这个引擎不可用"的状态，不是宿主错误：返回 error
+        # 状态让右侧栏把原因显示出来（原先直接抛出，界面上看不到任何解释）。
+        return OperationResult(
+            name="websearch.widget.health",
+            status="error",
+            payload={
+                "state": "error",
+                "provider": str(config.get("provider") or ""),
+                "error": str(exc),
+                "checked_at": _now(),
+            },
+        )
     query = str(request.payload.get("query") or "OpenAI").strip()
     if not query or len(query) > 200:
         return OperationResult(

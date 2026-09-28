@@ -32,14 +32,60 @@ def test_approval_gate_auto_allows_read_tool(tmp_path: Path):
     assert "Auto-approved" in decision.reason
 
 
-def test_approval_gate_blocks_path_escape(tmp_path: Path):
-    gate = ApprovalGate(work_root=tmp_path, tool_permissions={"write_file": ASK_USER})
+def test_approval_gate_allows_path_escape_without_asking(tmp_path: Path):
+    """工作目录之外不再询问（2026-09-27 产品决定），直接放行给执行层。"""
+    gate = ApprovalGate(work_root=tmp_path, tool_permissions={"write_file": AUTO_ALLOW})
 
     decision = gate.check("write_file", {"path": "../outside.txt"})
 
-    assert decision.allowed is False
-    assert decision.blocked is True
-    assert "outside work_root" in decision.reason
+    assert decision.allowed is True
+    assert decision.blocked is False
+    assert decision.requires_approval is False
+    assert decision.outside_workdir is False
+
+
+def test_approval_gate_opens_path_escape_when_outside_access_is_allowed(tmp_path: Path):
+    gate = ApprovalGate(
+        work_root=tmp_path,
+        tool_permissions={"write_file": AUTO_ALLOW},
+        allow_access_outside_workdir=True,
+    )
+
+    decision = gate.check("write_file", {"path": "../outside.txt"})
+
+    assert decision.allowed is True
+    assert decision.blocked is False
+    assert decision.outside_workdir is False
+
+
+def test_approval_gate_allows_command_touching_outside_path(tmp_path: Path):
+    gate = ApprovalGate(work_root=tmp_path, tool_permissions={"run_command": AUTO_ALLOW})
+
+    decision = gate.check("run_command", {"command": f'cat "{tmp_path.parent / "outside.txt"}"'})
+
+    assert decision.allowed is True
+    assert decision.requires_approval is False
+    assert decision.outside_workdir is False
+
+
+def test_approval_gate_treats_resource_root_as_inside(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    skill_dir = tmp_path / "skills" / "demo"
+    workspace.mkdir()
+    skill_dir.mkdir(parents=True)
+    gate = ApprovalGate(
+        work_root=workspace,
+        tool_permissions={"read_file": AUTO_ALLOW},
+        resource_roots=lambda: (skill_dir,),
+    )
+
+    inside_skill = gate.check("read_file", {"path": str(skill_dir / "helper.txt")})
+    elsewhere = gate.check("read_file", {"path": str(tmp_path / "other.txt")})
+
+    assert inside_skill.allowed is True
+    assert elsewhere.allowed is True
+    assert elsewhere.requires_approval is False
+    assert elsewhere.outside_workdir is False
 
 
 def test_approval_gate_requires_user_for_write(tmp_path: Path):
@@ -135,3 +181,27 @@ def test_hard_block_patterns_are_case_insensitive(tmp_path: Path):
     assert decision.blocked is True
     decision = gate.check("write_file", {"path": "config/.Env"})
     assert decision.blocked is True
+
+
+def test_approval_gate_allows_directory_and_search_tools_outside(tmp_path: Path):
+    """列目录/搜索与读写一致：越界不再询问，直接由执行层处理。"""
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    gate = ApprovalGate(
+        work_root=workspace,
+        tool_permissions={"list_dir": AUTO_ALLOW, "search_files": AUTO_ALLOW, "search_content": AUTO_ALLOW},
+    )
+
+    listing = gate.check("list_dir", {"path": str(outside)})
+    searching = gate.check("search_content", {"pattern": "x", "path": str(outside)})
+    inside = gate.check("list_dir", {"path": "."})
+
+    assert listing.allowed is True
+    assert listing.requires_approval is False
+    assert listing.outside_workdir is False
+    assert searching.allowed is True
+    assert searching.requires_approval is False
+    assert searching.outside_workdir is False
+    assert inside.allowed is True

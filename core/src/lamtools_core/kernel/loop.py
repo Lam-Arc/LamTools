@@ -61,6 +61,7 @@ from lamtools_core.runtime import (
     RuntimeTurnInput,
 )
 from lamtools_core.runtime.audit import build_kernel_audit
+from lamtools_core.runtime_owner import LIVE_RUN_STATES, is_own_token, read_owner
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 from lamtools_core.tool import ToolCall, ToolResult
 
@@ -223,14 +224,48 @@ def _repair_incomplete_tool_history(messages: list[ChatMessage]) -> list[ChatMes
             ))
         pending.clear()
 
+    def keep_orphan_result(message: ChatMessage) -> None:
+        """Re-label a tool result no pending call can own as user context.
+
+        A provider rejects any ``tool`` message that does not directly follow
+        the assistant message that requested it, so an orphaned result (its
+        assistant message was dropped by trimming, or guidance/other messages
+        were interleaved before it) must not stay in the tool role.  Keep the
+        payload — dropping it would silently lose the model's own tool output —
+        and merge into a preceding user message so no provider sees two user
+        turns in a row.
+        """
+        content = message.content
+        previous = repaired[-1] if repaired else None
+        if (
+            previous is not None
+            and previous.role == "user"
+            and isinstance(previous.content, str)
+            and isinstance(content, str)
+        ):
+            previous.content = f"{previous.content}\n\n{content}" if content else previous.content
+            previous.metadata = {
+                **dict(previous.metadata or {}),
+                "history_repair": "orphaned_tool_result",
+            }
+            return
+        repaired.append(ChatMessage(
+            role="user",
+            content=content,
+            metadata={
+                **dict(message.metadata or {}),
+                "history_repair": "orphaned_tool_result",
+            },
+        ))
+
     for message in messages:
         if message.role == "tool":
             call_id = str(message.tool_call_id or "")
             if call_id and call_id in pending:
                 repaired.append(message)
                 pending.pop(call_id, None)
-            elif not pending:
-                repaired.append(message)
+            else:
+                keep_orphan_result(message)
             continue
         if pending:
             close_pending()
@@ -973,7 +1008,16 @@ class CoreLoopKernel:
                         tool_message = await self.kit.format_tool_result_for_model(state, call, result)
                         history.append(tool_message)
                         await self._save_checkpoint(state)
-                        if not await self._consume_guidance(state, turn_input, history, index):
+                        # Collect (do not yet apply) new guidance: the rest of the
+                        # batch has to be written back first.  A provider rejects
+                        # any tool result that does not directly follow the
+                        # assistant message that requested it, so a guidance user
+                        # message inserted here would orphan the skipped results
+                        # behind it (2026-09-27: every steered sub-agent died with
+                        # "Messages with role 'tool' must be a response to a
+                        # preceding message with 'tool_calls'").
+                        guidance = self._collect_guidance(turn_input)
+                        if not guidance:
                             continue
                         remaining_calls = turn.tool_calls[call_index + 1:]
                         for skipped_call in remaining_calls:
@@ -996,6 +1040,7 @@ class CoreLoopKernel:
                         if remaining_calls:
                             step.metadata["guidance_interrupted_tool_batch"] = True
                             await self._save_checkpoint(state)
+                        await self._apply_guidance(state, history, index, guidance)
                         break
 
                 payload_reassessment_required = False
@@ -1406,7 +1451,27 @@ class CoreLoopKernel:
         (2026-09-25 audit P3).  Returns the messages appended to history.
         """
         # Mark running
+        previous_status = str(state.status or "")
+        previous_owner = read_owner(state.metadata)
         state.status = "running"
+        # A run that was in flight but belongs to a process that is gone is
+        # being taken over here.  Leave a durable trace instead of silently
+        # overwriting it, so a crashed CLI run can be told apart from a clean
+        # continuation when reading the session later.
+        if previous_status in LIVE_RUN_STATES and not is_own_token(previous_owner):
+            state.metadata["adopted_stale_run"] = {
+                "previous_run_id": state.run_id,
+                "previous_status": previous_status,
+                "previous_owner": previous_owner,
+                "adopted_at": time_module.time(),
+            }
+            _logger.warning(
+                "[kernel:_run] adopting stale session %s (previous run %s, status %s, owner pid %s)",
+                state.session_id,
+                state.run_id,
+                previous_status,
+                previous_owner.get("pid"),
+            )
         await self.state_store.save(state)
         _logger.info("[kernel:_run] state saved as running sid=%s", state.session_id)
 
@@ -2094,15 +2159,18 @@ class CoreLoopKernel:
             provider_state=copy.deepcopy(provider_state),
         )
 
-    async def _consume_guidance(
+    def _collect_guidance(
         self,
-        state: RuntimeState,
         turn_input: RuntimeTurnInput,
-        history: list[ChatMessage],
-        response_index: int,
         *,
         finalize: bool = False,
-    ) -> bool:
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Drain pending guidance into normalized ``(content, metadata)`` pairs.
+
+        Draining is split from :meth:`_apply_guidance` so callers that must
+        finish writing back the current tool batch before the guidance lands in
+        history can do exactly that.
+        """
         if finalize and turn_input.guidance_finalizer is not None:
             guidance_items = turn_input.guidance_finalizer() or []
         else:
@@ -2118,8 +2186,16 @@ class CoreLoopKernel:
                 metadata = {}
             if content:
                 guidance.append((content, metadata))
-        if not guidance:
-            return False
+        return guidance
+
+    async def _apply_guidance(
+        self,
+        state: RuntimeState,
+        history: list[ChatMessage],
+        response_index: int,
+        guidance: list[tuple[str, dict[str, Any]]],
+    ) -> None:
+        """Append already-collected guidance to history and announce it."""
         for content, metadata in guidance:
             history.append(ChatMessage(role="user", content=content))
             await self.event_sink.emit(CoreEvent(
@@ -2135,6 +2211,20 @@ class CoreLoopKernel:
                 tags=["guidance"],
             ))
         await self._save_checkpoint(state)
+
+    async def _consume_guidance(
+        self,
+        state: RuntimeState,
+        turn_input: RuntimeTurnInput,
+        history: list[ChatMessage],
+        response_index: int,
+        *,
+        finalize: bool = False,
+    ) -> bool:
+        guidance = self._collect_guidance(turn_input, finalize=finalize)
+        if not guidance:
+            return False
+        await self._apply_guidance(state, history, response_index, guidance)
         return True
 
     async def _next_stream_event(self, stream_iterator: Any) -> LLMStreamEvent:
@@ -3770,6 +3860,13 @@ class CoreLoopKernel:
 
     @staticmethod
     def _approval_request_message(call: ToolCall) -> str:
+        approval = call.metadata.get("approval") if isinstance(call.metadata, dict) else None
+        if isinstance(approval, dict) and approval.get("outside_workdir"):
+            # Say what the user is consenting to (the concrete path) instead of
+            # only naming the tool that asked.
+            reason = str(approval.get("reason") or "").strip()
+            if reason:
+                return f"需要授权：{reason}"
         args = call.arguments if isinstance(call.arguments, dict) else {}
         command = str(args.get("command") or "").strip()
         if command:

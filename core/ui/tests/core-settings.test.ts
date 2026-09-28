@@ -490,6 +490,14 @@ describe('Core settings permission contract', () => {
     expect(source).not.toContain("'update-permission-mode'")
   })
 
+  it('describes the approval-instead-of-block boundary copy', () => {
+    const settings = readFileSync(resolve(process.cwd(), 'src/components/CoreSettings.vue'), 'utf8')
+    const presets = readFileSync(resolve(process.cwd(), 'src/composer/execution.ts'), 'utf8')
+    expect(settings).toContain('工作目录外的读写与命令行访问会先征求你的确认，批准后本次执行。')
+    expect(settings).toContain('工作目录外需确认')
+    expect(presets).toContain('在当前能力范围内自动批准（工作目录外仍会确认）')
+  })
+
   it('binds the toggle state in the Shared Core App', () => {
 const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
     expect(source).toContain(':allow-access-outside-workdir="allowAccessOutsideWorkdir"')

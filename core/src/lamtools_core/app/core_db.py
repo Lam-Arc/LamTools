@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 import uuid
@@ -18,6 +19,7 @@ from sqlalchemy.pool import NullPool
 
 from lamtools_core.event import RunItemEvent
 from lamtools_core.runtime import RuntimeState, RuntimeStateConflictError
+from lamtools_core.runtime_owner import read_owner, refresh_owner, state_row_is_live
 from lamtools_core.runtime.arrange import (
     ArrangeJob,
     ArrangeOccurrence,
@@ -27,6 +29,7 @@ from lamtools_core.runtime.arrange import (
     next_arrange_run,
 )
 from lamtools_core.runtime.goal import Goal, GoalStatus, GoalStore
+from lamtools_core.runtime.plan_package import PlanPackage, PlanStatus, PlanStore, plan_from_dict
 
 from .event_store import SqlAlchemyAppEventStore
 from .persistence_host import AppPersistenceHost
@@ -37,6 +40,9 @@ from .sqlite_write import SQLiteWriteCoordinator, configure_sqlite_engine
 
 if TYPE_CHECKING:
     from .project_store import CoreProjectStore
+
+
+_logger = logging.getLogger(__name__)
 
 
 class CoreDbBase(DeclarativeBase):
@@ -205,6 +211,40 @@ class CoreGoal(CoreDbBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CorePlan(CoreDbBase):
+    """One plan package (方案) as this host stores it.
+
+    `package_json` is the record of truth — the same shape both hosts write and
+    read. The plain columns beside it exist to filter and order without parsing
+    JSON, and are rewritten from the package on every save.
+    """
+
+    __tablename__ = "core_plans"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False, default="")
+    title: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="draft")
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    package_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CorePlanRevision(CoreDbBase):
+    """Every accepted revision, so a plan can be read back and reverted to."""
+
+    __tablename__ = "core_plan_revisions"
+
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    package_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class CoreArrangeJob(CoreDbBase):
@@ -753,6 +793,23 @@ class SqlAlchemyRuntimeStateStore:
 
         await self.write_coordinator.run(write)
 
+    async def live_owner(self, session_id: str) -> dict[str, Any] | None:
+        """Owner token of a run still in flight, or ``None`` when free.
+
+        Used as a cheap pre-flight check before adopting a session: a row left
+        behind by a crashed process is not live, while a row being written by a
+        running process is.
+        """
+        async with self.session_factory() as db:
+            row = await db.get(CoreRuntimeSession, session_id)
+        if row is None:
+            return None
+        payload = row.runtime_state_json if isinstance(row.runtime_state_json, dict) else {}
+        if not state_row_is_live(payload):
+            return None
+        metadata = payload.get("metadata")
+        return read_owner(metadata if isinstance(metadata, dict) else {})
+
     async def find_pending_approval(self, request_id: str) -> RuntimeState | None:
         async with self.session_factory() as db:
             # Filter at the SQL layer to only sessions that actually carry a
@@ -781,14 +838,40 @@ class SqlAlchemyRuntimeStateStore:
         return None
 
     async def _save(self, state: RuntimeState, *, history: list[dict[str, Any]] | None) -> str | None:
+        # Claim this run as the session's owner (and refresh the heartbeat) so a
+        # concurrent process can tell a live writer from a crashed one.
+        if isinstance(state.metadata, dict):
+            refresh_owner(state.metadata)
         state_payload, pending_payload = _runtime_state_payloads(state)
         expected_revision = getattr(state, "_runtime_store_revision", None)
         now = datetime.now()
+
+        def blocked_by_live_owner(row: Any) -> bool:
+            """Whether the row belongs to a run that is still in flight."""
+            payload = row.runtime_state_json if isinstance(row.runtime_state_json, dict) else {}
+            return state_row_is_live(payload)
+
+        def adopt(reason: str, current_revision: int) -> None:
+            _logger.warning(
+                "[runtime-state] adopting session %s (%s): expected_revision=%s current=%s",
+                state.session_id,
+                reason,
+                expected_revision,
+                current_revision,
+            )
+
         async def write(db):
             row = await db.get(CoreRuntimeSession, state.session_id)
             if row is None:
                 if expected_revision not in {None, 0}:
-                    raise RuntimeStateConflictError(f"Runtime state revision conflict for {state.session_id}")
+                    # The row disappeared under us (session deleted or rolled
+                    # back by another actor).  Nothing is live to protect, so
+                    # recreate instead of failing the run.
+                    _logger.warning(
+                        "[runtime-state] recreating missing session row %s (expected_revision=%s)",
+                        state.session_id,
+                        expected_revision,
+                    )
                 db.add(
                     CoreRuntimeSession(
                         thread_id=state.session_id,
@@ -805,9 +888,26 @@ class SqlAlchemyRuntimeStateStore:
                 return 1, change.change_id if change is not None else None
 
             current_revision = int(row.revision or 0)
-            if expected_revision is None or int(expected_revision) != current_revision:
-                raise RuntimeStateConflictError(f"Runtime state revision conflict for {state.session_id}")
-            next_revision = current_revision + 1
+            baseline = current_revision
+            stale_stamp = expected_revision is None or int(expected_revision) != current_revision
+            if stale_stamp and blocked_by_live_owner(row):
+                # Another process is running this session right now: refuse
+                # rather than interleave two runtimes into one state row.
+                _logger.error(
+                    "[runtime-state] session %s is owned by a live run (expected=%s current=%s)",
+                    state.session_id,
+                    expected_revision,
+                    current_revision,
+                )
+                raise RuntimeStateConflictError(
+                    f"Session '{state.session_id}' is being written by another running process"
+                )
+            if stale_stamp:
+                adopt("stale stamp", current_revision)
+            # ``baseline`` is the revision the compare-and-set below expects:
+            # either the one this state object loaded, or the current row after
+            # adopting a run that is no longer alive.
+            next_revision = baseline + 1
             values: dict[str, Any] = {
                 "revision": next_revision,
                 "runtime_state_json": state_payload,
@@ -821,7 +921,7 @@ class SqlAlchemyRuntimeStateStore:
                 update(CoreRuntimeSession)
                 .where(
                     CoreRuntimeSession.thread_id == state.session_id,
-                    CoreRuntimeSession.revision == current_revision,
+                    CoreRuntimeSession.revision == baseline,
                 )
                 .values(**values)
             )
@@ -942,6 +1042,112 @@ class SqlAlchemyGoalStore:
             return goal
 
         return await self.write_coordinator.run(write)
+
+
+class SqlAlchemyPlanStore:
+    """Plan packages on disk, with one snapshot row per accepted revision."""
+
+    def __init__(self, session_factory: async_sessionmaker, write_coordinator: SQLiteWriteCoordinator) -> None:
+        self.session_factory = session_factory
+        self.write_coordinator = write_coordinator
+
+    async def insert(self, plan: PlanPackage) -> PlanPackage:
+        async def write(db):
+            if await db.get(CorePlan, plan.id) is not None:
+                raise ValueError(f"Plan already exists: {plan.id}")
+            db.add(_plan_row(plan))
+            await db.flush()
+            return plan
+
+        return await self.write_coordinator.run(write)
+
+    async def replace(self, plan: PlanPackage, *, expected_revision: int) -> PlanPackage:
+        async def write(db):
+            result = await db.execute(
+                update(CorePlan)
+                .where(CorePlan.id == plan.id, CorePlan.revision == expected_revision)
+                .values(**_plan_values(plan))
+            )
+            if result.rowcount != 1:
+                existing = await db.get(CorePlan, plan.id)
+                if existing is None:
+                    raise LookupError(f"Plan not found: {plan.id}")
+                raise RuntimeError(f"plan revision conflict: {plan.id}")
+            return plan
+
+        return await self.write_coordinator.run(write)
+
+    async def get(self, plan_id: str) -> PlanPackage | None:
+        async with self.session_factory() as db:
+            row = await db.get(CorePlan, str(plan_id or "").strip())
+        return _plan_from_row(row) if row is not None else None
+
+    async def list(
+        self,
+        *,
+        project_id: str | None = None,
+        status: PlanStatus | None = None,
+        include_deleted: bool = False,
+    ) -> list[PlanPackage]:
+        statement = select(CorePlan)
+        if project_id is not None:
+            statement = statement.where(CorePlan.project_id == project_id)
+        if status is not None:
+            statement = statement.where(CorePlan.status == status)
+        if not include_deleted:
+            statement = statement.where(CorePlan.deleted_at.is_(None))
+        # Newest first, with the id as a tiebreaker: two plans saved inside the
+        # same clock tick still come back in a stable order.
+        statement = statement.order_by(CorePlan.created_at.desc(), CorePlan.id.desc())
+        async with self.session_factory() as db:
+            rows = (await db.execute(statement)).scalars().all()
+        return [_plan_from_row(row) for row in rows]
+
+    async def set_deleted(self, plan_id: str, *, deleted: bool) -> PlanPackage:
+        key = str(plan_id or "").strip()
+
+        async def write(db):
+            row = await db.get(CorePlan, key)
+            if row is None:
+                raise LookupError(f"Plan not found: {key}")
+            plan = _plan_from_row(row)
+            now = datetime.now(timezone.utc)
+            updated = replace(
+                plan,
+                deleted_at=now if deleted else None,
+                updated_at=now,
+            )
+            row.deleted_at = _utc_datetime(updated.deleted_at) if updated.deleted_at else None
+            row.updated_at = _utc_datetime(updated.updated_at)
+            row.package_json = _json_safe(updated.to_dict())
+            await db.flush()
+            return updated
+
+        return await self.write_coordinator.run(write)
+
+    async def record_revision(self, plan: PlanPackage) -> None:
+        row = _plan_revision_row(plan)
+
+        async def write(db):
+            existing = await db.get(CorePlanRevision, row.id)
+            if existing is None:
+                db.add(row)
+            else:
+                existing.package_json = row.package_json
+                existing.created_at = row.created_at
+            await db.flush()
+
+        await self.write_coordinator.run(write)
+
+    async def revisions(self, plan_id: str) -> list[PlanPackage]:
+        statement = (
+            select(CorePlanRevision)
+            .where(CorePlanRevision.plan_id == str(plan_id or "").strip())
+            .order_by(CorePlanRevision.revision)
+        )
+        async with self.session_factory() as db:
+            rows = (await db.execute(statement)).scalars().all()
+        return [plan_from_dict(dict(row.package_json or {})) for row in rows]
 
 
 class SqlAlchemyArrangeStore:
@@ -1558,6 +1764,7 @@ class CoreAppDb:
     runtime_state_store: SqlAlchemyRuntimeStateStore
     handoff_context_store: SqlAlchemyHandoffContextStore
     goal_store: GoalStore
+    plan_store: PlanStore
     arrange_store: ArrangeStore
     project_store: CoreProjectStore
     sync_journal: Any
@@ -1638,6 +1845,7 @@ async def open_core_app_db(
         ),
         handoff_context_store=SqlAlchemyHandoffContextStore(session_factory, write_coordinator),
         goal_store=SqlAlchemyGoalStore(session_factory, write_coordinator),
+        plan_store=SqlAlchemyPlanStore(session_factory, write_coordinator),
         arrange_store=SqlAlchemyArrangeStore(session_factory, write_coordinator),
         project_store=CoreProjectStore(
             session_factory,
@@ -2067,6 +2275,52 @@ def _goal_from_row(row: CoreGoal) -> Goal:
         created_at=_utc_datetime(row.created_at),
         updated_at=_utc_datetime(row.updated_at),
         completed_at=_utc_datetime(row.completed_at) if row.completed_at else None,
+    )
+
+
+def _plan_row(plan: PlanPackage) -> CorePlan:
+    return CorePlan(
+        id=plan.id,
+        project_id=plan.project_id,
+        title=plan.title,
+        status=plan.status,
+        source=plan.source,
+        revision=plan.revision,
+        package_json=_json_safe(plan.to_dict()),
+        created_at=_utc_datetime(plan.created_at),
+        updated_at=_utc_datetime(plan.updated_at),
+        deleted_at=_utc_datetime(plan.deleted_at) if plan.deleted_at else None,
+    )
+
+
+def _plan_values(plan: PlanPackage) -> dict[str, Any]:
+    """The mutable columns, without the primary key."""
+
+    values = _plan_row(plan)
+    return {
+        "project_id": values.project_id,
+        "title": values.title,
+        "status": values.status,
+        "source": values.source,
+        "revision": values.revision,
+        "package_json": values.package_json,
+        "created_at": values.created_at,
+        "updated_at": values.updated_at,
+        "deleted_at": values.deleted_at,
+    }
+
+
+def _plan_from_row(row: CorePlan) -> PlanPackage:
+    return plan_from_dict(dict(row.package_json or {}))
+
+
+def _plan_revision_row(plan: PlanPackage) -> CorePlanRevision:
+    return CorePlanRevision(
+        id=f"{plan.id}@{plan.revision}",
+        plan_id=plan.id,
+        revision=plan.revision,
+        package_json=_json_safe(plan.to_dict()),
+        created_at=_utc_datetime(plan.updated_at),
     )
 
 

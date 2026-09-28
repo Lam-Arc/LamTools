@@ -46,6 +46,7 @@ import { createStandaloneProjectClient } from './StandaloneProjectClient'
 import { createStandaloneProjectRoutes } from './StandaloneProjectRoutes'
 import { artifactRpc, artifactSnapshot, handleStandaloneArtifactHttp } from './StandaloneArtifacts'
 import { goalRpc } from './StandaloneGoals'
+import { planRpc } from './StandalonePlans'
 import {
   createCheckpointRpc,
   forkSnapshotUpToTurn,
@@ -465,6 +466,8 @@ export class StandaloneTransport implements LamToolsTransport {
     if (artifactResult) return artifactResult
     const goalResult = await goalRpc(method, params)
     if (goalResult) return goalResult
+    const planResult = await planRpc(method, params)
+    if (planResult) return planResult
     const checkpointResult = await this.checkpointRpc(method, params)
     if (checkpointResult) return checkpointResult
     if (method === 'workspace.search') return await searchStandaloneWorkspace(this.repository, params)

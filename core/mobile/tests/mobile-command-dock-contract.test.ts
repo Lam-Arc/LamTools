@@ -24,11 +24,17 @@ describe('mobile command dock host contract', () => {
 
   it('keeps narrow drawers simplified while restoring all wide Pad actions', () => {
     expect(shellSource).toContain("const showMobileFooterFallback = computed(() => appRuntime.platform === 'mobile' && props.mobileCommandDockAvailable !== true)")
-    expect(shellSource).toContain(':show-sidebar-search-action="appRuntime.platform !== \'mobile\' || showMobileFooterFallback"')
-    expect(shellSource).toContain(':show-sidebar-plugins-action="appRuntime.platform !== \'mobile\' || showMobileFooterFallback"')
+    // 桌面把搜索/插件入口移到了左栏顶部的搜索行，页脚只留设置；手机降级页脚
+    // 仍旧自己带这几个入口。
+    expect(shellSource).toContain(':show-sidebar-search-action="showMobileFooterFallback"')
+    expect(shellSource).toContain(':show-sidebar-plugins-action="showMobileFooterFallback"')
     expect(shellSource).toContain(':show-sidebar-settings-action="appRuntime.platform !== \'mobile\' || showMobileFooterFallback"')
     expect(shellSource).toContain('v-if="showSidebarFooter" #sidebar-footer')
-    expect(shellSource).toContain('v-if="appRuntime.platform !== \'mobile\' || showMobileFooterFallback" class="sidebar-action" type="button" data-mobile-footer-arrange')
+    // 手机降级页脚仍是带文字的竖排行；桌面底部是账号显示 + 设置。
+    expect(shellSource).toContain('class="drawer-footer-stack"')
+    expect(shellSource).toContain('data-mobile-footer-arrange @click="showArrange = true"')
+    expect(shellSource).toContain('class="drawer-footer-account"')
+    expect(shellSource).toContain('label="长期安排"')
     expect(shellSource).toContain('@click="selectAppModeByKey(option.id)"')
     expect(shellSource).toContain('@click="emit(\'open-account\')"')
     expect(shellSource).toContain('openPlugins,')

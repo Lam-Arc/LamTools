@@ -238,7 +238,7 @@
 | # | 改动 | 文件 | 效果 |
 |---|------|------|------|
 | D1 | `startTurn` 请求加 `include_snapshot: false`（turn/accepted + item/started 事件已覆盖 UI 状态；响应快照在 56MB 线程上是 ~1s 的 JSON.parse，且发生在 hydrate 跳过判定之前，跳过省不了 parse） | `ui/src/appServer/store.ts` | 回合开始不再解析 56MB |
-| D2 | `nextCoreProcessExpandedIds` 只自动展开**含 running part** 的助手消息（此前回合开始把**所有**历史助手消息加入集合 → 全部消息 v-memo 布尔翻转 → 整线重渲 ~1s；回合结束清空集合 → 又一次整线重渲） | `ui/src/appServer/workbenchProjection.ts` | turn 开始/结束的重渲范围从 O(全窗口) 降到 O(当前回合消息)；历史消息保持紧凑组折叠（紧凑组摘要本就是为此设计）；审批卡由 FloatingApprovalCard 兜底 |
+| D2 | `nextCoreProcessExpandedIds` 只自动展开**含 running part** 的助手消息（此前回合开始把**所有**历史助手消息加入集合 → 全部消息 v-memo 布尔翻转 → 整线重渲 ~1s；回合结束清空集合 → 又一次整线重渲） | `ui/src/appServer/workbenchProjection.ts` | turn 开始/结束的重渲范围从 O(全窗口) 降到 O(当前回合消息)；历史消息保持紧凑组折叠（紧凑组摘要本就是为此设计）；未答复的审批卡由 `nextCoreProcessExpandedIds` 的 pending decision 分支强制展开兜底（已答复的审批卡不再渲染：答复落定即整卡撤出过程时间线，见 `ui/src/components/MessageView.vue` 的 `isAnsweredDecision`） |
 
 验证：typecheck/build 全绿；投影/控制器/store 测试全绿（唯一失败为既有基线 "nests real child run items"）；
 CDP 实测 0 长任务（60s 完整回合）。

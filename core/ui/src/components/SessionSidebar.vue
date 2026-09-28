@@ -1,8 +1,25 @@
 <template>
   <div class="session-sidebar-content">
     <span ref="dragImageRef" class="sidebar-drag-image" aria-hidden="true"></span>
-    <div v-if="hasProjectData" class="sidebar-toolbar">
+    <div
+      v-if="hasProjectData || searchAction || $slots['toolbar-actions']"
+      class="sidebar-toolbar"
+      :class="{ 'sidebar-toolbar--actions': searchAction }"
+    >
+      <button
+        v-if="searchAction"
+        class="sidebar-search-action"
+        type="button"
+        title="搜索"
+        aria-label="搜索"
+        data-sidebar-search-action
+        @click="emit('search')"
+      >
+        <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
+        <span class="sidebar-search-action__label">搜索</span>
+      </button>
       <div
+        v-else
         class="sidebar-search-wrap"
         :class="{ 'is-expanded': searchExpanded || Boolean(normalizedQuery) }"
       >
@@ -29,7 +46,7 @@
           @blur="collapseSearchIfEmpty"
         />
       </div>
-
+      <slot name="toolbar-actions" />
     </div>
     <div v-if="!hasProjectData" class="sidebar-empty">
       <slot name="empty">暂无内容，创建一个开始。</slot>
@@ -210,9 +227,11 @@
           v-if="hiddenCount(group, section.id) > 0"
           type="button"
           class="conversation-more"
+          :title="`展开另外 ${hiddenCount(group, section.id)} 个会话`"
+          :aria-label="`展开另外 ${hiddenCount(group, section.id)} 个会话`"
           @click.stop="toggleGroupExpand(group.id)"
         >
-          还有 {{ hiddenCount(group, section.id) }} 个会话
+          {{ hiddenCount(group, section.id) }} more…
         </button>
         </div>
         </article>
@@ -299,6 +318,11 @@ const props = withDefaults(
     showSessionActions?: boolean
     /** Include the project settings entry in the project action menu. */
     allowProjectSettings?: boolean
+    /**
+     * Render the toolbar's search as an entry that emits `search` (the host
+     * opens its global search) instead of the in-list filter input.
+     */
+    searchAction?: boolean
   }>(),
   {
     hasProjects: undefined,
@@ -314,6 +338,7 @@ const props = withDefaults(
     pinStorageKey: '',
     showSessionActions: false,
     allowProjectSettings: true,
+    searchAction: false,
   },
 )
 
@@ -327,6 +352,7 @@ const emit = defineEmits<{
   'export-session': [sessionId: string, format: SessionExportFormat]
   'project-context-menu': [projectGroupId: string]
   'rename-project': [projectGroupId: string]
+  'search': []
 }>()
 
 export type SessionExportFormat = CoreSessionExportFormat

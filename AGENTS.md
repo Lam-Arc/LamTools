@@ -87,6 +87,12 @@ current operating system and shell.
 <!-- codex-workflow-project-local-instructions-start -->
 # LamTools
 
+## 沟通方式（强制）
+
+- 面向用户的回复只讲业务：发生了什么（用户能观察到的现象）、现象之间的差别、以及需要用户拍板的业务决策及其影响。
+- 不出现代码路径、函数名、变量名、日志片段、协议或接口名等实现层词汇；实现方案与取舍由 agent 自行决定，不向用户汇报。
+- 仅当用户明确要求技术细节（看代码、代码审查、排查细节）时，才按要求的粒度展开。
+
 ## Setup 后置验收
 
 - 每次完成 Core Windows Inno Setup 构建（`core/desktop/installer/Sunday.iss`）或 setup 版本更新后，使用项目技能

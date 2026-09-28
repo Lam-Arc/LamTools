@@ -5,6 +5,7 @@ import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import WorkspaceShell from '../src/components/WorkspaceShell.vue'
+import { RIGHT_DRAWER_RETRACT_MS } from '../src/composables/useShellLayout'
 
 type MediaListener = (event: MediaQueryListEvent) => void
 
@@ -187,6 +188,55 @@ describe('WorkspaceShell responsive drawers', () => {
     wrapper.unmount()
   })
 
+  it('retracts the right rail before dropping its raised layer', async () => {
+    vi.useFakeTimers()
+    installMatchMedia(false)
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Sunday' },
+      slots: { 'right-panel': '<div data-right-content>运行状态</div>' },
+    })
+    await wrapper.vm.$nextTick()
+    const drawer = wrapper.get('[data-workspace-right-drawer]')
+    expect(drawer.classes()).not.toContain('drawer-retracting')
+
+    await wrapper.get('.edge-right').trigger('mouseenter')
+    await wrapper.vm.$nextTick()
+    expect(drawer.classes()).toContain('open')
+
+    await drawer.trigger('mouseleave')
+    await wrapper.vm.$nextTick()
+    expect(drawer.classes()).not.toContain('open')
+    // The exit still runs on the raised layer; the layer is lowered only once
+    // the rail has actually retracted.
+    expect(drawer.classes()).toContain('drawer-retracting')
+
+    vi.advanceTimersByTime(RIGHT_DRAWER_RETRACT_MS)
+    await wrapper.vm.$nextTick()
+    expect(drawer.classes()).not.toContain('drawer-retracting')
+
+    // A pinned rail sits beside the main card instead of above it, so closing
+    // it lowers nothing and must not linger on the popover layer.
+    const controls = wrapper.vm as unknown as { toggleRightPinned: () => void }
+    controls.toggleRightPinned()
+    await wrapper.vm.$nextTick()
+    expect(drawer.classes()).toContain('open')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', ctrlKey: true, cancelable: true }))
+    await wrapper.vm.$nextTick()
+    expect(drawer.classes()).not.toContain('open')
+    expect(drawer.classes()).not.toContain('drawer-retracting')
+
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
+  it('keeps the right-drawer retract length in sync with the stylesheet token', () => {
+    const variablesCss = readFileSync(resolve(import.meta.dirname, '../src/styles/variables.css'), 'utf8')
+    const token = variablesCss.match(/--right-drawer-retract:\s*(\d+)ms/)
+
+    expect(token?.[1]).toBeDefined()
+    expect(Number(token?.[1])).toBe(RIGHT_DRAWER_RETRACT_MS)
+  })
+
   it('does not treat mouse text selection as a drawer gesture', async () => {
     const wrapper = mount(WorkspaceShell, {
       props: { productName: 'Sage' },
@@ -232,7 +282,7 @@ describe('WorkspaceShell responsive drawers', () => {
     const sidebarCss = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
     const variablesCss = readFileSync(resolve(import.meta.dirname, '../src/styles/variables.css'), 'utf8')
 
-    expect(variablesCss).toContain('--sidebar-width: 232px')
+    expect(variablesCss).toContain('--sidebar-width: 162px')
     expect(shellCss).toMatch(/--sidebar-width: min\(86vw, 320px\)/)
     expect(shellCss).toContain('--right-panel-gap: 2px')
     expect(shellCss).toContain('.workspace-shell.right-open.right-pinned')
@@ -245,13 +295,15 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(shellSource).toContain('class="workspace-drawer drawer-right optical-glass"')
     expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?transform: none;[\s\S]*?visibility: visible;[\s\S]*?transition: visibility 0s linear 0s;/)
     expect(shellCss).toMatch(/\.drawer-right > \.drawer-body\s*\{[\s\S]*?transition: transform 240ms var\(--ease-out\), opacity 240ms var\(--ease-out\);/)
-    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\)\s*\{[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none;[\s\S]*?transition-delay: var\(--dur-base\);/)
-    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\) > \.drawer-body\s*\{[\s\S]*?opacity: 0;[\s\S]*?transform: translateX\(10px\);/)
+    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\)\s*\{[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none;[\s\S]*?transition-delay: var\(--right-drawer-retract\);/)
+    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\) > \.drawer-body\s*\{[\s\S]*?opacity: 0;[\s\S]*?transform: translateX\(10px\);[\s\S]*?transition-duration: var\(--right-drawer-retract\), var\(--right-drawer-retract\);/)
+    expect(shellCss).toMatch(/\.drawer-right\.drawer-retracting\s*\{\s*z-index: var\(--z-popover\);/)
+    expect(variablesCss).toMatch(/--right-drawer-retract:\s*180ms/)
     expect(shellCss).not.toMatch(/\.drawer-right\s*\{[^}]*will-change:/)
     expect(shellCss).toMatch(/\.workspace-shell \.workspace-drawer,[\s\S]*?transition: none !important;/)
     expect(shellCss).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.drawer-right\s*\{[\s\S]*?left: var\(--space-2\);[\s\S]*?right: var\(--space-2\);[\s\S]*?width: auto;/)
     expect(shellCss).toMatch(/\.sidebar-root \.sidebar-pin-button \{[\s\S]*?width: 44px;[\s\S]*?height: 44px;/)
-    expect(shellCss).toMatch(/\.drawer-footer \.settings-entry,[\s\S]*?\.drawer-footer \.sidebar-action,[\s\S]*?\.sidebar-create-project \{[\s\S]*?min-height: 44px;/)
+    expect(shellCss).toMatch(/\.icon-btn,[\s\S]*?\.rail-action__button,[\s\S]*?\.drawer-footer \.sidebar-action,[\s\S]*?\.sidebar-create-project \{[\s\S]*?min-height: 44px;/)
     expect(sidebarCss).toMatch(/\.sidebar-search,[\s\S]*?\.sidebar-search-clear,[\s\S]*?\.sidebar-project-empty-action \{[\s\S]*?min-height: 44px;/)
     expect(sidebarCss).toMatch(/\.project-action \{[\s\S]*?min-width: 44px;[\s\S]*?min-height: 44px;/)
     const contextMenuCss = readFileSync(resolve(import.meta.dirname, '../src/components/context-menu/ContextMenuPanel.vue'), 'utf8')

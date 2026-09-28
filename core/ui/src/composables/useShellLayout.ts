@@ -12,6 +12,13 @@ import { DEFAULT_THEME } from '../helpers/theme'
 export type DensityMode = 'compact' | 'standard' | 'loose'
 export type { ThemeData, ThemeCSSVars }
 
+/**
+ * How long `.drawer-right` takes to retract. Must stay equal to the
+ * `--right-drawer-retract` token in variables.css: the raised layer is held for
+ * exactly this long so the panel lowers only after it has finished retracting.
+ */
+export const RIGHT_DRAWER_RETRACT_MS = 180
+
 export interface ShellLayoutOptions {
   /** localStorage key prefix for the consuming member product */
   storageKey: string
@@ -50,6 +57,9 @@ export function useShellLayout(options: ShellLayoutOptions) {
   }))
 
   const rightDrawerModal = computed(() => rightOpen.value && isNarrowViewport.value)
+
+  /** True whenever the right rail occupies the workspace, staged or hovered. */
+  const rightDrawerShown = computed(() => rightOpen.value || stageOpen.value)
 
   // The native title bar lives outside `.workspace-shell`, so mirror only the
   // two live main-surface insets to :root for title-bar extensions such as
@@ -155,6 +165,30 @@ export function useShellLayout(options: ShellLayoutOptions) {
     leftOpen.value = false
     rightOpen.value = false
   }
+
+  // The right rail retracts first and only then drops back to the background
+  // layer. Lowering the layer up front hid the whole exit behind the opaque
+  // main card, so the panel appeared to vanish rather than retract.
+  const rightRetracting = ref(false)
+  let rightRetractTimer: ReturnType<typeof setTimeout> | undefined
+
+  function clearRightRetract(): void {
+    if (rightRetractTimer === undefined) return
+    clearTimeout(rightRetractTimer)
+    rightRetractTimer = undefined
+  }
+
+  watch(rightDrawerShown, (shown) => {
+    clearRightRetract()
+    // A pinned rail sits beside the main card instead of above it, so it has
+    // no raised layer to hold; phones keep drawers raised from the stylesheet.
+    rightRetracting.value = !shown && !rightPinned.value
+    if (!rightRetracting.value) return
+    rightRetractTimer = setTimeout(() => {
+      rightRetractTimer = undefined
+      rightRetracting.value = false
+    }, RIGHT_DRAWER_RETRACT_MS)
+  })
 
   function toggleStage() {
     stageOpen.value = !stageOpen.value
@@ -303,6 +337,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
       appliedThemeKeys = []
     }
     clearTimeout(saveTimer)
+    clearRightRetract()
   })
 
   // --- persistence ---
@@ -344,6 +379,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
     rightOpen,
     leftPinned,
     rightPinned,
+    rightRetracting,
     stageOpen,
     stageHeight,
     isNarrowViewport,
@@ -354,6 +390,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
     shellClass,
     shellStyle,
     rightDrawerModal,
+    rightDrawerShown,
     // actions
     toggleLeftPinned,
     toggleRightPinned,

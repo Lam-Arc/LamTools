@@ -93,6 +93,7 @@ from lamtools_core.app.runtime_permissions import (
     load_global_runtime_controls,
     read_global_runtime_controls,
     resolve_permission_preset,
+    resolve_session_permissions,
     runtime_snapshot as build_runtime_snapshot,
     session_runtime_preferences,
 )
@@ -607,6 +608,16 @@ async def run_core_cli_task(
         thread_id,
         title=options.message,
     )
+    # One session has one runtime; a second process writing the same row would
+    # interleave two runs.  Refuse when another live process owns it, and let a
+    # row left behind by a crashed run be adopted (the kernel marks the takeover
+    # in state metadata on its first save).
+    live_owner = await core_db.runtime_state_store.live_owner(thread_id)
+    if live_owner:
+        raise RuntimeError(
+            f"会话 {thread_id} 正被另一个进程运行（pid={live_owner.get('pid')}，"
+            f"主机={live_owner.get('host')}）；请等它结束，或换一个 --thread-id。"
+        )
     session_preferences = session_runtime_preferences(
         session.metadata,
         global_controls=global_controls,
@@ -621,11 +632,12 @@ async def run_core_cli_task(
         requested_preset = "auto"
     else:
         requested_preset = str(session_preferences["permission_preset"])
-    resolved_permissions = resolve_permission_preset(
+    resolved_permissions = resolve_session_permissions(
         preset=requested_preset,
         base_tier=session_preferences["base_tier"],
         base_allow_access_outside_workdir=base_allow_outside,
         tier_tools=tier_tools,
+        global_controls=global_controls,
     )
     allow_outside_workdir = resolved_permissions.allow_access_outside_workdir
 
@@ -1071,6 +1083,18 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
             }
         )
     return resolved
+
+
+def _add_live_connection_args(parser: argparse.ArgumentParser) -> None:
+    """The app-server connection trio a live command needs.
+
+    Older groups spell these three out one by one; new groups call this so the
+    defaults stay in step.
+    """
+
+    parser.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    parser.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    parser.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
 
 
 def build_parser(
@@ -1718,6 +1742,53 @@ def build_parser(
     goal_update.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     goal_update.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
     goal_update.set_defaults(func=cmd_goal_update, thread_id="", raw=False)
+
+    plan = sub.add_parser("plan", help="Manage plan packages (方案)")
+    plan_sub = plan.add_subparsers(dest="plan_command", required=True)
+    plan_list = plan_sub.add_parser("ls", help="List plans")
+    plan_list.add_argument("--project", default="", help="Only plans of this project")
+    plan_list.add_argument("--status", default="", help="Only this status: draft/ready/executing/done/archived")
+    plan_list.add_argument("--include-deleted", action="store_true", help="Include deleted plans")
+    _add_live_connection_args(plan_list)
+    plan_list.set_defaults(func=cmd_plan_list, raw=False)
+    plan_show = plan_sub.add_parser("describe", help="Show one plan package as JSON")
+    plan_show.add_argument("plan_id", help="Plan ID")
+    _add_live_connection_args(plan_show)
+    plan_show.set_defaults(func=cmd_plan_show, raw=False)
+    plan_save = plan_sub.add_parser("save", help="Create or revise a plan (flags, --from-file, or both)")
+    plan_save.add_argument("--plan-id", default="", help="Plan ID (new plans may omit it)")
+    plan_save.add_argument("--project", default="", help="Project ID the plan belongs to")
+    plan_save.add_argument("--title", default="", help="Plan title")
+    plan_save.add_argument("--summary", default="", help="One-line summary")
+    plan_save.add_argument("--requirement", default="", help="Restate the requirement in your own words")
+    plan_save.add_argument("--approach", default="", help="The chosen approach")
+    plan_save.add_argument("--status", default="", help="draft/ready/executing/done/archived")
+    plan_save.add_argument("--expected-revision", type=int, default=0, help="Optimistic-concurrency token for a revise")
+    plan_save.add_argument("--from-file", default="", help="Load a package JSON (e.g. exported from the phone)")
+    _add_live_connection_args(plan_save)
+    plan_save.set_defaults(func=cmd_plan_save, raw=False)
+    plan_export = plan_sub.add_parser("export", help="Write a plan package to a file")
+    plan_export.add_argument("plan_id", help="Plan ID")
+    plan_export.add_argument("--out", default="", help="Destination path (default: <plan_id>.plan.json)")
+    _add_live_connection_args(plan_export)
+    plan_export.set_defaults(func=cmd_plan_export, raw=False)
+    plan_delete = plan_sub.add_parser("delete", help="Delete a plan (soft; restore brings it back)")
+    plan_delete.add_argument("plan_id", help="Plan ID")
+    _add_live_connection_args(plan_delete)
+    plan_delete.set_defaults(func=cmd_plan_delete, raw=False)
+    plan_restore = plan_sub.add_parser("restore", help="Bring a deleted plan back")
+    plan_restore.add_argument("plan_id", help="Plan ID")
+    _add_live_connection_args(plan_restore)
+    plan_restore.set_defaults(func=cmd_plan_restore, raw=False)
+    plan_revert = plan_sub.add_parser("revert", help="Restore an earlier revision as a new revision")
+    plan_revert.add_argument("plan_id", help="Plan ID")
+    plan_revert.add_argument("revision", type=int, help="Revision to restore")
+    _add_live_connection_args(plan_revert)
+    plan_revert.set_defaults(func=cmd_plan_revert, raw=False)
+    plan_revisions = plan_sub.add_parser("revisions", help="List a plan's revision history")
+    plan_revisions.add_argument("plan_id", help="Plan ID")
+    _add_live_connection_args(plan_revisions)
+    plan_revisions.set_defaults(func=cmd_plan_revisions, raw=False)
 
     arrange = sub.add_parser("arrange", help="Manage durable arrangements")
     arrange_sub = arrange.add_subparsers(dest="arrange_command", required=True)
@@ -3585,6 +3656,162 @@ async def cmd_goal_update(args: argparse.Namespace) -> int:
     result = await _invoke_live(args, op)
     goal = result.get("goal", {}) if isinstance(result, dict) else {}
     print(f"[goal] {str(goal.get('id') or args.goal_id)} status={args.status}")
+    return 0
+
+
+async def cmd_plan_list(args: argparse.Namespace) -> int:
+    payload: dict[str, Any] = {}
+    if args.project:
+        payload["project_id"] = args.project
+    if args.status:
+        payload["status"] = args.status
+    if args.include_deleted:
+        payload["include_deleted"] = True
+
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("plan.list", payload)
+    result = await _invoke_live(args, op)
+    if args.raw:
+        _print_live_result(args, result, "")
+        return 0
+    plans = result.get("plans", []) if isinstance(result, dict) else []
+    if not plans:
+        print("no plans")
+    for plan in plans if isinstance(plans, list) else []:
+        if not isinstance(plan, dict):
+            continue
+        steps = (plan.get("checklist") or {}).get("steps") or []
+        print(
+            f"{str(plan.get('plan_id') or '')[:24]:24s}  {str(plan.get('status') or '?'):9s}"
+            f"  {str(plan.get('source') or '?'):7s}  {len(steps):2d} step(s)"
+            f"  {str(plan.get('title') or '')[:48]}"
+        )
+    return 0
+
+
+async def cmd_plan_show(args: argparse.Namespace) -> int:
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("plan.get", {"plan_id": args.plan_id})
+    result = await _invoke_live(args, op)
+    if args.raw:
+        _print_live_result(args, result, "")
+        return 0
+    plan = result.get("plan", {}) if isinstance(result, dict) else {}
+    if not isinstance(plan, dict):
+        return 1
+    print(json.dumps(plan, ensure_ascii=False, indent=2))
+    return 0
+
+
+async def cmd_plan_save(args: argparse.Namespace) -> int:
+    """Save a plan from flags, or from a package file, or both.
+
+    `--from-file` takes an exported package (the shape `plan export` writes), so
+    a plan produced on the phone can be brought in without retyping it. Flags
+    override what the file said.
+    """
+    payload: dict[str, Any] = {}
+    if args.from_file:
+        try:
+            loaded = json.loads(Path(args.from_file).read_text(encoding="utf-8-sig"))
+        except OSError as exc:
+            print(f"error: cannot read {args.from_file}: {exc}", file=sys.stderr)
+            return 1
+        except json.JSONDecodeError as exc:
+            print(f"error: {args.from_file} is not valid JSON: {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(loaded, dict):
+            print(f"error: {args.from_file} must contain a plan object", file=sys.stderr)
+            return 1
+        payload.update(loaded)
+        # A package carries the host it came from; the store decides that.
+        payload.pop("source", None)
+    for key, value in (
+        ("plan_id", args.plan_id),
+        ("project_id", args.project),
+        ("title", args.title),
+        ("summary", args.summary),
+        ("status", args.status),
+    ):
+        if value:
+            payload[key] = value
+    if args.requirement:
+        requirement = dict(payload.get("requirement") or {})
+        requirement["restatement"] = args.requirement
+        payload["requirement"] = requirement
+    if args.approach:
+        approach = dict(payload.get("approach") or {})
+        approach["chosen"] = args.approach
+        payload["approach"] = approach
+    if args.expected_revision:
+        payload["expected_revision"] = args.expected_revision
+    if not payload:
+        print("error: nothing to save (pass flags or --from-file)", file=sys.stderr)
+        return 1
+
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("plan.save", payload)
+    result = await _invoke_live(args, op)
+    plan = result.get("plan", {}) if isinstance(result, dict) else {}
+    print(f"[plan] {str(plan.get('plan_id') or '')} revision={plan.get('revision')} status={plan.get('status')}")
+    return 0
+
+
+async def cmd_plan_delete(args: argparse.Namespace) -> int:
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("plan.delete", {"plan_id": args.plan_id})
+    await _invoke_live(args, op)
+    print(f"[plan] {args.plan_id} deleted (restore with: lamtools plan restore {args.plan_id})")
+    return 0
+
+
+async def cmd_plan_restore(args: argparse.Namespace) -> int:
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("plan.restore", {"plan_id": args.plan_id})
+    await _invoke_live(args, op)
+    print(f"[plan] {args.plan_id} restored")
+    return 0
+
+
+async def cmd_plan_revert(args: argparse.Namespace) -> int:
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("plan.revert", {"plan_id": args.plan_id, "revision": args.revision})
+    result = await _invoke_live(args, op)
+    plan = result.get("plan", {}) if isinstance(result, dict) else {}
+    print(f"[plan] {args.plan_id} reverted to revision {args.revision} as revision {plan.get('revision')}")
+    return 0
+
+
+async def cmd_plan_revisions(args: argparse.Namespace) -> int:
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("plan.revisions", {"plan_id": args.plan_id})
+    result = await _invoke_live(args, op)
+    if args.raw:
+        _print_live_result(args, result, "")
+        return 0
+    for item in result.get("revisions", []) if isinstance(result, dict) else []:
+        if isinstance(item, dict):
+            print(
+                f"r{item.get('revision'):<4} {str(item.get('status') or '?'):9s}"
+                f" {str(item.get('created_at') or '')[:19]:19s} {item.get('title') or ''}"
+            )
+    return 0
+
+
+async def cmd_plan_export(args: argparse.Namespace) -> int:
+    """Write a plan package to a file — the portable half of a plan."""
+
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("plan.get", {"plan_id": args.plan_id})
+    result = await _invoke_live(args, op)
+    plan = result.get("plan", {}) if isinstance(result, dict) else {}
+    if not isinstance(plan, dict) or not plan:
+        print("error: plan not found", file=sys.stderr)
+        return 1
+    destination = Path(args.out) if args.out else Path(f"{args.plan_id}.plan.json")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"[plan] wrote {destination}")
     return 0
 
 

@@ -71,6 +71,7 @@ export { selectCoreSubAgentRuns } from './agents/subAgentProjection';
 export { default as WorkspaceShell } from './components/WorkspaceShell.vue';
 export { default as LamToolsApp } from './app/LamToolsApp.vue';
 export { default as LeftSidebarShell } from './components/LeftSidebarShell.vue';
+export { default as RailAction } from './components/RailAction.vue';
 export { default as SessionSidebar } from './components/SessionSidebar.vue';
 export { default as ChatThread } from './components/ChatThread.vue';
 export { default as ComposerBar } from './components/ComposerBar.vue';

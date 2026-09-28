@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -22,6 +23,8 @@ from typing import Awaitable, Callable
 from lamtools_core.plugins._jsonc import strip_jsonc_comments
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult, ToolResultStatus
 from lamtools_core.tool.search.protocol import SearchProvider, SearchResult
+
+_logger = logging.getLogger(__name__)
 
 DEFAULT_PROVIDER = "ddg"
 DEFAULT_FALLBACK_PROVIDERS = ("ddg", "baidu", "bing")
@@ -139,7 +142,19 @@ def build_web_search_handler(
     ``data_dir``（可选）指向插件配置位置（D5 配置迁入后读取新位置）。
     """
     cfg = _default_config(work_root, data_dir=data_dir)
-    default_provider = get_provider(cfg.get("provider"), cfg)
+    try:
+        default_provider = get_provider(cfg.get("provider"), cfg)
+    except ValueError as exc:
+        # 配置里写了一个不被支持的内核名，绝不能让它把整个工具箱装配打断：
+        # build_core_toolbox 是全有全无的，抛出去等于每一轮对话都启动失败
+        # （2026-09-26：右侧栏写过 provider=custom，助手整体瘫痪）。降级到
+        # 内置默认内核 + fallback 链路，并留告警便于定位。
+        _logger.warning(
+            "[web_search] configured provider unusable, falling back to %s: %s",
+            DEFAULT_PROVIDER,
+            exc,
+        )
+        default_provider = get_provider(None, cfg)
 
     raw_fallbacks = cfg.get("fallback_providers", DEFAULT_FALLBACK_PROVIDERS)
     fallback_names = (

@@ -84,26 +84,44 @@
     </div>
 
     <footer v-if="props.showSearchAction || props.showPluginsAction || props.showSettingsAction || $slots['sidebar-footer']" class="drawer-footer">
-      <button v-if="props.showSearchAction" class="settings-entry" type="button" aria-label="打开搜索" @click="emit('search')">
-        <span aria-hidden="true"><Search :size="14" :stroke-width="1.8" /></span>
-        <span>搜索</span>
-      </button>
-      <button v-if="props.showPluginsAction" class="settings-entry" type="button" aria-label="打开插件" @click="emit('plugins')">
-        <span aria-hidden="true"><Puzzle :size="14" :stroke-width="1.8" /></span>
-        <span>插件</span>
-      </button>
-      <button v-if="props.showSettingsAction" class="settings-entry" type="button" aria-label="打开设置" @click="emit('settings')">
-        <span aria-hidden="true"><Command :size="14" :stroke-width="1.8" /></span>
-        <span>设置</span>
-      </button>
-      <slot name="sidebar-footer" />
+      <div class="drawer-footer-row">
+        <RailAction
+          v-if="props.showSearchAction"
+          action-id="search"
+          label="搜索"
+          description="全局搜索：跨项目查找会话、消息与学习资料。"
+          @click="emit('search')"
+        >
+          <Search :size="14" :stroke-width="1.8" />
+        </RailAction>
+        <RailAction
+          v-if="props.showPluginsAction"
+          action-id="plugins"
+          label="插件"
+          description="管理已安装的插件，开关它们带来的界面与工具。"
+          @click="emit('plugins')"
+        >
+          <Puzzle :size="14" :stroke-width="1.8" />
+        </RailAction>
+        <RailAction
+          v-if="props.showSettingsAction"
+          action-id="settings"
+          label="设置"
+          description="模型与供应商、外观主题、工具权限等应用配置。"
+          @click="emit('settings')"
+        >
+          <Settings :size="14" :stroke-width="1.8" />
+        </RailAction>
+        <slot name="sidebar-footer" />
+      </div>
     </footer>
   </aside>
 </template>
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { Command, Pin, Puzzle, Search } from 'lucide-vue-next'
+import { Pin, Puzzle, Search, Settings } from 'lucide-vue-next'
+import RailAction from './RailAction.vue'
 
 const props = withDefaults(
   defineProps<{

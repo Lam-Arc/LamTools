@@ -29,6 +29,10 @@ class LamToolsWindowInsetsPlugin(private val activity: Activity) : Plugin(activi
             val statusBars = insets.getInsets(WindowInsetsCompat.Type.statusBars())
             val stableStatusBars = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.statusBars())
             val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            // Edge-to-edge means the keyboard does not resize the window, so the
+            // WebView cannot see it through the viewport. Android is the only
+            // source for how much of the screen the IME covers.
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             val density = activity.resources.displayMetrics.density
             if (density <= 0f) {
                 invoke.reject("invalid display density")
@@ -43,6 +47,7 @@ class LamToolsWindowInsetsPlugin(private val activity: Activity) : Plugin(activi
             result.put("right", cssPixels(maxOf(statusBars.right, cutout.right), density))
             result.put("bottom", cssPixels(maxOf(statusBars.bottom, cutout.bottom), density))
             result.put("left", cssPixels(maxOf(statusBars.left, cutout.left), density))
+            result.put("imeBottom", cssPixels(maxOf(ime.bottom, 0), density))
             invoke.resolve(result)
         } catch (error: Exception) {
             invoke.reject(error.message ?: "window inset read failed")

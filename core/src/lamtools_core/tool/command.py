@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -409,13 +410,25 @@ def format_running_command_output(
     return result
 
 
-def validate_command_paths(
-    args: list[str],
-    work_root: Path,
-    resource_roots: tuple[Path, ...] = (),
-    *,
-    allow_outside: bool = False,
-) -> None:
+@dataclass(frozen=True)
+class CommandPathArgument:
+    """A command argument that may name a filesystem path."""
+
+    position: int
+    raw: str
+    value: str
+    #: Path-shaped quoting that cannot be resolved safely (``cat "a'b"``).
+    quoting_unverifiable: bool
+    #: Tilde/parameter/command expansion: the shell resolves it, not us.
+    expansion: bool
+
+
+def _command_path_arguments(args: list[str]) -> Iterator[CommandPathArgument]:
+    """Classify which arguments reach the workspace-bounds check.
+
+    Shared by the enforcing validator and the approval gate's "would this
+    escape the workspace?" detector so both use one tokenization rule.
+    """
     for i, raw_arg in enumerate(args):
         if i == 0:
             continue
@@ -441,36 +454,92 @@ def validate_command_paths(
             or "\\" in value
             or re.match(r"^[A-Za-z]:[\\/]", value) is not None
         )
-        if has_path_syntax and any(char in value for char in "'\""):
-            raise ValueError(
-                f"Path argument '{raw_arg}' (position {i}) uses mixed or unmatched quoting "
-                "that cannot be validated safely"
-            )
-
-        if (
+        bounds_candidate = (
             value in {".", ".."}
             or value.startswith("/")
             or value.startswith("~")
             or re.match(r"^[A-Za-z]:[\\/]", value)
             or "/" in value
             or "\\" in value
-        ):
-            if allow_outside:
-                continue
-            # Tilde / parameter / command expansion cannot be statically
-            # resolved — the shell would expand the token outside work_root
-            # (``cat ~/.ssh/id_rsa``, ``cat $HOME/.ssh/id_rsa``,
-            # ``echo x > ~/.bashrc``).  Reject instead of letting the literal
-            # path pass the bounds check (audit 06 S1).
-            if value.startswith("~") or any(ch in value for ch in "$`"):
-                raise ValueError(
-                    f"Path argument '{raw_arg}' (position {i}) uses shell expansion "
-                    "that cannot be validated against the workspace"
-                )
-            resolved = (work_root / value).resolve()
-            allowed_roots = (work_root.resolve(), *(root.resolve() for root in resource_roots))
-            if not any(is_within_path(resolved, root) for root in allowed_roots):
-                raise ValueError(f"Path argument '{raw_arg}' (position {i}) escapes work_root")
+        )
+        if not bounds_candidate:
+            continue
+        yield CommandPathArgument(
+            position=i,
+            raw=raw_arg,
+            value=value,
+            quoting_unverifiable=has_path_syntax and any(char in value for char in "'\""),
+            expansion=value.startswith("~") or any(ch in value for ch in "$`"),
+        )
+
+
+def command_path_roots(
+    work_root: Path,
+    resource_roots: tuple[Path, ...] = (),
+) -> tuple[Path, ...]:
+    return (work_root.resolve(), *(root.resolve() for root in resource_roots))
+
+
+def outside_workdir_path_arguments(
+    args: list[str],
+    work_root: Path,
+    resource_roots: tuple[Path, ...] = (),
+) -> list[str]:
+    """Return path arguments that resolve beyond the workspace and its roots.
+
+    Unverifiable quoting is skipped — the executor rejects those as invalid
+    syntax, so they are not a consent question.  Expansion tokens (``~``,
+    ``$VAR``, backticks) count as outside because only the shell can resolve
+    them.
+    """
+    allowed_roots = command_path_roots(work_root, resource_roots)
+    outside: list[str] = []
+    for item in _command_path_arguments(args):
+        if item.quoting_unverifiable:
+            continue
+        if item.expansion:
+            outside.append(item.raw)
+            continue
+        resolved = (Path(work_root) / item.value).resolve()
+        if not any(is_within_path(resolved, root) for root in allowed_roots):
+            outside.append(item.raw)
+    return outside
+
+
+def validate_command_paths(
+    args: list[str],
+    work_root: Path,
+    resource_roots: tuple[Path, ...] = (),
+    *,
+    allow_outside: bool = True,
+) -> None:
+    """Reject path arguments outside the workspace only when asked to.
+
+    The workspace boundary is no longer enforced (2026-09-27), so the default
+    is permissive; an explicit ``allow_outside=False`` restores the old bounds
+    check for callers that still want it.
+    """
+    for item in _command_path_arguments(args):
+        if item.quoting_unverifiable:
+            raise ValueError(
+                f"Path argument '{item.raw}' (position {item.position}) uses mixed or unmatched quoting "
+                "that cannot be validated safely"
+            )
+        if allow_outside:
+            continue
+        # Tilde / parameter / command expansion cannot be statically resolved —
+        # the shell would expand the token outside work_root
+        # (``cat ~/.ssh/id_rsa``, ``cat $HOME/.ssh/id_rsa``,
+        # ``echo x > ~/.bashrc``).  Reject instead of letting the literal
+        # path pass the bounds check (audit 06 S1).
+        if item.expansion:
+            raise ValueError(
+                f"Path argument '{item.raw}' (position {item.position}) uses shell expansion "
+                "that cannot be validated against the workspace"
+            )
+        resolved = (work_root / item.value).resolve()
+        if not any(is_within_path(resolved, root) for root in command_path_roots(work_root, resource_roots)):
+            raise ValueError(f"Path argument '{item.raw}' (position {item.position}) escapes work_root")
 
 
 def _strip_matching_quotes(value: str) -> str:

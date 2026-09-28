@@ -117,6 +117,11 @@ onUnmounted(() => {
 
 <style scoped>
 .ui-select {
+  /* 箭头槽位：触发器右侧必须按「内缩 + 箭头宽 + 间隙」预留，
+     否则短标签（尤其 CJK，如「自动」）会被箭头压住。 */
+  --ui-select-arrow-inset: 11px;
+  --ui-select-arrow-size: 7px;
+  --ui-select-arrow-gap: var(--space-1);
   position: relative;
   min-width: 0;
 }
@@ -128,7 +133,7 @@ onUnmounted(() => {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--settings-control-solid, var(--theme-control-solid, #242424)) 70%, transparent);
   color: var(--settings-control-text, var(--theme-control-text, #f4f1ec));
-  padding: 0 var(--space-3) 0 var(--space-2);
+  padding: 0 calc(var(--ui-select-arrow-inset) + var(--ui-select-arrow-size) + var(--ui-select-arrow-gap)) 0 var(--space-2);
   display: inline-flex;
   align-items: center;
   text-align: left;
@@ -149,10 +154,10 @@ onUnmounted(() => {
 
 .ui-select-arrow {
   position: absolute;
-  right: 11px;
+  right: var(--ui-select-arrow-inset);
   top: 50%;
-  width: 7px;
-  height: 7px;
+  width: var(--ui-select-arrow-size);
+  height: var(--ui-select-arrow-size);
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   opacity: .7;

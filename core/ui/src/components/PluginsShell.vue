@@ -5,6 +5,7 @@
         <SettingsShell
           :sections="sections"
           title="插件"
+          :initial-section="props.initialSection"
           :settings-theme-style="settingsThemeStyle"
           @close="$emit('close')"
         >
@@ -57,6 +58,8 @@ const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   transport: LamToolsTransport
   theme?: ThemeData | null
+  /** Section to open on: a search hit for a skill lands on 技能, not 插件. */
+  initialSection?: string
 }>()
 
 const emit = defineEmits<{

@@ -24,9 +24,8 @@ describe('shared optical glass contract', () => {
     expect(variablesCss).toMatch(/--optical-glass-brightness:\s*1\.02/)
     expect(variablesCss).toMatch(/--optical-glass-tint:\s*16%/)
     expect(variablesCss).toContain('--optical-glass-highlight-color: rgb(255 255 255)')
-    expect(variablesCss).toMatch(/--optical-glass-reflection:\s*10%/)
     expect(variablesCss).toContain('--theme-optical-glass-border-color: rgb(95 95 95)')
-    expect(variablesCss).toContain('--optical-glass-inset-top: 56%')
+    expect(variablesCss).toContain('--optical-glass-inset-bottom: 14%')
     expect(variablesCss).toContain('--optical-glass-shadow: 0 7px 14px')
     expect(opticalGlassCss).toContain('overflow: hidden;')
     expect(opticalGlassCss).toContain('-webkit-backdrop-filter:')
@@ -34,12 +33,19 @@ describe('shared optical glass contract', () => {
     expect(opticalGlassCss).toMatch(/@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\)/)
     expect(opticalGlassCss).toContain('border: 2px solid var(--theme-optical-glass-border-color)')
     expect(shellLayoutSource).toContain("key.startsWith('--theme-')")
-    expect(opticalGlassCss).toMatch(/\.optical-glass::before\s*\{[\s\S]*?radial-gradient[\s\S]*?optical-glass-highlight-color/)
-    expect(opticalGlassCss).toMatch(/\.optical-glass::before\s*\{[\s\S]*?radial-gradient\(\s*54% 24% at 12% 0%/)
-    expect(opticalGlassCss).toMatch(/\.optical-glass::before\s*\{[\s\S]*?radial-gradient/)
     expect(opticalGlassCss).toMatch(/\.optical-glass::after\s*\{[\s\S]*?optical-glass-refraction-color/)
     expect(opticalGlassCss).not.toContain('conic-gradient')
     expect(opticalGlassCss).not.toContain('mask-composite')
+  })
+
+  it('leaves the top of the pane free of specular highlight', () => {
+    const beforeRule = opticalGlassCss.match(/\.optical-glass::before\s*\{[\s\S]*?\n\}/)?.[0] || ''
+    expect(beforeRule).toContain('box-shadow:')
+    expect(beforeRule).toContain('optical-glass-inset-bottom')
+    expect(beforeRule).not.toContain('radial-gradient')
+    expect(beforeRule).not.toMatch(/inset\s+0\s+1px\s+0/)
+    expect(variablesCss).not.toContain('--optical-glass-reflection')
+    expect(variablesCss).not.toContain('--optical-glass-inset-top')
   })
 
   it('mounts every confirmed runtime glass surface on the shared primitive', () => {

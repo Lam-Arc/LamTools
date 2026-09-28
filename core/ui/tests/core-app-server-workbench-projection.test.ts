@@ -767,6 +767,68 @@ describe('core appServer workbench approval recovery', () => {
     expect(metadata?.waitingRequest).toBeDefined()
   })
 
+  // 答复落定（request=resolved）后投影必须给出 completed：界面据此撤掉审批卡，
+  // 未答复的卡片则保持 pending，继续等待用户回答。
+  it('settles the decision part once the approval request is resolved', () => {
+    const turnId = 'turn-approval-settled'
+    const toolItemId = `${turnId}:call_00_settled:tool`
+    const buildSnapshot = (requestStatus: string, decision?: string) => hydrateSnapshot({
+      thread_id: 'thread-approval-settled',
+      snapshot_seq: 12,
+      core: {
+        thread_id: 'thread-approval-settled',
+        snapshot_seq: 12,
+        status: 'waiting',
+        item_order: [`${turnId}:user`, toolItemId],
+        turns: {
+          [turnId]: {
+            turn_id: turnId, status: 'waiting', last_kind: 'approval_request',
+            items: [`${turnId}:user`, toolItemId],
+          },
+        },
+        items: {
+          [`${turnId}:user`]: {
+            item_id: `${turnId}:user`, turn_id: turnId, kind: 'message', status: 'completed',
+            payload: { type: 'userMessage', content: [{ type: 'text', text: '执行命令' }] },
+          },
+          [toolItemId]: {
+            item_id: toolItemId,
+            turn_id: turnId,
+            kind: 'tool_call',
+            last_kind: 'approval_request',
+            status: 'waiting',
+            payload: {
+              type: 'serverRequest',
+              request_id: 'req-settled',
+              tool_name: 'run_command',
+              title: '需要确认：npm test',
+              options: [{ id: 'approve', label: '批准' }, { id: 'deny', label: '拒绝' }],
+            },
+          },
+        },
+        requests: {
+          'req-settled': {
+            request_id: 'req-settled',
+            status: requestStatus,
+            item_id: toolItemId,
+            turn_id: turnId,
+            ...(decision ? { decision } : {}),
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const decisionPart = (snapshot: ReturnType<typeof buildSnapshot>) => selectCoreWorkbenchMessages(snapshot)
+      .find((m) => m.role === 'assistant')?.parts?.find((part) => part.partType === 'decision')
+
+    expect(decisionPart(buildSnapshot('open'))?.status).toBe('pending')
+
+    const answered = decisionPart(buildSnapshot('resolved', 'approve_once'))
+    expect(answered?.status).toBe('completed')
+    const answeredMetadata = answered?.metadata as Record<string, unknown> | undefined
+    expect(answeredMetadata?.waitingResponse).toMatchObject({ action: 'approve' })
+  })
+
   it('keeps a real tool_call (no approval marker) as a tool part', () => {
     const turnId = 'turn-tool-wb'
     const toolItemId = `${turnId}:call_00_tool:tool`

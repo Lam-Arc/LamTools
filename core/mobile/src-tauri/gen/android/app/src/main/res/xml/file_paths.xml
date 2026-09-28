@@ -2,4 +2,7 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
   <external-path name="my_images" path="." />
   <cache-path name="my_cache_images" path="." />
+  <!-- The system downloader puts the verified update APK in the app's external
+       files directory; the installer needs a URI whose root is declared here. -->
+  <external-files-path name="sunday_updates" path="sunday-updates/" />
 </paths>

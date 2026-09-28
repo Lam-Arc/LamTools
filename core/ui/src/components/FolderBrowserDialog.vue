@@ -2,7 +2,7 @@
   <!-- Default mount point is document.body; a workspace-shell host may pass
        its own target (audit 19 S3 — hardcoding ".workspace-shell" silently
        broke rendering in hosts without the shell). -->
-  <Teleport :to="teleportTarget">
+  <Teleport :to="resolvedTarget">
     <Transition name="fb-overlay">
       <div
         v-if="visible"
@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, defineAsyncComponent } from 'vue'
+import { nextTick, onMounted, ref, computed, watch, defineAsyncComponent } from 'vue'
 import { ArrowUp } from 'lucide-vue-next'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
@@ -105,6 +105,35 @@ const props = withDefaults(defineProps<Props>(), {
   initialPath: '',
   teleportTarget: 'body',
 })
+
+/**
+ * Resolved teleport target. A caller that renders the host inside its own
+ * template cannot be resolved while that subtree is still being created — the
+ * element only reaches the document when the whole tree is mounted, so the
+ * selector matches nothing at setup time. Vue leaves a subtree it could not
+ * teleport behind, and unmounting that subtree throws
+ * (`Cannot read properties of null`), which is how the plugin config card
+ * became impossible to close. Body is always a valid target, so render there
+ * until the real host exists.
+ */
+const resolvedTarget = ref<string | HTMLElement>('body')
+
+function resolveTeleportTarget(): void {
+  const selector = props.teleportTarget
+  if (!selector || selector === 'body') {
+    resolvedTarget.value = 'body'
+    return
+  }
+  const host = typeof document === 'undefined' ? null : document.querySelector<HTMLElement>(selector)
+  resolvedTarget.value = host ?? 'body'
+}
+
+onMounted(() => {
+  resolveTeleportTarget()
+  // A host that appears in the same mount pass is in the document one tick on.
+  void nextTick(resolveTeleportTarget)
+})
+watch(() => props.teleportTarget, resolveTeleportTarget)
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]

@@ -81,6 +81,110 @@ def test_incomplete_tool_history_is_closed_before_next_user_message():
     assert repaired[2].metadata["history_repair"] == "interrupted_tool_call"
 
 
+def test_orphaned_tool_result_is_relabelled_as_user_context():
+    """A tool result no call can own must not stay in the tool role.
+
+    Corrupted histories already persisted (guidance interleaved into a tool
+    batch) reach a provider that rejects them outright, so loading repairs the
+    order: the payload survives as user-role context, merged into the previous
+    user message instead of creating two user turns in a row.
+    """
+    messages = [
+        ChatMessage(role="user", content="start"),
+        ChatMessage(
+            role="assistant",
+            tool_calls=[LLMToolCall(id="call-1", name="run_command", arguments={})],
+        ),
+        ChatMessage(role="tool", tool_call_id="call-1", content="status: ok\nfirst"),
+        ChatMessage(role="user", content="change of plan"),
+        ChatMessage(
+            role="tool",
+            tool_call_id="call-2",
+            content="status: blocked\nSkipped because new user guidance changed the active turn.",
+        ),
+    ]
+
+    repaired = _repair_incomplete_tool_history(messages)
+
+    assert [message.role for message in repaired] == ["user", "assistant", "tool", "user"]
+    assert repaired[2].tool_call_id == "call-1"
+    assert "change of plan" in str(repaired[3].content)
+    assert "Skipped because new user guidance" in str(repaired[3].content)
+    assert repaired[3].metadata["history_repair"] == "orphaned_tool_result"
+
+
+def test_leading_orphaned_tool_result_becomes_a_user_message():
+    repaired = _repair_incomplete_tool_history([
+        ChatMessage(role="tool", tool_call_id="call-x", content="status: ok\nstale"),
+        ChatMessage(role="user", content="continue"),
+    ])
+
+    assert [message.role for message in repaired] == ["user", "user"]
+    assert "stale" in str(repaired[0].content)
+    assert repaired[0].metadata["history_repair"] == "orphaned_tool_result"
+
+
+@pytest.mark.asyncio
+async def test_stale_run_takeover_is_recorded_in_state_metadata():
+    """A run taken over from a dead process leaves a durable trace.
+
+    The status it had before the takeover and the ownership token that owned it
+    are recorded, so a crashed session can be told apart from a clean
+    continuation later (2026-09-27).
+    """
+    import socket
+
+    store = InMemoryStateStore()
+    crashed = RuntimeState(
+        session_id="stale-session",
+        status="running",
+        metadata={
+            "runtime_owner": {
+                "pid": 999_999_999,
+                "host": socket.gethostname(),
+                "started_at": 0.0,
+                "heartbeat_at": 0.0,
+            }
+        },
+    )
+    await store.save(crashed)
+    kernel = _make_kernel(MockRuntimeKit([MockKitStep(reply="Resumed", decision="done")]), state_store=store)
+
+    result = await kernel.run(_make_turn_input(session_id="stale-session"))
+
+    assert result.decision == "done"
+    adopted = result.state.metadata["adopted_stale_run"]
+    assert adopted["previous_status"] == "running"
+    assert adopted["previous_owner"]["pid"] == 999_999_999
+
+
+@pytest.mark.asyncio
+async def test_clean_continuation_does_not_record_a_takeover():
+    """Continuing a session whose previous run finished is not an adoption."""
+    import socket
+
+    store = InMemoryStateStore()
+    finished = RuntimeState(
+        session_id="finished-session",
+        status="done",
+        metadata={
+            "runtime_owner": {
+                "pid": 999_999_999,
+                "host": socket.gethostname(),
+                "started_at": 0.0,
+                "heartbeat_at": 0.0,
+            }
+        },
+    )
+    await store.save(finished)
+    kernel = _make_kernel(MockRuntimeKit([MockKitStep(reply="Next turn", decision="done")]), state_store=store)
+
+    result = await kernel.run(_make_turn_input(session_id="finished-session"))
+
+    assert result.decision == "done"
+    assert "adopted_stale_run" not in result.state.metadata
+
+
 # ---------------------------------------------------------------------------
 # Mock implementations
 # ---------------------------------------------------------------------------
@@ -1129,6 +1233,68 @@ class TestKernelUnboundedLoop:
             message.role == "user" and message.content == "stop the old approach"
             for message in kit.context_histories[1]
         )
+
+    @pytest.mark.asyncio
+    async def test_guidance_lands_after_the_whole_tool_batch_in_history(self):
+        """Guidance must not sit between an assistant's calls and their results.
+
+        Providers reject a tool result that does not directly follow the
+        assistant message that requested it, so when guidance interrupts a
+        sequential batch every result — executed or skipped — has to be written
+        back before the guidance user message (2026-09-27: every steered
+        sub-agent died on exactly that rejection).
+        """
+        registry = RuntimeTaskRegistry()
+        current_task = asyncio.current_task()
+        assert current_task is not None
+        assert registry.accept_run("ordered-thread", "ordered-run") is True
+        assert registry.register("ordered-thread", current_task, run_id="ordered-run") is True
+        calls = [
+            ToolCall(id=f"call-{index}", name="run_command", arguments={"command": str(index)})
+            for index in range(4)
+        ]
+
+        class GuidanceInjectingKit(MockRuntimeKit):
+            def __init__(self) -> None:
+                super().__init__([
+                    MockKitStep(tool_calls=calls, decision="continue"),
+                    MockKitStep(reply="Guidance applied", decision="done"),
+                ])
+
+            async def execute_tool(self, state, call):
+                if call.id == "call-0":
+                    assert registry.accept_guidance(
+                        "ordered-thread",
+                        "change of plan",
+                        run_id="ordered-run",
+                        guidance_id="guidance-mid-batch",
+                    ) == "accepted"
+                return ToolResult(call_id=call.id, name=call.name, content=f"{call.id} done")
+
+        kit = GuidanceInjectingKit()
+        kernel = _make_kernel(kit)
+        result = await kernel.run(RuntimeTurnInput(
+            user_message="start",
+            run_id="ordered-run",
+            turn_id="ordered-run",
+            metadata={"session_id": "ordered-thread"},
+            guidance_source=registry.guidance_source("ordered-thread", run_id="ordered-run"),
+            guidance_finalizer=registry.guidance_finalizer("ordered-thread", run_id="ordered-run"),
+        ))
+
+        assert result.decision == "done"
+        messages = kit.context_histories[1]
+        assert [message.role for message in messages] == [
+            "user", "assistant", "tool", "tool", "tool", "tool", "user",
+        ]
+        tool_call_ids = [message.tool_call_id for message in messages if message.role == "tool"]
+        assert tool_call_ids == [call.id for call in calls]
+        assert messages[-1].content == "change of plan"
+        # The invariant the provider enforces: every tool message directly
+        # follows an assistant message or another tool message of the same batch.
+        for index, message in enumerate(messages):
+            if message.role == "tool":
+                assert messages[index - 1].role in {"assistant", "tool"}
 
     @pytest.mark.asyncio
     async def test_registry_rejects_run_overwrite_and_deduplicates_guidance_ids(self):
@@ -4748,3 +4914,41 @@ class TestHistoryCompactedEvent:
 
         compacted = [e for e in sink.events if e.name == "runtime.history_compacted"]
         assert compacted == []
+
+
+class TestApprovalRequestMessage:
+    """Approval cards must state what the user is consenting to."""
+
+    def test_outside_workdir_ask_shows_the_path(self):
+        from lamtools_core.kernel.loop import CoreLoopKernel
+
+        call = ToolCall(
+            id="read-outside",
+            name="read_file",
+            arguments={"path": r"E:\outside\notes.md"},
+            metadata={
+                "approval": {
+                    "outside_workdir": True,
+                    "reason": r"需要访问工作目录之外的路径：E:\outside\notes.md",
+                }
+            },
+        )
+
+        message = CoreLoopKernel._approval_request_message(call)
+
+        assert message == r"需要授权：需要访问工作目录之外的路径：E:\outside\notes.md"
+
+    def test_regular_tool_ask_keeps_the_generic_copy(self):
+        from lamtools_core.kernel.loop import CoreLoopKernel
+
+        call = ToolCall(id="write", name="write_file", arguments={"path": "out.txt"})
+
+        assert CoreLoopKernel._approval_request_message(call) == "需要授权后才能执行工具：write_file"
+
+    def test_command_ask_lists_the_command(self):
+        from lamtools_core.kernel.loop import CoreLoopKernel
+
+        call = ToolCall(id="cmd", name="run_command", arguments={"command": "git push"})
+        message = CoreLoopKernel._approval_request_message(call)
+
+        assert "git push" in message

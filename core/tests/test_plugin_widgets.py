@@ -189,7 +189,9 @@ def test_component_widget_entry_must_stay_inside_plugin_root(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_bundled_websearch_widget_has_valid_snapshot(tmp_path: Path) -> None:
+    # websearch 默认关闭（清单 defaultEnabled=false），先显式启用再取快照。
     state = PluginStateStore(tmp_path / "state.json")
+    state.set_enabled("websearch", True)
     catalog = build_plugin_operation_catalog(
         plugin_registry=PluginRegistry(plugin_roots=[bundled_plugins_dir()], state_store=state),
         plugin_state_store=state,

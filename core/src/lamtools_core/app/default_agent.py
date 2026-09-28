@@ -69,6 +69,7 @@ from .runtime_permissions import (
     RUNTIME_PERMISSION_KEYS,
     permissions_from_snapshot,
     resolve_permission_preset,
+    resolve_session_permissions,
     runtime_snapshot as build_runtime_snapshot,
 )
 
@@ -2124,7 +2125,9 @@ def _session_runtime_permissions_provider(
         preferences = getter(thread_id)
         if not isinstance(preferences, Mapping):
             return None
-        resolved = resolve_permission_preset(
+        # Resolved live (not from a cached snapshot) so flipping the global
+        # out-of-workspace switch reaches running sessions on their next tool.
+        resolved = resolve_session_permissions(
             preset=preferences.get("permission_preset"),
             base_tier=preferences.get("base_tier"),
             base_allow_access_outside_workdir=preferences.get(
@@ -2187,7 +2190,7 @@ def _runtime_snapshot_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]
     raw_preset = payload.get("permission_preset")
     if raw_preset is not None:
         try:
-            permissions = resolve_permission_preset(
+            permissions = resolve_session_permissions(
                 preset=raw_preset,
                 base_tier=payload.get("active_tier") or "full_edit",
                 base_allow_access_outside_workdir=payload.get(

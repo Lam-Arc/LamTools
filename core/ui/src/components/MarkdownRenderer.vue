@@ -1049,6 +1049,20 @@ defineExpose({ renderStreaming })
 .markdown-body :deep(.markdown-table-shell--overflowing thead) {
   top: 0;
 }
+/* Phones cannot grab the 12px scroll strip above the header, and
+   `overflow-x: clip` blocks touch panning, so a wide table was unreachable
+   content. Below the mobile breakpoint the viewport pans natively and the
+   custom strip steps aside; the JS translation stays at 0 because a
+   display:none scrollbar reports no scroll offset. */
+@media (max-width: 640px) {
+  .markdown-body :deep(.markdown-table-viewport) {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+  .markdown-body :deep(.markdown-table-scrollbar) {
+    display: none;
+  }
+}
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
   border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);

@@ -93,7 +93,8 @@ describe('ContextMenuHost', () => {
   it('keeps every root and submenu card on the stable liquid-glass substrate', () => {
     expect(contextMenuPanelSource).toContain('class="context-menu-panel optical-glass"')
     expect(opticalGlassCss).toMatch(/\.optical-glass\s*\{[\s\S]*?blur\(var\(--optical-glass-blur\)\)[\s\S]*?saturate\(var\(--optical-glass-saturation\)\)[\s\S]*?brightness\(var\(--optical-glass-brightness\)\)[\s\S]*?contrast\(var\(--optical-glass-contrast\)\)/)
-    expect(opticalGlassCss).toMatch(/\.optical-glass::before\s*\{[\s\S]*?radial-gradient[\s\S]*?box-shadow:/)
+    expect(opticalGlassCss).toMatch(/\.optical-glass::before\s*\{[\s\S]*?box-shadow:/)
+    expect(opticalGlassCss).not.toMatch(/\.optical-glass::before\s*\{[^}]*radial-gradient/)
     expect(opticalGlassCss).toMatch(/\.optical-glass::after\s*\{[\s\S]*?radial-gradient[\s\S]*?optical-glass-refraction-color/)
     expect(opticalGlassCss).not.toContain('conic-gradient')
     expect(opticalGlassCss).not.toContain('mask-composite')
@@ -104,6 +105,15 @@ describe('ContextMenuHost', () => {
   it('inherits menu text from the chat surface instead of control text', () => {
     expect(contextMenuPanelSource).toContain('--text: var(--theme-main-text);')
     expect(contextMenuPanelSource).not.toContain('--text: var(--theme-control-text);')
+  })
+
+  it('marks the focused row with the row highlight instead of a blue focus ring', () => {
+    expect(contextMenuPanelSource).toMatch(
+      /\.context-menu-item:focus-visible:not\(:disabled\)::before\s*\{[^}]*var\(--alpha-hover\)/,
+    )
+    const focusRingRule = contextMenuPanelSource.match(/\.context-menu-item:focus-visible\s*\{[^}]*\}/)?.[0] || ''
+    expect(focusRingRule).toContain('outline: none')
+    expect(contextMenuPanelSource).not.toMatch(/\.context-menu-item[^{}]*\{[^}]*outline:\s*2px/)
   })
 
   it('renders at the pointer, clamps to the viewport, and flips upward near the bottom-right edge', async () => {

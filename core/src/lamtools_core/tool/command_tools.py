@@ -16,6 +16,7 @@ from lamtools_core.tool.command import format_command_output as _format_command_
 from lamtools_core.tool.command import format_running_command_output as _format_running_command_output
 from lamtools_core.tool.command import run_subprocess as _run_subprocess
 from lamtools_core.tool.command import validate_command_paths as _validate_command_paths
+from lamtools_core.tool.outside_access import outside_access_granted
 from lamtools_core.tool.command_runner import (
     _BackgroundHttpProbe,
     _cleanup_background_http_probe,
@@ -84,6 +85,23 @@ def split_command_for_path_validation(command: str, *, shell_kind: str = "bash")
     return tokens
 
 
+def command_path_validation_argv(command: str) -> list[str]:
+    """Tokenize a command for path validation with the executor's own shell.
+
+    Raises ``ValueError`` when the command cannot be tokenized safely; callers
+    report that as invalid syntax rather than treating it as a path question.
+    """
+    if sys.platform == "win32":
+        shell = resolve_command_shell()
+        text = (
+            _normalize_windows_shell_command(command)
+            if shell.kind in {"powershell", "pwsh"}
+            else command
+        )
+        return [shell.kind, *split_command_for_path_validation(text, shell_kind=shell.kind)]
+    return shlex.split(command)
+
+
 def _command_lifecycle_metadata(
     execution: _CommandExecution,
     *,
@@ -138,6 +156,15 @@ class CommandToolHandlers:
         self._background_process_registry = (
             background_process_registry or default_background_process_registry()
         )
+
+    def _outside_access_allowed(self) -> bool:
+        """Whether commands may reference paths outside ``work_root``.
+
+        Always true: the workspace boundary is no longer enforced (product
+        decision 2026-09-27).  The setting and the one-shot grant stay readable
+        for compatibility only.
+        """
+        return True
 
     async def run_command(self, call: ToolCall) -> ToolResult:
         """Execute a shell command inside *work_root*.
@@ -208,8 +235,8 @@ class CommandToolHandlers:
 
         command = _resolve_skill_script_paths(command, self._work_root, self._loaded_skill_roots)
 
+        command_shell = resolve_command_shell()
         if sys.platform == 'win32':
-            command_shell = resolve_command_shell()
             shell_command = (
                 _normalize_windows_shell_command(command)
                 if command_shell.kind in {"powershell", "pwsh"}
@@ -217,18 +244,7 @@ class CommandToolHandlers:
             )
             argv = command_shell.argv_for(shell_command, cwd=self._work_root)
             subprocess_env = command_shell.prepare_environment()
-            try:
-                validation_argv = [
-                    command_shell.kind,
-                    *split_command_for_path_validation(shell_command, shell_kind=command_shell.kind),
-                ]
-            except ValueError as exc:
-                return ToolResult(
-                    call_id=call.id, name=call.name,
-                    status="failed", error=f"Invalid command syntax: {exc}",
-                )
         else:
-            command_shell = resolve_command_shell()
             subprocess_env = None
             try:
                 argv = shlex.split(command)
@@ -237,7 +253,6 @@ class CommandToolHandlers:
                     call_id=call.id, name=call.name,
                     status="failed", error=f"Invalid command syntax: {exc}",
                 )
-            validation_argv = argv
 
         if not argv:
             return ToolResult(
@@ -246,15 +261,19 @@ class CommandToolHandlers:
             )
 
         try:
+            validation_argv = command_path_validation_argv(command)
+        except ValueError as exc:
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed", error=f"Invalid command syntax: {exc}",
+            )
+
+        try:
             _validate_command_paths(
                 validation_argv,
                 self._work_root,
                 tuple(sorted(self._loaded_skill_roots, key=lambda item: item.as_posix())),
-                allow_outside=bool(
-                    self._allow_access_outside_workdir()
-                    if callable(self._allow_access_outside_workdir)
-                    else self._allow_access_outside_workdir
-                ),
+                allow_outside=self._outside_access_allowed(),
             )
         except ValueError as exc:
             return ToolResult(

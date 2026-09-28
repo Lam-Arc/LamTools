@@ -299,21 +299,40 @@
 }
 
 .workspace-shell--empty-session.workspace-shell--composer-center {
-  --empty-session-composer-top: calc(
-    var(--titlebar-offset, 0px) +
-    var(--stage-reveal, 0px) +
-    (100vh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px) - var(--composer-height, 120px)) / 2 +
-    calc(var(--space-6) * 2)
+  /* The centred slot is capped by whatever covers the bottom of the window (a
+     keyboard, a system bar), so a blank session's composer never sits behind
+     the IME; the greeting above it follows the same value. */
+  --empty-session-composer-top: min(
+    calc(
+      var(--titlebar-offset, 0px) +
+      var(--stage-reveal, 0px) +
+      (100vh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px) - var(--composer-height, 120px)) / 2 +
+      calc(var(--space-6) * 2)
+    ),
+    calc(
+      100vh -
+      var(--composer-height, 120px) -
+      var(--composer-bottom-offset, 0px) -
+      var(--composer-clearance, 24px)
+    )
   );
 }
 
 @supports (height: 100dvh) {
   .workspace-shell--empty-session.workspace-shell--composer-center {
-    --empty-session-composer-top: calc(
-      var(--titlebar-offset, 0px) +
-      var(--stage-reveal, 0px) +
-      (100dvh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px) - var(--composer-height, 120px)) / 2 +
-      calc(var(--space-6) * 2)
+    --empty-session-composer-top: min(
+      calc(
+        var(--titlebar-offset, 0px) +
+        var(--stage-reveal, 0px) +
+        (100dvh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px) - var(--composer-height, 120px)) / 2 +
+        calc(var(--space-6) * 2)
+      ),
+      calc(
+        100dvh -
+        var(--composer-height, 120px) -
+        var(--composer-bottom-offset, 0px) -
+        var(--composer-clearance, 24px)
+      )
     );
   }
 }
@@ -2330,6 +2349,13 @@
     max-width: none;
   }
   .empty-session-hero {
+    left: 50%;
+    width: calc(100% - var(--space-4));
+    transform: translateX(-50%);
+  }
+  /* A session whose composer sits at the bottom anchors the hero above it from
+     the viewport edge. */
+  .workspace-shell--composer-bottom .empty-session-hero {
     top: auto;
     bottom: calc(
       var(--composer-bottom-offset, 0px) +
@@ -2337,9 +2363,15 @@
       var(--composer-height, 120px) +
       var(--space-3)
     );
-    left: 50%;
-    width: calc(100% - var(--space-4));
-    transform: translateX(-50%);
+  }
+  /* A blank session centres the composer through --empty-session-composer-top
+     instead, so the hero keeps the shared anchor (its own bottom edge floating
+     one step above the composer) — a viewport-relative bottom would drop the
+     greeting behind the composer card. */
+  .workspace-shell--empty-session .empty-session-hero {
+    top: calc(var(--empty-session-composer-top, 50vh) - var(--space-3));
+    bottom: auto;
+    transform: translate(-50%, -100%);
   }
   .empty-session-logo { --sunday-logo-size: 104px !important; }
   .empty-session-title { font-size: clamp(18px, 5.4vw, 21px); }
@@ -2431,6 +2463,10 @@
     padding-inline: 10px;
   }
   .settings-main {
+    /* The sheet is a single column on phones: the main pane has to take the
+       rest of the page, otherwise the card stops mid-screen and leaves a bare
+       backdrop band under it. */
+    flex: 1 1 auto;
     min-height: 0;
     margin: 0;
     padding: 24px 16px 40px;
@@ -2442,7 +2478,6 @@
 }
 @media (max-width: 480px) {
   .floating-composer { border-radius: var(--radius-lg); }
-  .empty-session-hero { top: 28%; }
 }
 
 /* =========================================================================
@@ -2673,12 +2708,30 @@
 .process-stream {
   width: 100%;
   display: grid;
+  /* An explicit shrinkable column: with the implicit auto track, a tool card
+     whose content is wide (a long single-line diff, a long command) forced its
+     intrinsic minimum on the track and widened the whole message past the
+     thread column, clipping the reply on phones. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 7px;
   margin: 7px 0 12px;
   padding: 10px 0 10px 17px;
   border-left: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
   color: color-mix(in srgb, var(--theme-main-text, #fff) 58%, transparent);
   counter-reset: reasoning-step;
+}
+/* Bounds of the process tree: every box may shrink below its content so the
+   scroll containers inside a tool card (output/diff blocks) own the overflow
+   instead of the message column. */
+.process-stream,
+.process-stream > *,
+.process-timeline,
+.process-timeline > *,
+.process-group,
+.process-group-body,
+.process-group-body > *,
+.process-step {
+  min-width: 0;
 }
 .process-stream--live {
   animation: stream-enter .16s ease-out both;

@@ -153,8 +153,8 @@ describe('「本轮产出」面板：内部去重', () => {
   })
 })
 
-describe('决策答复 GSAP Transition（jsdom 降级）', () => {
-  it('决策答复在 jsdom 下正常渲染不报错', () => {
+describe('已答复的审批卡撤出对话', () => {
+  it('答复落定后整卡不再渲染，也不留下答复回显', () => {
     const m = msg('assistant:t5', [
       {
         id: 'd1',
@@ -164,7 +164,22 @@ describe('决策答复 GSAP Transition（jsdom 降级）', () => {
       },
     ])
     const wrapper = mountMessageView( { props: { msg: m, processExpandedIds: new Set([m.id]) } })
-    expect(wrapper.find('.decision-card-decision').exists()).toBe(true)
-    expect(wrapper.find('.decision-card-decision').text()).toContain('批准')
+    expect(wrapper.find('.decision-card').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('已选择')
+  })
+
+  it('待答复的审批卡仍然渲染，等待选择', () => {
+    const m = msg('assistant:t6', [
+      {
+        id: 'd2',
+        partType: 'decision',
+        status: 'pending',
+        label: '等待授权',
+      },
+    ])
+    const wrapper = mountMessageView( { props: { msg: m, processExpandedIds: new Set([m.id]) } })
+    const card = wrapper.find('.decision-card')
+    expect(card.exists()).toBe(true)
+    expect(card.text()).toContain('等待选择')
   })
 })

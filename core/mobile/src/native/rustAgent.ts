@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import type { PlanPackage, PlanPatch, PlanRevisionSummary } from '@lamtools/ui/plans/types'
 import type {
   StandaloneModel,
   StandaloneProvider,
@@ -347,6 +348,55 @@ export async function updateEmbeddedGoal(input: {
     statusReason: input.statusReason ?? null,
     metadata: input.metadata ?? null,
   })
+}
+
+/**
+ * Plan packages (方案) on the phone.
+ *
+ * The payload *is* the package: a field it does not mention keeps its stored
+ * value, so the panel can send only what changed. `expected_revision` is the
+ * optimistic-concurrency token — the panels always send it, a model tool does
+ * not have to.
+ */
+export async function saveEmbeddedPlan(payload: PlanPatch): Promise<{ plan: PlanPackage }> {
+  return await invoke('sunday_plan_save', { payload })
+}
+
+export async function readEmbeddedPlan(planId: string): Promise<{ plan: PlanPackage }> {
+  return await invoke('sunday_plan_get', { planId })
+}
+
+export async function listEmbeddedPlans(
+  input: { projectId?: string; status?: string; includeDeleted?: boolean } = {},
+): Promise<{ plans: PlanPackage[] }> {
+  return await invoke('sunday_plan_list', {
+    projectId: input.projectId || null,
+    status: input.status || null,
+    includeDeleted: input.includeDeleted ?? null,
+  })
+}
+
+/** Deletion is soft: the record and its history survive, `restore` brings it back. */
+export async function deleteEmbeddedPlan(planId: string): Promise<{ plan: PlanPackage }> {
+  return await invoke('sunday_plan_delete', { planId })
+}
+
+export async function restoreEmbeddedPlan(planId: string): Promise<{ plan: PlanPackage }> {
+  return await invoke('sunday_plan_restore', { planId })
+}
+
+/** Restore an earlier revision's content as a new revision; history only grows. */
+export async function revertEmbeddedPlan(
+  planId: string,
+  revision: number,
+): Promise<{ plan: PlanPackage }> {
+  return await invoke('sunday_plan_revert', { planId, revision })
+}
+
+export async function readEmbeddedPlanRevisions(
+  planId: string,
+): Promise<{ revisions: PlanRevisionSummary[] }> {
+  return await invoke('sunday_plan_revisions', { planId })
 }
 
 /** One bundled plugin's config schema, embedded and parsed by the host. */

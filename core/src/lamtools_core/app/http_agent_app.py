@@ -37,6 +37,7 @@ from lamtools_core.attachment.service import MAX_ATTACHMENT_BYTES
 from lamtools_core.runtime import RuntimeTaskRegistry
 from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arranged_operation_payload
 from lamtools_core.runtime.goal import GoalManager
+from lamtools_core.runtime.plan_package import PlanManager
 from lamtools_core.runtime.observer import ObserverSupervisor
 from lamtools_core.member import MemberKit, MemberManifest
 from lamtools_core.session import build_session_record
@@ -51,6 +52,7 @@ from .core_session_store import CoreDbSessionStore
 from .desktop_plugin_session_store import DesktopPluginSessionStore
 from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from .durable_operations import register_durable_operations
+from .plan_operations import register_plan_operations
 from .event_store import AppEventInput
 from .factory import add_spa_fallback, create_app
 from .live_hub import CoreAppEventHub
@@ -376,6 +378,7 @@ def create_core_agent_http_app(
         )
         app_state["attachment_store"] = CoreAttachmentStore(core_db_handle.session_factory, resolved_data_dir)
         goal_manager = GoalManager(core_db_handle.goal_store)
+        plan_manager = PlanManager(core_db_handle.plan_store)
         arrange_manager = ArrangeManager(core_db_handle.arrange_store)
 
         async def capture_model_context(state: Any, request: Any) -> None:
@@ -546,6 +549,8 @@ def create_core_agent_http_app(
             wake_observers=observer_supervisor.wake,
             observer_status=observer_supervisor.status,
         )
+        register_plan_operations(agent_operations, plan_manager=plan_manager)
+        app_state["plan_manager"] = plan_manager
         app_state["operations"] = agent_operations
         app_state["arrange_runner"] = arrange_runner
         app_state["observer_supervisor"] = observer_supervisor

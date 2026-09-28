@@ -46,6 +46,23 @@ describe('mobile layout native bridge contract', () => {
     expect(topBarSource).toContain('var(--mobile-header-offset, env(safe-area-inset-top, 0px))')
   })
 
+  it('lifts the composer with the keyboard height Android reports', () => {
+    // Android is the only source: the shell runs edge-to-edge, so the keyboard
+    // never changes the WebView size the shared viewport measurement reads.
+    expect(androidPluginSource).toContain('WindowInsetsCompat.Type.ime()')
+    expect(androidPluginSource).toContain('result.put("imeBottom"')
+    expect(rustInsetSource).toContain('rename = "imeBottom"')
+    expect(insetSource).toContain('imeBottom: finiteInset(record.imeBottom)')
+    expect(appSource).toContain("--native-keyboard-inset")
+    expect(appSource).toContain('insets.imeBottom')
+    expect(appSource).toContain('document.documentElement.style.removeProperty(\'--native-keyboard-inset\')')
+    // No viewport event fires while the keyboard opens, so a focused text field
+    // makes the bridge sample the inset instead.
+    expect(insetSource).toContain("addEventListener('focusin'")
+    expect(insetSource).toContain("addEventListener('focusout'")
+    expect(shellCss).toContain('max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom))')
+  })
+
   it('uses the mobile top bar without mounting desktop window chrome', () => {
     expect(appSource).toContain('<MobileTopBar')
     expect(sharedAppSource).toContain(':hide-on-mobile="runtime.platform === \'mobile\'"')

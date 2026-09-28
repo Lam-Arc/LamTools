@@ -8,6 +8,7 @@
         <SettingsShell
           :sections="sections"
           title="Sunday 设置"
+          :initial-section="props.section"
           :settings-theme-style="settingsThemeStyle"
           @close="requestCloseSettings"
         >
@@ -367,7 +368,7 @@
               </div>
               <div>
                 <dt>文件边界</dt>
-                <dd>{{ effectiveAllowAccessOutsideWorkdir ? '允许工作目录外' : '仅限工作目录' }}</dd>
+                <dd>{{ effectiveAllowAccessOutsideWorkdir ? '允许工作目录外' : '工作目录外需确认' }}</dd>
               </div>
             </dl>
           </section>
@@ -422,7 +423,7 @@
             <div class="permission-boundary-row">
               <div class="permission-setting-copy">
                 <strong>工作目录外访问</strong>
-                <span>{{ permissionPreset === 'full_access' ? '完全访问模式会临时允许访问工作目录之外的路径。' : allowAccessOutsideWorkdir ? '允许读写工作目录之外的路径。' : '仅允许访问当前工作目录内的路径。' }}</span>
+                <span>{{ permissionPreset === 'full_access' ? '完全访问模式会临时允许访问工作目录之外的路径。' : allowAccessOutsideWorkdir ? '允许读写工作目录之外的路径。' : '工作目录外的读写与命令行访问会先征求你的确认，批准后本次执行。' }}</span>
               </div>
               <button
                 type="button"
@@ -435,13 +436,13 @@
                 @click="toggleAllowOutsideWorkdir"
               >
                 <span class="permission-switch-track" aria-hidden="true"><span /></span>
-                <span>{{ permissionPreset === 'full_access' ? '完全访问已包含' : allowAccessOutsideWorkdir ? '已允许' : '仅工作目录' }}</span>
+                <span>{{ permissionPreset === 'full_access' ? '完全访问已包含' : allowAccessOutsideWorkdir ? '已允许' : '需确认' }}</span>
               </button>
             </div>
 
             <ul class="permission-safety-list">
               <li><span class="permission-safety-dot" aria-hidden="true" />敏感路径（如 .env、SSH 凭据）写入和编辑仍会阻断。</li>
-              <li><span class="permission-safety-dot" aria-hidden="true" />高危命令即使自动审批，也仍需运行前确认。</li>
+              <li><span class="permission-safety-dot" aria-hidden="true" />高危命令默认需要运行前确认（自动批准模式除外）。</li>
               <li><span class="permission-safety-dot" aria-hidden="true" />插件与 MCP 的 hard block 不能从此页解除。</li>
             </ul>
           </section>
@@ -1192,6 +1193,8 @@ const props = withDefaults(defineProps<{
   providers: CoreSettingsProvider[]
   modelGroups?: CoreSettingsModelGroup[]
   catalogView?: CoreModelCatalogView
+  /** Section the settings surface opens on (e.g. the rail's account entry). */
+  section?: string
   density: CoreSettingsDensity
   theme: ThemeData
   contentWidth?: number
@@ -1216,6 +1219,7 @@ const props = withDefaults(defineProps<{
   modelGroups: () => [],
   catalogView: 'provider',
   commandShellPlatform: 'other',
+  section: undefined,
 })
 
 const emit = defineEmits<{
@@ -3987,15 +3991,14 @@ onUnmounted(() => {
   border-radius: 0;
 }
 
-/* The settings main surface is already the card. Keep its chrome and move
-   only the provider details into an inner scroll region. */
+/* The settings main surface is already the card. Keep its chrome; the
+   provider/model columns grow with their content and the page scrolls. */
 :deep(.settings-main--models) {
-  overflow: hidden;
   border-radius: var(--radius) var(--radius) 0 0;
 }
 
 :deep(.settings-main--models .settings-content) {
-  height: 100%;
+  height: auto;
   min-height: 0;
 }
 
@@ -4096,19 +4099,13 @@ onUnmounted(() => {
   border-radius: var(--radius);
 }
 
-:deep(.settings-main--models) {
-  overflow: hidden;
-}
-
+/* 内容自适应高度：面板不随视口撑满，超出部分交给设置页滚动。
+   原先的 height:100% 链会把工作区压成视口剩余高度，下沿把内容裁掉。 */
 :deep(.settings-main--models .settings-content) {
   width: min(1180px, 100%);
-  height: 100%;
-  min-height: 0;
 }
 
 .models-panel {
-  height: 100%;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
@@ -4120,9 +4117,10 @@ onUnmounted(() => {
 }
 
 .models-workspace {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  /* 内容再少也保持一个完整工作面；左栏因此不会被压到需要内部滚动。 */
+  min-height: 420px;
   min-width: 0;
-  min-height: 0;
   display: grid;
   grid-template-columns: 260px minmax(420px, 1fr);
   align-items: stretch;
@@ -4134,8 +4132,7 @@ onUnmounted(() => {
 .provider-rail {
   position: static;
   min-width: 0;
-  min-height: 0;
-  height: 100%;
+  height: auto;
   display: flex;
   flex-direction: column;
   padding: var(--space-5) var(--space-4) var(--space-4);
@@ -4143,7 +4140,7 @@ onUnmounted(() => {
   border-right: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
   border-radius: 0;
   background: transparent;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .provider-rail-head {
@@ -4152,13 +4149,13 @@ onUnmounted(() => {
 }
 
 .provider-picker {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
   max-height: none;
   display: grid;
   align-content: start;
   gap: var(--space-1);
-  overflow-y: auto;
+  overflow: visible;
   padding: var(--space-2) 0;
 }
 
@@ -4254,14 +4251,12 @@ onUnmounted(() => {
 
 .provider-detail {
   min-width: 0;
-  min-height: 0;
-  height: 100%;
+  height: auto;
   display: grid;
   align-content: start;
   gap: var(--space-4);
   padding: var(--space-4) var(--space-5) var(--space-5);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: visible;
 }
 
 .provider-detail-head {
@@ -4461,45 +4456,18 @@ onUnmounted(() => {
 }
 
 @media (max-width: 959px) {
-  :deep(.settings-main--models) {
-    overflow-y: auto;
-  }
-
   :deep(.settings-main--models .settings-content) {
     width: 100%;
-    height: auto;
-  }
-
-  .models-panel {
-    height: auto;
   }
 
   .models-workspace {
     grid-template-columns: 1fr;
-    height: auto;
-    flex: 0 0 auto;
-    overflow: visible;
   }
 
   .provider-rail {
-    height: auto;
     padding: var(--space-5) 0;
     border-right: 0;
     border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
-    overflow: visible;
-  }
-
-  .provider-picker {
-    flex: 0 0 auto;
-    display: grid;
-    max-height: 280px;
-    overflow-x: hidden;
-    overflow-y: auto;
-    padding-bottom: var(--space-1);
-  }
-
-  .provider-picker-item {
-    flex: 0 0 auto;
   }
 
   .provider-rail-footer {
@@ -4512,9 +4480,7 @@ onUnmounted(() => {
   }
 
   .provider-detail {
-    height: auto;
     padding: var(--space-6) 0 0;
-    overflow: visible;
   }
 
   .model-row {
@@ -4825,10 +4791,9 @@ onUnmounted(() => {
 .models-workspace-body {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 0;
   display: grid;
   grid-template-columns: 260px minmax(420px, 1fr);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .resource-search {
@@ -4899,10 +4864,10 @@ onUnmounted(() => {
   }
 
   .provider-picker {
+    /* 供应商列表整体展示（纵向），滚动交给设置页，左栏不再需要内部滚动。 */
     display: grid;
-    max-height: 280px;
-    overflow-x: hidden;
-    overflow-y: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .provider-picker-item {

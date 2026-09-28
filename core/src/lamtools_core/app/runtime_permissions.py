@@ -141,6 +141,37 @@ def load_global_runtime_controls() -> dict[str, Any]:
         return read_global_runtime_controls(None)
 
 
+def resolve_session_permissions(
+    *,
+    preset: object,
+    base_tier: object,
+    base_allow_access_outside_workdir: object,
+    tier_tools: object = None,
+    global_controls: object | None = None,
+) -> ResolvedRuntimePermissions:
+    """Resolve a session preset with the global out-of-workspace switch applied.
+
+    ``core.runtimeControls.allow_access_outside_workdir`` is a permanent
+    authorization rather than a per-session capability: once the user turns it
+    on, it applies to every session immediately — including sessions that were
+    created (and froze a ``false`` base) before the switch was flipped.  The
+    session-level value stays untouched, so turning the switch back off returns
+    those sessions to asking.
+    """
+    controls = read_global_runtime_controls(
+        global_controls if global_controls is not None else load_global_runtime_controls()
+    )
+    base_outside = bool(base_allow_access_outside_workdir) or bool(
+        controls["base_allow_access_outside_workdir"]
+    )
+    return resolve_permission_preset(
+        preset=preset,
+        base_tier=base_tier,
+        base_allow_access_outside_workdir=base_outside,
+        tier_tools=tier_tools,
+    )
+
+
 def session_runtime_preferences(
     metadata: object,
     *,
@@ -369,4 +400,5 @@ __all__ = [
     "merge_session_runtime_preferences",
     "load_global_runtime_controls",
     "resolve_permission_preset",
+    "resolve_session_permissions",
 ]

@@ -387,14 +387,31 @@ def test_core_toolbox_auto_approve_keeps_hard_blocks(tmp_path):
     write_call = toolbox.prepare_call(
         ToolCall(id="write-1", name="write_file", arguments={"path": "out.txt", "content": "hello"})
     )
-    escape_call = toolbox.prepare_call(
-        ToolCall(id="write-escape", name="write_file", arguments={"path": "../outside.txt", "content": "bad"})
+    secret_call = toolbox.prepare_call(
+        ToolCall(id="write-secret", name="write_file", arguments={"path": ".env", "content": "bad"})
     )
 
     assert write_call.requires_approval is False
     assert write_call.metadata["approval"]["auto_approved"] is True
-    assert escape_call.requires_approval is False
-    assert escape_call.metadata["approval"]["blocked"] is True
+    assert secret_call.metadata["approval"]["blocked"] is True
+
+
+def test_core_toolbox_auto_preset_approves_outside_workdir(tmp_path):
+    """自动预设直接批准；工作目录之外不再是需要点头的例外（2026-09-27）。"""
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    (outside / "note.txt").write_text("outside read\n", encoding="utf-8")
+    toolbox = build_core_toolbox(work_root=workspace, approval_policy="auto_approve")
+
+    call = toolbox.prepare_call(
+        ToolCall(id="read-outside", name="read_file", arguments={"path": str(outside / "note.txt")})
+    )
+
+    assert call.requires_approval is False
+    assert call.metadata["approval"]["outside_workdir"] is False
+    assert call.metadata["approval"]["auto_approved"] is True
 
 
 @pytest.mark.asyncio
@@ -478,21 +495,150 @@ def test_core_toolbox_question_requires_approval_under_require_policy(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_core_toolbox_blocks_path_escape_before_execution(tmp_path):
-    toolbox = build_core_toolbox(work_root=tmp_path)
+async def test_core_toolbox_writes_outside_path_without_asking(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    toolbox = build_core_toolbox(work_root=workspace, approval_policy="auto_approve")
+
     call = toolbox.prepare_call(
-        ToolCall(id="write-escape", name="write_file", arguments={"path": "../outside.txt", "content": "bad"})
+        ToolCall(
+            id="write-outside",
+            name="write_file",
+            arguments={"path": str(outside / "note.txt"), "content": "written\n"},
+        )
     )
 
+    assert call.requires_approval is False
+    assert call.metadata["approval"]["outside_workdir"] is False
     result = await toolbox.execute(call)
 
-    assert result.status == "blocked"
-    assert "outside work_root" in result.error
-    assert not (tmp_path.parent / "outside.txt").exists()
+    assert result.status == "ok"
+    assert (outside / "note.txt").read_text(encoding="utf-8") == "written\n"
 
 
 @pytest.mark.asyncio
-async def test_core_toolbox_allow_access_outside_workdir(tmp_path):
+async def test_core_toolbox_reads_edits_and_lists_outside_paths(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    target = outside / "note.txt"
+    target.write_text("outside read\n", encoding="utf-8")
+    toolbox = build_core_toolbox(work_root=workspace, approval_policy="auto_approve")
+
+    async def run(call):
+        prepared = toolbox.prepare_call(call)
+        assert prepared.requires_approval is False
+        return await toolbox.execute(prepared)
+
+    read_result = await run(
+        ToolCall(id="read-outside", name="read_file", arguments={"path": str(target)})
+    )
+    assert read_result.status == "ok"
+    assert "outside read" in read_result.content
+
+    write_result = await run(
+        ToolCall(
+            id="write-outside",
+            name="write_file",
+            arguments={"path": str(outside / "new.txt"), "content": "written\n"},
+        )
+    )
+    assert write_result.status == "ok"
+    assert (outside / "new.txt").read_text(encoding="utf-8") == "written\n"
+
+    edit_result = await run(
+        ToolCall(
+            id="edit-outside",
+            name="edit_file",
+            arguments={"path": str(target), "old_string": "outside", "new_string": "edited"},
+        )
+    )
+    assert edit_result.status == "ok"
+    assert target.read_text(encoding="utf-8") == "edited read\n"
+
+    list_result = await run(
+        ToolCall(id="list-outside", name="list_dir", arguments={"path": str(outside)})
+    )
+    assert list_result.status == "ok"
+    assert "note.txt" in list_result.content
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_sensitive_write_stays_hard_blocked_outside(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    toolbox = build_core_toolbox(work_root=workspace, approval_policy="auto_approve")
+
+    call = toolbox.prepare_approved_call(
+        ToolCall(
+            id="write-env",
+            name="write_file",
+            arguments={"path": str(outside / ".env"), "content": "KEY=1"},
+            metadata={"approval": {"approved": True}},
+        )
+    )
+    result = await toolbox.execute(call)
+
+    assert result.status == "blocked"
+    assert "sensitive pattern" in result.error
+    assert not (outside / ".env").exists()
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_runs_command_touching_outside_path(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    target = outside / "note.txt"
+    target.write_text("shell read\n", encoding="utf-8")
+    toolbox = build_core_toolbox(work_root=workspace, approval_policy="auto_approve")
+
+    call = toolbox.prepare_call(
+        ToolCall(id="cat-outside", name="run_command", arguments={"command": f'cat "{target}"'})
+    )
+
+    assert call.requires_approval is False
+    assert call.metadata["approval"]["outside_workdir"] is False
+    result = await toolbox.execute(call)
+
+    assert result.status == "ok"
+    assert "shell read" in result.content
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_loads_skill_assets_without_asking(tmp_path):
+    """技能自带目录在加载后视为已授权，不再弹确认。"""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    skill_dir = tmp_path / "resources" / "skills" / "sample"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: sample\ndescription: Sample skill\n---\nRead helper.txt.\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "helper.txt").write_text("skill asset\n", encoding="utf-8")
+    toolbox = build_core_toolbox(work_root=workspace, skill_registry=FakeSkillRegistry(skill_dir))
+    await toolbox.execute(ToolCall(id="load", name="load_skill", arguments={"name": "sample"}))
+
+    call = toolbox.prepare_call(
+        ToolCall(id="read-asset", name="read_file", arguments={"path": str(skill_dir / "helper.txt")})
+    )
+    result = await toolbox.execute(call)
+
+    assert call.requires_approval is False
+    assert result.status == "ok"
+    assert "skill asset" in result.content
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_reads_outside_workdir_by_default(tmp_path):
+    """工作目录之外默认即可读写（2026-09-27 产品决定）。"""
     root = tmp_path / "root"
     workspace = root / "project"
     outside = root / "outside"
@@ -503,39 +649,25 @@ async def test_core_toolbox_allow_access_outside_workdir(tmp_path):
     async def run(toolbox, call):
         return await toolbox.execute(toolbox.prepare_call(call))
 
-    # Default (restricted): the approval gate blocks out-of-workspace reads
-    # before the handler ever runs.
-    restricted = build_core_toolbox(work_root=workspace, approval_policy="auto_approve")
+    toolbox = build_core_toolbox(work_root=workspace, approval_policy="auto_approve")
     result = await run(
-        restricted,
-        ToolCall(id="read-blocked", name="read_file", arguments={"path": str(outside / "secret.txt")}),
-    )
-    assert result.status == "blocked"
-    assert "outside work_root" in result.error
-
-    allowed = build_core_toolbox(
-        work_root=workspace,
-        approval_policy="auto_approve",
-        allow_access_outside_workdir=True,
-    )
-    result = await run(
-        allowed,
+        toolbox,
         ToolCall(id="read-ok", name="read_file", arguments={"path": str(outside / "secret.txt")}),
     )
     assert result.status == "ok"
     assert "top secret" in result.content
 
     result = await run(
-        allowed,
+        toolbox,
         ToolCall(id="write-ok", name="write_file", arguments={"path": str(outside / "new.txt"), "content": "new\n"}),
     )
     assert result.status == "ok"
     assert (outside / "new.txt").read_text(encoding="utf-8") == "new\n"
 
-    # Sensitive-pattern hard blocks still apply even when out-of-workspace
-    # access is allowed.
+    # Sensitive-pattern hard blocks are unrelated to the workspace boundary and
+    # still apply.
     result = await run(
-        allowed,
+        toolbox,
         ToolCall(id="env-blocked", name="write_file", arguments={"path": str(outside / ".env"), "content": "KEY=1"}),
     )
     assert result.status == "blocked"

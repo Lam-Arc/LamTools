@@ -517,28 +517,13 @@ onMounted(fetchModes)
 </script>
 
 <style scoped>
+/* 内容自适应高度：面板与工作区按内容撑开，超出的部分由设置页（.settings-main）滚动。
+   原先的 height:100% 链把工作区压成「视口剩余高度」，下沿会把模式栏与工具列表裁掉。 */
 .loadtools-panel {
   min-width: 0;
-  height: 100%;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
-}
-
-:global(.settings-main:has(.loadtools-panel)) {
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-:global(.settings-main:has(.loadtools-panel) .settings-content) {
-  height: 100%;
-  min-height: 0;
-}
-
-:global(.settings-main:has(.loadtools-panel) .settings-content > .settings-panel) {
-  height: 100%;
-  min-height: 0;
 }
 
 .loadtools-title {
@@ -629,9 +614,10 @@ onMounted(fetchModes)
 }
 
 .loadtools-workspace {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  /* 内容再少也保持一个完整工作面；左栏因此不会被压到需要内部滚动。 */
+  min-height: 420px;
   min-width: 0;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: visible;
@@ -642,21 +628,19 @@ onMounted(fetchModes)
 
 .loadtools-workspace-body {
   min-width: 0;
-  min-height: 0;
   flex: 1 1 auto;
   display: grid;
   grid-template-columns: 260px minmax(420px, 1fr);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .mode-rail {
   min-width: 0;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   padding: var(--space-5);
   border-right: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .mode-rail-head {
@@ -723,12 +707,12 @@ onMounted(fetchModes)
 
 .mode-picker {
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   display: grid;
   align-content: start;
   gap: var(--space-1);
   margin-top: var(--space-3);
-  overflow-y: auto;
+  overflow: visible;
 }
 
 .mode-picker-item {
@@ -843,11 +827,10 @@ onMounted(fetchModes)
 
 .mode-detail {
   min-width: 0;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   padding: var(--space-5);
-  overflow: auto;
+  overflow: visible;
 }
 
 .mode-detail-head {
@@ -1216,43 +1199,15 @@ onMounted(fetchModes)
 }
 
 @media (max-width: 959px) {
-  :global(.settings-main:has(.loadtools-panel) .settings-content),
-  :global(.settings-main:has(.loadtools-panel) .settings-content > .settings-panel) {
-    height: auto;
-  }
-
-  .loadtools-panel {
-    height: auto;
-  }
-
-  .loadtools-workspace {
-    flex: 0 0 auto;
-    overflow: visible;
-  }
-
+  /* 单列堆叠：模式列表变成上方一段导航，仍然整体展示，滚动交给设置页。 */
   .loadtools-workspace-body {
     grid-template-columns: 1fr;
-    overflow: visible;
   }
 
   .mode-rail {
-    min-height: 0;
     padding: var(--space-4);
     border-right: 0;
     border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
-    overflow: visible;
-  }
-
-  .mode-picker {
-    flex: 0 1 auto;
-    display: grid;
-    max-height: 320px;
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
-
-  .mode-picker-item {
-    flex: 0 0 auto;
   }
 
   .mode-rail-footer {
@@ -1261,7 +1216,6 @@ onMounted(fetchModes)
 
   .mode-detail {
     padding: var(--space-5) var(--space-4) var(--space-4);
-    overflow: visible;
   }
 }
 

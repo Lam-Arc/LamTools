@@ -570,12 +570,9 @@
                     <div class="decision-card-head">
                       <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
                       <span class="decision-card-title">{{ decisionTitle(group.part) }}</span>
-                      <span class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
+                      <span v-if="decisionStatusLabel(group.part)" class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
                     </div>
                     <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
-                    <Transition :css="false" @enter="decisionResponseEnter" @leave="fadeSlideLeave">
-                      <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
-                    </Transition>
                     <div v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
                       <div v-for="option in decisionOptions(group.part)" :key="option.id" class="decision-option-group">
                         <button
@@ -867,6 +864,7 @@ import { assistantSegmentTurnId, projectAssistantMessageParts } from '../appServ
 import { copyText } from '../helpers/clipboard'
 import { workspaceRelativePath } from '../helpers/workspacePath'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
+import { useNarrowViewport } from '../composables/useNarrowViewport'
 import AutoTextarea from './AutoTextarea.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import MessageAttachmentDeck from './MessageAttachmentDeck.vue'
@@ -1064,8 +1062,8 @@ function formatAssistantTimestamp(value: string | undefined): { compact: string;
 //    （对齐 perf 文档红线；reduced-motion / 无 rAF 环境直切）。
 const rootEl = ref<HTMLElement | null>(null)
 
-// 组件级 GSAP 作用域 context（对齐 gsap-frameworks 规范）：本轮产出面板、
-// 决策答复等 Transition 钩子里创建的 tween 全部挂进 ctx，卸载时一次 revert 清理。
+// 组件级 GSAP 作用域 context（对齐 gsap-frameworks 规范）：本轮产出面板等
+// Transition 钩子里创建的 tween 全部挂进 ctx，卸载时一次 revert 清理。
 const gsapCtx = gsap.context(() => {}, rootEl)
 
 onMounted(() => {
@@ -1087,18 +1085,14 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  // 消息入场 tween（mount-only）与 ctx 内新动画（面板/决策答复）统一清理
+  // 消息入场 tween（mount-only）与 ctx 内新动画（本轮产出面板）统一清理
   if (rootEl.value) gsap.killTweensOf(rootEl.value)
   gsapCtx.revert()
 })
 
-// ── Transition 入场钩子（本轮产出面板 / 决策答复）：tween 挂进 gsapCtx，
+// ── Transition 入场钩子（本轮产出面板）：tween 挂进 gsapCtx，
 //    由 ctx.revert() 统一清理；离场走 fadeSlideLeave 瞬时直切（出现类元素移除无需动画）。
 function artifactsEnter(el: Element, done: () => void): void {
-  gsapCtx.add(() => fadeSlideEnter(el, done))
-}
-
-function decisionResponseEnter(el: Element, done: () => void): void {
   gsapCtx.add(() => fadeSlideEnter(el, done))
 }
 
@@ -1153,7 +1147,11 @@ interface ChecklistItem {
 }
 
 const toolExpandedIds = ref<Set<string>>(new Set())
-const toolWrapIds = ref<Set<string>>(new Set())
+// Explicit wrap choices only. The default follows the viewport: a phone has no
+// room to pan a long diff line sideways, so a tool card wraps there unless the
+// reader taps the toggle back to scroll.
+const toolWrapChoices = ref<Map<string, boolean>>(new Map())
+const narrowViewport = useNarrowViewport()
 const subLineProcessCollapsedIds = ref<Set<string>>(new Set())
 const fullyExpandedPartIds = ref<Set<string>>(new Set())
 const processTitleSnapshots = ref<Record<string, string>>({})
@@ -1177,7 +1175,7 @@ function partMemo(part: MessagePart, live: boolean): unknown[] {
     fullyExpandedPartIds.value.has(part.id),
     processTitleSnapshot(part),
     toolExpandedIds.value.has(part.id),
-    toolWrapIds.value.has(part.id),
+    isToolWrapEnabled(part.id),
     subLineProcessCollapsedIds.value.has(part.id),
     decisionGuideDrafts.value[part.id],
   ]
@@ -1444,14 +1442,13 @@ function messageAttachments(message: CoreMessage): CoreAttachment[] {
 }
 
 function toggleToolWrap(partId: string) {
-  const next = new Set(toolWrapIds.value)
-  if (next.has(partId)) next.delete(partId)
-  else next.add(partId)
-  toolWrapIds.value = next
+  const next = new Map(toolWrapChoices.value)
+  next.set(partId, !isToolWrapEnabled(partId))
+  toolWrapChoices.value = next
 }
 
 function isToolWrapEnabled(partId: string): boolean {
-  return toolWrapIds.value.has(partId)
+  return toolWrapChoices.value.get(partId) ?? narrowViewport.value
 }
 
 function hasToolDisplay(part: MessagePart): boolean {
@@ -1682,13 +1679,16 @@ function assistantPartsProjection(msg: CoreMessage): ReturnType<typeof projectAs
     return cached.projection
   }
 
-  const projection = Array.isArray(msg.processParts) && typeof msg.answerText === 'string'
+  const raw = Array.isArray(msg.processParts) && typeof msg.answerText === 'string'
     ? {
         processParts: msg.processParts,
         answerPart: msg.answerPart ?? null,
         answerText: msg.answerText,
       }
     : projectAssistantMessageParts(msg.parts || [], msg.content || '', { live: isLiveMessage(msg) })
+  const projection = raw.processParts.some(isAnsweredDecision)
+    ? { ...raw, processParts: raw.processParts.filter(part => !isAnsweredDecision(part)) }
+    : raw
   projectionCache.set(msg, {
     parts: msg.parts,
     processParts: msg.processParts,
@@ -1697,6 +1697,15 @@ function assistantPartsProjection(msg: CoreMessage): ReturnType<typeof projectAs
     projection,
   })
   return projection
+}
+
+/**
+ * 审批/决策卡只在需要用户处理时占位：答复一落定（completed）就整卡撤出过程时间线，
+ * 不再以「已记录 / 已选择」的形态挂在对话末尾。未答复（pending）与提交中必须保留，
+ * 否则用户看不到问题、无法回答。
+ */
+function isAnsweredDecision(part: MessagePart): boolean {
+  return part.partType === 'decision' && part.status === 'completed'
 }
 
 function processParts(msg: CoreMessage): MessagePart[] {
@@ -3279,44 +3288,12 @@ function decisionTitle(part: MessagePart): string {
   return title ? `需要确认：${compactDetail(String(title), 56)}` : '等待确认'
 }
 
+/** 只有待处理中的审批卡会渲染，因此状态标签只覆盖未答复的三种形态。 */
 function decisionStatusLabel(part: MessagePart): string {
   if (part.status === 'pending') return '等待选择'
   if (part.status === 'running') return '处理中'
   if (part.status === 'error') return '失败'
-  return '已记录'
-}
-
-function decisionResponseText(part: MessagePart): string {
-  const response = decisionResponse(part)
-  if (!response) return ''
-  const action = String(response.action || '').toLowerCase()
-  const rawText = String(response.response || '').trim()
-  const labels: Record<string, string> = {
-    approve: '批准',
-    deny: '拒绝',
-    guide: '其他',
-  }
-  const label = labels[action] || compactDetail(action || rawText || '已处理', 32)
-  if (action === 'guide' && rawText && rawText !== action) {
-    return `已选择：${label} - ${compactDetail(rawText, 160)}`
-  }
-  return `已选择：${label}`
-}
-
-function decisionResponse(part: MessagePart): Record<string, unknown> | null {
-  const meta = part.metadata || {}
-  const response = meta.waitingResponse
-  if (response && typeof response === 'object' && !Array.isArray(response)) {
-    return response as Record<string, unknown>
-  }
-  const waitingRequest = meta.waitingRequest
-  if (waitingRequest && typeof waitingRequest === 'object' && !Array.isArray(waitingRequest)) {
-    const nested = (waitingRequest as Record<string, unknown>).response
-    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
-      return nested as Record<string, unknown>
-    }
-  }
-  return null
+  return ''
 }
 
 function decisionDetail(part: MessagePart): string {

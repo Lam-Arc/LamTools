@@ -70,6 +70,7 @@ from .runtime_permissions import (
     normalize_permission_mode,
     permissions_from_snapshot,
     resolve_permission_preset,
+    resolve_session_permissions,
     runtime_snapshot as build_runtime_snapshot,
     session_runtime_preferences,
     with_session_runtime_preferences,
@@ -1317,11 +1318,12 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
         base_outside = preferences["base_allow_access_outside_workdir"]
 
     tier_tools = _load_tier_tools(context)
-    permissions = resolve_permission_preset(
+    permissions = resolve_session_permissions(
         preset=preset,
         base_tier=base_tier,
         base_allow_access_outside_workdir=base_outside,
         tier_tools=tier_tools,
+        global_controls=global_value or global_controls,
     )
     return {
         **permissions.to_dict(),

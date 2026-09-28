@@ -34,9 +34,20 @@ def test_command_execution_defaults_are_tool_friendly():
 
 
 @pytest.mark.parametrize("quoted_path", ["'../outside.txt'", '"../outside.txt"'])
-def test_command_path_guard_rejects_quoted_parent_paths(tmp_path: Path, quoted_path: str):
+def test_command_path_guard_rejects_quoted_parent_paths_in_strict_mode(
+    tmp_path: Path, quoted_path: str
+):
+    """严格模式（allow_outside=False）保留越界拒绝，供仍需要边界的调用方使用。"""
     with pytest.raises(ValueError, match="escapes work_root"):
-        validate_command_paths(["cat", quoted_path], tmp_path)
+        validate_command_paths(["cat", quoted_path], tmp_path, allow_outside=False)
+
+
+@pytest.mark.parametrize("quoted_path", ["'../outside.txt'", '"../outside.txt"'])
+def test_command_path_guard_allows_quoted_parent_paths_by_default(
+    tmp_path: Path, quoted_path: str
+):
+    """默认不再限制工作目录之外（2026-09-27 产品决定）。"""
+    validate_command_paths(["cat", quoted_path], tmp_path)
 
 
 def test_command_path_guard_allows_quoted_in_root_paths(tmp_path: Path):
@@ -59,7 +70,7 @@ def test_command_path_guard_fails_closed_for_embedded_or_unmatched_quotes(
 ):
     with pytest.raises(ValueError):
         tokens = split_command_for_path_validation(command)
-        validate_command_paths(["shell", *tokens], tmp_path)
+        validate_command_paths(["shell", *tokens], tmp_path, allow_outside=False)
 
 
 @pytest.mark.parametrize("shell_kind", ["wsl", "git-bash", "powershell", "pwsh"])
@@ -77,7 +88,7 @@ def test_shell_aware_path_validation_rejects_quote_concatenation(
 ):
     with pytest.raises(ValueError):
         tokens = split_command_for_path_validation(command, shell_kind=shell_kind)
-        validate_command_paths([shell_kind, *tokens], tmp_path)
+        validate_command_paths([shell_kind, *tokens], tmp_path, allow_outside=False)
 
 
 @pytest.mark.parametrize("shell_kind", ["wsl", "git-bash", "powershell", "pwsh"])
@@ -446,9 +457,13 @@ def test_validate_command_paths_allows_workspace_paths(tmp_path: Path):
     validate_command_paths(["py", "-m", "pytest", "tests/"], tmp_path)
 
 
-def test_validate_command_paths_blocks_escape(tmp_path: Path):
+def test_validate_command_paths_blocks_escape_in_strict_mode(tmp_path: Path):
     with pytest.raises(ValueError, match="escapes work_root"):
-        validate_command_paths(["py", "-m", "pytest", "../outside"], tmp_path)
+        validate_command_paths(["py", "-m", "pytest", "../outside"], tmp_path, allow_outside=False)
+
+
+def test_validate_command_paths_allows_escape_by_default(tmp_path: Path):
+    validate_command_paths(["py", "-m", "pytest", "../outside"], tmp_path)
 
 
 def test_validate_command_paths_allows_escape_when_outside_access_is_enabled(tmp_path: Path):
@@ -466,7 +481,7 @@ def test_validate_command_paths_allows_resource_roots(tmp_path: Path):
     script.write_text("print('ok')\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="escapes work_root"):
-        validate_command_paths(["py", str(script)], tmp_path)
+        validate_command_paths(["py", str(script)], tmp_path, allow_outside=False)
 
     validate_command_paths(["py", str(script)], tmp_path, (skill_root,))
 

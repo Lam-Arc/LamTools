@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
-    <div ref="settingsOverlayEl" class="settings-overlay">
-      <div ref="settingsCardEl" class="settings-card" :style="settingsThemeStyle">
+    <div ref="overlayEl" class="settings-overlay">
+      <div ref="cardEl" class="settings-card search-card" :style="settingsThemeStyle">
         <header class="search-head">
           <div class="search-input-row">
             <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -9,7 +9,7 @@
               ref="inputEl"
               :value="query"
               type="text"
-              :placeholder="inputPlaceholder"
+              placeholder="搜索任务、插件或文件"
               aria-label="搜索"
               autocomplete="off"
               spellcheck="false"
@@ -21,23 +21,23 @@
               @keydown.up.prevent="moveCursor(-1)"
               @keydown.esc.prevent="$emit('close')"
             />
-            <button type="button" class="search-clear" aria-label="清除" @click="query = ''">
+            <button v-if="query" type="button" class="search-clear" aria-label="清除" @click="clearQuery">
               <X :size="13" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </div>
           <nav class="search-tabs" aria-label="搜索范围">
             <button
-              v-for="tab in availableTabs"
-              :key="tab.id"
+              v-for="category in CATEGORIES"
+              :key="category.id"
               type="button"
-              :class="{ active: activeTab === tab.id }"
-              :aria-current="activeTab === tab.id ? 'page' : undefined"
-              @click="switchTab(tab.id)"
+              :class="{ active: activeCategory === category.id }"
+              :aria-current="activeCategory === category.id ? 'page' : undefined"
+              @click="switchCategory(category.id)"
             >
               <span class="search-tab-icon">
-                <component :is="tab.icon" :size="14" :stroke-width="1.8" aria-hidden="true" />
+                <component :is="category.icon" :size="14" :stroke-width="1.8" aria-hidden="true" />
               </span>
-              <span>{{ tab.label }}</span>
+              <span>{{ category.label }}</span>
             </button>
           </nav>
         </header>
@@ -45,71 +45,39 @@
         <main class="search-body">
           <p v-if="searching" class="search-status">搜索中…</p>
           <p v-else-if="error" class="search-status search-error" role="alert">{{ error }}</p>
-          <p v-else-if="searched && !results.length" class="search-status">无</p>
+          <p v-else-if="!visibleRows.length" class="search-status search-hint">{{ hintText }}</p>
 
-          <ul v-else-if="results.length" class="search-results">
-            <!-- 文件：文件名匹配 -->
-            <template v-if="activeTab === 'files'">
-              <li v-for="(hit, idx) in results" :key="'f' + idx" class="search-hit file-hit">
-                <span class="search-hit-icon"><FileText :size="14" :stroke-width="1.8" aria-hidden="true" /></span>
-                <span class="search-hit-path" v-html="highlight(hit.path)" />
-              </li>
-            </template>
-
-            <!-- 内容：行内匹配 -->
-            <template v-else-if="activeTab === 'content'">
-              <li v-for="(hit, idx) in results" :key="'c' + idx" class="search-hit">
-                <div class="search-hit-head">
-                  <span class="search-hit-title" v-html="highlight(hit.path)"></span>
-                  <span class="search-hit-role content-line">{{ hit.line }}</span>
-                </div>
-                <p class="search-hit-snippet" v-html="highlight(hit.content)"></p>
-              </li>
-            </template>
-
-            <!-- 会话：历史消息命中 -->
-            <template v-else-if="activeTab === 'sessions'">
+          <ul v-else class="search-results">
+            <template v-for="group in visibleGroups" :key="group.label">
+              <li class="search-group-label">{{ group.label }}</li>
               <li
-                v-for="(hit, idx) in results"
-                :key="hit.message_id"
-                class="search-hit"
-                :class="{ 'is-active': idx === cursor }"
-                @mousedown.prevent="cursor = idx; jumpSession(hit)"
-                @mouseenter="cursor = idx"
+                v-for="row in group.rows"
+                :key="row.key"
+                class="search-row"
+                :class="{ active: row.index === cursor, 'is-static': !row.action }"
+                :data-search-row="row.key"
+                @mousedown.prevent="activate(row)"
+                @mouseenter="cursor = row.index"
               >
-                <div class="search-hit-head">
-                  <span class="search-hit-title">{{ titleOf(hit.session_id) }}</span>
-                  <span class="search-hit-role" :class="hit.role">{{ roleLabel(hit.role) }}</span>
-                  <span class="search-hit-time">{{ timeOf(hit.ts) }}</span>
-                </div>
-                <p class="search-hit-snippet" v-html="highlight(hit.snippet)"></p>
-              </li>
-            </template>
-
-            <!-- Study：节点、笔记和 Study 会话由现有宿主搜索承载 -->
-            <template v-else-if="activeTab === 'study'">
-              <li v-for="(hit, idx) in results" :key="'study-' + (hit.entity_id || hit.note_id || hit.session_id || idx)" class="search-hit" :class="{ 'is-active': idx === cursor }" @mousedown.prevent="cursor = idx; jumpStudy(hit as StudySearchHit)" @mouseenter="cursor = idx">
-                <div class="search-hit-head"><span class="search-hit-title">{{ hit.title || hit.path || hit.entity_id || hit.note_id }}</span><span class="search-hit-role">{{ hit.entity_type || 'Study' }}</span></div>
-                <p class="search-hit-snippet" v-html="highlight(hit.snippet || hit.content)" />
-              </li>
-            </template>
-            <!-- 文档：RAG 语义命中 -->
-            <template v-else>
-              <li v-for="(hit, idx) in results" :key="'d' + idx" class="search-hit">
-                <div class="search-hit-head">
-                  <span class="search-hit-title">{{ hit.title || hit.path }}</span>
-                  <span v-if="hit.score" class="search-hit-score">{{ hit.score.toFixed(3) }}</span>
-                </div>
-                <p v-if="hit.heading" class="search-hit-heading">{{ hit.heading }}</p>
-                <p class="search-hit-snippet" v-html="highlight(hit.snippet)"></p>
+                <span class="search-row-icon" aria-hidden="true">
+                  <component :is="row.icon" :size="16" :stroke-width="1.8" />
+                </span>
+                <span class="search-row-copy">
+                  <strong v-html="highlight(row.title)"></strong>
+                  <small v-if="row.subtitle" v-html="highlight(row.subtitle)"></small>
+                </span>
+                <span v-if="row.meta" class="search-row-meta">{{ row.meta }}</span>
+                <kbd v-if="row.shortcut" class="search-row-shortcut">{{ row.shortcut }}</kbd>
               </li>
             </template>
           </ul>
-
-          <div v-else class="search-status search-hint">
-            {{ hintText }}
-          </div>
         </main>
+
+        <div class="search-footer" aria-hidden="true">
+          <span><kbd>↑↓</kbd> 移动</span>
+          <span><kbd>Enter</kbd> 选择</span>
+          <span><kbd>Esc</kbd> 关闭</span>
+        </div>
       </div>
     </div>
   </Teleport>
@@ -117,28 +85,50 @@
 
 <script setup lang="ts">
 /**
- * SearchShell — 全局搜索全屏页（与插件 / 设置 / 长期安排并列的顶层入口，侧边栏"搜索"打开）。
+ * SearchShell — 全局搜索（Ctrl+K / 侧边栏“搜索”）。
  *
- * Tab 分层（用户共识：搜索放在插件上面的顶层入口）：
- * - 文件：workspace.search mode=files —— 工作区文件名匹配（core 内置，不经 Agent）
- * - 内容：workspace.search mode=content —— 工作区文件内容行匹配
- * - 会话：rag.sessions.search —— RAG 插件索引的历史会话消息（命中可跳转会话，复用 onJump）
- * - 文档：rag.docs.search —— RAG 插件索引的工作区文档语义检索
- * 会话/文档两个 Tab 仅在 lamtools-rag 插件启用时展示（mount 时查 plugin.list）。
- * 复用 SettingsShell 骨架（.settings-overlay/.settings-card + --settings-* token）。
+ * 分类（用户共识）：全部 / 任务 / 插件 / 文件。原先分散的搜索入口一律归入这四类：
+ * - 任务：任务标题（本地即时）+ RAG 消息级命中（lamtools-rag 启用时）
+ * - 插件：插件、技能、钩子（命中即打开插件面板的对应分区）
+ * - 文件：文件名、文件内容（workspace.search）+ 已索引文档语义命中（rag.docs.search）
+ * - Study：节点/笔记/会话，只在 Study 会话里出现，作为“全部”下的独立分组
+ *
+ * 空查询给“最近任务 / 建议 / 面板”三组。建议与面板里的快捷命令由宿主传入：
+ * 桌面有终端与预览、手机没有，所以命令表由调用方决定，不写死在这里。
  */
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
 import {
   File,
   FileText,
+  FolderSearch,
+  Lightbulb,
+  LayoutList,
+  ListChecks,
   MessageSquareText,
+  Plug,
   Search,
+  Sparkles,
+  Webhook,
   X,
 } from 'lucide-vue-next'
-import type { Component } from 'vue'
 import type { CoreSessionListItem } from '../types'
 import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
+
+/** A host-supplied shortcut row, so each host offers only the commands it has. */
+export interface SearchCommand {
+  id: string
+  label: string
+  group: '建议' | '面板'
+  shortcut?: string
+  icon?: Component
+  run: () => void
+}
+
+export interface SearchPluginTarget {
+  section: 'plugins' | 'skills' | 'hooks'
+  id?: string
+}
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -148,13 +138,27 @@ const props = defineProps<{
   activeModeId?: string | null
   onStudyHit?: (hit: StudySearchHit) => void | Promise<void>
   theme?: ThemeData | null
+  /** Open a task by id — a title match has no message to land on. */
+  onOpenSession?: (sessionId: string) => void
+  /** Open the plugins panel on the section a plugin/skill/hook hit belongs to. */
+  onOpenPlugins?: (target: SearchPluginTarget) => void
+  commands?: SearchCommand[]
 }>()
 
 const emit = defineEmits<{ close: [] }>()
-const settingsOverlayEl = ref<HTMLElement | null>(null)
-const settingsCardEl = ref<HTMLElement | null>(null)
 
-type SearchTabId = 'files' | 'content' | 'sessions' | 'docs' | 'study'
+const overlayEl = ref<HTMLElement | null>(null)
+const cardEl = ref<HTMLElement | null>(null)
+
+type SearchCategoryId = 'all' | 'tasks' | 'plugins' | 'files'
+
+const CATEGORIES: { id: SearchCategoryId; label: string; icon: Component }[] = [
+  { id: 'all', label: '全部', icon: LayoutList },
+  { id: 'tasks', label: '任务', icon: ListChecks },
+  { id: 'plugins', label: '插件', icon: Plug },
+  { id: 'files', label: '文件', icon: File },
+]
+
 interface SearchHit {
   path?: string
   line?: number
@@ -179,94 +183,388 @@ export interface StudySearchHit extends SearchHit {
   message_id?: string
 }
 
-const TAB_DEFS: { id: SearchTabId; label: string; icon: Component }[] = [
-  { id: 'files', label: '文件', icon: File },
-  { id: 'content', label: '内容', icon: FileText },
-  { id: 'sessions', label: '会话', icon: MessageSquareText },
-  { id: 'docs', label: '文档', icon: Search },
-  { id: 'study', label: 'Study', icon: Search },
-]
+/** One rendered row. A row without an action is informational (file hits today). */
+interface SearchRow {
+  key: string
+  group: string
+  icon: Component
+  title: string
+  subtitle?: string
+  meta?: string
+  shortcut?: string
+  action?: () => void
+  index: number
+}
 
-const activeTab = ref<SearchTabId>('files')
+const GROUP_ORDER_QUERY = ['任务', '插件', '文件', 'Study']
+const GROUP_ORDER_IDLE = ['最近任务', '建议', '面板']
+
+const activeCategory = ref<SearchCategoryId>('all')
 const query = ref('')
 const inputEl = ref<HTMLInputElement | null>(null)
-const results = ref<SearchHit[]>([])
+const cursor = ref(0)
 const searching = ref(false)
-const searched = ref(false)
 const error = ref('')
 const ragEnabled = ref(false)
-const cursor = ref(0)
-// IME 合成标志：手动管理（不用 v-model 的 composition 拦截——WebView2 上
-// compositionend 偶发不触发，v-model 内部标志卡死 → 退格后 modelValue 不
-// 更新、渲染时字符回弹 = "无法退格"。合成中不更新 query，合成结束强制同步。
-// 与旧 SessionSearchDialog 同一策略（已并入本组件）。
 const composing = ref(false)
+
+/** Remote hits for the current query, one bucket per source. */
+const messageHits = ref<SearchHit[]>([])
+const studyHits = ref<SearchHit[]>([])
+const fileHits = ref<SearchHit[]>([])
+const contentHits = ref<SearchHit[]>([])
+const docHits = ref<SearchHit[]>([])
+
+/** Plugins, skills and hooks: fetched once, filtered locally. */
+interface CatalogEntry {
+  id: string
+  name: string
+  description: string
+  icon: Component
+  section: SearchPluginTarget['section']
+  meta?: string
+}
+const catalog = ref<CatalogEntry[]>([])
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let searchSeq = 0
 
-const pluginTabs = computed<{ id: SearchTabId; label: string; icon: Component }[]>(() => {
-  const base = ragEnabled.value ? TAB_DEFS : TAB_DEFS.filter((t) => t.id !== 'sessions' && t.id !== 'docs')
-  return props.activeModeId?.startsWith('study:') ? base : base.filter(tab => tab.id !== 'study')
-})
-const availableTabs = computed(() => pluginTabs.value)
+const commands = computed(() => props.commands || [])
+const hasStudy = computed(() => Boolean(props.activeModeId?.startsWith('study:')))
 
-const inputPlaceholder = computed(() => {
-  switch (activeTab.value) {
-    case 'files':
-      return '按文件名搜索工作区…'
-    case 'content':
-      return '搜索工作区文件内容…'
-    case 'sessions':
-      return '搜索历史会话消息…'
-    case 'study':
-      return '搜索 Study 节点、笔记和已创建会话…'
-    default:
-      return '语义搜索已索引文档…'
-  }
+const hintText = computed(() =>
+  query.value ? '无匹配结果' : '输入关键词搜索任务、插件或文件',
+)
+
+/** Task title matches: instant, and they work without the RAG plugin. */
+const sessionTitleMatches = computed(() => {
+  const needle = query.value.trim().toLowerCase()
+  if (!needle) return []
+  return props.sessions
+    .filter((session) =>
+      String(session.title || '').toLowerCase().includes(needle) ||
+      String(session.id).toLowerCase().includes(needle),
+    )
+    .slice(0, 8)
 })
 
-const hintText = computed(() => {
-  if (searched.value) return '直接输入关键词开始搜索'
-  switch (activeTab.value) {
-    case 'sessions':
-      return ragEnabled.value
-        ? '输入关键词搜索历史会话（消息级索引，UI 直搜不经 Agent）'
-        : '会话搜索需要 lamtools-rag 插件'
-    case 'docs':
-      return '输入关键词语义检索已索引的工作区文档'
-    case 'study':
-      return '只搜索当前 Study 工作环境内可访问的节点、笔记和会话'
-    default:
-      return '输入关键词搜索工作区文件'
-  }
+const recentSessions = computed(() => props.sessions.slice(0, 5))
+
+const catalogMatches = computed(() => {
+  const needle = query.value.trim().toLowerCase()
+  if (!needle) return []
+  return catalog.value
+    .filter((entry) =>
+      `${entry.name} ${entry.description} ${entry.meta || ''}`.toLowerCase().includes(needle),
+    )
+    .slice(0, 12)
 })
+
+function sectionIcon(section: SearchPluginTarget['section']): Component {
+  if (section === 'skills') return Sparkles
+  if (section === 'hooks') return Webhook
+  return Plug
+}
+
+/** Every visible row, flattened; `index` is what the keyboard moves over. */
+const rows = computed<SearchRow[]>(() => {
+  const built: Omit<SearchRow, 'index'>[] = []
+  const needle = query.value.trim()
+
+  if (!needle) {
+    if (activeCategory.value === 'all' || activeCategory.value === 'tasks') {
+      for (const session of recentSessions.value) {
+        built.push({
+          key: `recent-${session.id}`,
+          group: '最近任务',
+          icon: MessageSquareText,
+          title: String(session.title || session.id),
+          meta: relativeTime(session),
+          action: () => openSession(session.id),
+        })
+      }
+    }
+    if (activeCategory.value === 'all') {
+      for (const command of commands.value) {
+        built.push({
+          key: `command-${command.id}`,
+          group: command.group,
+          icon: command.icon || Lightbulb,
+          title: command.label,
+          shortcut: command.shortcut,
+          action: command.run,
+        })
+      }
+    }
+    return built.map((row, index) => ({ ...row, index }))
+  }
+
+  if (activeCategory.value === 'all' || activeCategory.value === 'tasks') {
+    for (const session of sessionTitleMatches.value) {
+      built.push({
+        key: `session-${session.id}`,
+        group: '任务',
+        icon: MessageSquareText,
+        title: String(session.title || session.id),
+        subtitle: '任务标题',
+        meta: relativeTime(session),
+        action: () => openSession(session.id),
+      })
+    }
+    for (const hit of messageHits.value) {
+      built.push({
+        key: `message-${hit.message_id || built.length}`,
+        group: '任务',
+        icon: MessageSquareText,
+        title: titleOf(hit.session_id),
+        subtitle: hit.snippet,
+        meta: timeOf(hit.ts),
+        action: () => jumpSession(hit),
+      })
+    }
+  }
+
+  if (activeCategory.value === 'all' || activeCategory.value === 'plugins') {
+    for (const entry of catalogMatches.value) {
+      built.push({
+        key: `catalog-${entry.section}-${entry.id}`,
+        group: '插件',
+        icon: entry.icon,
+        title: entry.name,
+        subtitle: entry.description,
+        meta: entry.meta,
+        action: () => props.onOpenPlugins?.({ section: entry.section, id: entry.id }),
+      })
+    }
+  }
+
+  if (activeCategory.value === 'all' || activeCategory.value === 'files') {
+    for (const hit of fileHits.value) {
+      built.push({
+        key: `file-${hit.path}`,
+        group: '文件',
+        icon: File,
+        title: hit.path || '',
+        subtitle: '文件名',
+      })
+    }
+    for (const hit of contentHits.value) {
+      built.push({
+        key: `content-${hit.path}-${hit.line}`,
+        group: '文件',
+        icon: FileText,
+        title: hit.path || '',
+        subtitle: hit.content,
+        meta: hit.line ? `第 ${hit.line} 行` : undefined,
+      })
+    }
+    for (const hit of docHits.value) {
+      built.push({
+        key: `doc-${hit.path}-${hit.heading || ''}`,
+        group: '文件',
+        icon: FolderSearch,
+        title: hit.title || hit.path || '',
+        subtitle: hit.snippet,
+        meta: hit.score ? hit.score.toFixed(3) : '文档',
+      })
+    }
+  }
+
+  if (hasStudy.value && activeCategory.value === 'all') {
+    for (const hit of studyHits.value) {
+      built.push({
+        key: `study-${hit.entity_id || hit.note_id || hit.session_id || built.length}`,
+        group: 'Study',
+        icon: FolderSearch,
+        title: hit.title || hit.path || hit.entity_id || hit.note_id || '',
+        subtitle: hit.snippet || hit.content,
+        meta: hit.entity_type,
+        action: () => jumpStudy(hit as StudySearchHit),
+      })
+    }
+  }
+
+  return built.map((row, index) => ({ ...row, index }))
+})
+
+const visibleRows = computed(() => rows.value)
+
+/** Rows grouped for rendering, in a stable order, empty groups dropped. */
+const visibleGroups = computed(() => {
+  const order = query.value.trim() ? GROUP_ORDER_QUERY : GROUP_ORDER_IDLE
+  const byGroup = new Map<string, SearchRow[]>()
+  for (const row of rows.value) {
+    const list = byGroup.get(row.group) || []
+    list.push(row)
+    byGroup.set(row.group, list)
+  }
+  return order
+    .filter((label) => byGroup.has(label))
+    .map((label) => ({ label, rows: byGroup.get(label) as SearchRow[] }))
+})
+
+const selectableIndexes = computed(() =>
+  rows.value.filter((row) => Boolean(row.action)).map((row) => row.index),
+)
+
+function activate(row: SearchRow): void {
+  if (row.action) row.action()
+}
+
+function openSession(sessionId: string): void {
+  emit('close')
+  props.onOpenSession?.(sessionId)
+}
+
+function jumpSession(hit: SearchHit): void {
+  if (hit.session_id && hit.message_id) {
+    emit('close')
+    props.onJump(hit.session_id, hit.message_id)
+  }
+}
+
+function jumpStudy(hit: StudySearchHit): void {
+  emit('close')
+  void props.onStudyHit?.(hit)
+}
+
+function onInput(event: Event): void {
+  if (composing.value) return
+  query.value = (event.target as HTMLInputElement).value
+}
+
+function onCompositionEnd(event: Event): void {
+  composing.value = false
+  query.value = (event.target as HTMLInputElement).value
+}
+
+function clearQuery(): void {
+  query.value = ''
+  inputEl.value?.focus()
+}
+
+function switchCategory(category: SearchCategoryId): void {
+  activeCategory.value = category
+  cursor.value = selectableIndexes.value[0] ?? 0
+  const needle = query.value.trim()
+  if (needle) void runSearch(needle)
+}
+
+function onEnter(): void {
+  const row = visibleRows.value.find((item) => item.index === cursor.value)
+  if (row?.action) {
+    activate(row)
+    return
+  }
+  const needle = query.value.trim()
+  if (needle) void runSearch(needle)
+}
+
+function moveCursor(step: number): void {
+  const selectable = selectableIndexes.value
+  if (!selectable.length) return
+  const position = selectable.indexOf(cursor.value)
+  const next = position < 0 ? 0 : (position + step + selectable.length) % selectable.length
+  cursor.value = selectable[next]
+}
+
+watch(query, (value) => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  const needle = value.trim()
+  cursor.value = 0
+  if (!needle) {
+    resetRemoteHits()
+    return
+  }
+  searching.value = true
+  debounceTimer = setTimeout(() => void runSearch(needle), 300)
+})
+
+watch(visibleRows, () => {
+  const selectable = selectableIndexes.value
+  if (!selectable.includes(cursor.value)) cursor.value = selectable[0] ?? 0
+  void nextTick(() => {
+    const active = cardEl.value?.querySelector('.search-row.active')
+    // jsdom has no scrollIntoView; the dialog must not depend on it existing.
+    if (active && typeof active.scrollIntoView === 'function') {
+      active.scrollIntoView({ block: 'nearest' })
+    }
+  })
+})
+
+function resetRemoteHits(): void {
+  messageHits.value = []
+  studyHits.value = []
+  fileHits.value = []
+  contentHits.value = []
+  docHits.value = []
+  error.value = ''
+  searching.value = false
+}
+
+async function runSearch(needle: string): Promise<void> {
+  const seq = ++searchSeq
+  error.value = ''
+  searching.value = true
+  const category = activeCategory.value
+  const wantsTasks = category === 'all' || category === 'tasks'
+  const wantsFiles = category === 'all' || category === 'files'
+  try {
+    const [messages, files, content, docs, study] = await Promise.all([
+      wantsTasks && ragEnabled.value ? searchSessions(needle) : Promise.resolve([]),
+      wantsFiles ? searchWorkspace(needle, 'files') : Promise.resolve([]),
+      wantsFiles ? searchWorkspace(needle, 'content') : Promise.resolve([]),
+      wantsFiles && ragEnabled.value ? searchDocs(needle) : Promise.resolve([]),
+      hasStudy.value && category === 'all' ? searchStudy(needle) : Promise.resolve([]),
+    ])
+    if (seq !== searchSeq) return // 过期响应丢弃
+    messageHits.value = messages
+    fileHits.value = files
+    contentHits.value = content
+    docHits.value = docs
+    studyHits.value = study
+  } catch (e) {
+    if (seq !== searchSeq) return
+    resetRemoteHits()
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    if (seq === searchSeq) searching.value = false
+  }
+}
+
+async function searchSessions(needle: string): Promise<SearchHit[]> {
+  const result = await props.requestRpc('rag.sessions.search', { query: needle, top: 12 })
+  return (result.hits || []) as SearchHit[]
+}
+
+async function searchWorkspace(needle: string, mode: 'files' | 'content'): Promise<SearchHit[]> {
+  const result = await props.requestRpc('workspace.search', { query: needle, mode, limit: 40 })
+  return (result.results || []) as SearchHit[]
+}
+
+async function searchDocs(needle: string): Promise<SearchHit[]> {
+  const result = await props.requestRpc('rag.docs.search', { query: needle, top: 12 })
+  return (result.hits || []) as SearchHit[]
+}
+
+async function searchStudy(needle: string): Promise<SearchHit[]> {
+  const result = await props.requestRpc('study.search', { query: needle, scope: 'study', limit: 30 })
+  return (result.results || result.hits || []) as SearchHit[]
+}
 
 const settingsThemeStyle = computed(() => {
   if (!props.theme) return {}
   const theme = props.theme
   const lightMain = relativeLuminance(theme.mainText) < 0.45
   return {
-    '--settings-backdrop-background': gradientFromStops(
-      theme.backdropAngle,
-      theme.backdropStops,
-      1,
-    ),
+    '--settings-backdrop-background': gradientFromStops(theme.backdropAngle, theme.backdropStops, 1),
     '--settings-backdrop-text': theme.backdropText,
-    '--settings-main-background': gradientFromStops(
-      theme.mainAngle,
-      theme.mainStops,
-      theme.mainOpacity,
-    ),
+    '--settings-main-background': gradientFromStops(theme.mainAngle, theme.mainStops, theme.mainOpacity),
     '--settings-main-text': theme.mainText,
     '--settings-main-solid': theme.mainStops[0]?.color || '#111111',
     '--settings-card-background': 'color-mix(in srgb, var(--settings-main-solid) 96%, var(--settings-main-text) 4%)',
     '--settings-card-text': theme.mainText,
-    '--settings-control-background': gradientFromStops(
-      theme.controlAngle,
-      theme.controlStops,
-      theme.controlOpacity,
-    ),
+    '--settings-control-background': gradientFromStops(theme.controlAngle, theme.controlStops, theme.controlOpacity),
     '--settings-control-text': theme.controlText,
     '--settings-control-solid': theme.controlStops[0]?.color || '#3a3834',
     ...(lightMain
@@ -280,125 +578,15 @@ const settingsThemeStyle = computed(() => {
 })
 
 useOutsidePointerDismiss({
-  overlay: settingsOverlayEl,
-  card: settingsCardEl,
+  overlay: overlayEl,
+  card: cardEl,
   onDismiss: () => emit('close'),
 })
-
-function onInput(event: Event): void {
-  if (composing.value) return
-  query.value = (event.target as HTMLInputElement).value
-}
-
-function onCompositionEnd(event: Event): void {
-  composing.value = false
-  query.value = (event.target as HTMLInputElement).value
-}
-
-function switchTab(tab: SearchTabId): void {
-  activeTab.value = tab
-  cursor.value = 0
-  runSearch(query.value.trim())
-}
-
-function onEnter(): void {
-  if (activeTab.value === 'sessions') {
-    const hit = results.value[cursor.value] as SearchHit | undefined
-    if (hit?.session_id && hit?.message_id) jumpSession(hit)
-    return
-  }
-  const q = query.value.trim()
-  if (q) runSearch(q)
-}
-
-function moveCursor(step: number): void {
-  if (activeTab.value !== 'sessions' || !results.value.length) return
-  cursor.value = (cursor.value + step + results.value.length) % results.value.length
-}
-
-watch(query, (value) => {
-  if (debounceTimer) clearTimeout(debounceTimer)
-  const q = value.trim()
-  resetForQuery(q)
-  if (!q) return
-  searching.value = true
-  debounceTimer = setTimeout(() => runSearch(q), 300)
-})
-
-function resetForQuery(q: string): void {
-  if (!q) {
-    searched.value = false
-    results.value = []
-    error.value = ''
-  }
-}
-
-async function runSearch(q: string): Promise<void> {
-  if (!q) {
-    searched.value = false
-    results.value = []
-    return
-  }
-  const seq = ++searchSeq
-  error.value = ''
-  searching.value = true
-  try {
-    const result = await callForTab(activeTab.value, q)
-    if (seq !== searchSeq) return // 过期响应丢弃
-    results.value = result
-    cursor.value = 0
-    searched.value = true
-  } catch (e) {
-    if (seq !== searchSeq) return
-    error.value = e instanceof Error ? e.message : String(e)
-    results.value = []
-  } finally {
-    if (seq === searchSeq) searching.value = false
-  }
-}
-
-async function callForTab(tab: SearchTabId, q: string): Promise<SearchHit[]> {
-  switch (tab) {
-    case 'files':
-    case 'content':
-      return (await props.requestRpc('workspace.search', { query: q, mode: tab, limit: 50 }))
-        .results as SearchHit[]
-    case 'sessions':
-      return ((await props.requestRpc('rag.sessions.search', { query: q, top: 12 })).hits ||
-        []) as SearchHit[]
-    case 'study': {
-      const result = await props.requestRpc('study.search', { query: q, scope: 'study', limit: 50 })
-      return (result.results || result.hits || []) as SearchHit[]
-    }
-    default: {
-      const hits = (await props.requestRpc('rag.docs.search', { query: q, top: 12 }))
-        .hits as SearchHit[]
-      return hits || []
-    }
-  }
-}
-
-function jumpSession(hit: SearchHit): void {
-  if (hit.session_id && hit.message_id) {
-    // 跳转后立即关闭搜索页（与 Ctrl+K 快速搜索同语义：命中即离开）
-    emit('close')
-    props.onJump(hit.session_id, hit.message_id)
-  }
-}
-
-function jumpStudy(hit: StudySearchHit): void {
-  emit('close')
-  void props.onStudyHit?.(hit)
-}
 
 function titleOf(sessionId: string | undefined): string {
   const session = props.sessions.find((item) => item.id === sessionId)
   if (session?.title && session.title !== sessionId) return session.title
-  return `会话 ${(sessionId || '').slice(0, 8) || '未知'}…`
-}
-
-function roleLabel(role: string | undefined): string {
-  return role === 'user' ? '我' : 'Agent'
+  return `任务 ${(sessionId || '').slice(0, 8) || '未知'}…`
 }
 
 function timeOf(ts: number | null | undefined): string {
@@ -408,17 +596,28 @@ function timeOf(ts: number | null | undefined): string {
   return `${date.getMonth() + 1}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+/** The list's own "how long ago" label: 刚刚 / 50分 / 3小时 / 3天. */
+function relativeTime(session: CoreSessionListItem): string {
+  const raw = session.updatedAt
+  if (!raw) return ''
+  const stamp = new Date(raw).getTime()
+  if (!Number.isFinite(stamp)) return ''
+  const minutes = Math.floor((Date.now() - stamp) / 60000)
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes}分`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}小时`
+  return `${Math.floor(hours / 24)}天`
+}
+
 function highlight(text: string | undefined): string {
   const raw = text || ''
-  const escaped = raw
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  const q = query.value.trim()
-  if (!q) return escaped
-  const terms = q
+  const escaped = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const needle = query.value.trim()
+  if (!needle) return escaped
+  const terms = needle
     .split(/\s+/)
-    .filter((t) => t.length >= 2)
+    .filter((term) => term.length >= 2)
     .sort((a, b) => b.length - a.length)
   let html = escaped
   for (const term of terms) {
@@ -434,21 +633,79 @@ function escapeRegExp(text: string): string {
 onMounted(async () => {
   await nextTick()
   inputEl.value?.focus()
+  void loadCatalog()
   try {
     const result = await props.requestRpc('plugin.list')
     const plugins = (result.plugins as { name: string; enabled: boolean }[]) || []
     ragEnabled.value = !!plugins.find((p) => p.name === 'lamtools-rag' && p.enabled)
-    if (ragEnabled.value && activeTab.value === 'files') {
-      // 默认落在内容 Tab（文件仅按文件名匹配，覆盖窄）
-      activeTab.value = 'content'
-    }
   } catch {
     ragEnabled.value = false
   }
 })
+
+/** Three catalogues, fetched once, filtered locally: typing costs no RPC. */
+async function loadCatalog(): Promise<void> {
+  const [plugins, skills, hooks] = await Promise.all([
+    safeCatalog(() => props.requestRpc('plugin.list')),
+    safeCatalog(() => props.requestRpc('skill.list')),
+    safeCatalog(() => props.requestRpc('hook.list')),
+  ])
+  const entries: CatalogEntry[] = []
+  for (const item of (plugins.plugins as Record<string, unknown>[]) || []) {
+    const name = String(item.name || item.id || '')
+    if (!name) continue
+    entries.push({
+      id: name,
+      name,
+      description: String(item.description || ''),
+      icon: sectionIcon('plugins'),
+      section: 'plugins',
+      meta: item.enabled === false ? '已停用' : '插件',
+    })
+  }
+  for (const item of (skills.skills as Record<string, unknown>[]) || []) {
+    const name = String(item.name || '')
+    if (!name) continue
+    entries.push({
+      id: name,
+      name,
+      description: String(item.description || ''),
+      icon: sectionIcon('skills'),
+      section: 'skills',
+      meta: item.enabled === false ? '已停用' : '技能',
+    })
+  }
+  for (const item of (hooks.hooks as Record<string, unknown>[]) || []) {
+    const name = String(item.name || item.id || '')
+    if (!name) continue
+    entries.push({
+      id: name,
+      name,
+      description: String(item.description || item.command || ''),
+      icon: sectionIcon('hooks'),
+      section: 'hooks',
+      meta: item.trusted ? '钩子·已信任' : '钩子',
+    })
+  }
+  catalog.value = entries
+}
+
+async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
+  try {
+    return await call()
+  } catch {
+    return {}
+  }
+}
 </script>
 
 <style scoped>
+.search-card {
+  display: flex;
+  flex-direction: column;
+  max-height: min(560px, calc(100vh - 160px));
+}
+
 .search-head {
   flex-shrink: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
@@ -457,8 +714,8 @@ onMounted(async () => {
 .search-input-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: var(--space-2);
+  padding: 14px var(--space-3);
   color: var(--settings-muted, #a7a29b);
 }
 
@@ -473,35 +730,38 @@ onMounted(async () => {
   font-size: 15px;
   font-family: inherit;
 }
+
 .search-input-row input::placeholder {
   color: color-mix(in srgb, var(--theme-composer-text) 45%, transparent);
 }
 
 .search-clear {
+  display: inline-flex;
   border: none;
+  border-radius: var(--radius-sm);
+  padding: 2px;
   background: none;
   color: var(--settings-muted, #a7a29b);
   cursor: pointer;
-  padding: 2px;
-  display: inline-flex;
-  border-radius: var(--radius-sm);
 }
+
 .search-clear:hover {
   color: var(--settings-card-text, var(--text));
 }
 
 .search-tabs {
   display: flex;
-  gap: 4px;
-  padding: 0 12px 10px;
+  gap: var(--space-1);
+  padding: 0 var(--space-3) 10px;
 }
+
 .search-tabs button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
+  padding: 6px var(--space-2);
   background: transparent;
   color: var(--settings-muted, #a7a29b);
   font-size: 13px;
@@ -509,15 +769,18 @@ onMounted(async () => {
   cursor: pointer;
   transition: background 160ms ease, color 160ms ease;
 }
+
 .search-tabs button:hover {
   color: var(--settings-card-text, var(--text));
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
+  background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-hover), transparent);
 }
+
 .search-tabs button.active {
   background: var(--settings-control-background, #343331);
   color: var(--settings-control-text, var(--text));
   border-color: color-mix(in srgb, var(--settings-main-text, #fff) 12%, transparent);
 }
+
 .search-tab-icon {
   display: inline-flex;
 }
@@ -526,26 +789,25 @@ onMounted(async () => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 0;
-  color: var(--settings-card-text, var(--settings-main-text, var(--text)));
-  --muted: var(--settings-muted, #a7a29b);
+  padding: var(--space-1) 0 var(--space-2);
+  --text: var(--settings-card-text, var(--settings-main-text, #fff));
+  color: var(--text);
 }
 
 .search-status {
   margin: 0;
-  padding: 28px 20px;
+  padding: 28px var(--space-4);
   text-align: center;
   color: var(--settings-muted, #8a8580);
   font-size: 13px;
 }
+
 .search-status.search-error {
-  color: #e57373;
+  color: var(--red);
 }
+
 .search-status.search-hint {
-  padding: 20px;
-  text-align: center;
   font-size: 12px;
-  color: var(--settings-muted, #8a8580);
 }
 
 .search-results {
@@ -554,97 +816,152 @@ onMounted(async () => {
   padding: 0;
 }
 
-.search-hit {
-  padding: 10px 18px;
+.search-group-label {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+.search-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--space-6) minmax(0, 1fr) auto auto;
+  gap: var(--space-2);
+  align-items: center;
+  min-height: 48px;
+  padding: var(--space-2) var(--space-3);
+}
+
+/* 行式高亮：无圆角遮罩，hover/active 只作用于背景层并左右渐隐。 */
+.search-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0, 0, 0, .2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0, 0, 0, .2) 100%);
+  mask-image: linear-gradient(to right, rgba(0, 0, 0, .2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0, 0, 0, .2) 100%);
+}
+
+.search-row:not(.is-static) {
   cursor: pointer;
-  border-left: 2px solid transparent;
-}
-.search-hit:hover {
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
-  border-left-color: var(--settings-control-background, #3a3834);
-}
-.search-hit.is-active {
-  background: color-mix(in srgb, var(--settings-control-background, #3a3834) 28%, transparent);
-  border-left-color: var(--settings-control-background, #ffd166);
 }
 
-.file-hit {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--settings-card-text, var(--text));
-}
-.search-hit-icon {
-  display: inline-flex;
-  color: var(--settings-muted, #a7a29b);
-  flex-shrink: 0;
-}
-.search-hit-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: 12px;
+.search-row:not(.is-static):hover::before {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
 }
 
-.search-hit-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
+.search-row.active::before {
+  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
 }
-.search-hit-title {
+
+.search-row-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--space-6);
+  height: var(--space-6);
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+}
+
+.search-row-copy {
+  position: relative;
   min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.search-row-copy strong,
+.search-row-copy small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.search-row-copy strong {
+  color: var(--text);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 550;
 }
-.search-hit-role {
-  flex-shrink: 0;
+
+.search-row-copy small {
+  color: color-mix(in srgb, var(--text) 65%, transparent);
   font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+  line-height: 1.25;
 }
-.search-hit-role.user {
-  color: #8ab4f8;
-}
-.search-hit-role.assistant {
-  color: #81c995;
-}
-.content-line {
-  font-family: var(--font-mono);
-  color: var(--settings-muted, #8a8580);
-}
-.search-hit-time,
-.search-hit-score {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--settings-muted, #8a8580);
-}
-.search-hit-score {
-  font-family: var(--font-mono);
-}
-.search-hit-heading {
-  margin: 2px 0 4px;
-  font-size: 12px;
-  color: var(--settings-muted, #a7a29b);
-}
-.search-hit-snippet {
-  margin: 0;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--settings-card-text, var(--text));
-  opacity: 0.92;
-}
-.search-hit-snippet mark {
-  background: color-mix(in srgb, var(--settings-control-background, #ffd166) 55%, transparent);
-  color: inherit;
+
+.search-row-copy mark {
   border-radius: 2px;
   padding: 0 1px;
+  background: color-mix(in srgb, var(--settings-control-background, #ffd166) 55%, transparent);
+  color: inherit;
+}
+
+.search-row-meta {
+  position: relative;
+  max-width: 140px;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-row-shortcut {
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-1);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.search-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 8%, transparent);
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  color: color-mix(in srgb, var(--settings-main-text, #fff) 45%, transparent);
+  font-size: 10px;
+}
+
+.search-footer span {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.search-footer kbd {
+  min-width: 20px;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 12%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-1);
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 4%, transparent);
+  color: color-mix(in srgb, var(--settings-main-text, #fff) 65%, transparent);
+  font: inherit;
+  line-height: 1.25;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .search-row-meta {
+    display: none;
+  }
+
+  .search-row {
+    grid-template-columns: var(--space-6) minmax(0, 1fr) auto;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

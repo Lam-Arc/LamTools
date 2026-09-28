@@ -121,7 +121,10 @@ describe('LeftSidebarShell', () => {
 
   it('uses the shared row recipe for fixed footer entries', () => {
     expect(workspaceShellCss).toMatch(/\.drawer-footer \{[\s\S]*?gap: var\(--sidebar-row-gap\);/)
-    expect(workspaceShellCss).toMatch(/\.drawer-footer \.settings-entry \{[\s\S]*?min-height: var\(--sidebar-row-height\);[\s\S]*?border-radius: var\(--sidebar-row-radius\);/)
+    // 桌面页脚是一行图标入口；带文字的竖排行留给手机降级页脚。
+    expect(workspaceShellCss).toMatch(/\.drawer-footer-row \{[\s\S]*?flex-direction: row;[\s\S]*?align-items: center;/)
+    expect(workspaceShellCss).toMatch(/\.rail-action__button \{[\s\S]*?width: var\(--rail-action-size\);[\s\S]*?border-radius: var\(--sidebar-row-radius\);/)
+    expect(workspaceShellCss).toMatch(/\.drawer-footer-account \{[\s\S]*?height: var\(--rail-action-size\);[\s\S]*?border-radius: var\(--sidebar-row-radius\);/)
     expect(workspaceShellCss).toMatch(/\.sidebar-action \{[\s\S]*?min-height: var\(--sidebar-row-height\);[\s\S]*?border-radius: var\(--sidebar-row-radius\);/)
   })
 
@@ -139,9 +142,11 @@ describe('LeftSidebarShell', () => {
       },
     })
 
-    expect(wrapper.find('[aria-label="打开搜索"]').exists()).toBe(false)
-    expect(wrapper.find('[aria-label="打开设置"]').exists()).toBe(false)
-    expect(wrapper.get('[aria-label="打开插件"]').text()).toContain('插件')
+    expect(wrapper.find('[data-rail-action="search"]').exists()).toBe(false)
+    expect(wrapper.find('[data-rail-action="settings"]').exists()).toBe(false)
+    expect(wrapper.find('[data-rail-action="plugins"]').exists()).toBe(true)
+    // 图标入口不带文字，标签只在悬浮提示里（提示行为由 DrawerFooterAction 提供）。
+    expect(wrapper.get('[data-rail-action="plugins"]').text()).toBe('')
     expect(wrapper.get('[data-footer]').text()).toBe('长期安排')
   })
 

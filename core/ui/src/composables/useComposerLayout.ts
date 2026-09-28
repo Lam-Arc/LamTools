@@ -129,7 +129,11 @@ export function useComposerLayout(options: ComposerLayoutOptions) {
     // change after rotation. The numeric ref is exposed in state for callers
     // and tests that need the measured value.
     '--safe-area-bottom': 'env(safe-area-inset-bottom, 0px)',
-    '--composer-bottom-offset': 'max(var(--keyboard-inset), var(--safe-area-bottom))',
+    // `--native-keyboard-inset` is published by a host whose window does not
+    // shrink with the keyboard (the Android shell runs edge-to-edge), where the
+    // viewport measurement above cannot see it. Keep this expression in step
+    // with the stylesheet default in workspace-shell.css.
+    '--composer-bottom-offset': 'max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom))',
     '--composer-height': `${composerHeight.value}px`,
   }))
   const shellClass = computed(() => `workspace-shell--composer-${placement.value}`)

@@ -7,6 +7,7 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -176,12 +177,29 @@ class LamToolsShellPlugin(private val activity: Activity) : Plugin(activity) {
     fun installApk(invoke: Invoke) {
         try {
             val args = invoke.parseArgs(ShellFileArgs::class.java)
-            // Only a file the host downloaded into this directory and verified
-            // against the manifest hash can reach the installer.
-            require(args.fileName.matches(Regex("[A-Za-z0-9._-]{1,120}\\.apk")))
-            val directory = File(activity.cacheDir, "sunday-updates").canonicalFile
-            val file = File(directory, args.fileName).canonicalFile
-            require(file.parentFile == directory && file.isFile && file.length() > 0L)
+            // Only a file the host downloaded and verified against the release
+            // digest can reach the installer. The system downloader writes to
+            // the app's external files directory while the in-process fallback
+            // writes to the cache, so look in both.
+            val fileName = safeUpdateName(args.fileName)
+            val file = resolveUpdateFile(fileName)
+            // Android 8+ keeps "install unknown apps" per source app: declaring
+            // REQUEST_INSTALL_PACKAGES is not enough, the user has to allow this
+            // app once. Without it the installer screen never appears, so ask
+            // for it instead of failing silently.
+            if (!activity.packageManager.canRequestPackageInstalls()) {
+                activity.startActivity(
+                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                        .setData(Uri.parse("package:${activity.packageName}")),
+                )
+                invoke.resolve(
+                    JSObject()
+                        .put("launched", false)
+                        .put("needsPermission", true)
+                        .put("message", "请先允许 Sunday 安装应用，然后回到这里再次点安装"),
+                )
+                return
+            }
             val uri = FileProvider.getUriForFile(
                 activity,
                 "${activity.packageName}.fileprovider",
@@ -189,7 +207,7 @@ class LamToolsShellPlugin(private val activity: Activity) : Plugin(activity) {
             )
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "application/vnd.android.package-archive")
-                clipData = ClipData.newUri(activity.contentResolver, args.fileName, uri)
+                clipData = ClipData.newUri(activity.contentResolver, fileName, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             activity.startActivity(intent)

@@ -20,12 +20,22 @@ def test_validate_workspace_path_accepts_child_path(tmp_path):
     assert resolved == (work_root / "src" / "main.py").resolve()
 
 
-def test_validate_workspace_path_rejects_escape(tmp_path):
+def test_validate_workspace_path_rejects_escape_in_strict_mode(tmp_path):
     work_root = tmp_path / "project"
     work_root.mkdir()
 
     with pytest.raises(ValueError, match="outside work_root"):
-        validate_workspace_path("../secret.txt", work_root)
+        validate_workspace_path("../secret.txt", work_root, allow_outside=False)
+
+
+def test_validate_workspace_path_allows_escape_by_default(tmp_path):
+    """工作目录边界不再强制（2026-09-27 产品决定）。"""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+
+    resolved = validate_workspace_path("../secret.txt", work_root)
+
+    assert resolved == (tmp_path / "secret.txt").resolve()
 
 
 def test_validate_workspace_path_allow_outside_allows_escape(tmp_path):

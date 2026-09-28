@@ -105,6 +105,19 @@ CORE_DURABLE_OPERATION_NAMES: tuple[str, ...] = (
 )
 
 
+# Plan packages are their own group: they are durable documents rather than
+# session state, and the phone answers the same names from its local store.
+CORE_PLAN_OPERATION_NAMES: tuple[str, ...] = (
+    "plan.save",
+    "plan.get",
+    "plan.list",
+    "plan.delete",
+    "plan.restore",
+    "plan.revert",
+    "plan.revisions",
+)
+
+
 def register_operation_handlers(
     catalog: OperationCatalog,
     names: Sequence[str],

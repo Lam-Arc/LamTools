@@ -6,6 +6,11 @@ pub struct MobileWindowInsets<R: Runtime>(pub PluginHandle<R>);
 #[derive(Debug, Deserialize, Serialize)]
 pub struct WindowInsetsResponse {
     pub top: f64,
+    /// Height of the on-screen keyboard in CSS pixels; 0 while it is closed.
+    /// `default` keeps an older Android plugin (which does not report it) from
+    /// failing the whole read.
+    #[serde(rename = "imeBottom", default)]
+    pub ime_bottom: f64,
 }
 
 #[tauri::command]

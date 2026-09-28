@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -87,7 +88,6 @@ DEFAULT_BLOCKED_FILE_PATTERNS: tuple[str, ...] = (
     ".aws/",
 )
 
-
 @dataclass(frozen=True)
 class CommandPermissionDecision:
     group: CommandPermissionGroup
@@ -103,6 +103,10 @@ class ToolApprovalDecision:
     permission_tier: PermissionTier
     requires_approval: bool = False
     blocked: bool = False
+    #: The decision asks about reaching outside the workspace.  Such a request
+    #: is never settled by a preset alone (see ``CoreToolbox.prepare_call``);
+    #: once the user approves it, the call receives a one-shot grant.
+    outside_workdir: bool = False
 
 
 def normalize_command_policies(raw: dict[str, object] | None) -> dict[CommandPermissionGroup, CommandApprovalPolicy]:
@@ -160,6 +164,7 @@ class ApprovalGate:
         approval_policy: RuntimeApprovalPolicy | None = None,
         manifest_tool_permissions: dict[str, PermissionTier] | None = None,
         manifest_hard_block_tools: set[str] | None = None,
+        resource_roots: Callable[[], Iterable[Path]] | Iterable[Path] | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.tool_permissions = dict(tool_permissions)
@@ -176,6 +181,31 @@ class ApprovalGate:
         self.approval_policy = approval_policy
         self.manifest_tool_permissions = dict(manifest_tool_permissions or {})
         self.manifest_hard_block_tools = set(manifest_hard_block_tools or set())
+        self.resource_roots = resource_roots
+
+    def allowed_roots(self) -> tuple[Path, ...]:
+        """Workspace plus caller-provided resource roots (loaded skill folders).
+
+        A skill's own directory is inside the agent's granted scope by virtue of
+        loading it, so its assets are not a consent question.
+        """
+        roots = self.resource_roots
+        if roots is None:
+            return (self.work_root,)
+        if callable(roots):
+            try:
+                values = roots()
+            except Exception:  # noqa: BLE001 - a broken provider must not widen access
+                return (self.work_root,)
+        else:
+            values = roots
+        extra: list[Path] = []
+        for item in values or ():
+            try:
+                extra.append(Path(item).resolve())
+            except (TypeError, ValueError, OSError):
+                continue
+        return (self.work_root, *extra)
 
     def check(self, tool_name: str, params: dict[str, Any] | None = None) -> ToolApprovalDecision:
         params = params or {}
@@ -201,14 +231,6 @@ class ApprovalGate:
         if block_reason:
             return ToolApprovalDecision(False, block_reason, base_tier, blocked=True)
 
-        # Workdir bounds check is bypassed when the user allows access outside
-        # work_root (settings core.runtimeControls.allow_access_outside_workdir);
-        # sensitive-pattern hard blocks above still apply.
-        if tool_name in {"read_file", "write_file", "edit_file"} and not self.allow_access_outside_workdir:
-            path_check = self._check_path_bounds(params)
-            if path_check:
-                return ToolApprovalDecision(False, path_check, base_tier, blocked=True)
-
         # Capability/tier access is a hard boundary.  It is evaluated before
         # manifest approval and before the Composer approval preset.  A
         # full_edit empty list is the documented all-tools sentinel; for
@@ -224,6 +246,10 @@ class ApprovalGate:
                     blocked=True,
                 )
 
+        # Reaching outside the workspace is no longer a consent question: the
+        # product decision (2026-09-27) is that the agent may read, write and
+        # execute anywhere the operating system allows.  ``outside_workdir``
+        # stays on the decision for audit/compat but is never set here.
         if tool_name == "run_command":
             command = params.get("command", "")
             if isinstance(command, str) and command.strip():
@@ -260,15 +286,3 @@ class ApprovalGate:
                 if pattern.casefold() in path:
                     return f"Blocked: path contains sensitive pattern '{pattern}'"
         return ""
-
-    def _check_path_bounds(self, params: dict[str, Any]) -> str:
-        path = params.get("path", "")
-        if not path:
-            return ""
-        try:
-            resolved = (self.work_root / str(path)).resolve()
-            if resolved.is_relative_to(self.work_root):
-                return ""
-            return f"Blocked: path '{path}' is outside work_root '{self.work_root}'"
-        except (ValueError, OSError):
-            return f"Blocked: invalid path '{path}'"

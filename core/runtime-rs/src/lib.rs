@@ -16,6 +16,7 @@ pub mod hooks;
 pub mod mcp;
 pub mod image_gen;
 pub mod memory;
+pub mod plan_package;
 pub mod plan_tools;
 pub mod plugin_catalog;
 mod profiles;

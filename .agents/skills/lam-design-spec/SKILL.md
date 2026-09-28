@@ -74,7 +74,7 @@ version: 0.1.0
 ### 下拉 / select / popover（control area）
 单一配方：触发器 `--radius-sm`、菜单 `--radius`、item `--radius-sm`、`--z-popover`、`--shadow-md`。`UiSelect` 为唯一可复用原语，`WfSelect`/composer-menu 须收敛至此。
 
-**选项行高亮 = 行式**：无圆角遮罩（`border-radius:0`），hover/active 背景层用 `::before` 伪元素 + `mask` 左右渐隐（`--row-fade`，两端 alpha 0.2），行间 `gap: var(--space-1)` 留间距。只有 hover/active 的背景层渐隐，文字始终完整。
+**选项行高亮 = 行式**：无圆角遮罩（`border-radius:0`），hover/active 背景层用 `::before` 伪元素 + `mask` 左右渐隐（`--row-fade`，两端 alpha 0.2），行间 `gap: var(--space-1)` 留间距。只有 hover/active 的背景层渐隐，文字始终完整。**键盘聚焦沿用同一行高亮，不叠加焦点环**：菜单打开即把焦点交给第一项，再加蓝框会让鼠标打开的菜单看起来像有选中态。
 
 ### 按钮（control area）
 统一变体 primary / secondary / ghost / danger × sm / md。`--radius-sm` · disabled `opacity:.45`。hover 机制：中性变体（secondary/ghost）用 `--alpha-*`；彩色填充按钮（primary/danger）用 `filter: brightness(.94)`，不混用。
@@ -86,7 +86,7 @@ version: 0.1.0
 ### 光学液态玻璃（true glass surface）
 统一复用 `core/ui/src/styles/optical-glass.css` 的 `.optical-glass`，不得另建 `.liquid-glass` 或在消费者中重复 `backdrop-filter`、主体背景和悬浮阴影。材质 token 位于 `variables.css`：blur 8px、saturate 1.14、brightness 1.02；主体使用所在 theme area 的 `--text` 以约 16% 透明度混合，保持高透射，不用组件级 `opacity`。
 
-玻璃边缘由原语统一提供 2px 纯中性灰物理边：浅色模式使用浅灰，深色模式使用深灰，边框自身不得叠加镜面、透明或渐变效果。玻璃内部仍保留左上局部 radial specular、顶部 inset 高光、灰绿色下缘折射，以及短的双层阴影。消费者只负责几何、`--text` area 映射和语义 modifier；交互玻璃 hover 只可轻微增亮，active 使用 0.97–0.98 缩放。原语必须同时提供 `-webkit-backdrop-filter`、不支持 backdrop 时的半透明 fallback，并在 `prefers-reduced-motion: reduce` 下不引入持续运动。
+玻璃边缘由原语统一提供 2px 纯中性灰物理边：浅色模式使用浅灰，深色模式使用深灰，边框自身不得叠加镜面、透明或渐变效果。玻璃上缘必须保持无高光（既无左上 radial specular，也无顶部 inset 高光），玻璃内部只保留左右 1px 边缘过渡、灰绿色下缘折射，以及短的双层阴影。消费者只负责几何、`--text` area 映射和语义 modifier；交互玻璃 hover 只可轻微增亮，active 使用 0.97–0.98 缩放。原语必须同时提供 `-webkit-backdrop-filter`、不支持 backdrop 时的半透明 fallback，并在 `prefers-reduced-motion: reduce` 下不引入持续运动。
 
 true glass surface 清单：右侧 rail、上下文菜单 root/submenu、Study selection card、Workflow catalog popover/runtime dock、回到最新按钮、移动端顶栏按钮/同步状态、goal 区。模态 dimmer、opaque panel、左侧 drawer、Workflow node card 不得套用该原语。
 
@@ -108,6 +108,7 @@ true glass surface 清单：右侧 rail、上下文菜单 root/submenu、Study s
 - 禁止第二个下拉 / button 原语
 - 禁止覆盖输入框 focus 为 outline:none 之外的聚焦态（输入框无聚焦态，光标即可）
 - 禁止动效无 `prefers-reduced-motion` 回退
+- 禁止给玻璃上缘加高光（左上 specular 径向光、`inset 0 1px 0` 顶部亮线），也禁止为此新建 `--optical-glass-reflection` / `--optical-glass-inset-top` 之类 token
 
 ## 审计
 

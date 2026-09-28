@@ -339,9 +339,10 @@ defineExpose({
   background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
 }
 
+/* 菜单的聚焦指示由行高亮承担（与 hover 同配方）。菜单打开即把焦点交给第一项，
+   再叠一层焦点环会让鼠标打开的菜单看起来像有选中态。 */
 .context-menu-item:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
-  outline-offset: -1px;
+  outline: none;
 }
 
 .context-menu-item:disabled {

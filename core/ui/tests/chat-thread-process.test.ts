@@ -18,6 +18,53 @@ function mountChatThread(options: any = {}) {
   });
 }
 
+/** A file tool whose diff is wider than a phone can pan comfortably. */
+function writeDiffMessages(): CoreMessage[] {
+  return [{
+    id: 'm-write',
+    role: 'assistant',
+    content: 'Done.',
+    timestamp: '2026-06-18T00:00:00.000Z',
+    metadata: { timeline: true },
+    parts: [{
+      id: 'p-write',
+      partType: 'tool_call',
+      status: 'completed',
+      label: 'write_file',
+      toolName: 'write_file',
+      toolArgs: { path: 'notes.txt' },
+      toolResult: 'Created notes.txt: 12 chars, 3 lines.\n--- preview ---\n  1 | old preview\n--- end preview ---',
+      artifacts: [{
+        kind: 'file_change',
+        uri: 'notes.txt',
+        content: '+++ b/notes.txt\n@@ -0,0 +1,5 @@\n+first\n+second\n+middle line must stay visible\n+fourth\n+fifth',
+        metadata: { path: 'notes.txt', action: 'create', new_line_count: 5 },
+      }],
+    }],
+  }];
+}
+
+/** Follow one max-width query against innerWidth, like a real viewport. */
+function stubViewportWidth(width: number): () => void {
+  const originalMatchMedia = window.matchMedia;
+  const originalWidth = window.innerWidth;
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+  window.matchMedia = ((query: string): MediaQueryList => ({
+    matches: query.includes('max-width') && window.innerWidth <= 640,
+    media: query,
+    onchange: null,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia;
+  return () => {
+    window.matchMedia = originalMatchMedia;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth });
+  };
+}
+
 describe('ChatThread process cards', () => {
   it('renders sub-agent lifecycle and mailbox events with explicit copy and icons', async () => {
     const messages: CoreMessage[] = [{
@@ -534,28 +581,7 @@ describe('ChatThread process cards', () => {
   });
 
   it('renders write diffs as scrollable full content with wrap toggle', async () => {
-    const messages: CoreMessage[] = [{
-      id: 'm-write',
-      role: 'assistant',
-      content: 'Done.',
-      timestamp: '2026-06-18T00:00:00.000Z',
-      metadata: { timeline: true },
-      parts: [{
-        id: 'p-write',
-        partType: 'tool_call',
-        status: 'completed',
-        label: 'write_file',
-        toolName: 'write_file',
-        toolArgs: { path: 'notes.txt' },
-        toolResult: 'Created notes.txt: 12 chars, 3 lines.\n--- preview ---\n  1 | old preview\n--- end preview ---',
-        artifacts: [{
-          kind: 'file_change',
-          uri: 'notes.txt',
-          content: '+++ b/notes.txt\n@@ -0,0 +1,5 @@\n+first\n+second\n+middle line must stay visible\n+fourth\n+fifth',
-          metadata: { path: 'notes.txt', action: 'create', new_line_count: 5 },
-        }],
-      }],
-    }];
+    const messages = writeDiffMessages();
 
     const wrapper = mountChatThread( {
       props: {
@@ -577,6 +603,32 @@ describe('ChatThread process cards', () => {
     await wrapper.find('.wrap-toggle').trigger('click');
 
     expect(wrapper.find('.diff-block--wrap').exists()).toBe(true);
+  });
+
+  it('wraps a tool card by default on a narrow viewport and keeps the toggle authoritative', async () => {
+    const restoreViewport = stubViewportWidth(390);
+    try {
+      const wrapper = mountChatThread({
+        props: {
+          messages: writeDiffMessages(),
+          processExpandedIds: new Set(['m-write']),
+        },
+      });
+
+      await wrapper.find('.tool-card-header').trigger('click');
+
+      expect(wrapper.find('.diff-block--wrap').exists()).toBe(true);
+      expect(wrapper.find('.wrap-toggle').text()).toBe('wrap');
+
+      // An explicit tap still wins over the narrow-screen default.
+      await wrapper.find('.wrap-toggle').trigger('click');
+
+      expect(wrapper.find('.diff-block--wrap').exists()).toBe(false);
+      expect(wrapper.find('.wrap-toggle').text()).toBe('scroll');
+      wrapper.unmount();
+    } finally {
+      restoreViewport();
+    }
   });
 
   it('auto-expands running compaction and streams the summary accessibly without external expansion state', () => {
@@ -1680,11 +1732,55 @@ describe('ChatThread process cards', () => {
     });
   });
 
-  it('renders a completed decision with the selected action and no active options', () => {
+  it('drops the decision card as soon as the answer lands on the next message push', async () => {
+    const awaiting: CoreMessage = {
+      id: 'm-live-answer',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { live: true, timeline: true, liveStatus: '等待用户处理' },
+      parts: [{
+        id: 'p-live-answer',
+        partType: 'decision',
+        status: 'pending',
+        content: 'Approve command execution?',
+        label: '等待授权',
+        toolName: 'run_command',
+        toolArgs: {
+          command: 'npm test',
+          options: [
+            { id: 'approve', label: '批准', response: 'approve' },
+            { id: 'deny', label: '拒绝', response: 'deny' },
+          ],
+        },
+      }],
+    };
+
+    const wrapper = mountChatThread( {
+      props: { messages: [awaiting] },
+    });
+    expect(wrapper.find('.decision-card').exists()).toBe(true);
+
+    // 答复落库后 workbench 会推入新的消息对象（新的 part 引用），卡片随之撤出
+    const answered: CoreMessage = {
+      ...awaiting,
+      parts: [{
+        ...awaiting.parts![0],
+        status: 'completed',
+        metadata: { waitingResponse: { action: 'approve', response: 'approve_once' } },
+      }],
+    };
+    await wrapper.setProps({ messages: [answered] });
+
+    expect(wrapper.find('.decision-card').exists()).toBe(false);
+    expect(wrapper.find('.decision-options').exists()).toBe(false);
+  });
+
+  it('removes an answered decision card from the process timeline', () => {
     const messages: CoreMessage[] = [{
       id: 'm-completed-decision',
       role: 'assistant',
-      content: '',
+      content: '已改为重命名。',
       timestamp: '2026-06-18T00:00:00.000Z',
       metadata: {},
       parts: [{
@@ -1717,10 +1813,61 @@ describe('ChatThread process cards', () => {
       },
     });
 
-    expect(wrapper.find('.decision-card-decision').text()).toContain('已选择：其他');
-    expect(wrapper.find('.decision-card-decision').text()).toContain('不要删除，改为重命名。');
+    // 整卡撤出：卡体、选项与答复回显都不再保留
+    expect(wrapper.find('.decision-card').exists()).toBe(false);
     expect(wrapper.findAll('.decision-option')).toHaveLength(0);
-    expect(wrapper.find('.decision-guide').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('已选择');
+    // 该消息的过程内容只剩这张卡，过程区随之消失
+    expect(wrapper.find('.process-stream').exists()).toBe(false);
+    expect(wrapper.find('.assistant-answer').text()).toContain('已改为重命名。');
+  });
+
+  it('keeps an unanswered decision card while removing its answered sibling', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-mixed-decisions',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: {},
+      parts: [
+        {
+          id: 'p-answered',
+          partType: 'decision',
+          status: 'completed',
+          content: 'Approve the first command?',
+          label: '等待授权',
+          toolName: 'run_command',
+          metadata: { waitingResponse: { action: 'approve', response: 'approve_once' } },
+        },
+        {
+          id: 'p-pending',
+          partType: 'decision',
+          status: 'pending',
+          content: 'Approve the second command?',
+          label: '等待授权',
+          toolName: 'run_command',
+          toolArgs: {
+            command: 'npm test',
+            options: [
+              { id: 'approve', label: '批准', response: 'approve' },
+              { id: 'deny', label: '拒绝', response: 'deny' },
+            ],
+          },
+        },
+      ],
+    }];
+
+    const wrapper = mountChatThread( {
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-mixed-decisions']),
+      },
+    });
+
+    const cards = wrapper.findAll('.decision-card');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].text()).toContain('Approve the second command?');
+    expect(cards[0].findAll('.decision-option')).toHaveLength(2);
   });
 
   it('lets products render reasoning content through a slot once expanded', async () => {

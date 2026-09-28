@@ -46,6 +46,7 @@
     :providers="availableProviders"
     :model-groups="modelGroups"
     :catalog-view="modelCatalogView"
+    :section="settingsSection"
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
@@ -108,6 +109,7 @@
           :request-rpc="requestConfigOperation"
           :transport="transport"
           :theme="theme"
+          :initial-section="pluginsSection"
     @capabilities-changed="handleCapabilitiesChanged"
     @close="closePlugins"
   />
@@ -125,7 +127,22 @@
     :active-mode-id="activeAppModeKey"
     :on-study-hit="jumpToStudySearchHit"
     :theme="theme"
+    :on-open-session="openSessionFromSearch"
+    :on-open-plugins="openPluginsFromSearch"
+    :commands="searchCommands"
     @close="showSearch = false"
+  />
+  <AccountShell
+    v-if="showAccount"
+    :account-status="effectiveAccountStatus"
+    :devices="effectiveAccountDevices"
+    :loading="remoteAccountLoading"
+    :error="remoteGatewayError"
+    :theme="theme"
+    :on-logout="logoutEffectiveAccount"
+    :on-open-settings="openAccountSettings"
+    :on-refresh="refreshRemoteAccount"
+    @close="showAccount = false"
   />
   <OnboardingWizard
     v-if="showOnboarding"
@@ -149,8 +166,8 @@
     :content-width="contentWidth"
     :show-sidebar-header="false"
     :show-sidebar-header-action="false"
-    :show-sidebar-search-action="appRuntime.platform !== 'mobile' || showMobileFooterFallback"
-    :show-sidebar-plugins-action="appRuntime.platform !== 'mobile' || showMobileFooterFallback"
+    :show-sidebar-search-action="showMobileFooterFallback"
+    :show-sidebar-plugins-action="showMobileFooterFallback"
     :show-sidebar-settings-action="appRuntime.platform !== 'mobile' || showMobileFooterFallback"
     :show-right-panel="appRuntime.platform !== 'mobile'"
     :show-right-panel-header="false"
@@ -239,6 +256,7 @@
         :allow-session-delete="sidebarAllowSessionDelete"
         :allow-session-context-menu="sidebarAllowSessionContextMenu"
         :new-session-label="sidebarNewSessionLabel"
+        :search-action="appRuntime.platform !== 'mobile'"
         @select-session="handleSidebarSession"
         @select-project="handleSidebarProject"
         @new-session="handleSidebarNewSession"
@@ -248,17 +266,40 @@
         @delete-session="deleteSession"
         @rename-session="renameSessionFromSidebar"
         @export-session="exportSession"
+        @search="openSearch"
       >
         <template #empty>
           <div class="sidebar-empty-projects" data-sidebar-empty-projects>
             <div v-if="!activePluginMode" class="sidebar-empty-backdrop" aria-hidden="true">暂无</div>
           </div>
         </template>
+        <!-- 桌面：搜索行的其余入口（插件 / 长期安排）与搜索并作一行。 -->
+        <template v-if="appRuntime.platform !== 'mobile'" #toolbar-actions>
+          <RailAction
+            action-id="plugins"
+            label="插件"
+            description="管理已安装的插件，开关它们带来的界面与工具。"
+            tip-placement="below"
+            @click="openPlugins"
+          >
+            <Puzzle :size="16" :stroke-width="1.8" />
+          </RailAction>
+          <RailAction
+            action-id="arrange"
+            label="长期安排"
+            description="查看并调整长期任务安排，让 Sunday 按计划继续执行。"
+            tip-placement="below"
+            @click="showArrange = true"
+          >
+            <CalendarClock :size="16" :stroke-width="1.8" />
+          </RailAction>
+        </template>
       </SessionSidebar>
     </template>
 
     <template v-if="showSidebarFooter" #sidebar-footer>
-      <template v-if="showMobileFooterFallback">
+      <!-- 手机降级页脚（无 hover 可依赖）：仍是带文字的竖排行，与今天一致。 -->
+      <div v-if="showMobileFooterFallback" class="drawer-footer-stack">
         <button
           v-for="option in mobileModeOptions"
           :key="option.id"
@@ -274,9 +315,21 @@
         <button class="sidebar-action" type="button" data-mobile-footer-account @click="emit('open-account')">
           <span aria-hidden="true"><UserRound :size="14" :stroke-width="1.8" /></span><span>登录 / 账号</span>
         </button>
-      </template>
-      <button v-if="appRuntime.platform !== 'mobile' || showMobileFooterFallback" class="sidebar-action" type="button" data-mobile-footer-arrange @click="showArrange = true">
-        <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>长期安排</span>
+        <button class="sidebar-action" type="button" data-mobile-footer-arrange @click="showArrange = true">
+          <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>长期安排</span>
+        </button>
+      </div>
+      <!-- 桌面底部只留账号显示 + 设置（设置由左侧栏自身提供）。 -->
+      <button
+        v-else
+        class="drawer-footer-account"
+        type="button"
+        data-sidebar-account
+        :title="accountLabel"
+        @click="openAccount"
+      >
+        <UserRound :size="16" :stroke-width="1.8" aria-hidden="true" />
+        <span class="drawer-footer-account__label">{{ accountLabel }}</span>
       </button>
     </template>
 
@@ -650,9 +703,16 @@ import {
   ChevronUp,
   ClipboardPaste,
   Copy,
+  FolderOpen,
   LoaderCircle,
+  MonitorPlay,
   MonitorSmartphone,
+  PanelLeft,
+  PanelRight,
+  Plus,
+  Puzzle,
   Scissors,
+  Settings,
   TextSelect,
   Upload,
   UserRound,
@@ -701,6 +761,7 @@ import AttachmentSourceMenu from '../components/AttachmentSourceMenu.vue'
 import ChatThread from '../components/ChatThread.vue'
 import ChatOutlineNavigator from '../components/ChatOutlineNavigator.vue'
 import CommandPalette from '../components/CommandPalette.vue'
+import RailAction from '../components/RailAction.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreWorkspaceMenu from '../components/CoreWorkspaceMenu.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
@@ -722,7 +783,8 @@ import { openContextMenu } from '../components/context-menu/context-menu'
 import type { ContextMenuEntry } from '../components/context-menu/types'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import PluginsShell from '../components/PluginsShell.vue'
-import SearchShell, { type StudySearchHit } from '../components/SearchShell.vue'
+import AccountShell from '../components/AccountShell.vue'
+import SearchShell, { type SearchCommand, type StudySearchHit } from '../components/SearchShell.vue'
 import type {
   CoreSettingsModelPayload,
   CoreSettingsProviderPayload,
@@ -962,6 +1024,8 @@ function syncRightPinned(value: boolean) {
 }
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
+/** Section the settings surface opens on; the rail's account entry targets it. */
+const settingsSection = ref<string | undefined>(undefined)
 const showPlugins = ref(false)
 const showSearch = ref(false)
 const remoteGatewayStatus = ref<MobileControlGatewayStatus | null>(null)
@@ -1285,10 +1349,43 @@ async function revokeRemoteDevice(deviceId: string): Promise<void> {
 
 // Ctrl+K 全局搜索：与侧边栏「搜索」按钮一样切 showSearch（同一 SearchShell 入口）。
 // 打开时避免触发浏览器/输入框插件快捷键（旧 SessionSearchDialog 已并入 SearchShell）。
+// Ctrl+N / Ctrl+O / Ctrl+B / Ctrl+J 是搜索弹窗里列出的那四条，标签写出来了就得真的能按。
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null
+  if (!element) return false
+  const tag = element.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || element.isContentEditable === true
+}
+
 function handleGlobalSearchKeydown(event: KeyboardEvent): void {
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+  if (!(event.ctrlKey || event.metaKey)) return
+  const key = event.key.toLowerCase()
+  if (key === 'k') {
     event.preventDefault()
     showSearch.value = !showSearch.value
+    return
+  }
+  // The rest are document-level actions; inside a text field the browser's own
+  // editing keys must win.
+  if (isTextEntryTarget(event.target)) return
+  if (key === 'n') {
+    event.preventDefault()
+    void createStartPageSession()
+    return
+  }
+  if (key === 'o') {
+    event.preventDefault()
+    showProjectPicker.value = true
+    return
+  }
+  if (key === 'b') {
+    event.preventDefault()
+    toggleLeftPinned()
+    return
+  }
+  if (key === 'j') {
+    event.preventDefault()
+    toggleStage()
   }
 }
 const showArrange = ref(false)
@@ -3600,19 +3697,75 @@ function handleSidebarNewSession(projectGroupId: string): void {
   void createProjectSession(projectGroupId)
 }
 
-function openSettings(): void {
+function openSettings(section?: string): void {
+  settingsSection.value = section
   showSettings.value = true
   void refreshRemoteGateway()
   void refreshRemoteAccount()
+}
+
+/** Rail account entry: show the account state, and open settings on it. */
+const accountLabel = computed(() => {
+  const username = remoteAccountStatus.value?.username?.trim()
+  return username || '登录 / 账号'
+})
+
+/** The account screen is its own surface; the settings section keeps the forms. */
+const showAccount = ref(false)
+
+function openAccount(): void {
+  showAccount.value = true
+  void refreshRemoteAccount()
+}
+
+function openAccountSettings(): void {
+  showAccount.value = false
+  openSettings('mobile-control')
 }
 
 function openSearch(): void {
   showSearch.value = true
 }
 
-function openPlugins(): void {
+/** Which plugins section the next open should land on (search hits target one). */
+const pluginsSection = ref<string | undefined>(undefined)
+
+function openPlugins(section?: string): void {
+  pluginsSection.value = section
   showPlugins.value = true
 }
+
+function openPluginsFromSearch(target: { section: 'plugins' | 'skills' | 'hooks'; id?: string }): void {
+  showSearch.value = false
+  openPlugins(target.section)
+}
+
+/** A task hit with no message to land on: open it like the sidebar does. */
+function openSessionFromSearch(sessionId: string): void {
+  showSearch.value = false
+  void selectSession(sessionId)
+}
+
+/**
+ * The shortcut rows the search dialog shows while the query is empty.
+ * Only commands this host really has: the phone has no terminal or preview, so
+ * it passes fewer of them instead of advertising what it cannot do.
+ */
+const searchCommands = computed<SearchCommand[]>(() => {
+  const commands: SearchCommand[] = [
+    { id: 'new-task', label: '新任务', group: '建议', shortcut: 'Ctrl+N', icon: Plus, run: () => void createStartPageSession() },
+    { id: 'open-workspace', label: '打开工作区', group: '建议', shortcut: 'Ctrl+O', icon: FolderOpen, run: () => { showProjectPicker.value = true } },
+    { id: 'settings', label: '设置', group: '建议', icon: Settings, run: () => openSettings() },
+    { id: 'toggle-sidebar', label: '切换侧栏', group: '面板', shortcut: 'Ctrl+B', icon: PanelLeft, run: () => toggleLeftPinned() },
+  ]
+  if (appRuntime.platform !== 'mobile') {
+    commands.push(
+      { id: 'toggle-preview', label: '切换预览', group: '面板', shortcut: 'Ctrl+J', icon: MonitorPlay, run: () => toggleStage() },
+      { id: 'toggle-right-panel', label: '切换右侧栏', group: '面板', icon: PanelRight, run: () => toggleRightPinned() },
+    )
+  }
+  return commands
+})
 
 function closePlugins(): void {
   showPlugins.value = false

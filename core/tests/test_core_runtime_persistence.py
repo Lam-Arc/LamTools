@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 
 import pytest
@@ -266,8 +267,89 @@ async def test_core_runtime_store_rejects_stale_concurrent_state_write(tmp_path)
         first.status = "running"
         await db.runtime_state_store.save(first)
         second.status = "waiting"
+        # The row is owned by a live process (this one), so the stale writer is
+        # refused instead of interleaving two runtimes into one row.
         with pytest.raises(RuntimeStateConflictError):
             await db.runtime_state_store.save(second)
+    finally:
+        await db.close()
+
+
+async def _mark_session_owner_gone(db, session_id: str) -> None:
+    """Rewrite the persisted owner token to a pid no process holds."""
+    from lamtools_core.app.core_db import CoreRuntimeSession
+    from lamtools_core.runtime_owner import OWNER_METADATA_KEY
+
+    async with db.runtime_state_store.session_factory() as connection:
+        row = await connection.get(CoreRuntimeSession, session_id)
+        payload = dict(row.runtime_state_json or {})
+        metadata = dict(payload.get("metadata") or {})
+        token = metadata.get(OWNER_METADATA_KEY)
+        metadata[OWNER_METADATA_KEY] = {
+            "pid": 999_999_999,
+            "host": (token or {}).get("host", "localhost"),
+            "started_at": 0.0,
+            "heartbeat_at": 0.0,
+        }
+        payload["metadata"] = metadata
+        row.runtime_state_json = payload
+        await connection.commit()
+
+
+@pytest.mark.asyncio
+async def test_core_runtime_store_adopts_a_write_whose_owner_is_gone(tmp_path) -> None:
+    """A row left behind by a killed process must not poison the session.
+
+    The revision compare-and-set is a guard against *live* concurrent writers
+    only: when the recorded owner is no longer running, the newer state adopts
+    the row instead of aborting the run (2026-09-27: resuming a killed CLI run
+    died mid-flight with a revision conflict).
+    """
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        initial = RuntimeState(session_id="thread-adopt")
+        await db.runtime_state_store.save_checkpoint(initial, [])
+        stale = await db.runtime_state_store.get("thread-adopt")
+        winner = await db.runtime_state_store.get("thread-adopt")
+        assert stale is not None and winner is not None
+
+        winner.status = "running"
+        await db.runtime_state_store.save(winner)
+        await _mark_session_owner_gone(db, "thread-adopt")
+
+        stale.status = "waiting"
+        await db.runtime_state_store.save(stale)
+
+        adopted = await db.runtime_state_store.get("thread-adopt")
+        assert adopted is not None
+        assert adopted.status == "waiting"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_core_runtime_store_live_owner_reports_busy_and_free_sessions(tmp_path) -> None:
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        state = RuntimeState(session_id="thread-busy")
+        await db.runtime_state_store.save_checkpoint(state, [])
+
+        # Terminal/idle rows and unknown threads are free.
+        assert await db.runtime_state_store.live_owner("thread-busy") is None
+        assert await db.runtime_state_store.live_owner("thread-missing") is None
+
+        running = await db.runtime_state_store.get("thread-busy")
+        assert running is not None
+        running.status = "running"
+        await db.runtime_state_store.save(running)
+
+        owner = await db.runtime_state_store.live_owner("thread-busy")
+        assert owner is not None
+        assert owner["pid"] == os.getpid()
+
+        # Once that process is gone the session is adoptable again.
+        await _mark_session_owner_gone(db, "thread-busy")
+        assert await db.runtime_state_store.live_owner("thread-busy") is None
     finally:
         await db.close()
 

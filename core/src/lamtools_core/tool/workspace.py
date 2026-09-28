@@ -16,8 +16,15 @@ def validate_workspace_path(
     path: str | Path,
     work_root: str | Path,
     *,
-    allow_outside: bool = False,
+    allow_outside: bool = True,
 ) -> Path:
+    """Resolve a path against the workspace, permissive by default.
+
+    The workspace boundary is no longer enforced (product decision
+    2026-09-27), so a target outside ``work_root`` resolves normally.  An
+    explicit ``allow_outside=False`` restores the bounds check for callers that
+    still want it.
+    """
     root = Path(work_root).resolve()
     resolved = (root / path).resolve()
     if not allow_outside and not is_within_path(resolved, root):

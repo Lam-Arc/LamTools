@@ -237,7 +237,7 @@ describe('WorkspaceShell rendering', () => {
     const wrapper = mountShell();
 
     await wrapper.find('.drawer-head .icon-btn').trigger('click');
-    await wrapper.find('.settings-entry[aria-label="打开设置"]').trigger('click');
+    await wrapper.find('.rail-action__button[data-rail-action="settings"]').trigger('click');
     await wrapper.find('.floating-composer').trigger('submit');
 
     expect(wrapper.emitted('new-session')).toHaveLength(1);

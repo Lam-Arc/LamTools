@@ -13,6 +13,11 @@ export {
 export { usePendingAttachments } from './usePendingAttachments'
 
 export {
+  NARROW_VIEWPORT_MAX_WIDTH,
+  useNarrowViewport,
+} from './useNarrowViewport'
+
+export {
   useOutsidePointerDismiss,
   type OutsidePointerDismissOptions,
 } from './useOutsidePointerDismiss'

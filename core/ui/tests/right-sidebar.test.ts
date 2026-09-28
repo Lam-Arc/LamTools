@@ -5,6 +5,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import RightSidebarHost from '../src/components/RightSidebarHost.vue'
 import RightSidebarRag from '../src/components/RightSidebarRag.vue'
+import RightSidebarWebSearch from '../src/components/RightSidebarWebSearch.vue'
+import UiSelect from '../src/components/UiSelect.vue'
 import RightSidebarWidgetRenderer from '../src/components/RightSidebarWidgetRenderer.vue'
 import {
   listPluginWidgets,
@@ -443,5 +445,33 @@ afterEach(() => {
     await refreshPluginUIModes(requestRpc)
     expect(getWidget('status', 'trusted')?.load).toBe(trustedLoader)
     expect((await listPluginWidgets(requestRpc)).widgets).toHaveLength(1)
+  })
+})
+
+describe('RightSidebarWebSearch plugin state', () => {
+  it('shows the disabled hint while the websearch plugin is off, and recovers after recheck', async () => {
+    const disabledRpc: RightSidebarRpc = vi.fn(async (method: string) => {
+      if (method === 'websearch.config.get') return { content: '{"provider": "bing"}' }
+      // 插件被禁用时它的操作整体不存在——宿主返回"方法不存在"。
+      throw new Error('Unsupported method: websearch.widget.snapshot')
+    })
+    const wrapper = mount(RightSidebarWebSearch, { props: { requestRpc: disabledRpc } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('搜索插件未启用')
+    expect(wrapper.findComponent(UiSelect).exists()).toBe(false)
+
+    const enabledRpc: RightSidebarRpc = vi.fn(async (method: string) => {
+      if (method === 'websearch.config.get') return { content: '{"provider": "bing"}' }
+      return { snapshot: { schema_version: 1, state: 'ok', summary: 'Configured engine: bing', blocks: [] } }
+    })
+    await wrapper.setProps({ requestRpc: enabledRpc })
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('搜索插件未启用')
+    expect(wrapper.findComponent(UiSelect).exists()).toBe(true)
+
+    wrapper.unmount()
   })
 })

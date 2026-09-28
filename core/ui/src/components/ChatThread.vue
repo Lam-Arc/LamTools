@@ -675,6 +675,15 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   max-height: 320px;
   overflow: auto;
 }
+/* This block has no wrap toggle of its own and a phone cannot comfortably pan a
+   long line inside a card, so it wraps at the breakpoint where the toggled
+   blocks also default to wrap (`NARROW_VIEWPORT_MAX_WIDTH`). */
+@media (max-width: 640px) {
+  .tool-output {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
 
 /* Command-run output — the one tool card styled as a dark terminal (all other
    tool cards stay line-based/borderless). Also contains long output lines
@@ -823,8 +832,6 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-  /* 状态翻转：pending 金边 → 已答复中性边的平滑过渡（B5） */
-  transition: border-left-color var(--dur-base) ease;
 }
 
 .decision-card-head,
@@ -961,16 +968,6 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   font-size: 11px;
   line-height: 1.45;
   overflow-wrap: anywhere;
-}
-
-.decision-card-decision {
-  margin: 0;
-  color: color-mix(in srgb, var(--green) 76%, var(--theme-main-text, #fff) 24%);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  /* 答复出现入场已迁移到 MessageView 的 GSAP Transition（fadeSlide，B5 状态翻转动画） */
 }
 
 .decision-guide {

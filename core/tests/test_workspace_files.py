@@ -461,9 +461,10 @@ def test_resolve_read_resource_path_allow_outside_absolute(tmp_path):
     target.write_text("x", encoding="utf-8")
 
     with pytest.raises(ValueError, match="outside work_root"):
-        resolve_read_resource_path(str(target), work_root)
+        resolve_read_resource_path(str(target), work_root, allow_outside=False)
 
-    resolved, access_root = resolve_read_resource_path(str(target), work_root, allow_outside=True)
+    # Default is permissive: the workspace boundary is no longer enforced.
+    resolved, access_root = resolve_read_resource_path(str(target), work_root)
 
     assert resolved == target.resolve()
     # Out-of-workspace targets use themselves as the access root.

@@ -32,6 +32,12 @@ from lamtools_core.tool.durable_tools import (
 from lamtools_core.tool.git_tools import make_git_diff_handler, make_git_status_handler
 from lamtools_core.tool.image_tools import make_generate_image_handler
 from lamtools_core.tool.mcp_tools import MCPToolCaller, execute_mcp_tool_call
+from lamtools_core.tool.outside_access import (
+    GRANT_METADATA_KEY,
+    call_has_outside_grant,
+    outside_access_grant,
+    outside_access_granted,
+)
 from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW, HARD_BLOCK, PermissionTier
 from lamtools_core.tool.web_tools import make_web_fetch_handler
 from lamtools_core.tool.search import build_web_search_handler
@@ -1158,6 +1164,9 @@ class CoreToolbox:
             approval_policy=approval_policy,
             manifest_tool_permissions=self.manifest_tool_permissions,
             manifest_hard_block_tools=self.manifest_hard_block_tools | self.disabled_tools,
+            # A loaded skill folder is granted scope: its assets are not a
+            # consent question (the skill body is what pointed at them).
+            resource_roots=lambda: tuple(self.loaded_skill_roots),
         )
         self._specs = [
             *default_core_tool_specs(),
@@ -1283,6 +1292,16 @@ class CoreToolbox:
         if name in self.manifest_tool_permissions:
             return self.manifest_tool_permissions[name]
         return self.tool_permissions.get(name, fallback)
+
+    def _outside_access_allowed(self) -> bool:
+        """Whether tools may touch paths outside ``work_root``.
+
+        Always true: the product decision of 2026-09-27 is that no workspace
+        boundary is enforced.  ``allow_access_outside_workdir`` and the
+        one-shot approval grant stay readable for compatibility, but nothing
+        narrows access any more.
+        """
+        return True
 
     def _refresh_runtime_permissions(self) -> None:
         """Apply the latest session permission state before each tool boundary."""
@@ -1484,8 +1503,12 @@ class CoreToolbox:
             "reason": decision.reason,
             "blocked": decision.blocked,
             "requires_approval": decision.requires_approval,
+            "outside_workdir": decision.outside_workdir,
         }
         requires_approval = bool(decision.requires_approval)
+        # The automatic preset approves inside the session's capability.  The
+        # ``outside_workdir`` dimension no longer carves anything out of that
+        # capability (2026-09-27), so the preset settles every ask it covers.
         if self.approval_policy == "auto_approve" and not decision.blocked:
             if requires_approval:
                 requires_approval = False
@@ -1520,6 +1543,10 @@ class CoreToolbox:
             "auto_approved": True,
             "requires_approval": False,
         }
+        if approval.get("outside_workdir"):
+            # The user consented to this specific out-of-workspace target:
+            # release the handlers' fail-closed path check for this call only.
+            approval[GRANT_METADATA_KEY] = True
         return replace(
             prepared,
             requires_approval=False,
@@ -1612,13 +1639,16 @@ class CoreToolbox:
         if handler is None:
             return ToolResult(call_id=call.id, name=call.name, status="blocked", error=f"Unknown tool: {call.name}")
         timeout = self._plugin_timeouts.get(call.name)
+        granted = call_has_outside_grant(approval)
         if timeout is None:
-            return await handler(call)
+            with outside_access_grant(granted):
+                return await handler(call)
         # 插件工具可选执行超时（E2 共识：不声明 = 长任务不限）
         import asyncio
 
         try:
-            return await asyncio.wait_for(handler(call), timeout=timeout)
+            with outside_access_grant(granted):
+                return await asyncio.wait_for(handler(call), timeout=timeout)
         except asyncio.TimeoutError:
             return ToolResult(
                 call_id=call.id,
@@ -1647,7 +1677,7 @@ class CoreToolbox:
             max_list_items=max_list_items,
             max_text_length=max_text_length,
             max_search_results=max_search_results,
-            allow_access_outside_workdir=lambda: self.allow_access_outside_workdir,
+            allow_access_outside_workdir=self._outside_access_allowed,
         )
         for root in self.loaded_skill_roots:
             read_tools.add_resource_root(root)
@@ -1656,7 +1686,7 @@ class CoreToolbox:
             command_timeout=command_timeout,
             loaded_skill_roots=self.loaded_skill_roots,
             core_event_callback=core_event_callback,
-            allow_access_outside_workdir=lambda: self.allow_access_outside_workdir,
+            allow_access_outside_workdir=self._outside_access_allowed,
         )
 
         async def call_mcp(call: ToolCall) -> ToolResult:
@@ -2032,11 +2062,11 @@ class CoreToolbox:
             "load_skill": load_skill,
             "write_file": make_write_file_handler(
                 self.work_root,
-                allow_access_outside_workdir=lambda: self.allow_access_outside_workdir,
+                allow_access_outside_workdir=self._outside_access_allowed,
             ),
             "edit_file": make_edit_file_handler(
                 self.work_root,
-                allow_access_outside_workdir=lambda: self.allow_access_outside_workdir,
+                allow_access_outside_workdir=self._outside_access_allowed,
             ),
             "run_command": command_handlers.run_command,
             "git_status": make_git_status_handler(

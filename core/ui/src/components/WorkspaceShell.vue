@@ -196,9 +196,9 @@
       :id="rightDrawerId"
       data-workspace-right-drawer
       class="workspace-drawer drawer-right optical-glass"
-      :class="{ open: rightOpen || stageOpen, pinned: rightPinned }"
-      :inert="(!rightOpen && !stageOpen) || undefined"
-      :aria-hidden="!rightOpen && !stageOpen"
+      :class="{ open: rightDrawerShown, pinned: rightPinned, 'drawer-retracting': rightRetracting }"
+      :inert="!rightDrawerShown || undefined"
+      :aria-hidden="!rightDrawerShown"
       @mouseleave="onRightDrawerLeave"
     >
       <header v-if="showRightPanelHeader" class="drawer-head">
@@ -335,12 +335,14 @@ const {
   rightOpen,
   leftPinned,
   rightPinned,
+  rightRetracting,
   stageOpen,
   stageHeight,
   isNarrowViewport,
   shellClass,
   shellStyle,
   rightDrawerModal,
+  rightDrawerShown,
   density: shellDensity,
   contentWidth: shellContentWidth,
   theme: shellTheme,

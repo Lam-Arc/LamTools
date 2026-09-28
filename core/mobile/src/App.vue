@@ -106,7 +106,7 @@ import {
 } from './pairing/TrustedDevices'
 import { onMobilePause, onMobileResume } from './native/lifecycle'
 import { createMobileFilePicker } from './native/filePicker'
-import { observeNativeWindowInsets } from './native/windowInsets'
+import { observeNativeWindowInsets, type NativeWindowInsets } from './native/windowInsets'
 import { loadOrCreateDeviceIdentity } from './pairing/DeviceIdentity'
 import PairingScreen, {
   type AccountAuthRequest,
@@ -1054,12 +1054,17 @@ function onSecureStorageRecovered(): void {
   statusMessage.value = '设备密钥已更换，请重新登录或配对电脑'
 }
 
-function syncNativeWindowInsets(insets: { top: number }): void {
-  // The Android bridge reports CSS pixels. Keeping the value on :root lets
-  // the shared MobileTopBar inherit it without coupling the UI package to
-  // Tauri or Android.
+function syncNativeWindowInsets(insets: NativeWindowInsets): void {
+  // The Android bridge reports CSS pixels. Keeping the values on :root lets
+  // the shared UI inherit them without coupling the UI package to Tauri or
+  // Android: the top inset positions the mobile top bar, the keyboard inset
+  // lifts the composer above the IME (edge-to-edge keeps the WebView at full
+  // height, so the shared viewport measurement alone cannot see the keyboard).
   const top = Number.isFinite(insets.top) ? Math.max(0, insets.top) : 0
-  document.documentElement.style.setProperty('--native-safe-area-top', `${top}px`)
+  const imeBottom = Number.isFinite(insets.imeBottom) ? Math.max(0, insets.imeBottom) : 0
+  const root = document.documentElement.style
+  root.setProperty('--native-safe-area-top', `${top}px`)
+  root.setProperty('--native-keyboard-inset', `${imeBottom}px`)
 }
 
 onMounted(async () => {
@@ -1096,6 +1101,7 @@ onUnmounted(() => {
   removePauseListener?.()
   removeWindowInsetsListener?.()
   document.documentElement.style.removeProperty('--native-safe-area-top')
+  document.documentElement.style.removeProperty('--native-keyboard-inset')
   runtime.close()
   removeLocalRepositoryListener()
   removeRemoteRepositoryListener()

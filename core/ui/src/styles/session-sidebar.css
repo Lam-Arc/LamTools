@@ -19,12 +19,58 @@
 }
 
 .sidebar-toolbar {
+  /* 行内图标入口的悬浮提示以这一行为定位基准（见 workspace-shell.css 的
+     .rail-action__tip）。 */
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--sidebar-toolbar-gap);
   min-width: 0;
   min-height: var(--sidebar-row-height);
   margin-bottom: var(--space-2);
+}
+/* 搜索变成入口（打开全局搜索）后，这一行还并排放下了插件/长期安排等图标。 */
+.sidebar-toolbar--actions {
+  gap: var(--space-1);
+}
+.sidebar-search-action {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--sidebar-row-height);
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--sidebar-row-radius);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: color-mix(in srgb, var(--theme-control-text) 66%, transparent);
+  display: flex;
+  align-items: center;
+  gap: var(--sidebar-item-gap);
+  font: inherit;
+  font-size: var(--sidebar-font);
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.sidebar-search-action:hover,
+.sidebar-search-action:focus-visible {
+  border-color: color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  color: var(--theme-control-text);
+}
+.sidebar-search-action:focus-visible {
+  outline: none;
+}
+.sidebar-search-action > svg {
+  flex: 0 0 auto;
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
+  stroke-width: 1.8;
+}
+.sidebar-search-action__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sidebar-search-wrap {
   display: flex;
@@ -173,10 +219,12 @@
   text-overflow: ellipsis;
 }
 .project-name strong {
+  /* 与会话名同号同重（--sidebar-font / 400），靠 --sidebar-text-project
+     的主题派生色区分层级，不再靠加粗和字号。 */
   font-size: var(--sidebar-font);
-  font-weight: 600;
+  font-weight: 400;
   line-height: var(--sidebar-line-height-item);
-  color: var(--sidebar-text-primary);
+  color: var(--sidebar-text-project);
   white-space: nowrap;
 }
 .project-name.clickable { cursor: pointer; }
@@ -242,6 +290,14 @@
 }
 .project-block[data-collapsed] .project-fold svg {
   transform: rotate(0deg);
+}
+
+/* 紧凑左栏（断点与 workspace-shell.css 的左栏宽度分档成对）：窄栏优先保住
+   项目名，让出左侧图标与折叠键；点击项目名仍可收起/展开会话。 */
+@media (min-width: 641px) and (max-width: 1599px) {
+  .project-toggle { display: none; }
+  .project-main { grid-template-columns: minmax(0, 1fr); }
+  .project-name .project-visual-icon { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .sidebar-search-wrap,

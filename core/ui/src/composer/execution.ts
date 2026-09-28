@@ -11,7 +11,7 @@ export const CORE_PERMISSION_PRESET_LABELS: Record<CorePermissionPreset, string>
 
 export const CORE_PERMISSION_PRESET_DESCRIPTIONS: Record<CorePermissionPreset, string> = {
   ask: '工具执行前请求批准',
-  auto: '在当前能力范围内自动批准',
+  auto: '在当前能力范围内自动批准（工作目录外仍会确认）',
   full_access: '完全编辑、自动批准，并允许访问工作目录外',
 }
 

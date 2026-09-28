@@ -247,8 +247,14 @@ def resolve_read_resource_path(
     work_root: str | Path,
     resource_roots: tuple[Path, ...] = (),
     *,
-    allow_outside: bool = False,
+    allow_outside: bool = True,
 ) -> tuple[Path, Path]:
+    """Resolve a read/search target, permissive by default.
+
+    The workspace boundary is no longer enforced (2026-09-27); an explicit
+    ``allow_outside=False`` restores the old restriction for callers that want
+    it.
+    """
     root = Path(work_root).resolve()
     raw = Path(path)
     roots = tuple(item.resolve() for item in resource_roots)
@@ -620,7 +626,7 @@ def make_write_file_handler(
         return await write_file_tool(
             call,
             work_root=work_root,
-            allow_access_outside_workdir=_access_outside_enabled(allow_access_outside_workdir),
+            allow_access_outside_workdir=allow_access_outside_workdir,
         )
 
     return write_file
@@ -635,7 +641,7 @@ def make_edit_file_handler(
         return await edit_file_tool(
             call,
             work_root=work_root,
-            allow_access_outside_workdir=_access_outside_enabled(allow_access_outside_workdir),
+            allow_access_outside_workdir=allow_access_outside_workdir,
         )
 
     return edit_file
@@ -645,7 +651,7 @@ async def write_file_tool(
     call: ToolCall,
     *,
     work_root: Path,
-    allow_access_outside_workdir: bool = False,
+    allow_access_outside_workdir: AccessOutsideWorkdir = False,
 ) -> ToolResult:
     args = call.arguments if isinstance(call.arguments, dict) else {}
     if "path" not in args:
@@ -674,7 +680,11 @@ async def write_file_tool(
         return _failed_result(call, "invalid_utf8", f"Content is not valid UTF-8: {exc}")
 
     try:
-        resolved = validate_workspace_path(path_str, work_root, allow_outside=allow_access_outside_workdir)
+        resolved = validate_workspace_path(
+            path_str,
+            work_root,
+            allow_outside=_access_outside_enabled(allow_access_outside_workdir),
+        )
     except ValueError as exc:
         return _failed_result(call, "path_outside_root", str(exc))
 
@@ -812,7 +822,7 @@ async def edit_file_tool(
     call: ToolCall,
     *,
     work_root: Path,
-    allow_access_outside_workdir: bool = False,
+    allow_access_outside_workdir: AccessOutsideWorkdir = False,
 ) -> ToolResult:
     args = call.arguments if isinstance(call.arguments, dict) else {}
     if "path" not in args:
@@ -852,7 +862,11 @@ async def edit_file_tool(
         return _failed_result(call, "invalid_argument", "'occurrence' must be a positive 1-based integer or null")
 
     try:
-        resolved = validate_workspace_path(path_str, work_root, allow_outside=allow_access_outside_workdir)
+        resolved = validate_workspace_path(
+            path_str,
+            work_root,
+            allow_outside=_access_outside_enabled(allow_access_outside_workdir),
+        )
     except ValueError as exc:
         return _failed_result(call, "path_outside_root", str(exc))
 

@@ -37,6 +37,7 @@ def test_bundled_core_tool_specs_four_tools():
 
 def test_assemble_discovers_bundled_plugins(tmp_path):
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
+    from lamtools_core.plugins.registry import PluginStateStore
 
     assembly = assemble_core_agent_plugins(
         data_dir=tmp_path / "data",
@@ -44,9 +45,23 @@ def test_assemble_discovers_bundled_plugins(tmp_path):
         plugin_roots=[],
     )
     names = {plugin.name for plugin in assembly["plugins"]}
-    assert {"git", "websearch", "imagegen"} <= names
+    # websearch 声明 defaultEnabled=false：默认装配里不出现（要用去插件页启用），
+    # 显式启用后回到装配结果里。
+    assert {"git", "imagegen"} <= names
+    assert "websearch" not in names
     group_names = {group["name"] for group in assembly["plugin_tool_groups"]}
-    assert {"git", "websearch", "imagegen"} <= group_names
+    assert {"git", "imagegen"} <= group_names
+    assert "websearch" not in group_names
+
+    PluginStateStore(tmp_path / "data" / "plugins.jsonc").set_enabled("websearch", True)
+    enabled = assemble_core_agent_plugins(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[],
+    )
+    enabled_names = {plugin.name for plugin in enabled["plugins"]}
+    assert "websearch" in enabled_names
+    assert "websearch" in {group["name"] for group in enabled["plugin_tool_groups"]}
 
 
 def test_study_skills_are_scoped_by_the_real_plugin_assembly(tmp_path):
@@ -89,9 +104,14 @@ def test_study_skills_are_scoped_by_the_real_plugin_assembly(tmp_path):
 
 
 def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
-    """默认装配包含基础工具和所有已启用 bundled plugin 工具。"""
-    from lamtools_core.app.base_agent import assemble_core_agent_plugins
+    """默认装配包含基础工具和所有已启用 bundled plugin 工具。
 
+    websearch 默认关闭，这里先显式启用，覆盖"启用后工具确实回到工具箱"。
+    """
+    from lamtools_core.app.base_agent import assemble_core_agent_plugins
+    from lamtools_core.plugins.registry import PluginStateStore
+
+    PluginStateStore(tmp_path / "data" / "plugins.jsonc").set_enabled("websearch", True)
     assembly = assemble_core_agent_plugins(
         data_dir=tmp_path / "data",
         work_root=tmp_path,
@@ -228,3 +248,41 @@ async def test_websearch_config_get_migrates_legacy(tmp_path):
     assert "baidu" in result.payload["content"]
     migrated = read_plugin_config(tmp_path / "data", "websearch")
     assert migrated["provider"] == "baidu"
+
+
+def test_websearch_plugin_is_disabled_by_default(tmp_path):
+    """搜索默认关闭：清单声明 defaultEnabled=false，插件页显式开关优先。"""
+    from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
+
+    state_path = tmp_path / "plugins.jsonc"
+    store = PluginStateStore(state_path)
+    registry = PluginRegistry(plugin_roots=[bundled_plugins_dir()], state_store=store)
+
+    by_name = {plugin.name: plugin for plugin in registry.discover()}
+    assert by_name["websearch"].enabled is False
+    # 其它内置插件不受影响
+    assert by_name["git"].enabled is True
+    assert by_name["imagegen"].enabled is True
+
+    store.set_enabled("websearch", True)
+    by_name = {plugin.name: plugin for plugin in registry.discover()}
+    assert by_name["websearch"].enabled is True
+
+    store.set_enabled("websearch", False)
+    by_name = {plugin.name: plugin for plugin in registry.discover()}
+    assert by_name["websearch"].enabled is False
+
+
+def test_unsupported_search_kernel_does_not_break_the_toolbox(tmp_path, monkeypatch):
+    """配置里写了不支持的内核名 → 工具箱照常装配（降级到内置默认内核）。
+
+    2026-09-26 事故：websearch.jsonc 里 provider=custom 让 build_core_toolbox
+    抛 ValueError，每一轮对话都在启动阶段失败。
+    """
+    config = tmp_path / "websearch.jsonc"
+    config.write_text('{"provider": "custom"}', encoding="utf-8")
+    monkeypatch.setenv("WEBSEARCH_CONFIG", str(config))
+
+    toolbox = build_core_toolbox(work_root=tmp_path, data_dir=tmp_path / "data")
+
+    assert "web_search" in toolbox._handlers

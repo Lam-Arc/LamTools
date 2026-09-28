@@ -81,6 +81,74 @@ async def test_resolve_turn_approval_policy_defaults_outside_workdir_false() -> 
     assert resolved["allow_access_outside_workdir"] is False
 
 
+def test_global_switch_opens_outside_access_for_frozen_session() -> None:
+    """设置在会话创建后打开：旧会话不再逐次确认。"""
+    from lamtools_core.app.runtime_permissions import resolve_session_permissions
+
+    opened = resolve_session_permissions(
+        preset="ask",
+        base_tier="full_edit",
+        base_allow_access_outside_workdir=False,
+        global_controls={"permission_mode": "full_edit", "allow_access_outside_workdir": True},
+    )
+    closed = resolve_session_permissions(
+        preset="ask",
+        base_tier="full_edit",
+        base_allow_access_outside_workdir=False,
+        global_controls={"permission_mode": "full_edit"},
+    )
+    session_grant = resolve_session_permissions(
+        preset="ask",
+        base_tier="full_edit",
+        base_allow_access_outside_workdir=True,
+        global_controls={"permission_mode": "full_edit"},
+    )
+
+    assert opened.allow_access_outside_workdir is True
+    assert closed.allow_access_outside_workdir is False
+    assert session_grant.allow_access_outside_workdir is True
+
+
+class _FakeSessionStore:
+    def __init__(self, metadata: dict) -> None:
+        self._metadata = metadata
+
+    def get(self, session_id: str) -> object:
+        session = type("Session", (), {})()
+        session.id = session_id
+        session.metadata = dict(self._metadata)
+        return session
+
+
+class _FakeHostContext:
+    """Policy context backed by a session that froze ``false`` before the switch."""
+
+    def __init__(self, *, settings: dict | None, session_metadata: dict) -> None:
+        self.operations = _FakeSettingsOperations(settings)
+        self.host = type("Host", (), {"session_store": _FakeSessionStore(session_metadata)})()
+
+
+@pytest.mark.asyncio
+async def test_resolve_turn_policy_applies_global_switch_to_existing_session() -> None:
+    from lamtools_core.app.live_operations import _resolve_turn_approval_policy
+
+    context = _FakeHostContext(
+        settings={"permission_mode": "full_edit", "allow_access_outside_workdir": True},
+        session_metadata={
+            "work_root": "C:/workspace",
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            },
+        },
+    )
+
+    resolved = await _resolve_turn_approval_policy(context=context, params={"thread_id": "thread-1"})
+
+    assert resolved["allow_access_outside_workdir"] is True
+
+
 def test_full_access_preset_expands_to_full_edit_auto_approve_and_outside_access() -> None:
     from lamtools_core.app.runtime_permissions import resolve_permission_preset
 
