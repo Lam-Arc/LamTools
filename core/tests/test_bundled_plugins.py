@@ -130,10 +130,11 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
         )
     toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=plugin_specs)
     names = {spec.name for spec in toolbox.tool_specs()}
-    # 16 base + 4 bundled + 5 Workflow + 5 Study tools.
-    assert len(names) == 30
+    # 16 base + 4 bundled + 5 Workflow + 5 Study tools + the plan package tool.
+    assert len(names) == 31
     assert {'get_knowledge_net', 'build_knowledge_net', 'exam', 'sign', 'notes'} <= names
     assert {"git_status", "git_diff", "web_search", "generate_image"} <= names
+    assert "plan_package" in names
     assert {
         "workflow_graph",
         "workflow_add_node",

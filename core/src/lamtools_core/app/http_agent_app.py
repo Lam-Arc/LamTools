@@ -549,7 +549,11 @@ def create_core_agent_http_app(
             wake_observers=observer_supervisor.wake,
             observer_status=observer_supervisor.status,
         )
-        register_plan_operations(agent_operations, plan_manager=plan_manager)
+        register_plan_operations(
+            agent_operations,
+            plan_manager=plan_manager,
+            project_store=core_db_handle.project_store,
+        )
         app_state["plan_manager"] = plan_manager
         app_state["operations"] = agent_operations
         app_state["arrange_runner"] = arrange_runner

@@ -1,0 +1,14 @@
+{
+  "id": "plan",
+  "name": "plan",
+  "version": "0.1.0",
+  "description": "方案（plan packages）：把一次需求变成可交付的方案——需求与边界、取舍、文档、分步清单、目标与风险；手机起草，桌面核对后开工",
+  "builtin": true,
+  "skills": [
+    "./skills"
+  ],
+  "tools": [
+    "./tools/tools.jsonc"
+  ],
+  "platforms": "universal"
+}

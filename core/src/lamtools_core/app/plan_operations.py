@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from lamtools_core.app.project_store import normalize_workspace_root
 from lamtools_core.runtime.plan_package import (
     PLAN_STATUSES,
     PlanManager,
@@ -20,10 +21,16 @@ from .operation_catalog import OperationCatalog, OperationRequest, OperationResu
 from .operation_groups import CORE_PLAN_OPERATION_NAMES
 
 
-def register_plan_operations(catalog: OperationCatalog, *, plan_manager: PlanManager) -> None:
+def register_plan_operations(
+    catalog: OperationCatalog,
+    *,
+    plan_manager: PlanManager,
+    project_store: Any = None,
+) -> None:
     async def plan_save(request: OperationRequest) -> OperationResult:
         payload = dict(request.payload or {})
         try:
+            await _resolve_project(payload, project_store)
             plan = await plan_manager.save(
                 payload,
                 source="desktop",
@@ -107,6 +114,29 @@ def register_plan_operations(catalog: OperationCatalog, *, plan_manager: PlanMan
 
 def _plan_id(payload: dict[str, Any]) -> str:
     return str(payload.get("plan_id") or payload.get("planId") or payload.get("id") or "").strip()
+
+
+async def _resolve_project(payload: dict[str, Any], project_store: Any) -> None:
+    """Accept a plan pointed at a workspace instead of at a project id.
+
+    The store keys plans by the host's project id, which a model tool rarely
+    knows but a running turn always does (its workspace). When the project is
+    still missing, the refusal comes from the package rules, not from here, so
+    direct callers keep the wording the shared fixtures pin.
+    """
+
+    project_id = str(payload.get("project_id") or payload.get("projectId") or "").strip()
+    if project_id:
+        payload["project_id"] = project_id
+        return
+    work_root = str(payload.get("work_root") or payload.get("workRoot") or "").strip()
+    if not work_root or project_store is None:
+        return
+    target = normalize_workspace_root(work_root)
+    for project in await project_store.list():
+        if normalize_workspace_root(project.work_root) == target:
+            payload["project_id"] = project.id
+            return
 
 
 def _optional_revision(payload: dict[str, Any]) -> int | None:

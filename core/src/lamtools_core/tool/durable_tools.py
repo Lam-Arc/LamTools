@@ -186,7 +186,69 @@ def durable_tool_handlers(
             await execute_operation(operation, payload, _operation_metadata(call)),
         )
 
-    return {"goal": goal, "arrange": arrange}
+    async def plan_package(call: ToolCall) -> ToolResult:
+        """The durable document behind a piece of work (方案).
+
+        A save is a patch: the fields the payload mentions are applied and the
+        rest keep their stored values, which is what lets an agent revise one
+        field without re-sending (and silently reverting) the ones it did not
+        read. `project_id` is filled from the turn's workspace when the model
+        does not know it.
+        """
+        args = _args(call)
+        action = str(args.get("action") or "").strip().lower()
+        if action == "save":
+            operation = "plan.save"
+            payload = {key: value for key, value in args.items() if key != "action"}
+            if not str(payload.get("project_id") or "").strip() and work_root:
+                payload["work_root"] = str(Path(work_root).resolve())
+        elif action == "get":
+            operation = "plan.get"
+            payload = {"plan_id": str(args.get("plan_id") or "").strip()}
+        elif action == "list":
+            operation = "plan.list"
+            payload = {
+                "project_id": str(args.get("project_id") or "").strip(),
+                "status": str(args.get("status") or "").strip(),
+                "include_deleted": bool(args.get("include_deleted")),
+            }
+        else:
+            return _failed(call, "plan_package action must be save, get, or list")
+        return _from_operation(
+            call,
+            await execute_operation(operation, payload, _operation_metadata(call)),
+        )
+
+    return {"goal": goal, "arrange": arrange, "plan_package": plan_package}
+
+
+def make_plan_package_handler(
+    execute_operation: OperationExecutor,
+    *,
+    work_root: str | Path | None = None,
+) -> Callable[[ToolCall], Awaitable[ToolResult]]:
+    """The plan-package tool, for callers that resolve handlers by name.
+
+    The plan plugin declares this tool, so the toolbox assembles it through
+    `_bundled_plugin_handler` rather than by looking it up in
+    `durable_tool_handlers`; both entry points return the same handler.
+    """
+
+    return durable_tool_handlers(execute_operation, work_root=work_root)["plan_package"]
+
+
+async def plan_package_unavailable(call: ToolCall) -> ToolResult:
+    """What the plan tool answers where there is no operation catalog.
+
+    A host without a catalog cannot reach the plan store at all, and saying so
+    beats the alternative — a tool that looks available and fails at call time
+    with an unrelated error. Async because every tool handler is awaited.
+    """
+
+    return _failed(
+        call,
+        "plan packages are unavailable on this host: it has no operation catalog",
+    )
 
 
 def arrange_requires_approval(args: dict[str, Any]) -> bool:
@@ -277,4 +339,6 @@ __all__ = [
     "arrange_requires_approval",
     "durable_tool_handlers",
     "durable_tool_specs",
+    "make_plan_package_handler",
+    "plan_package_unavailable",
 ]

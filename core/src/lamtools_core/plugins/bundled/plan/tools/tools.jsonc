@@ -1,0 +1,162 @@
+{
+  "tools": [
+    {
+      "name": "plan_package",
+      "description": "Create, read or list a plan package (方案) — the durable document behind a piece of work: the requirement said back in your words, what is deliberately out of scope, the approach and what was rejected, the documents to write, the steps to install when the work starts, the goal and its completion criteria, the risks, and the questions still open. action=save drafts or revises one (a field you leave out keeps its stored value, and every accepted save records a revision you can restore); action=get reads one back — do this before revising it; action=list finds one you only know by title. The package is a document, not a run: this is not the session checklist, which is write_checklist / update_checklist for the turn you are running now.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["save", "get", "list"],
+            "description": "save = create or revise; get = read one by id; list = find by project, status or title"
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "The plan to save onto, read or list. Omit on the first save of a new plan."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "description": "The revision you read before saving. Send it to have a concurrent change refused instead of overwritten."
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project this plan belongs to. Required for a new plan; on desktop a running turn fills it in from its workspace."
+          },
+          "title": { "type": "string", "description": "What this is, in the user's words" },
+          "summary": { "type": "string", "description": "One line a list can show" },
+          "status": {
+            "type": "string",
+            "enum": ["draft", "ready", "executing", "done", "archived"],
+            "description": "draft until the steps are settled; ready needs at least one step; executing/done are set by whoever runs it"
+          },
+          "requirement": {
+            "type": "object",
+            "description": "What is wanted and what is not",
+            "additionalProperties": false,
+            "properties": {
+              "restatement": { "type": "string", "description": "The request said back in your own words" },
+              "success_looks_like": { "type": "string", "description": "What the user will observe when it works" },
+              "non_goals": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Things that could be in scope and are deliberately not"
+              },
+              "assumptions": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "What you assumed instead of asking — each one falsifiable"
+              }
+            }
+          },
+          "open_questions": {
+            "type": "array",
+            "description": "What could not be settled, and what each one blocks",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string" },
+                "question": { "type": "string" },
+                "status": { "type": "string", "enum": ["open", "answered"] },
+                "answer": { "type": "string" }
+              }
+            }
+          },
+          "approach": {
+            "type": "object",
+            "description": "The approach, and the alternatives that lost",
+            "additionalProperties": false,
+            "properties": {
+              "chosen": { "type": "string" },
+              "why": { "type": "string" },
+              "rejected": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "option": { "type": "string" },
+                    "why": { "type": "string", "description": "One line: why it lost" }
+                  }
+                }
+              }
+            }
+          },
+          "checklist": {
+            "type": "object",
+            "description": "The work, ordered, with how each step is proven",
+            "additionalProperties": false,
+            "properties": {
+              "design_summary": { "type": "string" },
+              "files": { "type": "array", "items": { "type": "string" } },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string" },
+                    "description": {
+                      "type": "string",
+                      "description": "What changes, and how you will know it is done — not 'improve X'"
+                    },
+                    "deliverables": { "type": "array", "items": { "type": "string" } },
+                    "status": {
+                      "type": "string",
+                      "enum": ["pending", "in_progress", "completed", "blocked", "skipped", "replaced"]
+                    }
+                  },
+                  "required": ["description"]
+                }
+              }
+            }
+          },
+          "goal": {
+            "type": "object",
+            "description": "What the work is for, and the criteria that end it",
+            "additionalProperties": false,
+            "properties": {
+              "objective": { "type": "string" },
+              "completion_criteria": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "risk": { "type": "string" },
+                "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+                "mitigation": { "type": "string" }
+              }
+            }
+          },
+          "docs": {
+            "type": "array",
+            "description": "Documents written into the project; the package stores the paths, the files hold the text",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": { "type": "string", "description": "Project-relative path, forward slashes" },
+                "kind": { "type": "string", "enum": ["research", "spec", "design", "plan", "tasks", "notes"] },
+                "title": { "type": "string" }
+              }
+            }
+          },
+          "include_deleted": {
+            "type": "boolean",
+            "description": "list only: include plans that were deleted"
+          }
+        },
+        "required": ["action"]
+      },
+      "permission": "auto_allow",
+      "category": "control",
+      "handler": "lamtools_core.tool.durable_tools:make_plan_package_handler"
+    }
+  ]
+}

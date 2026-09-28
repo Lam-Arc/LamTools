@@ -39,6 +39,10 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
         include_str!("../../src/lamtools_core/plugins/bundled/imagegen/plugin.json"),
     ),
     (
+        "plan",
+        include_str!("../../src/lamtools_core/plugins/bundled/plan/plugin.json"),
+    ),
+    (
         "study",
         include_str!("../../src/lamtools_core/plugins/bundled/study/plugin.json"),
     ),
@@ -350,9 +354,9 @@ mod tests {
             .into_iter()
             .map(|plugin| plugin.name)
             .collect();
-        // imagegen / study / websearch declare `universal`; git, workflow and the
-        // desktop pet declare `desktop`, so the phone does not offer them at all.
-        assert_eq!(names, ["imagegen", "study", "websearch"], "{names:?}");
+        // imagegen / study / websearch / plan declare `universal`; git, workflow and
+        // the desktop pet declare `desktop`, so the phone does not offer them at all.
+        assert_eq!(names, ["imagegen", "plan", "study", "websearch"], "{names:?}");
     }
 
     #[test]
@@ -369,6 +373,7 @@ mod tests {
                 "emotion-ball-pet",
                 "git",
                 "imagegen",
+                "plan",
                 "study",
                 "websearch",
                 "workflow"

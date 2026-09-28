@@ -2129,6 +2129,7 @@ class CoreToolbox:
                 command_timeout=command_timeout,
                 max_text_length=max_text_length,
                 imagegen_config=imagegen_config,
+                operation_executor=operation_executor,
                 )
             if handler is None:
                 handler = self._import_plugin_handler(spec)
@@ -2150,12 +2151,24 @@ class CoreToolbox:
         command_timeout: int,
         max_text_length: int,
         imagegen_config: dict | None,
+        operation_executor: OperationExecutor | None = None,
     ) -> ToolHandler | None:
         """内置插件工具（D2 共识）由 core 显式装配——handler 工厂留在
         core 包内，按工具名解析（不走通用动态导入，工厂需要 work_root/
         timeout 等装配参数）。未命中（第三方插件）返回 None 走动态导入。
         """
         name = spec.name
+        if name == "plan_package":
+            # The plan plugin declares the tool; its handler needs the operation
+            # catalog, so it is assembled here instead of imported.
+            from lamtools_core.tool.durable_tools import (
+                make_plan_package_handler,
+                plan_package_unavailable,
+            )
+
+            if operation_executor is None:
+                return plan_package_unavailable
+            return make_plan_package_handler(operation_executor, work_root=self.work_root)
         if name == "git_status":
             return make_git_status_handler(
                 self.work_root,
