@@ -2,7 +2,7 @@
   <section class="settings-panel plugins-root">
     <header class="settings-title">
       <h1>插件</h1>
-      <p>插件 = 工具 / 技能 / Hooks / MCP 的统一安装单元。内置插件（git / websearch / imagegen）可禁用、不可卸载。</p>
+      <p>插件 = 工具 / 技能 / Hooks / MCP 的统一安装单元。内置插件可禁用、不可卸载；每个插件按平台分类（通用 / 桌面端专用 / 移动端专用），本机只列出适用的部分。</p>
     </header>
 
     <p v-if="error" class="skill-error" role="alert">{{ error }}</p>
@@ -46,16 +46,18 @@
     </div>
 
     <!-- 插件列表 -->
+    <!-- 插件列表：按平台分类分组。与本机无关的分类根本不在载荷里，所以这里只会有
+         「本机适用」和「通用」两组，组头让跨端与平台专属一眼可见。 -->
     <div class="provider-list">
-      <section class="provider-group">
+      <section v-for="group in groupedPlugins" :key="group.platforms" class="provider-group">
         <header class="provider-head">
           <div class="provider-identity">
-            <strong>已安装插件</strong>
-            <span>{{ plugins.length }} 个</span>
+            <strong>{{ group.label }}</strong>
+            <span>{{ group.plugins.length }} 个</span>
           </div>
         </header>
         <div class="model-list">
-          <div v-for="plugin in plugins" :key="plugin.name" class="model-row plugin-row" :class="{ 'is-disabled': !plugin.enabled }">
+          <div v-for="plugin in group.plugins" :key="plugin.name" class="model-row plugin-row" :class="{ 'is-disabled': !plugin.enabled }">
             <div class="model-identity">
               <button class="plugin-name-btn" type="button" @click="openConfig(plugin)">
                 <strong>{{ plugin.name }}</strong>
@@ -273,7 +275,10 @@
       </div>
 
       <!-- 目录树对话框：teleport 进 overlay 内（overlay 自身 z-95 高于对话框
-           z-modal，只有作为其子节点才能保证对话框可交互） -->
+           z-modal，只有作为其子节点才能保证对话框可交互）。宿主在这里，由
+           FolderBrowserDialog 挂载后再解析——调用方同一模板里的宿主在子树
+           创建期间还不在文档中，选择器当场解析不到。 -->
+      <div class="plugin-folder-host"></div>
       <FolderBrowserDialog
         v-model="browseDialogOpen"
         :transport="props.transport"
@@ -281,7 +286,6 @@
         @selected="onBrowseSelected"
         @update:model-value="onBrowseDismissed"
       />
-      <div class="plugin-folder-host"></div>
     </div>
   </section>
 </template>
@@ -309,6 +313,8 @@ interface PluginItem {
   description: string
   root: string
   enabled: boolean
+  /** 平台分类：desktop / mobile / universal（未声明按 universal 处理）。 */
+  platforms?: string
   skills: string[]
   hooks: string[]
   mcp: string[]
@@ -435,8 +441,33 @@ let pendingBrowseResolve: ((path: string | null) => void) | null = null
 
 const enabledCount = computed(() => plugins.value.filter((p) => p.enabled).length)
 
+/** 分类分组与组标题；顺序即显示顺序。 */
+const PLATFORM_GROUPS: { platforms: string; label: string }[] = [
+  { platforms: 'universal', label: '通用' },
+  { platforms: 'desktop', label: '桌面端专用' },
+  { platforms: 'mobile', label: '移动端专用' },
+]
+
+/**
+ * 插件按平台分类分组。
+ *
+ * 分类由插件清单声明、宿主按「通用 + 本机」过滤后下发，所以另一平台的组在这里
+ * 只会是空组（本机载荷里根本没有那些插件）；未声明或值陌生的按通用处理，与宿主
+ * 侧的默认一致。
+ */
+const groupedPlugins = computed(() => PLATFORM_GROUPS
+  .map(group => ({
+    ...group,
+    plugins: plugins.value.filter(plugin => platformClass(plugin) === group.platforms),
+  }))
+  .filter(group => group.plugins.length > 0))
+
+function platformClass(plugin: PluginItem): string {
+  return plugin.platforms === 'desktop' || plugin.platforms === 'mobile' ? plugin.platforms : 'universal'
+}
+
 function isBundled(plugin: PluginItem): boolean {
-  return plugin.builtin === true || ['git', 'websearch', 'imagegen', 'study', 'workflow'].includes(plugin.name)
+  return plugin.builtin === true
 }
 
 function toolCount(plugin: PluginItem): number {

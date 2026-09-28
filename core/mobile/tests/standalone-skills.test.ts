@@ -43,6 +43,10 @@ function store() {
   return new StandaloneExtensionsStore(
     new MemoryStandaloneStateStorage<any>(),
     async () => [],
+    undefined,
+    undefined,
+    // One bundled skill, so the panel has a non-deletable row to judge against.
+    async () => [{ name: 'bundled-example', description: '随包内置', location: 'bundled://core/bundled-example/SKILL.md' }],
   )
 }
 
@@ -70,7 +74,10 @@ describe('standalone user skills', () => {
       enabled: true,
       description: '何时使用',
     })
-    expect(listed.find(skill => skill.name === 'plugin-manager')).toMatchObject({ deletable: false })
+    expect(listed.find(skill => skill.name === 'bundled-example')).toMatchObject({
+      source: 'core',
+      deletable: false,
+    })
 
     // Host-side validation reaches the panel instead of being swallowed.
     await expect(manager.handleRpc('skill.create', { name: 'bad name', description: 'd', content: 'c' }))
@@ -81,7 +88,7 @@ describe('standalone user skills', () => {
       .rejects.toThrow('已存在')
 
     // A bundled skill cannot be deleted through this path.
-    await expect(manager.handleRpc('skill.delete', { name: 'plugin-manager' }))
+    await expect(manager.handleRpc('skill.delete', { name: 'bundled-example' }))
       .rejects.toThrow('只允许删除自建技能')
     expect(await manager.handleRpc('skill.delete', { name: 'my-skill' }))
       .toEqual({ name: 'my-skill', location: 'skills/my-skill/SKILL.md', deleted: true })

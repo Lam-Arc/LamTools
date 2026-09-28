@@ -4,7 +4,7 @@ description: Read or extract, merge, split, rotate, reorder or fill PDFs, or exp
 metadata:
   version: 0.2.0
   language: zh-CN
-  target: lamtools-desktop
+  platforms: desktop
   status: beta
 ---
 

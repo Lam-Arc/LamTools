@@ -20,15 +20,16 @@ use lamtools_runtime::{
     workflow_store::WorkflowStore,
     image_gen::{GenerateImageTools, ImageGenConfig, ImageSink},
     web_search::WebSearchTools,
-    AgentContext, AgentRuntime, ApprovalResponse, DeviceCapabilities, Message, ModelBackend,
-    ToolCall, ToolObserver, ToolRuntime, TurnContinuation, TurnOptions, TurnProgress, TurnRequest,
+    AgentContext, AgentRuntime, ApprovalResponse, DeviceCapabilities, HostPlatform, Message,
+    ModelBackend, ToolCall, ToolObserver, ToolRuntime, TurnContinuation, TurnOptions, TurnProgress,
+    TurnRequest,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -892,10 +893,23 @@ fn sunday_update_install(
 ) -> Result<Value, String> {
     let file_name = verified_update_file(&app).ok_or_else(|| "尚未下载并校验安装包".to_owned())?;
     let file_name = validate_update_file_name(&file_name)?;
-    shell
+    let result = shell
         .0
         .run_mobile_plugin::<Value>("installApk", ShellFileRequest { file_name: &file_name })
         .map_err(|_| "无法启动系统安装器".to_owned())?;
+    // Android 8+ keeps "install unknown apps" per source app. When this app has
+    // not been allowed yet the host opens that settings screen and reports it,
+    // so the update card can say what to do instead of looking like a failure.
+    if result.get("needsPermission").and_then(Value::as_bool) == Some(true) {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "needs_permission": true,
+            "error": result
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("请先允许 Sunday 安装应用，然后重试"),
+        }));
+    }
     Ok(serde_json::json!({
         "ok": true,
         "message": "已交给系统安装器；请在系统界面确认安装",
@@ -1325,9 +1339,16 @@ async fn project_agents_md(
     .map_err(|error| error.to_string())?
 }
 
+/// The bundled plugin catalogue the extensions panel renders.
+///
+/// Read from the embedded manifests and filtered by the class each of them
+/// declares: this host is mobile, so a plugin declared `desktop` — git, workflow,
+/// the desktop pet — is not in this list at all, and one declared `universal`
+/// arrives with the name, version, description, skill roots, modes and tool
+/// comparison its manifest carries.
 #[tauri::command]
-fn sunday_plugin_inventory() -> Vec<lamtools_runtime::plugin_catalog::PluginInventory> {
-    lamtools_runtime::plugin_catalog::bundled_plugin_inventory()
+fn sunday_plugin_catalog() -> Vec<lamtools_runtime::plugin_catalog::BundledPlugin> {
+    lamtools_runtime::plugin_catalog::bundled_plugins(lamtools_runtime::HostPlatform::Mobile)
 }
 
 /// The in-app update manifest, fetched by the host rather than the WebView.
@@ -1876,13 +1897,27 @@ async fn sunday_agent_turn_inner(
     let project_runtime: Arc<dyn ToolRuntime> =
         Arc::new(ProjectFileTools::new(project_root.clone()));
     let (skill_runtime, skill_prompt): (Arc<dyn ToolRuntime>, String) = if payload.study_tools {
-        let skills = CombinedSkillTools::new(payload.disabled_skill_names.clone(), Vec::new());
-        let prompt = SkillTools::new(payload.disabled_skill_names.clone(), Vec::new())
-            .catalog_prompt_for(&capabilities);
+        let skills = CombinedSkillTools::new(
+            payload.disabled_skill_names.clone(),
+            skill_roots(&app),
+            HostPlatform::Mobile,
+        );
+        // The Study skills are contributed by `apply_study_skill_context` above, so
+        // this prompt carries the core skills only.
+        let prompt = SkillTools::new(
+            payload.disabled_skill_names.clone(),
+            skill_roots(&app),
+            HostPlatform::Mobile,
+        )
+        .catalog_prompt();
         (Arc::new(skills), prompt)
     } else {
-        let skills = SkillTools::new(payload.disabled_skill_names.clone(), Vec::new());
-        let prompt = skills.catalog_prompt_for(&capabilities);
+        let skills = SkillTools::new(
+            payload.disabled_skill_names.clone(),
+            skill_roots(&app),
+            HostPlatform::Mobile,
+        );
+        let prompt = skills.catalog_prompt();
         (Arc::new(skills), prompt)
     };
     if !skill_prompt.is_empty() {
@@ -2169,8 +2204,12 @@ async fn sunday_agent_resume_inner(
             payload.sub_agent_enabled,
             &payload.sub_agent_guide,
         );
-        let skill_prompt = SkillTools::new(payload.disabled_skill_names.clone(), Vec::new())
-            .catalog_prompt_for(&capabilities);
+        let skill_prompt = SkillTools::new(
+            payload.disabled_skill_names.clone(),
+            skill_roots(&app),
+            HostPlatform::Mobile,
+        )
+        .catalog_prompt();
         if !skill_prompt.is_empty() {
             context.mode_context.push_str("\n\n");
             context.mode_context.push_str(&skill_prompt);
@@ -2179,12 +2218,14 @@ async fn sunday_agent_resume_inner(
     let skill_runtime: Arc<dyn ToolRuntime> = if payload.study_tools {
         Arc::new(CombinedSkillTools::new(
             payload.disabled_skill_names.clone(),
-            Vec::new(),
+            skill_roots(&app),
+            HostPlatform::Mobile,
         ))
     } else {
         Arc::new(SkillTools::new(
             payload.disabled_skill_names.clone(),
-            Vec::new(),
+            skill_roots(&app),
+            HostPlatform::Mobile,
         ))
     };
     // Web search needs only the network, and the desktop host offers it in Study
@@ -3714,6 +3755,41 @@ fn native_user_skill_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, 
         .join("skills"))
 }
 
+/// The skill roots that live under an app data directory, in the desktop layout
+/// `{data}/skills/<name>/SKILL.md` — the one `create_user_skill` writes and the
+/// runtime scanner reads.
+fn user_skill_roots(app_data_dir: &Path) -> Vec<PathBuf> {
+    vec![app_data_dir.join("skills")]
+}
+
+/// Skill directories every turn mounts.
+///
+/// The app-private root is the one the 新建技能 panel writes, so a skill the user
+/// created is a skill the agent can load — the panel says as much, and a listing
+/// the model cannot reach would be the same broken promise as a skill it cannot
+/// run. An unreadable data directory leaves the turn without roots rather than
+/// failing it: the project root is resolved first and already refuses in that
+/// case.
+fn skill_roots(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .map(|data| user_skill_roots(&data))
+        .unwrap_or_default()
+}
+
+/// Core skills this host offers, read from the runtime that loads them.
+///
+/// Embedded skills only: the user's own skills are listed by `sunday_user_skills`
+/// from the directory they live in, and naming them here as well would list each
+/// one twice in the panel. The runtime drops any skill whose own frontmatter
+/// declares a desktop target, which is why the panel asks rather than keeping a
+/// list of its own — an offer the panel shows but `load_skill` refuses is exactly
+/// what this command exists to prevent.
+#[tauri::command]
+fn sunday_core_skill_catalog() -> Vec<lamtools_runtime::skills::SkillRecord> {
+    SkillTools::new(Vec::new(), Vec::new(), HostPlatform::Mobile).catalog()
+}
+
 fn safe_skill_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -4012,7 +4088,8 @@ pub fn run() {
         sunday_sub_agent_approval,
         sunday_study_rpc,
         sunday_study_skill_catalog,
-        sunday_plugin_inventory,
+        sunday_core_skill_catalog,
+        sunday_plugin_catalog,
         sunday_update_manifest,
         sunday_update_download,
         sunday_update_status,
@@ -4071,7 +4148,8 @@ pub fn run() {
         sunday_sub_agent_approval,
         sunday_study_rpc,
         sunday_study_skill_catalog,
-        sunday_plugin_inventory,
+        sunday_core_skill_catalog,
+        sunday_plugin_catalog,
         sunday_update_manifest,
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
@@ -4133,7 +4211,15 @@ mod tests {
             );
             assert!(entry["schema"]["properties"].is_object());
         }
-        assert!(schemas.get("git").is_none(), "git declares no schema");
+        // A plugin with no schema is reported without one, so the map carries the
+        // two that declare one and nothing else.
+        let names: Vec<&str> = schemas
+            .as_object()
+            .expect("schema map")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(names, ["imagegen", "websearch"]);
 
         // Settings shaped like the websearch schema must select the kernel the
         // panel chose, and missing settings must keep search usable.
@@ -4194,6 +4280,49 @@ description: 何时使用这个技能
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[tokio::test]
+    async fn a_skill_the_user_creates_is_one_the_agent_can_load() {
+        let data = std::env::temp_dir().join(format!("sunday-app-data-{}", uuid::Uuid::new_v4()));
+        let roots = user_skill_roots(&data);
+        assert_eq!(roots.len(), 1);
+        assert!(
+            roots[0].ends_with("skills"),
+            "roots[0] is {:?}",
+            roots[0]
+        );
+
+        // What the 新建技能 panel writes, read back by the runtime the agent gets.
+        create_user_skill(&roots[0], "my-note-style", "写作风格", "正文指引")
+            .await
+            .unwrap();
+        let skills = SkillTools::new(Vec::new(), roots, HostPlatform::Mobile);
+        let names: Vec<String> = skills.catalog().into_iter().map(|skill| skill.name).collect();
+        assert_eq!(names, ["my-note-style"]);
+        assert!(
+            skills.catalog_prompt().contains("my-note-style"),
+            "{}",
+            skills.catalog_prompt()
+        );
+        let loaded = skills.load("my-note-style").unwrap();
+        assert!(loaded["content"].as_str().unwrap().contains("正文指引"));
+
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn the_phone_offers_no_core_skills_and_the_loader_says_why() {
+        // Every embedded core skill declares a desktop target, and this host has
+        // no shell, so the runtime offers none of them. The panel reads this list;
+        // a skill that reappears here is a decision, not an oversight.
+        assert!(sunday_core_skill_catalog().is_empty());
+
+        let runtime = SkillTools::new(Vec::new(), Vec::new(), HostPlatform::Mobile);
+        assert!(runtime.catalog().is_empty());
+        let refusal = runtime.load("office-documents").unwrap_err().to_string();
+        assert!(refusal.contains("not available on this device"), "{refusal}");
+        assert!(refusal.contains("desktop host"), "{refusal}");
+    }
+
     #[test]
     fn skill_frontmatter_description_matches_the_runtime_parser() {
         assert_eq!(
@@ -4218,6 +4347,30 @@ name: a
 ---
 "), "Specialized capability.");
         assert_eq!(skill_description("no frontmatter"), "Specialized capability.");
+    }
+
+    #[test]
+    fn the_plugin_page_reads_a_class_filtered_catalogue_from_this_host() {
+        let plugins = sunday_plugin_catalog();
+        let names: Vec<String> = plugins.iter().map(|plugin| plugin.name.clone()).collect();
+        // The three universal plugins; git, workflow and the desktop pet declare
+        // `desktop`, so the phone's panel never sees them.
+        assert_eq!(names, ["imagegen", "study", "websearch"], "{names:?}");
+        let study = plugins
+            .iter()
+            .find(|plugin| plugin.name == "study")
+            .expect("study entry");
+        assert_eq!(study.platforms, "universal");
+        // Everything the panel shows comes from the manifest, so the payload and
+        // the plugin the desktop loads cannot describe different things.
+        assert_eq!(study.version, "1.0.0");
+        assert_eq!(
+            study.skills,
+            ["bundled://study/skills", "bundled://study/future"]
+        );
+        assert!(study.skill_names.contains(&"teach".to_string()));
+        assert_eq!(study.modes.len(), 1);
+        assert_eq!(study.modes[0].capabilities, Some(vec!["notes".to_string()]));
     }
 
     #[test]

@@ -4,7 +4,7 @@ description: Organize email, extract questions/tasks, draft replies/notices/foll
 metadata:
   version: 0.2.0
   language: zh-CN
-  target: lamtools-desktop
+  platforms: desktop
   status: beta
 ---
 

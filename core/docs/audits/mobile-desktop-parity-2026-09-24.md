@@ -67,7 +67,7 @@
 | 会话检查点/回滚 | `session.checkpoints.*`、`session.fork`、`session.rollback` | **已对齐**（0.1.20）：节点字段/图与头/恢复载荷照桌面；检查点存项目文件清单哈希（与 artifact blob 同一内容寻址），恢复先记 undo 检查点、从 blob 写回并记新版本、删除检查点之后新建的文件；fork 派生分支会话，rollback 恢复文件并截断该回合之后的对话 |
 | Goal（持久目标） | `runtime/goal.py` + `goal.*` 操作 | **已对齐**（0.1.19）：字段、状态机（active↔blocked→archived，archived 终态）、乐观并发 revision、`completed_at`、校验语与桌面一致；`goal.create/get/list/update` 齐备 |
 | 定时/编排可视化 | `arrange.*` 有，`CoreArrangeManager.vue` 共享 | 有 store，但**未核实**是否覆盖 occurrence/signal 全部语义 |
-| Office 文档 | `office` CLI（validate/render）+ `office-*` 技能 + 渲染合同 | 只有 `office-*` **技能文本**；无 CLI、无渲染器，技能指向的命令在移动端不可执行 |
+| Office 文档 | `office` CLI（validate/render）+ `office-*` 技能 + 渲染合同 | 无 CLI、无渲染器；0.1.22 起技能文本可读且附能力说明，**0.1.43 起不再提供这些技能**（清单/面板/`load_skill` 同一判定），Office 渲染仍为桌面能力 |
 | 命令系统 | `command.catalog`、`command.execute`、`run_command` 工具 | 无 shell 能力（`capabilities.shell=false`），无命令目录 |
 | 桌面宠物 | `emotion-ball-pet` 插件 + 桌面挂件 | 按你的决定排除 |
 | Workflow | 35 个 `workflow.*` + 5 个 Agent 工具 | 仅 UI RPC 面，**未向 Agent 装配工具**（按你的决定排除） |
@@ -83,13 +83,26 @@
 5. **Office 渲染**：技能存在但命令不可执行——要么补一个移动端渲染路径，要么把技能在移动端隐藏/改写。
 6. **会话检查点/回滚与 Goal**：桌面是两个完整子系统，移动端为零。这是**最大的两块结构缺口**。
 
-### 技能与 CLI 依赖（0.1.22 处理）
+### 技能与 CLI 依赖（0.1.22 说明，0.1.43 封禁，0.1.44 统一分类）
 
 14 个内置技能中 7 个（office-documents/charts/slides/spreadsheets/infographics/pdf/renderer）描述了
 `py -3.14 -m lamtools_core.cli office …` 的验证/渲染步骤。技能文本两平台共用、不做平台改写；
-取而代之的是宿主自述能力：无 shell 的宿主在技能清单后追加一行，说明这些步骤需要桌面端、
+0.1.22 的处理是宿主自述能力：无 shell 的宿主在技能清单后追加一行，说明这些步骤需要桌面端、
 本机应直接产出源文件、验证与渲染在桌面完成。Office 渲染本身是桌面能力（Android 无 Python
 与 Office 应用），不移植。
+
+0.1.43 改为封禁：清单照旧列出、加载时再拒绝，等于让模型先承诺一步做不到的工作，因此**清单、
+面板、`load_skill` 三处共用同一个宿主判定**；git 插件同样从面板与运行时清单里移除（Android
+没有 git 可执行文件、项目目录也不是仓库，那一行只能报告它装配不出的工具）。
+
+0.1.44 把这套判定收敛成一套分类：技能与插件都用 `platforms: desktop | mobile | universal`
+自报归属（缺省通用），宿主只提供「通用 + 本机」。技能侧判定随之从「本机有没有 shell」这个
+间接代理换成直接比对声明；插件侧则在**发现阶段**按分类过滤——另一平台的插件整块不装配，
+它的工具/技能/钩子/MCP/模式/挂件都不进本机，插件页也没有它，安装时明确拒绝而不是装完消失。
+分类表：imagegen / study / websearch 通用，git / workflow / emotion-ball-pet 桌面专属，
+移动专属目前为空（类别先建好并用测试固定）。技能：14 个内置技能桌面专属，Study 技能与用户
+自建技能未声明即通用。插件页按分类分组显示，界面上那份手写的内置插件名单也换成了载荷里的
+`builtin` 字段。详见 `docs/plugin-dev-guide.md`。
 
 ## 补充：工具层与运行时语义（CLI 维度已剔除）
 
@@ -122,6 +135,8 @@
 
 技能文本基本不依赖桌面工具名：14 个 Core 技能＋Study 技能里只有 `plugin-manager/SKILL.md` 提到一次 `edit_file`，
 `search_files`/`search_content`/`web_fetch`/`run_command`/`write_checklist` 均无提及。技能数量也对上：Core 14 + Study 5。
+（0.1.43 起移动端只提供 Study 5 + 自建技能：那 14 个技能的**流程**依赖桌面能力，与工具名是否统一无关，
+见「技能与 CLI 依赖」一节。）
 
 ### MCP 语义不同
 

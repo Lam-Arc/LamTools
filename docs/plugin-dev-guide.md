@@ -26,6 +26,7 @@
   "version": "0.1.0",               // 必填：语义化版本
   "description": "一句话描述",
   "manifest_version": "1",          // 缺省 1；未知版本拒绝加载（`x-*` 键透传保留）
+  "platforms": "universal",         // 平台分类，见下节；缺省 universal
   "skills": ["./skills"],           // ./ 相对路径，不得逃出插件根
   "hooks": ["./hooks/hooks.json"],
   "mcpServers": ["./mcp/mcp.json"], // 可选
@@ -35,6 +36,22 @@
   "configSchema": "./config/schema.jsonc" // 可选：配置 schema
 }
 ```
+
+### 平台分类（`platforms`）
+
+插件按「桌面 / 移动 / 通用」归类，宿主只提供**本机适用 + 通用**的部分：
+
+| 值 | 含义 | 示例 |
+|---|---|---|
+| `universal` | 通用（**缺省**）：两端都提供 | websearch / imagegen / study |
+| `desktop` | 桌面专属：手机没有对应能力 | git（无 git 可执行文件）、workflow（执行面在桌面）、emotion-ball-pet（桌面挂件窗口） |
+| `mobile` | 移动专属：桌面没有对应能力 | （目前没有内置插件属于这一类） |
+
+- 分类由插件自己在清单里声明，宿主的插件页、模式、工具、技能、钩子、MCP 都按它过滤：分类不含本机的插件**整块不装配**，也不出现在面板里。
+- 桌面端安装一个分类不是本机的插件会被明确拒绝（报出它声明的分类），而不会装完静默消失。
+- 取值只允许上面三个词；写错会按清单错误报出，不会被当成「没声明」。
+- 用户自装与社区插件的清单通常没有这个键——那就是 `universal`，行为与加这个字段之前一致。
+- 技能侧用同一套词：SKILL.md 的 frontmatter 里写 `metadata.platforms`，缺省同样是通用。
 
 所有 `./` 路径强制以 `./` 开头且解析后必须仍在插件根内（越界拒绝加载）。
 

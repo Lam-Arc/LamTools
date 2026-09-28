@@ -18,7 +18,7 @@ use crate::study::IMPLEMENTED_STUDY_TOOLS;
 use crate::sub_agent::{SUB_AGENT_MESSAGE_TOOL, SUB_AGENT_TOOL};
 use crate::skills::CombinedSkillTools;
 use crate::web_search::WebSearchTools;
-use crate::{DeviceCapabilities, ToolRuntime};
+use crate::{DeviceCapabilities, HostPlatform, ToolRuntime};
 
 /// One selectable tool in the editor.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -104,10 +104,12 @@ pub fn catalog_tools() -> Vec<CatalogTool> {
         &mut names,
     );
     // Skills are embedded in the runtime, so the catalog can ask the real
-    // runtime rather than naming `load_skill` itself.
+    // runtime rather than naming `load_skill` itself. The mode editor grants tool
+    // names, which this host's skill gate does not change, so the class here only
+    // picks which skills the runtime carries.
     push(
         definitions(
-            CombinedSkillTools::new(Vec::new(), Vec::new()),
+            CombinedSkillTools::new(Vec::new(), Vec::new(), HostPlatform::Mobile),
             &capabilities,
         ),
         &mut names,

@@ -4,7 +4,7 @@ description: Research using local materials plus websearch/webfetch; report sour
 metadata:
   version: 0.2.0
   language: zh-CN
-  target: lamtools-desktop
+  platforms: desktop
   status: beta
 ---
 

@@ -107,3 +107,45 @@ def test_invalid_ui_manifest_is_reported(tmp_path: Path) -> None:
     assert registry.discover() == []
     assert registry.discover_errors
     assert "existing" in registry.discover_errors[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_plugin_ui_list_carries_the_mode_capability_declaration(tmp_path: Path) -> None:
+    """模式的能力声明要走到界面真正读它的那个通道。
+
+    界面通过 plugin.ui.list 取模式，只有 plugin.list 带声明时，Study 的 notes
+    声明在共享界面等于没声明（2026-09-28 修）。
+    """
+    root = tmp_path / "plugins"
+    _ui_plugin(
+        root,
+        "claiming",
+        modes=[{"id": "study", "title": "Study", "entry": "./ui/index.ts", "capabilities": ["notes"]}],
+    )
+    _ui_plugin(root, "silent", modes=[{"id": "main", "title": "Main", "entry": "./ui/index.ts"}])
+    state = PluginStateStore(tmp_path / "state.jsonc")
+    catalog = _catalog(root, state)
+
+    ui = await catalog.execute("plugin.ui.list")
+    by_id = {item["id"]: item for item in ui.payload["modes"]}
+
+    assert by_id["study"]["capabilities"] == ["notes"]
+    # 未声明则整个字段不出现，界面读作"没有声明"而不是"什么都不支持"。
+    assert "capabilities" not in by_id["main"]
+
+
+@pytest.mark.asyncio
+async def test_plugin_list_reports_the_declared_platform_class(tmp_path: Path) -> None:
+    """插件列表带上分类，插件页据此分组。"""
+    root = tmp_path / "plugins"
+    _ui_plugin(root, "shared")
+    manifest = json.loads((root / "shared" / "plugin.json").read_text(encoding="utf-8"))
+    manifest["platforms"] = "desktop"
+    (root / "shared" / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+    state = PluginStateStore(tmp_path / "state.jsonc")
+    catalog = _catalog(root, state)
+
+    listed = await catalog.execute("plugin.list")
+    entry = next(item for item in listed.payload["plugins"] if item["name"] == "shared")
+
+    assert entry["platforms"] == "desktop"

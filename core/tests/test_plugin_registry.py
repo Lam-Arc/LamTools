@@ -282,3 +282,70 @@ def test_bundled_study_mode_declares_the_note_vault_capability():
     # An undeclared mode omits the field entirely, which the UI reads as "make
     # no claim" rather than "supports nothing".
     assert "capabilities" not in payloads["workflow"]["modes"][0]
+
+
+def test_the_platform_class_is_declared_per_plugin_and_defaults_to_universal(tmp_path: Path):
+    """平台分类：未声明 = 通用，取值非法按清单错误报出。"""
+    root = tmp_path / "plugins"
+    write_json(root / "plain" / "plugin.json", {"name": "plain", "version": "0.1.0"})
+    write_json(
+        root / "desktop-only" / "plugin.json",
+        {"name": "desktop-only", "version": "0.1.0", "platforms": "desktop"},
+    )
+    write_json(
+        root / "typo" / "plugin.json",
+        {"name": "typo", "version": "0.1.0", "platforms": "destkop"},
+    )
+
+    registry = PluginRegistry(plugin_roots=[root])
+    by_name = {item.name: item for item in registry.discover()}
+
+    # 未声明即通用：老清单与第三方插件的行为与加这个字段之前完全一致。
+    assert by_name["plain"].platforms == "universal"
+    assert by_name["desktop-only"].platforms == "desktop"
+    # 写错别字不会被当成"没声明"悄悄放行。
+    assert [error["name"] for error in registry.discover_errors] == ["typo"]
+    assert "unsupported platforms 'destkop'" in registry.discover_errors[0]["error"]
+
+
+def test_a_plugin_declared_for_another_platform_is_not_offered_here(tmp_path: Path):
+    """另一平台的插件整块不装配：插件页没有它，它的技能也不会进来。"""
+    root = tmp_path / "plugins"
+    write_json(
+        root / "phone-only" / "plugin.json",
+        {
+            "name": "phone-only",
+            "version": "0.1.0",
+            "platforms": "mobile",
+            "skills": ["./skills"],
+            "tools": ["./tools/tools.jsonc"],
+        },
+    )
+    write_json(
+        root / "shared" / "plugin.json",
+        {"name": "shared", "version": "0.1.0", "platforms": "universal"},
+    )
+
+    registry = PluginRegistry(plugin_roots=[root])
+
+    assert [item.name for item in registry.discover()] == ["shared"]
+    # 跳过不是错误：清单本身没毛病，只是不是本机的。
+    assert registry.discover_errors == []
+
+
+def test_every_bundled_plugin_declares_its_platform_class():
+    """内置插件逐个表态（用户 2026-09-28 共识的分类表），不留默认值兜底。"""
+    bundled = Path(__file__).resolve().parents[1] / "src" / "lamtools_core" / "plugins" / "bundled"
+    discovered = PluginRegistry(plugin_roots=[bundled]).discover()
+
+    # "没写" 会被当成通用，而内置插件的平台归属是一次明确的决定，不是默认值。
+    assert [item.name for item in discovered if "platforms" not in item.raw] == []
+    assert {item.name: item.platforms for item in discovered} == {
+        # 手机没有 git 可执行文件、工作流的执行面和桌宠窗口都在桌面。
+        "emotion-ball-pet": "desktop",
+        "git": "desktop",
+        "workflow": "desktop",
+        "imagegen": "universal",
+        "study": "universal",
+        "websearch": "universal",
+    }

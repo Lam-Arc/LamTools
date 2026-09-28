@@ -37,6 +37,13 @@ const SCHEMAS = {
   },
 }
 
+/** The plugin catalogue the host reports: the universal plugins, and study. */
+const CATALOG = [
+  { name: 'imagegen', version: '0.1.0', description: '生图工具', platforms: 'universal', skills: [], skill_names: [], modes: [], dependencies: [], tools: [], declared_tool_count: 0, tools_note: '' },
+  { name: 'websearch', version: '0.1.0', description: '网页搜索', platforms: 'universal', skills: [], skill_names: [], modes: [], dependencies: [], tools: [], declared_tool_count: 0, tools_note: '' },
+  { name: 'study', version: '1.0.0', description: '全局学习空间与文本批注', platforms: 'universal', skills: [], skill_names: [], modes: [], dependencies: [], tools: [], declared_tool_count: 0, tools_note: '' },
+]
+
 function store(storage = new MemoryStandaloneStateStorage<any>()) {
   return new StandaloneConfigStore(new MemorySecureStorage(), storage)
 }
@@ -110,8 +117,8 @@ describe('standalone plugin configuration', () => {
       limit: 8,
       timeout: 20,
     })
-    await expect(config.handleRpc('plugin.config.get', { name: 'git' }))
-      .rejects.toThrow("插件 'git' 没有可配置项")
+    await expect(config.handleRpc('plugin.config.get', { name: 'workflow' }))
+      .rejects.toThrow("插件 'workflow' 没有可配置项")
   })
 
   it('answers the JSONC websearch editor with the document the runtime will read', async () => {
@@ -161,9 +168,7 @@ describe('standalone plugin configuration', () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'sunday_plugin_schemas') return SCHEMAS
-      if (command === 'sunday_plugin_inventory') return []
-      if (command === 'sunday_study_skill_catalog') return []
-      if (command === 'sunday_user_skills') return []
+      if (command === 'sunday_plugin_catalog') return CATALOG
       throw new Error(`unexpected ${command}`)
     })
     const extensions = new StandaloneExtensionsStore(
@@ -174,8 +179,10 @@ describe('standalone plugin configuration', () => {
     const byName = Object.fromEntries(plugins.map(plugin => [plugin.name, plugin]))
     expect(byName.imagegen.config_schema).toBe('bundled://imagegen/config/schema.jsonc')
     expect(byName.websearch.config_schema).toBe('bundled://websearch/config/schema.jsonc')
-    // No schema means no configuration button, rather than an empty form.
-    expect(byName.git.config_schema).toBe('')
-    expect(byName.workflow.config_schema).toBe('')
+    // A schema-less plugin shows no configuration entry rather than an empty
+    // form; a desktop-class plugin is not offered here at all.
+    expect(byName.study.config_schema).toBe('')
+    expect(byName.git).toBeUndefined()
+    expect(byName.workflow).toBeUndefined()
   })
 })

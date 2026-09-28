@@ -31,5 +31,7 @@
       "cardHeight": 360,
       "margin": 24
     }
-  }
+  },
+  "builtin": true,
+  "platforms": "desktop"
 }

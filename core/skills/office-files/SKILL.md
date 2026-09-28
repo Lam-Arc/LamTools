@@ -4,7 +4,7 @@ description: Inventory authorized office files; classify, archive, rename or mov
 metadata:
   version: 0.2.0
   language: zh-CN
-  target: lamtools-desktop
+  platforms: desktop
   status: beta
 ---
 

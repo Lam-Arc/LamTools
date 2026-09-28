@@ -18,3 +18,20 @@ instructions in `SKILL.md`, UI metadata in `agents/openai.yaml`, and its executa
 Python package in `scripts/`. It is explicit-only supporting infrastructure rather than
 an automatic content-authoring route. Core provides the thin `office validate` /
 `office render` CLI adapter and loads the Skill-owned runtime lazily.
+
+## Platform class
+
+Every built-in skill declares which host it is for, in the same three words the
+plugin manifests use:
+
+```yaml
+metadata:
+  platforms: desktop   # desktop | mobile | universal (absent = universal)
+```
+
+All fourteen skills here are `desktop`: the Office bundle validates and renders
+through `py -3.14 -m lamtools_core.cli office …`, `create-plugin` and
+`plugin-manager` end at the desktop plugin installer, and `observe-events` binds
+its observer to a desktop event Arrange. A host that is not `desktop` does not
+offer them at all — no catalog entry, no prompt line, and `load_skill` refuses
+with the reason. Study's own skills declare nothing and are therefore universal.

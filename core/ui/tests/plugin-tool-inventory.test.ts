@@ -80,3 +80,39 @@ describe('plugin tool inventory display', () => {
     expect(wrapper.findAll('.is-plugins-note')).toHaveLength(0)
   })
 })
+
+describe('plugin platform classification', () => {
+  it('groups by the class the host reported and reads 内置 from the payload', async () => {
+    const wrapper = mountEditor([
+      plugin({ name: 'websearch', platforms: 'universal', builtin: true }),
+      plugin({ name: 'git', platforms: 'desktop', builtin: true }),
+      plugin({ name: 'phone-thing', platforms: 'mobile', builtin: false }),
+      // 未声明即通用，与宿主侧的默认一致（第三方插件不会因为没写而消失）。
+      plugin({ name: 'community', builtin: false }),
+    ])
+    await flushPromises()
+
+    const groups = wrapper.findAll('.provider-group')
+    expect(groups.map(group => group.find('.provider-head strong').text()))
+      .toEqual(['通用', '桌面端专用', '移动端专用'])
+    const namesIn = (index: number) => groups[index]
+      .findAll('.plugin-name-btn strong')
+      .map(node => node.text())
+    expect(namesIn(0)).toEqual(['websearch', 'community'])
+    expect(namesIn(1)).toEqual(['git'])
+    expect(namesIn(2)).toEqual(['phone-thing'])
+
+    // 内置徽标与卸载按钮都读载荷里的 builtin，界面上不再存第二份内置名单。
+    expect(groups[1].text()).toContain('内置')
+    expect(groups[1].find('[aria-label="卸载"]').exists()).toBe(false)
+    expect(groups[2].find('[aria-label="卸载"]').exists()).toBe(true)
+  })
+
+  it('shows no group for a class the host did not send', async () => {
+    const wrapper = mountEditor([plugin({ name: 'study', platforms: 'universal' })])
+    await flushPromises()
+
+    expect(wrapper.findAll('.provider-group')).toHaveLength(1)
+    expect(wrapper.find('.provider-head strong').text()).toBe('通用')
+  })
+})

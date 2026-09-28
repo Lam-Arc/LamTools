@@ -4,7 +4,7 @@ description: Create trend/share/comparison/distribution/correlation charts from 
 metadata:
   version: 0.2.0
   language: zh-CN
-  target: lamtools-desktop
+  platforms: desktop
   status: beta
 ---
 

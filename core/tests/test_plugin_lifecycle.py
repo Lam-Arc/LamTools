@@ -608,3 +608,35 @@ async def test_skill_create_roundtrip(lifecycle, tmp_path, monkeypatch):
     assert missing.status == "error"
     bad_name = await catalog.execute("skill.create", {"name": "bad name!", "description": "x", "content": "y"})
     assert bad_name.status == "error"
+
+
+async def test_plugin_install_refuses_a_plugin_for_another_platform(lifecycle, tmp_path):
+    """分类不是本机的插件装上也跑不起来，所以在安装这一步就说清楚。
+
+    发现阶段的过滤是静的（插件页不会出现它），因此这里必须报错而不是静默装进去。
+    """
+    catalog, _data_dir, roots = lifecycle
+    src = _make_plugin_dir(tmp_path, name="phone-only")
+    manifest = json.loads((src / "plugin.json").read_text(encoding="utf-8"))
+    manifest["platforms"] = "mobile"
+    (src / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = await catalog.execute("plugin.install", {"source": "local", "path": str(src)})
+
+    assert result.status == "error"
+    assert "platforms='mobile'" in result.payload["error"]
+    # 拒绝要干净：插件根里不留任何东西。
+    assert [item.name for item in roots.iterdir()] == []
+
+
+async def test_plugin_install_accepts_a_plugin_for_this_platform(lifecycle, tmp_path):
+    catalog, _data_dir, roots = lifecycle
+    src = _make_plugin_dir(tmp_path, name="desktop-tool")
+    manifest = json.loads((src / "plugin.json").read_text(encoding="utf-8"))
+    manifest["platforms"] = "desktop"
+    (src / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = await catalog.execute("plugin.install", {"source": "local", "path": str(src)})
+
+    assert result.status == "ok"
+    assert (roots / "desktop-tool" / "plugin.json").exists()

@@ -3526,3 +3526,104 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
   Study Python 48, Study Rust 11, auxiliary Python 146, and `git diff --check`.
 - No broad full-suite or GUI run is claimed. Next entry point: preserve both
   metadata-prefix forms and rerun the focused checks when prompt sources change.
+
+## Glass top-highlight removal (glass_top_highlight_20260928; 2026-09-28)
+
+- State: complete. The shared optical-glass primitive no longer paints any
+  highlight along the top of a pane: the upper-left radial specular and the
+  top inset line were both removed, and the two tokens that fed them
+  (`--optical-glass-reflection`, `--optical-glass-inset-top`) were retired.
+  Retained: the 2px neutral grey physical edge, the left/right 1px inset
+  transitions, the gray-green lower refraction, and the short two-layer shadow.
+- Verification: `core/ui` contract suite passed 101 files / 828 tests. The glass
+  contract test now pins the absence instead of the retired values (the
+  `::before` rule carries no radial-gradient and no `inset 0 1px 0`; both
+  tokens are gone from `variables.css`). A stylesheet-level before/after render
+  measured the row just inside a pane's top edge dropping from 149 to 125
+  luminance against a 131 interior baseline, and the upper-left wash delta from
+  4.9 to 2.2.
+- Spec: `lam-design-spec` now states the glass top must stay free of highlight
+  and forbids re-adding it or its tokens. No app-level (Tauri) visual run was
+  performed for this change.
+- Git handoff: no stage, commit, revert, or cleanup; the worktree remains dirty
+  with concurrent work.
+
+## Context-menu focus indicator moved onto the row highlight (menu_focus_ring_20260928; 2026-09-28)
+
+- State: complete. Menu rows (root items and submenu triggers) no longer paint a ring
+  on top of the row highlight. The ring came from the menu item's own `:focus-visible`
+  outline and showed on pointer-opened menus too, because the panel hands focus to its
+  first item on open; on a glass pane it read as a selection state. Keyboard users keep
+  the ordinary row highlight, which is the same recipe as hover and the menu idiom.
+- Verification: `core/ui` contract suite passed 102 files / 835 tests; the context-menu
+  suite gained an assertion for `outline: none` on the focused row, the retained
+  `--alpha-hover` row highlight, and the absence of a 2px outline on menu items.
+  Re-checked in the running Tauri dev window: no bluish pixels around the focused row,
+  row highlight still rendered.
+- Spec: `lam-design-spec` option-row recipe now states keyboard focus reuses the row
+  highlight and must not add a focus ring.
+- Git handoff: no stage, commit, revert, or cleanup.
+
+## Mobile blocks the skills and plugin this host cannot run (mobile_skill_gate_20260928; 2026-09-28)
+
+- State: complete. The phone no longer offers skills whose own instructions need a
+  desktop host. Every embedded core skill now declares `metadata.target:
+  lamtools-desktop` in its frontmatter — the eleven Office skills because their
+  validation and rendering step is `py -3.14 -m lamtools_core.cli office …`,
+  `create-plugin` and `plugin-manager` because their install-and-verify loop ends at
+  `plugin_install`/`plugin_list`, and `observe-events` because it binds an observer to
+  an event Arrange. `SkillTools` drops a desktop-targeted skill on a host without a
+  shell, so the phone's catalog, the prompt and `load_skill` all agree; the loader
+  refuses with the reason ("not available on this device") instead of the 0.1.22
+  warning line that listed the skill anyway. The desktop keeps all fourteen: it has the
+  shell, the plugin loader and the Arrange scheduler.
+- Panel: the 技能 page reads the host through the new `sunday_core_skill_catalog`
+  command instead of a hand-written list, which had drifted into advertising all
+  fourteen skills on a device that could run none of them.
+- Git plugin: removed from both the panel's plugin list and the runtime's bundled
+  inventory. Android has no git executable and a project directory is not a repository,
+  so the row could only ever report the tools it cannot assemble.
+- Fixed in passing, same class of defect: the app-private skill directory the 新建技能
+  panel writes was never mounted into a turn, so a skill the panel created could not be
+  loaded by the agent. Every turn now mounts `{app_data}/skills`, which is what the
+  panel's own text already promised.
+- Verification: `core/runtime-rs` 163 tests and `core/mobile/src-tauri` 44 tests pass;
+  mobile 48 files / 273 tests pass with `vue-tsc` clean. New tests pin the empty phone
+  catalog, the refusal reason, the mounted user-skill root and the git-free inventory.
+- Released as Sunday Mobile 0.1.43; record in `core/mobile/artifacts/release-1043/`.
+
+## Plugins and skills carry one platform class (mobile_plugin_taxonomy_20260928; 2026-09-28)
+
+- Decision (user, 2026-09-28): every plugin and skill belongs to one of three
+  classes — **桌面 / 移动 / 通用** — declared by the asset itself, and each host
+  offers what is universal plus what is its own. Undeclared means universal, so
+  third-party and already-installed plugins keep their behaviour.
+- Manifest contract: `plugin.json` gains `platforms: "desktop" | "mobile" |
+  "universal"`; SKILL.md frontmatter uses the same key and the same three words
+  under `metadata`. An invalid value is a manifest error, not a silent default.
+  Bundled classification: imagegen / study / websearch universal; git / workflow /
+  emotion-ball-pet desktop; mobile has none yet (the class exists and is tested).
+  Documented in `docs/plugin-dev-guide.md` and `core/skills/README.md`.
+- Desktop host (Python Core): discovery skips a plugin whose class is not this
+  host's — its tools, skills, hooks, MCP, modes and widgets are not assembled and
+  it is not on the plugin page; `plugin.install` refuses such a plugin with the
+  declared class instead of installing something that would vanish; `plugin.list`
+  carries `platforms` for the page to group by. Fixed in passing: `plugin.ui.list`
+  did not carry a mode's `capabilities`, so on the desktop the Study notes
+  declaration never reached the UI that reads it.
+- Mobile host (Rust + TS): the plugin page is built from the embedded manifests
+  (`sunday_plugin_catalog`) instead of the hand-written list that had drifted three
+  times; the class filter drops git / workflow / the desktop pet by reading their
+  own declarations. The skill gate now compares the declared class with the host
+  rather than the "has a shell" proxy through which the 0.1.43 block was expressed.
+- Plugin page (shared UI): grouped 通用 / 桌面端专用 / 移动端专用 with counts; the
+  payload's `builtin` field now drives the 内置 badge and the uninstall button
+  instead of a hard-coded name list. Verified in the running Tauri window (new
+  header text and the 通用 group header render; the rest is pinned by tests).
+- Verification: desktop 97 plugin tests + 110 adjacent suites, `core/ui` 102 files /
+  837 tests, `core/runtime-rs` 164, mobile Rust 45, mobile 48 files / 274 tests.
+  All four hand-written plugin lists are now one manifest + one class declaration.
+- Released as Sunday Mobile 0.1.44; record in `core/mobile/artifacts/release-1044/`.
+  Noted divergence, left as it is: desktop defaults websearch to disabled
+  (`defaultEnabled: false`) while the phone enables it — the field is not carried
+  into the mobile catalogue yet.

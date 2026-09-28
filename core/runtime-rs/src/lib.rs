@@ -71,6 +71,43 @@ pub struct DeviceCapabilities {
     pub notifications: bool,
 }
 
+/// Which host a runtime is built for.
+///
+/// Plugins (manifest `platforms`) and skills (frontmatter `platforms`) declare
+/// one class in the same three words — `desktop`, `mobile`, `universal` — and a
+/// host offers what is universal plus what is its own. A declaration is what
+/// decides, not a capability proxy: the phone has no shell because it is the
+/// phone, and a plugin that says `desktop` says so itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostPlatform {
+    Desktop,
+    Mobile,
+}
+
+/// The class name manifests and skill frontmatter use, so a declaration and a
+/// host speak one word.
+pub const PLATFORM_DESKTOP: &str = "desktop";
+pub const PLATFORM_MOBILE: &str = "mobile";
+pub const PLATFORM_UNIVERSAL: &str = "universal";
+
+impl HostPlatform {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HostPlatform::Desktop => PLATFORM_DESKTOP,
+            HostPlatform::Mobile => PLATFORM_MOBILE,
+        }
+    }
+
+    /// Whether this host offers something that declares `platforms`.
+    ///
+    /// An unrecognised class is not offered: an unknown word is a declaration
+    /// this host cannot honour, and silently treating it as universal is how a
+    /// surface ends up promising what it cannot run.
+    pub fn offers(self, platforms: &str) -> bool {
+        platforms == PLATFORM_UNIVERSAL || platforms == self.as_str()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDefinition {

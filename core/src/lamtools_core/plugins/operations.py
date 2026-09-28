@@ -17,6 +17,7 @@ from ._jsonc import strip_jsonc_comments as _strip_jsonc_comments
 from ._jsonc import strip_trailing_commas as _strip_trailing_commas
 from .deps import check_dependencies
 from .hook_config import HookRegistry
+from .models import CORE_HOST_PLATFORM, parse_platform_class, platform_supports_host
 from .registry import PluginRegistry, PluginStateStore
 from .trust import HookTrustStore
 
@@ -469,6 +470,9 @@ def build_plugin_operation_catalog(
                     "manifest_version": item.manifest_version,
                     "root": str(item.root),
                     "enabled": item.enabled,
+                    # 平台分类（desktop/mobile/universal）：插件页按它分组，
+                    # 也说明这个插件为什么只在某些宿主上出现。
+                    "platforms": item.platforms,
                     "skills": [str(path) for path in item.skill_roots],
                     "hooks": [str(path) for path in item.hook_files],
                     "mcp": [str(path) for path in item.mcp_files],
@@ -550,6 +554,8 @@ def build_plugin_operation_catalog(
                         "icon": mode.icon,
                         "tools": list(mode.tools),
                         "enabled": True,
+                        # 界面从这里取模式，声明只在 plugin.list 里带过就没有作用。
+                        **({"capabilities": list(mode.capabilities)} if mode.capabilities is not None else {}),
                     }
                 )
             for view in item.ui.views:
@@ -1123,6 +1129,14 @@ def build_plugin_operation_catalog(
         raw = _json.loads(manifest_path.read_text(encoding="utf-8-sig"))
         if not isinstance(raw, dict):
             raise ValueError(f"plugin manifest must be an object: {manifest_path}")
+        # 分类不是本机的插件装上也跑不起来：在安装这一步就说清楚，而不是装完
+        # 让它在插件页静默消失（发现阶段的过滤是静的）。
+        platforms = parse_platform_class(raw, source=str(manifest_path))
+        if not platform_supports_host(platforms, CORE_HOST_PLATFORM):
+            raise ValueError(
+                f"插件声明 platforms='{platforms}'，本机是 {CORE_HOST_PLATFORM}"
+                "，装上也无法运行，已拒绝安装"
+            )
         return raw
 
     def _resolve_plugin_dir(root: Path, raw_manifest: dict[str, Any], fallback: str) -> Path:

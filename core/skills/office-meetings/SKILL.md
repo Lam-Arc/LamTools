@@ -4,7 +4,7 @@ description: Turn notes/transcripts into minutes: topics, decisions, disagreemen
 metadata:
   version: 0.2.0
   language: zh-CN
-  target: lamtools-desktop
+  platforms: desktop
   status: beta
 ---
 

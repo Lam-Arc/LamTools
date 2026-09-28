@@ -4,7 +4,7 @@ description: Create/edit reports, plans, updates, notices, manuals and Word/Mark
 metadata:
   version: 0.2.0
   language: zh-CN
-  target: lamtools-desktop
+  platforms: desktop
   status: beta
 ---
 

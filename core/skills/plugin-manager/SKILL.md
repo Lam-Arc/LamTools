@@ -1,6 +1,8 @@
 ---
 name: plugin-manager
 description: Manage plugins, skills and hooks: install, update, remove, check dependencies or create them. Use for plugin/skill/hook management; load on demand without a settings toggle.
+metadata:
+  platforms: desktop
 ---
 
 # Plugin Manager

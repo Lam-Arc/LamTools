@@ -4,7 +4,7 @@ description: Validate canonical Office data bindings, render DOCX/XLSX/PPTX/PDF 
 metadata:
   version: 0.2.2
   language: en
-  target: lamtools-desktop
+  platforms: desktop
   status: beta
 ---
 

@@ -1,6 +1,8 @@
 ---
 name: create-plugin
 description: Scaffold a LamTools plugin (manifest + tools.jsonc + Python handler skeleton) from a user's description, then guide local install and verification. Use when the user asks to create, write, build, or develop a new plugin, add a custom tool, or make an existing capability into a plugin. Covers the full manifest schema, tools.jsonc fields, handler contract, permission model, and the install-and-verify loop.
+metadata:
+  platforms: desktop
 ---
 
 # Create Plugin

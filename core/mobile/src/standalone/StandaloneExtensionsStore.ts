@@ -6,44 +6,21 @@ import {
   hasEmbeddedRustCore,
   createEmbeddedUserSkill,
   deleteEmbeddedUserSkill,
+  listEmbeddedCoreSkills,
   listEmbeddedHooks,
-  listEmbeddedPluginInventory,
+  listEmbeddedPluginCatalog,
   listEmbeddedStudySkills,
   listEmbeddedUserSkills,
   readEmbeddedPluginSchemas,
   type EmbeddedHookListPayload,
-  type EmbeddedPluginInventory,
+  type EmbeddedPluginCatalogEntry,
   type EmbeddedPluginSchema,
+  type EmbeddedSkillRecord,
   type EmbeddedStudySkill,
 } from '../native/rustAgent'
 import { cloneState } from '../storage/cloneState'
 
 const EXTENSION_STATE_KEY = 'lamtools.mobile.standalone.extensions.v1'
-
-const plugins = [
-  { name: 'git', version: '0.1.0', description: 'Git 工具（内置插件）' },
-  { name: 'imagegen', version: '0.1.0', description: '生图工具（内置插件）' },
-  { name: 'study', version: '1.0.0', description: '全局学习空间与文本批注', skills: ['answer', 'build-map', 'take-exam', 'teach', 'curate-notes'] },
-  { name: 'websearch', version: '0.1.0', description: '网页搜索（内置插件）' },
-  { name: 'workflow', version: '1.0.0', description: '确定性节点图工作流' },
-] as const
-
-const coreSkills = [
-  ['create-plugin', '创建 LamTools 插件'],
-  ['observe-events', '观察和分析运行事件'],
-  ['office-charts', '创建 Office 图表'],
-  ['office-documents', '创建和编辑文档'],
-  ['office-email', '处理邮件内容'],
-  ['office-files', '处理 Office 文件'],
-  ['office-infographics', '创建信息图'],
-  ['office-meetings', '整理会议内容'],
-  ['office-pdf', '处理 PDF 文件'],
-  ['office-renderer', '渲染 Office 文件'],
-  ['office-research', '执行办公研究'],
-  ['office-slides', '创建和编辑演示文稿'],
-  ['office-spreadsheets', '创建和编辑电子表格'],
-  ['plugin-manager', '管理 LamTools 插件'],
-] as const
 
 interface ExtensionState {
   disabledPlugins: string[]
@@ -55,8 +32,8 @@ interface ExtensionState {
 
 export class StandaloneExtensionsStore {
   private state: ExtensionState | null = null
-  private inventory = new Map<string, EmbeddedPluginInventory>()
-  private inventoryStatus: 'idle' | 'ready' | 'failed' = 'idle'
+  private catalog = new Map<string, EmbeddedPluginCatalogEntry>()
+  private catalogStatus: 'idle' | 'ready' | 'failed' = 'idle'
   private schemas = new Map<string, EmbeddedPluginSchema>()
   private schemasStatus: 'idle' | 'ready' | 'failed' = 'idle'
 
@@ -67,30 +44,23 @@ export class StandaloneExtensionsStore {
       legacyKey: EXTENSION_STATE_KEY,
     }),
     private readonly studySkillCatalog: () => Promise<EmbeddedStudySkill[]> = listEmbeddedStudySkills,
-    private readonly pluginInventory: () => Promise<EmbeddedPluginInventory[]> = listEmbeddedPluginInventory,
+    private readonly pluginCatalog: () => Promise<EmbeddedPluginCatalogEntry[]> = listEmbeddedPluginCatalog,
     private readonly pluginSchemas: () => Promise<Record<string, EmbeddedPluginSchema>> = readEmbeddedPluginSchemas,
+    private readonly coreSkillCatalog: () => Promise<EmbeddedSkillRecord[]> = listEmbeddedCoreSkills,
   ) {}
 
   /**
-   * Read the runtime's tool inventory once per store instance.
+   * Read the host's plugin catalogue once per store instance.
    *
-   * An unreadable inventory must not become a confident "0 tools": the panel
-   * says the count is unknown instead.
+   * An unreadable catalogue is reported instead of shown: an empty panel would
+   * claim this host has no plugins, which is a different statement from "the
+   * host did not answer".
    */
-  private async loadInventory(): Promise<void> {
-    if (this.inventoryStatus !== 'idle') return
-    try {
-      for (const entry of await this.pluginInventory()) this.inventory.set(entry.plugin, entry)
-      this.inventoryStatus = 'ready'
-    } catch (error) {
-      this.inventoryStatus = 'failed'
-      console.error('Failed to read the plugin tool inventory', error)
-    }
-  }
-
-  private inventoryNote(name: string): string {
-    if (this.inventoryStatus === 'failed') return '工具清单读取失败，无法确认'
-    return this.inventory.get(name)?.note || ''
+  private async loadCatalog(): Promise<void> {
+    if (this.catalogStatus !== 'idle') return
+    const entries = await this.pluginCatalog()
+    for (const entry of entries) this.catalog.set(entry.name, entry)
+    this.catalogStatus = 'ready'
   }
 
   /**
@@ -115,49 +85,56 @@ export class StandaloneExtensionsStore {
   async handleRpc(method: string, params: Record<string, unknown>): Promise<Record<string, unknown> | null> {
     const state = await this.load()
     if (method === 'plugin.list') {
-      await Promise.all([this.loadInventory(), this.loadSchemas()])
+      await Promise.all([this.loadCatalog(), this.loadSchemas()])
       return {
-        plugins: plugins.map(plugin => {
-          // Report only what the runtime actually assembles. A hand-written
-          // list used to return an empty array for every plugin, which told the
-          // user nothing about whether a tool was missing or merely unlisted.
-          const inventory = this.inventory.get(plugin.name)
-          return {
-            ...plugin,
-            id: plugin.name,
-            builtin: true,
-            root: `bundled://${plugin.name}`,
-            enabled: !state.disabledPlugins.includes(plugin.name),
-            skills: 'skills' in plugin ? [`bundled://${plugin.name}/skills`, `bundled://${plugin.name}/future`] : [],
-            hooks: [], mcp: [],
-            tools: inventory?.assembled?.length
-              ? [{
-                  path: `bundled://${plugin.name}/tools.jsonc`,
-                  tools: inventory.assembled.map(tool => ({
-                    name: tool.name,
-                    permission: tool.permission,
-                    visibility: 'model',
-                    skill: '',
-                    handler: `rust://${plugin.name}`,
-                    timeout: 0,
-                  })),
-                }]
-              : [],
-            tools_note: this.inventoryNote(plugin.name),
-            operations: [], commands: [],
-            skill_names: 'skills' in plugin ? [...plugin.skills] : [],
-            hook_summary: [], dependencies: [], deps_status: 'none',
-            // A plugin with no schema shows no configuration entry rather than
-            // an empty one; the path names the file the schema came from.
-            config_schema: this.schemas.get(plugin.name)?.path || '',
-          }
-        }),
+        plugins: [...this.catalog.values()].map(entry => ({
+          name: entry.name,
+          version: entry.version,
+          description: entry.description,
+          // The class this plugin declares; the panel groups by it.
+          platforms: entry.platforms,
+          id: entry.name,
+          builtin: true,
+          root: `bundled://${entry.name}`,
+          enabled: !state.disabledPlugins.includes(entry.name),
+          // Skill roots the manifest declares, and the skills the host has
+          // embedded under them — both read from the plugin's own declaration.
+          skills: [...entry.skills],
+          hooks: [], mcp: [],
+          // Only the tools this host actually assembles; a declared-but-missing
+          // tool is a note, never a silent zero.
+          tools: entry.tools.length
+            ? [{
+                path: `bundled://${entry.name}/tools.jsonc`,
+                tools: entry.tools.map(tool => ({
+                  name: tool.name,
+                  permission: tool.permission,
+                  visibility: 'model',
+                  skill: '',
+                  handler: `rust://${entry.name}`,
+                  timeout: 0,
+                })),
+              }]
+            : [],
+          tools_note: entry.tools_note,
+          operations: [], commands: [],
+          skill_names: [...entry.skill_names],
+          hook_summary: [],
+          dependencies: [...entry.dependencies],
+          // This host installs no Python dependencies, so a plugin that declares
+          // some is reported as unknown rather than as "no dependencies".
+          deps_status: entry.dependencies.length ? 'unknown' : 'none',
+          // A plugin with no schema shows no configuration entry rather than
+          // an empty one; the path names the file the schema came from.
+          config_schema: this.schemas.get(entry.name)?.path || '',
+        })),
         errors: [],
       }
     }
     if (method === 'plugin.enable' || method === 'plugin.disable') {
       const name = String(params.name || '')
-      if (!plugins.some(plugin => plugin.name === name)) throw new Error(`插件 '${name}' 不存在`)
+      await this.loadCatalog()
+      if (!this.catalog.has(name)) throw new Error(`插件 '${name}' 不存在`)
       state.disabledPlugins = method === 'plugin.disable'
         ? [...new Set([...state.disabledPlugins, name])]
         : state.disabledPlugins.filter(item => item !== name)
@@ -167,7 +144,14 @@ export class StandaloneExtensionsStore {
     if (method === 'skill.list') {
       const studyEnabled = !state.disabledPlugins.includes('study')
       const skills = [
-        ...coreSkills.map(([name, description]) => ({ name, description, location: `bundled://skills/${name}/SKILL.md`, source: 'core', deletable: false })),
+        // Bundled skills come from the runtime, so what the panel lists is what
+        // the model can load: a skill whose instructions need the desktop is not
+        // in this list because `load_skill` would refuse it.
+        ...(await this.coreSkillCatalog()).map(skill => ({
+          ...skill,
+          source: 'core',
+          deletable: false,
+        })),
         ...(await this.studySkillCatalog()).map(skill => ({
           ...skill,
           source: 'plugin',
@@ -275,27 +259,25 @@ export class StandaloneExtensionsStore {
       return { updated: true, path: 'mobile://config/mcp.json' }
     }
     if (method === 'plugin.ui.list') {
-      const enabled = (name: string) => !state.disabledPlugins.includes(name)
-      return {
-        modes: [
-          ...(enabled('study') ? [{ id: 'study', pluginId: 'study', plugin_id: 'study', title: 'Study', icon: 'book-open', capabilities: ['notes'] }] : []),
-          // Workflow is not offered as a mode here, and the reason is not a
-          // missing backend — this comment used to say that and it was wrong.
-          // The RPC and the Rust store exist and work: list, list_grouped,
-          // create, get, document.get, document.save, compile, semantic,
-          // import.comfyui, export.comfyui, run, cancel, rename, expose,
-          // unexpose, object_info/node_types, activation.list, queue.enqueue/
-          // list/history/get/cancel/clear, human_task.list and delete. What is
-          // missing is the rest of what the mode promises the model:
-          // `workflow.tools.list` has no mobile answer, `activate`/`deactivate`
-          // need the Arrange scheduler, `human_task.get|complete|timeout` and
-          // `signal` need the full execution backend, and `pause`/`resume` need
-          // a runner that can be paused. Opening the mode would advertise tools
-          // this host refuses, so the entry stays closed on purpose — see
-          // core/docs/audits/mobile-desktop-parity-2026-09-24.md.
-        ],
-        widgets: [],
-      }
+      await this.loadCatalog()
+      // Modes come from the same manifests the panel reads; a plugin the host
+      // does not offer has no modes here either. Workflow used to be withheld by
+      // hand in this method — it is absent now because its manifest declares
+      // `desktop`, and the entry stays closed for the reason recorded in
+      // core/docs/audits/mobile-desktop-parity-2026-09-24.md.
+      const modes = [...this.catalog.values()]
+        .filter(entry => !state.disabledPlugins.includes(entry.name))
+        .flatMap(entry => entry.modes.map(mode => ({
+          id: mode.id,
+          pluginId: entry.name,
+          plugin_id: entry.name,
+          title: mode.title,
+          icon: mode.icon,
+          ...(typeof mode.capabilities === 'object' && mode.capabilities !== null
+            ? { capabilities: [...mode.capabilities] }
+            : {}),
+        })))
+      return { modes, widgets: [] }
     }
     if (method === 'plugin.widget.list') return { widgets: [] }
     return null

@@ -4,7 +4,7 @@ description: Create editable PPTX from materials, reports or outlines, or edit d
 metadata:
   version: 0.2.0
   language: zh-CN
-  target: lamtools-desktop
+  platforms: desktop
   status: beta
 ---
 

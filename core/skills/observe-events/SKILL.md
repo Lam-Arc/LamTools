@@ -1,6 +1,8 @@
 ---
 name: observe-events
 description: Create and register a durable workspace observer for natural-language requests to follow, watch, monitor, or react to events that may occur at an unknown time, such as new creator content, repository changes, queue messages, file changes, or API records. Use when an event-triggered Arrange needs an Agent-authored Python producer rather than a fixed calendar schedule.
+metadata:
+  platforms: desktop
 ---
 
 # Observe Events

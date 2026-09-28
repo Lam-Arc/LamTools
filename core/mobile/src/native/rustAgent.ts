@@ -108,14 +108,28 @@ export function hasEmbeddedRustCore(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
-export interface EmbeddedStudySkill {
+/** One skill a host catalog returns: bundled core, plugin or user authored. */
+export interface EmbeddedSkillRecord {
   name: string
   description: string
   location: string
 }
 
+export type EmbeddedStudySkill = EmbeddedSkillRecord
+
 export async function listEmbeddedStudySkills(): Promise<EmbeddedStudySkill[]> {
   return await invoke<EmbeddedStudySkill[]>('sunday_study_skill_catalog')
+}
+
+/**
+ * The core skills this host offers, from the runtime that loads them.
+ *
+ * A skill whose instructions need the desktop (the office CLI, the plugin
+ * installer, the Arrange scheduler) is left out here, so the panel cannot offer
+ * what `load_skill` would refuse.
+ */
+export async function listEmbeddedCoreSkills(): Promise<EmbeddedSkillRecord[]> {
+  return await invoke<EmbeddedSkillRecord[]>('sunday_core_skill_catalog')
 }
 
 /** One selectable tool in the mode editor, derived from the real runtimes. */
@@ -384,19 +398,42 @@ export interface EmbeddedPluginTool {
   permission: string
 }
 
-/** Tool inventory for one bundled plugin on this device. */
-export interface EmbeddedPluginInventory {
-  plugin: string
-  /** Tools assembled into the agent; the panel count must come from this. */
-  assembled: EmbeddedPluginTool[]
-  /** What the plugin manifest declares, for an honest comparison. */
-  declared_count: number
-  /** Why the two differ; empty when everything declared is assembled. */
-  note: string
+/** One mode a bundled plugin contributes, from its manifest. */
+export interface EmbeddedPluginMode {
+  id: string
+  title: string
+  icon: string
+  tools: string[]
+  /** Absent when the manifest makes no claim; an empty list claims none. */
+  capabilities?: string[] | null
 }
 
-export async function listEmbeddedPluginInventory(): Promise<EmbeddedPluginInventory[]> {
-  return await invoke<EmbeddedPluginInventory[]>('sunday_plugin_inventory')
+/**
+ * One bundled plugin this device offers, read from its own manifest.
+ *
+ * The runtime filters by the class the manifest declares (`desktop` / `mobile` /
+ * `universal`), so a plugin of another platform is not in this list at all.
+ */
+export interface EmbeddedPluginCatalogEntry {
+  name: string
+  version: string
+  description: string
+  platforms: string
+  /** Skill roots the manifest declares, as `bundled://` locations. */
+  skills: string[]
+  skill_names: string[]
+  modes: EmbeddedPluginMode[]
+  dependencies: string[]
+  /** Tools assembled into the agent; the panel count must come from this. */
+  tools: EmbeddedPluginTool[]
+  /** What the plugin manifest declares, for an honest comparison. */
+  declared_tool_count: number
+  /** Why the two differ; empty when everything declared is assembled. */
+  tools_note: string
+}
+
+export async function listEmbeddedPluginCatalog(): Promise<EmbeddedPluginCatalogEntry[]> {
+  return await invoke<EmbeddedPluginCatalogEntry[]>('sunday_plugin_catalog')
 }
 
 export async function runEmbeddedSundayTurn(input: {

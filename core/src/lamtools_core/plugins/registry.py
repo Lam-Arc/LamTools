@@ -8,6 +8,8 @@ from typing import Any
 
 from ._jsonc import load_jsonc_text
 from .models import (
+    CORE_HOST_PLATFORM,
+    MANIFEST_PLATFORMS_KEY,
     PluginCLIArgument,
     PluginCLICommand,
     PluginCLIContribution,
@@ -18,6 +20,8 @@ from .models import (
     PluginUIMode,
     PluginUIView,
     PluginWidgetAction,
+    parse_platform_class,
+    platform_supports_host,
 )
 
 _logger = logging.getLogger(__name__)
@@ -35,6 +39,8 @@ MANIFEST_UI_KEY = "ui"
 MANIFEST_CLI_KEY = "cli"
 MANIFEST_COMMANDS_KEY = "commands"
 MANIFEST_SKILL_MODES_KEY = "skillModes"
+# 清单声明插件缺省是否启用（缺省 True）；显式开关优先。
+MANIFEST_DEFAULT_ENABLED_KEY = "defaultEnabled"
 DEFAULT_DESKTOP_CARD_WIDTH = 376
 DEFAULT_DESKTOP_CARD_HEIGHT = 360
 
@@ -130,12 +136,18 @@ class PluginStateStore:
             json.dumps(data, ensure_ascii=False, indent=2),
         )
 
-    def is_enabled(self, name: str) -> bool:
+    def is_enabled(self, name: str, *, default: bool = True) -> bool:
+        """插件是否启用。
+
+        ``default`` 由清单声明（``defaultEnabled``，缺省 True）；插件页里
+        的显式开关始终优先于它。声明"默认关闭"的插件在状态文件里没有条目
+        时即视为关闭（如 websearch：要用需到插件页启用）。
+        """
         plugins = self._load().get("plugins", {})
         if not isinstance(plugins, dict):
-            return True
+            return default
         raw = plugins.get(name, {})
-        return bool(raw.get("enabled", True)) if isinstance(raw, dict) else True
+        return bool(raw.get("enabled", default)) if isinstance(raw, dict) else default
 
     def set_enabled(self, name: str, enabled: bool) -> None:
         data = self._load()
@@ -196,7 +208,7 @@ class PluginRegistry:
                     continue
                 seen.add(manifest_path)
                 try:
-                    items.append(self._read_manifest(manifest_path))
+                    manifest = self._read_manifest(manifest_path)
                 except (OSError, ValueError, json.JSONDecodeError) as exc:
                     # One corrupt plugin must never hide every other plugin
                     # (audit 11) — skip it, keep going, but surface it in
@@ -213,6 +225,19 @@ class PluginRegistry:
                             "error": str(exc),
                         }
                     )
+                    continue
+                # 平台分类不是本机的事时整块不装配：插件页没有它，它的工具/技能/
+                # 钩子/MCP/模式/挂件也不进本机。跳过不是错误（清单本身没问题），
+                # 所以只记日志、不进 discover_errors。
+                if not platform_supports_host(manifest.platforms, CORE_HOST_PLATFORM):
+                    _logger.info(
+                        "[plugins:discover] skipping %s: declares platforms '%s', this host is '%s'",
+                        manifest.name,
+                        manifest.platforms,
+                        CORE_HOST_PLATFORM,
+                    )
+                    continue
+                items.append(manifest)
         return sorted(items, key=lambda item: item.name)
 
     def _read_manifest(self, manifest_path: Path) -> PluginManifest:
@@ -284,7 +309,14 @@ class PluginRegistry:
         cli = self._cli_contribution(raw.get(MANIFEST_CLI_KEY), manifest_path)
         commands = self._composer_commands(raw.get(MANIFEST_COMMANDS_KEY), manifest_path)
         backend_entry = self._backend_entry(root, raw.get("backend"), manifest_path)
-        enabled = self.state_store.is_enabled(name) if self.state_store else True
+        # 清单可声明 defaultEnabled: false —— 未在插件页显式开关过时按关闭处理
+        # （websearch 用它把搜索能力改成"默认关闭、要用再启用"）。
+        default_enabled = bool(raw.get(MANIFEST_DEFAULT_ENABLED_KEY, True))
+        enabled = (
+            self.state_store.is_enabled(name, default=default_enabled)
+            if self.state_store
+            else default_enabled
+        )
         skill_roots = self._paths(root, raw.get("skills"))
         raw_skill_modes = raw.get(MANIFEST_SKILL_MODES_KEY, {})
         if raw_skill_modes is not None and not isinstance(raw_skill_modes, dict):
@@ -297,6 +329,8 @@ class PluginRegistry:
             if paths[0] not in skill_roots:
                 raise ValueError(f"plugin skillModes path must also appear in skills: {manifest_path}")
             skill_modes[paths[0]] = tuple(mode.strip() for mode in modes if mode.strip())
+        # 平台分类：与安装路径同一套校验语，写错了按清单错误报出而不是当成没声明。
+        platforms = parse_platform_class(raw, source=str(manifest_path))
         return PluginManifest(
             name=name,
             id=plugin_id,
@@ -335,6 +369,7 @@ class PluginRegistry:
             commands=commands,
             backend_entry=backend_entry,
             raw=dict(raw),
+            platforms=platforms,
         )
 
     def _composer_commands(

@@ -34,5 +34,8 @@
         }
       ]
     }
-  }
+  },
+  "defaultEnabled": false,
+  "builtin": true,
+  "platforms": "universal"
 }

@@ -9,6 +9,53 @@ HookSource = Literal["user", "project", "plugin", "managed"]
 HookHandlerType = Literal["command", "http", "mcp", "prompt"]
 HookDecisionKind = Literal["allow", "block"]
 
+# ── 平台分类（2026-09-28 用户共识：插件与技能共用同一套词）──────────────
+#
+# 一个插件或技能声明它属于哪一类，宿主只提供本机适用 + 通用的部分：
+#
+#   desktop    桌面专属：手机没有对应能力（git 可执行文件、办公命令行、桌宠窗口）
+#   mobile     移动专属：桌面没有对应能力
+#   universal  通用（未声明即通用）：两端都提供
+#
+# 未声明默认通用，因此新增字段不影响既有插件；取值非法按清单错误报出，写了
+# 错别字不会被当成"没声明"悄悄放行。
+PlatformClass = Literal["desktop", "mobile", "universal"]
+PLATFORM_DESKTOP = "desktop"
+PLATFORM_MOBILE = "mobile"
+PLATFORM_UNIVERSAL = "universal"
+PLATFORM_CLASSES: tuple[str, ...] = (PLATFORM_DESKTOP, PLATFORM_MOBILE, PLATFORM_UNIVERSAL)
+MANIFEST_PLATFORMS_KEY = "platforms"
+#: 本 Python Core 永远扮演的宿主。移动端的插件目录不在这里：手机没有插件
+#: 加载器，移动宿主由 Rust 侧的运行时按同一个分类词决定（见 runtime-rs）。
+CORE_HOST_PLATFORM: str = PLATFORM_DESKTOP
+
+
+def parse_platform_class(raw: dict[str, Any], *, source: str) -> str:
+    """清单里的平台分类；缺省通用，取值非法即报错。
+
+    ``source`` 只用于错误消息（清单路径或安装来源），校验语两处一致，安装与
+    发现不会各判一套。
+    """
+    value = raw.get(MANIFEST_PLATFORMS_KEY)
+    if value is None:
+        return PLATFORM_UNIVERSAL
+    if not isinstance(value, str):
+        raise ValueError(
+            f"plugin platforms must be one of {', '.join(PLATFORM_CLASSES)}: {source}"
+        )
+    platforms = value.strip()
+    if platforms not in PLATFORM_CLASSES:
+        raise ValueError(
+            f"unsupported platforms '{platforms}' "
+            f"(supported: {', '.join(PLATFORM_CLASSES)}): {source}"
+        )
+    return platforms
+
+
+def platform_supports_host(platforms: str, host: str) -> bool:
+    """该分类是否属于 ``host`` 这台宿主。"""
+    return platforms == PLATFORM_UNIVERSAL or platforms == host
+
 
 @dataclass(frozen=True)
 class PluginUIView:
@@ -200,6 +247,9 @@ class PluginManifest:
     # Optional mode scopes keyed by declared skill root. Kept at the end so
     # older positional manifest construction remains stable.
     skill_modes: dict[Path, tuple[str, ...]] = field(default_factory=dict)
+    # Platform class the manifest declares (see ``PlatformClass``); absent
+    # means universal. Kept at the end with the other extension fields.
+    platforms: str = PLATFORM_UNIVERSAL
 
 
 @dataclass(frozen=True)
