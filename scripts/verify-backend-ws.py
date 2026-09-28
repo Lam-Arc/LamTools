@@ -35,7 +35,14 @@ def wait_health(port: int, timeout_s: int = 60) -> bool:
 
 
 def verify_ws(port: int) -> tuple[bool, str]:
-    """Verify packaged WebSocket, Study, and dynamic plugin RPC surfaces."""
+    """Verify packaged WebSocket, Study, and dynamic plugin RPC surfaces.
+
+    The websearch plugin ships disabled by default (`defaultEnabled: false` in its
+    manifest) and a disabled plugin's operations answer "Unsupported method", so
+    this enables it the way the panel does before calling its widget RPC. What the
+    smoke proves stays the same — the bundled backend can load the plugin and serve
+    its declared operations — without asserting the product's default.
+    """
     import asyncio
 
     async def _run() -> tuple[bool, str]:
@@ -47,6 +54,23 @@ def verify_ws(port: int) -> tuple[bool, str]:
                 message = json.loads(raw)
                 if message.get("id") == request_id:
                     return message
+
+        async def call(ws, request_id: int, method: str, params: dict) -> tuple[dict | None, str]:
+            await ws.send(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "method": method,
+                        "params": params,
+                    }
+                )
+            )
+            data = await receive_response(ws, request_id)
+            if data.get("id") != request_id or "result" not in data:
+                error = data.get("error") if isinstance(data.get("error"), dict) else {}
+                return None, str(error.get("message") or f"{method} failed")
+            return data.get("result") or {}, ""
 
         url = f"ws://127.0.0.1:{port}/api/core/app-server"
         async with websockets.connect(url, open_timeout=8) as ws:
@@ -68,39 +92,34 @@ def verify_ws(port: int) -> tuple[bool, str]:
             if data.get("id") != 1 or "result" not in data:
                 return False, "WebSocket initialize failed"
 
-            await ws.send(
-                json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "method": "study.session",
-                        "params": {"scope": "builder"},
-                    }
-                )
+            listing, listing_error = await call(ws, 2, "plugin.list", {})
+            if listing is None:
+                return False, listing_error
+            plugins = listing.get("plugins") if isinstance(listing, dict) else None
+            if not isinstance(plugins, list):
+                return False, "plugin.list returned no plugins array"
+            websearch = next(
+                (item for item in plugins if isinstance(item, dict) and item.get("name") == "websearch"),
+                None,
             )
-            data = await receive_response(ws, 2)
-            result = data.get("result") if data.get("id") == 2 else None
-            if not isinstance(result, dict) or not result.get("session_id"):
-                error = data.get("error") if isinstance(data.get("error"), dict) else {}
-                return False, str(error.get("message") or "study.session returned no session_id")
+            if websearch is None:
+                return False, "websearch is missing from the packaged plugin registry"
+            if websearch.get("enabled") is not True:
+                enabled, enable_error = await call(ws, 3, "plugin.enable", {"name": "websearch"})
+                if enabled is None:
+                    return False, enable_error
 
-            await ws.send(
-                json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 3,
-                        "method": "websearch.widget.snapshot",
-                        "params": {},
-                    }
-                )
-            )
-            data = await receive_response(ws, 3)
-            result = data.get("result") if data.get("id") == 3 else None
-            if not isinstance(result, dict) or result.get("schema_version") != 1:
-                error = data.get("error") if isinstance(data.get("error"), dict) else {}
-                return False, str(
-                    error.get("message") or "websearch.widget.snapshot handler is unavailable"
-                )
+            study, study_error = await call(ws, 4, "study.session", {"scope": "builder"})
+            if study is None:
+                return False, study_error
+            if not study.get("session_id"):
+                return False, "study.session returned no session_id"
+
+            snapshot, snapshot_error = await call(ws, 5, "websearch.widget.snapshot", {})
+            if snapshot is None:
+                return False, snapshot_error
+            if snapshot.get("schema_version") != 1:
+                return False, "websearch.widget.snapshot returned no schema_version"
             return True, ""
 
     return asyncio.run(_run())
@@ -136,7 +155,7 @@ def main() -> int:
         ws_ok, ws_error = verify_ws(args.port)
         if ws_ok:
             print(
-                "[OK] WebSocket initialize + study.session + "
+                "[OK] WebSocket initialize + plugin.enable(websearch) + study.session + "
                 "websearch.widget.snapshot round-trip succeeded"
             )
             return 0
