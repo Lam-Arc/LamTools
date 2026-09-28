@@ -3627,3 +3627,39 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
   Noted divergence, left as it is: desktop defaults websearch to disabled
   (`defaultEnabled: false`) while the phone enables it — the field is not carried
   into the mobile catalogue yet.
+
+## Desktop 0.3.8 reached the official-site channel (desktop_site_038_20260928; 2026-09-28)
+
+- State: complete. The GitHub side of 0.3.8 was already cut by the release workflow
+  (tag moved from 558d1e80 to 1adec8b7 after the first run failed the plugin-widget
+  smoke test; run 36400175623 succeeded; release published 09:04:55Z with the
+  installer, AppImage and deb). This session closed the official-site channel,
+  which still described 0.3.7 after the GitHub release: a fresh download would have
+  fetched the 0.3.7 installer, and an installed 0.3.7 was only offered 0.3.8 through
+  the GitHub fallback.
+- The released installer carries the plugin and skill platform classes (commit
+  7782c469 is an ancestor of the tag, verified), the plan plugin, and the
+  release-flow fix that retagged the build.
+- Published: `Sunday_0.3.8_x64-setup.exe` + `Sunday-latest-x64-setup.exe`
+  (58,235,160 B, sha256 `c76b6761…`, previous latest archived as
+  `Sunday-latest-x64-setup-0.3.7-before-0.3.8-20260928.exe`); the desktop update
+  manifest now reads 0.3.8 with that digest and matches
+  `core/desktop/update-manifest.json`; the site was republished as
+  `site-releases/0.3.8-mobile-0.1.45-20260928` carrying both labels. Public
+  verification passed every assertion (both installer URLs, full-GET digest,
+  manifest version/digest/URL, both site labels).
+- One step failed on the way and is recorded: the first manifest publish aborted in
+  its own precheck because the manifest had been generated next to the installer
+  rather than in the release directory — no remote command ran, but the chained
+  cleanup still executed, which left the 0.3.8 installer paired with the 0.3.7
+  manifest for about two minutes. `manifest_republish.py` in
+  `core/desktop/artifacts/release-0.3.8/` exists for exactly that state and closed
+  it; both keys were revoked back to the one-line baseline.
+- Installed-build acceptance: `E:/setuptest/0.3.8`, main app PID 23972 and backend
+  PID 26152 from that directory; the shell renders the project list from its
+  backend, 模型与供应商 renders its backend-sourced list, and 关于与更新 reports
+  current 0.3.8 with "已是最新版本（v0.3.8 · 来源：官网）". The first launch attempt
+  timed out because a Tauri dev instance was still running against the same app
+  data — stopped, then the installed build stayed up.
+- Record: `core/desktop/artifacts/release-0.3.8/RELEASE.md` (transaction table,
+  evidence, rollback); the installed app was left running after acceptance.
