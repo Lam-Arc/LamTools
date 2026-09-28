@@ -3623,7 +3623,7 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
 - Verification: desktop 97 plugin tests + 110 adjacent suites, `core/ui` 102 files /
   837 tests, `core/runtime-rs` 164, mobile Rust 45, mobile 48 files / 274 tests.
   All four hand-written plugin lists are now one manifest + one class declaration.
-- Released as Sunday Mobile 0.1.44; record in `core/mobile/artifacts/release-1044/`.
+- Released as Sunday Mobile 0.1.45 and published (APK + in-app update manifest + site label; public verification passed on all four assertions). 0.1.44 was built and verified but never published, so the server's previous version was 0.1.43 — the superseded build is kept in `core/mobile/artifacts/release-1044-unpublished/`, the published record in `core/mobile/artifacts/release-1045/`.
   Noted divergence, left as it is: desktop defaults websearch to disabled
   (`defaultEnabled: false`) while the phone enables it — the field is not carried
   into the mobile catalogue yet.

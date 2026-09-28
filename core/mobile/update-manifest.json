@@ -1,8 +1,8 @@
 {
-  "version": "0.1.44",
+  "version": "0.1.45",
   "download_url": "https://47.114.43.99.nip.io/downloads/Sunday-mobile-latest.apk",
   "release_url": "https://47.114.43.99.nip.io/#download",
-  "release_notes": "Sunday Mobile 0.1.44",
-  "sha256": "114a700d9695c0e14409946dfaf944517a58ea8707252074ae94c8602fb42a01",
-  "size": 61367576
+  "release_notes": "Sunday Mobile 0.1.45",
+  "sha256": "fcf64cb9cd695d24b82c43e7fc64aae6afbbbc0b59dce4d9eae2cd598a2f571f",
+  "size": 61908340
 }
