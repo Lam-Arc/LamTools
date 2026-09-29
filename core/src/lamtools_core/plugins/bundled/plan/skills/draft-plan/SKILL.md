@@ -1,8 +1,8 @@
 ---
 name: draft-plan
-description: Turn a user's request into a plan package (方案) — requirement and non-goals, the chosen approach and what was rejected, documents, a step list where each step says how you will know it is done, the goal, and the risks — then save it with the plan_package tool. Use when the user asks for a plan, a 方案, a design or approach before work starts, or asks to think something through before anyone builds it. Also use it when the user describes a piece of work they want to hand to the desktop later. Do not use it for the steps of the turn you are running now: that is write_checklist.
+description: Turn a user's request into a plan package (方案) — requirement and non-goals, the chosen approach and what was rejected, documents, a step list where each step says how you will know it is done, the goal, and the risks — then save it with the plan_package tool. Use when the user asks for a plan, a 方案, a design or approach before work starts, or asks to think something through before anyone builds it. Also use it when the user describes a piece of work they want to hand to the desktop later. More of it is a conversation than a document: confirm what the user said, ask what they have not said, and keep the package a draft until the user has agreed. Do not use it for the steps of the turn you are running now: that is write_checklist.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   platforms: universal
 ---
 
@@ -12,21 +12,57 @@ In one sentence: turn what the user said into a document someone else can start 
 
 The plan you write is a **document with a life**: it is saved, revised, and later executed on a machine that can see files you cannot see. Write for that reader.
 
-## 1. Ask before writing, but not much
+But before it is a document, it is a conversation. A plan records what the user decided, not what you assumed on their behalf. Most of the work of this skill is drawing out the part the user already knows and has not said yet.
 
-Ask at most **five** questions, **one at a time**, and only where the answer changes the plan:
+## 1. Talk first; write down only what the user actually said
 
-- what "done" looks like for the user (the observable end state);
-- what is explicitly out of scope this time;
-- anything irreversible (deleting, publishing, paying, sending);
-- the target: which project or workspace this belongs to, if the user has not said;
-- who decides when the plan and reality disagree.
+1.1) **Confirm, then ask.** Every turn: say what you heard back in one sentence ("So it is a thing that sorts the notes you already have, so you stop doing it by hand — right?"), then ask. Never answer your own question by guessing.
 
-Then stop asking. For everything else, choose the industry default, do it, and list it under `assumptions` — an assumption the user can see is a decision; an unstated one is a trap. Never ask two questions in one message, and never ask a question you could answer from what you have already been told.
+1.2) **Ask; do not fill the gaps yourself.** Ask 2–3 questions at most in one turn, in the user's own language and register. Prefer the questions whose answer changes the plan:
+- what they are trying to end up with (the goal);
+- what they will be able to see once it works (success);
+- what they have already decided is out of this (non-goals);
+- what worries them, or what they tried before and disliked;
+- when they will call it finished, and who decides when plan and reality disagree.
+Never hand over a numbered questionnaire, and never ask more than three questions in one turn. One turn moves the plan one small step; that is the correct pace, not a delay.
 
-## 2. Write the package
+1.3) **A question is not asked until it is also recorded.** Put it in `open_questions` (`id`, `question`, `status: "open"`) and ask it in the conversation, in the same turn. A question that lives only in chat dies with the session; a question that lives only in the package is never answered. Do both.
 
-Fill every field below. Empty is allowed for `open_questions`, `risks` and `rejected`, but only when it is true:
+1.4) **Never invent content to look complete.** If the user has not said the goal, the boundary, or what success looks like, those fields stay empty and the plan stays a draft. A short honest draft with three open questions is a finished turn. A full-looking plan built on guesses is the exact failure this skill exists to prevent.
+
+1.5) **Keep the user's words.** Write the user's meaning in their own register — spoken, uneven, half-sorted is normal early on. Do not upgrade "自动把笔记归归类" into a formal term the user never used, and do not answer in a language the user did not write in. Converse and write the package in the user's language.
+
+### The forbidden shape (learn it by its negative)
+
+One vague sentence in, a complete-looking plan out, is the single worst outcome here.
+
+- User: "我想做个能自动整理我笔记的东西" — that is the whole message.
+- Wrong: save a package with `summary`, a chosen approach (a language, a storage choice, a model), ten ordered steps naming files and libraries, risks, and `status: "ready"`, then say "方案已生成，第一步是……". Everything after the title was invented; nothing was agreed; the status claims a settled plan.
+- Right: confirm what you heard, ask 2–3 questions (where the notes live now; what they want to see once it has worked; what it must never touch), save only `title` + `requirement.restatement` + three `open_questions`, keep `status: "draft"`, and say "我先把你这句记下来了，方案还是草稿；你回答上面几个，我再往下写。"
+
+## 2. Business first: what the user will see, not how you will build it
+
+The draft is the user's side of the agreement. Write what the user can observe, decide or object to — not your implementation.
+
+2.1) **Fields that stay in business language** — `requirement.restatement`, `requirement.success_looks_like`, `requirement.non_goals`, `requirement.assumptions`, `approach.chosen` / `approach.why` / `approach.rejected`, `docs`, `risks`, `open_questions`, `goal`. They answer: what is wanted, what is out, what the user will experience, what could go wrong for them.
+2.2) **The one field allowed to be technical** — `checklist.steps`. Steps are instructions for whoever builds the thing, so they may name files, commands, tools and libraries. No other field inherits that permission.
+2.3) **The user may open the door.** If the user themself names a technology, a target or a constraint ("我要用 Python 写", "跑在我们公司那台服务器上", "必须能离线"), it belongs where it applies — usually `approach` and the steps — because it is now their decision, not your invention.
+2.4) **Never name a technology the user did not.** "The boring default" is not an excuse: if the choice is not settled by the user's words, ask, or leave it to the steps and say it is not decided yet. A stack the user did not ask for is a decision you took for them.
+2.5) **An empty step list is normal early on.** Do not invent steps to fill `checklist`. Steps appear when the work is understood well enough that each one has a way to be shown done.
+
+## 3. When the plan may be called ready
+
+Keep `status: "draft"` until all of these are true, then set `"ready"`:
+- the user has agreed with your restatement in their own words (not merely failed to object);
+- `requirement.success_looks_like` and `requirement.non_goals` come from the user, not from an assumption;
+- there is at least one step and each step says how you will know it is done — the backend refuses `ready` with no steps, and rightly so;
+- every `open_questions` entry that would change the plan is answered, or the user has explicitly said to leave it.
+
+Before that it is a draft even if it looks tidy. An incomplete draft is the normal state; `ready` is a claim about agreement, not about tidiness.
+
+## 4. What goes in the package
+
+Fill only what is true. Empty is the correct value for a draft, and `open_questions`, `risks`, `rejected`, `docs` and `checklist` may even stay empty in a finished plan when there is genuinely nothing there.
 
 | field | what goes in it |
 |---|---|
@@ -35,7 +71,7 @@ Fill every field below. Empty is allowed for `open_questions`, `risks` and `reje
 | `requirement.restatement` | the request said back in your own words — the reader checks you understood it |
 | `requirement.success_looks_like` | what the user will be able to observe when it works |
 | `requirement.non_goals` | things that could reasonably be in scope and are deliberately not |
-| `requirement.assumptions` | what you assumed instead of asking, each one falsifiable |
+| `requirement.assumptions` | what you assumed instead of asking — each one falsifiable |
 | `approach.chosen` / `approach.why` | the approach, and why it beats the alternatives |
 | `approach.rejected` | each alternative and the one-line reason it lost |
 | `docs` | the documents to write, as paths inside the project (design, plan, tasks, notes) |
@@ -44,23 +80,22 @@ Fill every field below. Empty is allowed for `open_questions`, `risks` and `reje
 | `risks` | what could go wrong, how likely, what you would do |
 | `open_questions` | what you could not settle — each one blocks something specific |
 
-Rules that make the difference between a plan and a wish:
+Rules that keep a finished plan from being a wish:
 
-- **A step must say how you will know it is done.** Name the evidence for each step — a test that passes, a file that exists, a command whose output is what you expect. "Improve X", "handle edge cases", "add validation" are not steps; write what changes and what proves it changed.
-- **Keep steps small enough to check.** Aim for 5–15 steps. A step that needs a paragraph to describe is two steps.
-- **Write the documents as real files** in the project (a design note, the plan, the task list) before you save the package, and list them in `docs` with their `kind`. The package holds the paths; the files hold the text.
-- **Say what you have not seen.** You cannot read the target machine's files. Where a step depends on how things really are there, say so in the step itself and put the verification in the step — the executor is expected to check before changing anything.
-- **No technology you cannot justify.** If the user named a stack, use it. Otherwise pick the boring option and say why in `approach.why`.
+- **A step must say how you will know it is done.** Name the evidence — a test that passes, a file that exists, a command whose output is what you expect. "Improve X", "handle edge cases", "add validation" are not steps; write what changes and what proves it changed. This is the only field where technical words are welcome.
+- **Keep the steps checkable.** Aim for 5–15. A step that needs a paragraph to describe is two steps.
+- **Documents only when there is something to write.** Write a document as a real file at the path you list in `docs` with its `kind` — a path with no file behind it is a broken promise. For the document shapes, read [Plan templates](references/plan-template.md). An early draft often has no documents, and that is fine.
+- **Say what you have not seen.** You cannot read the target machine's files. Where a step depends on how things really are there, say so in the step and put the verification in the step — the executor checks before changing anything.
 
-## 3. Save it, then say what you left open
+## 5. Save it, then say what is still open
 
-Call `plan_package` with `action: "save"`, the `project_id`, and the fields above. The first save is revision 1; every later save records another revision, so nothing is lost by saving early.
+Call `plan_package` with `action: "save"` and the fields above — start with whatever is settled, however little. The first save is revision 1; every later save records another revision, so saving early loses nothing, while holding an unfinished plan in chat loses everything.
 
-Then tell the user, in this order:
+Then tell the user, briefly:
 
 1. the title and where it is stored;
-2. the open questions, if any, and what each one blocks;
-3. the assumptions you made instead of asking;
-4. that nothing has been executed — this is a document, and starting it is a separate decision.
+2. the questions you are waiting on, and what each one blocks;
+3. the assumptions you made instead of asking, if any;
+4. that nothing has been built — this is a document, and starting it is a separate decision.
 
 Do not summarise the whole package back to the user; they can open it. Do not start working on it.

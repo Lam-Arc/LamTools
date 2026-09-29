@@ -1,8 +1,15 @@
 # Plan document templates
 
-Three documents carry a plan package's text. Keep them short and factual; the package holds the decisions, these hold the detail. Write only the ones the work needs — a one-day change does not need all three.
+Three documents carry a plan package's text. Keep them short and factual; the package holds the decisions, these hold the detail. Write only the ones the work needs — a one-day change does not need all three, and an early draft may need none.
 
-Read this file when you are about to write a plan's documents (`read_skill_reference` with `name: draft-plan`, `path: ../references/plan-template.md`).
+Read this file when you are about to write a plan's documents: load it with `read_file` at `references/plan-template.md`, relative to the plan plugin's skill root. Paths you list in the package's `docs` are project-relative; this one is a skill reference, not a project document.
+
+## Business language stays business
+
+- `design.md` states the agreement — goal, non-goals, approach, alternatives, open questions. Write it in the user's language and register, naming a technology only where the user named it.
+- `plan.md` and `tasks.md` carry the steps, so they may name files, commands, tools and libraries — the same permission `checklist.steps` has.
+- Do not write a `plan.md` or `tasks.md` full of invented steps before the steps are settled. Early on, the honest document is a `design.md` holding what the user has actually said plus the open questions.
+- The user's words stay the user's words in every document: carry their meaning into the document, do not rewrite their register into jargon.
 
 ## design.md — why this shape
 
@@ -25,6 +32,8 @@ The chosen approach in a paragraph, then the parts that carry the risk.
 ## Open questions
 - <Question> — blocks <which step>, needs <whose answer>.
 ```
+
+The open questions here are the same ones stored in the package's `open_questions`: each has an `id`, a `question`, a `status` (`open` or `answered`) and, once answered, the `answer`. Keep the two in step; a document question with no package entry is a question nobody will chase.
 
 ## plan.md — what will be done
 
@@ -49,6 +58,8 @@ Anything the work must not do.
 ## Risks
 - <Risk> — <likelihood> — <what to do about it>.
 ```
+
+This is the document for the steps, so technical words belong here. Do not restate the goal or the non-goals in implementation terms when you copy them in.
 
 ## tasks.md — the same steps, trackable
 

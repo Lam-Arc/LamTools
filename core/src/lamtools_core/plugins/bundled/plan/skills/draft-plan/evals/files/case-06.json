@@ -1,0 +1,23 @@
+{
+  "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力与可读上下文。字段不是生产工具API。",
+  "case_id": "draft-plan-06",
+  "language": "zh",
+  "plan_package_available": true,
+  "existing_plan": null,
+  "prior_turns": [
+    "我想做个能自动整理我笔记的东西",
+    "笔记散在手机备忘录和电脑里，主要是灵感和待办。别动我原来的文件夹，整理完给我个清单就行。"
+  ],
+  "user_mentioned_technology": false,
+  "user_confirmed": true,
+  "business_fields_complete": true,
+  "known_fields": [
+    "title",
+    "summary",
+    "requirement.restatement",
+    "requirement.success_looks_like",
+    "requirement.non_goals",
+    "approach.chosen",
+    "checklist.steps"
+  ]
+}

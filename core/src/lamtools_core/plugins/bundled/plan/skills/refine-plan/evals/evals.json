@@ -1,0 +1,117 @@
+{
+  "skill_name": "refine-plan",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "整理完给我发个邮件就行，不用别的。",
+      "expected_output": "只补改动字段（success_looks_like 等），把已回答问题标 answered 并写入 answer；信息未齐保持 draft。",
+      "files": [
+        "evals/files/case-01.json"
+      ],
+      "assertions": [
+        "只 save 改动字段（补齐 success_looks_like 等），不重发整份方案。",
+        "把已回答的问题标为 answered 并写入 answer，不留在 open。",
+        "信息仍未齐时保持 draft，不提前转 ready。",
+        "用用户语言与原有口语表述写字段，不润色成术语。"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "把方案再补细一点，让我知道你到底要怎么做。",
+      "expected_output": "细化只体现在 checklist.steps（允许技术词汇、可验证）；业务字段不得出现实现细节，也不得引入用户未提的技术。",
+      "files": [
+        "evals/files/case-02.json"
+      ],
+      "assertions": [
+        "不把实现细节写入 requirement / approach / goal 等业务字段。",
+        "细化体现在 checklist.steps，允许技术词汇，且每步可验证。",
+        "不引入用户未提过的技术栈或框架。",
+        "只 save 改动的字段，其余保持原值。"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "改成用 SQLite 存就行，别的不用。",
+      "expected_output": "把用户提的技术写进 approach 或步骤；业务字段仍业务语言；不改未提到字段。",
+      "files": [
+        "evals/files/case-03.json"
+      ],
+      "assertions": [
+        "把 SQLite 作为用户拍板的约束写进 approach 或步骤。",
+        "业务字段仍用业务语言，不顺势把存储细节写进 success_looks_like。",
+        "不改动用户没有提到的其它字段（patch 语义）。",
+        "报告新的 revision 号。"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "把步骤写得具体点，每步让我知道做完没。",
+      "expected_output": "步骤可技术化且每步给出可验证证据；success_looks_like 与 non_goals 仍是业务表述。",
+      "files": [
+        "evals/files/case-04.json"
+      ],
+      "assertions": [
+        "步骤可以带上文件、命令、库等技术词汇。",
+        "success_looks_like 与 non_goals 仍用用户能观察与拍板的业务表述。",
+        "每步给出可验证的完成证据，不用'改进 X'这类说法。",
+        "步骤数保持可核对（约 5–15 步），不把一段话塞成一步。"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "前面说不发到别的平台，现在改主意了，整理完也同步到 Notion。",
+      "expected_output": "同一轮修正与该反馈矛盾的字段并告知用户，不保留自相矛盾的文本。",
+      "files": [
+        "evals/files/case-05.json"
+      ],
+      "assertions": [
+        "在同一轮里修正与反馈矛盾的字段（移除或改写对应的 non_goal）。",
+        "明确告诉用户这处矛盾已经被改。",
+        "不保留自相矛盾的方案文本。",
+        "Notion 这类技术名词来自用户，允许出现在相应字段。"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "行了，就按这个开工。",
+      "expected_output": "状态从 draft 转 ready，且步骤非空、完成证据齐备；仍有会改变方案的开放问题时保持 draft 并说明。",
+      "files": [
+        "evals/files/case-06.json"
+      ],
+      "assertions": [
+        "把状态从 draft 改为 ready。",
+        "ready 时至少一个步骤，且步骤的完成证据齐备。",
+        "若还有会改变方案的 open_question，保持 draft 并说明原因。",
+        "只改 status 等必要字段，不重发整份方案。"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "把第三点改一下：提醒改成只提醒一次。",
+      "expected_output": "先用 plan_package get 读回当前方案，再最小 patch 那一处，带 expected_revision。",
+      "files": [
+        "evals/files/case-07.json"
+      ],
+      "assertions": [
+        "先用 plan_package（action=get）读回当前方案再修改，不凭记忆重建。",
+        "只改用户指定的那一处，其他字段不动。",
+        "读到过方案就带上 expected_revision 保存。",
+        "说明改了什么、其余保持原样。"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "标题改成'读书笔记周报'就好。",
+      "expected_output": "save 只发送改动字段与 plan_id，不重发整份方案；其余字段保持原值并报告新 revision。",
+      "files": [
+        "evals/files/case-08.json"
+      ],
+      "assertions": [
+        "save 只发送改动字段与 plan_id，不重发整份方案。",
+        "其余字段保持原值，不因重发而回退已审阅内容。",
+        "报告新 revision 号。",
+        "不借改标题之机改动其它字段。"
+      ]
+    }
+  ]
+}

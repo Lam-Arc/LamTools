@@ -1,0 +1,42 @@
+{
+  "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力与可读上下文。字段不是生产工具API。",
+  "case_id": "execute-plan-05",
+  "language": "zh",
+  "plan_package_available": true,
+  "existing_plan": {
+    "plan_id": "plan-notes-1",
+    "revision": 9,
+    "status": "ready",
+    "title": "笔记整理方案",
+    "requirement": {
+      "restatement": "把已经写下的笔记自动归类，每周一给一份汇总",
+      "success_looks_like": "每周一早上收到一封汇总邮件",
+      "non_goals": [
+        "不改动原来的笔记内容",
+        "不发布到其它平台"
+      ]
+    },
+    "goal": {
+      "objective": "每周自动汇总读书笔记",
+      "completion_criteria": [
+        "每周一收到汇总邮件"
+      ]
+    },
+    "checklist": {
+      "steps": [
+        {
+          "id": "s-1",
+          "description": "扫描笔记目录并写出归类结果文件，验证文件条目数与笔记数一致",
+          "status": "pending"
+        },
+        {
+          "id": "s-2",
+          "description": "生成周报清单并验证清单包含全部本周笔记",
+          "status": "pending"
+        }
+      ]
+    }
+  },
+  "prior_turns": [],
+  "workspace_notes": {}
+}

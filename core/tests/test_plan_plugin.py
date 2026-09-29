@@ -7,6 +7,8 @@ handler over the operation catalog the plan store already backs.
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -81,6 +83,84 @@ def test_every_plan_skill_parses_and_declares_its_platform(tmp_path):
             line for line in body.split("---")[1].splitlines() if line.startswith("description:")
         )
         assert len(description) > 120, f"{name} has a description too thin to trigger on"
+
+
+def test_every_plan_skill_ships_a_complete_eval_suite(tmp_path):
+    """Each plan skill ships evals in the same shape the Study suite uses.
+
+    No other check covers the plan evals: the Study manifest is built from a
+    hard-coded skill list, so a plan suite could rot unread. These keys
+    (skill_name, prompt, expected_output, assertions, files) are kept identical
+    to the Study format so a single checker could read either.
+    """
+    skills_root = _plan_root() / "skills"
+    template = skills_root / "references" / "plan-template.md"
+    assert template.is_file()
+    draft_body = (skills_root / "draft-plan" / "SKILL.md").read_text(encoding="utf-8")
+    # The document shapes only reach the model if drafting links the reference.
+    assert "](references/plan-template.md)" in draft_body
+
+    seen: set[str] = set()
+    case_count = 0
+    for skill_file in sorted(skills_root.glob("*/SKILL.md")):
+        name = skill_file.parent.name
+        seen.add(name)
+        body = skill_file.read_text(encoding="utf-8")
+
+        # A reference may sit beside the skill or in the shared references pool.
+        for relative in re.findall(r"\]\((references/[^)]+\.md)\)", body):
+            candidates = (skill_file.parent / relative, skills_root / relative)
+            assert any(path.is_file() for path in candidates), (
+                f"{name} links a missing reference: {relative}"
+            )
+
+        manifest = json.loads(
+            (skill_file.parent / "evals" / "evals.json").read_text(encoding="utf-8")
+        )
+        assert manifest["skill_name"] == name
+        cases = manifest["evals"]
+        assert len(cases) == 8, f"{name} must ship 8 eval cases"
+        for case in cases:
+            assert str(case["prompt"]).strip()
+            assert str(case["expected_output"]).strip()
+            assertions = case["assertions"]
+            assert assertions and all(str(item).strip() for item in assertions)
+            assert len(assertions) >= 3, f"{name}:{case['id']} asserts too little"
+            files = case["files"]
+            assert files, f"{name}:{case['id']} has no fixture"
+            for relative in files:
+                fixture = skill_file.parent / relative
+                assert fixture.is_file()
+                payload = json.loads(fixture.read_text(encoding="utf-8"))
+                assert payload["case_id"] == f"{name}-{int(case['id']):02d}"
+            case_count += 1
+
+    assert seen == {"draft-plan", "refine-plan", "execute-plan"}
+    assert case_count == 24
+
+
+def test_plan_eval_manifest_reports_wiring_not_behavior(tmp_path):
+    """The plan eval runner validates wiring and claims no behavior."""
+    from lamtools_core.plugins.bundled.plan.eval_manifest import build_manifest
+
+    report = build_manifest(work_root=tmp_path)
+
+    assert report["host_smoke"]["status"] == "PASS"
+    assert report["host_smoke"]["mode"] == "execute"
+    assert report["host_smoke"]["active_skills"] == [
+        "draft-plan",
+        "refine-plan",
+        "execute-plan",
+    ]
+    assert report["host_smoke"]["behavioral_claim"] is False
+    assert report["host_smoke"]["reference_links_checked"] >= 1
+    assert report["behavioral_summary"] == {"total": 24, "run": 0, "not_run": 24}
+    assert [case["case_id"] for case in report["cases"]][:2] == [
+        "draft-plan:1",
+        "draft-plan:2",
+    ]
+    assert all(case["status"] == "NOT_RUN" and case["output"] is None for case in report["cases"])
+    assert all(case["fixture_files"] for case in report["cases"])
 
 
 def _toolbox(tmp_path, *, operation_executor: Any = None):
