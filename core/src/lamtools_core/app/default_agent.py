@@ -2435,8 +2435,7 @@ async def _persist_run_items(
     if not run_items or db_session_factory is None or app_event_store is None or thread_snapshot_store is None:
         return None
     if artifact_store is not None and work_root is not None:
-        for item in run_items:
-            await artifact_store.ingest_run_item(item, work_root=work_root)
+        await _ingest_run_items_quietly(artifact_store, run_items, work_root=work_root)
     persistence = AppPersistenceHost(
         app_event_store,
         thread_snapshot_store,
@@ -2461,6 +2460,34 @@ async def _persist_run_items(
 
 def _should_collect_core_event(event: Any) -> bool:
     return getattr(event, "metadata", {}).get("delivery") != "transient"
+
+
+async def _ingest_run_items_quietly(
+    artifact_store: Any,
+    run_items: list[Any],
+    *,
+    work_root: str | Path,
+) -> None:
+    """Register artifacts without ever failing the turn that produced them.
+
+    Artifact bookkeeping is derived state: the model and the tools already
+    succeeded and the events are persisted either way.  A file the operator
+    allowed outside the workspace used to raise here ("Artifact path escapes
+    project") and take the run down with it, so a failure is contained per item
+    and recorded as a warning instead — the same rule event persistence
+    follows.
+    """
+
+    for item in run_items:
+        try:
+            await artifact_store.ingest_run_item(item, work_root=work_root)
+        except Exception:  # noqa: BLE001 — bookkeeping must not fail the run
+            _logger.warning(
+                "[artifact] ingest failed item=%s kind=%s",
+                getattr(item, "item_id", "") or "?",
+                getattr(item, "kind", "") or "?",
+                exc_info=True,
+            )
 
 
 async def _persist_core_event_live(
@@ -2503,8 +2530,7 @@ async def _persist_core_event_live(
     if not run_items:
         return
     if artifact_store is not None and work_root is not None:
-        for item in run_items:
-            await artifact_store.ingest_run_item(item, work_root=work_root)
+        await _ingest_run_items_quietly(artifact_store, run_items, work_root=work_root)
     persistence = AppPersistenceHost(
         app_event_store,
         thread_snapshot_store,

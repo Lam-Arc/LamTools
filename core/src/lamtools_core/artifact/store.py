@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -16,6 +17,8 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
+
+_logger = logging.getLogger(__name__)
 
 from lamtools_core.app.core_db import (
     CoreArtifact,
@@ -280,6 +283,14 @@ class ArtifactStore:
             metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
             path = str(raw.get("uri") or raw.get("path") or metadata.get("path") or "")
             if not path:
+                canonical.append(raw)
+                continue
+            if _workspace_candidate(Path(work_root).resolve(), path) is None:
+                # An approved out-of-workspace file is not a project artifact:
+                # revisions and rollback write back through the workspace, so
+                # there is nothing to version here.  Keep the tool's own entry
+                # (the file card still renders) instead of failing the turn.
+                _logger.info("[artifact] skipped out-of-workspace path %s", path)
                 canonical.append(raw)
                 continue
             record = await self.register(
@@ -567,21 +578,41 @@ class ArtifactStore:
         await self.write_coordinator.run(write)
 
 
-def _normalize_path(work_root: Path, value: str) -> tuple[str, str, Path | None]:
-    raw = str(value or "").strip()
-    if raw.startswith(ATTACHMENT_PREFIX):
-        attachment_id = raw.removeprefix(ATTACHMENT_PREFIX).strip()
-        return f"attachment:{attachment_id}", f"{ATTACHMENT_PREFIX}{attachment_id}", None
-    rel = raw.removeprefix(WORKSPACE_PREFIX).replace("\\", "/")
+def _workspace_candidate(work_root: Path, value: str) -> Path | None:
+    """Resolve a stored path against the project root, or ``None`` when it lands outside.
+
+    Tool results name files relative to the workspace, but for a file the
+    operator allowed outside it (``relative_workspace_uri`` falls back to an
+    absolute path) the name is absolute.  Artifact records only mean something
+    inside the project — revisions, blobs and rollback all write back through
+    the workspace — so callers that ingest run items skip those instead of
+    failing the turn that produced them.
+    """
+
+    rel = str(value or "").strip().removeprefix(WORKSPACE_PREFIX).replace("\\", "/")
+    if not rel:
+        return None
     candidate = Path(rel)
     if candidate.is_absolute():
         candidate = candidate.resolve()
     else:
         candidate = (work_root / candidate).resolve()
     try:
-        normalized_rel = candidate.relative_to(work_root).as_posix()
-    except ValueError as exc:
-        raise ValueError("Artifact path escapes project") from exc
+        candidate.relative_to(work_root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _normalize_path(work_root: Path, value: str) -> tuple[str, str, Path | None]:
+    raw = str(value or "").strip()
+    if raw.startswith(ATTACHMENT_PREFIX):
+        attachment_id = raw.removeprefix(ATTACHMENT_PREFIX).strip()
+        return f"attachment:{attachment_id}", f"{ATTACHMENT_PREFIX}{attachment_id}", None
+    candidate = _workspace_candidate(work_root, raw)
+    if candidate is None:
+        raise ValueError("Artifact path escapes project")
+    normalized_rel = candidate.relative_to(work_root).as_posix()
     return f"workspace:{normalized_rel.casefold()}", f"{WORKSPACE_PREFIX}{normalized_rel}", candidate
 
 

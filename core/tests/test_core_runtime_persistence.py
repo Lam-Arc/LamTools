@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import text
@@ -1008,3 +1009,27 @@ async def test_concurrent_appends_preserve_seq_uniqueness(tmp_path) -> None:
         assert len(history) == 20
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_artifact_ingest_failure_never_escapes_the_persistence_path() -> None:
+    """Bookkeeping failures are contained per item instead of failing the run.
+
+    A file the operator allowed outside the workspace used to raise
+    "Artifact path escapes project" out of the live persistence path and take
+    the turn with it.  One bad item must neither raise nor stop the rest.
+    """
+    attempted: list[str] = []
+
+    class _ExplodingStore:
+        async def ingest_run_item(self, item, *, work_root):  # noqa: ANN001, ARG002
+            attempted.append(str(getattr(item, "item_id", "")))
+            raise ValueError("Artifact path escapes project")
+
+    items = [
+        SimpleNamespace(item_id="item-1", kind="tool_result"),
+        SimpleNamespace(item_id="item-2", kind="tool_result"),
+    ]
+    await default_agent._ingest_run_items_quietly(_ExplodingStore(), items, work_root="project")
+
+    assert attempted == ["item-1", "item-2"]

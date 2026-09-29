@@ -57,6 +57,62 @@ async def test_one_logical_file_has_immutable_deduplicated_revisions(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_tool_artifact_outside_the_workspace_is_skipped_not_fatal(tmp_path: Path) -> None:
+    """An approved out-of-workspace file must not fail the run that wrote it.
+
+    The write/edit tools name such a file with an absolute path (a path that
+    cannot be made relative to the workspace keeps its absolute form).  Artifact
+    records only mean something inside the project, so ingestion keeps the
+    tool's own entry and moves on instead of raising
+    "Artifact path escapes project" — which used to take the whole turn down.
+    """
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    outside = tmp_path / "elsewhere" / "note.txt"
+    outside.parent.mkdir()
+    outside.write_text("hello", encoding="utf-8")
+    db = await open_core_app_db(tmp_path / "core.db")
+    project, _ = await db.project_store.create(work_root)
+
+    item = RunItemEvent(
+        kind="tool_result",
+        thread_id="thread-1",
+        turn_id="turn-1",
+        item_id="item-outside",
+        event_id="event-outside",
+        status="completed",
+        payload={"tool_name": "write_file"},
+        artifacts=[{"kind": "file_change", "uri": outside.as_posix(), "content": "diff"}],
+    )
+    await db.artifact_store.ingest_run_item(item, project_id=project.id, work_root=work_root)
+
+    assert item.artifacts[0]["uri"] == outside.as_posix()
+    assert "artifact_id" not in item.artifacts[0]
+    assert await db.artifact_store.list(project.id) == []
+
+    # The skip is narrow: an absolute path *inside* the workspace still registers.
+    inside = work_root / "inside.txt"
+    inside.write_text("ok", encoding="utf-8")
+    inside_item = RunItemEvent(
+        kind="tool_result",
+        thread_id="thread-1",
+        turn_id="turn-2",
+        item_id="item-inside",
+        event_id="event-inside",
+        status="completed",
+        payload={"tool_name": "write_file"},
+        artifacts=[{"kind": "file_change", "uri": inside.as_posix(), "content": "diff"}],
+    )
+    await db.artifact_store.ingest_run_item(inside_item, project_id=project.id, work_root=work_root)
+
+    assert inside_item.artifacts[0]["artifact_id"]
+    assert [record.path for record in await db.artifact_store.list(project.id)] == [
+        "workspace://inside.txt"
+    ]
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_inputs_exclusions_legacy_remove_and_revision_restore(tmp_path: Path) -> None:
     work_root = tmp_path / "work"
     legacy_root = work_root / ".lam" / "artifact"
