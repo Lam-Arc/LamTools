@@ -390,7 +390,11 @@ const unregister = usePluginModeRuntime().register(`${props.pluginId}:${props.mo
   // and use its canonical loader without remounting the message tree.
   useCoreThread: computed(() => page.value === 'chat' && ready.value && !error.value),
   composerPlaceholder: computed(() => currentBinding.value?.subject.kind === 'notes' ? '想如何整理笔记…' : '想学什么…'),
-  composerDisabled: computed(() => !ready.value || chat.activeTurnRunning.value),
+  // The composer stays usable while a turn runs, like the rest of the app:
+  // typing queues the next message and the guided-send path stays available, so
+  // a long study turn no longer leaves the user with nothing to do.  Only an
+  // unready session (failed initialization) disables it.
+  composerDisabled: computed(() => !ready.value),
   allowAttachmentOnlySubmit: true,
   hideComposer: computed(() => page.value !== 'chat'),
   turnOptions,

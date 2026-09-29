@@ -37,11 +37,11 @@ function fixture() {
   const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(r)
   return captureAnchor(selection, 'study:main', 'study:study')!
 }
-function context(rpc: ReturnType<typeof vi.fn>) {
+function context(rpc: ReturnType<typeof vi.fn>, options: { running?: boolean } = {}) {
   return {
     requestRpc: rpc, transport: {}, sessions: ref<CoreSessionListItem[]>([]), selectedModelId: ref('model'), activeSessionId: ref('study:main'),
     composerText: ref(''), selectSession: vi.fn().mockResolvedValue(undefined), refreshSessions: vi.fn().mockResolvedValue(undefined),
-    lastEvent: ref(null), setRuntimeStatus: vi.fn(), chat: { messages: ref([]), processExpandedIds: ref(new Set()), activeTurnId: computed(() => ''), activeTurnRunning: computed(() => false), toggleProcess: vi.fn(), onDecisionSelect: vi.fn() },
+    lastEvent: ref(null), setRuntimeStatus: vi.fn(), chat: { messages: ref([]), processExpandedIds: ref(new Set()), activeTurnId: computed(() => ''), activeTurnRunning: computed(() => options.running === true), toggleProcess: vi.fn(), onDecisionSelect: vi.fn() },
   }
 }
 
@@ -156,8 +156,21 @@ describe('Study mode', () => {
     wrapper.unmount()
   })
 
-  it('retries failed session initialization and enables the composer after recovery', async () => {
+  it('keeps the composer usable while a turn is running', async () => {
+    // A running turn used to disable the composer outright, so a long study run
+    // left the user unable to queue the next message or steer the current one.
+    // The rest of the app keeps the composer live during a run; Study now does
+    // too, and only an unready session disables it.
     const rpc = vi.fn(async (method: string) => method === 'study.session' ? { session_id: 'study:main' } : { revision: 0, total: 0 })
+    const ctx = context(rpc, { running: true })
+    const runtime = createPluginModeRuntime()
+    const wrapper = mount(StudyView, { global: { stubs: { Teleport: true }, provide: { [CORE_PLUGIN_MODE_CONTEXT as symbol]: ctx, [CORE_PLUGIN_MODE_RUNTIME as symbol]: runtime } } })
+    await flushPromises()
+    expect(toValue(runtime.get('study:study')!.composerDisabled)).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('retries failed session initialization and enables the composer after recovery', async () => {    const rpc = vi.fn(async (method: string) => method === 'study.session' ? { session_id: 'study:main' } : { revision: 0, total: 0 })
     const ctx = context(rpc), runtime = createPluginModeRuntime()
     ctx.selectSession.mockRejectedValueOnce(new Error('thread not found'))
     const wrapper = mount(StudyView, { global: { stubs: { Teleport: true }, provide: { [CORE_PLUGIN_MODE_CONTEXT as symbol]: ctx, [CORE_PLUGIN_MODE_RUNTIME as symbol]: runtime } } })
