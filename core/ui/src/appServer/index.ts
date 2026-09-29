@@ -44,6 +44,7 @@ export {
   coreAppItemPartStatus,
   coreAppItemPartType,
   coreAppItemToMessagePart,
+  lockedMessageIdsBeforeCompaction,
   normalizeAnswerText,
   projectAssistantMessageParts,
   type CoreAppItemPartOptions,

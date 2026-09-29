@@ -10,7 +10,7 @@
       v-for="msg in messages"
       :key="msg.id"
       :data-message-id="msg.id"
-      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, turnActive, activeTurnId, checkpointTurnIds, autoPlotMath]"
+      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, turnActive, activeTurnId, lockedMessageIds, autoPlotMath]"
       :motion-enter="!initialMessageIds.has(msg.id)"
       :msg="msg"
         :assistant-label="assistantLabelForMessage(msg)"
@@ -21,7 +21,7 @@
       :work-root="workRoot"
       :active-turn-id="activeTurnId"
       :turn-active="turnActive"
-      :checkpoint-turn-ids="checkpointTurnIds"
+      :locked-message-ids="lockedMessageIds"
       :auto-plot-math="autoPlotMath"
       @toggle-process="onToggleProcess"
         @decision-select="onDecisionSelect"
@@ -85,8 +85,8 @@ const props = withDefaults(
     activeTurnId?: string | null
     /** 当前 turn 是否在运行（与 composer stop 按钮同一信号源） */
     turnActive?: boolean
-    /** 有 checkpoint 的 turn ids：回退/分叉/编辑按钮依赖 checkpoint，无节点时不显示 */
-    checkpointTurnIds?: Set<string>
+    /** 最后一次上下文压缩边界之前的消息 id：编辑/分叉/回退入口在这些回合隐藏。 */
+    lockedMessageIds?: Set<string>
     /** Automatically plot supported display-math formulas in final answers. */
     autoPlotMath?: boolean
   }>(),
@@ -100,7 +100,7 @@ const props = withDefaults(
     workRoot: null,
     activeTurnId: null,
     turnActive: false,
-    checkpointTurnIds: () => new Set(),
+    lockedMessageIds: () => new Set(),
     autoPlotMath: false,
   },
 )

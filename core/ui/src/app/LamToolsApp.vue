@@ -431,7 +431,7 @@
           :work-root="activePluginMode ? undefined : activeProject?.workRoot"
           :active-turn-id="activeTurnId"
           :turn-active="activeTurnRunning"
-          :checkpoint-turn-ids="checkpointTurnIds"
+          :locked-message-ids="lockedMessageIds"
           :auto-plot-math="activeAppModeKey === 'study:study'"
           @toggle-process="toggleProcess"
           @decision-select="approvalController.handleDecision"
@@ -743,6 +743,7 @@ import {
 import { createCoreProjectClient } from '../projects/client'
 import { createCoreProjectWorkspaceActions } from '../projects/workspace'
 import {
+  lockedMessageIdsBeforeCompaction,
   selectPendingCoreDecisions,
   type CoreQueuedInput,
 } from '../appServer'
@@ -2175,10 +2176,13 @@ watch([activeSessionId, isEmptySession], ([sessionId, empty], [previousSessionId
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
 
-// Checkpoint state is retained only for the legacy user-message edit path.
-// Assistant Fork/Rollback always use a durable turn boundary instead.
+// Checkpoint state still powers the checkpoint graph surfaces, but the
+// edit/fork/rollback entries no longer depend on it: a normal user message is
+// always actionable unless it predates the last context compaction.
 const checkpointController = useCheckpoints(requestConfigOperation)
-const checkpointTurnIds = checkpointController.checkpointTurnIds
+// Messages the backend already replaced with a context summary: their original
+// text is gone, so edit/fork/rollback must not be offered.
+const lockedMessageIds = computed(() => lockedMessageIdsBeforeCompaction(messages.value))
 
 provideCorePluginModeContext({
   transport,
@@ -2211,7 +2215,7 @@ provideCorePluginModeContext({
     toggleProcess,
     activeTurnId,
     activeTurnRunning,
-    checkpointTurnIds,
+    lockedMessageIds,
     onDecisionSelect: async (payload) => {
       await approvalController.handleDecision(
         payload as Parameters<typeof approvalController.handleDecision>[0],
@@ -2762,7 +2766,7 @@ async function refreshAfterRollback() {
 async function handleForkMessage(payload: { turnId: string; content: string }) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
-    composerErrorText.value = '该消息没有可用的分叉节点'
+    composerErrorText.value = '当前没有可分叉的会话'
     return
   }
   if (rollbackActiveTurn.value) {
@@ -2786,14 +2790,14 @@ async function handleForkMessage(payload: { turnId: string; content: string }) {
 async function handleRollbackMessage(payload: { turnId: string; content: string }) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
-    composerErrorText.value = '该消息没有对应的回退节点'
+    composerErrorText.value = '当前没有可回退的会话'
     return
   }
   if (rollbackActiveTurn.value) {
     composerErrorText.value = '任务运行中，请先停止任务再回退'
     return
   }
-  if (!window.confirm('将删除这条回复所在的整轮对话（用户消息和回复）及其后的内容。若没有该轮开始前的完整 checkpoint，仅回退对话，不恢复文件、运行时或外部操作。是否继续？')) return
+  if (!window.confirm('删除这条消息及之后的全部对话？有可用检查点时会一并恢复文件；没有则只清对话。')) return
   try {
     const result = await requestConfigOperation('session.rollback', {
       session_id: sessionId,
@@ -2813,26 +2817,25 @@ async function handleRollbackMessage(payload: { turnId: string; content: string 
 async function handleEditMessage(payload: { turnId: string; content: string; attachments?: CoreAttachment[] }) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
-    composerErrorText.value = '该消息没有可编辑的节点'
-    return
-  }
-  let checkpointId = checkpointController.getCheckpointForTurn(payload.turnId)
-  if (!checkpointId) {
-    // Map may be stale or not loaded yet — refresh once before giving up.
-    await checkpointController.load(sessionId)
-    checkpointId = checkpointController.getCheckpointForTurn(payload.turnId)
-  }
-  if (!checkpointId) {
-    composerErrorText.value = '该消息没有可编辑的节点'
+    composerErrorText.value = '当前没有可编辑的会话'
     return
   }
   if (rollbackActiveTurn.value) {
     composerErrorText.value = '任务运行中，请先停止任务再编辑'
     return
   }
+  if (!payload.turnId) {
+    composerErrorText.value = '这条消息没有可用的回合'
+    return
+  }
   try {
-    // 回退到该用户消息发出前的检查点（同回退），再以编辑后的内容重新发送
-    await checkpointController.restore(sessionId, checkpointId, 'all')
+    // 就地清空这条用户消息及其之后的对话，再以编辑后的内容重发：不依赖检查点，
+    // 所以第一条消息也能编辑。会话标题不被改写 —— 原标题原样保留；若原标题是
+    // 默认值（缺失/「新会话」/会话 id），重发时走首次消息的正常命名路径重新生成。
+    await requestConfigOperation('session.rollback', {
+      session_id: sessionId,
+      turn_id: payload.turnId,
+    })
     await refreshAfterRollback()
     // 携带原消息附件（已在后端上传，直接标记 uploaded 随发送提交，无需重新上传）
     clearAttachments()

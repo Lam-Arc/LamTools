@@ -52,7 +52,9 @@
             side="right"
             aria-label="消息附件"
           />
-          <!-- Hover actions: copy / edit (hidden while editing this message) -->
+          <!-- Hover actions: copy / edit / fork / roll back (hidden while editing
+               this message). Only the last context-compaction boundary is
+               excluded: those turns no longer have their original text. -->
           <div
             v-if="messageActions && editingMessageId !== msg.id && userActionable(msg)"
             class="user-actions"
@@ -70,17 +72,38 @@
               <Copy v-if="copiedActionId !== msg.id" :size="15" :stroke-width="1.8" aria-hidden="true" />
               <Check v-else :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
-            <button
-              v-if="userHasCheckpoint(msg)"
-              type="button"
-              class="assistant-action"
-              title="编辑消息"
-              aria-label="编辑消息"
-              data-user-edit
-              @click="startEditMessage(msg)"
-            >
-              <Pencil :size="15" :stroke-width="1.8" aria-hidden="true" />
-            </button>
+            <template v-if="!isActionLocked(msg)">
+              <button
+                type="button"
+                class="assistant-action"
+                title="编辑消息"
+                aria-label="编辑消息"
+                data-user-edit
+                @click="startEditMessage(msg)"
+              >
+                <Pencil :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                class="assistant-action"
+                title="从此处另开会话"
+                aria-label="从此处另开会话"
+                data-user-fork
+                @click="emit('fork-message', userActionPayload(msg))"
+              >
+                <GitFork :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                class="assistant-action"
+                title="删除此消息及之后内容"
+                aria-label="删除此消息及之后内容"
+                data-user-rollback
+                @click="emit('rollback-message', userActionPayload(msg))"
+              >
+                <Undo2 :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+            </template>
           </div>
         </div>
       </div>
@@ -774,9 +797,10 @@
           <!-- Message footer slot (for global stats line etc.) -->
           <slot name="message-footer" :message="msg" />
 
-          <!-- Hover actions: copy / fork / roll back at this turn boundary -->
+          <!-- Hover actions: copy / fork / roll back at this turn boundary.
+               Turns before the last context compaction are excluded. -->
           <div
-            v-if="messageActions && assistantActionable(msg)"
+            v-if="messageActions && assistantActionable(msg) && !isActionLocked(msg)"
             class="assistant-actions"
             data-assistant-actions
           >
@@ -992,8 +1016,8 @@ const props = withDefaults(
     activeTurnId?: string | null
     /** 当前 turn 是否在运行（与 composer stop 按钮同一信号源） */
     turnActive?: boolean
-    /** 有 checkpoint 的 turn ids：仅用于用户消息编辑的完整恢复路径。 */
-    checkpointTurnIds?: Set<string>
+    /** 位于最后一次上下文压缩之前、因而不再提供编辑/分叉/回退的消息 id。 */
+    lockedMessageIds?: Set<string>
     /** 挂载时播放入场动效（新消息淡入；初始批次/历史加载不播）。
         注意不能做成 directive：本组件多根（div + Teleport），运行时 directive 不生效。 */
     motionEnter?: boolean
@@ -1011,7 +1035,7 @@ const props = withDefaults(
     workRoot: null,
     activeTurnId: null,
     turnActive: false,
-    checkpointTurnIds: () => new Set(),
+    lockedMessageIds: () => new Set(),
     motionEnter: false,
     suppressArtifactsPanel: false,
     autoPlotMath: false,
@@ -1846,9 +1870,17 @@ function userActionable(msg: CoreMessage): boolean {
   return Boolean(userTurnId(msg) && String(msg.content || '').trim())
 }
 
-function userHasCheckpoint(msg: CoreMessage): boolean {
-  const turnId = userTurnId(msg)
-  return Boolean(turnId && props.checkpointTurnIds.has(turnId))
+/**
+ * True for messages the backend already replaced with a context summary.
+ * Edit/fork/rollback have no original text to work on there, so the entries
+ * stay hidden; no checkpoint or pending change is required otherwise.
+ */
+function isActionLocked(msg: CoreMessage): boolean {
+  return props.lockedMessageIds.has(String(msg.id || ''))
+}
+
+function userActionPayload(msg: CoreMessage): AssistantActionPayload {
+  return { turnId: userTurnId(msg), content: String(msg.content || '') }
 }
 
 function startEditMessage(msg: CoreMessage) {
@@ -1919,18 +1951,26 @@ function onContextMenu(event: MouseEvent): void {
 
   const msg = props.msg
   const items: ContextMenuEntry[] = []
+  const locked = isActionLocked(msg)
   if (userActionable(msg)) {
     items.push({ id: 'copy', label: '复制消息', icon: Copy, action: () => copyMessage(msg) })
-    if (userHasCheckpoint(msg)) {
-      items.push({ id: 'edit', label: '编辑消息', icon: Pencil, action: () => startEditMessage(msg) })
+    if (!locked) {
+      items.push(
+        { type: 'separator', id: 'user-action-separator' },
+        { id: 'edit', label: '编辑消息', icon: Pencil, action: () => startEditMessage(msg) },
+        { id: 'fork', label: '从此处另开会话', icon: GitFork, action: () => emit('fork-message', userActionPayload(msg)) },
+        { id: 'rollback', label: '回滚', icon: Undo2, destructive: true, action: () => emit('rollback-message', userActionPayload(msg)) },
+      )
     }
   } else if (assistantActionable(msg)) {
-    items.push(
-      { id: 'copy', label: '复制回复', icon: Copy, action: () => copyMessage(msg) },
-      { type: 'separator', id: 'message-fork-separator' },
-      { id: 'fork', label: '从此处另开会话', icon: GitFork, action: () => emit('fork-message', assistantActionPayload(msg)) },
-      { id: 'rollback', label: '回滚', icon: Undo2, destructive: true, action: () => emit('rollback-message', assistantActionPayload(msg)) },
-    )
+    items.push({ id: 'copy', label: '复制回复', icon: Copy, action: () => copyMessage(msg) })
+    if (!locked) {
+      items.push(
+        { type: 'separator', id: 'message-fork-separator' },
+        { id: 'fork', label: '从此处另开会话', icon: GitFork, action: () => emit('fork-message', assistantActionPayload(msg)) },
+        { id: 'rollback', label: '回滚', icon: Undo2, destructive: true, action: () => emit('rollback-message', assistantActionPayload(msg)) },
+      )
+    }
   }
   if (!items.length) return
   openContextMenu({

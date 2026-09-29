@@ -74,7 +74,8 @@ export interface CorePluginChatContext {
   toggleProcess: (id: string) => void
   activeTurnId: ComputedRef<string>
   activeTurnRunning: ComputedRef<boolean>
-  checkpointTurnIds: ComputedRef<Set<string>>
+  /** 位于最后一次上下文压缩之前、不再提供编辑/分叉/回退的消息 id。 */
+  lockedMessageIds: ComputedRef<Set<string>>
   onDecisionSelect: (payload: unknown) => void | Promise<void>
   onForkMessage: (payload: unknown) => void | Promise<void>
   onRollbackMessage: (payload: unknown) => void | Promise<void>

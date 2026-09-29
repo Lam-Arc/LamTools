@@ -1,4 +1,4 @@
-import type { MessagePart } from '../types'
+import type { CoreMessage, MessagePart } from '../types'
 import type { CoreAppItem } from './protocol.ts'
 
 export interface AssistantMessagePartsProjection {
@@ -196,4 +196,65 @@ export function coreAppItemInputPreview(value: unknown): MessagePart['inputPrevi
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * Message ids whose edit/fork/rollback entries must stay hidden because they
+ * precede the last applied context compaction.
+ *
+ * Compaction replaces the earlier transcript with a summary, so there is no
+ * original text left to edit or rewind to. The boundary is derived from the
+ * backend-produced compaction part already present in the transcript — the UI
+ * never guesses. The user message that triggered the compaction stays
+ * actionable: it is the newest instruction the model still sees.
+ */
+export function lockedMessageIdsBeforeCompaction(messages: CoreMessage[]): Set<string> {
+  const locked = new Set<string>()
+  if (!Array.isArray(messages) || messages.length === 0) return locked
+
+  let lastCompactionIndex = -1
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messageHasAppliedCompaction(messages[index])) lastCompactionIndex = index
+  }
+  if (lastCompactionIndex < 0) return locked
+
+  // Walk back to the user message that opened the compacted turn; it and the
+  // rest of the transcript remain actionable.
+  let boundaryIndex = lastCompactionIndex
+  for (let index = lastCompactionIndex; index >= 0; index -= 1) {
+    if (messageUserTurnId(messages[index])) {
+      boundaryIndex = index
+      break
+    }
+  }
+  for (let index = 0; index < boundaryIndex; index += 1) {
+    const id = String(messages[index]?.id || '')
+    if (id) locked.add(id)
+  }
+  return locked
+}
+
+function messageHasAppliedCompaction(message: CoreMessage | undefined): boolean {
+  if (!message) return false
+  const parts = [
+    ...(Array.isArray(message.parts) ? message.parts : []),
+    ...(Array.isArray(message.processParts) ? message.processParts : []),
+  ]
+  return parts.some(isAppliedCompactionPart)
+}
+
+function isAppliedCompactionPart(part: MessagePart): boolean {
+  if (part.partType !== 'compaction') return false
+  const metadata = part.metadata || {}
+  const raw = part as unknown as Record<string, unknown>
+  const explicit = String(
+    raw.compaction_status || raw.compactionStatus || metadata.compaction_status || metadata.compactionStatus || '',
+  ).trim()
+  if (explicit) return explicit === 'compacted' || explicit === 'completed' || explicit === 'done' || explicit === 'ok'
+  return part.status === 'completed'
+}
+
+function messageUserTurnId(message: CoreMessage | undefined): string {
+  const id = String(message?.id || '')
+  return id.endsWith(':user') ? id.slice(0, id.length - ':user'.length) : ''
 }

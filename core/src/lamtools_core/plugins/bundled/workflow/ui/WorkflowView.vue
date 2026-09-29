@@ -128,7 +128,7 @@
           :work-root="activeProject?.workRoot"
           :active-turn-id="chat.activeTurnId.value"
           :turn-active="chat.activeTurnRunning.value"
-          :checkpoint-turn-ids="chat.checkpointTurnIds.value"
+          :locked-message-ids="chat.lockedMessageIds.value"
           @toggle-process="chat.toggleProcess"
           @decision-select="chat.onDecisionSelect"
           @fork-message="chat.onForkMessage"

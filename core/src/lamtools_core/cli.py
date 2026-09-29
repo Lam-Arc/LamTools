@@ -1738,14 +1738,22 @@ def build_parser(
     session_rollback = session_sub.add_parser("rollback", help="Rollback to a turn, or restore a checkpoint")
     session_rollback.add_argument("thread_id")
     session_rollback.add_argument("checkpoint_id", nargs="?", default="", help="Legacy checkpoint id")
-    session_rollback.add_argument("--turn-id", default="", help="Keep this turn and discard later conversation")
+    session_rollback.add_argument(
+        "--turn-id",
+        default="",
+        help="Clear this turn and later conversation; restore files when a boundary checkpoint exists",
+    )
     _add_live_connection_arguments(session_rollback)
     session_rollback.add_argument("--raw", action="store_true")
     session_rollback.set_defaults(func=cmd_session_rollback)
     session_fork = session_sub.add_parser("fork", help="Fork at a turn, or from a checkpoint")
     session_fork.add_argument("thread_id")
     session_fork.add_argument("checkpoint_id", nargs="?", default="", help="Legacy checkpoint id")
-    session_fork.add_argument("--turn-id", default="", help="Keep this turn in the new session")
+    session_fork.add_argument(
+        "--turn-id",
+        default="",
+        help="Fork the history through this turn (this message and earlier only)",
+    )
     _add_live_connection_arguments(session_fork)
     session_fork.add_argument("--raw", action="store_true")
     session_fork.set_defaults(func=cmd_session_fork)

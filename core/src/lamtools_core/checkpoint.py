@@ -52,6 +52,7 @@ from lamtools_core.app.core_db import (
     CoreWorkspaceManifest,
 )
 from lamtools_core.app.event_store import AppEventInput, AppEventEnvelope, SqlAlchemyAppEventStore
+from lamtools_core.app.session_autotitle import MAX_TITLE_LEN, is_default_title
 from lamtools_core.app.snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
 from lamtools_core.app.sqlite_write import SQLiteWriteCoordinator
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
@@ -1761,6 +1762,11 @@ class CoreCheckpointConversationBackend:
             db,
             source_projection,
             explicit_title=title,
+            fallback_base=(
+                ""
+                if title.strip()
+                else _fork_title_fallback(payload, str((options or {}).get("turn_id") or ""))
+            ),
         )
         runtime = _fork_runtime_payload(
             runtime_payload if isinstance(runtime_payload, dict) else None,
@@ -2318,11 +2324,77 @@ def _fork_projection_payload(
     return {"snapshot_seq": int(payload.get("snapshot_seq") or 0) if payload else 0, "snapshot_json": state}
 
 
+def _fork_title_fallback(payload: dict[str, Any], turn_id: str) -> str:
+    """Derive a readable base title from the fork's own conversation prefix.
+
+    Only used when the source session's title is an untouched default (empty,
+    ``New Session``, or the bare session id).  Without it a fork would inherit
+    the id and surface as a hash-like title in the sidebar.  Prefer the user
+    message at the fork point; fall back to the earliest one.
+    """
+    events = payload.get("events")
+    wanted = str(turn_id or "").strip()
+    earliest = ""
+    for event in events if isinstance(events, list) else []:
+        if not isinstance(event, dict):
+            continue
+        text = _event_user_text(event)
+        if not text:
+            continue
+        if wanted and str(event.get("turn_id") or "") == wanted:
+            return _clamp_fork_title(text)
+        if not earliest:
+            earliest = text
+    return _clamp_fork_title(earliest)
+
+
+def _event_user_text(event: dict[str, Any]) -> str:
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    # ``core/runItem`` wraps the message payload one level deeper; live
+    # ``item/started`` user messages carry it directly.
+    inner = payload.get("payload")
+    candidates = [payload, inner] if isinstance(inner, dict) else [payload]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        part_type = str(candidate.get("type") or "")
+        is_user = part_type in {"userMessage", "user_message"} or str(candidate.get("role") or "") == "user"
+        if not is_user:
+            continue
+        text = _text_from_message_content(candidate.get("content"))
+        if text:
+            return text
+    if str(event.get("method") or "") == "turn/accepted":
+        return _text_from_message_content(payload.get("input"))
+    return ""
+
+
+def _text_from_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        chunks = [
+            str(item.get("text") or "")
+            for item in content
+            if isinstance(item, dict) and str(item.get("type") or "") == "text"
+        ]
+        return " ".join(chunk for chunk in chunks if chunk).strip()
+    return ""
+
+
+def _clamp_fork_title(text: str) -> str:
+    collapsed = " ".join(str(text or "").split())
+    return collapsed[:MAX_TITLE_LEN].strip()
+
+
 async def _next_fork_title(
     db: Any,
     source_state: dict[str, Any],
     *,
     explicit_title: str,
+    fallback_base: str = "",
 ) -> tuple[str, str]:
     """Return a project-scoped ``原标题（N）`` title and its stable base."""
     source_session = (
@@ -2333,17 +2405,27 @@ async def _next_fork_title(
         if isinstance(source_session.get("metadata"), dict)
         else {}
     )
-    source_title = str(source_session.get("title") or source_state.get("thread_id") or "新会话").strip()
+    source_title = str(source_session.get("title") or "").strip()
+    source_session_id = str(source_state.get("thread_id") or "").strip()
     if explicit_title.strip():
         base = explicit_title.strip()
         return base, base
 
     base = str(source_metadata.get("fork_title_base") or "").strip()
     if not base:
-        match = _FORK_TITLE_SUFFIX.fullmatch(source_title)
-        base = match.group("base").rstrip() if match and source_metadata.get("forked_from_session_id") else source_title
+        if is_default_title(source_title, session_id=source_session_id):
+            # An untouched default title (empty, "New Session", or the bare id)
+            # must not leak the session id into the fork's title.
+            base = fallback_base.strip()
+        else:
+            match = _FORK_TITLE_SUFFIX.fullmatch(source_title)
+            base = (
+                match.group("base").rstrip()
+                if match and source_metadata.get("forked_from_session_id")
+                else source_title
+            )
     if not base:
-        base = "新会话"
+        base = fallback_base.strip() or "新会话"
 
     source_work_root = str(source_metadata.get("work_root") or "")
     rows = (

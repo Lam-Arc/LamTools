@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -10,8 +11,11 @@ from lamtools_core.app import open_core_app_db
 from lamtools_core.app.core_db import CoreThreadSnapshot
 from lamtools_core.app.core_session_store import CoreDbSessionStore
 from lamtools_core.app.event_store import AppEventInput
+from lamtools_core.app.live_operations import CoreLiveContext, _auto_title_session
+from lamtools_core.app.session_autotitle import is_default_title
 from lamtools_core.checkpoint import CoreCheckpointCoordinator, register_checkpoint_operations
 from lamtools_core.event import RunItemEvent
+from lamtools_core.llm import LLMRequest, LLMResponse
 from lamtools_core.plugins.engine import HookEngine
 from lamtools_core.plugins.models import HookDefinition, HookEvent, HookHandler
 from lamtools_core.runtime import RuntimeState
@@ -135,6 +139,148 @@ async def test_turn_fork_keeps_selected_turn_and_rollback_removes_it_without_che
         assert not {event.turn_id for event in events if event.turn_id}
         assert "turn-1" not in str(snapshot)
         assert "turn-2" not in str(snapshot)
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_fork_uses_message_text_when_source_title_is_a_default(tmp_path: Path) -> None:
+    """Forking must not surface the bare session id as the new title.
+
+    A session that never got a generated title keeps the id (or "New Session")
+    as its title.  Forking then has to derive a readable title from the
+    conversation rather than inheriting the hash-like id.
+    """
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    sessions = CoreDbSessionStore(lambda: db)
+    from lamtools_core.app.operation_catalog import OperationCatalog
+
+    catalog = OperationCatalog()
+    register_checkpoint_operations(
+        catalog,
+        session_factory=db.session_factory,
+        data_dir=tmp_path / "core-data",
+        default_work_root=work_root,
+    )
+    try:
+        source_id = "fork-default-title-source"
+        await sessions.create(SessionRecord(
+            id=source_id, member_id="core", title=source_id, status="idle",
+            metadata={"work_root": str(work_root)},
+        ))
+        await _runtime(db, source_id, history=[])
+        await _append_message_turn(db, source_id, "turn-1", "帮我写一份季度报告")
+
+        forked = await catalog.execute("session.fork", {
+            "session_id": source_id, "turn_id": "turn-1", "new_session_id": "fork-default-title",
+        })
+        assert forked.status == "ok", forked.payload
+        fork_session = await sessions.get("fork-default-title")
+        assert fork_session is not None
+        assert source_id not in fork_session.title
+        assert fork_session.title.startswith("帮我写一份季度报告")
+        assert fork_session.title.endswith("（1）")
+        assert not is_default_title(fork_session.title, session_id="fork-default-title")
+        assert fork_session.metadata["work_root"] == str(work_root)
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_edit_first_turn_clears_the_conversation_and_keeps_a_regenerable_title(
+    tmp_path: Path,
+) -> None:
+    """Editing the first message is the rollback-to-empty + resend path.
+
+    It must work without any checkpoint (conversation-only), must leave the
+    session empty so the resend is a normal first message, and must never
+    rewrite the title into an id/hash.  When the title was still a default, the
+    ordinary first-message naming path regenerates it from the edited text.
+    """
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    sessions = CoreDbSessionStore(lambda: db)
+    from lamtools_core.app.operation_catalog import OperationCatalog
+
+    catalog = OperationCatalog()
+    register_checkpoint_operations(
+        catalog,
+        session_factory=db.session_factory,
+        data_dir=tmp_path / "core-data",
+        default_work_root=work_root,
+    )
+    try:
+        source_id = "edit-first-source"
+        await sessions.create(SessionRecord(
+            id=source_id, member_id="core", title=source_id, status="idle",
+            metadata={"work_root": str(work_root)},
+        ))
+        await _runtime(db, source_id, history=[])
+        await _append_message_turn(db, source_id, "turn-1", "原始问题")
+        await _append_message_turn(db, source_id, "turn-2", "第二个问题")
+
+        rolled_back = await catalog.execute("session.rollback", {
+            "session_id": source_id, "turn_id": "turn-1",
+        })
+        assert rolled_back.status == "ok", rolled_back.payload
+        # No checkpoint was ever created for this session: the rollback must
+        # still succeed and report honestly that only the conversation moved.
+        assert rolled_back.payload["mode"] == "conversation_only"
+        assert rolled_back.payload["restored"]["workspace"] is False
+        async with db.session_factory() as session:
+            events = await db.event_store.list_thread(session, thread_id=source_id)
+            snapshot = await db.snapshot_store.load(session, source_id)
+        assert [event.turn_id for event in events if event.turn_id] == []
+        assert not snapshot.get("item_order")
+
+        emptied = await sessions.get(source_id)
+        assert emptied is not None
+        assert emptied.title == source_id
+        assert is_default_title(emptied.title, session_id=source_id)
+
+        # Resend the edited text: it is now the only turn, so the ordinary
+        # first-message title path runs against the new content.
+        await _append_message_turn(db, source_id, "turn-1-edited", "改好的问题")
+
+        class _TitleLLM:
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                assert request.messages[-1].content == "改好的问题"
+                return LLMResponse(content="改好的问题")
+
+        class _Hub:
+            def __init__(self) -> None:
+                self.events: list[dict[str, Any]] = []
+
+            async def publish(self, event: dict[str, Any]) -> None:
+                self.events.append(event)
+
+        hub = _Hub()
+        host = SimpleNamespace(
+            session_factory=None,
+            persistence=None,
+            event_store=None,
+            snapshot_store=None,
+            hub=hub,
+            runtime_task_registry=SimpleNamespace(),
+            runtime_state_store=None,
+            llm_client=_TitleLLM(),
+            default_model_id="fake-model",
+            session_store=sessions,
+        )
+        await _auto_title_session(
+            context=CoreLiveContext(operations=SimpleNamespace(), host=host, hub=hub),
+            thread_id=source_id,
+            first_message="改好的问题",
+            model_id="fake-model",
+        )
+
+        regenerated = await sessions.get(source_id)
+        assert regenerated is not None
+        assert regenerated.title == "改好的问题"
+        assert regenerated.title != source_id
     finally:
         await db.close()
 

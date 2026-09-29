@@ -17,4 +17,27 @@ describe('Shared Core App rollback host wiring', () => {
     expect(source).toContain("const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))")
     expect(source).toMatch(/async function refreshAfterRollback\(\)[\s\S]*await refreshSessions\(\)[\s\S]*await selectSession\(sessionId\)/)
   })
+
+  it('edits by clearing the conversation, never by requiring a checkpoint', () => {
+    // Regression: the edit entry used to bail out with "该消息没有可编辑的节点"
+    // whenever the turn had no checkpoint, so editing the first message failed.
+    expect(source).not.toMatch(/getCheckpointForTurn/)
+    expect(source).not.toMatch(/checkpointController\.restore/)
+    const editHandler = source.slice(
+      source.indexOf('async function handleEditMessage'),
+      source.indexOf('async function handleEditMessage') + 1600,
+    )
+    expect(editHandler).toMatch(/session\.rollback[\s\S]*turn_id: payload\.turnId/)
+    expect(editHandler).toMatch(/submitComposer\(\)/)
+  })
+
+  it('gates edit/fork/rollback on the compaction boundary, not on checkpoints', () => {
+    expect(source).toMatch(/:locked-message-ids="lockedMessageIds"/)
+    expect(source).toMatch(/lockedMessageIdsBeforeCompaction/)
+    expect(source).not.toMatch(/:checkpoint-turn-ids=/)
+  })
+
+  it('confirms a rollback with a short prompt that states the file outcome', () => {
+    expect(source).toMatch(/window\.confirm\('删除这条消息及之后的全部对话？有可用检查点时会一并恢复文件；没有则只清对话。'\)/)
+  })
 })

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeAnswerText, projectAssistantMessageParts } from '../src/appServer/messageParts'
-import type { MessagePart } from '../src/types'
+import {
+  lockedMessageIdsBeforeCompaction,
+  normalizeAnswerText,
+  projectAssistantMessageParts,
+} from '../src/appServer/messageParts'
+import type { CoreMessage, MessagePart } from '../src/types'
 
 function part(id: string, partType: MessagePart['partType'], content = '', extra: Partial<MessagePart> = {}): MessagePart {
   return { id, partType, status: 'completed', content, ...extra }
@@ -105,5 +109,62 @@ describe('assistant message parts projection', () => {
     expect(result.processParts.map(item => item.id)).toEqual(['intermediate', 'tool'])
     expect(result.answerPart).toBeNull()
     expect(result.answerText).toBe('')
+  })
+})
+
+function message(id: string, role: CoreMessage['role'], parts: MessagePart[] = []): CoreMessage {
+  return { id, role, content: 'text', timestamp: '', parts }
+}
+
+describe('context compaction boundary', () => {
+  it('locks every message before the compaction when there is no compaction', () => {
+    const locked = lockedMessageIdsBeforeCompaction([
+      message('turn-1:user', 'user'),
+      message('assistant:turn-1', 'assistant'),
+    ])
+    expect([...locked]).toEqual([])
+  })
+
+  it('locks messages before the compacted turn but keeps the triggering message actionable', () => {
+    const locked = lockedMessageIdsBeforeCompaction([
+      message('turn-1:user', 'user'),
+      message('assistant:turn-1', 'assistant'),
+      message('turn-2:user', 'user'),
+      message('assistant:turn-2', 'assistant', [part('c1', 'compaction', '摘要', { compaction_status: 'compacted' })]),
+      message('turn-3:user', 'user'),
+    ])
+    expect([...locked].sort()).toEqual(['assistant:turn-1', 'turn-1:user'])
+  })
+
+  it('uses the last compaction as the boundary', () => {
+    const locked = lockedMessageIdsBeforeCompaction([
+      message('turn-1:user', 'user'),
+      message('assistant:turn-1', 'assistant', [part('c1', 'compaction', '摘要', { compaction_status: 'compacted' })]),
+      message('turn-2:user', 'user'),
+      message('assistant:turn-2', 'assistant', [part('c2', 'compaction', '摘要2', { compaction_status: 'compacted' })]),
+    ])
+    expect([...locked].sort()).toEqual(['assistant:turn-1', 'turn-1:user'])
+  })
+
+  it('ignores a compaction part that is still running', () => {
+    const locked = lockedMessageIdsBeforeCompaction([
+      message('turn-1:user', 'user'),
+      message('assistant:turn-1', 'assistant', [
+        part('c1', 'compaction', '摘要', { status: 'running', compaction_status: 'running' }),
+      ]),
+    ])
+    expect([...locked]).toEqual([])
+  })
+
+  it('detects an applied compaction projected into processParts', () => {
+    const assistant = message('assistant:turn-2', 'assistant')
+    assistant.processParts = [part('c1', 'compaction', '摘要', { compaction_status: 'compacted' })]
+    const locked = lockedMessageIdsBeforeCompaction([
+      message('turn-1:user', 'user'),
+      message('assistant:turn-1', 'assistant'),
+      message('turn-2:user', 'user'),
+      assistant,
+    ])
+    expect([...locked].sort()).toEqual(['assistant:turn-1', 'turn-1:user'])
   })
 })
