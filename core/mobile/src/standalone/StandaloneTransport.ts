@@ -2205,21 +2205,30 @@ async function conversationMessages(snapshot: SnapshotWithSession, activeTurnId 
   // rejected unless the newest finished turn was the one that wrote it: one
   // cancelled or failed turn then dropped every tool step the session had, and
   // the model continued as if it had only ever exchanged plain text. It is used
-  // whenever the turn that wrote it is still a completed turn of this session,
-  // and the messages of the turns after it are appended below, so nothing the
-  // user said in between is lost and nothing is replayed twice.
+  // whenever the turn that wrote it is still a turn of this session and is no
+  // longer in flight — a turn the user stopped keeps its context too, otherwise
+  // "stop, then say something" resets the conversation — and the messages of the
+  // turns after it are appended below, so nothing the user said in between is
+  // lost and nothing is replayed twice.
   const sourceTurn = sourceTurnId
     ? previousTurns.find(turn => turn.turn_id === sourceTurnId)
     : undefined
-  const sourceUsable = sourceTurnId == null || sourceTurn?.status === 'completed'
+  const sourceUsable = sourceTurnId == null
+    || (sourceTurn != null && !IN_FLIGHT_TURN_STATUSES.has(String(sourceTurn.status || '')))
   if (Array.isArray(persisted) && persisted.length && persisted.every(isRustAgentMessage) && sourceUsable) {
-    const history = await hydrateImageMessages(jsonClone(persisted) as RustAgentMessage[], snapshot.thread_id)
+    // An interrupted turn can end between a tool call and its result; that
+    // half-finished batch cannot be sent (providers reject an assistant tool
+    // call without its tool messages), so it comes off before the base history
+    // is extended with the later turns.
+    const history = withoutIncompleteToolTail(
+      await hydrateImageMessages(jsonClone(persisted) as RustAgentMessage[], snapshot.thread_id),
+    )
     const caughtUp = sourceTurn
       ? await turnMessages(core, previousTurns.filter(
           turn => Number(turn.seq || 0) > Number(sourceTurn.seq || 0),
         ), snapshot.thread_id)
       : []
-    const messages = [...history, ...caughtUp]
+    const messages = withoutIncompleteToolTail([...history, ...caughtUp])
     if (!activeTurnId) return messages
     const current = core.turns?.[activeTurnId]
     const currentUser = (current?.items || [])
@@ -2230,6 +2239,27 @@ async function conversationMessages(snapshot: SnapshotWithSession, activeTurnId 
     return [...messages, ...(message ? [message] : [])]
   }
   return turnMessages(core, previousTurns, snapshot.thread_id)
+}
+
+const IN_FLIGHT_TURN_STATUSES = new Set(['running', 'waiting', 'interrupting'])
+
+/**
+ * Drop a trailing assistant tool call whose results never arrived.
+ *
+ * A stopped turn may end between a tool call and its result. Keeping the call
+ * would make the next request invalid, so the call and any partial results are
+ * removed together; a call whose results are all present is left alone.
+ */
+function withoutIncompleteToolTail(messages: RustAgentMessage[]): RustAgentMessage[] {
+  if (!messages.length) return messages
+  const trimmed = messages.slice()
+  let index = trimmed.length
+  while (index > 0 && trimmed[index - 1].role === 'tool') index -= 1
+  const callIndex = index - 1
+  const call = callIndex >= 0 ? trimmed[callIndex] : undefined
+  if (call?.role !== 'assistant_tool_calls') return trimmed
+  const results = trimmed.length - index
+  return results >= call.calls.length ? trimmed : trimmed.slice(0, callIndex)
 }
 
 /** The model-visible messages of whole turns, taken from the transcript items. */

@@ -705,7 +705,12 @@ describe('StandaloneTransport', () => {
     }))
   })
 
-  it('does not replay late runtime history from a turn cancelled during metadata persistence', async () => {
+  it('replays the history a stopped turn wrote, so the next turn keeps its context', async () => {
+    // The durable history is the only place a turn's tool steps survive. It used
+    // to be dropped whenever the turn that wrote it was not `completed`, so
+    // "stop mid-turn, then say something" reset the conversation to plain text
+    // (the same failure 0.1.25 fixed for finished turns). A turn the user
+    // stopped now keeps its context.
     const repository = createLocalRepository(new MemoryDatabase())
     const created = await createStandaloneProjectClient(repository).create({ name: '历史 Stop 项目', work_root: '' })
     const config = new StandaloneConfigStore(new MemorySecureStorage())
@@ -754,7 +759,62 @@ describe('StandaloneTransport', () => {
     await vi.waitFor(() => expect(runAgent).toHaveBeenCalledTimes(2))
     expect(runAgent.mock.calls[1][0].history).toEqual([
       { role: 'user', content: 'first question' },
+      { role: 'assistant', content: 'cancelled answer' },
       { role: 'user', content: 'next question' },
+    ])
+  })
+
+  it('trims a tool call whose result never arrived before the next request', async () => {
+    // A stopped turn can end between a tool call and its result; a request whose
+    // assistant tool call has no matching tool message is invalid, so that
+    // half-finished batch comes off while the rest of the history is replayed.
+    const repository = createLocalRepository(new MemoryDatabase())
+    const created = await createStandaloneProjectClient(repository).create({ name: '半截工具调用', work_root: '' })
+    const config = new StandaloneConfigStore(new MemorySecureStorage())
+    await config.handleRpc('config.provider.create', {
+      name: 'Test', api_type: 'openai', base_url: 'https://model.invalid/v1', api_key: 'secret',
+      models: [{ model_id: 'history-model', display_name: 'History Model' }],
+    })
+    const entered = deferred<void>()
+    const release = deferred<void>()
+    const originalUpdate = repository.updateLocalSession.bind(repository)
+    vi.spyOn(repository, 'updateLocalSession').mockImplementation(async (...args) => {
+      if (args[1].metadata?.rust_runtime_history) {
+        entered.resolve()
+        await release.promise
+      }
+      return originalUpdate(...args)
+    })
+    const runAgent = vi.fn(async (input: any) => ({
+      text: 'stopped answer',
+      runtimeModelId: 'history-model', toolRounds: 0,
+      runtimeHistory: runAgent.mock.calls.length === 1
+        ? [
+            ...input.history,
+            { role: 'assistant_tool_calls', calls: [{ id: 'call-1', name: 'read_file', arguments: '{}' }] },
+          ]
+        : [...input.history, { role: 'assistant', content: 'next answer' }],
+    }))
+    const transport = new StandaloneTransport(
+      repository, config, runAgent, undefined, undefined, undefined, vi.fn(async () => true),
+    )
+
+    await transport.request<Record<string, unknown>>({ method: 'turn/start', params: {
+      thread_id: created.session.id, input: [{ type: 'text', text: 'do the work' }],
+    } })
+    await entered.promise
+    await transport.request({ method: 'turn/interrupt', params: { thread_id: created.session.id } })
+    release.resolve()
+    await transport.request({ method: 'turn/start', params: {
+      thread_id: created.session.id, input: [{ type: 'text', text: 'keep going' }],
+    } })
+    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledTimes(2))
+
+    const history = runAgent.mock.calls[1][0].history as Array<{ role: string }>
+    expect(history.map(message => message.role)).toEqual(['user', 'user'])
+    expect(history).toEqual([
+      { role: 'user', content: 'do the work' },
+      { role: 'user', content: 'keep going' },
     ])
   })
 
