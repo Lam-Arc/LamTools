@@ -1025,9 +1025,9 @@ def _write_settings_jsonc(config_root: Path, namespace: str, value: object) -> N
 
 
 def test_load_llm_config_resolves_from_jsonc_without_sqlite(isolated_config_root: Path) -> None:
-    _write_jsonc_config(isolated_config_root, is_default_model=True)
+    _write_jsonc_config(isolated_config_root)
 
-    config = load_llm_config()
+    config = load_llm_config(model_ref="model-name")
 
     assert config.model_record_id == "model-name"
     assert config.model_id == "model-name"
@@ -1051,26 +1051,34 @@ def test_load_llm_config_reads_core_model_routing_from_settings_jsonc(isolated_c
 
 
 def test_load_llm_config_ignores_member_model_routing_from_settings_jsonc(isolated_config_root: Path) -> None:
-    _write_jsonc_config(isolated_config_root, is_default_model=True)
+    _write_jsonc_config(isolated_config_root)
     _write_settings_jsonc(
         isolated_config_root,
         "lamwriter.modelRouting",
         {"routes": {"writer": {"mode": "model", "model_id": "legacy-route-record"}}},
     )
 
-    config = load_llm_config()
+    # lamwriter routing must not affect core. Core has no routing setting of its
+    # own, and there is no global default model to fall back to, so the call
+    # must fail with the explicit "add a provider/model" message instead of
+    # quietly running the lamwriter model.
+    with pytest.raises(ValueError) as excinfo:
+        load_llm_config()
 
-    # lamwriter routing must not affect core; the jsonc default model wins.
-    assert config.model_id == "model-name"
+    assert "请先添加供应商/模型" in str(excinfo.value)
 
 
-def test_load_llm_config_uses_default_jsonc_model_when_routing_missing(isolated_config_root: Path) -> None:
+def test_load_llm_config_without_routing_never_uses_the_jsonc_default_model(
+    isolated_config_root: Path,
+) -> None:
+    """The model flagged ``is_default`` is not a global default anymore."""
     _write_jsonc_config(isolated_config_root, is_default_model=True)
 
-    config = load_llm_config()
+    with pytest.raises(ValueError) as excinfo:
+        load_llm_config()
 
-    assert config.model_record_id == "model-name"
-    assert config.model_id == "model-name"
+    assert "model id is required" in str(excinfo.value)
+    assert "请先添加供应商/模型" in str(excinfo.value)
 
 
 async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, capsys, tmp_path: Path) -> None:

@@ -87,6 +87,7 @@ export { default as CoreResourceStats } from './components/CoreResourceStats.vue
 export { default as MarkdownRenderer } from './components/MarkdownRenderer.vue';
 export { default as UiSelect } from './components/UiSelect.vue';
 export { default as CoreQueuedInputTray } from './components/CoreQueuedInputTray.vue';
+export { default as CorePendingDecisionPanel } from './components/CorePendingDecisionPanel.vue';
 export { default as CommandPalette } from './components/CommandPalette.vue';
 export { default as AttachmentTray } from './components/AttachmentTray.vue';
 export { default as RuntimePanel } from './components/RuntimePanel.vue';
@@ -442,6 +443,16 @@ export {
   selectLatestActiveTurnId,
   updateCoreSessionListStatus,
   selectQueueTray,
+  selectPendingCoreDecisions,
+  coreDecisionSubject,
+  coreDecisionFacts,
+  coreDecisionTitle,
+  coreDecisionOptions,
+  coreDecisionOptionResponse,
+  coreDecisionRequestId,
+  coreDecisionToolName,
+  coreDecisionIsUnanswered,
+  coreDecisionDetail,
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
   applyCoreAppEvent,
@@ -488,6 +499,12 @@ export {
   type CoreRuntimeTurn,
   type SubmitCoreComposerTaskOptions,
   type SubmitCoreComposerTaskResult,
+  type CoreDecisionChoice,
+  type CoreDecisionFact,
+  type CoreDecisionFactTone,
+  type CoreDecisionOption,
+  type CorePendingDecision,
+  type SelectPendingCoreDecisionsOptions,
 } from './appServer';
 
 // Transport

@@ -267,4 +267,87 @@ describe('useCoreExecutionControlsState', () => {
     expect(state.selectedModelId.value).toBe('model-1')
     expect(state.activeModel.value?.id).toBe('model-1')
   })
+
+  it('resolves no model at all when nothing can be inherited', async () => {
+    // There is no global default model: with no selection, no scene memory and
+    // an empty catalog, the composer must show no model rather than pick one.
+    const models = ref<Array<{ id: string; provider_id: string; thinking_supported: boolean }>>([])
+    const state = useCoreExecutionControlsState({
+      models,
+      providers,
+      defaultModel: ref(null),
+    })
+
+    expect(state.activeModel.value).toBeNull()
+    expect(state.turnOptions()).not.toHaveProperty('model_id')
+  })
+
+  it('reports which model replaced a vanished selection', async () => {
+    const models = ref([
+      { id: 'model-1', provider_id: 'provider-1', thinking_supported: true },
+      { id: 'model-2', provider_id: 'provider-2', thinking_supported: true },
+    ])
+    const replacements: Array<[string, string]> = []
+    // The scene's inherited model is model-1 (the same scene's last used one).
+    const defaultModel = ref(models.value[0])
+    const state = useCoreExecutionControlsState({
+      models,
+      providers,
+      defaultModel,
+      onModelAutoReplaced: (from, to) => replacements.push([from, to]),
+    })
+
+    state.selectModel('model-2')
+    models.value = [models.value[0]]
+    await nextTick()
+
+    expect(state.selectedModelId.value).toBe('')
+    expect(state.activeModel.value?.id).toBe('model-1')
+    expect(replacements).toEqual([['model-2', 'model-1']])
+  })
+
+  it('does not report a replacement when the vanished model is simply gone with nothing to inherit', async () => {
+    const models = ref([
+      { id: 'model-1', provider_id: 'provider-1', thinking_supported: true },
+      { id: 'model-2', provider_id: 'provider-2', thinking_supported: true },
+    ])
+    const replacements: Array<[string, string]> = []
+    const defaultModel = ref<{ id: string; provider_id: string; thinking_supported: boolean } | null>(models.value[0])
+    const state = useCoreExecutionControlsState({
+      models,
+      providers,
+      defaultModel,
+      onModelAutoReplaced: (from, to) => replacements.push([from, to]),
+    })
+
+    state.selectModel('model-2')
+    defaultModel.value = null
+    models.value = [models.value[0]]
+    await nextTick()
+
+    expect(state.activeModel.value).toBeNull()
+    expect(replacements).toEqual([])
+  })
+
+  it('selects a concrete model from a group, never a group-level value', async () => {
+    const models = ref([
+      { id: 'model-1', provider_id: 'provider-1', display_name: 'Model One', thinking_supported: true },
+      { id: 'model-2', provider_id: 'provider-2', display_name: 'Model Two', thinking_supported: true },
+    ])
+    const state = useCoreExecutionControlsState({
+      models,
+      providers,
+      groups: ref([{ id: 'team', name: 'Team', model_ids: ['model-1', 'model-2'] }]),
+      catalogView: ref<'group' | 'provider'>('group'),
+      defaultModel: ref(null),
+    })
+
+    const groupOptions = state.modelOptions.value.filter(option => option.group === 'Team')
+    expect(groupOptions.map(option => option.value)).toEqual(['model-1', 'model-2'])
+    expect(groupOptions.every(option => option.value !== 'team')).toBe(true)
+
+    state.selectModel('model-2')
+    await nextTick()
+    expect(state.turnOptions()).toMatchObject({ model_id: 'model-2' })
+  })
 })

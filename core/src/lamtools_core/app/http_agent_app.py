@@ -71,6 +71,10 @@ _logger = logging.getLogger(__name__)
 class CoreConfigRoutingLLMClient:
     """LLM client that resolves provider/model from jsonc config files per request."""
 
+    #: Marks the config-file-driven path: the turn host enforces the
+    #: "no global default model" contract only for this client.
+    uses_config_routing = True
+
     def __init__(
         self,
         *,
@@ -213,8 +217,10 @@ def create_core_agent_http_app(
     # selection runs a bounded WSL probe whose cost must not land on the first
     # model request; the cached decision is what the prompt and run_command use.
     warm_command_shell()
+    resolved_boot_model = ""
     try:
         config = load_llm_config(model_ref=model_id)
+        resolved_boot_model = config.model_record_id
     except ValueError:
         # No usable model configured yet (no jsonc model/provider). Boot
         # with an unconfigured placeholder instead of crashing — the UI can
@@ -258,6 +264,15 @@ def create_core_agent_http_app(
             "capability": config.capability,
         },
     )
+    # First-run seed: when an explicit model was configured for this start
+    # (CLI ``--model-id`` / ``LAMTOOLS_LLM_MODEL_ID`` / the launch argument) and a
+    # scene has nothing to inherit yet, that model is where the scene starts.
+    # Scenes that already remember a model are left alone, so the main
+    # conversation and the desktop pet never share a model by accident.
+    if resolved_boot_model:
+        from lamtools_core.config.model_selection import seed_scenes_with_model
+
+        seed_scenes_with_model(resolved_boot_model)
 
     core_db_path = _resolve_core_db(core_db)
     # Single work-root contract: unless explicitly overridden, the agent work
@@ -1211,11 +1226,22 @@ def _register_core_config_operations(
 ) -> None:
     async def config_models_list(request: OperationRequest) -> OperationResult:
         del request
+        from lamtools_core.config.model_selection import SCENES, scene_recent_models
+
+        scene_models = {}
+        for scene in SCENES:
+            recent = scene_recent_models(scene)
+            scene_models[scene] = recent[0] if recent else ""
+        # ``default_model_id`` is kept as an (always empty) compatibility key:
+        # a global default no longer exists, so the UI must not read it.
         return OperationResult(
             name="config.models.list",
             payload={
                 "models": list_llm_model_configs(),
-                "default_model_id": default_model_id,
+                # Per-scene current model. There is no global default model:
+                # the UI resolves "current model" from the scene it belongs to.
+                "scene_models": scene_models,
+                "default_model_id": "",
             },
         )
 

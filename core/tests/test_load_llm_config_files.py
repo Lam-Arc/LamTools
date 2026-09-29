@@ -115,13 +115,31 @@ def test_load_llm_config_resolves_multimodal_capability_for_kimi(isolated_config
     assert config.capability == "multimodal"
 
 
-def test_load_llm_config_resolves_default_model_when_ref_empty(isolated_config_root: Path):
+def test_load_llm_config_never_falls_back_to_is_default_when_ref_empty(isolated_config_root: Path):
+    """There is no global default model: an omitted ref is an explicit error.
+
+    Previously the model flagged ``is_default=true`` was silently used, which is
+    how a session could end up running a different model than the UI showed
+    after a provider was added.
+    """
     _make_config(isolated_config_root)
 
-    config = load_llm_config(model_ref="")
+    with pytest.raises(ValueError) as excinfo:
+        load_llm_config(model_ref="")
 
-    # The default model (is_default=true) is xopkimik26.
-    assert config.model_id == "xopkimik26"
+    message = str(excinfo.value)
+    assert "model id is required" in message
+    assert "请先添加供应商/模型" in message
+
+
+def test_load_llm_config_honours_explicit_routing_setting(isolated_config_root: Path):
+    """A routing setting is an explicit route, not a default, and still wins."""
+    _make_config(isolated_config_root)
+    from lamtools_core.config.settings_store import set_setting
+
+    set_setting("lamtools.modelRouting", {"routes": {"core": {"model_id": "xopglm52"}}})
+
+    assert load_llm_config(model_ref="").model_id == "xopglm52"
 
 
 def test_load_llm_config_raises_for_unknown_model(isolated_config_root: Path):

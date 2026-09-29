@@ -516,14 +516,22 @@ def validate_command_paths(
     """Reject path arguments outside the workspace only when asked to.
 
     The workspace boundary is no longer enforced (2026-09-27), so the default
-    is permissive; an explicit ``allow_outside=False`` restores the old bounds
-    check for callers that still want it.
+    is permissive: an argument whose quoting cannot be resolved statically is
+    skipped, matching ``outside_workdir_path_arguments``.  An explicit
+    ``allow_outside=False`` restores the strict bounds check for callers that
+    still require it.
     """
     for item in _command_path_arguments(args):
         if item.quoting_unverifiable:
+            if allow_outside:
+                # Not a bounds question while the boundary is not enforced:
+                # genuinely invalid syntax is rejected by the executor's own
+                # tokenizer, and a resolvable path is authorized anyway.
+                continue
             raise ValueError(
-                f"Path argument '{item.raw}' (position {item.position}) uses mixed or unmatched quoting "
-                "that cannot be validated safely"
+                f"Path argument '{item.raw}' (position {item.position}) uses mixed or unmatched "
+                "quoting, so it cannot be verified to stay inside the workspace: use consistent "
+                "quoting or split the command into separate calls"
             )
         if allow_outside:
             continue

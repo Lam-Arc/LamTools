@@ -253,13 +253,45 @@ def _parse_retry_after(value: object) -> float | None:
         return None
 
 
-def _http_provider_error(status_code: int, text: str, headers: object) -> Exception:
+def _http_provider_error(
+    status_code: int,
+    text: str,
+    headers: object,
+    *,
+    provider_name: str = "",
+    base_url: str = "",
+    model: str = "",
+    auth_scheme: str = "",
+) -> Exception:
     """Build a structured provider error so retry classification can key on
     the status code instead of message text (audit 10 S2: 401/403/400 were
-    classified "retryable" and retried ~10 times)."""
+    classified "retryable" and retried ~10 times).
+
+    The message also names the provider / address / model that failed: a bare
+    ``LLM API error 403`` left the user guessing which of several providers
+    was rejecting them (the upstream body alone carries no local identity).
+    """
     from lamtools_core.kernel.errors import LLMProviderError, RateLimitError
 
-    message = f"LLM API error {status_code}: {text[:300]}"
+    who = " ".join(
+        part
+        for part in (
+            f"provider={provider_name}" if provider_name else "",
+            f"base_url={base_url}" if base_url else "",
+            f"model={model}" if model else "",
+            f"auth={auth_scheme}" if auth_scheme else "",
+        )
+        if part
+    )
+    message = f"LLM API error {status_code}"
+    if who:
+        message = f"{message} ({who})"
+    message = f"{message}: {text[:300]}"
+    if status_code in (401, 403):
+        message = (
+            f"{message} — 该供应商的密钥/协议可能与该地址不匹配，请检查认证方式"
+            "（例如该地址需要 Anthropic 的 x-api-key，却按 OpenAI 的 Bearer 发送）"
+        )
     if status_code == 429:
         retry_after = _parse_retry_after(getattr(headers, "get", lambda _k: None)("retry-after"))
         return RateLimitError(message, retry_after=retry_after)
@@ -379,7 +411,7 @@ class CoreHttpLLMClient:
                 headers=self._headers(),
             )
         if response.status_code >= 400:
-            raise _http_provider_error(response.status_code, response.text[:300], response.headers)
+            raise self._provider_error(response.status_code, response.text[:300], response)
         normalized = self._normalize_response(response.json(), model=prepared.model)
         return LLMResponse(
             content=str(normalized.get("content") or ""),
@@ -405,10 +437,10 @@ class CoreHttpLLMClient:
             ) as response:
                 if response.status_code >= 400:
                     text = await response.aread()
-                    raise _http_provider_error(
+                    raise self._provider_error(
                         response.status_code,
                         text.decode("utf-8", errors="replace")[:300],
-                        response.headers,
+                        response,
                     )
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data:"):
@@ -514,6 +546,28 @@ class CoreHttpLLMClient:
             metadata=dict(request.metadata),
         )
 
+    def _auth_scheme(self) -> str:
+        """Name the auth header shape used for this provider.
+
+        The mapping is protocol-driven (there is no per-provider ``auth``
+        override today): Anthropic-compatible endpoints take ``x-api-key``,
+        Gemini takes ``x-goog-api-key``, everything else takes a Bearer token.
+        Surfacing the chosen scheme in an error makes a provider configured
+        against the wrong protocol (a 401/403 whose body says "authentication
+        failed") diagnosable instead of opaque.
+        """
+        protocol = self._protocol()
+        auth = str(self.adapter_profile.get("auth") or protocol).strip().lower()
+        if protocol in {"gemini", "gemini-generative-language"} or auth in {
+            "gemini",
+            "google-api-key",
+            "x-goog-api-key",
+        }:
+            return "x-goog-api-key"
+        if auth in {"anthropic", "anthropic-messages", "x-api-key"}:
+            return "x-api-key"
+        return "Bearer"
+
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         protocol = self._protocol()
@@ -523,15 +577,44 @@ class CoreHttpLLMClient:
             "google-api-key",
             "x-goog-api-key",
         }:
-            headers["x-goog-api-key"] = self.config.api_key
+            headers["x-goog-api-key"] = self._validate_api_key()
         elif auth in {"anthropic", "anthropic-messages", "x-api-key"}:
-            headers["x-api-key"] = self.config.api_key
+            headers["x-api-key"] = self._validate_api_key()
             headers["anthropic-version"] = str(self.adapter_profile.get("anthropic_version") or "2023-06-01")
         else:
-            headers["Authorization"] = f"Bearer {self.config.api_key}"
+            headers["Authorization"] = f"Bearer {self._validate_api_key()}"
             if protocol == "anthropic-messages":
                 headers["anthropic-version"] = str(self.adapter_profile.get("anthropic_version") or "2023-06-01")
         return headers
+
+    def _validate_api_key(self) -> str:
+        """Return the api key, or fail locally with a clear identity.
+
+        A key carrying non-ASCII characters (typically a Chinese label pasted
+        along with it) cannot be encoded into an HTTP header. Without this
+        check the failure surfaces as a bare ``'ascii' codec can't encode``
+        with no provider/model, which reads like a transient network problem.
+        """
+        from lamtools_core.config.provider_store import ApiKeyValidationError, validate_api_key_text
+
+        try:
+            return validate_api_key_text(self.config.api_key)
+        except ApiKeyValidationError as exc:
+            raise ApiKeyValidationError(
+                f"{exc} — provider={self.config.provider_name} "
+                f"model={self.config.model_id}"
+            ) from exc
+
+    def _provider_error(self, status_code: int, text: str, response: object) -> Exception:
+        return _http_provider_error(
+            status_code,
+            text,
+            getattr(response, "headers", None) or {},
+            provider_name=self.config.provider_name,
+            base_url=self.config.base_url,
+            model=self.config.model_id,
+            auth_scheme=self._auth_scheme(),
+        )
 
 
 async def run_core_cli_task(
@@ -941,11 +1024,19 @@ def load_llm_config(*, model_ref: str = "") -> LLMConfig:
     store = _get_model_store()
     ref = model_ref.strip()
     if not ref:
+        # An explicit routing setting is a deliberate route, not a default.
         ref = _model_ref_from_routing()
     if not ref:
-        ref = store.default_model_id_sync(work_root=_model_store_work_root)
-    if not ref:
-        raise ValueError("model id is required when no routing setting is available")
+        # There is no "global default model": replacing a missing model with
+        # whatever is marked default is exactly the silent switch that made the
+        # UI show one model while another ran. Callers that have a scene (the
+        # live turn path, plugin backends, background tasks) resolve via
+        # ``lamtools_core.config.model_selection`` before reaching here.
+        raise ValueError(
+            "model id is required — no model was specified by the caller and no "
+            "session/scene has a model to inherit; 请先添加供应商/模型"
+            "（GUI：设置 → 模型与供应商；CLI：--model-id 或 lamtools.modelRouting 路由设置）"
+        )
     model = store.get_sync(ref, work_root=_model_store_work_root)
     if model is None:
         raise ValueError(f"model not found: {model_ref}")

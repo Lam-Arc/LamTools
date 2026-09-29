@@ -27,7 +27,15 @@ from lamtools_core.context_compaction_budget import (
 from .imagegen_store import IMAGEGEN_NAMESPACE, load_imagegen_config, save_imagegen_config
 from .model_store import ModelConfig, ModelStore, make_model_record_id
 from .model_group_store import ModelGroupRevisionConflict, ModelGroupStore
-from .provider_store import MASKED_API_KEY, ProviderConfig, ProviderStore, mask_api_key, slugify
+from .provider_store import (
+    MASKED_API_KEY,
+    ApiKeyValidationError,
+    ProviderConfig,
+    ProviderStore,
+    mask_api_key,
+    slugify,
+    validate_api_key_text,
+)
 from .settings_store import get_setting, set_setting
 
 
@@ -103,9 +111,13 @@ def build_config_operation_catalog(
         if missing:
             return _error(request, "name, base_url and api_key are required")
         name = str(params.get("name") or "").strip()
-        store = _providers()
+        try:
+            api_key = validate_api_key_text(str(params.get("api_key") or ""))
+        except ApiKeyValidationError as exc:
+            return _error(request, str(exc))
         provider_id = str(params.get("id") or params.get("preset_id") or "").strip() or slugify(name)
         # Ensure a unique provider id when the slug/preset id is already taken.
+        store = _providers()
         existing = store.list_sync(work_root=root)
         taken = {p.id for p in existing}
         candidate, suffix = provider_id, 2
@@ -118,7 +130,7 @@ def build_config_operation_catalog(
             name=name,
             api_type=str(params.get("api_type") or "openai").strip(),
             base_url=str(params.get("base_url") or "").strip(),
-            api_key=str(params.get("api_key") or "").strip(),
+            api_key=api_key,
             adapter_profile_id=str(
                 params.get("adapter_profile_id")
                 or provider_extra.get("adapter_profile_id")
@@ -150,8 +162,16 @@ def build_config_operation_catalog(
         )
         store.write(provider, scope="global", work_root=root)
         # Nested models[] (UI preset creations) become per-model jsonc files.
+        #
+        # Adding a provider must NOT change which model is currently in use:
+        # the payload's ``is_default`` (the preset's intended model) is no
+        # longer written as a global default, and no other model's flag is
+        # cleared.  It is only used as a *first-run seed* for the main-chat
+        # scene when no model has ever been used there — i.e. when there is
+        # nothing to inherit from at all.
         models_raw = params.get("models")
         created_models: list[ModelConfig] = []
+        seed_candidate = ""
         if isinstance(models_raw, list):
             model_store = _models()
             for raw in models_raw:
@@ -159,10 +179,18 @@ def build_config_operation_catalog(
                     continue
                 model = _model_config_from_payload(raw, fallback_provider=provider)
                 model.id = _unique_model_record_id(model, model_store, root)
-                if model.is_default:
-                    _clear_other_defaults(model_store, model.id, root)
+                if model.is_default and not seed_candidate:
+                    seed_candidate = model.id
+                model.is_default = False  # never a global default anymore
                 model_store.write(model, scope="global", work_root=root)
                 created_models.append(model)
+        if seed_candidate:
+            # First-run seed for scenes that have nothing remembered yet (the
+            # preset's intended model). Never touches a scene that already has
+            # a model, so adding a provider cannot change what is in use.
+            from .model_selection import seed_scenes_with_model
+
+            seed_scenes_with_model(seed_candidate)
         return OperationResult(
             name=request.name,
             payload={
@@ -180,7 +208,10 @@ def build_config_operation_catalog(
         provider = _find_provider(provider_id, store=store)
         if provider is None:
             return _error(request, f"provider not found: {provider_id}")
-        update = _provider_update_fields(provider, params)
+        try:
+            update = _provider_update_fields(provider, params)
+        except ApiKeyValidationError as exc:
+            return _error(request, str(exc))
         scope = _scope(params, root)
         if scope == "global" and _is_project_source(provider.source_path, root):
             # Writing a global copy would be shadowed by the project file —
@@ -503,6 +534,10 @@ def build_config_operation_catalog(
                 "（设置 → 模型与供应商），或在 CLI 中设置环境变量 LAMTOOLS_LLM_API_KEY"
                 "（需同时设置 LAMTOOLS_LLM_MODEL_ID）后重试",
             )
+        try:
+            api_key = validate_api_key_text(api_key)
+        except ApiKeyValidationError as exc:
+            return _error(request, f"LAMTOOLS_LLM_API_KEY 无效：{exc}")
         base_url = os.environ.get("LAMTOOLS_LLM_BASE_URL", "https://api.openai.com/v1").strip()
         model_id = os.environ.get("LAMTOOLS_LLM_MODEL_ID", "").strip()
         if not model_id:
@@ -607,10 +642,27 @@ def build_config_operation_catalog(
             },
         )
 
+    async def config_notices_drain(request: OperationRequest) -> OperationResult:
+        """Return and clear pending "config changed behind your back" notices.
+
+        The provider/model/settings jsonc files are watched for external edits
+        (cloud sync, another editor/instance, restored backup).  The UI drains
+        this endpoint and shows each notice, so a reload is never silent.
+        """
+        from .change_notice import drain_config_change_notices
+        from .model_selection import drain_model_notices
+
+        notices = [*drain_config_change_notices(), *drain_model_notices()]
+        return OperationResult(
+            name=request.name,
+            payload={"notices": notices},
+        )
+
     for name, handler in {
         "config.providers.list": providers_list,
         "config.provider.create": provider_create,
         "config.provider.update": provider_update,
+        "config.notices.drain": config_notices_drain,
         "workspace.search": workspace_search,
         "config.provider.delete": provider_delete,
         "config.models.list": models_list,
@@ -777,7 +829,7 @@ def _provider_update_fields(provider: ProviderConfig, params: dict[str, Any]) ->
             updates[key] = str(value).strip()
     api_key = params.get("api_key")
     if isinstance(api_key, str) and api_key.strip() and api_key.strip() != MASKED_API_KEY:
-        updates["api_key"] = api_key.strip()
+        updates["api_key"] = validate_api_key_text(api_key)
     extra = params.get("extra") if isinstance(params.get("extra"), dict) else {}
     if isinstance(params.get("extra"), dict):
         updates["extra"] = dict(extra)

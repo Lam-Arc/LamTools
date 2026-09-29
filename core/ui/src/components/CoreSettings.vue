@@ -165,7 +165,7 @@
                     <div class="model-identity">
                       <div class="model-name-line">
                         <strong>{{ model.display_name || model.model_id || model.id }}</strong>
-                        <span v-if="model.is_default" class="model-default-badge">当前默认</span>
+                        <span v-if="model.is_default" class="model-default-badge">预设首选</span>
                       </div>
                       <span class="model-meta">
                         <span class="model-id">{{ model.model_id || model.id }}</span>
@@ -179,7 +179,7 @@
                     <span v-else-if="model.capability === 'text'" class="model-capability">文本</span>
                   </div>
                   <div class="row-actions">
-                    <button v-if="!model.is_default" class="text-btn model-default-btn" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">设为默认</button>
+                    <button v-if="!model.is_default" class="text-btn model-default-btn" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">设为预设首选</button>
                     <button class="text-btn" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">编辑</button>
                     <button class="text-btn danger" type="button" :data-model-delete="model.id" @click="$emit('delete-model', model.id)">删除</button>
                   </div>
@@ -227,13 +227,13 @@
                     <div class="model-identity">
                       <div class="model-name-line">
                         <strong>{{ model.display_name || model.model_id || model.id }}</strong>
-                        <span v-if="model.is_default" class="model-default-badge">当前默认</span>
+                        <span v-if="model.is_default" class="model-default-badge">预设首选</span>
                       </div>
                       <span class="model-meta">{{ modelProviderName(model) }} · {{ model.model_id || model.id }}</span>
                     </div>
                   </div>
                   <div class="row-actions">
-                    <button v-if="!model.is_default" class="text-btn model-default-btn" type="button" @click="$emit('set-default-model', model.id)">设为默认</button>
+                    <button v-if="!model.is_default" class="text-btn model-default-btn" type="button" @click="$emit('set-default-model', model.id)">设为预设首选</button>
                     <button class="text-btn" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">编辑</button>
                     <button class="text-btn danger" type="button" :data-model-group-remove="model.id" @click="removeModelFromSelectedGroup(model.id)">移出组</button>
                   </div>
@@ -1913,6 +1913,9 @@ function submitProvider() {
         thinking_supported: model.thinkingSupported,
         thinking_budget: model.thinkingBudget,
         temperature: model.temperature,
+        // NOT a global default: the backend only uses this to seed the
+        // main-chat scene when no model has ever been used there. Adding a
+        // provider must never change the model a running session uses.
         is_default: model.modelId === preset.defaultModelId,
         extra: providerPresetModelExtra(model),
       }))

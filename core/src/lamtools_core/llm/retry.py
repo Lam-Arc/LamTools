@@ -54,7 +54,13 @@ def classify_model_error(exc: Exception) -> str:
     remains only as a fallback for untyped errors (audit 10 S2).
     """
     name = type(exc).__name__
-    if name in {"InvalidURL", "UnsupportedProtocol"}:
+    if name in {"InvalidURL", "UnsupportedProtocol", "ApiKeyValidationError"}:
+        return "fatal"
+    # A key carrying non-ASCII characters makes the HTTP header unencodable, so
+    # the request fails locally before any network round-trip. Retrying a
+    # request that cannot be built is pure noise (it used to burn all 10
+    # attempts), and the wrapped forms below are the same defect.
+    if isinstance(exc, (UnicodeEncodeError, UnicodeDecodeError)):
         return "fatal"
     if name == "TokenOverflowError":
         return "token_overflow"
@@ -85,6 +91,22 @@ def classify_model_error(exc: Exception) -> str:
         return "token_overflow"
     if any(marker in msg for marker in ("rate limit", "rate_limit", "429", "too many requests")):
         return "rate_limit"
+    # Wrapped non-ASCII api key / header encoding failures (the exception type
+    # is lost when a library re-raises its own error) — still a local build
+    # failure, never retryable.
+    if any(
+        marker in msg
+        for marker in (
+            "'ascii' codec can't encode",
+            "'ascii' codec can't decode",
+            "'latin-1' codec can't encode",
+            "codec can't encode characters in position",
+            "codec can't decode characters in position",
+            "non-ascii api key",
+            "含非 ascii 字符",
+        )
+    ):
+        return "fatal"
     # Configuration errors — retrying is pointless and causes retry storms
     if any(
         marker in msg

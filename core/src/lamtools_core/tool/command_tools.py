@@ -85,6 +85,15 @@ def split_command_for_path_validation(command: str, *, shell_kind: str = "bash")
     return tokens
 
 
+def _invalid_command_syntax_error(exc: ValueError) -> str:
+    """Actionable message for a command the executor's shell cannot tokenize."""
+    return (
+        f"Invalid command syntax: {exc}. "
+        "Use consistent quoting (no mixed or unmatched quote characters) "
+        "or split the command into separate calls."
+    )
+
+
 def command_path_validation_argv(command: str) -> list[str]:
     """Tokenize a command for path validation with the executor's own shell.
 
@@ -251,7 +260,8 @@ class CommandToolHandlers:
             except ValueError as exc:
                 return ToolResult(
                     call_id=call.id, name=call.name,
-                    status="failed", error=f"Invalid command syntax: {exc}",
+                    status="failed",
+                    error=_invalid_command_syntax_error(exc),
                 )
 
         if not argv:
@@ -265,7 +275,8 @@ class CommandToolHandlers:
         except ValueError as exc:
             return ToolResult(
                 call_id=call.id, name=call.name,
-                status="failed", error=f"Invalid command syntax: {exc}",
+                status="failed",
+                error=_invalid_command_syntax_error(exc),
             )
 
         try:

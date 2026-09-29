@@ -106,6 +106,118 @@ def test_shell_aware_path_splitter_rejects_unmatched_quotes(shell_kind: str) -> 
         split_command_for_path_validation('cat "../outside path.txt', shell_kind=shell_kind)
 
 
+# --- Reported Linux environment-probe command: quoting must not block it ---
+
+# The command shape from the report: `;`/`|` compounds, balanced quotes in a
+# regex, and absolute paths such as /etc/os-release.
+PROBE_COMMAND = (
+    "id; echo; hostname; uname -a; head -2 /etc/os-release; "
+    'ip -4 addr show | grep -E "^[0-9]|inet "; ip route; df -h / | tail -1'
+)
+PATH_VALIDATION_SHELL_KINDS = ["wsl", "git-bash", "powershell", "pwsh"]
+# Tokenizing a double-quoted absolute path whose value contains an apostrophe
+# leaves a bare quote in the token; a PowerShell backtick-escaped quote does the
+# same.  Both are resolvable by the executor's shell, so they are not invalid.
+EMBEDDED_QUOTE_COMMAND = 'head -2 "/tmp/it\'s.txt"'
+POWERSHELL_ESCAPED_QUOTE_COMMAND = 'head -2 "/etc/os`"release"'
+
+
+@pytest.mark.parametrize("shell_kind", PATH_VALIDATION_SHELL_KINDS)
+def test_reported_environment_probe_passes_without_boundary(
+    shell_kind: str, tmp_path: Path
+) -> None:
+    """契约：不强制边界时，合法复合探查命令不得被引号检查拦下。"""
+    tokens = split_command_for_path_validation(PROBE_COMMAND, shell_kind=shell_kind)
+    validate_command_paths([shell_kind, *tokens], tmp_path)
+
+
+@pytest.mark.parametrize("shell_kind", PATH_VALIDATION_SHELL_KINDS)
+def test_embedded_quote_in_quoted_path_is_skipped_without_boundary(
+    shell_kind: str, tmp_path: Path
+) -> None:
+    """契约：token 残留引号且无法静态消解时，不强制边界必须跳过而不是拒整条。
+
+    旧实现在此无条件抛错（回归点）；下限断言保证 token 里确实还有引号，
+    否则这条测试会空过。
+    """
+    tokens = split_command_for_path_validation(EMBEDDED_QUOTE_COMMAND, shell_kind=shell_kind)
+    assert any("'" in token for token in tokens)
+
+    validate_command_paths([shell_kind, *tokens], tmp_path)
+
+
+@pytest.mark.parametrize("shell_kind", ["powershell", "pwsh"])
+def test_powershell_escaped_quote_in_path_is_skipped_without_boundary(
+    shell_kind: str, tmp_path: Path
+) -> None:
+    tokens = split_command_for_path_validation(
+        POWERSHELL_ESCAPED_QUOTE_COMMAND, shell_kind=shell_kind
+    )
+    assert any('"' in token for token in tokens)
+
+    validate_command_paths([shell_kind, *tokens], tmp_path)
+
+
+@pytest.mark.parametrize("shell_kind", PATH_VALIDATION_SHELL_KINDS)
+def test_embedded_quote_in_quoted_path_is_rejected_with_actionable_message_in_strict_mode(
+    shell_kind: str, tmp_path: Path
+) -> None:
+    """契约：只有强制边界的调用方才硬拒绝，且提示说明原因与出路。"""
+    tokens = split_command_for_path_validation(EMBEDDED_QUOTE_COMMAND, shell_kind=shell_kind)
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_command_paths([shell_kind, *tokens], tmp_path, allow_outside=False)
+
+    message = str(excinfo.value)
+    assert "cannot be verified to stay inside the workspace" in message
+    assert "consistent quoting" in message
+    assert "split the command into separate calls" in message
+
+
+@pytest.mark.parametrize("shell_kind", PATH_VALIDATION_SHELL_KINDS)
+def test_unmatched_quote_reported_as_invalid_syntax_not_a_bounds_question(
+    shell_kind: str,
+) -> None:
+    """真不平衡引号由执行器自己的分词器判为无效语法（fail closed）。
+
+    选择「分词层拒绝」而非「边界层跳过」：执行器本来就会拒绝这种语法，
+    在边界层再报一次只会给出与真实原因无关的越界/引号提示。
+    """
+    with pytest.raises(ValueError):
+        split_command_for_path_validation('grep -E "^[0-9', shell_kind=shell_kind)
+
+
+def test_permissive_bounds_check_skips_token_with_unmatched_quote(tmp_path: Path) -> None:
+    validate_command_paths(["head", "-2", '/tmp/"broken'], tmp_path)
+
+
+def test_strict_bounds_check_rejects_token_with_unmatched_quote(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="cannot be verified to stay inside the workspace"):
+        validate_command_paths(["head", "-2", '/tmp/"broken'], tmp_path, allow_outside=False)
+
+
+@pytest.mark.parametrize("shell_kind", PATH_VALIDATION_SHELL_KINDS)
+@pytest.mark.parametrize("command", ['grep -E "^[0-9]|inet " sub/file.txt', "cat 'sub/file.txt'"])
+def test_balanced_quoting_passes_even_in_strict_mode(
+    shell_kind: str, command: str, tmp_path: Path
+) -> None:
+    """契约：成对引号（含正则里的 | 与 [0-9]）在强制边界下也必须通过。"""
+    tokens = split_command_for_path_validation(command, shell_kind=shell_kind)
+
+    validate_command_paths([shell_kind, *tokens], tmp_path, allow_outside=False)
+
+
+@pytest.mark.parametrize("shell_kind", PATH_VALIDATION_SHELL_KINDS)
+def test_reported_probe_outside_paths_still_rejected_in_strict_mode(
+    shell_kind: str, tmp_path: Path
+) -> None:
+    """安全语义不变：强制边界的调用方仍拒绝真正越出工作区的绝对路径。"""
+    tokens = split_command_for_path_validation(PROBE_COMMAND, shell_kind=shell_kind)
+
+    with pytest.raises(ValueError, match="escapes work_root"):
+        validate_command_paths([shell_kind, *tokens], tmp_path, allow_outside=False)
+
+
 def test_windows_command_creationflags_hide_console(monkeypatch):
     monkeypatch.setattr(command_module.sys, "platform", "win32")
     monkeypatch.setattr(command_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
@@ -310,6 +422,68 @@ async def test_run_command_uses_resolved_shell_and_reports_it(monkeypatch, tmp_p
     assert result.metadata["shell_state"] == "exited"
     assert result.metadata["readiness_state"] == "not_requested"
     assert "[process_state: exited]" in result.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", [PROBE_COMMAND, EMBEDDED_QUOTE_COMMAND])
+async def test_run_command_accepts_reported_probe_and_embedded_quote_paths(
+    monkeypatch, tmp_path: Path, command: str
+):
+    """端到端回归：默认（不强制边界）下这两条命令都不得被预检拒绝（旧实现拒整条）。"""
+    shell = command_runner.CommandShell(
+        name="Git Bash",
+        executable=r"C:\Program Files\Git\bin\bash.exe",
+        kind="git-bash",
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_run(argv, **_kwargs):
+        captured["argv"] = argv
+        return CommandExecution(exit_code=0, stdout="ok\n")
+
+    monkeypatch.setattr(command_tools_module.sys, "platform", "win32")
+    monkeypatch.setattr(command_tools_module, "resolve_command_shell", lambda: shell)
+    monkeypatch.setattr(command_tools_module, "_run_subprocess", fake_run)
+    handlers = CommandToolHandlers(
+        work_root=tmp_path,
+        command_timeout=10,
+        loaded_skill_roots=set(),
+    )
+
+    result = await handlers.run_command(
+        ToolCall(id="probe", name="run_command", arguments={"command": command})
+    )
+
+    assert result.status == "ok", result.error
+    assert captured["argv"] == [shell.executable, "--noprofile", "--norc", "-lc", command]
+
+
+@pytest.mark.asyncio
+async def test_run_command_reports_actionable_message_for_unmatched_quote(
+    monkeypatch, tmp_path: Path
+):
+    """契约：真不平衡引号仍会失败，但提示必须给出下一步（改引号或拆命令）。"""
+    shell = command_runner.CommandShell(
+        name="Git Bash",
+        executable=r"C:\Program Files\Git\bin\bash.exe",
+        kind="git-bash",
+    )
+    monkeypatch.setattr(command_tools_module.sys, "platform", "win32")
+    monkeypatch.setattr(command_tools_module, "resolve_command_shell", lambda: shell)
+    handlers = CommandToolHandlers(
+        work_root=tmp_path,
+        command_timeout=10,
+        loaded_skill_roots=set(),
+    )
+
+    result = await handlers.run_command(
+        ToolCall(id="bad-quote", name="run_command", arguments={"command": 'grep -E "^[0-9'})
+    )
+
+    assert result.status == "failed"
+    assert "Invalid command syntax" in (result.error or "")
+    assert "consistent quoting" in (result.error or "")
+    assert "split the command into separate calls" in (result.error or "")
 
 
 @pytest.mark.asyncio

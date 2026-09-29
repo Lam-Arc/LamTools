@@ -459,6 +459,16 @@ def create_core_agent_operations(
         if _is_llm_client(model_provider):
             from lamtools_core.tool.default_toolbox import build_core_toolbox
 
+            turn_spec, model_error = await _inherit_turn_model(
+                turn_spec,
+                request=request,
+                runtime_state_store=runtime_state_store,
+                model_provider=model_provider,
+            )
+            if model_error is not None:
+                return OperationResult(
+                    name=request.name, status="error", payload={"error": model_error}
+                )
             runtime_snapshot = _runtime_snapshot_from_payload(request.payload)
             runtime_request = request
             if runtime_snapshot is not None:
@@ -1917,7 +1927,7 @@ def create_core_agent_operations(
                 runtime_state_store=runtime_state_store,
                 thread_id=thread_id,
                 llm_client=model_provider if _is_llm_client(model_provider) else None,  # type: ignore[arg-type]
-                model=spec.default_model,
+                model=_background_scene_model(),
                 on_event=on_event,
             ),
         )
@@ -1928,7 +1938,7 @@ def create_core_agent_operations(
                 memory_store=memory_store,
                 thread_id=thread_id,
                 llm_client=model_provider if _is_llm_client(model_provider) else None,  # type: ignore[arg-type]
-                model=spec.default_model,
+                model=_background_scene_model(),
                 on_event=on_event,
             ),
         )
@@ -2017,7 +2027,7 @@ def create_core_agent_operations(
         return KernelSubAgentRunner(
             work_root=paths.work_root,
             llm_client=model_provider,
-            model_id=spec.default_model,
+            model_id=_background_scene_model(),
             approval_policy="require",
             session_prefix="plugin-sub-agent",
             state_store=runtime_state_store,
@@ -2225,6 +2235,123 @@ def _runtime_snapshot_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]
         if key in payload and payload[key] is not None:
             snapshot[key] = deepcopy(payload[key])
     return snapshot
+
+
+async def _inherit_turn_model(
+    spec: CoreAgentSpec,
+    *,
+    request: OperationRequest,
+    runtime_state_store: Any,
+    model_provider: Any = None,
+) -> tuple[CoreAgentSpec, str | None]:
+    """Pick the model this turn runs, or explain why it cannot.
+
+    Resolution order (never a silent substitution to an unrelated provider):
+
+    1. an explicit model named by the caller (recorded as the scene's current
+       model so the *next* turn in the scene inherits it);
+    2. the session's own last-used model (what the previous turn actually ran);
+    3. the same scene's most recently used model, with a visible notice when
+       the scene's first choice is gone and a different same-scene model is
+       used instead.
+
+    When nothing resolves the turn fails with a clear message instead of
+    running some other model the UI never showed.
+
+    Hosts that inject their own LLM client (the config-routing client is the
+    one that reads the jsonc config) keep whatever model id they were built
+    with — this contract governs the config-file-driven product path.
+    """
+    from lamtools_core.config.model_selection import (
+        SCENE_CHAT,
+        ModelResolutionError,
+        model_is_usable,
+        record_model_notice,
+        remember_and_resolve,
+        remember_scene_model,
+        resolve_scene_model,
+    )
+    from lamtools_core.config.model_store import ModelStore
+
+    if not getattr(model_provider, "uses_config_routing", False):
+        return spec, None
+    payload = request.payload if isinstance(request.payload, dict) else {}
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    scene = str(payload.get("scene") or metadata.get("scene") or SCENE_CHAT).strip() or SCENE_CHAT
+    requested = str(
+        payload.get("model_id")
+        or payload.get("modelId")
+        or metadata.get("model_id")
+        or ""
+    ).strip()
+    if requested:
+        try:
+            resolution = remember_and_resolve(scene, requested)
+        except ModelResolutionError as exc:
+            return spec, str(exc)
+        return replace(spec, default_model=resolution.model_id), None
+
+    session_model = await _session_last_used_model(runtime_state_store, request)
+    if session_model:
+        model = ModelStore().get_sync(session_model)
+        if model is not None and model_is_usable(model):
+            remember_scene_model(scene, model.id)
+            return replace(spec, default_model=model.id), None
+    try:
+        resolution = resolve_scene_model(scene)
+    except ModelResolutionError as exc:
+        return spec, str(exc)
+    if resolution.notice:
+        record_model_notice(resolution.notice)
+    return replace(spec, default_model=resolution.model_id), None
+
+
+def _background_scene_model() -> str:
+    """Model for background work (auto-title, compaction, dreaming, sub-agents).
+
+    Background calls follow the *background* scene's most recent model — never
+    the main conversation's, and never a boot-time "default".  An empty result
+    means no background model is remembered; the caller then fails with the
+    explicit "请先添加供应商/模型" message instead of borrowing a model from
+    another scene.
+    """
+    from lamtools_core.config.model_selection import SCENE_BACKGROUND, ModelResolutionError, resolve_scene_model
+
+    try:
+        return resolve_scene_model(SCENE_BACKGROUND).model_id
+    except ModelResolutionError:
+        return ""
+
+
+async def _session_last_used_model(runtime_state_store: Any, request: OperationRequest) -> str:
+    """Return the model the session's previous turn actually used (or "")."""
+    if runtime_state_store is None:
+        return ""
+    payload = request.payload if isinstance(request.payload, dict) else {}
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    thread_id = str(
+        payload.get("thread_id")
+        or payload.get("session_id")
+        or metadata.get("session_id")
+        or ""
+    ).strip()
+    if not thread_id:
+        return ""
+    try:
+        state = await runtime_state_store.get(thread_id)
+    except Exception:
+        return ""
+    if state is None:
+        return ""
+    state_metadata = getattr(state, "metadata", None)
+    if not isinstance(state_metadata, dict):
+        return ""
+    snapshot = state_metadata.get("runtime_snapshot")
+    if isinstance(snapshot, dict):
+        model = str(snapshot.get("model_id") or "").strip()
+        if model:
+            return model
+    return str(state_metadata.get("model_id") or "").strip()
 
 
 def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest, work_root: str | None = None) -> CoreAgentRuntimeOptions:

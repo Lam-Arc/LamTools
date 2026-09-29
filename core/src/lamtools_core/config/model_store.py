@@ -263,6 +263,10 @@ class ModelStore:
     # -- internal: cached load ------------------------------------------
 
     def _load_map(self, work_root: str | None) -> dict[str, ModelConfig]:
+        files = self._candidate_files(work_root)
+        from .change_notice import observe_config_files
+
+        observe_config_files("model", files)
         sig = self._signature(work_root)
         if self._cached_signature == sig and self._cached_models is not None:
             return self._cached_models
@@ -270,7 +274,7 @@ class ModelStore:
         # so later entries override earlier ones on a per-model_id basis.
         models: dict[str, ModelConfig] = {}
         default_id = ""
-        for path in self._candidate_files(work_root):
+        for path in files:
             model = self._parse(path)
             if model is None:
                 continue
@@ -303,6 +307,9 @@ class ModelStore:
         from lamtools_core.config.root import atomic_write_text
 
         atomic_write_text(path, self._serialize(model))
+        from .change_notice import mark_self_written
+
+        mark_self_written(path)
         self._cached_signature = None  # invalidate cache
         self._cached_models = None
         return path

@@ -549,30 +549,38 @@
     </template>
 
     <template #composer-textarea>
-      <AttachmentTray
-        :attachments="pendingAttachments"
-        :transport="transport"
-        @remove="removeAttachment"
-        @retry="retryPendingAttachment"
-        @preview="previewPendingAttachment"
-        @open="openPendingAttachment"
+      <CorePendingDecisionPanel
+        v-if="composerTakenOver"
+        :items="pendingDecisions"
+        :channel-ready="approvalChannelReady"
+        @decision-select="handlePendingDecisionSelect"
       />
-      <div class="composer-input-wrap">
-        <textarea
-          ref="composerTextareaEl"
-          v-model="composerText"
-          :class="{ 'composer-input--recognized': hasComposerRecognizedCommand }"
-          :disabled="composerInputDisabled"
-          :placeholder="composerPlaceholder"
-          rows="1"
-          @input="handleComposerInput"
-          @click="updateComposerCursor"
-          @keyup="handleComposerKeyup"
-          @keydown="handleComposerKeydown"
-          @paste="handleComposerPaste"
-          @contextmenu="openComposerContextMenu"
+      <template v-else>
+        <AttachmentTray
+          :attachments="pendingAttachments"
+          :transport="transport"
+          @remove="removeAttachment"
+          @retry="retryPendingAttachment"
+          @preview="previewPendingAttachment"
+          @open="openPendingAttachment"
         />
-      </div>
+        <div class="composer-input-wrap">
+          <textarea
+            ref="composerTextareaEl"
+            v-model="composerText"
+            :class="{ 'composer-input--recognized': hasComposerRecognizedCommand }"
+            :disabled="composerInputDisabled"
+            :placeholder="composerPlaceholder"
+            rows="1"
+            @input="handleComposerInput"
+            @click="updateComposerCursor"
+            @keyup="handleComposerKeyup"
+            @keydown="handleComposerKeydown"
+            @paste="handleComposerPaste"
+            @contextmenu="openComposerContextMenu"
+          />
+        </div>
+      </template>
     </template>
 
     <template #composer-tools>
@@ -734,6 +742,7 @@ import {
 import { createCoreProjectClient } from '../projects/client'
 import { createCoreProjectWorkspaceActions } from '../projects/workspace'
 import {
+  selectPendingCoreDecisions,
   type CoreQueuedInput,
 } from '../appServer'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'
@@ -765,6 +774,7 @@ import RailAction from '../components/RailAction.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreWorkspaceMenu from '../components/CoreWorkspaceMenu.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
+import CorePendingDecisionPanel from '../components/CorePendingDecisionPanel.vue'
 import CoreArrangeManager from '../components/CoreArrangeManager.vue'
 import CoreGoalStrip from '../components/CoreGoalStrip.vue'
 import HistoryLoadingIndicator from '../components/HistoryLoadingIndicator.vue'
@@ -1452,6 +1462,21 @@ const composerPlaceholder = computed(() => (
     : '给 Sunday 发送任务...'
 ))
 
+/**
+ * Composer takeover — waiting approvals/questions.
+ *
+ * While the runtime waits for the user, anything typed into the composer is
+ * queued as ordinary turn input (the thread status is `waiting`, so the submit
+ * path queues instead of starting a turn) and never answers the request. The
+ * composer input area is therefore replaced by the decision panel, which sends
+ * its choices through the one existing approval channel.
+ */
+const pendingDecisions = computed(() => (
+  activePluginMode.value ? [] : selectPendingCoreDecisions(workbench.messages.value)
+))
+const composerTakenOver = computed(() => pendingDecisions.value.length > 0)
+const approvalChannelReady = computed(() => workbench.connectionState.value === 'open')
+
 const composerInputDisabled = computed(() => {
   if (activePluginMode.value) {
     return readPluginSurface(activePluginSurface.value?.composerDisabled, true)
@@ -1466,6 +1491,9 @@ const composerSendDisabled = computed(() => {
     const attachmentOnly = readPluginSurface(activePluginSurface.value?.allowAttachmentOnlySubmit, false)
     return composerInputDisabled.value || (!composerText.value.trim() && !(attachmentOnly && pendingAttachments.value.length))
   }
+  // A pending decision owns the input area: sending a queued draft from here
+  // would look like an answer without answering anything.
+  if (composerTakenOver.value) return true
   return composerInputDisabled.value
     || !activeSessionId.value
     || (!composerText.value.trim() && pendingAttachments.value.length === 0)
@@ -1875,6 +1903,13 @@ const executionControls = useCoreExecutionControlsState({
   storage: window.localStorage,
   initial: { thinkingMode: 'high', permissionPreset: defaultPermissionPreset.value },
   onPermissionPresetSelected: persistSessionPermissionPreset,
+  onModelAutoReplaced: (fromModelId: string, toModelId: string) => {
+    const label = (id: string) => {
+      const model = availableModels.value.find((item) => item.id === id)
+      return String(model?.display_name || model?.model_id || id || '')
+    }
+    showToast('notice', `原模型「${label(fromModelId)}」已不可用，已改用「${label(toModelId)}」`, 8000)
+  },
 })
 const {
   modelOptions,
@@ -2789,6 +2824,18 @@ async function connectLive(threadId: string) {
   await workbench.connect(threadId)
 }
 
+/**
+ * Composer decision panel → the same payload shape the in-thread card emits, so
+ * both surfaces share one decision channel (nothing new on the wire).
+ */
+async function handlePendingDecisionSelect(payload: {
+  partId: string
+  option: { id?: string; label?: string; response?: string }
+  response: string
+}) {
+  await approvalController.handleDecision(payload)
+}
+
 async function submitComposer() {
   composerErrorText.value = ''
   // 停止模式：composer 必为空，须在空文本守卫之前处理，否则 stop 请求永远发不出去
@@ -2805,6 +2852,13 @@ async function submitComposer() {
     ? readPluginSurface(activePluginSurface.value?.allowAttachmentOnlySubmit, false)
     : true
   if (!text && !(attachmentOnly && pendingAttachments.value.length)) return
+
+  // No model to inherit and none configured: fail with an explicit prompt
+  // instead of sending a turn that would be silently routed to some default.
+  if (!activePluginMode.value && availableModels.value.length === 0) {
+    showToast('error', '请先添加供应商/模型（设置 → 模型与供应商）', 8000)
+    return
+  }
 
   sendingDisabled.value = true
 
@@ -3802,14 +3856,42 @@ async function loadModelOptions() {
     availableModels.value = Array.isArray(modelsResponse.models)
       ? modelsResponse.models as RawModel[]
       : []
-    defaultModelId.value = typeof modelsResponse.default_model_id === 'string'
-      ? modelsResponse.default_model_id
-      : ''
+    // There is no global default model: the composer inherits the main-chat
+    // scene's most recently used model. An empty value means "nothing to
+    // inherit" — the composer then shows no model rather than some default.
+    const sceneModels = (modelsResponse as { scene_models?: Record<string, unknown> }).scene_models
+    const sceneModelId = sceneModels && typeof sceneModels.chat === 'string' ? sceneModels.chat : ''
+    defaultModelId.value = sceneModelId
   } catch {
     availableModels.value = []
     availableProviders.value = []
     defaultModelId.value = ''
   }
+}
+
+// Backend notices: an external edit to provider/model/settings files, or a
+// model substituted because the inherited one disappeared. Both were silent
+// before; the user must be told which config changed or which model ran.
+async function drainConfigNotices() {
+  try {
+    const response = await requestConfigOperation('config.notices.drain')
+    const notices = Array.isArray(response.notices) ? response.notices : []
+    for (const notice of notices) {
+      const message = String((notice as { message?: unknown })?.message || '').trim()
+      if (message) showToast('notice', message, 8000)
+    }
+  } catch {
+    // Notice delivery must never break the app.
+  }
+}
+
+let configNoticeTimer: ReturnType<typeof setInterval> | null = null
+
+function startConfigNoticePolling(): void {
+  if (configNoticeTimer !== null) return
+  configNoticeTimer = setInterval(() => {
+    void drainConfigNotices()
+  }, 15000)
 }
 
 function toSession(raw: RawSession): CoreSessionListItem {
@@ -3957,6 +4039,10 @@ onMounted(() => {
   void loadInitialData().then(() => checkOnboarding())
   void refreshRemoteGateway()
   void refreshRemoteAccount()
+  // External config edits and model substitutions must reach the user even
+  // when no settings surface is open.
+  startConfigNoticePolling()
+  void drainConfigNotices()
   // 启动时静默检查更新（仅 Tauri 桌面环境，且用户未关闭「启动时自动检查更新」）
   if ((window as any).__TAURI_INTERNALS__ && readUpdateAutoCheck()) {
     void updateState.check()
@@ -3979,6 +4065,10 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalSearchKeydown)
   window.removeEventListener('lamtools:open-search', handleStudyOpenSearch)
   window.removeEventListener('lamtools:projects-synced', handleProjectsSynced)
+  if (configNoticeTimer !== null) {
+    clearInterval(configNoticeTimer)
+    configNoticeTimer = null
+  }
   stopLatestActivityMotion()
   cancelHistoryCapMotion()
   historyScrollCeiling = null

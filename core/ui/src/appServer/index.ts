@@ -69,6 +69,25 @@ export {
 } from './workbenchProjection.ts'
 
 export {
+  coreDecisionDetail,
+  coreDecisionFacts,
+  coreDecisionIsUnanswered,
+  coreDecisionOptionResponse,
+  coreDecisionOptions,
+  coreDecisionRequestId,
+  coreDecisionSubject,
+  coreDecisionTitle,
+  coreDecisionToolName,
+  selectPendingCoreDecisions,
+  type CoreDecisionChoice,
+  type CoreDecisionFact,
+  type CoreDecisionFactTone,
+  type CoreDecisionOption,
+  type CorePendingDecision,
+  type SelectPendingCoreDecisionsOptions,
+} from './pendingDecisions.ts'
+
+export {
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
   applyCoreAppEvent,

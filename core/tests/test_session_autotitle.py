@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -39,6 +40,39 @@ class FakeHub:
 
     async def publish(self, event: dict) -> None:
         self.events.append(event)
+
+
+@pytest.fixture
+def background_model(isolated_config_root: Path) -> str:
+    """Configure one usable provider+model and remember it for the background scene.
+
+    Background work (auto-title, compaction, dreaming) inherits the background
+    scene's model; there is no host-wide "default model" to fall back to.
+    """
+    from lamtools_core.config.model_selection import (
+        SCENE_BACKGROUND,
+        remember_scene_model,
+        reset_model_notices,
+    )
+
+    providers_dir = isolated_config_root / "providers"
+    models_dir = isolated_config_root / "models"
+    providers_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    (providers_dir / "p1.jsonc").write_text(
+        '{\n  "id": "p1",\n  "name": "P1",\n'
+        '  "base_url": "https://example.com/v1",\n  "api_key": "sk-test"\n}\n',
+        encoding="utf-8",
+    )
+    (models_dir / "model-x.jsonc").write_text(
+        '{\n  "id": "model-x",\n  "model_id": "model-x",\n'
+        '  "display_name": "Model X",\n  "provider": "P1",\n  "provider_id": "p1"\n}\n',
+        encoding="utf-8",
+    )
+    reset_model_notices()
+    remember_scene_model(SCENE_BACKGROUND, "model-x")
+    yield "model-x"
+    reset_model_notices()
 
 
 class FakeSessionStore:
@@ -148,7 +182,7 @@ class TestGenerateSessionTitle:
 
 
 class TestAutoTitleSession:
-    def test_generates_and_broadcasts(self):
+    def test_generates_and_broadcasts(self, background_model):
         hub = FakeHub()
         llm = FakeLLMClient(response=LLMResponse(content="生成的标题"))
         # Untouched session: title falls back to the bare session id.
@@ -158,6 +192,7 @@ class TestAutoTitleSession:
         assert len(store.patch_calls) == 1
         assert store.patch_calls[0]["title"] == "生成的标题"
         assert store.patch_calls[0]["only_if_title_default"] is True
+        assert llm.calls[0].model == background_model
         assert hub.events == [
             {
                 "method": "session/updated",
@@ -176,7 +211,7 @@ class TestAutoTitleSession:
         assert store.patch_calls == []
         assert hub.events == []
 
-    def test_no_broadcast_when_patch_rejected(self):
+    def test_no_broadcast_when_patch_rejected(self, background_model):
         """Simulates the race: the user renamed the session while the LLM was
         generating; the conditional patch (only_if_title_default) refuses and
         returns None, so nothing is clobbered and nothing is broadcast."""
@@ -219,12 +254,30 @@ class TestAutoTitleSession:
         assert llm.calls[0].model == "session-model"
         assert store.patch_calls[0]["title"] == "生成的标题"
 
-    def test_falls_back_to_host_default_model(self):
+    def test_falls_back_to_background_scene_model(self, background_model):
+        """Background work follows the background scene, not a host "default"."""
         hub = FakeHub()
         llm = FakeLLMClient(response=LLMResponse(content="生成的标题"))
         store = FakeSessionStore(existing_title="t1", metadata={})
         asyncio.run(_auto_title_session(context=_context(llm=llm, store=store, hub=hub), thread_id="t1", first_message="你好"))
-        assert llm.calls[0].model == "model-x"
+        assert llm.calls[0].model == background_model
+
+    def test_no_background_model_skips_and_notifies(self):
+        """With no background model the title is skipped and a notice is left —
+        never silently borrowed from the main conversation's scene."""
+        from lamtools_core.config.model_selection import drain_model_notices, reset_model_notices
+
+        reset_model_notices()
+        hub = FakeHub()
+        llm = FakeLLMClient(response=LLMResponse(content="生成的标题"))
+        store = FakeSessionStore(existing_title="t1", metadata={})
+        asyncio.run(_auto_title_session(context=_context(llm=llm, store=store, hub=hub), thread_id="t1", first_message="你好"))
+
+        assert llm.calls == []
+        assert store.patch_calls == []
+        notices = drain_model_notices()
+        assert len(notices) == 1
+        assert "后台任务没有可用模型" in notices[0]["message"]
 
 
 class _PatchRecordingStore:

@@ -14,6 +14,7 @@ from types import ModuleType
 from typing import Any
 
 from .context import PluginContext
+from lamtools_core.config.model_selection import scene_for_plugin
 from .models import PluginManifest
 
 _logger = logging.getLogger(__name__)
@@ -89,7 +90,10 @@ def load_plugin_backend(plugin: PluginManifest, context: PluginContext) -> Plugi
         raise ValueError(f"plugin backend entry does not exist: {entry}")
     module = _load_module(plugin, entry)
     factory = getattr(module, "create_plugin", None) or getattr(module, "create_runtime", None)
-    value = factory(context) if callable(factory) else module
+    # Hand each backend its own scene's model so a plugin never inherits the
+    # main conversation's model (see PluginContext.for_scene).
+    plugin_context = context.for_scene(scene_for_plugin(plugin))
+    value = factory(plugin_context) if callable(factory) else module
     if value is None:
         value = module
     if isinstance(value, PluginRuntimeHandle):

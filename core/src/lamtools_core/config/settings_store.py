@@ -50,6 +50,9 @@ def _split_namespace(namespace: str) -> tuple[str, str]:
 
 def _read_map(path: Path | None = None) -> dict[str, Any]:
     target = path or settings_path()
+    from .change_notice import observe_config_files
+
+    observe_config_files("settings", [target])
     try:
         data = load_jsonc(target)
     except FileNotFoundError:
@@ -111,6 +114,9 @@ def set_setting(namespace: str, value: Any, *, path: Path | None = None) -> Path
         from lamtools_core.config.root import atomic_write_text
 
         atomic_write_text(target, json.dumps(data, ensure_ascii=False, indent=2))
+    from .change_notice import mark_self_written
+
+    mark_self_written(target)
     return target
 
 
@@ -134,6 +140,9 @@ def delete_setting(namespace: str, *, path: Path | None = None) -> bool:
         from lamtools_core.config.root import atomic_write_text
 
         atomic_write_text(target, json.dumps(data, ensure_ascii=False, indent=2))
+    from .change_notice import mark_self_written
+
+    mark_self_written(target)
     return True
 
 

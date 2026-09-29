@@ -37,6 +37,11 @@ class PluginContext:
     event_sink: PluginEventSink | None = None
     services: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    #: The context this view was derived from (set by :meth:`for_scene`).
+    #: Late-bound fields assigned on the original *after* the view was created
+    #: (``operation_catalog`` is set once the operation catalog exists) are
+    #: resolved through this live reference.
+    parent: "PluginContext | None" = None
 
     def __post_init__(self) -> None:
         self.work_root = Path(self.work_root).resolve()
@@ -73,15 +78,67 @@ class PluginContext:
             metadata=self.metadata,
         )
 
+    def for_scene(self, scene: str) -> "PluginContext":
+        """Return a view whose ``model_id`` is the model of ``scene``.
+
+        Each plugin backend is handed its own scene's model (Study → study,
+        the desktop pet → desktop_pet, anything else → background) so a
+        plugin's model calls never inherit the main conversation's model by
+        accident.  The ``services`` dict is shared by reference, so services
+        registered after the backend is created stay visible.
+        """
+        view = self.for_work_root(self.work_root)
+        if view is self:
+            view = PluginContext(
+                work_root=self.work_root,
+                data_dir=self.data_dir,
+                app_data_dir=self.app_data_dir,
+                operation_catalog=self.operation_catalog,
+                permission_service=self.permission_service,
+                event_bus=self.event_bus,
+                runtime_task_registry=self.runtime_task_registry,
+                llm_client=self.llm_client,
+                event_sink=self.event_sink,
+                services=self.services,
+                metadata=self.metadata,
+            )
+        from lamtools_core.config.model_selection import ModelResolutionError, resolve_scene_model
+
+        # Keep a live link to the originating context: fields it assigns later
+        # (notably ``operation_catalog``) must stay reachable from this view.
+        view.parent = self
+        try:
+            view.model_id = resolve_scene_model(scene).model_id
+        except ModelResolutionError:
+            # No model for this scene: leave it empty so the plugin's model
+            # call fails with the explicit "请先添加供应商/模型" message instead
+            # of silently borrowing another scene's model.
+            view.model_id = ""
+        return view
+
     def operation_executor(self) -> Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[Any]]:
         """Build the common operation executor used by plugin tools."""
         async def execute(name: str, payload: dict[str, Any], metadata: dict[str, Any] | None = None) -> Any:
-            catalog = self.operation_catalog
+            catalog = self.resolved_operation_catalog()
             if catalog is None:
                 raise RuntimeError("operation catalog is not configured")
             return await catalog.execute(name, payload, metadata=metadata or {})
 
         return execute
+
+    def resolved_operation_catalog(self) -> Any | None:
+        """Return the operation catalog, following the parent chain.
+
+        The catalog is assigned to the originating context *after* plugin
+        backends are loaded, so a derived view (``for_scene``) must read it
+        through the live parent reference rather than the value it copied.
+        """
+        context: PluginContext | None = self
+        while context is not None:
+            if context.operation_catalog is not None:
+                return context.operation_catalog
+            context = context.parent
+        return None
 
     async def emit(self, event: Any) -> None:
         """Deliver a plugin event through the host's event sink if present."""

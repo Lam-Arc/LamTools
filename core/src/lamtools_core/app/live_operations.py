@@ -2485,7 +2485,23 @@ async def _auto_title_session(
             metadata = getattr(existing, "metadata", None)
             if isinstance(metadata, dict):
                 resolved_model = str(metadata.get("model_id") or "").strip()
-        resolved_model = resolved_model or context.host.default_model_id
+        if not resolved_model:
+            # Background work follows the background scene, never the main
+            # conversation's model and never a boot-time "default".
+            from lamtools_core.config.model_selection import (
+                ModelResolutionError,
+                SCENE_BACKGROUND,
+                record_model_notice,
+                resolve_scene_model,
+            )
+
+            try:
+                resolved_model = resolve_scene_model(SCENE_BACKGROUND).model_id
+            except ModelResolutionError:
+                # Auto-title is best-effort and must not fail the turn; make the
+                # skipped title visible instead of borrowing another model.
+                record_model_notice("后台任务没有可用模型，已跳过会话标题生成；请先添加供应商/模型")
+                return
 
         title = await generate_session_title(llm_client, resolved_model, first_message)
         if not title:
@@ -2796,6 +2812,26 @@ async def _ensure_turn_terminal(
         )
 
 
+async def _session_current_model(context: CoreLiveContext, thread_id: str) -> str:
+    """Return the model the session is currently using (its last turn's model)."""
+    store = context.runtime_state_store
+    if store is None or not thread_id:
+        return ""
+    try:
+        state = await store.get(thread_id)
+    except Exception:
+        return ""
+    metadata = getattr(state, "metadata", None)
+    if not isinstance(metadata, dict):
+        return ""
+    snapshot = metadata.get("runtime_snapshot")
+    if isinstance(snapshot, dict):
+        model = str(snapshot.get("model_id") or "").strip()
+        if model:
+            return model
+    return str(metadata.get("model_id") or "").strip()
+
+
 async def _dispatch_next_queue_item(
     *,
     context: CoreLiveContext,
@@ -2832,6 +2868,21 @@ async def _dispatch_next_queue_item(
         try:
             queued_work_root = str(queued.get("work_root") or work_root)
             runtime_snapshot = _queue_runtime_snapshot(queued)
+            # A queued message carries a snapshot from the moment it was queued.
+            # If the session's model changed since then, the queued snapshot's
+            # model must not win: the turn runs with the model the session is
+            # currently on (what the UI shows), and the alignment is announced.
+            queued_model = str(runtime_snapshot.get("model_id") or "").strip()
+            current_model = await _session_current_model(context, thread_id)
+            if current_model and current_model != queued_model:
+                runtime_snapshot["model_id"] = current_model
+                if queued_model:
+                    from lamtools_core.config.model_selection import record_model_notice
+
+                    record_model_notice(
+                        f"排队消息原定的模型「{queued_model}」与当前模型不一致，"
+                        f"已按当前模型「{current_model}」执行"
+                    )
             for key in RUNTIME_PERMISSION_KEYS:
                 if key in live_permission_snapshot:
                     runtime_snapshot[key] = deepcopy(live_permission_snapshot[key])

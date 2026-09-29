@@ -860,7 +860,17 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-vue-next'
-import { assistantSegmentTurnId, projectAssistantMessageParts } from '../appServer'
+import {
+  assistantSegmentTurnId,
+  // Decision presentation/selection semantics live in `pendingDecisions.ts` so
+  // the in-thread card and the composer takeover panel cannot drift apart.
+  coreDecisionDetail as decisionDetail,
+  coreDecisionOptionResponse as decisionOptionResponse,
+  coreDecisionOptions as decisionOptions,
+  coreDecisionTitle as decisionTitle,
+  projectAssistantMessageParts,
+} from '../appServer'
+import type { CoreDecisionOption as DecisionOption } from '../appServer'
 import { copyText } from '../helpers/clipboard'
 import { workspaceRelativePath } from '../helpers/workspacePath'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
@@ -1111,13 +1121,6 @@ interface EditMessagePayload {
 const decisionGuideDrafts = ref<Record<string, string>>({})
 
 // ── Helpers ──
-
-interface DecisionOption {
-  id: string
-  label: string
-  description?: string
-  response?: string
-}
 
 interface AgentTimelineItem {
   id: string
@@ -3281,57 +3284,12 @@ function isLowValueControlResult(part: MessagePart, result: string): boolean {
   return /验证通过|verification passed|design verified|ok/i.test(result)
 }
 
-function decisionTitle(part: MessagePart): string {
-  const args = part.toolArgs || {}
-  const meta = part.metadata || {}
-  const title = args.title || args.question || meta.title || meta.question || part.label
-  return title ? `需要确认：${compactDetail(String(title), 56)}` : '等待确认'
-}
-
 /** 只有待处理中的审批卡会渲染，因此状态标签只覆盖未答复的三种形态。 */
 function decisionStatusLabel(part: MessagePart): string {
   if (part.status === 'pending') return '等待选择'
   if (part.status === 'running') return '处理中'
   if (part.status === 'error') return '失败'
   return ''
-}
-
-function decisionDetail(part: MessagePart): string {
-  const args = part.toolArgs || {}
-  const meta = part.metadata || {}
-  const detail = args.reason || args.description || meta.reason || meta.description || part.detail || part.content
-  const title = args.title || args.question || meta.title || meta.question || part.label
-  if (!detail || detail === title) return ''
-  return compactDetail(String(detail), 240)
-}
-
-function decisionOptions(part: MessagePart): DecisionOption[] {
-  const args = part.toolArgs || {}
-  const meta = part.metadata || {}
-  const raw = args.options || meta.options
-  if (!Array.isArray(raw)) {
-    return part.status === 'pending'
-      ? [{ id: 'confirm', label: '确认并继续', description: '按当前方案继续执行' }]
-      : []
-  }
-  return raw
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-    .map((item, index) => ({
-      id: String(item.id || item.value || `option-${index + 1}`),
-      label: String(item.label || item.title || item.id || `选项 ${index + 1}`),
-      description: String(item.description || item.detail || ''),
-      response: item.response ? String(item.response) : undefined,
-    }))
-    .filter(option => option.label)
-}
-
-function decisionOptionResponse(part: MessagePart, option: DecisionOption): string {
-  if (option.response) return option.response
-  const title = decisionTitle(part).replace(/^需要确认：/, '')
-  const lines = [`我选择：${option.label}`]
-  if (option.description) lines.push(`原因/说明：${option.description}`)
-  if (title && title !== '等待确认') lines.push(`对应决策：${title}`)
-  return lines.join('\n')
 }
 
 function canGuideDecision(part: MessagePart): boolean {

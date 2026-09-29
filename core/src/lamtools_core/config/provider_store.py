@@ -38,6 +38,46 @@ PROVIDER_FILENAME_SUFFIX = ".jsonc"
 # Sentinel used when serialising api keys for display / round-tripping.
 MASKED_API_KEY = "********"
 
+#: Human-facing message for a pasted key carrying non-ASCII characters.
+NON_ASCII_API_KEY_MESSAGE = (
+    "密钥里含非 ASCII 字符（多为复制粘贴带进来的中文/全角字符），请重新粘贴"
+)
+
+
+class ApiKeyValidationError(ValueError):
+    """The provider api key cannot be used on the wire as-is."""
+
+
+def describe_non_ascii(value: str) -> list[str]:
+    """Return the distinct non-ASCII characters in ``value``, in first-seen order."""
+    seen: list[str] = []
+    for char in value:
+        if ord(char) > 127 and char not in seen:
+            seen.append(char)
+    return seen
+
+
+def validate_api_key_text(api_key: str) -> str:
+    """Return the trimmed api key, rejecting non-ASCII content.
+
+    An api key is serialized into an HTTP header, which is an ASCII-only
+    byte string.  A key carrying non-ASCII characters (typically a Chinese
+    label pasted along with the key) makes every request fail locally while
+    looking like a network hiccup, so it is rejected at save time with a
+    human-readable message instead.  Masked/empty values are left untouched
+    so the existing "keep the stored key" semantics stay intact.
+    """
+    text = str(api_key or "").strip()
+    if not text or text == MASKED_API_KEY:
+        return text
+    offending = describe_non_ascii(text)
+    if offending:
+        rendered = " ".join(f"“{char}”" for char in offending[:5])
+        raise ApiKeyValidationError(
+            f"{NON_ASCII_API_KEY_MESSAGE}（检测到非 ASCII 字符：{rendered}）"
+        )
+    return text
+
 
 def slugify(value: str) -> str:
     """Turn an arbitrary provider name into a safe file-name stem.
@@ -253,13 +293,17 @@ class ProviderStore:
     # -- internal: cached load ------------------------------------------
 
     def _load_map(self, work_root: str | None) -> dict[str, ProviderConfig]:
+        files = self._candidate_files(work_root)
+        from .change_notice import observe_config_files
+
+        observe_config_files("provider", files)
         sig = self._signature(work_root)
         if self._cached_signature == sig and self._cached_providers is not None:
             return self._cached_providers
         # Candidate files are ordered built-in → global → explicit → project,
         # so later entries override earlier ones on a per-id basis.
         providers: dict[str, ProviderConfig] = {}
-        for path in self._candidate_files(work_root):
+        for path in files:
             provider = self._parse(path)
             if provider is None:
                 continue
@@ -283,6 +327,9 @@ class ProviderStore:
         from lamtools_core.config.root import atomic_write_text
 
         atomic_write_text(path, self._serialize(provider))
+        from .change_notice import mark_self_written
+
+        mark_self_written(path)
         self._cached_signature = None  # invalidate cache
         self._cached_providers = None
         return path
@@ -332,8 +379,12 @@ __all__ = [
     "PROVIDERS_SUBDIR",
     "PROVIDER_FILENAME_SUFFIX",
     "MASKED_API_KEY",
+    "NON_ASCII_API_KEY_MESSAGE",
+    "ApiKeyValidationError",
     "ProviderConfig",
     "ProviderStore",
+    "describe_non_ascii",
     "mask_api_key",
     "slugify",
+    "validate_api_key_text",
 ]

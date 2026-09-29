@@ -1215,7 +1215,11 @@ def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_pat
 
     assert models["id"] == 3
     assert models["result"]["models"][0]["id"] == "model-record"
-    assert models["result"]["default_model_id"] == "model-record"
+    # There is no global default model any more: the per-scene map is what the
+    # UI reads, and ``default_model_id`` is kept only as an empty compat key.
+    assert models["result"]["default_model_id"] == ""
+    assert set(models["result"]["scene_models"]) == {"chat", "study", "desktop_pet", "background"}
+    assert models["result"]["scene_models"]["chat"] in {"", "model-record"}
     assert providers["id"] == 4
     assert providers["result"]["providers"] == [
         {

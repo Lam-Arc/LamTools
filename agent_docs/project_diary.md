@@ -6,6 +6,7 @@ logs.
 
 ## Decisions and Lessons
 
+- **红线：绝不静默更换正在使用的模型（用户 2026-09-29 明确要求）。** 会话进行中"当前模型"被非用户本人操作地换成别的模型不可接受；任何非用户发起的模型变更都必须**阻断或显式告知**（从哪个模型变成哪个、为什么），不允许静默替换。用户同时决定**取消"全局默认模型"**：新建会话跟随上一个会话的模型，非会话区域的模型调用也跟随最近会话所用模型。已证实的违规路径：用预设新增供应商会把它自带的模型写成全局默认并降级原默认，而"当前模型"在无显式选择时回落到默认模型，于是下一次模型调用就换了模型且界面无提示（2026-09-29 日志取证，见 `agent_docs/latest_session_work.md`）。实现时还需覆盖：后端在调用方未指定模型时使用宿主默认模型、以及任何"解析失败即回落"的分支（占位模型要变成明确报错）。
 - Keep current implementation and planning centered on `core/`; treat
   `archive/members/` as historical reference rather than a development target.
 - Keep runtime persistence in SQLite and user-facing configuration in the

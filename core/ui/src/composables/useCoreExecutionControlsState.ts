@@ -62,6 +62,12 @@ export interface UseCoreExecutionControlsStateOptions<
   labels?: CoreExecutionControlsStateLabels
   onModelSelected?(model: TModel): void | Promise<void>
   onPermissionPresetSelected?(preset: CorePermissionPreset): void | Promise<void>
+  /**
+   * Called when the model that was in use disappeared and the scene's
+   * inherited model takes over. The replacement must always be visible —
+   * never silently swapped in.
+   */
+  onModelAutoReplaced?(fromModelId: string, toModelId: string): void
 }
 
 export interface CoreExecutionControlsState<TModel extends CoreExecutionModelSource, TProvider extends CoreExecutionProviderSource> {
@@ -149,12 +155,23 @@ export function useCoreExecutionControlsState<
       thinkingModeOptions,
     ],
     () => {
+      const previousModelId = selectedModelId.value
       if (
         options.models.value.length > 0
-        && selectedModelId.value
-        && !options.models.value.some((model) => model.id === selectedModelId.value)
+        && previousModelId
+        && !options.models.value.some((model) => model.id === previousModelId)
       ) {
         selectedModelId.value = ''
+        // The chosen model is gone: the scene's inherited model takes over.
+        // Report it so the replacement is visible instead of silent.
+        const inherited = options.defaultModel.value
+        if (inherited?.id && inherited.id !== previousModelId && options.onModelAutoReplaced) {
+          try {
+            options.onModelAutoReplaced(previousModelId, inherited.id)
+          } catch {
+            // Reporting must never break the control state.
+          }
+        }
       }
       if (thinkingModeOptions.value.some((option) => option.value === selectedThinkingMode.value)) return
       selectedThinkingMode.value = thinkingModeOptions.value[0]?.value || 'off'
