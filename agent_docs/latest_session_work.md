@@ -67,6 +67,16 @@
 - 机制（代码）：预设新增供应商时，UI 会给"预设的默认模型"打 `is_default`（`CoreSettings.vue` 的 payload 构造），后端把新默认写为全局默认并**把原默认降级**（`config/operations.py:162,236,255,805-806`）；而"当前模型"的解析是 `selectCoreExecutionModel(models, selectedModelId, defaultModel)`——**所选 id 缺失时回落到默认模型**（`ui/src/composer/execution.ts:122-132`）。用户从未显式指定模型（一直用默认），因此默认一换，**下一轮就换模型，且界面没有任何提示**。
 - 待修（产品决策）：①预设新增供应商不应静默改"当前模型"（要么不动全局默认，要么明确提示"当前模型已切换为 XXX"）；②这正是"时好时坏"的来源——每次新增免费池预设都把默认模型换到它自己的默认模型，而那条记录的密钥是坏的。与第 4、5 条同属一类：缺校验 + 缺可见性 + 报错不点名。
 
+### 方案（plan）功能：打磨成熟 —— 已完成界面工作台（2026-09-29）
+
+用户决定：**完整可编辑工作台，桌面 + 手机共用**；plan 插件归**通用**；上线门槛的补充项（技能评测、文档、开工链路端到端回归、窗口/真机人工验收）**等用户发话时再问**，本轮不做。
+
+- 已完成 `57e4cb45`：共享界面右栏新增"方案"模式（与运行/文件/成果并列）——列表（按项目/状态筛选 + 摘要/状态/步骤进度/未答问题数 + 空状态引导）、全字段查看与编辑（需求/取舍/文档/步骤增删改与六种状态流转/目标/风险/回答未答问题/状态跃迁）、乐观并发保存（只发变化字段 + `expected_revision`，冲突则拒绝并提示 + 重载）、版本历史与回滚、软删除与恢复、"开工"（把方案交给当前会话，正在跑则排队；经既有 execute-plan 路径装清单，不新增协议）。手机端为同一份界面（窄屏全屏 + 触控尺寸）。
+- 新增：`core/ui/src/plans/{planEditing.ts,usePlanLibrary.ts,PlanLibraryPanel.vue,PlanStringListEditor.vue}` + `core/ui/tests/plan-library.test.ts`（19 条）；最小接线 `RightSidebarHost.vue`、`LamToolsApp.vue`（`startPlanFromPanel`）、`index.ts`。
+- 归类表已补 `plan: universal`（用户决定），**后端全量因此首次全绿**：2468 通过 / 2 跳过 / 0 失败。界面 110 文件 / 934 项 + 类型检查干净；手机 49 文件 / 284 项；设计审计 90 文件 0 偏离。
+- 未做（按用户指示推迟）：技能 evals、设计/使用文档、开工链路端到端回归、Tauri 窗口/真机人工验收。
+- 实现者自列的可否决小决策：工作台放右栏第 4 模式；"开工"不改方案状态；不做步骤拖拽排序；列表外额外提供"新建"。
+
 ## Mobile parity batches and the eight behaviour defects (mobile_parity_and_behaviour_fixes_20260924; 2026-09-24)
 
 - State: **complete**, both goals. The parity batches 1–8 (0.1.14–0.1.23) closed the surface gaps recorded in `core/docs/audits/mobile-desktop-parity-2026-09-24.md`; the eight defects real-device testing then reported (0.1.24–0.1.28) were behaviour defects inside code that already existed, and each is recorded with its evidence and residual in the behaviour-audit section of that same document.
