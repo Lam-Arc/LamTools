@@ -4507,9 +4507,14 @@ name: a
     fn the_plugin_page_reads_a_class_filtered_catalogue_from_this_host() {
         let plugins = sunday_plugin_catalog();
         let names: Vec<String> = plugins.iter().map(|plugin| plugin.name.clone()).collect();
-        // The three universal plugins; git, workflow and the desktop pet declare
+        // The four universal plugins; git, workflow and the desktop pet declare
         // `desktop`, so the phone's panel never sees them.
-        assert_eq!(names, ["imagegen", "study", "websearch"], "{names:?}");
+        assert_eq!(names, ["imagegen", "plan", "study", "websearch"], "{names:?}");
+        let plan = plugins
+            .iter()
+            .find(|plugin| plugin.name == "plan")
+            .expect("plan entry");
+        assert_eq!(plan.platforms, "universal");
         let study = plugins
             .iter()
             .find(|plugin| plugin.name == "study")
