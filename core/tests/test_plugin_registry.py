@@ -346,6 +346,8 @@ def test_every_bundled_plugin_declares_its_platform_class():
         "git": "desktop",
         "workflow": "desktop",
         "imagegen": "universal",
+        # 方案包：手机起草、桌面核对后开工，两端读写同一份方案（用户 2026-09-29 决定）。
+        "plan": "universal",
         "study": "universal",
         "websearch": "universal",
     }

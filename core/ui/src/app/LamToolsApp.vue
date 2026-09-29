@@ -650,6 +650,7 @@
         :mode="rightPanelMode"
         :artifact-signal="lastWorkbenchEvent"
         :open-artifact="openArtifactInStage"
+        :start-plan="startPlanFromPanel"
         :active-plugin-id="activePluginMode?.pluginId || null"
         :active-mode-id="activePluginMode?.id || null"
         :plugin-contributions="activePluginSidebarContributions"
@@ -781,6 +782,7 @@ import HistoryLoadingIndicator from '../components/HistoryLoadingIndicator.vue'
 import FileTreePanel from '../components/FileTreePanel.vue'
 import type { StageResource, StageKind } from '../types'
 import type { ArtifactRevision, ProjectArtifact } from '../types'
+import type { PlanPackage } from '../plans/types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreProjectPicker from '../components/CoreProjectPicker.vue'
 import CoreStartPage, { type CoreRecentProject } from '../components/CoreStartPage.vue'
@@ -1504,11 +1506,35 @@ const stageOpen = ref(false)
 const stageTabs = ref<StageResource[]>([])
 const stageActiveId = ref<string | null>(null)
 const stagePaneRef = ref<StagePaneInstance | null>(null)
-const rightPanelMode = ref<'runtime' | 'files' | 'artifacts'>('runtime')
+const rightPanelMode = ref<'runtime' | 'files' | 'artifacts' | 'plans'>('runtime')
 
-function handleRightPanelMode(mode: 'runtime' | 'files' | 'artifacts'): void {
+function handleRightPanelMode(mode: 'runtime' | 'files' | 'artifacts' | 'plans'): void {
   rightPanelMode.value = mode
   if (mode === 'files' && !stageOpen.value) stageOpen.value = true
+}
+
+/**
+ * "开工": turn a ready plan package into one ordinary session turn. The turn's
+ * agent reads the package back with `plan_package` and installs the goal and
+ * checklist itself (the execute-plan flow) — so no new RPC is introduced and the
+ * same path works on both hosts.
+ */
+async function startPlanFromPanel(plan: PlanPackage): Promise<void> {
+  if (!activeSessionId.value) {
+    showToast('error', '请先选择一个会话，再从方案开工', 6000)
+    return
+  }
+  composerText.value = buildPlanExecutionPrompt(plan)
+  await submitComposer()
+}
+
+function buildPlanExecutionPrompt(plan: PlanPackage): string {
+  const steps = plan.checklist.steps.length
+  return [
+    `执行方案《${plan.title}》（plan_id: ${plan.plan_id}，${steps} 步）。`,
+    '先用 plan_package 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案；',
+    '然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。',
+  ].join('')
 }
 
 function toggleStage() {

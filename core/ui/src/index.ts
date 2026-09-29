@@ -106,6 +106,15 @@ export { default as CoreSessionTitleEditor } from './components/CoreSessionTitle
 export { default as CoreImageGenEditor } from './components/CoreImageGenEditor.vue';
 export { default as ArtifactPanel } from './components/ArtifactPanel.vue';
 export { default as RightSidebarHost } from './components/RightSidebarHost.vue';
+export { default as PlanLibraryPanel } from './plans/PlanLibraryPanel.vue';
+export type {
+  PlanPackage,
+  PlanPatch,
+  PlanRevisionSummary,
+  PlanStatus,
+  PlanStepStatus,
+  PlanDocKind,
+} from './plans/types';
 export { default as RightSidebarModule } from './components/RightSidebarModule.vue';
 export { default as RightSidebarLayoutEditor } from './components/RightSidebarLayoutEditor.vue';
 export { default as RightSidebarWidgetRenderer } from './components/RightSidebarWidgetRenderer.vue';

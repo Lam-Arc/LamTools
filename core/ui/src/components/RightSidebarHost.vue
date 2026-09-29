@@ -67,7 +67,15 @@
         <slot name="stage" />
       </div>
       <div v-else ref="modePanelElement" key="modules" class="right-sidebar-module-list" data-right-sidebar-module-list>
+        <PlanLibraryPanel
+          v-if="plansModeActivated"
+          v-show="activeMode === 'plans'"
+          :project-id="projectId"
+          :request-rpc="requestRpc"
+          @start-plan="onStartPlan"
+        />
         <TransitionGroup
+          v-show="activeMode !== 'plans'"
           name="right-sidebar-module-list"
           tag="div"
           class="right-sidebar-module-items"
@@ -108,7 +116,7 @@
             />
           </RightSidebarModule>
         </TransitionGroup>
-        <div v-if="!orderedModules.length" class="right-sidebar-host-empty">
+        <div v-if="!orderedModules.length && activeMode !== 'plans'" class="right-sidebar-host-empty">
           <span>暂无显示中的模块</span>
           <button type="button" @click="editingLayout = true">编辑布局</button>
         </div>
@@ -120,7 +128,7 @@
 <script setup lang="ts">
 import { gsap } from 'gsap'
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch, type Component } from 'vue'
-import { Activity, Check, FolderKanban, FolderOpen, PanelRightOpen, SlidersHorizontal } from 'lucide-vue-next'
+import { Activity, Check, FolderKanban, FolderOpen, ListChecks, PanelRightOpen, SlidersHorizontal } from 'lucide-vue-next'
 import { refreshPluginUIWidgets } from '../plugins/api'
 import type { PluginWidgetEntry } from '../right-sidebar/types'
 import type {
@@ -139,6 +147,8 @@ import RightSidebarRag from './RightSidebarRag.vue'
 import CoreResourceStats from './CoreResourceStats.vue'
 import CoreSubAgentPanel from './CoreSubAgentPanel.vue'
 import ArtifactPanel from './ArtifactPanel.vue'
+import PlanLibraryPanel from '../plans/PlanLibraryPanel.vue'
+import type { PlanPackage } from '../plans/types'
 import type { ArtifactRevision, CoreMessage, CoreSubAgentRun, CoreSubAgentStatus, ProjectArtifact } from '../types'
 import { selectCoreSubAgentRuns } from '../agents/subAgentProjection'
 import type { LamToolsTransport } from '../transport'
@@ -158,9 +168,11 @@ const props = withDefaults(defineProps<{
   runtimeDetail?: string
   stageOpen?: boolean
   /** Explicit right-rail mode; artifact mode stays active while StagePane opens. */
-  mode?: 'runtime' | 'files' | 'artifacts'
+  mode?: 'runtime' | 'files' | 'artifacts' | 'plans'
   artifactSignal?: unknown
   openArtifact?: (artifact: ProjectArtifact, revision?: ArtifactRevision) => void | Promise<void>
+  /** Host callback that turns a ready plan into a session turn. */
+  startPlan?: (plan: PlanPackage) => void | Promise<void>
   /** Parent-shell navigation callback for source-backed sub-agent rows. */
   locateSubAgent?: (run: CoreSubAgentRun) => void | Promise<void>
   activePluginId?: string | null
@@ -184,6 +196,7 @@ const props = withDefaults(defineProps<{
   stageOpen: false,
   mode: 'runtime',
   openArtifact: undefined,
+  startPlan: undefined,
   locateSubAgent: undefined,
   activePluginId: null,
   activeModeId: null,
@@ -193,11 +206,18 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
-  'mode-change': [mode: 'runtime' | 'files' | 'artifacts']
+  'mode-change': [mode: 'runtime' | 'files' | 'artifacts' | 'plans']
+  'start-plan': [plan: PlanPackage]
 }>()
 
 const editingLayout = ref(false)
-const activeMode = ref<'runtime' | 'files' | 'artifacts'>(props.stageOpen ? 'files' : props.mode)
+const activeMode = ref<'runtime' | 'files' | 'artifacts' | 'plans'>(props.stageOpen ? 'files' : props.mode)
+// Once the plan workbench is opened it stays mounted: switching modes must not
+// throw away an in-progress plan edit.
+const plansModeActivated = ref(activeMode.value === 'plans')
+watch(activeMode, (mode) => {
+  if (mode === 'plans') plansModeActivated.value = true
+})
 const hostElement = ref<HTMLElement | null>(null)
 const modePanelElement = ref<HTMLElement | null>(null)
 const remoteWidgetEntries = ref<PluginWidgetEntry[]>([])
@@ -220,6 +240,7 @@ const panelModes = [
   { id: 'runtime' as const, label: '运行', icon: Activity },
   { id: 'files' as const, label: '文件', icon: FolderOpen },
   { id: 'artifacts' as const, label: '成果', icon: FolderKanban },
+  { id: 'plans' as const, label: '方案', icon: ListChecks },
 ]
 
 const localSubAgentRuns = computed(() => selectCoreSubAgentRuns(props.messages))
@@ -396,9 +417,15 @@ const orderedModules = computed(() => {
 })
 
 function moduleVisibleInMode(module: RightSidebarModuleDefinition): boolean {
+  if (activeMode.value === 'plans') return false
   if (activeMode.value === 'artifacts') return module.id === 'artifacts'
   if (activeMode.value === 'files') return false
   return module.id !== 'artifacts'
+}
+
+function onStartPlan(plan: PlanPackage): void {
+  emit('start-plan', plan)
+  void props.startPlan?.(plan)
 }
 
 function openSubAgent(subSessionId: string, run?: CoreSubAgentRun): void {
@@ -671,7 +698,7 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))]
 }
 
-function selectMode(mode: 'runtime' | 'files' | 'artifacts'): void {
+function selectMode(mode: 'runtime' | 'files' | 'artifacts' | 'plans'): void {
   activeMode.value = mode
   emit('mode-change', mode)
 }
@@ -933,7 +960,7 @@ defineExpose({
 .right-sidebar-host-edit:hover { background: color-mix(in srgb, var(--host-text) var(--alpha-hover), transparent); color: var(--host-text); }
 .right-sidebar-host-edit:active { background: color-mix(in srgb, var(--host-text) var(--alpha-active), transparent); }
 .right-sidebar-host-edit:focus-visible { outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent); outline-offset: 1px; }
-.right-sidebar-mode-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 0 var(--space-2) var(--space-2); }
+.right-sidebar-mode-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding: 0 var(--space-2) var(--space-2); }
 .right-sidebar-mode-tab { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); min-height: 30px; border: 0; border-radius: var(--radius-sm); padding: 0 var(--space-1); background: transparent; color: color-mix(in srgb, var(--host-text) 54%, transparent); font-size: 11px; transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .right-sidebar-mode-tab:hover { background: color-mix(in srgb, var(--host-text) var(--alpha-hover), transparent); color: var(--host-text); }
 .right-sidebar-mode-tab:active, .right-sidebar-mode-tab.active { background: color-mix(in srgb, var(--host-text) var(--alpha-active), transparent); color: var(--host-text); }
