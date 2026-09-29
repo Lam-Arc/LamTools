@@ -1,0 +1,18 @@
+{
+  "version": "0.3.9",
+  "tag": "v0.3.9",
+  "installer_path": "E:/LamTools/release/desktop/Sunday_0.3.9_x64-setup.exe",
+  "installer_sha256": "7b4860b9424c09bd34d310e77e7dd449ab16c2eb5bc8788bc7e3ac6a4fd9bca9",
+  "installer_size": 58244167,
+  "old_version": "0.3.8",
+  "old_latest_sha256": "c76b67615955c870a8cdaab61fecf4e1c08e4d29b04bb1a123dd74b45b8c5e6e",
+  "old_latest_size": 58235160,
+  "date_tag": "20260929",
+  "authorized_keys_lines": 1,
+  "authorized_keys_note": "Owner's Aliyun key pair (skp-bp19aylqsh2502ocgm9c) is pre-existing; this flow restores the count to this baseline.",
+  "github_release": "https://github.com/Lam-Arc/LamTools/releases/tag/v0.3.9 (published 2026-09-29T03:53:56Z by the CI run for tag v0.3.9); this record covers the official-site channel.",
+  "site_name": "0.3.9-mobile-0.1.46-20260929",
+  "previous_site": "0.3.8-mobile-0.1.45-20260928",
+  "manifest_sha256": "7d86aae2e13b56a442efd256eab9ffc9008c1966083a8306680c29e6081d9b23",
+  "manifest_bytes": 346
+}

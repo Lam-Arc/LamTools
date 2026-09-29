@@ -1,0 +1,10 @@
+2026-09-29T04:01:25Z
+/var/tmp/Sunday-site-0.3.9-20260929.upload.tar.gz: OK
+/var/www/lamtools/site-releases/0.3.9-mobile-0.1.46-20260929
+0.3.7-mobile-0.1.43-20260928
+0.3.7-mobile-0.1.45-20260928
+0.3.8-mobile-0.1.45-20260928
+0.3.9-mobile-0.1.46-20260929
+active
+active
+2026-09-29T04:01:25Z
