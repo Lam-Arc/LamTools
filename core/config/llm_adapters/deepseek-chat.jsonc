@@ -2,6 +2,14 @@
   "id": "deepseek-chat",
   "label": "DeepSeek Thinking",
   "protocol": "openai-chat-completions",
+  "reasoning": {
+      "levels": [
+        { "id": "max", "label": "极高" },
+        { "id": "high", "label": "高" },
+        { "id": "light", "label": "轻" },
+        { "id": "off", "label": "关闭" }
+      ]
+  },
   "match_model": ["deepseek"],
   "request": {
     "reasoning": {

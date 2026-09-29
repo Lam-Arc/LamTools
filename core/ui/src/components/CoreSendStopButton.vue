@@ -272,19 +272,20 @@ onUnmounted(() => {
   --glyph-scale-y: 1;
   --glyph-rotate: 0deg;
   --glyph-opacity: 1;
-  --trail-x: -9px;
+  --trail-x: -7.2px;
   --trail-scale: 0;
   --trail-opacity: 0;
   position: relative;
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
+  /* 80% of the previous 28px; glyph and trail scale with it. */
+  width: 22.4px;
+  height: 22.4px;
+  min-width: 22.4px;
   padding: 0;
   border: 0;
   border-radius: 999px;
   display: grid;
   place-items: center;
-  flex: 0 0 28px;
+  flex: 0 0 22.4px;
   background: var(--theme-composer-text);
   box-shadow: var(--shadow-sm);
   font-size: 0;
@@ -306,8 +307,8 @@ onUnmounted(() => {
 }
 
 .core-send-stop-button::before {
-  width: 13px;
-  height: 13px;
+  width: 10.4px;
+  height: 10.4px;
   background: var(--theme-composer-background);
   clip-path: polygon(4% 45%, 94% 7%, 68% 95%, 48% 62%, 31% 79%, 31% 57%);
   opacity: var(--glyph-opacity);
@@ -319,8 +320,8 @@ onUnmounted(() => {
 
 .core-send-stop-button::after {
   z-index: -1;
-  width: 18px;
-  height: 5px;
+  width: 14.4px;
+  height: 4px;
   border-radius: 999px;
   background: var(--theme-composer-background);
   opacity: var(--trail-opacity);
@@ -341,8 +342,8 @@ onUnmounted(() => {
 }
 
 .core-send-stop-button--stop::before {
-  width: 11px;
-  height: 11px;
+  width: 8.8px;
+  height: 8.8px;
   border-radius: var(--space-1);
   clip-path: inset(0 round var(--space-1));
 }
@@ -384,6 +385,8 @@ onUnmounted(() => {
 }
 
 @media (pointer: coarse) {
+  /* Touch keeps the 44px minimum target; only the pointer-driven size follows
+     the 80% reduction. */
   .core-send-stop-button {
     width: 44px;
     height: 44px;

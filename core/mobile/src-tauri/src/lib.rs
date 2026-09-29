@@ -1873,6 +1873,41 @@ fn sunday_plugin_mode_tools(mode: String) -> Vec<String> {
     Vec::new()
 }
 
+/// The reasoning ladder a stored model resolves to, for the Composer's thinking
+/// menu.
+///
+/// `config` is the same provider/model configuration the turn path builds
+/// (`rustProvider` in the frontend), so the ladder describes exactly the profile
+/// the next request will use — including a model that only carries an
+/// `adapter_profile_id`.  The desktop answers this from its Python adapter
+/// directory; the phone has none, so the embedded profiles answer instead.
+#[tauri::command]
+fn sunday_model_reasoning_declaration(config: Value) -> lamtools_runtime::ReasoningDeclaration {
+    let text = |key: &str| {
+        config
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+    let object = |key: &str| {
+        config
+            .get(key)
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    lamtools_runtime::model_reasoning_declaration(
+        &text("apiType"),
+        &text("baseUrl"),
+        &text("apiModelId"),
+        &text("providerName"),
+        &object("providerExtra"),
+        &object("modelExtra"),
+    )
+}
+
 /// The bundled websearch settings, resolved the way the desktop resolves the
 /// plugin's `config/schema.jsonc`: provider, fallback order, result limit and
 /// timeout. Missing or malformed values keep the runtime defaults.
@@ -4201,6 +4236,7 @@ pub fn run() {
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
+        sunday_model_reasoning_declaration,
         sunday_checkpoint_create,
         sunday_checkpoint_get,
         sunday_checkpoint_graph,
@@ -4264,6 +4300,7 @@ pub fn run() {
         sunday_tool_catalog,
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
+        sunday_model_reasoning_declaration,
         sunday_checkpoint_create,
         sunday_checkpoint_get,
         sunday_checkpoint_graph,
@@ -4510,6 +4547,61 @@ name: a
         assert!(study.iter().any(|name| name == "read_file"));
         // An unknown mode must not invent a whitelist.
         assert!(sunday_plugin_mode_tools("other:mode".into()).is_empty());
+    }
+
+    #[test]
+    fn the_reasoning_declaration_command_reads_the_config_the_turn_path_sends() {
+        // The frontend builds this payload with `rustProvider`, so these keys are
+        // the contract between the two sides: a renamed key here would silently
+        // answer "no ladder" for every preset model.
+        let declaration = sunday_model_reasoning_declaration(serde_json::json!({
+            "apiType": "openai",
+            "baseUrl": "https://api.deepseek.com/v1",
+            "apiKey": "",
+            "apiModelId": "deepseek-v4-flash",
+            "providerName": "DeepSeek",
+            "providerExtra": {"adapter_profile_id": "deepseek-chat"},
+            "modelExtra": {"adapter_profile_id": "deepseek-chat", "capability": "multimodal"},
+        }));
+        let values: Vec<&str> = declaration
+            .levels
+            .iter()
+            .map(|level| level.value.as_str())
+            .collect();
+        assert_eq!(values, ["max", "high", "light", "off"]);
+        assert_eq!(declaration.levels[0].label, "极高");
+        assert!(declaration.off_supported);
+
+        // A model whose own configuration names the profile wins, and a profile
+        // that cannot switch reasoning off declares no `off`.
+        let glm = sunday_model_reasoning_declaration(serde_json::json!({
+            "apiType": "openai",
+            "apiModelId": "glm-5.3",
+            "providerName": "Zhipu",
+            "providerExtra": {"adapter_profile_id": "deepseek-chat"},
+            "modelExtra": {"adapter_profile_id": "glm"},
+        }));
+        let values: Vec<&str> = glm.levels.iter().map(|level| level.value.as_str()).collect();
+        assert_eq!(values, ["max", "high", "light"]);
+        assert!(!glm.off_supported);
+
+        // A model that carries no profile id still resolves one by name, which is
+        // how a hand-added model reaches its ladder.
+        let by_name = sunday_model_reasoning_declaration(serde_json::json!({
+            "apiType": "openai",
+            "baseUrl": "https://api.moonshot.cn/v1",
+            "apiModelId": "kimi-k2-turbo",
+            "providerName": "Moonshot",
+            "providerExtra": {},
+            "modelExtra": {},
+        }));
+        let values: Vec<&str> = by_name
+            .levels
+            .iter()
+            .map(|level| level.value.as_str())
+            .collect();
+        assert_eq!(values, ["max", "high", "light"]);
+        assert!(!by_name.off_supported);
     }
 
     #[test]

@@ -148,7 +148,16 @@ def test_sub_agent_guidance_projects_as_completed_receive_tool_call():
     }
 
 
-def test_human_guidance_projection_behavior_is_unchanged():
+def test_human_guidance_projects_as_the_visible_user_message():
+    """Guided instructions appear at the moment the kernel takes them in.
+
+    The bubble is anchored on `runtime.guidance_received`, i.e. after every
+    item the run has produced so far and before everything produced from here
+    on.  A click-time bubble was inserted while the response still streaming
+    had no ordering anchor, so it rendered above that response and stayed
+    above it in the durable record — the instruction read as if the model had
+    answered it with output written before it (2026-09-28).
+    """
     events = runtime_fact_to_run_item_events(
         thread_id="thread-1",
         event_id="event-guidance-human",
@@ -157,7 +166,39 @@ def test_human_guidance_projection_behavior_is_unchanged():
         phase="runtime.guidance_received",
         status=None,
         sequence=8,
-        metadata={"payload": {"content": "please continue", "response_index": 2}},
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "content": "please continue",
+                "response_index": 2,
+            }
+        },
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    assert events[0].kind == "message"
+    assert events[0].status == "completed"
+    assert events[0].item_id == "turn-1:user:guide:event-guidance-human"
+    assert events[0].turn_id == "turn-1"
+    assert events[0].seq == 8
+    assert events[0].payload == {
+        "type": "userMessage",
+        "status": "completed",
+        "content": [{"type": "text", "text": "please continue"}],
+    }
+
+
+def test_human_guidance_without_text_projects_nothing():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-guidance-empty",
+        group="plan",
+        source="core",
+        phase="runtime.guidance_received",
+        status=None,
+        sequence=9,
+        metadata={"payload": {"turn_id": "turn-1", "content": "   "}},
     )
 
     assert events is None

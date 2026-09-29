@@ -26,6 +26,10 @@ export function corePermissionPresetLabel(value: unknown): string {
   return CORE_PERMISSION_PRESET_LABELS[normalizeCorePermissionPreset(value)]
 }
 
+export type CoreReasoningLevelDeclaration =
+  | string
+  | { id?: string; value?: string; level?: string; label?: string; name?: string }
+
 export interface CoreExecutionModelSource {
   id?: string
   provider_id?: string
@@ -34,6 +38,8 @@ export interface CoreExecutionModelSource {
   thinking_supported?: boolean
   thinking_budget?: number
   reasoning_off_supported?: boolean
+  /** The ladder this model itself declares; empty/absent keeps the product ladder. */
+  reasoning_levels?: CoreReasoningLevelDeclaration[] | null
   context_window?: number
   max_output_tokens?: number
 }
@@ -89,15 +95,28 @@ export const CORE_THINKING_BUDGETS: Record<Exclude<CoreThinkingMode, 'off'>, num
   max: 16_384,
 }
 
+const CORE_THINKING_MODE_ALIASES: Record<string, CoreThinkingMode> = {
+  off: 'off',
+  none: 'off',
+  disabled: 'off',
+  light: 'light',
+  low: 'light',
+  minimal: 'light',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  xh: 'xhigh',
+  max: 'max',
+  ultra: 'max',
+}
+
+/** Return the canonical mode for a known name, or null when the name is unknown. */
+export function coerceCoreThinkingMode(value: unknown): CoreThinkingMode | null {
+  return CORE_THINKING_MODE_ALIASES[String(value ?? '').trim().toLowerCase()] ?? null
+}
+
 export function normalizeCoreThinkingMode(value: unknown, fallback: CoreThinkingMode = 'off'): CoreThinkingMode {
-  const normalized = String(value ?? '').trim().toLowerCase()
-  if (normalized === 'off' || normalized === 'none' || normalized === 'disabled') return 'off'
-  if (normalized === 'light' || normalized === 'low' || normalized === 'minimal') return 'light'
-  if (normalized === 'medium') return 'medium'
-  if (normalized === 'high') return 'high'
-  if (normalized === 'xhigh' || normalized === 'xh') return 'xhigh'
-  if (normalized === 'max' || normalized === 'ultra') return 'max'
-  return fallback
+  return coerceCoreThinkingMode(value) ?? fallback
 }
 
 export function selectCoreExecutionModel<T extends CoreExecutionModelSource>(
@@ -212,6 +231,41 @@ export function coreModelSelectOptions<TModel extends CoreExecutionModelSource, 
   return options
 }
 
+/**
+ * The reasoning ladder the selected model declares, in the model's own order.
+ *
+ * Empty when the model declares nothing, so callers keep the product ladder
+ * instead of a ladder invented on the model's behalf.
+ */
+export function coreDeclaredThinkingLadder(
+  params: {
+    model?: CoreExecutionModelSource | null
+    labels?: CoreThinkingLabels
+  } = {},
+): CoreThinkingModeOption[] {
+  const labels = params.labels ?? CORE_THINKING_LABELS
+  const declared = params.model?.reasoning_levels
+  if (!Array.isArray(declared)) return []
+  const offSupported = params.model?.reasoning_off_supported !== false
+  const options: CoreThinkingModeOption[] = []
+  const seen = new Set<CoreThinkingMode>()
+  for (const item of declared) {
+    const raw = typeof item === 'string'
+      ? item
+      : item && typeof item === 'object'
+        ? item.id ?? item.value ?? item.level
+        : ''
+    const value = coerceCoreThinkingMode(raw)
+    if (!value || seen.has(value) || (value === 'off' && !offSupported)) continue
+    seen.add(value)
+    const declaredLabel = typeof item === 'object' && item !== null
+      ? String(item.label ?? item.name ?? '').trim()
+      : ''
+    options.push({ value, label: declaredLabel || labels[value] })
+  }
+  return options
+}
+
 export function coreThinkingModeOptions(
   params: {
     model?: CoreExecutionModelSource | null
@@ -223,6 +277,8 @@ export function coreThinkingModeOptions(
   if (params.model && !params.model.thinking_supported) {
     return [{ value: 'off', label: labels.off }]
   }
+  const declared = coreDeclaredThinkingLadder({ model: params.model, labels })
+  if (declared.length > 0) return declared
   const modes: CoreThinkingMode[] = params.model?.reasoning_off_supported === false
     ? ['max', 'xhigh', 'high', 'medium', 'light']
     : ['max', 'xhigh', 'high', 'medium', 'light', 'off']
@@ -242,6 +298,12 @@ export function coreThinkingPayload(params: {
   }
   if (mode === 'off' && params.model?.reasoning_off_supported === false) {
     mode = 'light'
+  }
+  const declared = coreDeclaredThinkingLadder({ model: params.model })
+  if (declared.length > 0 && !declared.some((option) => option.value === mode)) {
+    // The model never declared this level: send the strongest one it does
+    // accept instead of a value it does not recognize.
+    mode = declared[0].value
   }
   if (mode === 'off') {
     return { reasoning_level: 'off' }

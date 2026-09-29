@@ -30,6 +30,12 @@ import {
 } from '../composables'
 import type { CoreInputItem, CoreSessionListItem } from '../types'
 import {
+  readComposerDraft,
+  resolveComposerDraftStorage,
+  writeComposerDraft,
+  type ComposerDraftStorage,
+} from '../composer/drafts'
+import {
   isLamToolsTransport,
   type LamToolsTransport,
   type TransportHttpRequest,
@@ -240,6 +246,20 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   // one-time value captured when turn/start is accepted.
   watch([activeSessionId, turnState], syncActiveSessionStatus, { immediate: true })
 
+  // The composer owns a single live draft. Park the outgoing thread's text
+  // under that thread and restore the incoming one, so an unsent draft never
+  // leaks across sessions and survives a restart (localStorage, per thread).
+  const composerDraftStorage: ComposerDraftStorage | null = options.composerDraftStorage !== undefined
+    ? options.composerDraftStorage
+    : resolveComposerDraftStorage()
+  watch(activeSessionId, (threadId, previousThreadId) => {
+    if (previousThreadId) writeComposerDraft(composerDraftStorage, previousThreadId, composerText.value)
+    composerText.value = readComposerDraft(composerDraftStorage, threadId)
+  })
+  watch(composerText, (text) => {
+    writeComposerDraft(composerDraftStorage, activeSessionId.value, text)
+  })
+
   const approvalControllerRef = shallowRef<ReturnType<typeof useCoreApprovalController>>()
   const projectionController = useCoreWorkbenchProjectionController({
     snapshot,
@@ -399,7 +419,9 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     const generation = ++sessionSelectionGeneration
     activeSessionId.value = id
     liveComposerController.resetForThreadChange()
-    composerText.value = ''
+    // The composer draft is parked/restored by the activeSessionId watcher;
+    // clearing it here would both drop the outgoing draft and wipe the
+    // incoming thread's own unsent text.
     // A local cache may be used by a host for offline rendering, but it must
     // not become the mutation/revision source. Always resume with the server
     // snapshot before enabling the composer for the selected session.

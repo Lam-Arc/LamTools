@@ -8,6 +8,7 @@ import pytest
 from lamtools_core.app.cli_live import (
     CliLiveFormatter,
     execute_compaction_command_live,
+    format_event,
     watch_live_events,
 )
 from lamtools_core.cli import build_parser
@@ -54,6 +55,23 @@ def test_live_formatter_keeps_writer_compatible_run_item_lines() -> None:
             status="failed",
         )
     ) == ["[00:00] failed 任务失败。"]
+
+
+def test_live_formatter_shows_guided_user_messages_from_run_items() -> None:
+    """Guided instructions reach the CLI as run items, not `item/started`.
+
+    The bubble is projected when the kernel drains the guidance, so both CLI
+    rendering paths must label it as a user line (2026-09-28).
+    """
+    formatter = CliLiveFormatter()
+    guided = core_run_item(
+        "message",
+        {"type": "userMessage", "content": [{"type": "text", "text": "change course"}]},
+        status="completed",
+    )
+
+    assert formatter.format(guided) == ["[00:00] message:user change course"]
+    assert format_event(guided) == "[user] change course"
 
 
 def test_live_formatter_formats_approval_and_compaction_compatibly() -> None:

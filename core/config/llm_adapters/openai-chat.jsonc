@@ -2,6 +2,14 @@
   "id": "openai-chat",
   "label": "OpenAI Chat Completions compatible",
   "protocol": "openai-chat-completions",
+  "reasoning": {
+      "levels": [
+        { "id": "max", "label": "高" },
+        { "id": "medium", "label": "中" },
+        { "id": "light", "label": "轻" },
+        { "id": "off", "label": "关闭" }
+      ]
+  },
   "match_model": ["gpt-5", "gpt-4", "o1", "o3", "o4", "o5", "codex-"],
   "request": {
     "reasoning": {

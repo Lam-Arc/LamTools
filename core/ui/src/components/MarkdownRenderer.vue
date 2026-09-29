@@ -69,7 +69,9 @@ const props = withDefaults(
 )
 
 const contentRoot = ref<HTMLElement | null>(null)
-let tableCleanup: Array<() => void> = []
+// Table shell → dispose callback. Keyed by shell so removing a streaming
+// segment can dispose exactly the observers of the tables it owned.
+const tableCleanup = new Map<Element, () => void>()
 
 // ── Mermaid init ──
 let mermaidApi: typeof import('mermaid').default | null = null
@@ -269,23 +271,33 @@ function copyButtonHtml(source: string): string {
   )
 }
 
-function renderMarkdownDocument(source: string): string {
-  // Nested markdown document (```markdown / ```md): run the same pipeline as
-  // the top level — math protection → marked → sanitize → math restore — so
-  // inner formulas, diagrams and code blocks behave identically. Inner tokens
-  // are restored before returning, so the outer restoreMath never sees them.
-  const math = protectMath(source)
-  const renderer = createMermaidRenderer()
-  const html = marked.parse(math.content, {
-    renderer,
-    async: false,
-    breaks: false,
-    gfm: true,
-  }) as string
-  return DOMPurify.sanitize(restoreMath(html, math.tokens))
+// ── Shared "whole segment" full render ──
+// One pipeline (math protection → marked → sanitize → math restore) serves all
+// three consumers: the finished document, every closed streaming segment, and
+// the open streaming tail. Nested markdown documents (```markdown) reuse it
+// too, so inner formulas/diagrams/code behave identically.
+//
+// `heavy` is the streaming switch. When false, resource-heavy output — mermaid
+// diagrams, Study fenced SVG, automatic math plots — is left out (mermaid and
+// svg stay plain code blocks, formulas stay plain formulas). Those appear once,
+// in the authoritative end-of-stream render.
+function renderSegmentHtml(source: string, heavy: boolean): string {
+  try {
+    const math = protectMath(source, heavy)
+    const renderer = createMermaidRenderer(heavy)
+    const html = marked.parse(math.content, {
+      renderer,
+      async: false,
+      breaks: false,
+      gfm: true,
+    }) as string
+    return DOMPurify.sanitize(restoreMath(html, math.tokens))
+  } catch {
+    return `<p>${escapeHtml(source)}</p>`
+  }
 }
 
-function createMermaidRenderer(): Renderer {
+function createMermaidRenderer(heavy: boolean): Renderer {
   const renderer = new marked.Renderer()
 
   renderer.image = function ({ href, title, text }: { href: string; title?: string | null; text: string }): string {
@@ -299,7 +311,7 @@ function createMermaidRenderer(): Renderer {
   }
 
   renderer.code = function ({ text, lang }: { text: string; lang?: string }): string {
-    if (props.mermaid && lang === 'mermaid') {
+    if (props.mermaid && heavy && lang === 'mermaid') {
       const id = `mermaid-${mermaidSeq++}`
       mermaidBlocks.push({ id, code: text })
       // The placeholder is later replaced by the rendered diagram (or the
@@ -307,9 +319,9 @@ function createMermaidRenderer(): Renderer {
       return `<div class="code-block"><div class="mermaid-placeholder" data-mermaid-id="${id}"></div>${copyButtonHtml(text)}</div>`
     }
     if (lang === 'markdown' || lang === 'md') {
-      return `<div class="code-block"><div class="nested-markdown">${renderMarkdownDocument(text)}</div>${copyButtonHtml(text)}</div>`
+      return `<div class="code-block"><div class="nested-markdown">${renderSegmentHtml(text, heavy)}</div>${copyButtonHtml(text)}</div>`
     }
-    if (lang?.toLowerCase() === 'svg' && props.autoPlotMath) {
+    if (lang?.toLowerCase() === 'svg' && props.autoPlotMath && heavy) {
       const svg = sanitizeStudySvg(text)
       if (svg) return `<figure class="study-inline-svg">${svg}</figure>`
     }
@@ -366,12 +378,12 @@ function splitFencedCode(content: string): Array<{ code: boolean; text: string }
   return result
 }
 
-function protectMath(content: string): { content: string; tokens: MathToken[] } {
+function protectMath(content: string, heavy: boolean): { content: string; tokens: MathToken[] } {
   const tokens: MathToken[] = []
   let index = 0
   const protect = (source: string, expression: string, displayMode: boolean) => {
     const token = `@@LAM_MATH_${index++}@@`
-    const plot = props.autoPlotMath ? renderAutoMathPlot(expression, { allowStandalone: displayMode }) : ''
+    const plot = props.autoPlotMath && heavy ? renderAutoMathPlot(expression, { allowStandalone: displayMode }) : ''
     let plotHtml = plot
     if (plot && !displayMode) {
       const id = `math-inline-plot-${inlineMathPlotSeq++}`
@@ -396,137 +408,244 @@ function restoreMath(content: string, tokens: MathToken[]): string {
   return tokens.reduce((html, item) => html.replaceAll(item.token, item.html), content)
 }
 
-function normalizeMarkdownLineBreaks(content: string): string {
-  // NOTE: a single combined pass would be wrong — trailing/leading whitespace
-  // around the same newline overlap (e.g. " \n "), and replace() cannot
-  // consume overlapping matches. The sequential passes are the verified
-  // equivalent form.
-  return content
-    .replace(/\r\n?/g, '\n')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n[ \t]+/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-}
+// ── Streaming segment pipeline ──
+// A "segment" is a blank-line-delimited block, but the split is scanned rather
+// than naive: blank lines inside a fenced code block (``` / ~~~) or a `$$`
+// display-math block never close a segment, and an unclosed fence/formula is
+// always the open tail — so a half-written code block can never be split and
+// can never leak literal backticks.
+//
+// Every segment, closed or open, goes through the same full render as the
+// finished document (renderSegmentHtml with heavy=false), so headings, tables,
+// quotes, links, emphasis, ordered/nested lists all take shape while streaming.
+// Closed segments keep their exact DOM nodes across ticks (the phase-4
+// constraint: per-frame cost stays O(tail segment)).
+function splitStreamingSegments(content: string): string[] {
+  const segments: string[] = []
+  let buffer: string[] = []
+  let fence: { char: string; length: number } | null = null
+  let inMathBlock = false
 
-function renderStreamingInline(content: string): string {
-  const { content: protectedContent, tokens } = protectMath(content)
-  const escaped = escapeHtml(protectedContent)
-  // Convert inline `code` → styled span
-  const withCode = escaped.replace(/`([^`]+)`/g, '<code>$1</code>')
-  // Convert **bold** → <strong>
-  return restoreMath(withCode.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>'), tokens)
-}
-
-function renderStreamingCodeBlock(block: string): string {
-  const lines = block.split('\n')
-  const opening = lines[0] ?? ''
-  const lang = opening.replace(/^```/, '').trim()
-  const body = lines.slice(1).join('\n').replace(/\n?```$/, '')
-  const langAttr = lang ? ` class="language-${escapeHtml(lang)}"` : ''
-  return `<div class="code-block"><pre><code${langAttr}>${escapeHtml(body)}</code></pre>${copyButtonHtml(body)}</div>`
-}
-
-function renderStreamingBlock(block: string): string {
-  const trimmed = block.trim()
-  if (!trimmed) return ''
-
-  if (trimmed.startsWith('```')) {
-    return renderStreamingCodeBlock(trimmed)
+  const flush = () => {
+    const text = buffer.join('\n').trim()
+    if (text) segments.push(text)
+    buffer = []
   }
 
-  const lines = trimmed.split('\n').map((line) => line.trim()).filter(Boolean)
-  if (lines.length > 0 && lines.every((line) => /^[-*+]\s+/.test(line))) {
-    const items = lines
-      .map((line) => line.replace(/^[-*+]\s+/, ''))
-      .map((line) => `<li>${renderStreamingInline(line)}</li>`)
-      .join('')
-    return `<ul>${items}</ul>`
+  for (const line of content.replace(/\r\n?/g, '\n').split('\n')) {
+    const trimmed = line.trim()
+    if (fence) {
+      buffer.push(line)
+      const closing = trimmed.match(/^(`{3,}|~{3,})\s*$/)
+      if (closing && closing[1][0] === fence.char && closing[1].length >= fence.length) fence = null
+      continue
+    }
+    if (inMathBlock) {
+      buffer.push(line)
+      if (trimmed.endsWith('$$')) inMathBlock = false
+      continue
+    }
+    const opening = trimmed.match(/^(`{3,}|~{3,})/)
+    if (opening) {
+      fence = { char: opening[1][0], length: opening[1].length }
+      buffer.push(line)
+      continue
+    }
+    if (trimmed.startsWith('$$')) {
+      // `$$…$$` on one line stays inside its paragraph; only an open-ended
+      // `$$` starts a block whose blank lines must not split anything.
+      if (trimmed === '$$' || !trimmed.endsWith('$$')) inMathBlock = true
+      buffer.push(line)
+      continue
+    }
+    if (!trimmed) {
+      flush()
+      continue
+    }
+    buffer.push(line)
   }
-
-  if (lines.length > 0 && lines.every((line) => /^\d+[.)]\s+/.test(line))) {
-    const items = lines
-      .map((line) => line.replace(/^\d+[.)]\s+/, ''))
-      .map((line) => `<li>${renderStreamingInline(line)}</li>`)
-      .join('')
-    return `<ol>${items}</ol>`
-  }
-
-  const paragraph = trimmed.replace(/\n+/g, ' ')
-  return `<p>${renderStreamingInline(paragraph)}</p>`
+  flush()
+  return segments
 }
 
-// ── Lightweight streaming render ──
-// During streaming, render stable paragraphs, simple lists, code blocks, and inline code.
-// Single newlines remain soft line breaks so source wrapping does not create visual gaps.
+// Tail re-parses are rate limited to ~8/s once the tail is big enough to be
+// worth throttling. A small tail is re-rendered on every tick: its cost is
+// already bounded by the segment size, and the newest text must be visible in
+// the same tick (the live-message update contract asserted by
+// tests/messageview-update-bench.test.ts).
+const TAIL_PARSE_INTERVAL_MS = 120
+const EAGER_TAIL_PARSE_LIMIT = 1024
+const SEGMENT_CACHE_LIMIT = 200
 
-// Incremental streaming: streaming content only ever grows at the tail, and
-// block boundaries (blank-line separators) never retroactively change an
-// already-closed segment — so segments rendered in a previous tick keep their
-// exact DOM nodes forever. Only the final (open) segment is rebuilt each tick.
-// This turns per-frame cost from O(whole content) into O(tail segment).
 interface StreamedSegment {
   text: string
   nodes: ChildNode[]
 }
 
 let streamedSegments: StreamedSegment[] = []
+let tailParseTimer: ReturnType<typeof setTimeout> | null = null
+let lastTailParseAt = Number.NEGATIVE_INFINITY
+let lastClosedCount = 0
+let lastStreamingLength = 0
+// Bumped whenever the streamed DOM is abandoned (unmount, session switch, a
+// finished render taking over) so a queued tail timer can never write into a
+// container that now belongs to something else.
+let streamingGeneration = 0
+
+// Segment text → rendered HTML. Closed segments repeat byte-identically across
+// ticks and across message re-mounts (collapse/expand, session re-entry), so
+// they are cached. The tail is never cached: its text keeps changing.
+const streamedSegmentCache = new Map<string, string>()
+
+const streamingStats = {
+  closedParses: 0,
+  tailParses: 0,
+  segmentCacheHits: 0,
+}
+
+function cachedSegmentHtml(text: string): string {
+  const key = `${props.autoPlotMath ? 'p1' : 'p0'}:${text}`
+  const cached = streamedSegmentCache.get(key)
+  if (cached !== undefined) {
+    streamingStats.segmentCacheHits += 1
+    return cached
+  }
+  const html = renderSegmentHtml(text, false)
+  if (streamedSegmentCache.size >= SEGMENT_CACHE_LIMIT) {
+    const oldest = streamedSegmentCache.keys().next().value
+    if (oldest !== undefined) streamedSegmentCache.delete(oldest)
+  }
+  streamedSegmentCache.set(key, html)
+  return html
+}
+
+function appendSegmentNodes(container: HTMLElement, html: string): ChildNode[] {
+  const template = document.createElement('div')
+  template.innerHTML = html
+  const nodes: ChildNode[] = []
+  while (template.firstChild) {
+    const child = template.removeChild(template.firstChild)
+    container.appendChild(child)
+    nodes.push(child)
+  }
+  // Copy buttons travel inside the HTML; table shells are DOM post-processing
+  // that the finished render also applies, so streaming segments get them too.
+  for (const node of nodes) enhanceTablesIn(node)
+  return nodes
+}
+
+function disposeSegment(segment: StreamedSegment): void {
+  for (const node of segment.nodes) disposeTableEnhancementsIn(node)
+  for (const node of segment.nodes) node.remove()
+}
+
+function cancelTailParse(): void {
+  if (tailParseTimer !== null) {
+    clearTimeout(tailParseTimer)
+    tailParseTimer = null
+  }
+}
+
+function parseTailSegment(index: number, text: string, container: HTMLElement): void {
+  cancelTailParse()
+  const existing = streamedSegments[index]
+  if (existing) disposeSegment(existing)
+  const segment: StreamedSegment = {
+    text,
+    nodes: appendSegmentNodes(container, cachedSegmentHtml(text)),
+  }
+  streamingStats.tailParses += 1
+  if (existing) streamedSegments[index] = segment
+  else streamedSegments.push(segment)
+  lastTailParseAt = Date.now()
+}
+
+function scheduleTailParse(): void {
+  if (tailParseTimer !== null) return
+  const generation = streamingGeneration
+  const delay = Math.max(0, TAIL_PARSE_INTERVAL_MS - (Date.now() - lastTailParseAt))
+  tailParseTimer = setTimeout(() => {
+    tailParseTimer = null
+    if (generation !== streamingGeneration) return
+    if (!props.streaming || !contentRoot.value) return
+    // Read the live prop: a queued parse must never render older content.
+    syncStreamingSegments(props.content, true)
+  }, delay)
+}
 
 function clearStreamedSegments(): void {
-  for (const segment of streamedSegments) {
-    for (const node of segment.nodes) node.remove()
-  }
+  cancelTailParse()
+  streamingGeneration += 1
+  for (const segment of [...streamedSegments]) disposeSegment(segment)
   streamedSegments = []
+  lastTailParseAt = Number.NEGATIVE_INFINITY
+  lastClosedCount = 0
+  lastStreamingLength = 0
 }
 
-function renderStreamingIncremental(content: string): void {
+function syncStreamingSegments(content: string, forceTail: boolean): void {
   const container = contentRoot.value
   if (!container) return
-  const blocks = normalizeMarkdownLineBreaks(content).split(/\n{2,}/)
-  const segments = streamedSegments
+  const shrunk = content.length < lastStreamingLength
+  lastStreamingLength = content.length
+  const blocks = splitStreamingSegments(content)
+  const closedCount = Math.max(blocks.length - 1, 0)
 
-  // Reuse every segment whose text is byte-identical to the previous tick.
-  let index = 0
-  while (index < blocks.length && index < segments.length && blocks[index] === segments[index].text) {
-    index += 1
+  // 1) Reuse the leading segments whose rendered text is unchanged. The
+  //    previously-open tail is reusable too when its text now equals a closed
+  //    block: its DOM already is exactly that block's output.
+  let reuse = 0
+  while (reuse < closedCount && reuse < streamedSegments.length && streamedSegments[reuse].text === blocks[reuse]) {
+    reuse += 1
   }
 
-  // Drop now-obsolete tail segments (the previously-open segment changed).
-  while (segments.length > index) {
-    const removed = segments.pop()!
-    for (const node of removed.nodes) node.remove()
+  // 2) Drop the obsolete tail side (disposing each table shell with its nodes).
+  //    The one exception is a tail that is still the tail: it is kept in place
+  //    as the (up to one window) stale tail so a rate-limited re-parse never
+  //    leaves the paragraph blank in between. Keeping it is only safe when
+  //    nothing needs to be inserted in front of it.
+  const keepStaleTail = reuse === closedCount && streamedSegments.length === closedCount + 1
+  const dropFrom = keepStaleTail ? closedCount + 1 : reuse
+  while (streamedSegments.length > dropFrom) disposeSegment(streamedSegments.pop()!)
+
+  // 3) Render the segments that just closed — exactly once each.
+  while (streamedSegments.length < closedCount) {
+    const text = blocks[streamedSegments.length]
+    streamingStats.closedParses += 1
+    streamedSegments.push({
+      text,
+      nodes: appendSegmentNodes(container, cachedSegmentHtml(text)),
+    })
   }
 
-  // Render only the new/changed tail segments and append their nodes in DOM
-  // order (identical structure to the old single v-html string).
-  const temp = document.createElement('div')
-  while (index < blocks.length) {
-    temp.innerHTML = renderStreamingBlock(blocks[index])
-    const nodes: ChildNode[] = []
-    while (temp.firstChild) {
-      const child = temp.removeChild(temp.firstChild)
-      container.appendChild(child)
-      nodes.push(child)
-    }
-    segments.push({ text: blocks[index], nodes })
-    index += 1
-  }
-}
+  const closedChanged = closedCount !== lastClosedCount
+  lastClosedCount = closedCount
 
-// ── Lightweight streaming render (string form) ──
-// Exposed via defineExpose for equivalence testing against the incremental
-// DOM renderer.
-function renderStreaming(content: string): string {
-  return normalizeMarkdownLineBreaks(content)
-    .split(/\n{2,}/)
-    .map(renderStreamingBlock)
-    .join('')
+  const tailText = blocks.length > closedCount ? blocks[blocks.length - 1] : null
+  const renderedTail = streamedSegments.length > closedCount ? streamedSegments[closedCount] : null
+  if (tailText === null) {
+    if (renderedTail) disposeSegment(streamedSegments.pop()!)
+    cancelTailParse()
+    return
+  }
+  if (renderedTail && renderedTail.text === tailText) return
+
+  const due = forceTail
+    || closedChanged
+    || reuse < closedCount
+    || shrunk
+    || tailText.length < EAGER_TAIL_PARSE_LIMIT
+    || Date.now() - lastTailParseAt >= TAIL_PARSE_INTERVAL_MS
+  if (due) parseTailSegment(closedCount, tailText, container)
+  else scheduleTailParse()
 }
 
 const renderedHtml = computed(() => {
   if (!props.content) return ''
 
-  // Streaming mode renders via renderStreamingIncremental into contentRoot —
-  // the v-html path is not used (and must not re-render the whole stream).
+  // Streaming mode fills contentRoot segment by segment (see
+  // syncStreamingSegments) — the v-html path is not used and must not
+  // re-render the whole stream.
   if (props.streaming) return ''
 
   // Full Markdown render after streaming ends. Cache by content: expand/collapse
@@ -548,20 +667,9 @@ const renderedHtml = computed(() => {
   mermaidSeq = 0
   inlineMathPlots.length = 0
   inlineMathPlotSeq = 0
-  let html: string
-  try {
-    const math = protectMath(props.content)
-    const renderer = createMermaidRenderer()
-    html = marked.parse(math.content, {
-      renderer,
-      async: false,
-      breaks: false,
-      gfm: true,
-    }) as string
-    html = DOMPurify.sanitize(restoreMath(html, math.tokens))
-  } catch {
-    html = `<p>${escapeHtml(props.content)}</p>`
-  }
+  // renderSegmentHtml never throws: a failed parse falls back to escaped text,
+  // exactly like the whole-document path used to.
+  const html = renderSegmentHtml(props.content, true)
   markdownCache.set(cacheKey, {
     html,
     blocks: [...mermaidBlocks],
@@ -579,7 +687,7 @@ const renderedHtml = computed(() => {
 function renderStaticHtml(html: string): void {
   if (!contentRoot.value) return
   clearStreamedSegments()
-  clearTableEnhancements()
+  disposeTableEnhancements()
   contentRoot.value.innerHTML = html
   renderInlineMathPlots()
   enhanceTables()
@@ -611,70 +719,95 @@ function renderInlineMathPlots(): void {
 // Keep a real <table> intact so the browser calculates one shared column grid.
 // The surrounding card owns vertical scrolling, while the dedicated scrollbar
 // above the header translates wide tables horizontally.
-function clearTableEnhancements(): void {
-  for (const cleanup of tableCleanup) cleanup()
-  tableCleanup = []
+function disposeTableEnhancements(): void {
+  for (const dispose of tableCleanup.values()) dispose()
+  tableCleanup.clear()
+}
+
+function disposeTableEnhancementsIn(scope: Node): void {
+  if (!(scope instanceof Element)) return
+  const shells = [
+    ...(scope.matches('.markdown-table-shell') ? [scope] : []),
+    ...Array.from(scope.querySelectorAll('.markdown-table-shell')),
+  ]
+  for (const shell of shells) {
+    const dispose = tableCleanup.get(shell)
+    if (dispose) {
+      dispose()
+      tableCleanup.delete(shell)
+    }
+  }
+}
+
+function enhanceTablesIn(scope: Node): void {
+  if (!(scope instanceof Element)) return
+  const tables: HTMLTableElement[] = []
+  if (scope instanceof HTMLTableElement) tables.push(scope)
+  tables.push(...Array.from(scope.querySelectorAll<HTMLTableElement>('table')))
+  for (const table of tables) {
+    if (table.closest('.markdown-table-shell')) continue
+    enhanceTable(table)
+  }
 }
 
 function enhanceTables(): void {
   const root = contentRoot.value
   if (!root) return
+  enhanceTablesIn(root)
+}
 
-  for (const table of root.querySelectorAll<HTMLTableElement>('table')) {
-    if (table.closest('.markdown-table-shell')) continue
+function enhanceTable(table: HTMLTableElement): void {
+  const shell = document.createElement('div')
+  shell.className = 'markdown-table-shell'
 
-    const shell = document.createElement('div')
-    shell.className = 'markdown-table-shell'
+  const scrollbar = document.createElement('div')
+  scrollbar.className = 'markdown-table-scrollbar'
+  scrollbar.tabIndex = 0
+  scrollbar.setAttribute('role', 'region')
+  scrollbar.setAttribute('aria-label', '横向滚动表格')
 
-    const scrollbar = document.createElement('div')
-    scrollbar.className = 'markdown-table-scrollbar'
-    scrollbar.tabIndex = 0
-    scrollbar.setAttribute('role', 'region')
-    scrollbar.setAttribute('aria-label', '横向滚动表格')
+  const scrollTrack = document.createElement('div')
+  scrollTrack.className = 'markdown-table-scroll-track'
+  scrollTrack.setAttribute('aria-hidden', 'true')
+  scrollbar.appendChild(scrollTrack)
 
-    const scrollTrack = document.createElement('div')
-    scrollTrack.className = 'markdown-table-scroll-track'
-    scrollTrack.setAttribute('aria-hidden', 'true')
-    scrollbar.appendChild(scrollTrack)
+  const viewport = document.createElement('div')
+  viewport.className = 'markdown-table-viewport'
 
-    const viewport = document.createElement('div')
-    viewport.className = 'markdown-table-viewport'
+  table.before(shell)
+  shell.append(scrollbar, viewport)
+  viewport.appendChild(table)
 
-    table.before(shell)
-    shell.append(scrollbar, viewport)
-    viewport.appendChild(table)
-
-    const syncTablePosition = () => {
-      table.style.transform = `translate3d(${-scrollbar.scrollLeft}px, 0, 0)`
-    }
-    const updateOverflow = () => {
-      const viewportWidth = viewport.clientWidth
-      const tableWidth = Math.ceil(table.scrollWidth)
-      const overflowing = tableWidth > viewportWidth + 1
-      shell.classList.toggle('markdown-table-shell--overflowing', overflowing)
-      scrollbar.hidden = !overflowing
-      scrollTrack.style.width = `${Math.max(tableWidth, viewportWidth)}px`
-      if (!overflowing && scrollbar.scrollLeft !== 0) scrollbar.scrollLeft = 0
-      syncTablePosition()
-    }
-
-    scrollbar.addEventListener('scroll', syncTablePosition, { passive: true })
-    let resizeObserver: ResizeObserver | null = null
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(updateOverflow)
-      resizeObserver.observe(viewport)
-      resizeObserver.observe(table)
-    } else {
-      window.addEventListener('resize', updateOverflow)
-    }
-    updateOverflow()
-
-    tableCleanup.push(() => {
-      scrollbar.removeEventListener('scroll', syncTablePosition)
-      resizeObserver?.disconnect()
-      if (!resizeObserver) window.removeEventListener('resize', updateOverflow)
-    })
+  const syncTablePosition = () => {
+    table.style.transform = `translate3d(${-scrollbar.scrollLeft}px, 0, 0)`
   }
+  const updateOverflow = () => {
+    const viewportWidth = viewport.clientWidth
+    const tableWidth = Math.ceil(table.scrollWidth)
+    const overflowing = tableWidth > viewportWidth + 1
+    shell.classList.toggle('markdown-table-shell--overflowing', overflowing)
+    scrollbar.hidden = !overflowing
+    scrollTrack.style.width = `${Math.max(tableWidth, viewportWidth)}px`
+    if (!overflowing && scrollbar.scrollLeft !== 0) scrollbar.scrollLeft = 0
+    syncTablePosition()
+  }
+
+  scrollbar.addEventListener('scroll', syncTablePosition, { passive: true })
+  let resizeObserver: ResizeObserver | null = null
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(updateOverflow)
+    resizeObserver.observe(viewport)
+    resizeObserver.observe(table)
+  } else {
+    window.addEventListener('resize', updateOverflow)
+  }
+  updateOverflow()
+
+  tableCleanup.set(shell, () => {
+    scrollbar.removeEventListener('scroll', syncTablePosition)
+    resizeObserver?.disconnect()
+    if (!resizeObserver) window.removeEventListener('resize', updateOverflow)
+  })
 }
 
 // ── Render mermaid diagrams after DOM update ──
@@ -704,17 +837,20 @@ watch(renderedHtml, async (html) => {
   await renderMermaidDiagrams()
 })
 
-// Streaming ticks: incrementally render only the tail segment. flush:'post'
-// guarantees contentRoot is mounted/updated before we touch its children.
+// Streaming ticks: render the segments that just closed plus the open tail.
+// flush:'post' guarantees contentRoot is mounted/updated before we touch its
+// children.
 watch(() => props.content, (value) => {
-  if (props.streaming) renderStreamingIncremental(value)
+  if (props.streaming) syncStreamingSegments(value, false)
 }, { flush: 'post' })
 
 // Leaving streaming mode keeps the same content node and replaces only its
-// contents with the static renderer output.
+// contents with the finished render; entering it (a message going live again)
+// starts from a clean segment list.
 watch(() => props.streaming, (streaming) => {
-  if (!streaming) clearStreamedSegments()
-})
+  clearStreamedSegments()
+  if (streaming && contentRoot.value) syncStreamingSegments(props.content, true)
+}, { flush: 'post' })
 
 // ── Code block copy (delegated; buttons live inside rendered HTML) ──
 let copiedButton: HTMLElement | null = null
@@ -790,7 +926,7 @@ function onRootImageError(event: Event) {
 onMounted(async () => {
   contentRoot.value?.addEventListener('click', onRootClick, true)
   contentRoot.value?.addEventListener('error', onRootImageError, true)
-  if (props.streaming) renderStreamingIncremental(props.content)
+  if (props.streaming) syncStreamingSegments(props.content, true)
   else renderStaticHtml(renderedHtml.value)
   await renderMermaidDiagrams()
 })
@@ -798,11 +934,14 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   contentRoot.value?.removeEventListener('click', onRootClick, true)
   contentRoot.value?.removeEventListener('error', onRootImageError, true)
-  clearTableEnhancements()
   clearStreamedSegments()
+  disposeTableEnhancements()
 })
 
-defineExpose({ renderStreaming })
+// The shared full-segment renderer and the scanned segment splitter are the
+// reference used by the streaming equivalence tests (heavy=false renders what a
+// streaming tick must produce).
+defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streamingStats })
 </script>
 
 <style scoped>

@@ -2,6 +2,14 @@
   "id": "grok",
   "label": "Grok Reasoning",
   "protocol": "openai-chat-completions",
+  "reasoning": {
+      "levels": [
+        { "id": "max", "label": "高" },
+        { "id": "medium", "label": "中" },
+        { "id": "light", "label": "轻" },
+        { "id": "off", "label": "关闭" }
+      ]
+  },
   "match_model": ["grok", "xai"],
   "request": {
     "reasoning": {

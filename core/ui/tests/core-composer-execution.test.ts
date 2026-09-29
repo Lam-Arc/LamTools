@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  coreDeclaredThinkingLadder,
   coreModelSelectOptions,
   coreThinkingModeOptions,
   coreThinkingPayload,
@@ -72,6 +73,52 @@ describe('core composer execution helpers', () => {
       'light',
       'off',
     ])
+  })
+
+  it('offers exactly the reasoning ladder the selected model declares', () => {
+    const model = {
+      thinking_supported: true,
+      reasoning_off_supported: false,
+      reasoning_levels: [
+        { id: 'max', label: '高' },
+        { id: 'medium', label: '中' },
+        'low',
+        'nonsense',
+      ],
+    }
+    expect(coreDeclaredThinkingLadder({ model })).toEqual([
+      { value: 'max', label: '高' },
+      { value: 'medium', label: '中' },
+      { value: 'light', label: '轻' },
+    ])
+    expect(coreThinkingModeOptions({ model })).toEqual([
+      { value: 'max', label: '高' },
+      { value: 'medium', label: '中' },
+      { value: 'light', label: '轻' },
+    ])
+    // A level the model never declared is never sent: the strongest declared
+    // level is used instead of a value the model does not accept.
+    expect(coreThinkingPayload({ mode: 'xhigh', model })).toEqual({ reasoning_level: 'max' })
+    // Turning thinking off on a model that cannot be turned off keeps the
+    // published fallback: its weakest declared level, which it does accept.
+    expect(coreThinkingPayload({ mode: 'off', model })).toEqual({ reasoning_level: 'light' })
+    // Off appears only when the model itself declares it as honorable.
+    expect(coreThinkingModeOptions({
+      model: { thinking_supported: true, reasoning_levels: ['off', 'light'] },
+    })).toEqual([
+      { value: 'off', label: '关闭' },
+      { value: 'light', label: '轻' },
+    ])
+    // Without a declaration the product ladder still applies (published behavior).
+    expect(coreThinkingModeOptions({ model: { thinking_supported: true } }).map((option) => option.value)).toEqual([
+      'max',
+      'xhigh',
+      'high',
+      'medium',
+      'light',
+      'off',
+    ])
+    expect(coreDeclaredThinkingLadder({ model: { thinking_supported: true } })).toEqual([])
   })
 
   it('creates the Core turn thinking payload', () => {

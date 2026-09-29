@@ -57,6 +57,18 @@ def normalize_reasoning_level(
     return _LEGACY_REASONING_LEVELS.get(normalized, fallback_value)
 
 
+def coerce_reasoning_level(value: object) -> ReasoningLevel | None:
+    """Return the canonical level for a known name, or ``None`` when unknown.
+
+    ``normalize_reasoning_level`` deliberately falls back on unknown input;
+    callers that must *reject* an unknown level (a model declaring its own
+    reasoning ladder) need that distinction, so it is exposed here instead of
+    being duplicated at each call site.
+    """
+
+    return _LEGACY_REASONING_LEVELS.get(str(value or "").strip().lower())
+
+
 def reasoning_level_from_legacy(
     *,
     reasoning_level: object = None,
@@ -82,6 +94,7 @@ def reasoning_level_from_legacy(
 __all__ = [
     "REASONING_LEVELS",
     "ReasoningLevel",
+    "coerce_reasoning_level",
     "normalize_reasoning_level",
     "reasoning_level_from_legacy",
 ]

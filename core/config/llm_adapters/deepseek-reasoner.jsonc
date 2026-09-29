@@ -4,6 +4,9 @@
   "protocol": "openai-chat-completions",
   "match_model": ["deepseek-reasoner", "deepseek-r1"],
   "reasoning": {
+    "levels": [
+      { "id": "light", "label": "默认" }
+    ],
     "off_supported": false
   },
   "request": {

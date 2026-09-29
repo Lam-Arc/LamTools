@@ -206,6 +206,11 @@ class CliLiveFormatter:
         payload = run_item_payload(run_item)
         if payload.get("type") == "compaction":
             return self._format_compaction_run_item(run_item, payload)
+        if payload.get("type") == "userMessage":
+            # Guided instructions arrive as run items (projected when the
+            # kernel drains the guidance), not as `item/started` events.
+            text = run_item_text(payload, input_text=self.input_text)
+            return [self.line("message:user", shorten(text, 160))] if text else [self.line("message:user")]
         if kind == "message":
             text = run_item_text(payload, input_text=self.input_text)
             return [self.line("reply", shorten(text, 300 if self.verbose else 180))] if text else []
@@ -773,6 +778,12 @@ def format_run_item_event(run_item: dict[str, Any]) -> str | None:
         if status == "running":
             return "\u6b63\u5728\u538b\u7f29\u4e0a\u4e0b\u6587..."
         return format_compaction_failure(payload) if status in {"failed", "error", "cancelled"} else format_compaction_result(payload)
+    if payload.get("type") == "userMessage":
+        # Guided instructions are projected as run items when the kernel
+        # drains the guidance; keep the CLI transcript label identical to the
+        # `item/started` user message path.
+        text = run_item_text(payload)
+        return f"[user] {text}" if text else "[user]"
     if kind == "message":
         return run_item_text(payload) or None
     if kind in {"thinking", "reasoning"}:

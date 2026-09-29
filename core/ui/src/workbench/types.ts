@@ -10,6 +10,7 @@ import type { useCoreApprovalController } from '../composables/useCoreApprovalCo
 import type { useCoreLiveComposerController } from '../composables/useCoreLiveComposerController'
 import type { useCoreQueuedInputController } from '../composables/useCoreQueuedInputController'
 import type { CoreQueuedInput } from '../appServer/workbenchProjection'
+import type { ComposerDraftStorage } from '../composer/drafts'
 import type { LamToolsTransport, TransportHttpRequest, TransportHttpResponse } from '../transport'
 
 export type WorkbenchConnectionState = 'connecting' | 'open' | 'closed' | 'error'
@@ -49,6 +50,11 @@ export interface WorkbenchRuntimeOptions {
   onSubmitStart?: () => void
   /** Optional host capability hook for command side effects. */
   onCommandResult?: (result: Record<string, unknown>) => void | Promise<void>
+  /**
+   * Storage for per-thread unsent composer drafts. Defaults to
+   * window.localStorage; tests and non-browser hosts may inject their own.
+   */
+  composerDraftStorage?: ComposerDraftStorage | null
 }
 
 export interface WorkbenchComposerCallbacks {

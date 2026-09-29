@@ -21,6 +21,7 @@ from lamtools_core.llm.profiles import (
     build_profiled_gemini_request,
     build_profiled_openai_request,
     build_profiled_responses_request,
+    declared_reasoning_levels,
     load_adapter_profiles_from_dirs,
     load_jsonc,
     normalize_gemini_response_with_profile,
@@ -590,6 +591,70 @@ def test_builtin_adapter_profiles_define_medium_and_xhigh_presets():
         presets = ((profile.get("request") or {}).get("reasoning") or {}).get("presets")
         if isinstance(presets, dict):
             assert set(presets) == expected, profile_id
+
+
+def test_declared_reasoning_levels_stay_inside_each_profile_presets():
+    """A ladder may only offer grades the model can actually tell apart.
+
+    Guard for the fixed-six-level defect: two selectable levels that resolve to
+    the same provider payload (or a level the profile never defined, or an
+    ``off`` the adapter cannot honor) must never both reach the UI.
+    """
+    declared_somewhere = 0
+    for profile_id, profile in _builtin_profiles().items():
+        ladder = declared_reasoning_levels(profile)
+        if not ladder:
+            continue
+        declared_somewhere += 1
+        presets = ((profile.get("request") or {}).get("reasoning") or {}).get("presets")
+        assert isinstance(presets, dict), profile_id
+        payloads = []
+        for item in ladder:
+            assert item["value"] in presets, (profile_id, item)
+            if item["value"] == "off":
+                assert reasoning_off_supported(profile), profile_id
+            payloads.append(json.dumps(presets[item["value"]], sort_keys=True))
+        assert len({item["value"] for item in ladder}) == len(ladder), profile_id
+        assert len(set(payloads)) == len(payloads), profile_id
+    assert declared_somewhere > 0
+
+
+def test_declared_reasoning_levels_reject_unknown_ids_and_an_unhonorable_off():
+    assert declared_reasoning_levels(
+        {
+            "reasoning": {
+                "off_supported": False,
+                "levels": [
+                    "off",
+                    "light",
+                    "nonsense",
+                    {"id": "max", "label": "最高"},
+                    "low",
+                    {"value": "medium", "name": "中"},
+                ],
+            }
+        }
+    ) == [
+        {"value": "light", "label": ""},
+        {"value": "max", "label": "最高"},
+        {"value": "medium", "label": "中"},
+    ]
+    # No declaration at all keeps the product ladder rather than inventing one.
+    assert declared_reasoning_levels({"reasoning": {}}) == []
+    assert declared_reasoning_levels({}) == []
+
+
+def test_a_model_declaration_replaces_the_profile_ladder():
+    profiles = _builtin_profiles()
+    merged = resolve_adapter_profile_from_profiles(
+        profiles,
+        api_type="openai",
+        base_url="https://gateway.example/v1",
+        model_id="glm-4.6",
+        model_extra={"reasoning": {"levels": [{"id": "light", "label": "低"}]}},
+    )
+    assert declared_reasoning_levels(merged) == [{"value": "light", "label": "低"}]
+    assert declared_reasoning_levels(profiles["glm"]) != [{"value": "light", "label": "低"}]
 
 
 def test_deepseek_reasoning_mapping_is_off_low_high_high_max():

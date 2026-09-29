@@ -26,7 +26,7 @@ from lamtools_core.cli import (
 )
 from lamtools_core.http import create_core_router
 from lamtools_core.llm import LLMRequest
-from lamtools_core.llm.profiles import reasoning_off_supported
+from lamtools_core.llm.profiles import declared_reasoning_levels, reasoning_off_supported
 from lamtools_core.config import build_config_operation_catalog
 from lamtools_core.config.provider_store import ProviderConfig, ProviderStore, mask_api_key
 from lamtools_core.config.root import fallback_project_root
@@ -1242,6 +1242,7 @@ def _register_core_config_operations(
                         "max_output_tokens": config.max_output_tokens,
                         "thinking_supported": config.thinking_supported,
                         "reasoning_off_supported": reasoning_off_supported(adapter_profile),
+                        "reasoning_levels": declared_reasoning_levels(adapter_profile),
                         "thinking_budget": config.thinking_budget,
                         "temperature": config.temperature,
                     },

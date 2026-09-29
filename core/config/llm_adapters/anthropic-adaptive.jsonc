@@ -2,6 +2,14 @@
   "id": "anthropic-adaptive",
   "label": "Anthropic Adaptive Thinking",
   "protocol": "anthropic-messages",
+  "reasoning": {
+      "levels": [
+        { "id": "max", "label": "极高" },
+        { "id": "high", "label": "高" },
+        { "id": "light", "label": "轻" },
+        { "id": "off", "label": "关闭" }
+      ]
+  },
   "match_model": [
     "claude-opus-4-6",
     "claude-opus-4-7",

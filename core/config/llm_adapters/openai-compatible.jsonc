@@ -2,6 +2,11 @@
   "id": "openai-compatible",
   "label": "OpenAI Compatible (conservative)",
   "protocol": "openai-chat-completions",
+  "reasoning": {
+      "levels": [
+        { "id": "light", "label": "默认" }
+      ]
+  },
   "request": {
     "reasoning": {
       "cleanup": [

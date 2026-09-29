@@ -398,6 +398,8 @@ export {
   CORE_PERMISSION_PRESET_LABELS,
   coreModelDisplayLabel,
   coreModelSelectOptions,
+  coerceCoreThinkingMode,
+  coreDeclaredThinkingLadder,
   coreThinkingModeOptions,
   coreThinkingPayload,
   normalizeCoreThinkingMode,

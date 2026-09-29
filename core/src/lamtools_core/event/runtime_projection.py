@@ -391,7 +391,35 @@ def runtime_fact_to_run_item_events(
     if phase == "runtime.guidance_received":
         guidance_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         if guidance_metadata.get("source") != "sub_agent":
-            return None
+            # Parent-run guidance becomes the visible user bubble here — the
+            # moment the kernel drains it — instead of at the click that sent
+            # it.  A click-time bubble is inserted while the response that is
+            # still streaming has no ordering anchor (its progress events are
+            # transient), so the bubble lands ABOVE that response and the
+            # durable record then keeps it there (the response anchors on its
+            # own final part): the instruction read as if the model had
+            # answered it with output written before it.  Anchoring the
+            # message to this event puts it after everything written so far
+            # and before everything written from here on.
+            guidance_text = str(
+                payload.get("content") or fact.full_text or fact.preview or fact.summary or ""
+            ).strip()
+            if not guidance_text:
+                return None
+            guidance_item_id = f"{turn_id}:user:guide:{fact.id}"
+            return [
+                RunItemEvent(
+                    kind="message",
+                    item_id=guidance_item_id,
+                    status="completed",
+                    payload={
+                        "type": "userMessage",
+                        "status": "completed",
+                        "content": [{"type": "text", "text": guidance_text}],
+                    },
+                    **base,
+                )
+            ]
         guidance_sub_agent = dict(guidance_metadata)
         guidance_base = {
             **base,

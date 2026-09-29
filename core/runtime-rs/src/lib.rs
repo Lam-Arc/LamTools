@@ -35,6 +35,10 @@ pub mod workflow_ops;
 pub mod workflow_runner;
 pub mod workflow_store;
 
+/// The reasoning declaration a resolved adapter profile yields, for hosts that
+/// must show a thinking-level menu without a Python backend.
+pub use profiles::{DeclaredReasoningLevel, ReasoningDeclaration};
+
 /// How many consecutive tool-only rounds the model may run before it is asked
 /// for a visible progress note. Desktop parity for
 /// `LoopPolicy.max_tool_only_rounds_without_progress`.
@@ -1275,6 +1279,34 @@ fn json_object<const N: usize>(entries: [(&str, Value); N]) -> Value {
             .map(|(key, value)| (key.to_owned(), value))
             .collect(),
     )
+}
+
+/// The reasoning ladder a provider/model configuration resolves to.
+///
+/// A host that shows a thinking-level menu without a Python backend asks this:
+/// the adapter profiles are compiled into this crate, so the answer is the same
+/// ladder the desktop's `config.models.list` sends for that model — including a
+/// model that only carries an `adapter_profile_id` and declares no grades of its
+/// own.
+///
+/// Read-only: it describes which grades the profile accepts and never takes part
+/// in building a request.
+pub fn model_reasoning_declaration(
+    api_type: &str,
+    base_url: &str,
+    model_id: &str,
+    provider_name: &str,
+    provider_extra: &Value,
+    model_extra: &Value,
+) -> ReasoningDeclaration {
+    profiles::reasoning_declaration(&profiles::resolve_profile(
+        api_type,
+        base_url,
+        model_id,
+        provider_name,
+        provider_extra,
+        model_extra,
+    ))
 }
 
 pub fn system_context(

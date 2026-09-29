@@ -2,6 +2,14 @@
   "id": "anthropic-messages",
   "label": "Anthropic Messages",
   "protocol": "anthropic-messages",
+  "reasoning": {
+      "levels": [
+        { "id": "max", "label": "极高" },
+        { "id": "high", "label": "高" },
+        { "id": "light", "label": "轻" },
+        { "id": "off", "label": "关闭" }
+      ]
+  },
   "auth": "bearer",
   "request": {
     "omit_sampling_when_reasoning": true,

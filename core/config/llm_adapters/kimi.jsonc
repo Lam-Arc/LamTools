@@ -4,6 +4,11 @@
   "protocol": "openai-chat-completions",
   "match_model": ["kimi", "moonshot"],
   "reasoning": {
+    "levels": [
+      { "id": "max", "label": "极高" },
+      { "id": "high", "label": "高" },
+      { "id": "light", "label": "轻" }
+    ],
     "off_supported": false
   },
   "request": {

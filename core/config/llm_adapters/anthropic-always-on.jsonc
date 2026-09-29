@@ -4,6 +4,11 @@
   "protocol": "anthropic-messages",
   "match_model": ["claude-opus-5-thinking"],
   "reasoning": {
+    "levels": [
+      { "id": "max", "label": "极高" },
+      { "id": "high", "label": "高" },
+      { "id": "light", "label": "轻" }
+    ],
     "off_supported": false
   },
   "endpoint": "/v1/messages",

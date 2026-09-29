@@ -4,6 +4,10 @@
   "protocol": "gemini-generative-language",
   "match_model": ["gemini-3.1-pro", "gemini-3-pro"],
   "reasoning": {
+    "levels": [
+      { "id": "high", "label": "高" },
+      { "id": "light", "label": "低" }
+    ],
     "off_supported": false
   },
   "endpoint": "/v1beta/models/{model}:generateContent",

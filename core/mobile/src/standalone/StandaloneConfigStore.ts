@@ -2,6 +2,7 @@ import { secureStorage, type SecureStorage } from '../native/secureStorage'
 import {
   hasEmbeddedRustCore,
   listEmbeddedPluginModeTools,
+  readEmbeddedModelReasoningDeclaration,
   readEmbeddedPluginSchemas,
   readEmbeddedToolCatalog,
   type EmbeddedCatalogTool,
@@ -29,6 +30,12 @@ export interface StandaloneProvider {
   extra?: Record<string, unknown>
 }
 
+/** One grade a model declares, in the model's own order and wording. */
+export interface StandaloneReasoningLevel {
+  value: string
+  label: string
+}
+
 export interface StandaloneModel {
   id: string
   provider_id: string
@@ -40,6 +47,15 @@ export interface StandaloneModel {
   thinking_supported?: boolean
   thinking_budget?: number
   reasoning_off_supported?: boolean
+  /**
+   * The reasoning ladder this model declares, in the desktop's
+   * `reasoning_levels` shape. Absent or empty keeps the product ladder, so no
+   * surface offers a grade the model never claimed.
+   *
+   * Attached to every model this store hands to the shared Composer; see
+   * `modelWithReasoningDeclaration` for where the ladder comes from.
+   */
+  reasoning_levels?: StandaloneReasoningLevel[]
   temperature?: number
   extra?: Record<string, unknown>
 }
@@ -121,7 +137,15 @@ export class StandaloneConfigStore {
   async handleRpc(method: string, params: Record<string, unknown>): Promise<Record<string, unknown> | null> {
     const state = await this.load()
     if (method === 'config.providers.list') return { providers: state.providers }
-    if (method === 'config.models.list') return { models: state.models, default_model_id: state.defaultModelId }
+    if (method === 'config.models.list') {
+      // The shared Composer reads each model's declared reasoning ladder off this
+      // response, so every model is handed out with its ladder attached.
+      const providers = new Map(state.providers.map(provider => [provider.id, provider]))
+      const models = await Promise.all(state.models.map(
+        model => modelWithReasoningDeclaration(model, providers.get(model.provider_id)),
+      ))
+      return { models, default_model_id: state.defaultModelId }
+    }
     if (method === 'config.model_groups.list') return this.modelGroupsSnapshot(true)
     if (method === 'config.model_group.create') return await this.createModelGroup(params)
     if (method === 'config.model_group.update') return await this.updateModelGroup(params)
@@ -351,7 +375,7 @@ export class StandaloneConfigStore {
     if (!provider) throw new Error('模型对应的供应商不存在')
     const apiKey = providerApiKey(await this.secrets.get<string>(this.secretKey(provider.id)))
     if (!apiKey) throw new Error('请先配置供应商 API Key')
-    return { provider, model, apiKey }
+    return { provider, model: await modelWithReasoningDeclaration(model, provider), apiKey }
   }
 
   async runtimeModels(): Promise<StandaloneRuntimeModel[]> {
@@ -676,7 +700,7 @@ export class StandaloneConfigStore {
     }
     return {
       provider: providerResponse(provider!, apiKey),
-      model: modelResponse(model),
+      model: await modelResponse(model, provider),
       groups: this.modelGroupsSnapshot(false),
       created_provider: createdProvider,
     }
@@ -1132,22 +1156,62 @@ function providerResponse(provider: StandaloneProvider, apiKey: string): Record<
   }
 }
 
-function modelResponse(model: StandaloneModel): Record<string, unknown> {
-  const extra = isRecord(model.extra) ? cloneState(model.extra) : {}
+async function modelResponse(
+  model: StandaloneModel,
+  provider?: StandaloneProvider | null,
+): Promise<Record<string, unknown>> {
+  const projected = await modelWithReasoningDeclaration(model, provider)
+  const extra = isRecord(projected.extra) ? cloneState(projected.extra) : {}
   return {
-    id: model.id,
-    model_record_id: model.id,
-    provider_id: model.provider_id,
-    model_id: model.model_id,
-    display_name: model.display_name,
-    context_window: model.context_window || 0,
-    max_output_tokens: model.max_output_tokens || 4096,
-    thinking_supported: model.thinking_supported || false,
-    thinking_budget: model.thinking_budget || 10000,
-    temperature: model.temperature ?? 0.2,
+    id: projected.id,
+    model_record_id: projected.id,
+    provider_id: projected.provider_id,
+    model_id: projected.model_id,
+    display_name: projected.display_name,
+    context_window: projected.context_window || 0,
+    max_output_tokens: projected.max_output_tokens || 4096,
+    thinking_supported: projected.thinking_supported || false,
+    thinking_budget: projected.thinking_budget || 10000,
+    temperature: projected.temperature ?? 0.2,
+    reasoning_off_supported: projected.reasoning_off_supported === true,
+    reasoning_levels: projected.reasoning_levels || [],
     capability: String(extra.capability || ''),
-    notes: model.notes || '',
+    notes: projected.notes || '',
     extra,
+  }
+}
+
+/**
+ * A model as the shared Composer consumes it: the record plus the reasoning
+ * ladder that governs its requests, in the desktop's field names.
+ *
+ * A phone has no adapter-profile directory — `llm_adapters` is compiled into the
+ * runtime — so the ladder is resolved by the host from the very profile the next
+ * request will use. That is what gives a model added from a preset (which
+ * carries only an `adapter_profile_id`) its own grades, and it keeps a model
+ * that declares its own ladder (or whose provider does) ahead of the matched
+ * profile, because the host applies the same precedence the request does.
+ *
+ * A host that cannot answer — no embedded runtime, or a build that does not
+ * register the command — leaves the ladder empty, and the Composer shows the
+ * product ladder exactly as it did before this existed. Nothing here may fail a
+ * model catalog.
+ */
+async function modelWithReasoningDeclaration(
+  model: StandaloneModel,
+  provider?: StandaloneProvider | null,
+): Promise<StandaloneModel> {
+  const offSupported = booleanOrUndefined(model.reasoning_off_supported)
+  if (Array.isArray(model.reasoning_levels)) {
+    return { ...model, reasoning_off_supported: offSupported ?? true }
+  }
+  const declaration = provider
+    ? await readEmbeddedModelReasoningDeclaration({ provider, model })
+    : null
+  return {
+    ...model,
+    reasoning_off_supported: offSupported ?? declaration?.off_supported ?? true,
+    reasoning_levels: declaration?.levels ?? [],
   }
 }
 

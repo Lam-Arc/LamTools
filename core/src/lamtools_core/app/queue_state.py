@@ -63,7 +63,13 @@ def build_queue_guidance_plan(
     if not input_items:
         return QueueGuidancePlan(False, "queue_input_unavailable", [], [], ())
 
-    user_item_id = f"{turn_id}:user:guide:{queue_item_id}"
+    # Guidance is announced to the transcript by the kernel event
+    # (`runtime.guidance_received` -> a user bubble), i.e. at the point the
+    # model actually takes the instruction in.  A click-time user message
+    # would be inserted while the still-streaming response has no ordering
+    # anchor, so it renders ABOVE that response and stays there in the durable
+    # record — the instruction looked like it had been answered by output
+    # written before it (2026-09-28).
     events = (
         CoreAppEventSpec(
             event_id=f"{client_message_id}:steer",
@@ -72,15 +78,6 @@ def build_queue_guidance_plan(
             turn_id=turn_id,
             client_message_id=client_message_id,
             payload={"type": "turn", "input": input_items},
-        ),
-        CoreAppEventSpec(
-            event_id=f"{client_message_id}:usermsg",
-            thread_id=thread_id,
-            method="item/started",
-            turn_id=turn_id,
-            item_id=user_item_id,
-            client_message_id=client_message_id,
-            payload={"type": "userMessage", "status": "completed", "content": input_items},
         ),
         CoreAppEventSpec(
             event_id=f"{client_message_id}:consume",

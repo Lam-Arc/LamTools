@@ -1122,6 +1122,7 @@ def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_pa
             "temperature": 0.2,
             "capability": "text",
             "reasoning_off_supported": True,
+            "reasoning_levels": [{"value": "light", "label": "默认"}],
             "notes": "",
             "is_default": False,
             "adapter_profile_id": "",
@@ -1129,6 +1130,52 @@ def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_pa
         }
     ]
     assert "secret" not in response.text
+
+
+def test_core_agent_http_app_reports_the_reasoning_ladder_a_model_declares(
+    tmp_path: Path, isolated_config_root: Path
+) -> None:
+    """The composer's levels come from what the model declares, not a fixed list."""
+    provider_dir = isolated_config_root / "providers"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    (provider_dir / "provider-1.jsonc").write_text(
+        '{\n'
+        '  "id": "provider-1",\n'
+        '  "name": "Provider",\n'
+        '  "api_type": "openai",\n'
+        '  "base_url": "https://example.test/v1",\n'
+        '  "api_key": "secret"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    model_dir = isolated_config_root / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "model-record.jsonc").write_text(
+        '{\n'
+        '  "model_id": "model-record",\n'
+        '  "display_name": "Model Name",\n'
+        '  "provider_id": "provider-1",\n'
+        '  "thinking": {"supported": true, "budget": 10000},\n'
+        '  "reasoning": {"levels": [{"id": "light", "label": "低"}, {"id": "max", "label": "最高"}]}\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/core/config/models")
+
+    assert response.status_code == 200
+    model = response.json()["models"][0]
+    assert model["reasoning_levels"] == [
+        {"value": "light", "label": "低"},
+        {"value": "max", "label": "最高"},
+    ]
 
 
 def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_path: Path, isolated_config_root: Path) -> None:

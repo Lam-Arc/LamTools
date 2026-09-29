@@ -402,3 +402,44 @@ stash 验证与本改动无关）。
   tests passed 29/29 after it; mobile-focused tests passed 34, and mobile
   typecheck/build passed. No live phone HTTPS/stream success is established.
   State is paused pending the user's 0.1.3 error text.
+
+## 流式完整 Markdown 即时成型包（2026-09-28）
+
+**现象**：流式回答在结束前只成段落、扁平无序/有序列表、围栏代码块、行内代码、粗体与公式；标题、表格、引用、链接、斜体、分隔线、嵌套列表、mermaid 都不成型。用户观感是「半成型纯文本 → 结束瞬间全部成型」。
+
+**根因**：streaming 走轻量增量管线（能力即上述子集，全程 `escapeHtml` 不做清洗）；完整管线（公式保护 → marked → DOMPurify → 缓存）只在 `streaming` 翻假时执行一次，整段替换内容节点。另一既有缺陷：段切分为 `split(/\n{2,}/)` 盲切，围栏代码块内含空行会被切成多段并泄漏字面 ```。
+
+**改动**（`core/ui/src/components/MarkdownRenderer.vue`）：
+
+1. 扫描式段切分 `splitStreamingSegments`：空行只是段界，围栏（``` / ~~~）与 `$$` 块内部不切；**未闭合**的围栏/公式永远是尾部开放段（marked 在 EOF 自动闭合围栏，字面 ``` 不再泄漏）。不再对内容套 `normalizeMarkdownLineBreaks`——它会抹平行首缩进，嵌套列表因此在流式中永远不成型。
+2. 完整管线抽成 `renderSegmentHtml(source, heavy)`，三处共用：完成态整篇、闭合段、尾段。`heavy` 是流式开关（流式期间 false）。
+3. 闭合段用该完整渲染，结果按「段文本 + 开关」缓存；**节点复用语义不变**：闭合段保留原 DOM 节点，只重建尾段，每帧成本仍只与尾段相关（阶段 4 硬约束）。
+4. 尾段同样完整渲染，但限频 ~120ms（`TAIL_PARSE_INTERVAL_MS`）：窗口内的更新只标记尾段已脏并挂尾定时器；定时器触发时读**当时**的 `props.content`，并带 generation 令牌，离开流式/卸载/内容替换一律取消。段闭合、内容变短、切到非流式时立即渲染。限频期间保留上一版尾段 DOM，只滞后不出现空洞。
+5. 流式期间不做重型渲染：mermaid 与 Study 围栏 SVG 保留为代码块（含复制按钮），自动绘图公式不触发；结束态整篇渲染仍是权威结果，重型块结束时一次性出现。
+6. 闭合段与尾段走与完成态相同的 DOMPurify 清洗；表格外壳/滚动容器、代码块复制按钮在流式段上同样构建（`enhanceTablesIn` 按段作用域，段被替换时按 shell 释放 ResizeObserver，不留观察者泄漏）。
+7. 删除轻量三件套（`renderStreamingBlock` / `renderStreamingInline` / `renderStreamingCodeBlock`）与字符串版 `renderStreaming`；`defineExpose` 改为 `renderSegment`（共享完整段渲染）+ `splitStreamingSegments` + `streamingStats`（解析计数），等价性测试的参照渲染器由前两者组合而成。
+
+**新成本模型**：每 tick = 全文切段扫描（O(全文) 字符串操作，与阶段 4 相同，无 DOM/清洗）+ 刚闭合段的完整渲染一次（含一次清洗，按段缓存）+ 尾段完整渲染（尾段 <1KB 每 tick 一次，≥1KB 最多约 8 次/秒）。**不是**回到阶段 3 之前：阶段 3 的问题是每帧对全文做 marked + 清洗并整段替换 DOM；现在每帧的清洗量、DOM 写量与 marked 输入都只与尾段相关，闭合段永不重解析。
+
+**一处相对设计的偏离（因与既有契约冲突）**：无条件 120ms 限频会让 `tests/messageview-update-bench.test.ts`（不在本次可改文件范围内，且被要求保持全绿）变红——它直接断言 live 消息最后一次内容已在同一 tick 的 DOM 中（`wrapper.text()` 含最终内容）。因此尾段**短于 1KB 时不限频**，每 tick 直接解析；限频只对 ≥1KB 的尾段生效。理由：短尾段的完整渲染成本已与阶段 4 的 O(尾段) 同级（实测约 0.9ms/tick），限频无收益却牺牲实时性。回退方式一句话：删掉 `due` 条件里的 `tailText.length < EAGER_TAIL_PARSE_LIMIT`（则该基准转为红，需要同时调整该基准）。
+
+**为什么重型内容仍延后**：mermaid 渲染异步且带全局初始化/懒加载，Study SVG 清洗与自动绘图都是整块生成，每 tick 触发会闪烁并重复初始化；结束态整篇渲染一次成型更稳定（用户明确选择）。
+
+**实测（jsdom / vitest，本机，2026-09-28；未做真实浏览器/WebView2 帧时间与真机测量）**：
+
+- 每 tick 追加一段 271 字符的独立 markdown 段落（含粗体、行内代码、链接），尾段走完整管线（<1KB 不限频）：全文 7KB → 0.89ms/tick、38KB → 0.84ms/tick、92KB → 0.93ms/tick。与阶段 4 记录（8/40/96KB → 1.34/1.19/1.64ms，300 字符 tick）同量级且更平坦，而现在每 tick 产出的是完整 markdown（不只是转义纯文本）。
+- 4KB 大尾段在同一个限频窗口内 20 次更新：0.10ms/tick（0 次解析，只有切段扫描与段文本比较）。
+- `tests/messageview-update-bench.test.ts`（现有基准复测，300-part live 消息）：阶段 4 记录 1.8–2.0ms/tick → 现在 4.3ms/tick。差额就是尾段从「escapeHtml + 正则」换成「marked + DOMPurify 完整渲染」的代价；该基准断言阈值 250ms 不构成约束。
+- 结束态整篇渲染 38KB → 77.5ms（一次性，管线未变，未逐项对比改动前后）。
+- 上述 jsdom 探针为一次性测量脚本，已删除；消息级数字可用 `npx vitest run tests/messageview-update-bench.test.ts` 复现。
+
+**测试**：`core/ui/tests/markdown-streaming-incremental.test.ts` 12 条——参照渲染器换成共享段渲染 + 扫描切段；闭合段节点跨 tick 复用、只重建尾段；外壳/内容节点跨翻转稳定；流式中标题/表格/引用/链接/斜体/有序与嵌套列表即成型（含表格外壳与复制按钮结构）；含空行的围栏代码块始终是单块且不泄漏 ```；<1KB 尾段同 tick 生效；≥1KB 尾段限频（5 次更新 1 次解析）且最后一次内容不丢；限频期间尾段只滞后、不留空缺；排队定时器既不写入新内容也随卸载销毁；重型内容（mermaid / Study SVG / 自动绘图）流式中不出现、结束后出现；闭合段只解析一次（`streamingStats.closedParses` 不变）。全量 `core/ui` 107 文件 / 881 测试全绿，`npm run typecheck` 全绿。
+
+**已知残余**：
+
+- 松散列表（项之间有空行）在流式中先显示为两个列表，段闭合后合并——段边界即空行，属设计取舍。
+- 引用式链接定义（`[a]: url`）在定义段到达前显示为字面文本。
+- 未闭合的行内标记（`**加粗`、`*斜体`、`` `code ``）在闭合符号到达前显示字面符号。
+- 结束瞬间仍以整篇渲染为准（整段替换内容节点，shell/content 节点不变），这是权威结果。
+- 缩进代码块（4 空格）内含空行仍会被切开（扫描器只识别 ``` / ~~~ 围栏）；`~~~` 围栏内的 `$$` 仍会被公式保护误判（`protectMath` 只保护 ``` 围栏，属既有行为，未在本次改动范围）。
+- ≥1KB 且刚被限频的尾段在段闭合时会被重新渲染一次（闭合优先于限频），这是「闭合立即成型」换来的单次成本。

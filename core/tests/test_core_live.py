@@ -1297,7 +1297,11 @@ async def test_queue_guidance_persists_consumed_guidance_after_locked_commit_ret
         result = guided.response["result"]
         assert result["applied"] is True
         assert result["reason"] == ""
-        assert [event["method"] for event in result["events"]] == ["turn/steered", "item/started", "queue/itemDeleted"]
+        # No click-time `item/started` user message: the visible bubble for a
+        # guided instruction is projected by the kernel when it drains the
+        # guidance, so it lands after the output written so far instead of
+        # above the response that is still streaming (2026-09-28).
+        assert [event["method"] for event in result["events"]] == ["turn/steered", "queue/itemDeleted"]
         assert accepted_statuses == ["accepted", "duplicate"]
         assert consumed == ["queued guidance"]
 
@@ -1369,7 +1373,10 @@ async def test_consumed_guidance_survives_exhausted_commit_retries_for_client_re
         assert result["reason"] == ""
         expected_methods = ["turn/steered"]
         if operation_name == "queue.guide":
-            expected_methods = ["turn/steered", "item/started", "queue/itemDeleted"]
+            # Guidance release + queue consumption only; the visible user
+            # bubble is projected by the kernel when the guidance is drained
+            # (2026-09-28).
+            expected_methods = ["turn/steered", "queue/itemDeleted"]
         assert [event["method"] for event in result["events"]] == expected_methods
 
         async with context.session_factory() as db:
@@ -1431,7 +1438,7 @@ async def test_queue_guidance_retracts_pending_guidance_after_exhausted_commit_r
         result = retried.response["result"]
         assert result["applied"] is True
         assert result["reason"] == ""
-        assert [event["method"] for event in result["events"]] == ["turn/steered", "item/started", "queue/itemDeleted"]
+        assert [event["method"] for event in result["events"]] == ["turn/steered", "queue/itemDeleted"]
         assert accepted_statuses[0] == "accepted"
         assert accepted_statuses[-1] == "accepted"
     finally:
@@ -1589,6 +1596,43 @@ async def test_live_queue_guidance_reaches_the_next_model_call(tmp_path):
 
         assert len(llm.requests) == 2
         assert any(message.content == "queued guidance" for message in llm.requests[1].messages)
+
+        # The guided instruction's transcript bubble is projected when the
+        # kernel drains the guidance, so its anchor sits after everything the
+        # in-flight response wrote and before everything written afterwards.
+        # A click-time bubble would sit above the response it interrupted
+        # (2026-09-28).
+        async with context.session_factory() as db:
+            events = await context.persistence.list_thread(
+                db, thread_id="thread-queue-guide-live"
+            )
+        run_items = [event for event in events if event.method == "core/runItem"]
+
+        def _inner(event) -> dict:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            inner = payload.get("payload")
+            return inner if isinstance(inner, dict) else {}
+
+        guidance_items = [
+            event for event in run_items
+            if str((event.payload or {}).get("kind") or "") == "message"
+            and str(_inner(event).get("type") or "") == "userMessage"
+        ]
+        assert len(guidance_items) == 1
+        assert _inner(guidance_items[0])["content"] == [
+            {"type": "text", "text": "queued guidance"}
+        ]
+        guidance_seq = int(guidance_items[0].seq or 0)
+        first_text_seqs = [
+            int(event.seq or 0) for event in run_items
+            if str(event.item_id or "").endswith("response-0:text")
+        ]
+        second_text_seqs = [
+            int(event.seq or 0) for event in run_items
+            if str(event.item_id or "").endswith("response-1:text")
+        ]
+        assert first_text_seqs and second_text_seqs
+        assert max(first_text_seqs) < guidance_seq < min(second_text_seqs)
     finally:
         await engine.dispose()
 

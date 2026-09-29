@@ -486,6 +486,53 @@ export async function listEmbeddedPluginCatalog(): Promise<EmbeddedPluginCatalog
   return await invoke<EmbeddedPluginCatalogEntry[]>('sunday_plugin_catalog')
 }
 
+/** One grade the model's adapter profile declares. */
+export interface EmbeddedReasoningLevel {
+  value: string
+  label: string
+}
+
+/** The reasoning ladder the host resolved for a model. */
+export interface EmbeddedReasoningDeclaration {
+  levels: EmbeddedReasoningLevel[]
+  off_supported: boolean
+}
+
+/**
+ * The ladder the model's adapter profile declares, resolved by the host from
+ * the profiles compiled into the runtime.
+ *
+ * This is what lets a model that only carries an `adapter_profile_id` show its
+ * own grades instead of the product's fixed ladder. The answer is display data,
+ * so a host that cannot supply it (no embedded runtime, a command this build
+ * does not register, a configuration the resolver cannot read) degrades to
+ * `null` and the caller keeps its own ladder. A model catalog must never fail
+ * because a thinking menu could not be filled in.
+ */
+export async function readEmbeddedModelReasoningDeclaration(input: {
+  provider: StandaloneProvider
+  model: StandaloneModel
+}): Promise<EmbeddedReasoningDeclaration | null> {
+  if (!hasEmbeddedRustCore()) return null
+  try {
+    const result = await invoke<EmbeddedReasoningDeclaration>(
+      'sunday_model_reasoning_declaration',
+      // The same configuration the turn path sends, so the ladder describes the
+      // profile the next request will actually use.
+      { config: rustProvider(input.provider, input.model, '') },
+    )
+    if (!Array.isArray(result?.levels) || typeof result?.off_supported !== 'boolean') return null
+    return {
+      levels: result.levels
+        .filter(level => level && typeof level.value === 'string')
+        .map(level => ({ value: level.value, label: String(level.label ?? '') })),
+      off_supported: result.off_supported,
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function runEmbeddedSundayTurn(input: {
   turnId: string
   sessionId: string

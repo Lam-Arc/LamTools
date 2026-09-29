@@ -38,12 +38,12 @@
       --glyph-scale-y: 1;
       --glyph-rotate: 0deg;
       --glyph-opacity: 1;
-      --trail-x: -9px;
+      --trail-x: -7.2px;
       --trail-scale: 0;
       --trail-opacity: 0;
       position: relative;
-      width: 28px;
-      height: 28px;
+      width: 22.4px;
+      height: 22.4px;
       padding: 0;
       border: 0;
       border-radius: 999px;
@@ -67,8 +67,8 @@
     }
 
     button::before {
-      width: 13px;
-      height: 13px;
+      width: 10.4px;
+      height: 10.4px;
       background: currentColor;
       clip-path: polygon(4% 45%, 94% 7%, 68% 95%, 48% 62%, 31% 79%, 31% 57%);
       opacity: var(--glyph-opacity);
@@ -80,8 +80,8 @@
 
     button::after {
       z-index: -1;
-      width: 18px;
-      height: 5px;
+      width: 14.4px;
+      height: 4px;
       border-radius: 999px;
       background: currentColor;
       opacity: var(--trail-opacity);
@@ -98,8 +98,8 @@
     }
 
     button[data-state="stop"]::before {
-      width: 11px;
-      height: 11px;
+      width: 8.8px;
+      height: 8.8px;
       border-radius: var(--space-1);
       clip-path: inset(0 round var(--space-1));
     }

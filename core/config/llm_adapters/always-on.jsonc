@@ -4,6 +4,9 @@
   "protocol": "openai-chat-completions",
   "match_model": ["magistral", "minimax-m", "mimo"],
   "reasoning": {
+    "levels": [
+      { "id": "light", "label": "默认" }
+    ],
     "off_supported": false
   },
   "request": {

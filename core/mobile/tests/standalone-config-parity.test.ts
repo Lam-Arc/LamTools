@@ -1,10 +1,96 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  coreThinkingModeOptions,
+  coreThinkingPayload,
+  type CoreExecutionModelSource,
+} from '@lamtools/ui'
 import { createLocalRepository, type LocalState } from '../src/storage'
 import type { LocalDatabase } from '../src/storage/Database'
 import { MemorySecureStorage } from '../src/native/secureStorage'
 import { StandaloneConfigStore } from '../src/standalone/StandaloneConfigStore'
 import { MemoryStandaloneStateStorage } from '../src/standalone/StandaloneStateStorage'
 import { StandaloneTransport } from '../src/standalone/StandaloneTransport'
+
+const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }))
+
+// The host command this file exercises; the runtime-rs tests own the values it
+// answers with, so the ladders below are the compiled profiles' own ladders.
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
+
+/** What the host resolves for a profile id, mirroring `llm_adapters/*.jsonc`. */
+const HOST_LADDERS: Record<string, { levels: Array<{ value: string; label: string }>; off_supported: boolean }> = {
+  'deepseek-chat': {
+    levels: [
+      { value: 'max', label: '极高' },
+      { value: 'high', label: '高' },
+      { value: 'light', label: '轻' },
+      { value: 'off', label: '关闭' },
+    ],
+    off_supported: true,
+  },
+  glm: {
+    levels: [
+      { value: 'max', label: '极高' },
+      { value: 'high', label: '高' },
+      { value: 'light', label: '轻' },
+    ],
+    off_supported: false,
+  },
+}
+
+/** What the host answers for the profile a configuration names. */
+function hostDeclaration(args: { config?: Record<string, any> } | undefined): unknown {
+  // A model's own profile id wins over its provider's, the way the resolver
+  // picks the profile the request will use.
+  const profileId = args?.config?.modelExtra?.adapter_profile_id
+    || args?.config?.providerExtra?.adapter_profile_id
+  return HOST_LADDERS[profileId] ?? { levels: [], off_supported: true }
+}
+
+invokeMock.mockImplementation(async (command: string, args: { config?: Record<string, any> }) => {
+  if (command !== 'sunday_model_reasoning_declaration') throw new Error(`unexpected command: ${command}`)
+  return hostDeclaration(args)
+})
+
+/** The phone only talks to the host inside a Tauri window. */
+function stubTauriRuntime(present: boolean): void {
+  const scope = globalThis as { window?: unknown }
+  if (!present) {
+    delete scope.window
+    return
+  }
+  scope.window = { __TAURI_INTERNALS__: {} }
+}
+
+afterEach(() => {
+  stubTauriRuntime(false)
+  invokeMock.mockClear()
+})
+
+async function presetConfig(storage: MemoryStandaloneStateStorage<any>): Promise<StandaloneConfigStore> {
+  const config = new StandaloneConfigStore(new MemorySecureStorage(), storage)
+  await config.handleRpc('config.provider.create', {
+    name: 'DeepSeek',
+    api_key: 'secret',
+    base_url: 'https://api.deepseek.com/v1',
+    extra: { adapter_profile_id: 'deepseek-chat' },
+    models: [
+      {
+        model_id: 'deepseek-v4-flash',
+        display_name: 'DeepSeek V4 Flash',
+        thinking_supported: true,
+        extra: { adapter_profile_id: 'deepseek-chat', capability: 'multimodal' },
+      },
+      {
+        model_id: 'glm-5.3',
+        display_name: 'GLM 5.3',
+        thinking_supported: true,
+        extra: { adapter_profile_id: 'glm' },
+      },
+    ],
+  })
+  return config
+}
 
 class MemoryDatabase implements LocalDatabase<LocalState> {
   value: LocalState | null = null
@@ -214,5 +300,171 @@ describe('standalone named config operations', () => {
       context: { modeContext: '', globalInstructions: 'Global instructions', memory: 'Global memory' },
     }))
     await transport.close()
+  })
+
+  it('gives a preset model the ladder the host resolves for its adapter profile', async () => {
+    stubTauriRuntime(true)
+    const storage = new MemoryStandaloneStateStorage<any>()
+    const config = await presetConfig(storage)
+
+    const listed = await config.handleRpc('config.models.list', {})
+    const models = (listed?.models || []) as Array<Record<string, unknown>>
+    const byModelId = new Map(models.map(model => [String(model.model_id), model]))
+
+    // Both models were added from a preset: their configuration names an adapter
+    // profile and declares no ladder of its own, and they still get the model's
+    // real grades instead of the product ladder.
+    expect(byModelId.get('deepseek-v4-flash')?.reasoning_levels).toEqual([
+      { value: 'max', label: '极高' },
+      { value: 'high', label: '高' },
+      { value: 'light', label: '轻' },
+      { value: 'off', label: '关闭' },
+    ])
+    expect(byModelId.get('deepseek-v4-flash')?.reasoning_off_supported).toBe(true)
+    expect(byModelId.get('glm-5.3')?.reasoning_levels).toEqual([
+      { value: 'max', label: '极高' },
+      { value: 'high', label: '高' },
+      { value: 'light', label: '轻' },
+    ])
+    expect(byModelId.get('glm-5.3')?.reasoning_off_supported).toBe(false)
+
+    // The question carries the configuration the turn path sends, so the ladder
+    // describes the profile the next request will actually use.
+    expect(invokeMock).toHaveBeenCalledWith('sunday_model_reasoning_declaration', {
+      config: expect.objectContaining({
+        apiType: 'openai',
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiModelId: 'deepseek-v4-flash',
+        providerName: 'DeepSeek',
+        providerExtra: expect.objectContaining({ adapter_profile_id: 'deepseek-chat' }),
+        modelExtra: expect.objectContaining({ adapter_profile_id: 'deepseek-chat' }),
+      }),
+    })
+
+    // The hop that matters: the shared Composer reads these objects directly, so
+    // the model's grades — and only those — reach the thinking menu.
+    const surface = (modelId: string) => coreThinkingModeOptions({
+      model: byModelId.get(modelId) as CoreExecutionModelSource | undefined,
+    })
+    expect(surface('deepseek-v4-flash').map(option => option.value))
+      .toEqual(['max', 'high', 'light', 'off'])
+    expect(surface('deepseek-v4-flash').map(option => option.label))
+      .toEqual(['极高', '高', '轻', '关闭'])
+    expect(surface('glm-5.3').map(option => option.value)).toEqual(['max', 'high', 'light'])
+    // Request side: a stored grade the model never declared becomes the strongest
+    // one it does accept.
+    expect(coreThinkingPayload({
+      mode: 'xhigh',
+      model: byModelId.get('glm-5.3') as CoreExecutionModelSource,
+    }).reasoning_level).toBe('max')
+
+    // The same ladder reaches the turn path and the create answer.
+    const deepseekId = String(byModelId.get('deepseek-v4-flash')?.id || '')
+    await config.handleRpc('config.models.set_default', { model_id: deepseekId })
+    const active = await config.activeModel()
+    expect(active.model.id).toBe(deepseekId)
+    expect(active.model.reasoning_levels).toHaveLength(4)
+    expect(active.model.reasoning_off_supported).toBe(true)
+
+    const group = await config.handleRpc('config.model_group.create', { name: 'Created' })
+    const created = await config.handleRpc('config.model.create_with_provider', {
+      group_id: String(group?.group_id || ''),
+      expected_revision: group?.revision,
+      model: { model_id: 'glm-5.3-air', extra: { adapter_profile_id: 'glm' } },
+      provider: {
+        mode: 'existing',
+        provider_id: String(byModelId.get('glm-5.3')?.provider_id || ''),
+        base_url: 'https://api.deepseek.com/v1',
+      },
+    })
+    expect(created?.model).toMatchObject({
+      model_id: 'glm-5.3-air',
+      reasoning_off_supported: false,
+      reasoning_levels: [
+        { value: 'max', label: '极高' },
+        { value: 'high', label: '高' },
+        { value: 'light', label: '轻' },
+      ],
+    })
+  })
+
+  it('keeps a ladder the model itself carries without asking the host', async () => {
+    stubTauriRuntime(true)
+    // A record that carries its own declared grades — written by an import or a
+    // host version that pins them — is authoritative and needs no round trip.
+    const storage = new MemoryStandaloneStateStorage<any>({
+      providers: [],
+      models: [{
+        id: 'declaring:pinned',
+        provider_id: 'declaring',
+        model_id: 'pinned',
+        display_name: 'Pinned',
+        thinking_supported: true,
+        reasoning_off_supported: false,
+        reasoning_levels: [{ value: 'light', label: '轻' }],
+      }],
+      defaultModelId: 'declaring:pinned',
+      settings: {},
+    })
+    const config = new StandaloneConfigStore(new MemorySecureStorage(), storage)
+    await config.handleRpc('config.provider.create', {
+      name: 'Declaring',
+      api_key: 'secret',
+      base_url: 'https://declaring.invalid/v1',
+      extra: { adapter_profile_id: 'deepseek-chat' },
+    })
+
+    const listed = await config.handleRpc('config.models.list', {})
+    const model = (listed?.models as Array<Record<string, unknown>>)[0]
+    expect(model?.reasoning_levels).toEqual([{ value: 'light', label: '轻' }])
+    expect(model?.reasoning_off_supported).toBe(false)
+    expect(invokeMock).not.toHaveBeenCalled()
+    expect(coreThinkingModeOptions({ model: model as CoreExecutionModelSource })
+      .map(option => option.value)).toEqual(['light'])
+
+    const active = await config.activeModel()
+    expect(active.model.reasoning_levels).toEqual([{ value: 'light', label: '轻' }])
+    expect(invokeMock).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the product ladder when the host cannot answer', async () => {
+    // 1. No embedded runtime (a build or platform without the host command): the
+    //    catalog still loads and keeps the product ladder.
+    stubTauriRuntime(false)
+    const storage = new MemoryStandaloneStateStorage<any>()
+    const config = await presetConfig(storage)
+    const listed = await config.handleRpc('config.models.list', {})
+    const models = (listed?.models || []) as Array<Record<string, unknown>>
+    expect(models).toHaveLength(2)
+    expect(models.every(model => Array.isArray(model.reasoning_levels))).toBe(true)
+    expect(models.every(model => (model.reasoning_levels as unknown[]).length === 0)).toBe(true)
+    expect(models.every(model => model.reasoning_off_supported === true)).toBe(true)
+    expect(invokeMock).not.toHaveBeenCalled()
+    expect(coreThinkingModeOptions({ model: models[0] as CoreExecutionModelSource })
+      .map(option => option.value)).toEqual(['max', 'xhigh', 'high', 'medium', 'light', 'off'])
+
+    // 2. A runtime whose command fails (this build does not register it, or the
+    //    host errors): the model catalog must not surface the failure.
+    stubTauriRuntime(true)
+    invokeMock.mockRejectedValueOnce(new Error('command sunday_model_reasoning_declaration not found'))
+    invokeMock.mockRejectedValueOnce(new Error('command sunday_model_reasoning_declaration not found'))
+    const failed = await config.handleRpc('config.models.list', {})
+    const failedModels = (failed?.models || []) as Array<Record<string, unknown>>
+    expect(failedModels.map(model => model.reasoning_levels)).toEqual([[], []])
+    expect(failedModels.map(model => model.reasoning_off_supported)).toEqual([true, true])
+
+    // 3. An answer that is not a ladder at all is treated as no answer.
+    invokeMock.mockResolvedValueOnce({ levels: 'max', off_supported: 'yes' })
+    invokeMock.mockResolvedValueOnce({ levels: [] })
+    const malformed = await config.handleRpc('config.models.list', {})
+    const malformedModels = (malformed?.models || []) as Array<Record<string, unknown>>
+    expect(malformedModels.map(model => model.reasoning_levels)).toEqual([[], []])
+    expect(malformedModels.map(model => model.reasoning_off_supported)).toEqual([true, true])
+
+    // The turn path degrades the same way instead of failing a request.
+    invokeMock.mockRejectedValueOnce(new Error('command sunday_model_reasoning_declaration not found'))
+    const active = await config.activeModel()
+    expect(active.model.reasoning_levels).toEqual([])
+    expect(active.model.reasoning_off_supported).toBe(true)
   })
 })

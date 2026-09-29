@@ -70,6 +70,7 @@ from lamtools_core.llm.profiles import (
     normalize_stream_chunk_with_profile,
     finalize_provider_stream_state,
     reasoning_off_supported,
+    declared_reasoning_levels,
     resolve_adapter_profile_from_profiles,
     update_provider_stream_state,
 )
@@ -1038,6 +1039,27 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
     resolved: list[dict[str, Any]] = []
     for m in models:
         provider = provider_map.get(m.provider_id) or provider_map.get(m.provider) or None
+        adapter_profile = _resolve_adapter_profile(
+            LLMConfig(
+                provider_name=provider.name if provider is not None else m.provider,
+                provider_api_type=provider.api_type if provider is not None else "openai",
+                base_url=(provider.base_url if provider is not None else "").rstrip("/"),
+                api_key="",
+                model_record_id=m.id,
+                model_id=m.model_id,
+                display_name=m.display_name,
+                context_window=m.context_window,
+                max_output_tokens=m.max_output_tokens,
+                temperature=m.temperature,
+                thinking_supported=m.thinking_supported,
+                thinking_budget=m.thinking_budget,
+                reasoning_effort=m.reasoning_effort,
+                capability=m.resolved_capability,
+                provider_extra=_provider_extra(provider) if provider is not None else {},
+                model_extra=m.to_extra(),
+            ),
+            (),
+        )
         resolved.append(
             {
                 "id": m.id,
@@ -1053,29 +1075,8 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
                 "thinking_budget": m.thinking_budget,
                 "temperature": m.temperature,
                 "capability": m.resolved_capability,
-                "reasoning_off_supported": reasoning_off_supported(
-                    _resolve_adapter_profile(
-                        LLMConfig(
-                            provider_name=provider.name if provider is not None else m.provider,
-                            provider_api_type=provider.api_type if provider is not None else "openai",
-                            base_url=(provider.base_url if provider is not None else "").rstrip("/"),
-                            api_key="",
-                            model_record_id=m.id,
-                            model_id=m.model_id,
-                            display_name=m.display_name,
-                            context_window=m.context_window,
-                            max_output_tokens=m.max_output_tokens,
-                            temperature=m.temperature,
-                            thinking_supported=m.thinking_supported,
-                            thinking_budget=m.thinking_budget,
-                            reasoning_effort=m.reasoning_effort,
-                            capability=m.resolved_capability,
-                            provider_extra=_provider_extra(provider) if provider is not None else {},
-                            model_extra=m.to_extra(),
-                        ),
-                        (),
-                    )
-                ),
+                "reasoning_off_supported": reasoning_off_supported(adapter_profile),
+                "reasoning_levels": declared_reasoning_levels(adapter_profile),
                 "notes": m.notes,
                 "is_default": m.is_default,
                 "adapter_profile_id": m.adapter_profile_id,
@@ -4301,6 +4302,18 @@ async def cmd_models_show(args: argparse.Namespace) -> int:
     print(f"max_output:      {model.max_output_tokens}")
     print(f"temperature:     {model.temperature}")
     print(f"thinking:        supported={model.thinking_supported} budget={model.thinking_budget}")
+    ladder = next(
+        (
+            entry.get("reasoning_levels") or []
+            for entry in list_llm_model_configs(work_root=args.work_root or None)
+            if entry.get("id") == model.id
+        ),
+        [],
+    )
+    print(
+        "thinking_levels: "
+        + (", ".join(str(item.get("value") or "") for item in ladder) or "(product default)")
+    )
     print(f"adapter_profile: {model.adapter_profile_id or '(none)'}")
     print(f"is_default:      {model.is_default}")
     print(f"source:          {model.source_path or '(none)'}")

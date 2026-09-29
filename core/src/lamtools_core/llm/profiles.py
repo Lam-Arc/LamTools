@@ -25,6 +25,9 @@ from lamtools_core.llm import (
 )
 
 
+from lamtools_core.llm.reasoning import coerce_reasoning_level
+
+
 def strip_jsonc(text: str) -> str:
     """Remove JSONC comments while preserving strings."""
     result: list[str] = []
@@ -432,6 +435,41 @@ def reasoning_off_supported(profile: dict[str, Any]) -> bool:
 
     value = get_path(profile, "reasoning.off_supported", True)
     return value is not False
+
+
+def declared_reasoning_levels(profile: dict[str, Any]) -> list[dict[str, str]]:
+    """The reasoning ladder this model itself declares, in its own order.
+
+    ``reasoning.levels`` is written either as canonical level ids
+    (``["light", "medium", "max"]``) or as ``{"id": …, "label": …}`` objects
+    when the model uses its own names for the grades.  A model that declares
+    nothing returns ``[]`` so callers keep the product-wide ladder instead of
+    having one invented for it.
+
+    Unknown ids and an ``off`` the profile cannot honor are dropped here, so
+    no surface can offer a level the request builder would not accept.
+    """
+
+    reasoning = _extra_dict(profile.get("reasoning"))
+    declared = reasoning.get("levels")
+    if not isinstance(declared, (list, tuple)):
+        return []
+    off_supported = reasoning_off_supported(profile)
+    levels: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in declared:
+        label = ""
+        if isinstance(item, dict):
+            value = item.get("id") or item.get("value") or item.get("level")
+            label = str(item.get("label") or item.get("name") or "").strip()
+        else:
+            value = item
+        level = coerce_reasoning_level(value)
+        if level is None or level in seen or (level == "off" and not off_supported):
+            continue
+        seen.add(level)
+        levels.append({"value": level, "label": label})
+    return levels
 
 
 def _reasoning_budget(value: int, target: int, *, minimum: int = 1) -> int:
@@ -2241,6 +2279,7 @@ __all__ = [
     "build_profiled_gemini_request",
     "build_profiled_openai_request",
     "build_profiled_responses_request",
+    "declared_reasoning_levels",
     "deep_merge",
     "endpoint_path",
     "get_path",
