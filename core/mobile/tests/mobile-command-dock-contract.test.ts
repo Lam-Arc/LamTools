@@ -32,13 +32,14 @@ describe('mobile command dock host contract', () => {
     expect(shellSource).toContain('v-if="showSidebarFooter" #sidebar-footer')
     // 手机降级页脚仍是带文字的竖排行；桌面底部是账号显示 + 设置。
     expect(shellSource).toContain('class="drawer-footer-stack"')
-    expect(shellSource).toContain('data-mobile-footer-arrange @click="showArrange = true"')
+    expect(shellSource).toContain('data-mobile-footer-library @click="openLibrary"')
+    expect(shellSource).toContain('data-mobile-footer-arrange @click="openArrange"')
     expect(shellSource).toContain('class="drawer-footer-account"')
     expect(shellSource).toContain('label="长期安排"')
     expect(shellSource).toContain('@click="selectAppModeByKey(option.id)"')
     expect(shellSource).toContain('@click="emit(\'open-account\')"')
     expect(shellSource).toContain('openPlugins,')
-    expect(shellSource).toContain('openArrange() { showArrange.value = true }')
+    expect(shellSource).toContain('openArrange,')
   })
 
   it('tracks the narrow dock breakpoint and removes its listener on unmount', () => {

@@ -12,6 +12,7 @@ import type { LocalProject, LocalRepository, LocalThread } from '../storage'
 import {
   hasEmbeddedRustCore,
   browseEmbeddedProjectDirectory,
+  deleteEmbeddedProjectFile,
   listEmbeddedProjectFiles,
   readEmbeddedProjectAgents,
   readEmbeddedProjectFile,
@@ -19,6 +20,14 @@ import {
   writeEmbeddedProjectAgents,
   writeEmbeddedProjectFile,
 } from '../native/rustAgent'
+import {
+  PLAN_LIBRARY_DIRNAME,
+  type PlanLibraryScanEntry,
+  isPlanLibraryPath,
+  parsePlanDocument,
+  planPath,
+  sortPlanEntries,
+} from './planLibraryScan'
 
 export function createStandaloneProjectClient(repository: LocalRepository): CoreProjectClient {
   return {
@@ -110,6 +119,43 @@ export function createStandaloneProjectClient(repository: LocalRepository): Core
       if (hasEmbeddedRustCore()) return await writeEmbeddedProjectFile(projectId, path, content)
       const file = await repository.writeProjectFile(projectId, path, content)
       return { content: file.content, path: file.path }
+    },
+    async listPlanLibrary(projectId) {
+      if (hasEmbeddedRustCore()) {
+        const listing = await listEmbeddedProjectFiles(projectId, PLAN_LIBRARY_DIRNAME)
+        const documents = await Promise.all(
+          listing
+            .filter(entry => entry.type === 'file' && entry.name.toLowerCase().endsWith('.md'))
+            .map(async entry => {
+              const file = await readEmbeddedProjectFile(projectId, planPath(entry.name))
+              return file ? parsePlanDocument(file.content, entry.name, entry.mtime) : null
+            }),
+        )
+        return {
+          dir: PLAN_LIBRARY_DIRNAME,
+          entries: sortPlanEntries(documents.filter((entry): entry is PlanLibraryScanEntry => entry !== null)),
+        }
+      }
+      const files = await repository.listProjectFiles(projectId, PLAN_LIBRARY_DIRNAME)
+      const documents = files
+        .filter(file => file.path.toLowerCase().endsWith('.md'))
+        .map(file => parsePlanDocument(
+          file.content,
+          file.path.split('/').pop() ?? file.path,
+          Date.parse(file.updatedAt) / 1000 || 0,
+          file.path,
+        ))
+      return { dir: PLAN_LIBRARY_DIRNAME, entries: sortPlanEntries(documents) }
+    },
+    async deletePlanLibraryFile(projectId, path) {
+      if (!isPlanLibraryPath(path)) throw new Error('路径越出资料库')
+      if (!path.toLowerCase().endsWith('.md')) throw new Error('只能删除方案文档（.md）')
+      if (hasEmbeddedRustCore()) {
+        await deleteEmbeddedProjectFile(projectId, path)
+      } else {
+        await repository.deleteProjectFile(projectId, path)
+      }
+      return { deleted: path }
     },
     async readRawFile(projectId, path) {
       if (hasEmbeddedRustCore()) {

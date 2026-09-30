@@ -1,19 +1,18 @@
 """End-to-end: "开工" on a ready plan puts its goal and steps on the session checklist.
 
-The desktop turns a ready plan package into one ordinary session turn
-(``ui/src/app/LamToolsApp.vue`` → ``buildPlanExecutionPrompt``): the turn reads
-the package back with ``plan_package``, checks it against the repository, and
+The desktop turns a ready plan document into one ordinary session turn
+(``ui/src/app/LamToolsApp.vue`` → ``startPlanFromLibrary``): the turn reads the
+plan file back with ``read_file``, checks it against the repository, and
 installs the goal and checklist following the ``execute-plan`` skill.
 
-Each half already has unit coverage — the package store (``test_plan_packages``),
-the plugin tool (``test_plan_plugin``), the checklist tool (``test_default_toolbox``).
-This drives the whole path instead: the real operation catalog, the real bundled
-plugin, the real toolbox and the real kernel, with a scripted model standing in
-for the LLM — the same scaffolding ``test_core_default_agent`` uses.
+Each half already has unit coverage — the plan library scan (``test_plan_library``),
+the checklist tool (``test_default_toolbox``). This drives the whole path
+instead: the real operation catalog, the real bundled plugin, the real toolbox
+and the real kernel, with a scripted model standing in for the LLM — the same
+scaffolding ``test_core_default_agent`` uses.
 
-The contract under test (``ui/src/plans/types.ts``): a plan step is
-"field-for-field the session checklist's step shape, so execution installs it
-as-is", and the plan is a document — starting it does not rewrite it.
+The contract under test: a plan is a markdown document in the project's 「方案/」
+folder, and starting it does not rewrite it.
 """
 
 from __future__ import annotations
@@ -23,33 +22,30 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from lamtools_core.app.default_agent import (
     CoreAgentPaths,
     CoreAgentSpec,
     create_core_agent_operations,
 )
 from lamtools_core.app.durable_operations import register_durable_operations
-from lamtools_core.app.plan_operations import register_plan_operations
+from lamtools_core.app.plan_library import plan_library_root
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.runtime import InMemoryRuntimeStateStore
 from lamtools_core.runtime.arrange import ArrangeManager, InMemoryArrangeStore
 from lamtools_core.runtime.goal import GoalManager, InMemoryGoalStore
-from lamtools_core.runtime.plan_package import InMemoryPlanStore, PlanManager
 
 # --- The "开工" prompt, copied verbatim from the UI -------------------------
 # If these drift from LamToolsApp.vue the guard below fails, so the test cannot
 # keep passing against a prompt the product no longer sends.
 _VUE_PLAN_PROMPT_FRAGMENTS = (
-    "执行方案《${plan.title}》（plan_id: ${plan.plan_id}，${steps} 步）。",
-    "先用 plan_package 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案；",
+    "执行方案《${plan.title}》（${plan.path}）。",
+    "先用 read_file 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；",
     "然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。",
 )
 
-_PROMPT_HEAD = "执行方案《{title}》（plan_id: {plan_id}，{steps} 步）。"
+_PROMPT_HEAD = "执行方案《{title}》（{path}）。"
 _PROMPT_BODY = (
-    "先用 plan_package 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案；"
+    "先用 read_file 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；"
     "然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。"
 )
 
@@ -57,67 +53,65 @@ _UI_SOURCE = Path(__file__).resolve().parents[1] / "ui" / "src" / "app" / "LamTo
 
 THREAD_ID = "thread-plan-start"
 WORK_FOLDER = "work"
+PLAN_RELATIVE = "方案/导出显示进度.md"
+
+# The plan document the library shows and the turn executes — one markdown file.
+_PLAN_DOCUMENT = """---
+状态: 就绪
+摘要: 导出长报告时让用户看见进度
+---
+
+# 导出显示进度
+
+## 需求与边界
+
+- 复述：导出长报告时用户看不到进度，只能干等。
+- 完成后能看到：导出过程中能看到百分比，结束后文件完整。
+- 这次不做：
+  - 不做取消按钮。
+- 假设：
+  - 导出体积在后台可读。
+
+## 取舍
+
+- 选定：在导出循环里回报进度，因为改动面最小，不碰导出格式。
+- 被否：重写导出器 — 风险高。
+
+## 步骤
+
+1. 导出循环每处理一批就回报一次进度 — 验证：进度回调有单元测试且通过。
+2. 把进度接到界面的进度条上 — 验证：界面组件渲染断言通过。
+3. 补一条覆盖进度的回归测试 — 验证：新增测试通过。
+
+## 目标与完成判据
+
+- 目标：导出过程对用户可见。
+- 判据：
+  - 导出时能看到百分比
+  - 进度到 100% 后文件完整
+
+## 风险
+
+- 进度回调拖慢导出 — 低 — 节流上报。
+
+## 未答问题
+
+"""
 
 
 def _ui_plan_start_prompt(plan: dict[str, Any]) -> str:
-    """The text the panel hands to the session, built the way the UI builds it."""
+    """The text the library hands to the session, built the way the UI builds it."""
 
-    head = _PROMPT_HEAD.format(
-        title=plan["title"],
-        plan_id=plan["plan_id"],
-        steps=len(plan["checklist"]["steps"]),
-    )
+    head = _PROMPT_HEAD.format(title=plan["title"], path=plan["path"])
     return head + _PROMPT_BODY
 
 
-def _ready_plan_payload() -> dict[str, Any]:
-    """A settled plan: a goal with its criteria, and more than one step."""
-
-    return {
-        "title": "导出显示进度",
-        "summary": "导出长报告时让用户看见进度",
-        "status": "ready",
-        "requirement": {
-            "restatement": "导出长报告时用户看不到进度，只能干等",
-            "success_looks_like": "导出过程中能看到百分比，结束后文件完整",
-            "non_goals": ["不做取消按钮"],
-            "assumptions": ["导出体积在后台可读"],
-        },
-        "approach": {
-            "chosen": "在导出循环里回报进度",
-            "why": "改动面最小，不碰导出格式",
-            "rejected": [{"option": "重写导出器", "why": "风险高"}],
-        },
-        "checklist": {
-            "design_summary": "导出过程对用户可见",
-            "files": ["core/export.py", "core/tests/test_export.py"],
-            "steps": [
-                {
-                    "id": "s1",
-                    "description": "导出循环每处理一批就回报一次进度",
-                    "deliverables": ["进度回调"],
-                    "status": "pending",
-                },
-                {
-                    "id": "s2",
-                    "description": "把进度接到界面的进度条上",
-                    "deliverables": ["进度条组件"],
-                    "status": "pending",
-                },
-                {
-                    "id": "s3",
-                    "description": "补一条覆盖进度的回归测试",
-                    "deliverables": ["测试通过"],
-                    "status": "pending",
-                },
-            ],
-        },
-        "goal": {
-            "objective": "导出过程对用户可见",
-            "completion_criteria": ["导出时能看到百分比", "进度到 100% 后文件完整"],
-        },
-        "risks": [{"risk": "进度回调拖慢导出", "severity": "low", "mitigation": "节流上报"}],
-    }
+def _write_ready_plan(work_root: Path) -> Path:
+    folder = plan_library_root(work_root)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "导出显示进度.md"
+    path.write_text(_PLAN_DOCUMENT, encoding="utf-8", newline="\n")
+    return path
 
 
 class _Projects:
@@ -133,11 +127,11 @@ class _Projects:
 class _PlanStartLLM:
     """Scripted model that walks the execute-plan flow for one "开工" turn."""
 
-    def __init__(self, *, plan_id: str) -> None:
-        self.plan_id = plan_id
+    def __init__(self, *, plan_relative: str) -> None:
+        self.plan_relative = plan_relative
         self.requests: list[LLMRequest] = []
         self.system_prompt = ""
-        self.read_back: dict[str, Any] | None = None
+        self.plan_content_seen: str | None = None
         self.installed_checklist: dict[str, Any] | None = None
         self.completions: list[LLMRequest] = []
 
@@ -155,9 +149,9 @@ class _PlanStartLLM:
         if len(self.requests) == 1:
             self.system_prompt = str(request.messages[0].content or "")
             tool_names = {tool["function"]["name"] for tool in request.tools or []}
-            # The turn must be able to do both half of the flow: read the
-            # document and install the run state.
-            assert "plan_package" in tool_names, "the plan tool is not offered to the session"
+            # The turn must be able to do both halves of the flow: read the
+            # plan document and install the run state.
+            assert "read_file" in tool_names, "the file tools are not offered to the session"
             assert "write_checklist" in tool_names
             assert "goal" in tool_names
             yield LLMStreamEvent(
@@ -165,24 +159,41 @@ class _PlanStartLLM:
                 tool_calls=[
                     LLMToolCall(
                         id="call-read-plan",
-                        name="plan_package",
-                        arguments={"action": "get", "plan_id": self.plan_id},
+                        name="read_file",
+                        arguments={"path": self.plan_relative},
                     )
                 ],
             )
             return
 
         if len(self.requests) == 2:
-            self.read_back = _plan_from_tool_messages(request.messages)
-            assert self.read_back is not None, "plan_package returned no plan to read back"
-            goal = dict(self.read_back.get("goal") or {})
-            checklist = dict(self.read_back.get("checklist") or {})
-            # Install exactly what the package says: its goal as the checklist's
-            # goal, and its steps as-is — the type contract says they fit.
+            self.plan_content_seen = _plan_content_from_tool_messages(request.messages)
+            assert self.plan_content_seen is not None, "read_file returned no plan to read back"
+            # Install exactly what the document says: the goal from 目标与完成判据
+            # and the ordered steps from 步骤 — the document is the source.
             self.installed_checklist = {
-                "design_summary": str(goal.get("objective") or ""),
-                "files": list(checklist.get("files") or []),
-                "steps": [dict(step) for step in checklist.get("steps") or []],
+                "design_summary": "导出过程对用户可见",
+                "files": [],
+                "steps": [
+                    {
+                        "id": "s1",
+                        "description": "导出循环每处理一批就回报一次进度",
+                        "deliverables": ["进度回调有单元测试且通过"],
+                        "status": "pending",
+                    },
+                    {
+                        "id": "s2",
+                        "description": "把进度接到界面的进度条上",
+                        "deliverables": ["界面组件渲染断言通过"],
+                        "status": "pending",
+                    },
+                    {
+                        "id": "s3",
+                        "description": "补一条覆盖进度的回归测试",
+                        "deliverables": ["新增测试通过"],
+                        "status": "pending",
+                    },
+                ],
             }
             yield LLMStreamEvent(
                 kind="done",
@@ -197,8 +208,11 @@ class _PlanStartLLM:
                         name="goal",
                         arguments={
                             "action": "create",
-                            "objective": str(goal.get("objective") or ""),
-                            "completion_criteria": list(goal.get("completion_criteria") or []),
+                            "objective": "导出过程对用户可见",
+                            "completion_criteria": [
+                                "导出时能看到百分比",
+                                "进度到 100% 后文件完整",
+                            ],
                         },
                     ),
                 ],
@@ -209,22 +223,19 @@ class _PlanStartLLM:
         yield LLMStreamEvent(kind="done")
 
 
-def _plan_from_tool_messages(messages: list[Any]) -> dict[str, Any] | None:
-    """The plan the model saw in the plan_package tool result, parsed back out."""
+def _plan_content_from_tool_messages(messages: list[Any]) -> str | None:
+    """The plan document the model saw in the read_file tool result, parsed back out."""
 
     for message in reversed(messages):
         if str(getattr(message, "role", "")) != "tool":
             continue
-        if str(getattr(message, "name", "")) != "plan_package":
+        if str(getattr(message, "name", "")) != "read_file":
             continue
         text = str(getattr(message, "content", "") or "")
-        marker = "content:\n"
+        marker = "content:"
         if marker not in text:
             continue
-        body = text.split(marker, 1)[1].strip()
-        payload, _ = json.JSONDecoder().raw_decode(body)
-        plan = payload.get("plan") if isinstance(payload, dict) else None
-        return plan if isinstance(plan, dict) else None
+        return text.split(marker, 1)[1].strip()
     return None
 
 
@@ -235,7 +246,6 @@ class _Harness:
         self.work_root = tmp_path / WORK_FOLDER
         self.work_root.mkdir()
         self.state_store = InMemoryRuntimeStateStore()
-        self.plan_manager = PlanManager(InMemoryPlanStore())
         self.goal_manager = GoalManager(InMemoryGoalStore())
         self.catalog = create_core_agent_operations(
             spec=CoreAgentSpec(),
@@ -250,25 +260,9 @@ class _Harness:
             goal_manager=self.goal_manager,
             arrange_manager=ArrangeManager(InMemoryArrangeStore()),
         )
-        register_plan_operations(
-            self.catalog,
-            plan_manager=self.plan_manager,
-            project_store=_Projects(self.work_root),
-        )
 
-    async def save_ready_plan(self) -> dict[str, Any]:
-        saved = await self.catalog.execute(
-            "plan.save",
-            {**_ready_plan_payload(), "work_root": str(self.work_root)},
-            metadata={"source": "test"},
-        )
-        assert saved.status == "ok", saved.payload
-        return dict(saved.payload["plan"])
-
-    async def read_plan(self, plan_id: str) -> dict[str, Any]:
-        read = await self.catalog.execute("plan.get", {"plan_id": plan_id})
-        assert read.status == "ok", read.payload
-        return dict(read.payload["plan"])
+    def write_ready_plan(self) -> Path:
+        return _write_ready_plan(self.work_root)
 
     async def run_start_turn(self, prompt: str) -> dict[str, Any]:
         result = await self.catalog.execute(
@@ -294,62 +288,46 @@ def test_the_ui_start_prompt_still_says_what_the_test_drives():
         assert fragment in source, f'the panel no longer sends: {fragment}'
     # The flow the prompt names has to still exist for the prompt to be honest.
     assert "execute-plan" in source
-    assert "plan_package" in source
+    assert "read_file" in source
 
 
-@pytest.mark.asyncio
 async def test_starting_a_ready_plan_installs_its_goal_and_steps_and_leaves_it_alone(tmp_path):
-    llm = _PlanStartLLM(plan_id="")  # plan_id filled in after the save
+    llm = _PlanStartLLM(plan_relative=PLAN_RELATIVE)
     harness = _Harness(tmp_path, llm)
-    stored = await harness.save_ready_plan()
-    llm.plan_id = stored["plan_id"]
+    plan_path = harness.write_ready_plan()
+    document_before = plan_path.read_text(encoding="utf-8")
 
-    # A settled plan with no checkpoints and nothing written yet — the scenario
-    # the product owner says must be startable.
-    assert stored["status"] == "ready"
-    assert stored["revision"] == 1
-    assert stored["execution"] is None
-    assert stored["docs"] == []
-
-    prompt = _ui_plan_start_prompt(stored)
+    prompt = _ui_plan_start_prompt({"title": "导出显示进度", "path": PLAN_RELATIVE})
     payload = await harness.run_start_turn(prompt)
 
     # 1. The prompt really reached the session, and the model could load the flow.
-    assert stored["plan_id"] in prompt and stored["title"] in prompt
+    assert "导出显示进度" in prompt and PLAN_RELATIVE in prompt
     assert "- execute-plan:" in llm.system_prompt, "execute-plan is not offered to this session"
 
-    # 2. The package was read back through the tool, unchanged.
-    assert llm.read_back is not None
-    assert llm.read_back["plan_id"] == stored["plan_id"]
-    assert llm.read_back["goal"] == stored["goal"]
-    assert llm.read_back["checklist"]["steps"] == stored["checklist"]["steps"]
+    # 2. The plan document was read back through the file tool, content intact
+    # (the tool appends its own metadata suffix after the document's bytes).
+    assert llm.plan_content_seen is not None
+    assert llm.plan_content_seen.startswith(document_before)
 
     # 3. The session checklist now carries the plan's goal and steps, in order.
     checklist = await harness.checklist()
-    assert checklist["goal"] == stored["goal"]["objective"]
+    assert checklist["goal"] == "导出过程对用户可见"
     installed = checklist["steps"]
-    plan_steps = stored["checklist"]["steps"]
-    assert len(installed) == len(plan_steps) >= 2
-    assert [step["id"] for step in installed] == [step["id"] for step in plan_steps]
-
-    # Field-for-field, as the package types promise: same four fields, same
-    # values. Only the status is the run's own — the first step is the one being
-    # worked, a plan document is not a run.
+    assert len(installed) == 3
+    assert [step["id"] for step in installed] == ["s1", "s2", "s3"]
+    assert all(step["description"] for step in installed)
+    # Field-for-field the run's own shape: the first step is the one being
+    # worked, the rest wait — a plan document is not a run.
     expected_keys = {"id", "description", "deliverables", "status"}
     assert all(set(step) == expected_keys for step in installed)
-    assert all(set(step) == expected_keys for step in plan_steps)
-    for got, want in zip(installed, plan_steps):
-        assert got["id"] == want["id"]
-        assert got["description"] == want["description"]
-        assert got["deliverables"] == want["deliverables"]
     assert installed[0]["status"] == "in_progress"
-    assert [step["status"] for step in installed[1:]] == ["pending"] * (len(installed) - 1)
+    assert [step["status"] for step in installed[1:]] == ["pending", "pending"]
 
     # 4. The goal's completion criteria were installed too, as the run's goal.
     goals = await harness.goal_manager.list(thread_id=THREAD_ID)
     assert len(goals) == 1
-    assert goals[0].objective == stored["goal"]["objective"]
-    assert list(goals[0].completion_criteria) == stored["goal"]["completion_criteria"]
+    assert goals[0].objective == "导出过程对用户可见"
+    assert list(goals[0].completion_criteria) == ["导出时能看到百分比", "进度到 100% 后文件完整"]
 
     # 5. What the run renders as the plan part is the same checklist.
     snapshots = [
@@ -364,15 +342,13 @@ async def test_starting_a_ready_plan_installs_its_goal_and_steps_and_leaves_it_a
     assert projected["goal"] == checklist["goal"]
     assert [step["id"] for step in projected["steps"]] == [step["id"] for step in installed]
 
-    # 6. Starting is not editing: the plan keeps its status, revision and body.
-    plan_after = await harness.read_plan(stored["plan_id"])
-    assert plan_after == stored, "starting the plan rewrote the plan document"
+    # 6. Starting is not editing: the plan file keeps its bytes.
+    assert plan_path.read_text(encoding="utf-8") == document_before, "starting the plan rewrote the plan document"
 
-    # 7. No checkpoint and no file change were required to get here.
-    assert not [path for path in harness.work_root.rglob("*") if path.is_file()]
+    # 7. No file change was required to get here — only reads and run state.
     tool_results = [item for item in payload["run_items"] if item["kind"] == "tool_result"]
     assert {item["payload"].get("tool_name") for item in tool_results} <= {
-        "plan_package",
+        "read_file",
         "write_checklist",
         "goal",
     }

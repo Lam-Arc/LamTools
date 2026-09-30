@@ -1,0 +1,12 @@
+{
+  "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力和可读上下文。字段不是生产工具API。",
+  "case_id": "teach-science-03",
+  "subject": "physics",
+  "topic": "RC电路的时间常数",
+  "node": "一阶电路",
+  "circuit": {"source_v": 5, "resistance_ohm": 1000, "capacitance_uf": 100, "initial_v": 0},
+  "learner_evidence": null,
+  "language": "zh",
+  "visual_tool": false,
+  "requested_depth": "concept"
+}

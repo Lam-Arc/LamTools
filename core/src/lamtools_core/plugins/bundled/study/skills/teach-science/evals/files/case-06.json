@@ -1,0 +1,12 @@
+{
+  "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力和可读上下文。字段不是生产工具API。",
+  "case_id": "teach-science-06",
+  "subject": "chemistry",
+  "topic": "pH的定义",
+  "node": "酸碱与溶液",
+  "learner_evidence": null,
+  "language": "zh",
+  "visual_tool": false,
+  "requested_depth": "short_answer",
+  "user_constraint": "只要结论，快一点"
+}

@@ -109,7 +109,7 @@ describe('SessionSidebar sections', () => {
   })
 
   it('keeps search as a compact icon until it is focused or opened', async () => {
-    const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: groups, localFilter: true } })
     const searchWrap = wrapper.get('.sidebar-search-wrap')
     const searchToggle = wrapper.get('[data-sidebar-search-toggle]')
 
@@ -123,7 +123,7 @@ describe('SessionSidebar sections', () => {
   })
 
   it('filters project and session names locally without changing source groups', async () => {
-    const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: groups, localFilter: true } })
     const input = wrapper.get('[data-sidebar-search]')
 
     await input.setValue('  RECENT NEW ')
@@ -164,7 +164,7 @@ describe('SessionSidebar sections', () => {
       },
     ]
     const wrapper = mount(SessionSidebar, {
-      props: { projectGroups: searchGroups, pinStorageKey: 'search-collapse' },
+      props: { projectGroups: searchGroups, pinStorageKey: 'search-collapse', localFilter: true },
     })
 
     const betaFold = wrapper.get('[data-project-fold="beta"]')

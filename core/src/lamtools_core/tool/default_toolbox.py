@@ -2158,17 +2158,6 @@ class CoreToolbox:
         timeout 等装配参数）。未命中（第三方插件）返回 None 走动态导入。
         """
         name = spec.name
-        if name == "plan_package":
-            # The plan plugin declares the tool; its handler needs the operation
-            # catalog, so it is assembled here instead of imported.
-            from lamtools_core.tool.durable_tools import (
-                make_plan_package_handler,
-                plan_package_unavailable,
-            )
-
-            if operation_executor is None:
-                return plan_package_unavailable
-            return make_plan_package_handler(operation_executor, work_root=self.work_root)
         if name == "git_status":
             return make_git_status_handler(
                 self.work_root,

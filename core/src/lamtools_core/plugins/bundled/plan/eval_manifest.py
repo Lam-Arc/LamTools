@@ -1,11 +1,11 @@
 """Validate the plan plugin's eval wiring without claiming model behavior was tested.
 
 It uses the same bundled-plugin assembly and skill runtime as Core: it checks
-that the plan plugin exposes its three skills and the plan_package tool, that
-every reference a skill links exists, and that all eval fixtures parse, then
-emits one NOT_RUN record per behavioral case. A separate runner with an
-explicitly configured production model must replace those records with real
-outputs and traces; this module never asserts that a case passed.
+that the plan plugin exposes its three skills, that every reference a skill
+links exists, and that all eval fixtures parse, then emits one NOT_RUN record
+per behavioral case. A separate runner with an explicitly configured production
+model must replace those records with real outputs and traces; this module
+never asserts that a case passed.
 """
 
 from __future__ import annotations
@@ -24,9 +24,10 @@ from lamtools_core.skill_runtime import create_skill_runtime
 PLUGIN_ID = "plan"
 PLAN_MODE = "execute"
 ACTIVE_SKILLS = ("draft-plan", "refine-plan", "execute-plan")
-# What an executing turn must be able to see: the package itself, the live
-# checklist it installs, the skill loader, and file reads for the plan's docs.
-REQUIRED_TOOLS = {"plan_package", "write_checklist", "update_checklist", "load_skill", "read_file"}
+# What an executing turn must be able to see: the file tools that write and
+# edit plans in 「方案/」, the live checklist it installs, the skill loader,
+# and file reads for the plan and its documents.
+REQUIRED_TOOLS = {"write_file", "edit_file", "write_checklist", "update_checklist", "load_skill", "read_file"}
 REFERENCE_LINK = re.compile(r"\]\((references/[^)]+\.md)\)")
 
 
@@ -78,9 +79,9 @@ def build_manifest(*, work_root: Path | None = None) -> dict[str, Any]:
             if group["name"] == PLUGIN_ID
             for tool in group["tools"]
         }
-        missing_tools = sorted({"plan_package"} - tool_names)
-        if missing_tools:
-            raise RuntimeError("plan plugin does not declare: " + ", ".join(missing_tools))
+        if tool_names:
+            raise RuntimeError(
+                "the plan plugin ships skills only; unexpected tools: " + ", ".join(sorted(tool_names)))
 
         records: list[dict[str, Any]] = []
         reference_count = 0

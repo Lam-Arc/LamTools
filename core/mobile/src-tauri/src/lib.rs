@@ -1,7 +1,6 @@
 use lamtools_runtime::{
     fetch_tools::WebFetchTools,
     plan_tools::PlanTools,
-    plan_package::{revision_summaries as plan_revision_summaries, PlanStore, PLAN_STATUSES},
     hooks::{HookEngine, HookListPayload, HookRegistry, HookRunContext},
     mcp::{load_server_configs, CompositeToolRuntime, McpLoadReport, McpServerConfig, McpToolRuntime},
     memory::{dream_with_model, DreamingConfig, DreamingOutcome},
@@ -1629,108 +1628,6 @@ async fn sunday_goal_update(
         metadata,
     )?;
     Ok(goals::goal_payload(&goal))
-}
-
-/// The plan store, beside the other host databases.
-fn native_plan_store(app: &tauri::AppHandle) -> Result<PlanStore, String> {
-    let data = app.path().app_data_dir().map_err(|error| error.to_string())?;
-    PlanStore::open(&data.join("plans.db"))
-}
-
-fn plan_expected_revision(payload: &Value) -> Result<Option<i64>, String> {
-    let value = payload
-        .get("expected_revision")
-        .or_else(|| payload.get("expectedRevision"));
-    match value {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(number)) => Ok(number.as_i64()),
-        Some(Value::String(text)) if text.trim().is_empty() => Ok(None),
-        Some(Value::String(text)) => text
-            .trim()
-            .parse::<i64>()
-            .map(Some)
-            .map_err(|_| "plan expected_revision must be a number".to_owned()),
-        Some(_) => Err("plan expected_revision must be a number".to_owned()),
-    }
-}
-
-fn plan_status_filter(status: Option<String>) -> Result<String, String> {
-    let status = status.unwrap_or_default().trim().to_owned();
-    if status.is_empty() {
-        return Ok(status);
-    }
-    match PLAN_STATUSES.contains(&status.as_str()) {
-        true => Ok(status),
-        false => Err(format!("invalid plan status: {status}")),
-    }
-}
-
-/// Save a plan package. The payload *is* the package: a field it does not
-/// mention keeps its stored value, so the panel can send just what changed.
-#[tauri::command]
-async fn sunday_plan_save(app: tauri::AppHandle, payload: Value) -> Result<Value, String> {
-    let store = native_plan_store(&app)?;
-    let plan = store.save(&payload, "mobile", plan_expected_revision(&payload)?)?;
-    Ok(serde_json::json!({"plan": plan}))
-}
-
-#[tauri::command]
-async fn sunday_plan_get(app: tauri::AppHandle, plan_id: String) -> Result<Value, String> {
-    let store = native_plan_store(&app)?;
-    let plan = store
-        .plan(&plan_id)?
-        .ok_or_else(|| format!("Plan not found: {}", plan_id.trim()))?;
-    Ok(serde_json::json!({"plan": plan}))
-}
-
-#[tauri::command]
-async fn sunday_plan_list(
-    app: tauri::AppHandle,
-    project_id: Option<String>,
-    status: Option<String>,
-    include_deleted: Option<bool>,
-) -> Result<Value, String> {
-    let store = native_plan_store(&app)?;
-    let project = project_id.unwrap_or_default().trim().to_owned();
-    let status = plan_status_filter(status)?;
-    let plans = store.list(
-        (!project.is_empty()).then_some(project.as_str()),
-        (!status.is_empty()).then_some(status.as_str()),
-        include_deleted.unwrap_or(false),
-    )?;
-    Ok(serde_json::json!({"plans": plans}))
-}
-
-#[tauri::command]
-async fn sunday_plan_delete(app: tauri::AppHandle, plan_id: String) -> Result<Value, String> {
-    let store = native_plan_store(&app)?;
-    Ok(serde_json::json!({"plan": store.set_deleted(&plan_id, true)?}))
-}
-
-#[tauri::command]
-async fn sunday_plan_restore(app: tauri::AppHandle, plan_id: String) -> Result<Value, String> {
-    let store = native_plan_store(&app)?;
-    Ok(serde_json::json!({"plan": store.set_deleted(&plan_id, false)?}))
-}
-
-#[tauri::command]
-async fn sunday_plan_revert(
-    app: tauri::AppHandle,
-    plan_id: String,
-    revision: i64,
-) -> Result<Value, String> {
-    let store = native_plan_store(&app)?;
-    Ok(serde_json::json!({"plan": store.revert(&plan_id, revision, "mobile")?}))
-}
-
-#[tauri::command]
-async fn sunday_plan_revisions(app: tauri::AppHandle, plan_id: String) -> Result<Value, String> {
-    let store = native_plan_store(&app)?;
-    store
-        .plan(&plan_id)?
-        .ok_or_else(|| format!("Plan not found: {}", plan_id.trim()))?;
-    let history = store.revisions(&plan_id)?;
-    Ok(serde_json::json!({"revisions": plan_revision_summaries(&history)}))
 }
 
 /// The checkpoint store, beside the other host databases.
@@ -3386,6 +3283,8 @@ struct NativeProjectFileEntry {
     kind: &'static str,
     size: u64,
     ext: String,
+    /// Modified time in whole epoch seconds (files only; 0 for directories).
+    mtime: u64,
 }
 
 async fn list_project_directory(
@@ -3407,6 +3306,16 @@ async fn list_project_directory(
         }
         let name = entry.file_name().to_string_lossy().into_owned();
         let is_dir = metadata.is_dir();
+        let mtime = if is_dir {
+            0
+        } else {
+            metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0)
+        };
         entries.push(NativeProjectFileEntry {
             ext: if is_dir {
                 String::new()
@@ -3419,6 +3328,7 @@ async fn list_project_directory(
             name,
             kind: if is_dir { "directory" } else { "file" },
             size: if is_dir { 0 } else { metadata.len() },
+            mtime,
         });
     }
     entries.sort_by(|left, right| {
@@ -3506,6 +3416,26 @@ async fn project_file_write(
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
     Ok(NativeProjectFile { path, content })
+}
+
+/// Delete one project file. The caller scopes it further (the plan-library
+/// route only ever asks for `方案/*.md`); this command stays a plain,
+/// contained file delete so the next library-like surface reuses it.
+#[tauri::command]
+async fn project_file_delete(
+    app: tauri::AppHandle,
+    project_id: String,
+    path: String,
+) -> Result<(), String> {
+    let root = native_project_root(&app, &project_id)?;
+    let resolved = safe_project_relative_path(&root, &path, false)?;
+    match tokio::fs::remove_file(resolved).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(format!("文件不存在: {path}"))
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// Raw bytes of one project file, base64 encoded.
@@ -4246,13 +4176,6 @@ pub fn run() {
         sunday_goal_get,
         sunday_goal_list,
         sunday_goal_update,
-        sunday_plan_save,
-        sunday_plan_get,
-        sunday_plan_list,
-        sunday_plan_delete,
-        sunday_plan_restore,
-        sunday_plan_revert,
-        sunday_plan_revisions,
         sunday_artifact_list,
         sunday_artifact_revisions,
         sunday_artifact_set_deleted,
@@ -4274,6 +4197,7 @@ pub fn run() {
         sunday_artifact_open,
         lan_discovery_discover,
         project_file_list,
+        project_file_delete,
         project_directory_browse,
         project_file_read,
         project_file_read_raw,
@@ -4310,13 +4234,6 @@ pub fn run() {
         sunday_goal_get,
         sunday_goal_list,
         sunday_goal_update,
-        sunday_plan_save,
-        sunday_plan_get,
-        sunday_plan_list,
-        sunday_plan_delete,
-        sunday_plan_restore,
-        sunday_plan_revert,
-        sunday_plan_revisions,
         sunday_artifact_list,
         sunday_artifact_revisions,
         sunday_artifact_set_deleted,
@@ -4335,6 +4252,7 @@ pub fn run() {
         sunday_attachment_list,
         sunday_attachment_delete,
         project_file_list,
+        project_file_delete,
         project_directory_browse,
         project_file_read,
         project_file_read_raw,

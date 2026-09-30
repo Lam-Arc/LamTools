@@ -19,35 +19,32 @@ const groups = [
 ]
 
 describe('left rail entry arrangement', () => {
-  it('turns the rail search into the global-search entry and keeps the row open', async () => {
+  it('renders no search chrome of its own on desktop and keeps the slot row', async () => {
     const wrapper = mount(SessionSidebar, {
-      props: { projectGroups: [], hasProjects: false, searchAction: true },
+      props: { projectGroups: [], hasProjects: false },
       slots: { 'toolbar-actions': '<button data-toolbar-action>插件</button>' },
     })
 
-    // 过滤输入不再渲染；入口是与宿主全局搜索连接的动作。
+    // 桌面：搜索是宿主放在工具栏槽里的图标入口，侧栏自己不再渲染。
     expect(wrapper.find('[data-sidebar-search]').exists()).toBe(false)
-    const entry = wrapper.get('[data-sidebar-search-action]')
-    expect(entry.text()).toContain('搜索')
-    await entry.trigger('click')
-    expect(wrapper.emitted('search')).toHaveLength(1)
+    expect(wrapper.find('[data-sidebar-search-action]').exists()).toBe(false)
+    expect(wrapper.find('[data-sidebar-search-toggle]').exists()).toBe(false)
 
     // 没有项目数据时这一行仍然在（入口属于应用级导航，不是列表装饰）。
-    expect(wrapper.get('.sidebar-toolbar').text()).toContain('搜索')
     expect(wrapper.find('[data-toolbar-action]').exists()).toBe(true)
     expect(wrapper.get('.sidebar-toolbar').text()).toContain('插件')
 
-    // 默认（过滤）模式不受影响：仍渲染输入框与开关。
-    const filtering = mount(SessionSidebar, { props: { projectGroups: groups } })
+    // 手机抽屉（local-filter）仍渲染可展开的过滤输入。
+    const filtering = mount(SessionSidebar, { props: { projectGroups: groups, localFilter: true } })
     expect(filtering.find('[data-sidebar-search]').exists()).toBe(true)
     expect(filtering.find('[data-sidebar-search-action]').exists()).toBe(false)
   })
 
-  it('keeps search, plugins and the long-term schedule in the rail toolbar row', () => {
-    expect(appSource).toContain(':search-action="appRuntime.platform !== \'mobile\'"')
-    expect(appSource).toContain('@search="openSearch"')
+  it('keeps search, library, the long-term schedule and plugins in the rail toolbar row', () => {
+    // 一排同规格图标：搜索、资料库、长期安排、插件都是工具栏槽里的 RailAction。
+    expect(appSource).toContain(":local-filter=\"appRuntime.platform === 'mobile'\"")
     expect(appSource).toContain('#toolbar-actions')
-    expect(appSource).toMatch(/#toolbar-actions[\s\S]*?action-id="plugins"[\s\S]*?action-id="arrange"/)
+    expect(appSource).toMatch(/action-id="search"[\s\S]*?action-id="library"[\s\S]*?action-id="arrange"[\s\S]*?action-id="plugins"/)
     expect(appSource).toMatch(/action-id="plugins"[\s\S]*?tip-placement="below"/)
     // 顶部行向下展开提示（向上会被 drawer 顶边裁掉），底部行向上展开。
     expect(shellCss).toContain('.rail-action__tip--below { top: 100%; }')
@@ -79,7 +76,7 @@ describe('left rail entry arrangement', () => {
   })
 
   it('leaves the mobile fallback footer on its labelled rows', () => {
-    expect(appSource).toMatch(/v-if="showMobileFooterFallback" class="drawer-footer-stack"[\s\S]*?data-mobile-footer-account[\s\S]*?data-mobile-footer-arrange/)
+    expect(appSource).toMatch(/v-if="showMobileFooterFallback" class="drawer-footer-stack"[\s\S]*?data-mobile-footer-account[\s\S]*?data-mobile-footer-library[\s\S]*?data-mobile-footer-arrange/)
     expect(shellCss).toMatch(/\.drawer-footer-stack \{[\s\S]*?flex: 1 1 100%;[\s\S]*?flex-direction: column;/)
   })
 

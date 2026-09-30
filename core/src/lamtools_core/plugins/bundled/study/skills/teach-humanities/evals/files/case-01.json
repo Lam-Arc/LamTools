@@ -1,0 +1,11 @@
+{
+  "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力和可读上下文。字段不是生产工具API。",
+  "case_id": "teach-humanities-01",
+  "subject": "history",
+  "topic": "秦统一的成因",
+  "node": "秦的统一",
+  "learner_evidence": null,
+  "language": "zh",
+  "source_constraint": "可联网，但须可追溯",
+  "requested_depth": "first_lesson"
+}

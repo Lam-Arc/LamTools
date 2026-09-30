@@ -91,6 +91,10 @@
             <Puzzle :size="16" :stroke-width="1.8" aria-hidden="true" />
             <span>插件</span>
           </button>
+          <button type="button" data-mobile-library-button @click="runAction('open-library')">
+            <Library :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <span>资料库</span>
+          </button>
           <button type="button" data-mobile-arrange-button @click="runAction('open-arrange')">
             <CalendarClock :size="16" :stroke-width="1.8" aria-hidden="true" />
             <span>长期安排</span>
@@ -107,7 +111,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Blocks, CalendarClock, Check, PanelLeft, Puzzle, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
+import { Blocks, CalendarClock, Check, Library, PanelLeft, Puzzle, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
 import { gsap } from 'gsap'
 
 export interface MobileModeOption {
@@ -137,6 +141,7 @@ const emit = defineEmits<{
   'open-search': []
   'open-settings': []
   'open-plugins': []
+  'open-library': []
   'open-arrange': []
   'select-mode': [id: string]
 }>()
@@ -198,8 +203,9 @@ function selectMode(id: string): void {
   closePanel()
 }
 
-function runAction(event: 'open-search' | 'open-settings' | 'open-account' | 'open-plugins' | 'open-arrange'): void {
+function runAction(event: 'open-search' | 'open-settings' | 'open-account' | 'open-plugins' | 'open-library' | 'open-arrange'): void {
   if (event === 'open-search') emit('open-search')
+  else if (event === 'open-library') emit('open-library')
   else if (event === 'open-settings') emit('open-settings')
   else if (event === 'open-account') emit('open-account')
   else if (event === 'open-plugins') emit('open-plugins')

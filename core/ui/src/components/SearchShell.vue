@@ -1,10 +1,11 @@
 <template>
-  <Teleport to="body">
-    <div ref="overlayEl" class="settings-overlay">
-      <div ref="cardEl" class="settings-card search-card" :style="settingsThemeStyle">
-        <header class="search-head">
-          <div class="search-input-row">
-            <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
+  <div ref="searchViewEl" class="search-view" :style="settingsThemeStyle">
+    <header class="search-head">
+      <div class="search-input-row">
+        <button class="search-back" type="button" aria-label="返回会话" title="返回会话" @click="$emit('close')">
+          <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
             <input
               ref="inputEl"
               :value="query"
@@ -76,11 +77,9 @@
         <div class="search-footer" aria-hidden="true">
           <span><kbd>↑↓</kbd> 移动</span>
           <span><kbd>Enter</kbd> 选择</span>
-          <span><kbd>Esc</kbd> 关闭</span>
+          <span><kbd>Esc</kbd> 返回</span>
         </div>
-      </div>
-    </div>
-  </Teleport>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -98,6 +97,7 @@
  */
 import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
 import {
+  ArrowLeft,
   File,
   FileText,
   FolderSearch,
@@ -113,7 +113,6 @@ import {
 } from 'lucide-vue-next'
 import type { CoreSessionListItem } from '../types'
 import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 /** A host-supplied shortcut row, so each host offers only the commands it has. */
 export interface SearchCommand {
@@ -147,8 +146,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ close: [] }>()
 
-const overlayEl = ref<HTMLElement | null>(null)
-const cardEl = ref<HTMLElement | null>(null)
+const searchViewEl = ref<HTMLElement | null>(null)
 
 type SearchCategoryId = 'all' | 'tasks' | 'plugins' | 'files'
 
@@ -484,7 +482,7 @@ watch(visibleRows, () => {
   const selectable = selectableIndexes.value
   if (!selectable.includes(cursor.value)) cursor.value = selectable[0] ?? 0
   void nextTick(() => {
-    const active = cardEl.value?.querySelector('.search-row.active')
+    const active = searchViewEl.value?.querySelector('.search-row.active')
     // jsdom has no scrollIntoView; the dialog must not depend on it existing.
     if (active && typeof active.scrollIntoView === 'function') {
       active.scrollIntoView({ block: 'nearest' })
@@ -575,12 +573,6 @@ const settingsThemeStyle = computed(() => {
         }
       : {}),
   } as Record<string, string>
-})
-
-useOutsidePointerDismiss({
-  overlay: overlayEl,
-  card: cardEl,
-  onDismiss: () => emit('close'),
 })
 
 function titleOf(sessionId: string | undefined): string {
@@ -700,10 +692,14 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
 </script>
 
 <style scoped>
-.search-card {
+/* 整版界面：占住聊天区域，页面内给输入框与结果；不再是一张悬浮卡片。 */
+.search-view {
+  --text: var(--settings-card-text, var(--settings-main-text, #fff));
   display: flex;
   flex-direction: column;
-  max-height: min(560px, calc(100vh - 160px));
+  height: 100%;
+  background: var(--theme-main-background, var(--bg, #111111));
+  color: var(--text);
 }
 
 .search-head {
@@ -715,8 +711,31 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 14px var(--space-3);
+  padding: 14px var(--space-4);
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
   color: var(--settings-muted, #a7a29b);
+}
+
+.search-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--settings-muted, #a7a29b);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.search-back:hover {
+  background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-hover), transparent);
+  color: var(--settings-card-text, var(--text));
 }
 
 .search-input-row input {
@@ -752,7 +771,9 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
 .search-tabs {
   display: flex;
   gap: var(--space-1);
-  padding: 0 var(--space-3) 10px;
+  padding: 0 var(--space-4) 10px;
+  max-width: 720px;
+  margin: 0 auto;
 }
 
 .search-tabs button {
@@ -789,9 +810,15 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-1) 0 var(--space-2);
+  padding: var(--space-1) var(--space-4) var(--space-2);
   --text: var(--settings-card-text, var(--settings-main-text, #fff));
   color: var(--text);
+}
+
+.search-body > * {
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .search-status {

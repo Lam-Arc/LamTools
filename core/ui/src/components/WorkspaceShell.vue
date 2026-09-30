@@ -97,7 +97,11 @@
     </LeftSidebarShell>
 
     <!-- ===== Main Area ===== -->
-    <main class="workspace-main" :inert="rightDrawerModal || undefined">
+    <main
+      class="workspace-main"
+      :class="{ 'workspace-main--no-composer': hideComposer }"
+      :inert="rightDrawerModal || undefined"
+    >
       <div class="workspace-runtime-overlay">
         <slot name="runtime-overlay" />
       </div>

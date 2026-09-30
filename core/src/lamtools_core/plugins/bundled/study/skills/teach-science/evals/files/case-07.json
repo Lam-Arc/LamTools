@@ -1,0 +1,11 @@
+{
+  "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力和可读上下文。字段不是生产工具API。",
+  "case_id": "teach-science-07",
+  "subject": "chemistry",
+  "topic": "物质的量与浓度",
+  "node": "物质的量",
+  "learner_evidence": "两个概念反复混淆，能套公式但说不清含义",
+  "language": "zh",
+  "visual_tool": false,
+  "requested_depth": "concept"
+}

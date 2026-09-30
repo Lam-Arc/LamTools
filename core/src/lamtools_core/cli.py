@@ -1843,52 +1843,19 @@ def build_parser(
     goal_update.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
     goal_update.set_defaults(func=cmd_goal_update, thread_id="", raw=False)
 
-    plan = sub.add_parser("plan", help="Manage plan packages (方案)")
-    plan_sub = plan.add_subparsers(dest="plan_command", required=True)
-    plan_list = plan_sub.add_parser("ls", help="List plans")
-    plan_list.add_argument("--project", default="", help="Only plans of this project")
-    plan_list.add_argument("--status", default="", help="Only this status: draft/ready/executing/done/archived")
-    plan_list.add_argument("--include-deleted", action="store_true", help="Include deleted plans")
-    _add_live_connection_args(plan_list)
-    plan_list.set_defaults(func=cmd_plan_list, raw=False)
-    plan_show = plan_sub.add_parser("describe", help="Show one plan package as JSON")
-    plan_show.add_argument("plan_id", help="Plan ID")
-    _add_live_connection_args(plan_show)
-    plan_show.set_defaults(func=cmd_plan_show, raw=False)
-    plan_save = plan_sub.add_parser("save", help="Create or revise a plan (flags, --from-file, or both)")
-    plan_save.add_argument("--plan-id", default="", help="Plan ID (new plans may omit it)")
-    plan_save.add_argument("--project", default="", help="Project ID the plan belongs to")
-    plan_save.add_argument("--title", default="", help="Plan title")
-    plan_save.add_argument("--summary", default="", help="One-line summary")
-    plan_save.add_argument("--requirement", default="", help="Restate the requirement in your own words")
-    plan_save.add_argument("--approach", default="", help="The chosen approach")
-    plan_save.add_argument("--status", default="", help="draft/ready/executing/done/archived")
-    plan_save.add_argument("--expected-revision", type=int, default=0, help="Optimistic-concurrency token for a revise")
-    plan_save.add_argument("--from-file", default="", help="Load a package JSON (e.g. exported from the phone)")
-    _add_live_connection_args(plan_save)
-    plan_save.set_defaults(func=cmd_plan_save, raw=False)
-    plan_export = plan_sub.add_parser("export", help="Write a plan package to a file")
-    plan_export.add_argument("plan_id", help="Plan ID")
-    plan_export.add_argument("--out", default="", help="Destination path (default: <plan_id>.plan.json)")
-    _add_live_connection_args(plan_export)
-    plan_export.set_defaults(func=cmd_plan_export, raw=False)
-    plan_delete = plan_sub.add_parser("delete", help="Delete a plan (soft; restore brings it back)")
-    plan_delete.add_argument("plan_id", help="Plan ID")
-    _add_live_connection_args(plan_delete)
-    plan_delete.set_defaults(func=cmd_plan_delete, raw=False)
-    plan_restore = plan_sub.add_parser("restore", help="Bring a deleted plan back")
-    plan_restore.add_argument("plan_id", help="Plan ID")
-    _add_live_connection_args(plan_restore)
-    plan_restore.set_defaults(func=cmd_plan_restore, raw=False)
-    plan_revert = plan_sub.add_parser("revert", help="Restore an earlier revision as a new revision")
-    plan_revert.add_argument("plan_id", help="Plan ID")
-    plan_revert.add_argument("revision", type=int, help="Revision to restore")
-    _add_live_connection_args(plan_revert)
-    plan_revert.set_defaults(func=cmd_plan_revert, raw=False)
-    plan_revisions = plan_sub.add_parser("revisions", help="List a plan's revision history")
-    plan_revisions.add_argument("plan_id", help="Plan ID")
-    _add_live_connection_args(plan_revisions)
-    plan_revisions.set_defaults(func=cmd_plan_revisions, raw=False)
+    plan_library = sub.add_parser("plan-library", help="Manage the plan library (方案/ folder)")
+    plan_library_sub = plan_library.add_subparsers(dest="plan_library_command", required=True)
+    plan_library_list = plan_library_sub.add_parser("list", help="List the plans in a project's 方案/ folder")
+    plan_library_list.add_argument("--work-root", required=True, help="Project work root (the folder holding 方案/)")
+    plan_library_list.set_defaults(func=cmd_plan_library_list, raw=False)
+    plan_library_show = plan_library_sub.add_parser("show", help="Print one plan document")
+    plan_library_show.add_argument("name", help="Plan file name inside 方案/ (e.g. 导出显示进度.md)")
+    plan_library_show.add_argument("--work-root", required=True, help="Project work root")
+    plan_library_show.set_defaults(func=cmd_plan_library_show, raw=False)
+    plan_library_delete = plan_library_sub.add_parser("delete", help="Delete one plan document")
+    plan_library_delete.add_argument("name", help="Plan file name inside 方案/")
+    plan_library_delete.add_argument("--work-root", required=True, help="Project work root")
+    plan_library_delete.set_defaults(func=cmd_plan_library_delete, raw=False)
 
     arrange = sub.add_parser("arrange", help="Manage durable arrangements")
     arrange_sub = arrange.add_subparsers(dest="arrange_command", required=True)
@@ -3759,159 +3726,53 @@ async def cmd_goal_update(args: argparse.Namespace) -> int:
     return 0
 
 
-async def cmd_plan_list(args: argparse.Namespace) -> int:
-    payload: dict[str, Any] = {}
-    if args.project:
-        payload["project_id"] = args.project
-    if args.status:
-        payload["status"] = args.status
-    if args.include_deleted:
-        payload["include_deleted"] = True
+def _plan_library_path(work_root: str, name: str) -> Path | None:
+    """A plan file inside 方案/, refusing anything that climbs out of it."""
+    from lamtools_core.app.plan_library import plan_library_root
 
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("plan.list", payload)
-    result = await _invoke_live(args, op)
-    if args.raw:
-        _print_live_result(args, result, "")
+    root = plan_library_root(work_root).resolve()
+    target = (root / name).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return None
+    return target
+
+
+def cmd_plan_library_list(args: argparse.Namespace) -> int:
+    from lamtools_core.app.plan_library import scan_plan_library
+
+    entries = scan_plan_library(args.work_root)
+    if not entries:
+        print(f"[plan-library] no plans in {args.work_root}/方案")
         return 0
-    plans = result.get("plans", []) if isinstance(result, dict) else []
-    if not plans:
-        print("no plans")
-    for plan in plans if isinstance(plans, list) else []:
-        if not isinstance(plan, dict):
-            continue
-        steps = (plan.get("checklist") or {}).get("steps") or []
-        print(
-            f"{str(plan.get('plan_id') or '')[:24]:24s}  {str(plan.get('status') or '?'):9s}"
-            f"  {str(plan.get('source') or '?'):7s}  {len(steps):2d} step(s)"
-            f"  {str(plan.get('title') or '')[:48]}"
-        )
+    for entry in entries:
+        print(f"[plan-library] {entry['status']:9} {entry['path']}  {entry['title']}")
     return 0
 
 
-async def cmd_plan_show(args: argparse.Namespace) -> int:
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("plan.get", {"plan_id": args.plan_id})
-    result = await _invoke_live(args, op)
-    if args.raw:
-        _print_live_result(args, result, "")
-        return 0
-    plan = result.get("plan", {}) if isinstance(result, dict) else {}
-    if not isinstance(plan, dict):
+def cmd_plan_library_show(args: argparse.Namespace) -> int:
+    path = _plan_library_path(args.work_root, args.name)
+    if path is None:
+        print("error: name escapes the plan library", file=sys.stderr)
         return 1
-    print(json.dumps(plan, ensure_ascii=False, indent=2))
-    return 0
-
-
-async def cmd_plan_save(args: argparse.Namespace) -> int:
-    """Save a plan from flags, or from a package file, or both.
-
-    `--from-file` takes an exported package (the shape `plan export` writes), so
-    a plan produced on the phone can be brought in without retyping it. Flags
-    override what the file said.
-    """
-    payload: dict[str, Any] = {}
-    if args.from_file:
-        try:
-            loaded = json.loads(Path(args.from_file).read_text(encoding="utf-8-sig"))
-        except OSError as exc:
-            print(f"error: cannot read {args.from_file}: {exc}", file=sys.stderr)
-            return 1
-        except json.JSONDecodeError as exc:
-            print(f"error: {args.from_file} is not valid JSON: {exc}", file=sys.stderr)
-            return 1
-        if not isinstance(loaded, dict):
-            print(f"error: {args.from_file} must contain a plan object", file=sys.stderr)
-            return 1
-        payload.update(loaded)
-        # A package carries the host it came from; the store decides that.
-        payload.pop("source", None)
-    for key, value in (
-        ("plan_id", args.plan_id),
-        ("project_id", args.project),
-        ("title", args.title),
-        ("summary", args.summary),
-        ("status", args.status),
-    ):
-        if value:
-            payload[key] = value
-    if args.requirement:
-        requirement = dict(payload.get("requirement") or {})
-        requirement["restatement"] = args.requirement
-        payload["requirement"] = requirement
-    if args.approach:
-        approach = dict(payload.get("approach") or {})
-        approach["chosen"] = args.approach
-        payload["approach"] = approach
-    if args.expected_revision:
-        payload["expected_revision"] = args.expected_revision
-    if not payload:
-        print("error: nothing to save (pass flags or --from-file)", file=sys.stderr)
+    if not path.is_file():
+        print(f"error: plan not found: {args.name}", file=sys.stderr)
         return 1
-
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("plan.save", payload)
-    result = await _invoke_live(args, op)
-    plan = result.get("plan", {}) if isinstance(result, dict) else {}
-    print(f"[plan] {str(plan.get('plan_id') or '')} revision={plan.get('revision')} status={plan.get('status')}")
+    print(path.read_text(encoding="utf-8"), end="")
     return 0
 
 
-async def cmd_plan_delete(args: argparse.Namespace) -> int:
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("plan.delete", {"plan_id": args.plan_id})
-    await _invoke_live(args, op)
-    print(f"[plan] {args.plan_id} deleted (restore with: lamtools plan restore {args.plan_id})")
-    return 0
-
-
-async def cmd_plan_restore(args: argparse.Namespace) -> int:
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("plan.restore", {"plan_id": args.plan_id})
-    await _invoke_live(args, op)
-    print(f"[plan] {args.plan_id} restored")
-    return 0
-
-
-async def cmd_plan_revert(args: argparse.Namespace) -> int:
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("plan.revert", {"plan_id": args.plan_id, "revision": args.revision})
-    result = await _invoke_live(args, op)
-    plan = result.get("plan", {}) if isinstance(result, dict) else {}
-    print(f"[plan] {args.plan_id} reverted to revision {args.revision} as revision {plan.get('revision')}")
-    return 0
-
-
-async def cmd_plan_revisions(args: argparse.Namespace) -> int:
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("plan.revisions", {"plan_id": args.plan_id})
-    result = await _invoke_live(args, op)
-    if args.raw:
-        _print_live_result(args, result, "")
-        return 0
-    for item in result.get("revisions", []) if isinstance(result, dict) else []:
-        if isinstance(item, dict):
-            print(
-                f"r{item.get('revision'):<4} {str(item.get('status') or '?'):9s}"
-                f" {str(item.get('created_at') or '')[:19]:19s} {item.get('title') or ''}"
-            )
-    return 0
-
-
-async def cmd_plan_export(args: argparse.Namespace) -> int:
-    """Write a plan package to a file — the portable half of a plan."""
-
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("plan.get", {"plan_id": args.plan_id})
-    result = await _invoke_live(args, op)
-    plan = result.get("plan", {}) if isinstance(result, dict) else {}
-    if not isinstance(plan, dict) or not plan:
-        print("error: plan not found", file=sys.stderr)
+def cmd_plan_library_delete(args: argparse.Namespace) -> int:
+    path = _plan_library_path(args.work_root, args.name)
+    if path is None:
+        print("error: name escapes the plan library", file=sys.stderr)
         return 1
-    destination = Path(args.out) if args.out else Path(f"{args.plan_id}.plan.json")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"[plan] wrote {destination}")
+    if not path.is_file():
+        print(f"error: plan not found: {args.name}", file=sys.stderr)
+        return 1
+    path.unlink()
+    print(f"[plan-library] deleted {args.name}")
     return 0
 
 

@@ -106,15 +106,6 @@ export { default as CoreSessionTitleEditor } from './components/CoreSessionTitle
 export { default as CoreImageGenEditor } from './components/CoreImageGenEditor.vue';
 export { default as ArtifactPanel } from './components/ArtifactPanel.vue';
 export { default as RightSidebarHost } from './components/RightSidebarHost.vue';
-export { default as PlanLibraryPanel } from './plans/PlanLibraryPanel.vue';
-export type {
-  PlanPackage,
-  PlanPatch,
-  PlanRevisionSummary,
-  PlanStatus,
-  PlanStepStatus,
-  PlanDocKind,
-} from './plans/types';
 export { default as RightSidebarModule } from './components/RightSidebarModule.vue';
 export { default as RightSidebarLayoutEditor } from './components/RightSidebarLayoutEditor.vue';
 export { default as RightSidebarWidgetRenderer } from './components/RightSidebarWidgetRenderer.vue';
@@ -123,6 +114,7 @@ export { default as RightSidebarWebSearch } from './components/RightSidebarWebSe
 export { default as RightSidebarRag } from './components/RightSidebarRag.vue';
 export { default as CoreAgentsEditor } from './components/CoreAgentsEditor.vue';
 export { default as CoreArrangeManager } from './components/CoreArrangeManager.vue';
+export { default as PlanLibraryView } from './components/PlanLibraryView.vue';
 export { default as CoreGoalStrip } from './components/CoreGoalStrip.vue';
 export {
   PluginUIRegistry,
@@ -323,8 +315,9 @@ export { CORE_EXECUTION_CONTROLS_STORAGE_KEYS } from './composables';
 
 export {
   createCoreProjectClient,
-  type CoreProjectClient,
   type CoreFileEntry,
+  type CorePlanLibraryEntry,
+  type CoreProjectClient,
 } from './projects/client';
 
 export {

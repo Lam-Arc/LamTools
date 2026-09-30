@@ -1,0 +1,6 @@
+interface:
+  display_name: "Teach Science"
+  short_description: "Definition-then-gloss teaching for formal and quantitative subjects"
+  default_prompt: "Use $teach-science to teach a formal subject, with a plain-language gloss immediately after every definition."
+policy:
+  allow_implicit_invocation: false

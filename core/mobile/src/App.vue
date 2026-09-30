@@ -27,6 +27,7 @@
       @open-search="lamToolsAppRef?.openSearch()"
       @open-settings="lamToolsAppRef?.openSettings()"
       @open-plugins="lamToolsAppRef?.openPlugins()"
+      @open-library="lamToolsAppRef?.openLibrary()"
       @open-arrange="lamToolsAppRef?.openArrange()"
       @select-mode="lamToolsAppRef?.selectAppModeByKey($event)"
     />

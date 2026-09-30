@@ -1,0 +1,12 @@
+{
+  "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力和可读上下文。字段不是生产工具API。",
+  "case_id": "teach-humanities-04",
+  "subject": "history",
+  "topic": "戊戌变法失败的原因",
+  "node": "戊戌变法",
+  "learner_evidence": "正在备考，需要条目化要点",
+  "language": "zh",
+  "source_constraint": "以考纲口径为准",
+  "requested_depth": "exam_points",
+  "user_constraint": "别讲故事"
+}

@@ -17,5 +17,7 @@ export function createSwitchableProjectClient(active: () => CoreProjectClient): 
     writeFile: (...args) => active().writeFile(...args),
     readRawFile: (...args) => active().readRawFile(...args),
     browseDirectory: (...args) => active().browseDirectory(...args),
+    listPlanLibrary: (...args) => active().listPlanLibrary(...args),
+    deletePlanLibraryFile: (...args) => active().deletePlanLibraryFile(...args),
   }
 }

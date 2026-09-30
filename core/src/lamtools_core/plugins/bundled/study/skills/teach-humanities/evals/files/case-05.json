@@ -1,0 +1,11 @@
+{
+  "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力和可读上下文。字段不是生产工具API。",
+  "case_id": "teach-humanities-05",
+  "subject": "history",
+  "topic": "罗马帝国衰亡的解释分歧",
+  "node": "罗马帝国",
+  "learner_evidence": null,
+  "language": "zh",
+  "source_constraint": "可联网，须给出可追溯来源",
+  "requested_depth": "disputed_question"
+}

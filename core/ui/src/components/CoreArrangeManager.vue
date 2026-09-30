@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { X } from 'lucide-vue-next'
+import { ArrowLeft } from 'lucide-vue-next'
 import type { CoreArrangeJob } from '../durable/types'
 import { createDurableApi, type CoreDurableRequest } from '../durable/api'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{
@@ -12,8 +11,6 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ back: [] }>()
 const durable = createDurableApi(props.requestRpc)
-const arrangeOverlayEl = ref<HTMLElement | null>(null)
-const arrangeDialogEl = ref<HTMLElement | null>(null)
 
 const jobs = ref<CoreArrangeJob[]>([])
 const schedulerNotice = ref('')
@@ -451,27 +448,21 @@ function onKeydown(e: KeyboardEvent) {
 }
 onMounted(() => document.addEventListener('keydown', onKeydown))
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
-
-useOutsidePointerDismiss({
-  overlay: arrangeOverlayEl,
-  card: arrangeDialogEl,
-  onDismiss: () => emit('back'),
-})
 </script>
 
 <template>
-  <Teleport defer to=".workspace-shell">
-    <div ref="arrangeOverlayEl" class="arrange-overlay">
-      <div ref="arrangeDialogEl" class="arrange-dialog">
-        <button class="arrange-card-close" type="button" aria-label="关闭安排" title="关闭安排" @click="$emit('back')">
-          <X :size="15" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-        <main class="arrange-page" :aria-busy="loading">
-          <header class="arrange-header">
-            <div>
-              <h1 class="arrange-title">安排</h1>
-              <p class="arrange-subtitle">长期任务，按计划自动执行。</p>
-            </div>
+  <div class="arrange-view" :aria-busy="loading">
+    <main class="arrange-page">
+      <header class="arrange-header">
+        <div class="arrange-header-lead">
+          <button class="arrange-back" type="button" aria-label="返回会话" title="返回会话" @click="$emit('back')">
+            <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+          <div>
+            <h1 class="arrange-title">长期安排</h1>
+            <p class="arrange-subtitle">定时任务，按计划自动执行。</p>
+          </div>
+        </div>
       <div class="header-actions">
         <button class="primary-button" @click="openCreateForm">＋ 新建安排</button>
         <button class="quiet-button" :disabled="loading" @click="loadJobs">{{ loading ? '刷新中…' : '刷新' }}</button>
@@ -754,73 +745,43 @@ useOutsidePointerDismiss({
         </div>
       </article>
     </div>
-      </main>
-    </div>
+    </main>
   </div>
-  </Teleport>
 </template>
 
 <style scoped>
-/* ── Overlay + card ── */
-.arrange-overlay {
-  position: fixed;
-  inset: var(--titlebar-offset, 36px) 0 0 0;
-  z-index: var(--z-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
+/* ── 整版界面（占住聊天区域，不再悬浮） ── */
+.arrange-view {
+  --text: var(--theme-main-text);
+  background: var(--theme-main-background);
 }
 
-.arrange-dialog {
-  position: relative;
-  width: min(860px, calc(100vw - 48px));
-  max-height: calc(100dvh - var(--titlebar-offset, 36px) - 48px);
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--theme-main-background, var(--bg, #111111));
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.arrange-card-close {
-  position: absolute;
-  top: 12px;
-  right: 14px;
-  z-index: 5;
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 8%, transparent);
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent);
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, color 0.15s;
-}
-
-.arrange-card-close:hover {
-  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 16%, transparent);
-  color: var(--theme-main-text, #f2efeb);
-}
-
-/* ── Card content ── */
 .arrange-page {
   padding: 20px clamp(24px, 6vw, 48px) 36px;
   color: var(--theme-main-text, var(--text));
   background: transparent;
-  overflow-y: auto;
 }
 
 .arrange-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; max-width: 780px; margin: 0 auto 20px; }
+.arrange-header-lead { display: flex; align-items: flex-start; gap: var(--space-3); }
+.arrange-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-top: 6px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 10%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.arrange-back:hover {
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
+  color: var(--theme-main-text, #f2efeb);
+}
 h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: -.025em; }
 .arrange-header p, .text-button { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); }
 p { margin: 0; }
@@ -933,11 +894,6 @@ button:disabled { cursor: default; opacity: .5; }
 @media (max-width: 700px) {
   .arrange-page { padding: 24px 18px; }
   .arrange-card { padding: 14px 16px; }
-  .arrange-dialog {
-    width: 100vw;
-    max-height: calc(100dvh - var(--titlebar-offset, 36px));
-    border-radius: 0;
-  }
   .form-card { padding: 14px 16px; }
   .form-row { grid-template-columns: 1fr; }
   .title-row { align-items: flex-start; flex-direction: column; gap: 8px; }
@@ -945,6 +901,5 @@ button:disabled { cursor: default; opacity: .5; }
   .action-btn { min-height: 36px; }
   .text-button, .quiet-button { min-height: 44px; }
   .header-actions { flex-direction: column; align-items: stretch; }
-  .arrange-card-close { top: 10px; right: 10px; }
 }
 </style>

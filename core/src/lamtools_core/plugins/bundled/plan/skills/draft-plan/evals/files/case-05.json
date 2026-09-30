@@ -2,15 +2,13 @@
   "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力与可读上下文。字段不是生产工具API。",
   "case_id": "draft-plan-05",
   "language": "zh",
-  "plan_package_available": true,
-  "existing_plan": null,
+  "file_tools_available": true,
+  "plan_folder": [
+    {
+      "path": "方案/读书笔记周报.md",
+      "status": "draft"
+    }
+  ],
   "prior_turns": [],
-  "user_mentioned_technology": false,
-  "business_fields_complete": true,
-  "known_fields": [
-    "title",
-    "requirement.restatement",
-    "requirement.success_looks_like",
-    "requirement.non_goals"
-  ]
+  "user_mentioned_technology": false
 }

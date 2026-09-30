@@ -80,6 +80,27 @@ export function createStandaloneProjectRoutes(
       }
     }
 
+    // GET|DELETE /projects/{id}/plan-library — the 资料库 scan over 「方案/」,
+    // same shape the desktop's Python route answers.
+    if (segments.length === 3 && segments[2] === 'plan-library') {
+      if (request.method === 'GET') {
+        try {
+          return jsonResponse(await client.listPlanLibrary(projectId))
+        } catch (error) {
+          return projectErrorResponse(error, '资料库读取失败')
+        }
+      }
+      if (request.method === 'DELETE') {
+        const path = url.searchParams.get('path') || ''
+        if (!path) return jsonResponse({ error: '缺少 path 参数' }, 400)
+        try {
+          return jsonResponse(await client.deletePlanLibraryFile(projectId, path))
+        } catch (error) {
+          return projectErrorResponse(error, '方案删除失败')
+        }
+      }
+    }
+
     if (segments.length === 4 && segments[2] === 'files' && segments[3] === 'raw' && request.method === 'GET') {
       const path = url.searchParams.get('path') || ''
       if (!path) return jsonResponse({ error: '缺少 path 参数' }, 400)

@@ -129,6 +129,7 @@ export interface LocalRepository {
   listProjectFiles(projectId: string, path?: string): Promise<LocalProjectFile[]>
   readProjectFile(projectId: string, path: string): Promise<LocalProjectFile | null>
   writeProjectFile(projectId: string, path: string, content: string): Promise<LocalProjectFile>
+  deleteProjectFile(projectId: string, path: string): Promise<void>
   createLocalSession(projectId?: string, title?: string): Promise<LocalThread>
   updateLocalSession(threadId: string, input: { title?: string; metadata?: Record<string, unknown>; status?: string }): Promise<LocalThread>
   deleteLocalSession(threadId: string): Promise<void>
@@ -348,6 +349,14 @@ export function createLocalRepository(
     const file: LocalProjectFile = { projectId, path: normalizedPath, content, updatedAt: new Date().toISOString() }
     await update(next => { next.files[fileKey(projectId, normalizedPath)] = file })
     return clone(file)
+  }
+
+  async function deleteProjectFile(projectId: string, path: string): Promise<void> {
+    await init()
+    const normalizedPath = normalizeProjectPath(path)
+    const key = fileKey(projectId, normalizedPath)
+    if (!state.value.files[key]) throw new Error('文件不存在')
+    await update(next => { delete next.files[key] })
   }
 
   async function createLocalSession(projectId?: string, title = '新会话'): Promise<LocalThread> {
@@ -707,6 +716,7 @@ export function createLocalRepository(
     listProjectFiles,
     readProjectFile,
     writeProjectFile,
+    deleteProjectFile,
     createLocalSession,
     updateLocalSession,
     deleteLocalSession,

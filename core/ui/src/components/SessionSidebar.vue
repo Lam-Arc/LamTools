@@ -2,24 +2,12 @@
   <div class="session-sidebar-content">
     <span ref="dragImageRef" class="sidebar-drag-image" aria-hidden="true"></span>
     <div
-      v-if="hasProjectData || searchAction || $slots['toolbar-actions']"
+      v-if="hasProjectData || localFilter || $slots['toolbar-actions']"
       class="sidebar-toolbar"
-      :class="{ 'sidebar-toolbar--actions': searchAction }"
+      :class="{ 'sidebar-toolbar--actions': !localFilter }"
     >
-      <button
-        v-if="searchAction"
-        class="sidebar-search-action"
-        type="button"
-        title="搜索"
-        aria-label="搜索"
-        data-sidebar-search-action
-        @click="emit('search')"
-      >
-        <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
-        <span class="sidebar-search-action__label">搜索</span>
-      </button>
       <div
-        v-else
+        v-if="localFilter"
         class="sidebar-search-wrap"
         :class="{ 'is-expanded': searchExpanded || Boolean(normalizedQuery) }"
       >
@@ -319,10 +307,11 @@ const props = withDefaults(
     /** Include the project settings entry in the project action menu. */
     allowProjectSettings?: boolean
     /**
-     * Render the toolbar's search as an entry that emits `search` (the host
-     * opens its global search) instead of the in-list filter input.
+     * Render the toolbar's search as the in-list filter input (mobile drawer).
+     * On desktop the global search lives in the toolbar-actions rail instead,
+     * so nothing renders here.
      */
-    searchAction?: boolean
+    localFilter?: boolean
   }>(),
   {
     hasProjects: undefined,
@@ -338,7 +327,7 @@ const props = withDefaults(
     pinStorageKey: '',
     showSessionActions: false,
     allowProjectSettings: true,
-    searchAction: false,
+    localFilter: false,
   },
 )
 
@@ -352,7 +341,6 @@ const emit = defineEmits<{
   'export-session': [sessionId: string, format: SessionExportFormat]
   'project-context-menu': [projectGroupId: string]
   'rename-project': [projectGroupId: string]
-  'search': []
 }>()
 
 export type SessionExportFormat = CoreSessionExportFormat

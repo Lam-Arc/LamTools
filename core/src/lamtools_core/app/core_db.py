@@ -29,7 +29,6 @@ from lamtools_core.runtime.arrange import (
     next_arrange_run,
 )
 from lamtools_core.runtime.goal import Goal, GoalStatus, GoalStore
-from lamtools_core.runtime.plan_package import PlanPackage, PlanStatus, PlanStore, plan_from_dict
 
 from .event_store import SqlAlchemyAppEventStore
 from .persistence_host import AppPersistenceHost
@@ -214,11 +213,10 @@ class CoreGoal(CoreDbBase):
 
 
 class CorePlan(CoreDbBase):
-    """One plan package (方案) as this host stores it.
+    """A retired plan package row (方案), kept so old data stays on disk.
 
-    `package_json` is the record of truth — the same shape both hosts write and
-    read. The plain columns beside it exist to filter and order without parsing
-    JSON, and are rewritten from the package on every save.
+    Plans moved to markdown files in the project's 「方案/」 folder on
+    2026-09-30; nothing writes here any more and nothing reads it in product.
     """
 
     __tablename__ = "core_plans"
@@ -236,7 +234,7 @@ class CorePlan(CoreDbBase):
 
 
 class CorePlanRevision(CoreDbBase):
-    """Every accepted revision, so a plan can be read back and reverted to."""
+    """A retired plan revision row — kept alongside `core_plans` for old data."""
 
     __tablename__ = "core_plan_revisions"
 
@@ -1044,112 +1042,6 @@ class SqlAlchemyGoalStore:
         return await self.write_coordinator.run(write)
 
 
-class SqlAlchemyPlanStore:
-    """Plan packages on disk, with one snapshot row per accepted revision."""
-
-    def __init__(self, session_factory: async_sessionmaker, write_coordinator: SQLiteWriteCoordinator) -> None:
-        self.session_factory = session_factory
-        self.write_coordinator = write_coordinator
-
-    async def insert(self, plan: PlanPackage) -> PlanPackage:
-        async def write(db):
-            if await db.get(CorePlan, plan.id) is not None:
-                raise ValueError(f"Plan already exists: {plan.id}")
-            db.add(_plan_row(plan))
-            await db.flush()
-            return plan
-
-        return await self.write_coordinator.run(write)
-
-    async def replace(self, plan: PlanPackage, *, expected_revision: int) -> PlanPackage:
-        async def write(db):
-            result = await db.execute(
-                update(CorePlan)
-                .where(CorePlan.id == plan.id, CorePlan.revision == expected_revision)
-                .values(**_plan_values(plan))
-            )
-            if result.rowcount != 1:
-                existing = await db.get(CorePlan, plan.id)
-                if existing is None:
-                    raise LookupError(f"Plan not found: {plan.id}")
-                raise RuntimeError(f"plan revision conflict: {plan.id}")
-            return plan
-
-        return await self.write_coordinator.run(write)
-
-    async def get(self, plan_id: str) -> PlanPackage | None:
-        async with self.session_factory() as db:
-            row = await db.get(CorePlan, str(plan_id or "").strip())
-        return _plan_from_row(row) if row is not None else None
-
-    async def list(
-        self,
-        *,
-        project_id: str | None = None,
-        status: PlanStatus | None = None,
-        include_deleted: bool = False,
-    ) -> list[PlanPackage]:
-        statement = select(CorePlan)
-        if project_id is not None:
-            statement = statement.where(CorePlan.project_id == project_id)
-        if status is not None:
-            statement = statement.where(CorePlan.status == status)
-        if not include_deleted:
-            statement = statement.where(CorePlan.deleted_at.is_(None))
-        # Newest first, with the id as a tiebreaker: two plans saved inside the
-        # same clock tick still come back in a stable order.
-        statement = statement.order_by(CorePlan.created_at.desc(), CorePlan.id.desc())
-        async with self.session_factory() as db:
-            rows = (await db.execute(statement)).scalars().all()
-        return [_plan_from_row(row) for row in rows]
-
-    async def set_deleted(self, plan_id: str, *, deleted: bool) -> PlanPackage:
-        key = str(plan_id or "").strip()
-
-        async def write(db):
-            row = await db.get(CorePlan, key)
-            if row is None:
-                raise LookupError(f"Plan not found: {key}")
-            plan = _plan_from_row(row)
-            now = datetime.now(timezone.utc)
-            updated = replace(
-                plan,
-                deleted_at=now if deleted else None,
-                updated_at=now,
-            )
-            row.deleted_at = _utc_datetime(updated.deleted_at) if updated.deleted_at else None
-            row.updated_at = _utc_datetime(updated.updated_at)
-            row.package_json = _json_safe(updated.to_dict())
-            await db.flush()
-            return updated
-
-        return await self.write_coordinator.run(write)
-
-    async def record_revision(self, plan: PlanPackage) -> None:
-        row = _plan_revision_row(plan)
-
-        async def write(db):
-            existing = await db.get(CorePlanRevision, row.id)
-            if existing is None:
-                db.add(row)
-            else:
-                existing.package_json = row.package_json
-                existing.created_at = row.created_at
-            await db.flush()
-
-        await self.write_coordinator.run(write)
-
-    async def revisions(self, plan_id: str) -> list[PlanPackage]:
-        statement = (
-            select(CorePlanRevision)
-            .where(CorePlanRevision.plan_id == str(plan_id or "").strip())
-            .order_by(CorePlanRevision.revision)
-        )
-        async with self.session_factory() as db:
-            rows = (await db.execute(statement)).scalars().all()
-        return [plan_from_dict(dict(row.package_json or {})) for row in rows]
-
-
 class SqlAlchemyArrangeStore:
     def __init__(self, session_factory: async_sessionmaker, write_coordinator: SQLiteWriteCoordinator) -> None:
         self.session_factory = session_factory
@@ -1764,7 +1656,6 @@ class CoreAppDb:
     runtime_state_store: SqlAlchemyRuntimeStateStore
     handoff_context_store: SqlAlchemyHandoffContextStore
     goal_store: GoalStore
-    plan_store: PlanStore
     arrange_store: ArrangeStore
     project_store: CoreProjectStore
     sync_journal: Any
@@ -1845,7 +1736,6 @@ async def open_core_app_db(
         ),
         handoff_context_store=SqlAlchemyHandoffContextStore(session_factory, write_coordinator),
         goal_store=SqlAlchemyGoalStore(session_factory, write_coordinator),
-        plan_store=SqlAlchemyPlanStore(session_factory, write_coordinator),
         arrange_store=SqlAlchemyArrangeStore(session_factory, write_coordinator),
         project_store=CoreProjectStore(
             session_factory,
@@ -2275,52 +2165,6 @@ def _goal_from_row(row: CoreGoal) -> Goal:
         created_at=_utc_datetime(row.created_at),
         updated_at=_utc_datetime(row.updated_at),
         completed_at=_utc_datetime(row.completed_at) if row.completed_at else None,
-    )
-
-
-def _plan_row(plan: PlanPackage) -> CorePlan:
-    return CorePlan(
-        id=plan.id,
-        project_id=plan.project_id,
-        title=plan.title,
-        status=plan.status,
-        source=plan.source,
-        revision=plan.revision,
-        package_json=_json_safe(plan.to_dict()),
-        created_at=_utc_datetime(plan.created_at),
-        updated_at=_utc_datetime(plan.updated_at),
-        deleted_at=_utc_datetime(plan.deleted_at) if plan.deleted_at else None,
-    )
-
-
-def _plan_values(plan: PlanPackage) -> dict[str, Any]:
-    """The mutable columns, without the primary key."""
-
-    values = _plan_row(plan)
-    return {
-        "project_id": values.project_id,
-        "title": values.title,
-        "status": values.status,
-        "source": values.source,
-        "revision": values.revision,
-        "package_json": values.package_json,
-        "created_at": values.created_at,
-        "updated_at": values.updated_at,
-        "deleted_at": values.deleted_at,
-    }
-
-
-def _plan_from_row(row: CorePlan) -> PlanPackage:
-    return plan_from_dict(dict(row.package_json or {}))
-
-
-def _plan_revision_row(plan: PlanPackage) -> CorePlanRevision:
-    return CorePlanRevision(
-        id=f"{plan.id}@{plan.revision}",
-        plan_id=plan.id,
-        revision=plan.revision,
-        package_json=_json_safe(plan.to_dict()),
-        created_at=_utc_datetime(plan.updated_at),
     )
 
 

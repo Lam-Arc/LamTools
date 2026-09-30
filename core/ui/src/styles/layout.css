@@ -95,6 +95,20 @@
 .workspace-shell--full-bleed .workspace-main {
   padding: 0;
 }
+
+/* 整版界面（搜索/资料库/长期安排）打开时输入栏隐藏，底部留白随之收回。 */
+.workspace-main--no-composer {
+  padding-bottom: var(--space-6);
+}
+
+/* 整版界面本体：占住聊天区域的一块可滚动面板（输入栏隐藏，高度即主卡内高）。 */
+.full-area-view {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .workspace-shell--full-bleed .workspace-main > .workspace-plugin-header {
   position: absolute;
   inset: 0 0 auto;

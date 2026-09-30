@@ -113,25 +113,6 @@
     @capabilities-changed="handleCapabilitiesChanged"
     @close="closePlugins"
   />
-  <CoreArrangeManager
-    v-if="showArrange"
-    :work-root="currentWorkRoot()"
-    :request-rpc="requestConfigOperation"
-    @back="showArrange = false"
-  />
-  <SearchShell
-    v-if="showSearch"
-    :request-rpc="requestConfigOperation"
-    :sessions="sessions"
-    :on-jump="jumpToSearchedMessage"
-    :active-mode-id="activeAppModeKey"
-    :on-study-hit="jumpToStudySearchHit"
-    :theme="theme"
-    :on-open-session="openSessionFromSearch"
-    :on-open-plugins="openPluginsFromSearch"
-    :commands="searchCommands"
-    @close="showSearch = false"
-  />
   <AccountShell
     v-if="showAccount"
     :account-status="effectiveAccountStatus"
@@ -256,7 +237,7 @@
         :allow-session-delete="sidebarAllowSessionDelete"
         :allow-session-context-menu="sidebarAllowSessionContextMenu"
         :new-session-label="sidebarNewSessionLabel"
-        :search-action="appRuntime.platform !== 'mobile'"
+        :local-filter="appRuntime.platform === 'mobile'"
         @select-session="handleSidebarSession"
         @select-project="handleSidebarProject"
         @new-session="handleSidebarNewSession"
@@ -266,15 +247,41 @@
         @delete-session="deleteSession"
         @rename-session="renameSessionFromSidebar"
         @export-session="exportSession"
-        @search="openSearch"
       >
         <template #empty>
           <div class="sidebar-empty-projects" data-sidebar-empty-projects>
             <div v-if="!activePluginMode" class="sidebar-empty-backdrop" aria-hidden="true">暂无</div>
           </div>
         </template>
-        <!-- 桌面：搜索行的其余入口（插件 / 长期安排）与搜索并作一行。 -->
+        <!-- 桌面：全局搜索、资料库、长期安排、插件并作一排同规格图标。 -->
         <template v-if="appRuntime.platform !== 'mobile'" #toolbar-actions>
+          <RailAction
+            action-id="search"
+            label="搜索"
+            description="跨项目查找会话、消息、方案与文件。"
+            tip-placement="below"
+            @click="openSearch"
+          >
+            <Search :size="16" :stroke-width="1.8" />
+          </RailAction>
+          <RailAction
+            action-id="library"
+            label="资料库"
+            description="浏览「方案/」文件夹里的方案，点开读全文，就绪后可直接开工。"
+            tip-placement="below"
+            @click="openLibrary"
+          >
+            <Library :size="16" :stroke-width="1.8" />
+          </RailAction>
+          <RailAction
+            action-id="arrange"
+            label="长期安排"
+            description="查看并调整长期任务安排，让 Sunday 按计划继续执行。"
+            tip-placement="below"
+            @click="openArrange"
+          >
+            <CalendarClock :size="16" :stroke-width="1.8" />
+          </RailAction>
           <RailAction
             action-id="plugins"
             label="插件"
@@ -283,15 +290,6 @@
             @click="openPlugins"
           >
             <Puzzle :size="16" :stroke-width="1.8" />
-          </RailAction>
-          <RailAction
-            action-id="arrange"
-            label="长期安排"
-            description="查看并调整长期任务安排，让 Sunday 按计划继续执行。"
-            tip-placement="below"
-            @click="showArrange = true"
-          >
-            <CalendarClock :size="16" :stroke-width="1.8" />
           </RailAction>
         </template>
       </SessionSidebar>
@@ -315,7 +313,10 @@
         <button class="sidebar-action" type="button" data-mobile-footer-account @click="emit('open-account')">
           <span aria-hidden="true"><UserRound :size="14" :stroke-width="1.8" /></span><span>登录 / 账号</span>
         </button>
-        <button class="sidebar-action" type="button" data-mobile-footer-arrange @click="showArrange = true">
+        <button class="sidebar-action" type="button" data-mobile-footer-library @click="openLibrary">
+          <span aria-hidden="true"><Library :size="14" :stroke-width="1.8" /></span><span>资料库</span>
+        </button>
+        <button class="sidebar-action" type="button" data-mobile-footer-arrange @click="openArrange">
           <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>长期安排</span>
         </button>
       </div>
@@ -354,9 +355,43 @@
     </template>
 
     <template #main-content>
+      <!-- 整版界面：搜索 / 资料库 / 长期安排 互斥地占住聊天区域，返回或 Esc 退出。 -->
+      <template v-if="fullAreaView">
+        <CoreArrangeManager
+          v-if="showArrange"
+          class="full-area-view"
+          :work-root="currentWorkRoot()"
+          :request-rpc="requestConfigOperation"
+          @back="closeFullArea"
+        />
+        <SearchShell
+          v-else-if="showSearch"
+          class="full-area-view"
+          :request-rpc="requestConfigOperation"
+          :sessions="sessions"
+          :on-jump="jumpToSearchedMessage"
+          :active-mode-id="activeAppModeKey"
+          :on-study-hit="jumpToStudySearchHit"
+          :theme="theme"
+          :on-open-session="openSessionFromSearch"
+          :on-open-plugins="openPluginsFromSearch"
+          :commands="searchCommands"
+          @close="closeFullArea"
+        />
+        <PlanLibraryView
+          v-else-if="showLibrary"
+          class="full-area-view"
+          :client="projectClient"
+          :project-id="activeProjectId ?? selectedProjectId"
+          :refresh-signal="libraryRefreshTick"
+          @back="closeFullArea"
+          @start-plan="startPlanFromLibrary"
+          @edit-plan="openPlanFileInStage"
+        />
+      </template>
       <div
         v-if="activePluginMode"
-        v-show="!pluginUsesCoreThread"
+        v-show="!pluginUsesCoreThread && !fullAreaView"
         class="plugin-mode-surface"
       >
         <PluginModeHost
@@ -365,7 +400,7 @@
         />
       </div>
       <CoreStartPage
-        v-if="!activePluginMode && showCoreStartPage"
+        v-if="!fullAreaView && !activePluginMode && showCoreStartPage"
         :has-project="projects.length > 0"
         :recent-projects="recentCoreProjects"
         @new-project="openProjectCreate()"
@@ -373,7 +408,7 @@
         @new-session="createStartPageSession"
         @open-recent-project="openRecentProject"
       />
-      <template v-else-if="!activePluginMode || pluginUsesCoreThread">
+      <template v-else-if="!fullAreaView && (!activePluginMode || pluginUsesCoreThread)">
         <ChatOutlineNavigator
           v-if="!isEmptySession"
           ref="outlineNavigator"
@@ -650,7 +685,6 @@
         :mode="rightPanelMode"
         :artifact-signal="lastWorkbenchEvent"
         :open-artifact="openArtifactInStage"
-        :start-plan="startPlanFromPanel"
         :active-plugin-id="activePluginMode?.pluginId || null"
         :active-mode-id="activePluginMode?.id || null"
         :plugin-contributions="activePluginSidebarContributions"
@@ -716,6 +750,7 @@ import {
   LoaderCircle,
   MonitorPlay,
   MonitorSmartphone,
+  Library,
   PanelLeft,
   PanelRight,
   Plus,
@@ -783,7 +818,6 @@ import HistoryLoadingIndicator from '../components/HistoryLoadingIndicator.vue'
 import FileTreePanel from '../components/FileTreePanel.vue'
 import type { StageResource, StageKind } from '../types'
 import type { ArtifactRevision, ProjectArtifact } from '../types'
-import type { PlanPackage } from '../plans/types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreProjectPicker from '../components/CoreProjectPicker.vue'
 import CoreStartPage, { type CoreRecentProject } from '../components/CoreStartPage.vue'
@@ -798,6 +832,7 @@ import OnboardingWizard from '../components/OnboardingWizard.vue'
 import PluginsShell from '../components/PluginsShell.vue'
 import AccountShell from '../components/AccountShell.vue'
 import SearchShell, { type SearchCommand, type StudySearchHit } from '../components/SearchShell.vue'
+import PlanLibraryView, { type PlanLibraryEntry } from '../components/PlanLibraryView.vue'
 import type {
   CoreSettingsModelPayload,
   CoreSettingsProviderPayload,
@@ -1040,7 +1075,19 @@ const showSettings = ref(false)
 /** Section the settings surface opens on; the rail's account entry targets it. */
 const settingsSection = ref<string | undefined>(undefined)
 const showPlugins = ref(false)
-const showSearch = ref(false)
+// 整版界面状态：搜索 / 资料库 / 长期安排 互斥地占住聊天区域，返回或 Esc 退出；
+// 打开同一个入口相当于退出（与旧浮层的开合直觉一致）。
+const fullAreaView = ref<'library' | 'search' | 'arrange' | null>(null)
+const showSearch = computed(() => fullAreaView.value === 'search')
+const showArrange = computed(() => fullAreaView.value === 'arrange')
+const showLibrary = computed(() => fullAreaView.value === 'library')
+const libraryRefreshTick = ref(0)
+function openFullArea(view: 'library' | 'search' | 'arrange'): void {
+  fullAreaView.value = fullAreaView.value === view ? null : view
+}
+function closeFullArea(): void {
+  fullAreaView.value = null
+}
 const remoteGatewayStatus = ref<MobileControlGatewayStatus | null>(null)
 const remotePairing = ref<MobileControlPairing | null>(null)
 const remoteGatewayLoading = ref(false)
@@ -1375,7 +1422,7 @@ function handleGlobalSearchKeydown(event: KeyboardEvent): void {
   const key = event.key.toLowerCase()
   if (key === 'k') {
     event.preventDefault()
-    showSearch.value = !showSearch.value
+    openSearch()
     return
   }
   // The rest are document-level actions; inside a text field the browser's own
@@ -1401,7 +1448,6 @@ function handleGlobalSearchKeydown(event: KeyboardEvent): void {
     toggleStage()
   }
 }
-const showArrange = ref(false)
 const showOnboarding = ref(false)
 const wizardLoading = ref(false)
 const wizardError = ref('')
@@ -1507,33 +1553,41 @@ const stageOpen = ref(false)
 const stageTabs = ref<StageResource[]>([])
 const stageActiveId = ref<string | null>(null)
 const stagePaneRef = ref<StagePaneInstance | null>(null)
-const rightPanelMode = ref<'runtime' | 'files' | 'artifacts' | 'plans'>('runtime')
+const rightPanelMode = ref<'runtime' | 'files' | 'artifacts'>('runtime')
 
-function handleRightPanelMode(mode: 'runtime' | 'files' | 'artifacts' | 'plans'): void {
+function handleRightPanelMode(mode: 'runtime' | 'files' | 'artifacts'): void {
   rightPanelMode.value = mode
   if (mode === 'files' && !stageOpen.value) stageOpen.value = true
 }
 
 /**
- * "开工": turn a ready plan package into one ordinary session turn. The turn's
- * agent reads the package back with `plan_package` and installs the goal and
- * checklist itself (the execute-plan flow) — so no new RPC is introduced and the
- * same path works on both hosts.
+ * "开工"（资料库）：方案即「方案/」文件夹里的一篇文档，开工把它变成一个普通
+ * 会话回合——执行技能自己读回文件、装目标与清单，因此不需要新通道，
+ * 桌面与手机走同一条路。
  */
-async function startPlanFromPanel(plan: PlanPackage): Promise<void> {
+function startPlanFromLibrary(plan: PlanLibraryEntry): void {
   if (!activeSessionId.value) {
     showToast('error', '请先选择一个会话，再从方案开工', 6000)
     return
   }
-  composerText.value = buildPlanExecutionPrompt(plan)
-  await submitComposer()
+  closeFullArea()
+  composerText.value = buildPlanLibraryExecutionPrompt(plan)
+  void submitComposer()
 }
 
-function buildPlanExecutionPrompt(plan: PlanPackage): string {
-  const steps = plan.checklist.steps.length
+/** 资料库阅读页的"编辑"：关掉整版界面，在文件编辑页里直接打开方案文件。 */
+function openPlanFileInStage(path: string): void {
+  const name = path.split('/').pop() || path
+  const ext = name.includes('.') ? (name.split('.').pop() || 'md').toLowerCase() : 'md'
+  closeFullArea()
+  void openFileInStage({ path, name, ext })
+}
+
+/** 开工指令（资料库）：方案即「方案/」里的一篇文档，执行技能自己读回它。 */
+function buildPlanLibraryExecutionPrompt(plan: PlanLibraryEntry): string {
   return [
-    `执行方案《${plan.title}》（plan_id: ${plan.plan_id}，${steps} 步）。`,
-    '先用 plan_package 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案；',
+    `执行方案《${plan.title}》（${plan.path}）。`,
+    '先用 read_file 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；',
     '然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。',
   ].join('')
 }
@@ -1976,6 +2030,11 @@ const runtimeModeLabel = computed(() => (
 const latestStatus = workbench.turnState
 const activeTurnId = workbench.activeTurnId
 const activeTurnRunning = workbench.turnActive
+
+// 助手刚写完方案时，打开着的资料库自动刷新列表（回合收束即为信号）。
+watch(activeTurnRunning, (running, previous) => {
+  if (!running && previous && showLibrary.value) libraryRefreshTick.value += 1
+})
 const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))
 
 function stopLatestActivityMotion(): void {
@@ -2018,7 +2077,7 @@ watch([activeTurnRunning, latestActivityIndicator], syncLatestActivityMotion, { 
 const coreSessions = computed(() => sessions.value.filter((session) => !isInternalSession(session)))
 const coreProjectGroups = computed(() => buildCoreProjectGroups(projects.value, coreSessions.value))
 const showCoreStartPage = computed(() => !activePluginMode.value && !activeSessionId.value)
-const shouldHideComposer = computed(() => showCoreStartPage.value || readPluginSurface(activePluginSurface.value?.hideComposer, false))
+const shouldHideComposer = computed(() => Boolean(fullAreaView.value) || showCoreStartPage.value || readPluginSurface(activePluginSurface.value?.hideComposer, false))
 const recentCoreProjects = computed<CoreRecentProject[]>(() => {
   const projectsById = new Map(projects.value.map((project) => [project.id, project]))
   return recentProjectOpenings.value.flatMap((entry): CoreRecentProject[] => {
@@ -3807,7 +3866,15 @@ function openAccountSettings(): void {
 }
 
 function openSearch(): void {
-  showSearch.value = true
+  openFullArea('search')
+}
+
+function openLibrary(): void {
+  openFullArea('library')
+}
+
+function openArrange(): void {
+  openFullArea('arrange')
 }
 
 /** Which plugins section the next open should land on (search hits target one). */
@@ -3819,13 +3886,13 @@ function openPlugins(section?: string): void {
 }
 
 function openPluginsFromSearch(target: { section: 'plugins' | 'skills' | 'hooks'; id?: string }): void {
-  showSearch.value = false
+  closeFullArea()
   openPlugins(target.section)
 }
 
 /** A task hit with no message to land on: open it like the sidebar does. */
 function openSessionFromSearch(sessionId: string): void {
-  showSearch.value = false
+  closeFullArea()
   void selectSession(sessionId)
 }
 
@@ -4043,9 +4110,10 @@ defineExpose({
   selectAppModeByKey,
   refreshPluginModes,
   openSearch,
+  openLibrary,
   openSettings,
   openPlugins,
-  openArrange() { showArrange.value = true },
+  openArrange,
   openProject,
 })
 

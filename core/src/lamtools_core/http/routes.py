@@ -18,6 +18,7 @@ from lamtools_core.export import ConversationExportService
 from lamtools_core.export.serializers import full_to_zip, handoff_to_json, transcript_to_jsonl, transcript_to_markdown, transcript_to_text
 
 from ..app.operation_catalog import OperationCatalog
+from ..app.plan_library import PLAN_LIBRARY_DIRNAME, scan_plan_library
 from ..app.project_store import ActiveProjectSessionsError, CoreProjectStore
 from ..app.project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
 from ..provider import ProviderConfig, ProviderRegistry
@@ -636,6 +637,43 @@ def create_core_router(
         except PermissionError:
             raise HTTPException(status_code=403, detail="Permission denied")
         return {"content": content, "path": path}
+
+    # ==================================================================
+    # Plan library routes (方案/ folder — the library lists what is on disk)
+    # ==================================================================
+
+    @router.get("/projects/{project_id}/plan-library")
+    async def list_plan_library(project_id: str) -> dict[str, Any]:
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return {"dir": PLAN_LIBRARY_DIRNAME, "entries": scan_plan_library(project.work_root)}
+
+    @router.delete("/projects/{project_id}/plan-library")
+    async def delete_plan_library_file(project_id: str, path: str) -> dict[str, Any]:
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        root = Path(project.work_root).resolve()
+        library_root = (root / PLAN_LIBRARY_DIRNAME).resolve()
+        target = (root / path).resolve()
+        try:
+            target.relative_to(library_root)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path escapes the plan library")
+        if target.suffix.lower() != ".md":
+            raise HTTPException(status_code=400, detail="Only plan documents (.md) can be deleted here")
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        try:
+            target.unlink()
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        return {"deleted": path}
 
     # ==================================================================
     # Directory browser route (for FolderBrowserDialog, no project required)

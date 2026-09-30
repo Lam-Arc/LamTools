@@ -1,10 +1,10 @@
 """Validate Study skill eval wiring without claiming model behavior was tested.
 
 This module uses the same bundled-plugin assembly and SkillRegistry as Core. It
-checks mode isolation, tool declarations, relative references, and all eval
-fixtures, then emits one NOT_RUN record per behavioral case. A separate runner
-with an explicitly configured production model must replace those records with
-real outputs and traces.
+checks mode isolation, skill-group membership, tool declarations, relative
+references, and all eval fixtures, then emits one NOT_RUN record per behavioral
+case. A separate runner with an explicitly configured production model must
+replace those records with real outputs and traces.
 """
 
 from __future__ import annotations
@@ -21,8 +21,22 @@ from lamtools_core.skill_runtime import create_skill_runtime
 
 
 STUDY_MODE = "study:study"
-ACTIVE_SKILLS = ("build-map", "teach", "answer", "take-exam", "curate-notes")
+ACTIVE_SKILLS = (
+    "build-map",
+    "teach",
+    "teach-humanities",
+    "teach-science",
+    "answer",
+    "take-exam",
+    "curate-notes",
+)
 FUTURE_SKILLS: tuple[str, ...] = ()
+# A group entry owns the shared protocol and names its members; a member adds
+# subject rules and is reachable only through the entry, so it must stay out of
+# the implicit index.
+SKILL_GROUPS: dict[str, tuple[str, ...]] = {
+    "teach": ("teach-humanities", "teach-science"),
+}
 REQUIRED_TOOLS = {
     "build_knowledge_net",
     "get_knowledge_net",
@@ -73,6 +87,24 @@ def build_manifest(*, work_root: Path | None = None) -> dict[str, Any]:
             if skill is None:
                 raise RuntimeError(f"Study skill unavailable in {STUDY_MODE}: {name}")
             skill_locations[name] = skill.location
+
+        mode_index = runtime.registry.prompt_index(resolved_work_root, active_mode=STUDY_MODE)
+        for entry, members in SKILL_GROUPS.items():
+            entry_skill = runtime.registry.get(resolved_work_root, entry, active_mode=STUDY_MODE)
+            if entry_skill is None:
+                raise RuntimeError(f"Skill group entry unavailable in {STUDY_MODE}: {entry}")
+            if not entry_skill.allow_implicit_invocation or f"- {entry}:" not in mode_index:
+                raise RuntimeError(f"Skill group entry must stay implicitly invocable: {entry}")
+            for member in members:
+                member_skill = runtime.registry.get(resolved_work_root, member, active_mode=STUDY_MODE)
+                if member_skill is None:
+                    raise RuntimeError(f"Skill group member unavailable in {STUDY_MODE}: {member}")
+                if member_skill.allow_implicit_invocation:
+                    raise RuntimeError(f"Skill group member must not be implicitly invocable: {member}")
+                if f"- {member}:" in mode_index:
+                    raise RuntimeError(f"Skill group member leaked into the mode index: {member}")
+                if member not in entry_skill.content:
+                    raise RuntimeError(f"Skill group entry {entry} does not name its member: {member}")
 
         for name in FUTURE_SKILLS:
             if runtime.registry.get(resolved_work_root, name, active_mode=STUDY_MODE) is not None:
@@ -127,6 +159,7 @@ def build_manifest(*, work_root: Path | None = None) -> dict[str, Any]:
             "mode": STUDY_MODE,
             "active_skills": list(ACTIVE_SKILLS),
             "future_gated_skills": list(FUTURE_SKILLS),
+            "skill_groups": {entry: list(members) for entry, members in SKILL_GROUPS.items()},
             "tool_ids": sorted(mode_tools),
             "reference_links_checked": reference_count,
             "behavioral_claim": False,

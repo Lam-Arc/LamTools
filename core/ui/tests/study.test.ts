@@ -276,7 +276,7 @@ describe('Study mode', () => {
     expect(studySource).not.toContain('IntersectionObserver')
     expect(studySource).not.toContain('study-chat-bottom-sentinel')
     expect(studySource).not.toContain('setInterval')
-    expect(appSource).toMatch(/<div\s+v-if="activePluginMode"\s+v-show="!pluginUsesCoreThread"\s+class="plugin-mode-surface"/)
+    expect(appSource).toMatch(/<div\s+v-if="activePluginMode"\s+v-show="!pluginUsesCoreThread && !fullAreaView"\s+class="plugin-mode-surface"/)
     expect(appSource).not.toMatch(/<PluginModeHost\s+[^>]*v-show=/)
     expect(appSource).toContain('<AttachmentTray')
     expect(appSource).toContain('workbench.attachments.value = items')

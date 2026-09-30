@@ -1,8 +1,9 @@
-"""The plan plugin (方案): what it ships, and the tool doing real work.
+"""The plan plugin (方案): what it ships — skills only, files as the store.
 
-The plugin is the desktop half of "the phone authors a plan, a desktop executes
-it": the manifest declares the skills and the tool, and core assembles the tool's
-handler over the operation catalog the plan store already backs.
+Plans are markdown documents in the project's 「方案/」 folder: the agent drafts
+and edits them with its ordinary file tools, and the library reads the folder.
+The plugin's job is the three skills (the conversation-first behaviour) plus the
+shared template — no dedicated tool any more.
 """
 
 from __future__ import annotations
@@ -10,32 +11,13 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
-import pytest
-
-from lamtools_core.app.operation_catalog import OperationCatalog
-from lamtools_core.app.plan_operations import register_plan_operations
 from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore, bundled_plugins_dir
-from lamtools_core.plugins.tools import complete_plugin_tool_specs, load_plugin_tools
-from lamtools_core.runtime.plan_package import InMemoryPlanStore, PlanManager
-from lamtools_core.tool import ToolCall
-from lamtools_core.tool.default_toolbox import build_core_toolbox, bundled_core_tool_specs, core_model_tools
+from lamtools_core.plugins.tools import load_plugin_tools
 
 
 def _plan_root():
     return bundled_plugins_dir() / "plan"
-
-
-class _Projects:
-    """Just enough project store for the workspace → project lookup."""
-
-    def __init__(self, work_root) -> None:
-        self._projects = [SimpleNamespace(id="proj-1", work_root=str(work_root))]
-
-    async def list(self):
-        return list(self._projects)
 
 
 def _registry(tmp_path) -> PluginRegistry:
@@ -45,7 +27,7 @@ def _registry(tmp_path) -> PluginRegistry:
     )
 
 
-def test_the_plugin_ships_three_skills_and_one_tool(tmp_path):
+def test_the_plugin_ships_three_skills_and_no_tool(tmp_path):
     registry = _registry(tmp_path)
     plugin = next((item for item in registry.discover() if item.name == "plan"), None)
 
@@ -60,9 +42,8 @@ def test_the_plugin_ships_three_skills_and_one_tool(tmp_path):
         "execute-plan",
         "refine-plan",
     ]
-    declared = load_plugin_tools(plugin.tool_files, plugin_root=Path(plugin.root))
-    assert [tool.name for tool in declared] == ["plan_package"]
-    assert declared[0].permission == "auto_allow"
+    # Plans are files: the plugin declares no tool of its own any more.
+    assert load_plugin_tools(plugin.tool_files, plugin_root=Path(plugin.root)) == []
 
 
 def test_every_plan_skill_parses_and_declares_its_platform(tmp_path):
@@ -83,6 +64,30 @@ def test_every_plan_skill_parses_and_declares_its_platform(tmp_path):
             line for line in body.split("---")[1].splitlines() if line.startswith("description:")
         )
         assert len(description) > 120, f"{name} has a description too thin to trigger on"
+
+
+def test_the_skills_teach_the_file_contract_not_a_store():
+    """The skills must send the agent to 「方案/」 files — no store, no tool.
+
+    These greps fail if a rewrite drifts back to the retired plan_package flow:
+    the skills are the only place the behaviour lives now.
+    """
+    skills_root = _plan_root() / "skills"
+    draft = (skills_root / "draft-plan" / "SKILL.md").read_text(encoding="utf-8")
+    refine = (skills_root / "refine-plan" / "SKILL.md").read_text(encoding="utf-8")
+    execute = (skills_root / "execute-plan" / "SKILL.md").read_text(encoding="utf-8")
+
+    # The designated folder and the file contract are named.
+    assert "方案/" in draft and "方案/" in refine and "方案/" in execute
+    # Drafting writes files with the ordinary file tools; nothing mentions the
+    # retired tool or its store semantics.
+    for name, body in (("draft-plan", draft), ("refine-plan", refine)):
+        assert "plan_package" not in body, f"{name} still teaches the retired tool"
+        assert "write_file" in body or "edit_file" in body, f"{name} never says how to write"
+    assert "plan_package" not in execute, "execute-plan still teaches the retired tool"
+    assert "read_file" in execute
+    # The status machine lives in the document now; no backend refusal exists.
+    assert "状态" in draft and "就绪" in draft and "草稿" in draft
 
 
 def test_every_plan_skill_ships_a_complete_eval_suite(tmp_path):
@@ -161,100 +166,3 @@ def test_plan_eval_manifest_reports_wiring_not_behavior(tmp_path):
     ]
     assert all(case["status"] == "NOT_RUN" and case["output"] is None for case in report["cases"])
     assert all(case["fixture_files"] for case in report["cases"])
-
-
-def _toolbox(tmp_path, *, operation_executor: Any = None):
-    root = _plan_root()
-    declared = load_plugin_tools([root / "tools" / "tools.jsonc"], plugin_root=root)
-    base_specs = {spec.name: spec for spec in bundled_core_tool_specs()}
-    specs = complete_plugin_tool_specs(
-        declared,
-        plugin_name="plan",
-        plugin_root=root,
-        base_specs_by_name=base_specs,
-    )
-    assert [spec.name for spec in specs] == ["plan_package"]
-    definitions = {
-        item["function"]["name"]: item["function"] for item in core_model_tools(specs)
-    }
-    assert definitions["plan_package"]["parameters"]["additionalProperties"] is False
-    return build_core_toolbox(
-        work_root=tmp_path,
-        plugin_tool_specs=specs,
-        operation_executor=operation_executor,
-    )
-
-
-@pytest.mark.asyncio
-async def test_the_tool_saves_and_reads_a_plan_through_the_catalog(tmp_path):
-    catalog = OperationCatalog()
-    store = InMemoryPlanStore()
-    register_plan_operations(
-        catalog,
-        plan_manager=PlanManager(store),
-        project_store=_Projects(tmp_path),
-    )
-
-    async def executor(operation: str, payload: dict, meta: dict) -> Any:
-        return await catalog.execute(operation, payload, metadata=meta)
-
-    toolbox = _toolbox(tmp_path, operation_executor=executor)
-
-    saved = await toolbox.execute(
-        ToolCall(
-            id="call-1",
-            name="plan_package",
-            arguments={
-                "action": "save",
-                # No project_id: a running turn fills it in from its workspace.
-                "title": "手机做方案，电脑执行",
-                "requirement": {"restatement": "把需求变成方案"},
-                "approach": {"chosen": "共享插件"},
-            },
-        )
-    )
-    assert saved.status == "ok", saved.error
-    plan = saved.metadata["operation_payload"]["plan"]
-    assert plan["project_id"] == "proj-1"
-    assert plan["revision"] == 1
-    plan_id = plan["plan_id"]
-
-    read_back = await toolbox.execute(
-        ToolCall(id="call-2", name="plan_package", arguments={"action": "get", "plan_id": plan_id})
-    )
-    assert read_back.status == "ok", read_back.error
-    assert read_back.metadata["operation_payload"]["plan"]["title"] == "手机做方案，电脑执行"
-
-    # A save is a patch, and it spends a revision.
-    revised = await toolbox.execute(
-        ToolCall(
-            id="call-3",
-            name="plan_package",
-            arguments={"action": "save", "plan_id": plan_id, "expected_revision": 1, "summary": "一句话"},
-        )
-    )
-    assert revised.status == "ok", revised.error
-    revised_plan = revised.metadata["operation_payload"]["plan"]
-    assert revised_plan["revision"] == 2
-    assert revised_plan["summary"] == "一句话"
-    assert revised_plan["title"] == "手机做方案，电脑执行"
-
-    listed = await toolbox.execute(
-        ToolCall(id="call-4", name="plan_package", arguments={"action": "list", "project_id": "proj-1"})
-    )
-    assert [item["plan_id"] for item in listed.metadata["operation_payload"]["plans"]] == [plan_id]
-
-
-@pytest.mark.asyncio
-async def test_the_tool_says_so_when_there_is_no_catalog(tmp_path):
-    """A host without an operation catalog must not look like it can save plans."""
-
-    toolbox = _toolbox(tmp_path)
-    result = await toolbox.execute(
-        ToolCall(id="call-1", name="plan_package", arguments={"action": "list"})
-    )
-
-    assert result.status == "failed"
-    assert "no operation catalog" in (result.error or "")
-    assert "Unknown tool" not in (result.error or "")
-    assert "plan_package" not in toolbox._plugin_handler_errors

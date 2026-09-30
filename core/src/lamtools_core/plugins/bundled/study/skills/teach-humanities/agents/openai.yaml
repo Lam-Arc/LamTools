@@ -1,0 +1,6 @@
+interface:
+  display_name: "Teach Humanities"
+  short_description: "Parable-before-principle teaching for history, philosophy, literature, law, and ethics"
+  default_prompt: "Use $teach-humanities to teach an interpretive subject: tell a concrete story that carries the principle, then name the principle and map the story onto it."
+policy:
+  allow_implicit_invocation: false

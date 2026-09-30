@@ -21,6 +21,17 @@ export interface CoreFileEntry {
   ext: string
 }
 
+/** One plan document in the project's 「方案/」 folder, as the scan reports it. */
+export interface CorePlanLibraryEntry {
+  name: string
+  path: string
+  title: string
+  status: 'draft' | 'ready' | 'executing' | 'done'
+  summary: string
+  size: number
+  updated_at: number
+}
+
 export interface CoreProjectClient {
   list(): Promise<CoreProject[]>
   create(payload: CoreProjectCreatePayload): Promise<CoreProjectCreateResult>
@@ -37,6 +48,8 @@ export interface CoreProjectClient {
   writeFile(projectId: string, path: string, content: string): Promise<{ content: string; path: string }>
   readRawFile(projectId: string, path: string): Promise<TransportHttpResponse>
   browseDirectory(path?: string): Promise<{ entries: CoreFileEntry[]; path: string }>
+  listPlanLibrary(projectId: string): Promise<{ dir: string; entries: CorePlanLibraryEntry[] }>
+  deletePlanLibraryFile(projectId: string, path: string): Promise<{ deleted: string }>
 }
 
 type RawProject = {
@@ -126,6 +139,18 @@ export function createCoreProjectClient(transport: LamToolsTransport): CoreProje
     async browseDirectory(path = '') {
       const query = path ? `?path=${encodeURIComponent(path)}` : ''
       return await requestJson<{ entries: CoreFileEntry[]; path: string }>(transport, `/browse-directory${query}`)
+    },
+    async listPlanLibrary(projectId) {
+      return await requestJson<{ dir: string; entries: CorePlanLibraryEntry[] }>(
+        transport,
+        `${projectPath(projectId)}/plan-library`,
+      )
+    },
+    async deletePlanLibraryFile(projectId, path) {
+      const query = `?path=${encodeURIComponent(path)}`
+      return await requestJson<{ deleted: string }>(transport, `${projectPath(projectId)}/plan-library${query}`, {
+        method: 'DELETE',
+      })
     },
   }
 }

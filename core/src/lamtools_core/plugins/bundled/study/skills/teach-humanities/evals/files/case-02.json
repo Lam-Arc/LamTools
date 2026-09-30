@@ -1,0 +1,11 @@
+{
+  "fixture_note": "测试输入，不是当前用户真实记录；由宿主适配器按字段提供能力和可读上下文。字段不是生产工具API。",
+  "case_id": "teach-humanities-02",
+  "subject": "philosophy",
+  "topic": "柏拉图的正义观",
+  "node": "正义",
+  "learner_evidence": "能复述名词，说不清论证结构",
+  "language": "zh",
+  "source_constraint": "指定读本未在上下文中",
+  "requested_depth": "concept"
+}
