@@ -47,7 +47,7 @@ describe('PlanLibraryView', () => {
     await items[0].trigger('click')
     await settled()
     expect(client.readFile).toHaveBeenCalledWith('proj-1', '方案/导出显示进度.md')
-    expect(wrapper.get('.library-reader-body').text()).toContain('做点什么')
+    expect(wrapper.get('.library-document').text()).toContain('做点什么')
   })
 
   it('guides an empty library towards the conversation', async () => {
@@ -58,6 +58,7 @@ describe('PlanLibraryView', () => {
     const empty = wrapper.get('[data-library-empty]')
     expect(empty.text()).toContain('还没有方案')
     expect(empty.text()).toContain('在聊天里说出你的想法')
+    expect(empty.text()).toContain('Markdown')
   })
 
   it('only lets a ready plan start, and says why when it cannot', async () => {
@@ -105,7 +106,7 @@ describe('PlanLibraryView', () => {
     expect(client.listPlanLibrary).toHaveBeenCalledTimes(2)
   })
 
-  it('edits through the host and leaves with back', async () => {
+  it('edits through the host, and the desktop header band is the way back', async () => {
     const client = fakeClient()
     const wrapper = mount(PlanLibraryView, { props: { client, projectId: 'proj-1' } })
     await settled()
@@ -116,8 +117,22 @@ describe('PlanLibraryView', () => {
     await buttons[1].trigger('click')
     expect(wrapper.emitted('edit-plan')?.[0]).toEqual(['方案/导出显示进度.md'])
 
-    await wrapper.get('.library-back').trigger('click')
-    expect(wrapper.emitted('back')).toHaveLength(1)
+    // 桌面没有界面内的返回键：返回键在顶部条上（宿主渲染）。
+    expect(wrapper.find('.library-back').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('sends the refresh action to the header band on desktop', async () => {
+    const client = fakeClient()
+    const wrapper = mount(PlanLibraryView, {
+      props: { client, projectId: 'proj-1', bandActions: false },
+    })
+    await settled()
+    const refresh = wrapper.get('[data-library-refresh]')
+    await refresh.trigger('click')
+    await settled()
+    expect(client.listPlanLibrary).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
   })
 
   it('rescans when the host bumps the refresh signal', async () => {

@@ -18,12 +18,13 @@ const shellCss = read('src/styles/layout.css')
  */
 describe('full-area views (搜索 / 资料库 / 长期安排)', () => {
   it('switches one full-area view at a time and hides the composer while open', () => {
-    expect(appSource).toMatch(/const fullAreaView = ref<'library' \| 'search' \| 'arrange' \| null>\(null\)/)
-    expect(appSource).toMatch(/function openFullArea\(view: 'library' \| 'search' \| 'arrange'\): void \{[\s\S]*?fullAreaView\.value = fullAreaView\.value === view \? null : view/)
+    expect(appSource).toMatch(/type FullAreaViewId = 'library' \| 'search' \| 'arrange' \| 'settings' \| 'plugins' \| 'account'/)
+    expect(appSource).toMatch(/const fullAreaView = ref<FullAreaViewId \| null>\(null\)/)
+    expect(appSource).toMatch(/function openFullArea\(view: FullAreaViewId\): void \{[\s\S]*?fullAreaView\.value = fullAreaView\.value === view \? null : view/)
     expect(appSource).toMatch(/function closeFullArea\(\): void \{\s*fullAreaView\.value = null/)
 
     // The views mount inside #main-content, mutually exclusive by the ref.
-    expect(appSource).toMatch(/<template v-if="fullAreaView">[\s\S]*?<CoreArrangeManager[\s\S]*?v-if="showArrange"[\s\S]*?<SearchShell[\s\S]*?v-else-if="showSearch"[\s\S]*?<PlanLibraryView[\s\S]*?v-else-if="showLibrary"/)
+    expect(appSource).toMatch(/<template v-if="fullAreaView">[\s\S]*?<CoreArrangeManager[\s\S]*?v-if="showArrange"[\s\S]*?<SearchShell[\s\S]*?v-else-if="showSearch"[\s\S]*?<PlanLibraryView[\s\S]*?v-else-if="showLibrary"[\s\S]*?<CoreSettings[\s\S]*?v-else-if="showSettings"[\s\S]*?<PluginsShell[\s\S]*?v-else-if="showPlugins"[\s\S]*?<AccountShell[\s\S]*?v-else-if="showAccount"/)
     // Each one's back path closes the full-area state.
     expect(appSource).toMatch(/<CoreArrangeManager[\s\S]*?@back="closeFullArea"/)
     expect(appSource).toMatch(/<SearchShell[\s\S]*?@close="closeFullArea"/)
@@ -42,6 +43,10 @@ describe('full-area views (搜索 / 资料库 / 长期安排)', () => {
     expect(appSource).toMatch(/action-id="arrange"[\s\S]*?@click="openArrange"/)
 
     expect(appSource).toMatch(/data-mobile-footer-library @click="openLibrary"/)
+    // 设置 / 插件 / 账号也走同一族整版界面。
+    expect(appSource).toMatch(/function openSettings\(section\?: string\): void \{[\s\S]*?openFullArea\('settings'\)/)
+    expect(appSource).toMatch(/function openPlugins\(section\?: string\): void \{[\s\S]*?openFullArea\('plugins'\)/)
+    expect(appSource).toMatch(/function openAccount\(\): void \{[\s\S]*?openFullArea\('account'\)/)
     expect(topBarSource).toMatch(/data-mobile-library-button @click="runAction\('open-library'\)"/)
     expect(topBarSource).toMatch(/emit\('open-library'\)/)
   })
@@ -54,7 +59,7 @@ describe('full-area views (搜索 / 资料库 / 长期安排)', () => {
       appSource.indexOf('</template>', appSource.indexOf('#toolbar-actions')),
     )
     const railIcons = [...railSlot.matchAll(/<([A-Z][A-Za-z0-9]*)\s+:size=/g)].map(match => match[1])
-    expect(railIcons).toEqual(expect.arrayContaining(['Search', 'Library', 'CalendarClock', 'Puzzle']))
+    expect(railIcons).toEqual(expect.arrayContaining(['Search', 'BookOpen', 'CalendarClock', 'Puzzle']))
     for (const icon of railIcons) {
       expect(lucideBlock, `${icon} is rendered in the rail but not imported`).toMatch(
         new RegExp(`(^|\r?\n)  ${icon},(\r?\n|$)`),
@@ -79,9 +84,10 @@ describe('full-area views (搜索 / 资料库 / 长期安排)', () => {
     expect(appSource).toMatch(/case 'arrange':[\s\S]*?title: '长期安排'/)
 
     // 桌面不再在界面内部重复标题与返回键（手机没有顶部条，保留内部的）。
-    expect(read('src/components/CoreArrangeManager.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.arrange-back/)
+    expect(read('src/components/CoreArrangeManager.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.arrange-mobile-head/)
     expect(read('src/components/SearchShell.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.search-back/)
-    expect(read('src/components/PlanLibraryView.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.library-head-lead/)
+    expect(read('src/components/AccountShell.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.account-back/)
+    expect(read('src/components/PlanLibraryView.vue')).toContain('FullAreaActions')
   })
 
   it('no longer teleports the arrange manager or the search shell as overlays', () => {

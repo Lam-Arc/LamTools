@@ -10,20 +10,19 @@ describe('CoreArrangeManager states', () => {
       .mockResolvedValueOnce({ jobs: [] })
     const wrapper = mount(CoreArrangeManager, {
       props: { requestRpc },
-      // CoreArrangeManager defers its content into .workspace-shell via
-      // Teleport, which never exists in jsdom; stub Teleport to keep the
-      // content mounted inside the wrapper
+      // 动作组会传送到顶部条（full-area-band-actions）；jsdom 里没有那个节点，
+      // 传送目标缺失时内容自会就地渲染。
       global: { stubs: { Teleport: true } },
     })
 
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('服务不可用')
-    expect(wrapper.find('.arrange-empty').exists()).toBe(false)
+    expect(wrapper.find('[data-arrange-empty]').exists()).toBe(false)
     expect(wrapper.find('.card-list').exists()).toBe(false)
 
     await wrapper.get('[role="alert"] button').trigger('click')
     await flushPromises()
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
-    expect(wrapper.get('.arrange-empty').text()).toContain('还没有安排')
+    expect(wrapper.get('[data-arrange-empty]').text()).toContain('还没有安排')
   })
 })

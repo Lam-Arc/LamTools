@@ -1,11 +1,6 @@
 <template>
-  <Teleport to="body">
-    <div
-      ref="settingsOverlayEl"
-      class="settings-overlay"
-    >
-      <div ref="settingsCardEl" class="settings-card" :style="settingsThemeStyle">
-        <SettingsShell
+  <div class="full-area-column full-area-surface" :style="settingsThemeStyle">
+    <SettingsShell
           :sections="sections"
           title="Sunday 设置"
           :initial-section="props.section"
@@ -804,9 +799,8 @@
     </template>
   </SettingsShell>
 
-      <!-- Floating editor overlay for provider/model edit forms.
-           内联渲染即可：Teleport 目标是自身祖先（settings-card），传送等同原地；
-           且 ref+Teleport 组合在测试环境（Teleport stub）会触发渲染递归。 -->
+      <!-- 提供方 / 模型编辑表单的浮层：就在设置的版面内联呈现（整版界面里
+           没有更大的遮罩层，浮层只盖住这一栏内容）。 -->
       <div v-if="providerEditor || modelEditor || modelGroupEditor || groupMembersEditor" ref="editorOverlayEl" class="editor-overlay">
           <div ref="editorPopoverEl" class="editor-popover" :class="{ 'editor-popover--model': Boolean(modelEditor) }">
             <!-- Validation errors must render INSIDE the popover — the outer
@@ -1074,13 +1068,11 @@
           </div>
         </div>
       </div>
-    </div>
-  </Teleport>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { gsap } from 'gsap'
+import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
 import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
@@ -1121,7 +1113,6 @@ import {
   useCoreUpdateState,
   type CoreUpdateState,
 } from '../composables'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
 
@@ -2190,48 +2181,9 @@ const presets = THEME_PRESETS
 // compaction) touched after the last save, makes a close without confirmation
 // risky (Esc / backdrop click / header close all discard silently today).
 const settingsDirty = ref(false)
-const settingsOverlayEl = ref<HTMLElement | null>(null)
-const settingsCardEl = ref<HTMLElement | null>(null)
 const editorOverlayEl = ref<HTMLElement | null>(null)
 const editorPopoverEl = ref<HTMLElement | null>(null)
 
-let motionContext: gsap.Context | null = null
-let motionMedia: gsap.MatchMedia | null = null
-let settingsEnterTimeline: gsap.core.Timeline | null = null
-let editorEnterTimeline: gsap.core.Timeline | null = null
-let motionEnabled = false
-
-function animateEditorEnter() {
-  if (!motionEnabled || !motionContext || !editorPopoverEl.value) return
-  const editor = editorPopoverEl.value
-  const sections = Array.from(editor.querySelectorAll<HTMLElement>('.editor-popover-head, .editor-section, .settings-advanced, .editor-actions'))
-  editorEnterTimeline?.kill()
-  motionContext.add(() => {
-    editorEnterTimeline = gsap.timeline({ defaults: { overwrite: 'auto' } })
-    editorEnterTimeline
-      .fromTo(
-        editor,
-        { autoAlpha: 0, y: 10, scale: 0.975, transformOrigin: '50% 40%' },
-        { autoAlpha: 1, y: 0, scale: 1, duration: 0.28, ease: 'back.out(1.1)' },
-      )
-      .fromTo(
-        sections,
-        { autoAlpha: 0, y: 6 },
-        { autoAlpha: 1, y: 0, duration: 0.2, ease: 'power3.out', stagger: 0.035 },
-        '>-0.16',
-      )
-      .set([editor, ...sections], { clearProps: 'opacity,visibility,transform' })
-  })
-}
-
-watch(
-  () => Boolean(providerEditor.value || modelEditor.value || modelGroupEditor.value || groupMembersEditor.value),
-  async (isOpen) => {
-    if (!isOpen) return
-    await nextTick()
-    animateEditorEnter()
-  },
-)
 
 function markSettingsDirty() {
   settingsDirty.value = true
@@ -2242,11 +2194,6 @@ function requestCloseSettings() {
   emit('close')
 }
 
-useOutsidePointerDismiss({
-  overlay: settingsOverlayEl,
-  card: settingsCardEl,
-  onDismiss: requestCloseSettings,
-})
 useOutsidePointerDismiss({
   overlay: editorOverlayEl,
   card: editorPopoverEl,
@@ -2262,30 +2209,6 @@ function onKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   document.addEventListener('keydown', onKeydown)
-  if (settingsOverlayEl.value && settingsCardEl.value) {
-    motionContext = gsap.context(() => {}, settingsOverlayEl.value)
-    motionMedia = gsap.matchMedia()
-    motionMedia.add('(prefers-reduced-motion: no-preference)', () => {
-      motionEnabled = true
-      motionContext?.add(() => {
-        settingsEnterTimeline = gsap.timeline({ defaults: { overwrite: 'auto' } })
-        settingsEnterTimeline
-          .fromTo(
-            settingsOverlayEl.value,
-            { autoAlpha: 0 },
-            { autoAlpha: 1, duration: 0.16, ease: 'power1.out' },
-          )
-          .fromTo(
-            settingsCardEl.value,
-            { autoAlpha: 0, y: 12, scale: 0.985, transformOrigin: '50% 40%' },
-            { autoAlpha: 1, y: 0, scale: 1, duration: 0.32, ease: 'back.out(1.1)' },
-            '<',
-          )
-          .set([settingsOverlayEl.value, settingsCardEl.value], { clearProps: 'opacity,visibility,transform' })
-      })
-      return () => { motionEnabled = false }
-    })
-  }
   void fetchGlobalAgentsMd()
   void fetchGlobalMemory()
   void fetchLoadContext()
@@ -2295,14 +2218,6 @@ onMounted(() => {
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
-  settingsEnterTimeline?.kill()
-  editorEnterTimeline?.kill()
-  motionMedia?.revert()
-  motionContext?.revert()
-  settingsEnterTimeline = null
-  editorEnterTimeline = null
-  motionMedia = null
-  motionContext = null
 })
 </script>
 
@@ -4121,11 +4036,13 @@ onUnmounted(() => {
 
 .models-workspace {
   flex: 0 0 auto;
-  /* 内容再少也保持一个完整工作面；左栏因此不会被压到需要内部滚动。 */
+  /* 内容再少也保持一个完整工作面；左栏因此不会被压到需要内部滚动。
+     两栏都能收缩：就地渲染后设置栏只有主卡宽，任何固定下限都会在窄窗口
+     把右栏顶出容器、被主卡的 overflow 裁掉。 */
   min-height: 420px;
   min-width: 0;
   display: grid;
-  grid-template-columns: 260px minmax(420px, 1fr);
+  grid-template-columns: minmax(180px, 244px) minmax(0, 1fr);
   align-items: stretch;
   gap: 0;
   overflow: hidden;
@@ -4458,7 +4375,9 @@ onUnmounted(() => {
   flex: 0 1 auto;
 }
 
-@media (max-width: 959px) {
+/* 就地渲染后设置页只剩主卡宽度（窗口 - 左栏 - 设置导航），两栏工作台在
+   ~1180 以下就放不下 564px 的下限；低于它改为单栏，而不是被右边缘裁掉。 */
+@media (max-width: 1180px) {
   :deep(.settings-main--models .settings-content) {
     width: 100%;
   }

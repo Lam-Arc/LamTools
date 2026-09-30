@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowLeft } from 'lucide-vue-next'
+import { ArrowLeft, CalendarClock } from 'lucide-vue-next'
 import type { CoreArrangeJob } from '../durable/types'
 import { createDurableApi, type CoreDurableRequest } from '../durable/api'
+import FullAreaActions from './FullAreaActions.vue'
 import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{
   workRoot?: string
   requestRpc: CoreDurableRequest
+  /** Desktop sends the actions into the header band; phones render them in place. */
+  bandActions?: boolean
 }>()
 const emit = defineEmits<{ back: [] }>()
 const durable = createDurableApi(props.requestRpc)
@@ -452,22 +455,21 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 
 <template>
   <div class="arrange-view" :aria-busy="loading">
-    <main class="arrange-page">
-      <header class="arrange-header">
-        <div class="arrange-header-lead">
-          <button class="arrange-back" type="button" aria-label="返回会话" title="返回会话" @click="$emit('back')">
-            <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
-          </button>
-          <div>
-            <h1 class="arrange-title">长期安排</h1>
-            <p class="arrange-subtitle">定时任务，按计划自动执行。</p>
-          </div>
+    <main class="arrange-page full-area-column">
+      <div class="arrange-mobile-head">
+        <button class="arrange-back" type="button" aria-label="返回会话" title="返回会话" @click="$emit('back')">
+          <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <div>
+          <h1 class="arrange-title">长期安排</h1>
+          <p class="arrange-subtitle">定时任务，按计划自动执行。</p>
         </div>
-      <div class="header-actions">
-        <button class="primary-button" @click="openCreateForm">＋ 新建安排</button>
-        <button class="quiet-button" :disabled="loading" @click="loadJobs">{{ loading ? '刷新中…' : '刷新' }}</button>
       </div>
-    </header>
+
+      <FullAreaActions :to-band="bandActions">
+        <button class="primary-button" @click="openCreateForm">新建安排</button>
+        <button class="quiet-button" :disabled="loading" @click="loadJobs">{{ loading ? '刷新中…' : '刷新' }}</button>
+      </FullAreaActions>
 
     <p v-if="schedulerNotice" class="arrange-subtitle" role="status">{{ schedulerNotice }}</p>
 
@@ -584,8 +586,17 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
       </div>
     </div>
 
-    <div v-if="!loading && !showForm && !error && activeJobs.length === 0 && jobs.length === 0" class="arrange-empty">
-      还没有安排。点击上方按钮新建，或直接告诉 Agent「安排一下……」。
+    <div
+      v-if="!loading && !showForm && !error && activeJobs.length === 0 && jobs.length === 0"
+      class="full-area-empty"
+      data-arrange-empty
+    >
+      <span class="full-area-empty-icon" aria-hidden="true"><CalendarClock :size="18" :stroke-width="1.8" /></span>
+      <h2 class="full-area-empty-title">还没有安排</h2>
+      <p class="full-area-empty-hint">
+        安排是一句交给 Agent 的长期指令：到点它会自己开工，跑完把结果留在会话里。
+        点右上角「新建安排」，或直接在聊天里说「每天九点把 XX 做一遍」。
+      </p>
     </div>
 
     <!-- terminal toggle -->
@@ -750,58 +761,117 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 </template>
 
 <style scoped>
-/* ── 整版界面（占住聊天区域，不再悬浮） ── */
+/* ── 整版界面：内容落在与会话同一条轴线上（full-area-column） ── */
 .arrange-view {
   --text: var(--theme-main-text);
-  background: var(--theme-main-background);
 }
 
 .arrange-page {
-  padding: 20px clamp(24px, 6vw, 48px) 36px;
-  color: var(--theme-main-text, var(--text));
-  background: transparent;
+  padding: var(--space-4) 0 var(--space-5);
 }
 
-.arrange-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; max-width: 780px; margin: 0 auto 20px; }
-.arrange-header-lead { display: flex; align-items: flex-start; gap: var(--space-3); }
+/* 手机没有顶部条，标题与返回键留在版面里；桌面由顶部条承担。 */
+.arrange-mobile-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
 .arrange-back {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  margin-top: 6px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 10%, transparent);
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin-top: 2px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent);
+  color: color-mix(in srgb, var(--text) 68%, transparent);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
+
 .arrange-back:hover {
-  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
-  color: var(--theme-main-text, #f2efeb);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
 }
-h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: -.025em; }
-.arrange-header p, .text-button { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); }
+
+h1 { margin: 0 0 2px; font-size: 17px; font-weight: 700; letter-spacing: 0; }
+.arrange-subtitle { font-size: 12px; }
+.text-button { color: color-mix(in srgb, var(--text) 62%, transparent); }
 p { margin: 0; }
-button { font: inherit; } .text-button, .quiet-button { border: 0; background: transparent; color: inherit; cursor: pointer; }
-.text-button { padding: 0; } .quiet-button { padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--theme-main-text, var(--text)) 10%, transparent); border-radius: var(--radius-sm); }
-.primary-button { padding: 7px 16px; border: 0; border-radius: var(--radius-sm); background: var(--theme-control-background, var(--blue)); color: var(--theme-control-text, #fff); cursor: pointer; font-weight: 600; }
-.primary-button:disabled { opacity: .5; cursor: default; }
-.header-actions { display: flex; gap: 8px; align-items: center; }
+button { font: inherit; }
+.text-button, .quiet-button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+.text-button { padding: 0; }
 
-.arrange-loading, .arrange-empty { max-width: 780px; margin-inline: auto; padding: 28px 0; color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); }
-.arrange-error { max-width: 780px; margin-inline: auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; color: var(--red); }
-.arrange-error button { flex: none; min-height: 36px; padding: 6px 11px; border: 1px solid currentColor; border-radius: var(--radius-sm); background: transparent; color: inherit; cursor: pointer; }
+/* 按钮：与资料库同一套（一种配方，两种语气）。 */
+.quiet-button, .primary-button {
+  min-height: 28px;
+  padding: 5px var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
 
-/* ---- form ---- */
-.form-card { max-width: 780px; margin: 0 auto 28px; padding: 20px; border: 1px solid color-mix(in srgb, var(--blue) 36%, transparent); border-radius: var(--radius); background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, var(--text)) 5%, transparent)); }
-.form-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.form-body { display: flex; flex-direction: column; gap: 14px; }
+.quiet-button {
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+}
+
+.quiet-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
+}
+
+.primary-button {
+  border: 1px solid transparent;
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
+  font-weight: 600;
+}
+
+.primary-button:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.primary-button:disabled, .quiet-button:disabled { opacity: .45; cursor: default; }
+
+.arrange-loading { padding: var(--space-4) 0; font-size: 13px; color: color-mix(in srgb, var(--text) 62%, transparent); }
+.arrange-error { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) 0; color: var(--red); font-size: 13px; }
+.arrange-error button { flex: none; min-height: 28px; padding: 5px var(--space-3); border: 1px solid currentColor; border-radius: var(--radius-sm); background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 12.5px; }
+
+/* ---- 新建 / 编辑表单 ---- */
+.form-card {
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--text) 12%, transparent));
+  border-radius: var(--radius);
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--text) 4%, transparent));
+}
+.form-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-3); font-size: 13.5px; }
+.form-body { display: flex; flex-direction: column; gap: var(--space-3); }
 .form-field { display: flex; flex-direction: column; gap: 4px; }
-.form-field span { font-size: 13px; color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); }
+.form-field span { font-size: 12px; color: color-mix(in srgb, var(--text) 62%, transparent); }
 .form-field em { font-style: normal; color: var(--orange); }
+.form-field input, .form-field textarea {
+  box-sizing: border-box; width: 100%; padding: 7px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); caret-color: var(--theme-composer-text); font: inherit; font-size: 13.5px;
+}
+.form-field :deep(.ui-select-trigger) {
+  min-height: 34px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent); border-radius: var(--radius-sm);
+  background: var(--theme-main-subtle-background, var(--bg)); color: var(--text); font-size: 13.5px;
+}
+.form-field textarea { resize: vertical; min-height: 64px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.form-error { color: var(--red); font-size: 12.5px; }
+.form-actions { display: flex; gap: var(--space-2); margin-top: 4px; }
+
 .form-field input, .form-field textarea {
   box-sizing: border-box; width: 100%; padding: 7px 10px;
   border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: 6px;
@@ -817,16 +887,16 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 .form-error { color: var(--red); font-size: 13px; }
 .form-actions { display: flex; gap: 8px; margin-top: 4px; }
 
-.terminal-toggle { max-width: 780px; margin: 0 auto 12px; }
+.terminal-toggle { margin-bottom: var(--space-2); }
 
 /* ---- cards ---- */
-.card-list { max-width: 780px; margin-inline: auto; display: grid; gap: 16px; }
+.card-list { display: grid; gap: var(--space-2); }
 
 .arrange-card {
-  padding: 18px 20px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, var(--text)) 10%, transparent);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--text) 10%, transparent));
   border-radius: var(--radius);
-  background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, var(--text)) 5%, transparent));
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--text) 4%, transparent));
 }
 .card-row { display: flex; align-items: center; gap: 8px; }
 .card-row + .card-row { margin-top: 10px; }
@@ -834,7 +904,7 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 /* row 1: title */
 .title-row { justify-content: space-between; }
 .title-area { min-width: 0; flex: 1; }
-.card-title { font-size: 15px; font-weight: 600; cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
+.card-title { font-size: 14px; font-weight: 650; cursor: pointer; border-radius: var(--radius-sm); padding: 1px var(--space-1); margin: -1px calc(-1 * var(--space-1)); }
 .card-title:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent); }
 .card-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .title-actions { display: flex; gap: 4px; flex-shrink: 0; }
@@ -845,7 +915,7 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 
 /* row 2: instruction */
 .instruction-row { flex-wrap: wrap; }
-.card-instruction { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); font-size: 13px; cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; white-space: pre-wrap; }
+.card-instruction { color: color-mix(in srgb, var(--text) 65%, transparent); font-size: 13px; cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; white-space: pre-wrap; }
 .card-instruction:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent); color: var(--theme-main-text, var(--text)); }
 .card-instruction:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
@@ -891,11 +961,9 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 
 button:disabled { cursor: default; opacity: .5; }
 
-/* 桌面：标题与返回键由顶部条承担，这里只留动作。 */
+/* 桌面：标题与返回键由顶部条承担，手机头整块收起。 */
 @media (min-width: 641px) {
-  .arrange-back,
-  .arrange-title,
-  .arrange-subtitle {
+  .arrange-mobile-head {
     display: none;
   }
 }

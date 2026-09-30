@@ -1,12 +1,19 @@
 <template>
   <div ref="searchViewEl" class="search-view" :style="settingsThemeStyle">
-    <header class="search-head">
+    <header class="search-head full-area-column">
       <div class="search-input-row">
-        <button class="search-back" type="button" aria-label="返回会话" title="返回会话" @click="$emit('close')">
+        <button
+          class="search-back"
+          type="button"
+          aria-label="返回会话"
+          title="返回会话"
+          @click="$emit('close')"
+        >
           <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
+        <Search class="search-field-icon" :size="15" :stroke-width="1.8" aria-hidden="true" />
             <input
+              class="search-field-input"
               ref="inputEl"
               :value="query"
               type="text"
@@ -43,7 +50,7 @@
           </nav>
         </header>
 
-        <main class="search-body">
+        <main class="search-body full-area-column">
           <p v-if="searching" class="search-status">搜索中…</p>
           <p v-else-if="error" class="search-status search-error" role="alert">{{ error }}</p>
           <p v-else-if="!visibleRows.length" class="search-status search-hint">{{ hintText }}</p>
@@ -74,7 +81,7 @@
           </ul>
         </main>
 
-        <div class="search-footer" aria-hidden="true">
+        <div class="search-footer full-area-column" aria-hidden="true">
           <span><kbd>↑↓</kbd> 移动</span>
           <span><kbd>Enter</kbd> 选择</span>
           <span><kbd>Esc</kbd> 返回</span>
@@ -231,7 +238,9 @@ const commands = computed(() => props.commands || [])
 const hasStudy = computed(() => Boolean(props.activeModeId?.startsWith('study:')))
 
 const hintText = computed(() =>
-  query.value ? '无匹配结果' : '输入关键词搜索任务、插件或文件',
+  query.value
+    ? `没有匹配「${query.value.trim()}」的结果 — 换个关键词，或切到「全部」看看其他范围`
+    : '输入关键词搜索任务、插件或文件',
 )
 
 /** Task title matches: instant, and they work without the RAG plugin. */
@@ -692,53 +701,40 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
 </script>
 
 <style scoped>
-/* 整版界面：占住聊天区域，页面内给输入框与结果；不再是一张悬浮卡片。 */
+/* 整版界面：输入与结果落在与会话同一条轴线上（full-area-column）。 */
 .search-view {
   --text: var(--settings-card-text, var(--settings-main-text, #fff));
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--theme-main-background, var(--bg, #111111));
   color: var(--text);
+  padding-top: var(--space-4);
 }
 
 .search-head {
   flex-shrink: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
 }
 
 .search-input-row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 14px var(--space-4);
-  max-width: 720px;
-  margin: 0 auto;
-  width: 100%;
-  box-sizing: border-box;
-  color: var(--settings-muted, #a7a29b);
-}
-
-.search-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+  height: 34px;
+  padding: 0 var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--settings-muted, #a7a29b);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 55%, transparent);
 }
 
-.search-back:hover {
-  background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-hover), transparent);
-  color: var(--settings-card-text, var(--text));
-}
+.search-field-icon { flex: 0 0 auto; }
 
-.search-input-row input {
+.search-field-input {
   flex: 1;
   min-width: 0;
   background: transparent;
@@ -746,34 +742,33 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   outline: none;
   color: var(--theme-composer-text);
   caret-color: var(--theme-composer-text);
-  font-size: 15px;
+  font-size: 14px;
   font-family: inherit;
 }
 
-.search-input-row input::placeholder {
+.search-field-input::placeholder {
   color: color-mix(in srgb, var(--theme-composer-text) 45%, transparent);
 }
 
 .search-clear {
   display: inline-flex;
+  flex: 0 0 auto;
   border: none;
   border-radius: var(--radius-sm);
   padding: 2px;
   background: none;
-  color: var(--settings-muted, #a7a29b);
+  color: inherit;
   cursor: pointer;
 }
 
 .search-clear:hover {
-  color: var(--settings-card-text, var(--text));
+  color: var(--theme-composer-text);
 }
 
+/* 范围切换：分段控件，与输入框同宽同轴。 */
 .search-tabs {
   display: flex;
   gap: var(--space-1);
-  padding: 0 var(--space-4) 10px;
-  max-width: 720px;
-  margin: 0 auto;
 }
 
 .search-tabs button {
@@ -782,24 +777,24 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   gap: 6px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  padding: 6px var(--space-2);
+  padding: 4px var(--space-2);
   background: transparent;
-  color: var(--settings-muted, #a7a29b);
-  font-size: 13px;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+  font-size: 12.5px;
   font-family: inherit;
   cursor: pointer;
-  transition: background 160ms ease, color 160ms ease;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .search-tabs button:hover {
-  color: var(--settings-card-text, var(--text));
-  background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-hover), transparent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
 }
 
 .search-tabs button.active {
-  background: var(--settings-control-background, #343331);
-  color: var(--settings-control-text, var(--text));
-  border-color: color-mix(in srgb, var(--settings-main-text, #fff) 12%, transparent);
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
+  border-color: color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 .search-tab-icon {
@@ -810,22 +805,13 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-1) var(--space-4) var(--space-2);
-  --text: var(--settings-card-text, var(--settings-main-text, #fff));
-  color: var(--text);
-}
-
-.search-body > * {
-  max-width: 720px;
-  margin-left: auto;
-  margin-right: auto;
+  padding: var(--space-2) 0 var(--space-4);
 }
 
 .search-status {
   margin: 0;
-  padding: 28px var(--space-4);
-  text-align: center;
-  color: var(--settings-muted, #8a8580);
+  padding: var(--space-4) var(--space-3);
+  color: color-mix(in srgb, var(--text) 62%, transparent);
   font-size: 13px;
 }
 
@@ -834,7 +820,8 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
 }
 
 .search-status.search-hint {
-  font-size: 12px;
+  padding-top: var(--space-3);
+  font-size: 12.5px;
 }
 
 .search-results {
@@ -844,11 +831,10 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
 }
 
 .search-group-label {
-  padding: var(--space-2) var(--space-3) var(--space-1);
+  padding: var(--space-3) var(--space-3) var(--space-1);
   color: color-mix(in srgb, var(--text) 45%, transparent);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .08em;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .search-row {
@@ -857,8 +843,9 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   grid-template-columns: var(--space-6) minmax(0, 1fr) auto auto;
   gap: var(--space-2);
   align-items: center;
-  min-height: 48px;
+  min-height: 44px;
   padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
 }
 
 /* 行式高亮：无圆角遮罩，hover/active 只作用于背景层并左右渐隐。 */
@@ -952,6 +939,8 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
 }
 
 .search-footer {
+  padding-top: var(--space-2);
+  border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;

@@ -108,6 +108,88 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  --text: var(--theme-main-text);
+  color: var(--text);
+}
+
+/* 整版界面统一的内容栏：与会话标题、聊天正文同一条轴线（--content-width）。
+   标题、动作、内容、空态都落在这条线上，界面就不会各说各话。 */
+.full-area-column {
+  width: min(var(--content-width), 100%);
+  margin-inline: auto;
+}
+
+/* 工作台型整版界面（设置 / 插件）用更宽的容器，内容仍然居中。 */
+.full-area-wide {
+  /* 工作台型界面（设置 / 插件）用满主卡宽度：内部有两栏，再套一层居中栏
+     只会把右栏挤到看不见。 */
+  width: 100%;
+}
+
+/* 顶栏右侧的动作位：整版界面把动作送到这里，与标题同一行。 */
+.full-area-band-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* 整版界面里承载内部浮层（设置/插件的编辑弹层）的定位基准。 */
+.full-area-surface {
+  position: relative;
+}
+
+.full-area-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* 空态：不是一句孤零零的话，而是教人怎么开始的一小块内容。 */
+.full-area-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 52ch;
+  padding: var(--space-5) 0 0;
+}
+
+.full-area-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+}
+
+.full-area-empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.full-area-empty-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+}
+
+/* 整版界面里的说明文字（加载 / 出错 / 提示）统一大小与颜色。 */
+.full-area-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+}
+
+.full-area-note--error {
+  color: var(--red);
 }
 .workspace-shell--full-bleed .workspace-main > .workspace-plugin-header {
   position: absolute;
@@ -774,20 +856,22 @@
    ========================================================================= */
 .settings-page {
   display: grid;
-  grid-template-columns: 224px minmax(0, 1fr);
+  grid-template-columns: 208px minmax(0, 1fr);
+  gap: var(--space-4);
   height: 100%;
   overflow: hidden;
-  background: var(--settings-backdrop-background, var(--bg));
-  color: var(--settings-backdrop-text, var(--text));
+  /* 整版界面：底与字都跟随主区，而不是外壳/侧栏那一层。 */
+  background: transparent;
+  color: var(--theme-main-text, var(--text));
 }
 
 .settings-sidebar {
   min-width: 0;
   background: transparent;
-  color: var(--settings-backdrop-text, var(--text));
+  color: color-mix(in srgb, var(--theme-main-text, var(--text)) 78%, transparent);
   display: flex;
   flex-direction: column;
-  padding: 20px 12px 12px;
+  padding: 0 0 var(--space-3);
 }
 
 .settings-brand {
@@ -849,14 +933,14 @@
 .settings-sidebar .settings-entry:hover { opacity: 1; }
 
 .settings-main {
-  --text: var(--settings-main-text, #f2efeb);
-  --panel-2: var(--settings-panel-2, #1d1e1e);
-  --line: var(--settings-line, #3b3a38);
-  --muted: var(--settings-muted, #a7a29b);
+  --text: inherit;
+  --panel-2: var(--theme-main-subtle-background, #1d1e1e);
+  --line: var(--theme-main-border, #3b3a38);
+  --muted: color-mix(in srgb, var(--theme-main-text, var(--text)) 62%, transparent);
   overflow-y: auto;
   overflow-x: hidden;
-  margin: 12px 12px 0 0;
-  padding: var(--space-6) max(var(--space-6), 4vw) calc(var(--space-6) * 2);
+  margin: 0;
+  padding: 0 0 var(--space-6);
   border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   background: var(--settings-main-background, #141515);
@@ -3276,4 +3360,25 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 62%, transparent);
     background: color-mix(in srgb, var(--green) var(--alpha-hover), transparent);
   }
+}
+
+/* =========================================================================
+   整版界面里的设置/插件（就地渲染，不再是悬浮卡片）
+   ========================================================================= */
+/* 顶部条已经给出标题与返回键，左栏不再重复。 */
+.settings-page .settings-brand,
+.settings-page .settings-sidebar-footer {
+  display: none;
+}
+
+/* 网格子项默认 min-width:auto：长 URL / 长文本会把列撑破，被右边缘裁掉。
+   设置面板里每一层都允许收缩，长文本自己换行。 */
+.settings-main,
+.settings-main * {
+  min-width: 0;
+}
+
+.settings-main :where(code, a, .mono) {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }

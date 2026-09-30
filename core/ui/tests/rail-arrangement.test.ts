@@ -68,7 +68,7 @@ describe('left rail entry arrangement', () => {
     expect(appSource).toMatch(/function openSettings\(section\?: string\): void \{[\s\S]*?settingsSection\.value = section/)
     // 账号有自己的界面（用户共识：内容先少放），页脚入口直接开它。
     expect(appSource).toContain('@click="openAccount"')
-    expect(appSource).toMatch(/function openAccount\(\): void \{\s*showAccount\.value = true/)
+    expect(appSource).toMatch(/function openAccount\(\): void \{\s*openFullArea\('account'\)/)
     // 登录、注册、配对表单仍在设置里，由账号界面的链接过去。
     expect(appSource).toMatch(/function openAccountSettings\(\): void \{[\s\S]*?openSettings\('mobile-control'\)/)
     expect(appSource).toMatch(/<AccountShell[\s\S]*?:on-open-settings="openAccountSettings"/)

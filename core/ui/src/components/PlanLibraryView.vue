@@ -1,39 +1,31 @@
 <template>
-  <div class="plan-library-view">
-    <header class="library-head">
-      <div class="library-head-lead">
-        <button class="library-back" type="button" aria-label="返回会话" title="返回会话" @click="emit('back')">
-          <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-        <div>
-          <h1 class="library-title">资料库</h1>
-          <p class="library-subtitle">「{{ dirName }}」文件夹里的方案 — 点开读全文，就绪后开工。</p>
-        </div>
-      </div>
-      <div class="library-head-actions">
-        <button class="library-quiet-button" :disabled="loading" @click="reload">
-          {{ loading ? '刷新中…' : '刷新' }}
-        </button>
-      </div>
-    </header>
+  <div class="plan-library-view full-area-view">
+    <FullAreaActions :to-band="bandActions">
+      <button class="library-button" type="button" :disabled="loading" data-library-refresh @click="reload">
+        {{ loading ? '刷新中…' : '刷新' }}
+      </button>
+    </FullAreaActions>
 
-    <p v-if="!projectId" class="library-notice" role="note">先在左侧选择一个项目 — 资料库跟随项目文件夹。</p>
+    <p v-if="!projectId" class="full-area-note">先在左侧选择一个项目 — 资料库跟随项目文件夹。</p>
 
-    <div v-else class="library-columns" :class="{ 'library-columns--reader-open': narrow && selected }">
-      <!-- ── 列表：先看到全部方案，再决定读哪一份 ── -->
-      <aside class="library-list">
-        <p v-if="loading && !entries.length" class="library-notice" role="status">正在读取方案…</p>
-        <div v-else-if="error" class="library-notice library-notice--error" role="alert">
-          <span>{{ error }}</span>
-          <button class="library-quiet-button" type="button" @click="reload">重试</button>
-        </div>
-        <div v-else-if="!entries.length" class="library-empty" data-library-empty>
-          <p class="library-empty-title">还没有方案。</p>
-          <p class="library-empty-hint">
-            在聊天里说出你的想法，助手会一边问一边把方案写进「{{ dirName }}」文件夹；写好后就出现在这里。
-          </p>
-        </div>
-        <ul v-else class="library-items" aria-label="方案列表">
+    <div v-else-if="!entries.length && !loading && !error" class="full-area-column">
+      <div class="full-area-empty" data-library-empty>
+        <span class="full-area-empty-icon" aria-hidden="true"><BookOpen :size="18" :stroke-width="1.8" /></span>
+        <h2 class="full-area-empty-title">还没有方案</h2>
+        <p class="full-area-empty-hint">
+          在聊天里说出你的想法，助手会一边问一边把方案写进「{{ dirName }}」文件夹；写好后就出现在这里。
+          方案是一篇普通的 Markdown 文档，你也可以直接编辑它。
+        </p>
+      </div>
+    </div>
+
+    <div v-else class="full-area-column library-columns" :class="{ 'library-columns--reader-open': narrow && selected }">
+      <aside class="library-list" aria-label="方案列表">
+        <p v-if="error" class="full-area-note full-area-note--error" role="alert">
+          {{ error }}<button class="library-link" type="button" @click="reload">重试</button>
+        </p>
+        <p v-else-if="loading && !entries.length" class="full-area-note" role="status">正在读取方案…</p>
+        <ul v-else class="library-items">
           <li v-for="entry in entries" :key="entry.path">
             <button
               class="library-item"
@@ -42,10 +34,12 @@
               :data-library-entry="entry.name"
               @click="select(entry)"
             >
-              <span class="library-item-title">{{ entry.title }}</span>
-              <span v-if="entry.summary" class="library-item-summary">{{ entry.summary }}</span>
-              <span class="library-item-meta">
-                <span class="library-status-chip" :data-plan-status="entry.status">{{ statusLabel(entry.status) }}</span>
+              <span class="library-item-top">
+                <span class="library-item-title">{{ entry.title }}</span>
+                <span class="library-status" :data-plan-status="entry.status">{{ statusLabel(entry.status) }}</span>
+              </span>
+              <span class="library-item-bottom">
+                <span class="library-item-summary">{{ entry.summary || '（还没有摘要）' }}</span>
                 <span class="library-item-time">{{ updatedLabel(entry.updated_at) }}</span>
               </span>
             </button>
@@ -53,27 +47,16 @@
         </ul>
       </aside>
 
-      <!-- ── 阅读页：像读一篇文档一样读方案 ── -->
       <section class="library-reader" aria-label="方案阅读">
         <template v-if="selected">
           <header class="library-reader-head">
-            <button
-              v-if="narrow"
-              class="library-back"
-              type="button"
-              aria-label="返回列表"
-              title="返回列表"
-              @click="clearSelection"
-            >
-              <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
-            </button>
-            <div class="library-reader-titles">
-              <h2 class="library-reader-title">{{ selected.title }}</h2>
-              <p v-if="contentUpdatedAt" class="library-reader-time">更新于 {{ contentUpdatedAt }}</p>
-            </div>
+            <h2 class="library-reader-title">{{ selected.title }}</h2>
+            <p class="library-reader-meta">
+              {{ statusLabel(selected.status) }}<template v-if="contentUpdatedAt"> · 更新于 {{ contentUpdatedAt }}</template>
+            </p>
             <div class="library-reader-actions">
               <button
-                class="library-primary-button"
+                class="library-button library-button--primary"
                 type="button"
                 :disabled="selected.status !== 'ready'"
                 :title="startTitle"
@@ -82,11 +65,9 @@
               >
                 开工
               </button>
-              <button class="library-quiet-button" type="button" title="在文件编辑页中打开" @click="emit('edit-plan', selected.path)">
-                编辑
-              </button>
+              <button class="library-button" type="button" @click="emit('edit-plan', selected.path)">编辑</button>
               <button
-                class="library-quiet-button library-danger-button"
+                class="library-button library-button--danger"
                 type="button"
                 :data-library-delete="confirmingDelete ? 'confirm' : 'arm'"
                 @click="removeSelected"
@@ -96,18 +77,15 @@
               </button>
             </div>
           </header>
-          <p v-if="contentLoading" class="library-notice" role="status">正在打开…</p>
-          <p v-else-if="contentError" class="library-notice library-notice--error" role="alert">
-            <span>{{ contentError }}</span>
-            <button class="library-quiet-button" type="button" @click="loadContent">重试</button>
-          </p>
-          <article v-else class="library-reader-body">
-            <MarkdownRenderer :content="content" />
+          <p v-if="contentLoading" class="full-area-note" role="status">正在打开…</p>
+          <p v-else-if="contentError" class="full-area-note full-area-note--error" role="alert">{{ contentError }}</p>
+          <article v-else class="library-document">
+            <MarkdownRenderer :content="documentBody" />
           </article>
         </template>
-        <div v-else class="library-reader-empty" data-library-reader-empty>
-          <p>从左侧选一份方案开始读；没有的话，对助手说出你的想法就好。</p>
-        </div>
+        <p v-else class="full-area-note library-reader-empty" data-library-reader-empty>
+          从左侧选一份方案开始读。
+        </p>
       </section>
     </div>
   </div>
@@ -119,18 +97,19 @@
  *
  * A plan (方案) is a markdown document in the project's 「方案/」 folder; the
  * agent drafts and edits those files during ordinary conversation. This view
- * is the reader: list first, document on click, and the two actions that make
- * sense in place — 开工 (a ready plan becomes one ordinary session turn) and
- * 编辑 (the file in the stage editor). Everything else happens in the chat.
+ * is the reader: the list on one axis, the document on the next, and the three
+ * actions that make sense in place — 开工 (a ready plan becomes one ordinary
+ * session turn), 编辑 (the file in the stage editor), 删除.
  *
  * The list comes from the plan-library scan (one call, newest first). A turn
  * finishing while the library is open bumps the host's refresh signal, so a
  * plan the agent just wrote shows up without leaving the view.
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowLeft } from 'lucide-vue-next'
+import { BookOpen } from 'lucide-vue-next'
 import type { CorePlanLibraryEntry, CoreProjectClient } from '../projects/client'
 import { useNarrowViewport } from '../composables/useNarrowViewport'
+import FullAreaActions from './FullAreaActions.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 
 export type PlanLibraryEntry = CorePlanLibraryEntry
@@ -142,6 +121,8 @@ const props = defineProps<{
   projectId?: string | null
   /** Bumped by the host when a turn finishes — the cue to rescan the folder. */
   refreshSignal?: number
+  /** Desktop sends actions into the header band; phones render them in place. */
+  bandActions?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -173,6 +154,26 @@ const STATUS_LABELS: Record<PlanLibraryEntry['status'], string> = {
 function statusLabel(status: PlanLibraryEntry['status']): string {
   return STATUS_LABELS[status] ?? status
 }
+
+/**
+ * 正文：去掉开头的 frontmatter（状态/摘要已在标题行给出）与首个 H1（标题行已给出），
+ * 让读者看到的是一篇干净的文档，而不是带着元数据的一大块粗体。
+ */
+const documentBody = computed(() => stripPlanChrome(content.value))
+
+function stripPlanChrome(markdown: string): string {
+  let body = markdown
+  if (body.startsWith('---')) {
+    const close = body.indexOf(closingFence, 3)
+    if (close !== -1) body = body.slice(body.indexOf(newline, close + 1) + 1)
+  }
+  return body.replace(leadingHeading, '')
+}
+
+/** Markdown 里的三处字面量：收尾分隔线、换行、首个标题行。 */
+const closingFence = '\n---'
+const newline = '\n'
+const leadingHeading = /^\s*#\s+[^\n]*\n/
 
 const startTitle = computed(() => {
   if (!selected.value) return ''
@@ -294,97 +295,28 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* main area：资料库占住主卡内容区；列表与阅读双栏，窄屏合成单栏。 */
 .plan-library-view {
-  --text: var(--theme-main-text);
   display: flex;
   flex-direction: column;
-  height: 100%;
-  color: var(--text);
-}
-
-.library-head {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) clamp(var(--space-4), 4vw, var(--space-6)) var(--space-3);
-  border-bottom: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.library-head-lead {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.library-back,
-.library-item,
-.library-quiet-button,
-.library-primary-button,
-.library-danger-button {
-  font: inherit;
-}
-
-.library-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  margin-top: 2px;
-  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: color-mix(in srgb, var(--text) 65%, transparent);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
-}
-
-.library-back:hover {
-  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
-  color: var(--text);
-}
-
-.library-title {
-  margin: 0 0 2px;
-  font-size: 20px;
-  font-weight: 760;
-  letter-spacing: -.02em;
-}
-
-.library-subtitle {
-  margin: 0;
-  color: color-mix(in srgb, var(--text) 65%, transparent);
-  font-size: 12px;
-}
-
-.library-head-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-shrink: 0;
+  padding-top: var(--space-4);
 }
 
 .library-columns {
-  flex: 1 1 auto;
-  min-height: 0;
   display: grid;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(200px, 236px) minmax(0, 1fr);
+  gap: var(--space-5);
+  padding-bottom: var(--space-5);
+  align-items: start;
 }
 
 /* ── 列表 ── */
 .library-list {
-  min-height: 0;
-  overflow-y: auto;
-  border-right: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
-  padding: var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-1);
+  padding-right: var(--space-4);
+  border-right: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+  min-height: 0;
 }
 
 .library-items {
@@ -393,23 +325,23 @@ onUnmounted(() => {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
 }
 
 .library-item {
   width: 100%;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
+  gap: 3px;
   padding: var(--space-2) var(--space-3);
-  border: 1px solid transparent;
-  border-radius: var(--radius);
+  border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .library-item:hover {
@@ -418,217 +350,245 @@ onUnmounted(() => {
 
 .library-item.is-active {
   background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
-  border-color: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.library-item-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .library-item-title {
-  font-weight: 640;
-  font-size: 14px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.library-item-bottom {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .library-item-summary {
-  color: color-mix(in srgb, var(--text) 65%, transparent);
+  flex: 1 1 auto;
+  min-width: 0;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.library-item-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.library-status-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px var(--space-2);
-  border-radius: 999px;
+.library-item-time {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text) 42%, transparent);
   font-size: 11px;
-  line-height: 18px;
-  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
-  color: color-mix(in srgb, var(--text) 65%, transparent);
+  font-variant-numeric: tabular-nums;
 }
 
-.library-status-chip[data-plan-status='ready'] {
-  background: color-mix(in srgb, var(--green) 18%, transparent);
+.library-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 var(--space-1);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+}
+
+.library-status[data-plan-status='ready'] {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
   color: var(--green);
 }
 
-.library-status-chip[data-plan-status='executing'] {
-  background: color-mix(in srgb, var(--orange) 18%, transparent);
+.library-status[data-plan-status='executing'] {
+  background: color-mix(in srgb, var(--orange) 16%, transparent);
   color: var(--orange);
 }
 
-.library-status-chip[data-plan-status='done'] {
-  background: color-mix(in srgb, var(--blue) 18%, transparent);
+.library-status[data-plan-status='done'] {
+  background: color-mix(in srgb, var(--blue) 16%, transparent);
   color: var(--blue);
-}
-
-.library-item-time {
-  color: color-mix(in srgb, var(--text) 45%, transparent);
-  font-size: 11px;
-}
-
-.library-empty {
-  margin: auto;
-  max-width: 320px;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.library-empty-title {
-  margin: 0;
-  font-weight: 640;
-}
-
-.library-empty-hint {
-  margin: 0;
-  color: color-mix(in srgb, var(--text) 65%, transparent);
-  font-size: 12px;
-  line-height: 1.7;
 }
 
 /* ── 阅读页 ── */
 .library-reader {
-  min-height: 0;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
 }
 
 .library-reader-head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  flex-shrink: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'title actions'
+    'meta actions';
+  gap: 2px var(--space-4);
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) clamp(var(--space-4), 4vw, var(--space-6));
-  background: color-mix(in srgb, var(--theme-main-background) 92%, transparent);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
-}
-
-.library-reader-titles {
-  min-width: 0;
-  flex: 1 1 auto;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
 }
 
 .library-reader-title {
+  grid-area: title;
   margin: 0;
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 700;
+  letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.library-reader-time {
+.library-reader-meta {
+  grid-area: meta;
   margin: 0;
-  color: color-mix(in srgb, var(--text) 45%, transparent);
-  font-size: 11px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 52%, transparent);
+  font-variant-numeric: tabular-nums;
 }
 
 .library-reader-actions {
+  grid-area: actions;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex-shrink: 0;
 }
 
-.library-primary-button {
-  padding: 6px var(--space-3);
-  border: 0;
+.library-reader-empty {
+  padding-top: var(--space-4);
+}
+
+.library-document {
+  max-width: 68ch;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+/* 文档排版：标签页的标题行已经给过标题，正文里不再抢戏。 */
+.library-document :deep(h1),
+.library-document :deep(h2),
+.library-document :deep(h3) {
+  margin: var(--space-5) 0 var(--space-2);
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.35;
+}
+
+.library-document :deep(h1) { font-size: 17px; }
+.library-document :deep(h2) { font-size: 15px; }
+.library-document :deep(h3) { font-size: 13.5px; color: color-mix(in srgb, var(--text) 82%, transparent); }
+.library-document :deep(> :first-child) { margin-top: 0; }
+
+.library-document :deep(p) { margin: 0 0 var(--space-3); }
+.library-document :deep(ul),
+.library-document :deep(ol) { margin: 0 0 var(--space-3); padding-left: 1.25em; }
+.library-document :deep(li) { margin-bottom: 4px; }
+.library-document :deep(li > ul),
+.library-document :deep(li > ol) { margin-top: 4px; }
+.library-document :deep(code) {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 1px 5px;
   border-radius: var(--radius-sm);
-  background: var(--theme-control-background);
-  color: var(--theme-control-text);
-  font-weight: 600;
-  cursor: pointer;
-  transition: filter var(--dur-fast) var(--ease-out);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
-
-.library-primary-button:hover:not(:disabled) {
-  filter: brightness(.94);
+.library-document :deep(pre) {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--theme-main-sunken-background, color-mix(in srgb, var(--text) 6%, transparent));
+  overflow-x: auto;
 }
-
-.library-primary-button:disabled {
-  opacity: .45;
-  cursor: default;
+.library-document :deep(pre code) { padding: 0; background: none; }
+.library-document :deep(blockquote) {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--text) 18%, transparent);
+  color: color-mix(in srgb, var(--text) 72%, transparent);
 }
+.library-document :deep(hr) {
+  margin: var(--space-5) 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+.library-document :deep(table) { width: 100%; border-collapse: collapse; margin: 0 0 var(--space-3); font-size: 13px; }
+.library-document :deep(th),
+.library-document :deep(td) { padding: 6px var(--space-2); border-bottom: 1px solid color-mix(in srgb, var(--text) 10%, transparent); text-align: left; }
 
-.library-quiet-button {
-  padding: 6px var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+/* ── 按钮：一种配方，两种语气 ── */
+.library-button {
+  padding: 5px var(--space-3);
+  min-height: 28px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: color-mix(in srgb, var(--text) 65%, transparent);
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+  font: inherit;
+  font-size: 12.5px;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
-.library-quiet-button:hover:not(:disabled) {
+.library-button:hover:not(:disabled) {
   background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
   color: var(--text);
 }
 
-.library-danger-button:hover:not(:disabled),
-.library-danger-button[data-library-delete='confirm'] {
-  border-color: color-mix(in srgb, var(--red) 40%, transparent);
-  color: var(--red);
+.library-button--primary {
+  border-color: transparent;
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
+  font-weight: 600;
+}
+
+.library-button--primary:hover:not(:disabled) {
+  background: var(--theme-control-background);
+  filter: brightness(0.94);
+}
+
+.library-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.library-button--danger:hover:not(:disabled),
+.library-button--danger[data-library-delete='confirm'] {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
   background: color-mix(in srgb, var(--red) 10%, transparent);
-}
-
-.library-reader-body {
-  width: 100%;
-  max-width: 760px;
-  margin: 0 auto;
-  padding: var(--space-4) clamp(var(--space-4), 4vw, var(--space-6)) var(--space-6);
-}
-
-.library-reader-empty {
-  margin: auto;
-  padding: var(--space-6);
-  text-align: center;
-  color: color-mix(in srgb, var(--text) 45%, transparent);
-  font-size: 13px;
-}
-
-/* ── 通用提示 ── */
-.library-notice {
-  margin: 0;
-  padding: var(--space-3) clamp(var(--space-4), 4vw, var(--space-6));
-  color: color-mix(in srgb, var(--text) 65%, transparent);
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.library-notice--error {
   color: var(--red);
 }
 
-/* 桌面：标题与返回键由顶部条承担，这里只留动作。 */
-@media (min-width: 641px) {
-  .library-head-lead {
-    display: none;
-  }
+.library-link {
+  margin-left: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
 }
 
 /* 窄屏：单栏，列表与阅读页互斥呈现。 */
 @media (max-width: 640px) {
   .library-columns {
     grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+
+  .library-list {
+    padding-right: 0;
+    border-right: 0;
   }
 
   .library-columns--reader-open .library-list {
@@ -638,17 +598,11 @@ onUnmounted(() => {
   .library-columns:not(.library-columns--reader-open) .library-reader {
     display: none;
   }
-
-  .library-head {
-    padding: var(--space-2) var(--space-3);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .library-item,
-  .library-back,
-  .library-quiet-button,
-  .library-primary-button {
+  .library-button {
     transition: none;
   }
 }

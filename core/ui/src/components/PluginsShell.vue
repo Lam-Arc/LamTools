@@ -1,8 +1,6 @@
 <template>
-  <Teleport to="body">
-    <div ref="settingsOverlayEl" class="settings-overlay">
-      <div ref="settingsCardEl" class="settings-card" :style="settingsThemeStyle">
-        <SettingsShell
+  <div class="full-area-column full-area-surface" :style="settingsThemeStyle">
+    <SettingsShell
           :sections="sections"
           title="插件"
           :initial-section="props.initialSection"
@@ -29,10 +27,8 @@
               </KeepAlive>
             </section>
           </template>
-        </SettingsShell>
-      </div>
-    </div>
-  </Teleport>
+    </SettingsShell>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -52,7 +48,6 @@ import CoreSkillsEditor from './CoreSkillsEditor.vue'
 import CoreHooksEditor from './CoreHooksEditor.vue'
 import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'
 import type { LamToolsTransport } from '../transport'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -67,8 +62,6 @@ const emit = defineEmits<{
   'capabilities-changed': [refreshDesktop: boolean]
 }>()
 
-const settingsOverlayEl = ref<HTMLElement | null>(null)
-const settingsCardEl = ref<HTMLElement | null>(null)
 
 const sections: SettingsSection[] = [
   { id: 'plugins', label: '插件', icon: 'puzzle' },
@@ -111,9 +104,4 @@ const settingsThemeStyle = computed(() => {
   } as Record<string, string>
 })
 
-useOutsidePointerDismiss({
-  overlay: settingsOverlayEl,
-  card: settingsCardEl,
-  onDismiss: () => emit('close'),
-})
 </script>

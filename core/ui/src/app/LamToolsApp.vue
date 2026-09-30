@@ -40,91 +40,9 @@
     >{{ updateInstallState === 'downloading' ? '下载中…' : '下载更新' }}</button>
     <button class="core-update-banner-close" type="button" aria-label="关闭提示" @click="dismissUpdateBanner">✕</button>
   </div>
-  <CoreSettings
-    v-if="showSettings"
-    :models="availableModels"
-    :providers="availableProviders"
-    :model-groups="modelGroups"
-    :catalog-view="modelCatalogView"
-    :section="settingsSection"
-    :density="density"
-    :theme="theme"
-    :content-width="contentWidth"
-    :show-right-panel-header="false"
-    :theme-mode="themeMode"
-    :effective-theme-mode="effectiveThemeMode"
-    :permission-preset="defaultPermissionPreset"
-    :allow-access-outside-workdir="allowAccessOutsideWorkdir"
-    :command-shell-platform="commandShellPlatform"
-    :request-rpc="requestConfigOperation"
-    :update-state="updateState"
-    :remote-gateway-status="remoteGatewayStatus"
-    :remote-pairing="remotePairing"
-    :remote-gateway-loading="remoteGatewayLoading"
-    :remote-gateway-error="effectiveAccountError || remoteGatewayError"
-    :remote-gateway-available="remoteGatewayAvailable"
-    :remote-account-status="effectiveAccountStatus"
-    :remote-account-identity="remoteAccountIdentity"
-    :remote-account-loading="effectiveAccountLoading"
-    :remote-account-devices="effectiveAccountDevices"
-    @close="showSettings = false"
-    @update:density="uiPreferences.setDensity"
-    @update:content-width="uiPreferences.setContentWidth"
-    @update:theme-mode="uiPreferences.setThemeMode"
-    @reset-theme="uiPreferences.resetTheme"
-    @apply-preset="uiPreferences.applyThemePreset"
-    @update-stops="uiPreferences.updateThemeStops"
-    @update-angle="uiPreferences.updateThemeAngle"
-    @update-opacity="uiPreferences.updateThemeOpacity"
-    @update-text-color="uiPreferences.updateThemeText"
-    @update-process-icon-color="uiPreferences.updateProcessIconColor"
-    @add-stop="uiPreferences.addStop"
-    @remove-stop="uiPreferences.removeStop"
-    @sort-stops="uiPreferences.sortStops"
-    @update-permission-preset="updatePermissionPreset"
-    @update-allow-outside-workdir="updateAllowAccessOutsideWorkdir"
-    @create-provider="createProvider"
-    @update-provider="updateProvider"
-    @delete-provider="deleteProvider"
-	@create-model="createModel"
-	    @update-model="updateModel"
-	    @delete-model="deleteModel"
-    @set-default-model="setDefaultModel"
-    @update:catalog-view="updateModelCatalogView"
-    @create-model-group="createModelGroup"
-    @update-model-group="updateModelGroup"
-    @delete-model-group="deleteModelGroup"
-    @set-model-group-members="setModelGroupMembers"
-    @create-model-with-provider="createModelWithProvider"
-    @remote-gateway-start="startRemoteGateway"
-    @remote-gateway-stop="stopRemoteGateway"
-    @remote-pairing-create="createRemotePairing"
-    @remote-device-revoke="revokeRemoteDevice"
-    @remote-account-submit="submitEffectiveAccount"
-    @remote-account-logout="logoutEffectiveAccount"
-    @reopen-onboarding="reopenOnboarding"
-  />
-        <PluginsShell
-          v-if="showPlugins"
-          :request-rpc="requestConfigOperation"
-          :transport="transport"
-          :theme="theme"
-          :initial-section="pluginsSection"
-    @capabilities-changed="handleCapabilitiesChanged"
-    @close="closePlugins"
-  />
-  <AccountShell
-    v-if="showAccount"
-    :account-status="effectiveAccountStatus"
-    :devices="effectiveAccountDevices"
-    :loading="remoteAccountLoading"
-    :error="remoteGatewayError"
-    :theme="theme"
-    :on-logout="logoutEffectiveAccount"
-    :on-open-settings="openAccountSettings"
-    :on-refresh="refreshRemoteAccount"
-    @close="showAccount = false"
-  />
+
+
+
   <OnboardingWizard
     v-if="showOnboarding"
     :providers="availableProviders"
@@ -271,7 +189,7 @@
             tip-placement="below"
             @click="openLibrary"
           >
-            <Library :size="16" :stroke-width="1.8" />
+            <BookOpen :size="16" :stroke-width="1.8" />
           </RailAction>
           <RailAction
             action-id="arrange"
@@ -355,6 +273,7 @@
           <h1 data-full-area-title>{{ fullAreaHeading.title }}</h1>
           <span>{{ fullAreaHeading.subtitle }}</span>
         </div>
+        <div id="full-area-band-actions" class="full-area-band-actions"></div>
       </div>
       <div v-else-if="appRuntime.platform !== 'mobile' && activePluginMode" class="workspace-plugin-header" data-plugin-header></div>
       <div v-else-if="appRuntime.platform !== 'mobile' && activeSessionId" class="thread-header" data-session-header>
@@ -381,6 +300,8 @@
         <CoreArrangeManager
           v-if="showArrange"
           class="full-area-view"
+          :band-actions="appRuntime.platform !== 'mobile'"
+          
           :work-root="currentWorkRoot()"
           :request-rpc="requestConfigOperation"
           @back="closeFullArea"
@@ -388,6 +309,8 @@
         <SearchShell
           v-else-if="showSearch"
           class="full-area-view"
+          :band-actions="appRuntime.platform !== 'mobile'"
+          
           :request-rpc="requestConfigOperation"
           :sessions="sessions"
           :on-jump="jumpToSearchedMessage"
@@ -402,6 +325,8 @@
         <PlanLibraryView
           v-else-if="showLibrary"
           class="full-area-view"
+          :band-actions="appRuntime.platform !== 'mobile'"
+          
           :client="projectClient"
           :project-id="activeProjectId ?? selectedProjectId"
           :refresh-signal="libraryRefreshTick"
@@ -409,6 +334,97 @@
           @start-plan="startPlanFromLibrary"
           @edit-plan="openPlanFileInStage"
         />
+        <CoreSettings
+          v-else-if="showSettings"
+            class="full-area-view full-area-wide"
+            :band-actions="appRuntime.platform !== 'mobile'"
+          :models="availableModels"
+          :providers="availableProviders"
+          :model-groups="modelGroups"
+          :catalog-view="modelCatalogView"
+          :section="settingsSection"
+          :density="density"
+          :theme="theme"
+          :content-width="contentWidth"
+          :show-right-panel-header="false"
+          :theme-mode="themeMode"
+          :effective-theme-mode="effectiveThemeMode"
+          :permission-preset="defaultPermissionPreset"
+          :allow-access-outside-workdir="allowAccessOutsideWorkdir"
+          :command-shell-platform="commandShellPlatform"
+          :request-rpc="requestConfigOperation"
+          :update-state="updateState"
+          :remote-gateway-status="remoteGatewayStatus"
+          :remote-pairing="remotePairing"
+          :remote-gateway-loading="remoteGatewayLoading"
+          :remote-gateway-error="effectiveAccountError || remoteGatewayError"
+          :remote-gateway-available="remoteGatewayAvailable"
+          :remote-account-status="effectiveAccountStatus"
+          :remote-account-identity="remoteAccountIdentity"
+          :remote-account-loading="effectiveAccountLoading"
+          :remote-account-devices="effectiveAccountDevices"
+          @close="closeFullArea"
+          @update:density="uiPreferences.setDensity"
+          @update:content-width="uiPreferences.setContentWidth"
+          @update:theme-mode="uiPreferences.setThemeMode"
+          @reset-theme="uiPreferences.resetTheme"
+          @apply-preset="uiPreferences.applyThemePreset"
+          @update-stops="uiPreferences.updateThemeStops"
+          @update-angle="uiPreferences.updateThemeAngle"
+          @update-opacity="uiPreferences.updateThemeOpacity"
+          @update-text-color="uiPreferences.updateThemeText"
+          @update-process-icon-color="uiPreferences.updateProcessIconColor"
+          @add-stop="uiPreferences.addStop"
+          @remove-stop="uiPreferences.removeStop"
+          @sort-stops="uiPreferences.sortStops"
+          @update-permission-preset="updatePermissionPreset"
+          @update-allow-outside-workdir="updateAllowAccessOutsideWorkdir"
+          @create-provider="createProvider"
+          @update-provider="updateProvider"
+          @delete-provider="deleteProvider"
+          @create-model="createModel"
+          @update-model="updateModel"
+          @delete-model="deleteModel"
+          @set-default-model="setDefaultModel"
+          @update:catalog-view="updateModelCatalogView"
+          @create-model-group="createModelGroup"
+          @update-model-group="updateModelGroup"
+          @delete-model-group="deleteModelGroup"
+          @set-model-group-members="setModelGroupMembers"
+          @create-model-with-provider="createModelWithProvider"
+          @remote-gateway-start="startRemoteGateway"
+          @remote-gateway-stop="stopRemoteGateway"
+          @remote-pairing-create="createRemotePairing"
+          @remote-device-revoke="revokeRemoteDevice"
+          @remote-account-submit="submitEffectiveAccount"
+          @remote-account-logout="logoutEffectiveAccount"
+          @reopen-onboarding="reopenOnboarding"
+          />
+        <PluginsShell
+          v-else-if="showPlugins"
+            class="full-area-view full-area-wide"
+            :band-actions="appRuntime.platform !== 'mobile'"
+          :request-rpc="requestConfigOperation"
+          :transport="transport"
+          :theme="theme"
+          :initial-section="pluginsSection"
+          @capabilities-changed="handleCapabilitiesChanged"
+          @close="closeFullArea"
+          />
+        <AccountShell
+          v-else-if="showAccount"
+            class="full-area-view"
+            :band-actions="appRuntime.platform !== 'mobile'"
+          :account-status="effectiveAccountStatus"
+          :devices="effectiveAccountDevices"
+          :loading="remoteAccountLoading"
+          :error="remoteGatewayError"
+          :theme="theme"
+          :on-logout="logoutEffectiveAccount"
+          :on-open-settings="openAccountSettings"
+          :on-refresh="refreshRemoteAccount"
+          @close="closeFullArea"
+          />
       </template>
       <div
         v-if="activePluginMode"
@@ -772,7 +788,7 @@ import {
   LoaderCircle,
   MonitorPlay,
   MonitorSmartphone,
-  Library,
+  BookOpen,
   PanelLeft,
   PanelRight,
   Plus,
@@ -1094,16 +1110,18 @@ function syncRightPinned(value: boolean) {
   rightPinned.value = value
 }
 const settingsStorageKey = 'lamtools.core.ui'
-const showSettings = ref(false)
 /** Section the settings surface opens on; the rail's account entry targets it. */
 const settingsSection = ref<string | undefined>(undefined)
-const showPlugins = ref(false)
 // 整版界面状态：搜索 / 资料库 / 长期安排 互斥地占住聊天区域，返回或 Esc 退出；
 // 打开同一个入口相当于退出（与旧浮层的开合直觉一致）。
-const fullAreaView = ref<'library' | 'search' | 'arrange' | null>(null)
+type FullAreaViewId = 'library' | 'search' | 'arrange' | 'settings' | 'plugins' | 'account'
+const fullAreaView = ref<FullAreaViewId | null>(null)
 const showSearch = computed(() => fullAreaView.value === 'search')
 const showArrange = computed(() => fullAreaView.value === 'arrange')
 const showLibrary = computed(() => fullAreaView.value === 'library')
+const showSettings = computed(() => fullAreaView.value === 'settings')
+const showPlugins = computed(() => fullAreaView.value === 'plugins')
+const showAccount = computed(() => fullAreaView.value === 'account')
 const libraryRefreshTick = ref(0)
 // 顶部标题（整版界面）：标题与说明跟着当前界面走，不再停留在会话标题上。
 const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
@@ -1114,11 +1132,17 @@ const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
       return { title: '资料库', subtitle: '「方案/」文件夹里的方案 — 点开读全文，就绪后开工。' }
     case 'arrange':
       return { title: '长期安排', subtitle: '定时任务，按计划自动执行。' }
+    case 'settings':
+      return { title: '设置', subtitle: '模型与供应商、外观主题、工具权限等应用配置。' }
+    case 'plugins':
+      return { title: '插件', subtitle: '管理已安装的插件，开关它们带来的界面与工具。' }
+    case 'account':
+      return { title: '账号', subtitle: '登录状态与已配对的设备。' }
     default:
       return { title: '', subtitle: '' }
   }
 })
-function openFullArea(view: 'library' | 'search' | 'arrange'): void {
+function openFullArea(view: FullAreaViewId): void {
   fullAreaView.value = fullAreaView.value === view ? null : view
 }
 function closeFullArea(): void {
@@ -3877,7 +3901,7 @@ function handleSidebarNewSession(projectGroupId: string): void {
 
 function openSettings(section?: string): void {
   settingsSection.value = section
-  showSettings.value = true
+  openFullArea('settings')
   void refreshRemoteGateway()
   void refreshRemoteAccount()
 }
@@ -3889,15 +3913,14 @@ const accountLabel = computed(() => {
 })
 
 /** The account screen is its own surface; the settings section keeps the forms. */
-const showAccount = ref(false)
 
 function openAccount(): void {
-  showAccount.value = true
+  openFullArea('account')
   void refreshRemoteAccount()
 }
 
 function openAccountSettings(): void {
-  showAccount.value = false
+  closeFullArea()
   openSettings('mobile-control')
 }
 
@@ -3918,7 +3941,7 @@ const pluginsSection = ref<string | undefined>(undefined)
 
 function openPlugins(section?: string): void {
   pluginsSection.value = section
-  showPlugins.value = true
+  openFullArea('plugins')
 }
 
 function openPluginsFromSearch(target: { section: 'plugins' | 'skills' | 'hooks'; id?: string }): void {
@@ -3954,7 +3977,7 @@ const searchCommands = computed<SearchCommand[]>(() => {
 })
 
 function closePlugins(): void {
-  showPlugins.value = false
+  closeFullArea()
   void refreshPluginModes()
 }
 

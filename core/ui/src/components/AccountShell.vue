@@ -1,23 +1,20 @@
 <template>
-  <Teleport to="body">
-    <div ref="overlayEl" class="settings-overlay">
-      <div ref="cardEl" class="settings-card account-card" :style="settingsThemeStyle">
+  <div class="full-area-column full-area-surface account-view" :style="settingsThemeStyle">
         <header class="account-head">
+          <button class="account-back" type="button" aria-label="返回会话" title="返回会话" @click="$emit('close')">
+            <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
+          </button>
           <span class="account-head-title">账号</span>
           <span v-if="accountStatus" class="account-head-state">已登录</span>
           <span v-else class="account-head-state is-off">未登录</span>
           <button
             v-if="onRefresh"
-            class="account-icon-btn"
+            class="account-action"
             type="button"
-            aria-label="刷新账号状态"
             :disabled="loading"
             @click="onRefresh()"
           >
-            <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </button>
-          <button class="account-icon-btn" type="button" aria-label="关闭" @click="$emit('close')">
-            <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+            {{ loading ? '刷新中…' : '刷新' }}
           </button>
         </header>
 
@@ -86,9 +83,7 @@
             打开完整设置（账号与设备）
           </button>
         </footer>
-      </div>
-    </div>
-  </Teleport>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -101,9 +96,8 @@
  * - 方案传输尚未接入，这里明确写成“待接入”，不摆一个按不动的按钮。
  */
 import { computed, ref } from 'vue'
-import { RefreshCw, X } from 'lucide-vue-next'
+import { ArrowLeft } from 'lucide-vue-next'
 import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 import type {
   MobileControlAccountDevice,
   MobileControlAccountStatus,
@@ -122,17 +116,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{ close: [] }>()
 
-const overlayEl = ref<HTMLElement | null>(null)
-const cardEl = ref<HTMLElement | null>(null)
 
 const devices = computed(() => props.devices || [])
 const onlineCount = computed(() => devices.value.filter((device) => device.online).length)
 
-useOutsidePointerDismiss({
-  overlay: overlayEl,
-  card: cardEl,
-  onDismiss: () => emit('close'),
-})
 
 const settingsThemeStyle = computed(() => {
   if (!props.theme) return {}
@@ -176,6 +163,55 @@ const settingsThemeStyle = computed(() => {
   border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
   padding: var(--space-3);
   color: var(--settings-main-text, #fff);
+}
+
+.account-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 68%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.account-back:hover {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
+}
+
+.account-action {
+  margin-left: auto;
+  min-height: 28px;
+  padding: 5px var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.account-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
+}
+
+.account-action:disabled { opacity: .45; cursor: default; }
+
+/* 桌面：标题与返回键由顶部条承担，这里只留登录状态。 */
+@media (min-width: 641px) {
+  .account-back,
+  .account-head-title {
+    display: none;
+  }
 }
 
 .account-head-title {
