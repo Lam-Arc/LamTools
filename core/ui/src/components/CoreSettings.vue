@@ -1,5 +1,10 @@
 <template>
-  <div class="full-area-column full-area-surface" :style="settingsThemeStyle">
+  <div
+    ref="settingsRootEl"
+    class="full-area-column full-area-surface"
+    :class="{ 'settings-surface--narrow': narrowSurface }"
+    :style="settingsThemeStyle"
+  >
     <SettingsShell
           :sections="sections"
           title="Sunday 设置"
@@ -2201,6 +2206,17 @@ useOutsidePointerDismiss({
   onDismiss: closeEditors,
 })
 
+// 就地渲染后设置只有主卡宽：窗口宽度与这一栏的可用宽度不是一回事，而 WebView
+// 又不支持容器查询。用 ResizeObserver 按实际宽度折叠工作台，两栏装不下时改单栏。
+const settingsRootEl = ref<HTMLElement | null>(null)
+const narrowSurface = ref(false)
+let settingsResizeObserver: ResizeObserver | null = null
+
+function measureSettingsSurface(): void {
+  const width = settingsRootEl.value?.clientWidth ?? 0
+  narrowSurface.value = width > 0 && width < 900
+}
+
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     requestCloseSettings()
@@ -2209,6 +2225,11 @@ function onKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   document.addEventListener('keydown', onKeydown)
+  if (typeof ResizeObserver !== 'undefined') {
+    settingsResizeObserver = new ResizeObserver(measureSettingsSurface)
+    if (settingsRootEl.value) settingsResizeObserver.observe(settingsRootEl.value)
+    measureSettingsSurface()
+  }
   void fetchGlobalAgentsMd()
   void fetchGlobalMemory()
   void fetchLoadContext()
@@ -2218,6 +2239,8 @@ onMounted(() => {
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
+  settingsResizeObserver?.disconnect()
+  settingsResizeObserver = null
 })
 </script>
 
@@ -5285,5 +5308,18 @@ onUnmounted(() => {
   .permission-related-settings summary::after {
     transition: none;
   }
+}
+
+/* 面板装得下两栏才用两栏：窄的时候单栏排下来，而不是被主卡裁掉。 */
+.settings-surface--narrow .models-workspace {
+  grid-template-columns: minmax(0, 1fr);
+  height: auto;
+  min-height: 0;
+}
+
+.settings-surface--narrow .provider-rail {
+  border-right: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
+  padding: var(--space-4) 0;
 }
 </style>
