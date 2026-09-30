@@ -319,7 +319,8 @@
    the native titlebar. Pull it through the shared main-surface inset and give
    it the compact post-first-fix height so its existing divider stays put.
    Specialized workflow headers intentionally have no marker. */
-/* 整版界面的顶部条：标题跟着界面切换，返回键在标题原来的位置。 */
+/* 整版界面的顶部条：铺满主卡的内容区（返回键贴最左、动作贴最右），
+   标题跟着界面切换。下面的正文仍按各自的列宽居中/排布。 */
 .full-area-header {
   justify-content: flex-start;
   gap: var(--space-3);
@@ -390,12 +391,14 @@
 
   /* 整版界面顶栏与会话标题栏共用同一条band：同一套高度与内缩。 */
   .thread-header[data-full-area-header] {
+    /* 铺满主卡内容区：返回键贴最左、动作贴最右，不再缩进到正文列宽。 */
+    width: auto;
     height: calc(var(--space-6) * 2 + var(--space-4) - var(--space-1) - 1px);
     min-height: 0;
     margin-top: calc(-1 * var(--space-6) - var(--space-4) + var(--space-1));
-    margin-right: auto;
+    margin-right: calc(var(--space-3) - var(--main-x-padding));
     margin-bottom: 0;
-    margin-left: auto;
+    margin-left: calc(var(--space-3) - var(--main-x-padding));
     padding: 0;
   }
 }
@@ -857,7 +860,8 @@
    ========================================================================= */
 .settings-page {
   display: grid;
-  grid-template-columns: 208px minmax(0, 1fr);
+  /* 导航栏按标签自身宽度收窄：两个字的栏目就两字宽，六字栏目也放得下。 */
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
   gap: var(--space-4);
   height: 100%;
   overflow: hidden;
@@ -868,6 +872,8 @@
 
 .settings-sidebar {
   min-width: 0;
+  width: max-content;
+  max-width: 100%;
   background: transparent;
   color: color-mix(in srgb, var(--theme-main-text, var(--text)) 78%, transparent);
   display: flex;
@@ -894,6 +900,8 @@
   padding-top: 4px;
 }
 .settings-nav button {
+  white-space: nowrap;
+  padding-right: var(--space-3);
   min-height: 38px;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -950,8 +958,11 @@
 }
 
 .settings-content {
-  width: min(1040px, 100%);
-  margin: 0 auto;
+  /* 紧跟导航左对齐：居中留白会让左沿对不上顶部条与导航。宽屏只做个上限，
+     免得行长得离谱。 */
+  width: 100%;
+  max-width: 1100px;
+  margin: 0;
   display: grid;
   gap: var(--space-5);
 }
@@ -3383,3 +3394,29 @@
   overflow-wrap: anywhere;
   white-space: normal;
 }
+
+/* =========================================================================
+   窄的整版界面（设置 / 插件）：导航横排在上，内容整宽、工作台单栏
+   ========================================================================= */
+.settings-surface--narrow .settings-page {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.settings-surface--narrow .settings-sidebar {
+  width: 100%;
+  padding-bottom: var(--space-2);
+}
+
+.settings-surface--narrow .settings-nav {
+  display: flex;
+  flex-direction: row;
+  gap: var(--space-1);
+  overflow-x: auto;
+  padding-bottom: var(--space-1);
+}
+
+.settings-surface--narrow .settings-content {
+  max-width: none;
+}
+
