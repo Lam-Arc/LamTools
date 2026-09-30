@@ -335,7 +335,28 @@
     </template>
 
     <template #main-header>
-      <div v-if="appRuntime.platform !== 'mobile' && activePluginMode" class="workspace-plugin-header" data-plugin-header></div>
+      <!-- 整版界面：顶部标题跟着切换，返回键就放在标题原来的位置。 -->
+      <div
+        v-if="appRuntime.platform !== 'mobile' && fullAreaView"
+        class="thread-header full-area-header"
+        data-full-area-header
+      >
+        <button
+          type="button"
+          class="full-area-back"
+          title="返回会话（Esc）"
+          aria-label="返回会话"
+          data-full-area-back
+          @click="closeFullArea"
+        >
+          <ArrowLeft :size="15" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <div class="full-area-heading">
+          <h1 data-full-area-title>{{ fullAreaHeading.title }}</h1>
+          <span>{{ fullAreaHeading.subtitle }}</span>
+        </div>
+      </div>
+      <div v-else-if="appRuntime.platform !== 'mobile' && activePluginMode" class="workspace-plugin-header" data-plugin-header></div>
       <div v-else-if="appRuntime.platform !== 'mobile' && activeSessionId" class="thread-header" data-session-header>
         <CoreSessionTitleEditor
           :title="activeSessionTitle"
@@ -739,6 +760,7 @@ import {
 import { gsap } from 'gsap'
 import {
   ArrowDown,
+  ArrowLeft,
   Blocks,
   CalendarClock,
   Check,
@@ -756,6 +778,7 @@ import {
   Plus,
   Puzzle,
   Scissors,
+  Search,
   Settings,
   TextSelect,
   Upload,
@@ -1082,6 +1105,19 @@ const showSearch = computed(() => fullAreaView.value === 'search')
 const showArrange = computed(() => fullAreaView.value === 'arrange')
 const showLibrary = computed(() => fullAreaView.value === 'library')
 const libraryRefreshTick = ref(0)
+// 顶部标题（整版界面）：标题与说明跟着当前界面走，不再停留在会话标题上。
+const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
+  switch (fullAreaView.value) {
+    case 'search':
+      return { title: '搜索', subtitle: '跨项目查找会话、消息、方案与文件。' }
+    case 'library':
+      return { title: '资料库', subtitle: '「方案/」文件夹里的方案 — 点开读全文，就绪后开工。' }
+    case 'arrange':
+      return { title: '长期安排', subtitle: '定时任务，按计划自动执行。' }
+    default:
+      return { title: '', subtitle: '' }
+  }
+})
 function openFullArea(view: 'library' | 'search' | 'arrange'): void {
   fullAreaView.value = fullAreaView.value === view ? null : view
 }

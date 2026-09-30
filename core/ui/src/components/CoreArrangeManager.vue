@@ -891,6 +891,15 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 
 button:disabled { cursor: default; opacity: .5; }
 
+/* 桌面：标题与返回键由顶部条承担，这里只留动作。 */
+@media (min-width: 641px) {
+  .arrange-back,
+  .arrange-title,
+  .arrange-subtitle {
+    display: none;
+  }
+}
+
 @media (max-width: 700px) {
   .arrange-page { padding: 24px 18px; }
   .arrange-card { padding: 14px 16px; }

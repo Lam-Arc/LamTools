@@ -236,8 +236,77 @@
    the native titlebar. Pull it through the shared main-surface inset and give
    it the compact post-first-fix height so its existing divider stays put.
    Specialized workflow headers intentionally have no marker. */
+/* 整版界面的顶部条：标题跟着界面切换，返回键在标题原来的位置。 */
+.full-area-header {
+  justify-content: flex-start;
+  gap: var(--space-3);
+}
+
+.full-area-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin-right: var(--space-1);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 10%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.full-area-back:hover {
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
+  color: var(--theme-main-text, #f2efeb);
+}
+
+.full-area-back:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+
+.full-area-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.full-area-heading h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.full-area-heading span {
+  margin: 0;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 60%, transparent);
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .full-area-back {
+    transition: none;
+  }
+}
+
 @media (min-width: 641px) {
   .thread-header[data-session-header] {
+    height: calc(var(--space-6) * 2 + var(--space-4) - var(--space-1) - 1px);
+    min-height: 0;
+    margin-top: calc(-1 * var(--space-6) - var(--space-4) + var(--space-1));
+    margin-right: auto;
+    margin-bottom: 0;
+    margin-left: auto;
+    padding: 0;
+  }
+
+  /* 整版界面顶栏与会话标题栏共用同一条band：同一套高度与内缩。 */
+  .thread-header[data-full-area-header] {
     height: calc(var(--space-6) * 2 + var(--space-4) - var(--space-1) - 1px);
     min-height: 0;
     margin-top: calc(-1 * var(--space-6) - var(--space-4) + var(--space-1));

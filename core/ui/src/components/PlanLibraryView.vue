@@ -618,6 +618,13 @@ onUnmounted(() => {
   color: var(--red);
 }
 
+/* 桌面：标题与返回键由顶部条承担，这里只留动作。 */
+@media (min-width: 641px) {
+  .library-head-lead {
+    display: none;
+  }
+}
+
 /* 窄屏：单栏，列表与阅读页互斥呈现。 */
 @media (max-width: 640px) {
   .library-columns {

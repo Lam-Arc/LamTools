@@ -991,6 +991,13 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   }
 }
 
+/* 桌面：返回键在顶部条里；这里只留搜索输入行。 */
+@media (min-width: 641px) {
+  .search-back {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .search-tabs button {
     transition: none;

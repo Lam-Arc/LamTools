@@ -46,6 +46,44 @@ describe('full-area views (搜索 / 资料库 / 长期安排)', () => {
     expect(topBarSource).toMatch(/emit\('open-library'\)/)
   })
 
+  it('imports every icon the rail row and the dock render', () => {
+    // 一个未导入的图标会渲染成空组件：入口在 DOM 里、但完全看不见。
+    const lucideBlock = appSource.slice(0, appSource.indexOf("} from 'lucide-vue-next'"))
+    const railSlot = appSource.slice(
+      appSource.indexOf('#toolbar-actions'),
+      appSource.indexOf('</template>', appSource.indexOf('#toolbar-actions')),
+    )
+    const railIcons = [...railSlot.matchAll(/<([A-Z][A-Za-z0-9]*)\s+:size=/g)].map(match => match[1])
+    expect(railIcons).toEqual(expect.arrayContaining(['Search', 'Library', 'CalendarClock', 'Puzzle']))
+    for (const icon of railIcons) {
+      expect(lucideBlock, `${icon} is rendered in the rail but not imported`).toMatch(
+        new RegExp(`(^|\r?\n)  ${icon},(\r?\n|$)`),
+      )
+    }
+
+    const topBarLucide = topBarSource.slice(0, topBarSource.indexOf("} from 'lucide-vue-next'"))
+    const dockIcons = [...topBarSource.matchAll(/<([A-Z][A-Za-z0-9]*)\s+:size=/g)].map(match => match[1])
+    expect(dockIcons).toEqual(expect.arrayContaining(['Search', 'Library']))
+    for (const icon of dockIcons) {
+      expect(topBarLucide.includes(icon), `${icon} is rendered in the dock but not imported`).toBe(true)
+    }
+  })
+
+  it('carries the view title and the back button in the header band', () => {
+    // 顶部标题跟着界面走（不再停留在会话标题上），返回键就在标题原来的位置。
+    expect(appSource).toMatch(/v-if="appRuntime.platform !== 'mobile' && fullAreaView"[\s\S]*?data-full-area-header/)
+    expect(appSource).toMatch(/data-full-area-back[\s\S]*?@click="closeFullArea"/)
+    expect(appSource).toMatch(/data-full-area-title/)
+    expect(appSource).toMatch(/case 'search':[\s\S]*?title: '搜索'/)
+    expect(appSource).toMatch(/case 'library':[\s\S]*?title: '资料库'/)
+    expect(appSource).toMatch(/case 'arrange':[\s\S]*?title: '长期安排'/)
+
+    // 桌面不再在界面内部重复标题与返回键（手机没有顶部条，保留内部的）。
+    expect(read('src/components/CoreArrangeManager.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.arrange-back/)
+    expect(read('src/components/SearchShell.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.search-back/)
+    expect(read('src/components/PlanLibraryView.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.library-head-lead/)
+  })
+
   it('no longer teleports the arrange manager or the search shell as overlays', () => {
     const arrangeSource = read('src/components/CoreArrangeManager.vue')
     const searchSource = read('src/components/SearchShell.vue')
