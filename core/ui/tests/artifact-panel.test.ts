@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import ArtifactPanel from '../src/components/ArtifactPanel.vue'
+import CoreConfirmDialog from '../src/components/CoreConfirmDialog.vue'
 import { createFakeTransport } from './fake-transport'
 
 function artifact(id: string) {
@@ -23,13 +24,10 @@ afterEach(() => {
 })
 
 describe('ArtifactPanel', () => {
-  it('confirms bulk deletion before invoking the artifact delete RPC', async () => {
+  it('confirms bulk deletion in the app dialog before invoking the artifact delete RPC', async () => {
     const requestRpc = vi.fn(async (method: string) => (
       method === 'artifact.list' ? { artifacts: [artifact('a1')] } : {}
     ))
-    const confirm = vi.spyOn(window, 'confirm')
-      .mockReturnValueOnce(false)
-      .mockReturnValue(true)
     const wrapper = mount(ArtifactPanel, {
       props: {
         projectId: 'project-a',
@@ -43,10 +41,20 @@ describe('ArtifactPanel', () => {
     await wrapper.get('.text-btn.danger').trigger('click')
     await wrapper.get('input[type="checkbox"]').setValue(true)
     await wrapper.get('.artifact-actions .text-btn.danger').trigger('click')
-    expect(confirm).toHaveBeenCalledWith('确定将选中的 1 项从成果库移除？文件不会被删除。')
+
+    // 先问一次：确认框开着、RPC 还没发。
+    const dialog = wrapper.getComponent(CoreConfirmDialog)
+    expect(dialog.props('open')).toBe(true)
+    expect(dialog.props('title')).toBe('从成果库移除？')
+    expect(requestRpc).not.toHaveBeenCalledWith('artifact.delete', expect.anything())
+
+    // 取消不执行；确认才执行。
+    dialog.vm.$emit('cancel')
+    await flushPromises()
     expect(requestRpc).not.toHaveBeenCalledWith('artifact.delete', expect.anything())
 
     await wrapper.get('.artifact-actions .text-btn.danger').trigger('click')
+    wrapper.getComponent(CoreConfirmDialog).vm.$emit('confirm')
     await flushPromises()
     expect(requestRpc).toHaveBeenCalledWith('artifact.delete', {
       project_id: 'project-a',
@@ -69,8 +77,6 @@ describe('ArtifactPanel', () => {
                 status: 'ready',
                 source: 'user_upload',
                 path: 'attachment://brief',
-                revision_count: 2,
-                latest_revision_id: 'r2',
               },
               {
                 artifact_id: 'output-1',
@@ -80,7 +86,6 @@ describe('ArtifactPanel', () => {
                 status: 'completed',
                 source: 'agent_generated',
                 path: 'workspace://report.pdf',
-                revision_count: 1,
               },
               { artifact_id: 'ignored-1', name: 'trace.log', kind: 'file', role: 'evidence' },
             ],
@@ -93,55 +98,29 @@ describe('ArtifactPanel', () => {
     await flushPromises()
 
     expect(wrapper.findAll('.artifact-item')).toHaveLength(2)
-    expect(wrapper.text()).toContain('输入')
-    expect(wrapper.text()).toContain('2 个版本')
+    expect(wrapper.text()).toContain('用户')
+    expect(wrapper.text()).not.toContain('个版本')
     await wrapper.get('input[aria-label="搜索成果库"]').setValue('report')
     expect(wrapper.findAll('.artifact-item')).toHaveLength(1)
     await wrapper.get('.artifact-item-main').trigger('click')
-    expect(openArtifact).toHaveBeenCalledWith(expect.objectContaining({ artifact_id: 'output-1' }), undefined)
+    expect(openArtifact).toHaveBeenCalledWith(expect.objectContaining({ artifact_id: 'output-1' }))
     wrapper.unmount()
   })
 
-  it('loads revision history, restores a revision, and refreshes on an artifact event', async () => {
-    const requestRpc = vi.fn(async (method: string) => {
-      if (method === 'artifact.list') {
-        return {
-          artifacts: [{
-            ...artifact('a1'),
-            role: 'deliverable',
-            revisions: [
-              { revision_id: 'r1', revision: 1, created_at: '2026-09-12T00:00:00Z', path: 'workspace://old.txt' },
-              { revision_id: 'r2', revision: 2, created_at: '2026-09-13T00:00:00Z', path: 'workspace://new.txt' },
-            ],
-            latest_revision_id: 'r2',
-            revision_count: 2,
-          }],
-        }
-      }
-      if (method === 'artifact.revisions') {
-        return {
-          revisions: [
-            { revision_id: 'r1', revision: 1, created_at: '2026-09-12T00:00:00Z' },
-            { revision_id: 'r2', revision: 2, created_at: '2026-09-13T00:00:00Z' },
-            { revision_id: 'r3', revision: 3, created_at: '2026-09-14T00:00:00Z' },
-          ],
-        }
-      }
-      return {}
-    })
+  it('offers no version history and still refreshes on an artifact event', async () => {
+    const requestRpc = vi.fn(async (method: string) => (
+      method === 'artifact.list' ? { artifacts: [{ ...artifact('a1'), role: 'deliverable' }] } : {}
+    ))
     const wrapper = mount(ArtifactPanel, {
       props: { projectId: 'project-a', transport: createFakeTransport(), requestRpc },
     })
     await flushPromises()
-    await wrapper.findAll('.artifact-icon-button')[1].trigger('click')
-    expect(wrapper.find('.artifact-history').exists()).toBe(true)
-    expect(wrapper.findAll('.artifact-revision')).toHaveLength(2)
-    await wrapper.get('.artifact-revision-restore').trigger('click')
-    await flushPromises()
-    expect(requestRpc).toHaveBeenCalledWith('artifact.revision.restore', {
-      project_id: 'project-a', artifact_id: 'a1', revision_id: 'r1',
-    })
-    expect(wrapper.findAll('.artifact-revision')).toHaveLength(3)
+
+    // 成果没有历史版本：面板上不该出现任何版本入口或接口调用。
+    expect(wrapper.text()).not.toContain('版本历史')
+    expect(wrapper.find('.artifact-history').exists()).toBe(false)
+    expect(requestRpc.mock.calls.map(([method]) => method)).not.toContain('artifact.revisions')
+    expect(requestRpc.mock.calls.map(([method]) => method)).not.toContain('artifact.revision.restore')
 
     const beforeRefresh = requestRpc.mock.calls.filter(([method]) => method === 'artifact.list').length
     await wrapper.setProps({ artifactSignal: { method: 'core/runItem', payload: { artifacts: [{ artifact_id: 'a1' }] } } })
@@ -154,7 +133,7 @@ describe('ArtifactPanel', () => {
   it('surfaces removed and missing states and restores a soft-removed item', async () => {
     const requestRpc = vi.fn(async (method: string) => (
       method === 'artifact.list'
-        ? { artifacts: [{ ...artifact('a1'), role: 'deliverable', availability: 'metadata_only', deleted: true }] }
+        ? { artifacts: [{ ...artifact('a1'), role: 'deliverable', missing: true, deleted: true }] }
         : {}
     ))
     const wrapper = mount(ArtifactPanel, {

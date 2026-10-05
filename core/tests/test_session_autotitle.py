@@ -46,7 +46,7 @@ class FakeHub:
 def background_model(isolated_config_root: Path) -> str:
     """Configure one usable provider+model and remember it for the background scene.
 
-    Background work (auto-title, compaction, dreaming) inherits the background
+    Background work (auto-title, compaction) inherits the background
     scene's model; there is no host-wide "default model" to fall back to.
     """
     from lamtools_core.config.model_selection import (

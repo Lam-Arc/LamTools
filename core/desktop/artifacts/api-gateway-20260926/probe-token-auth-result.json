@@ -1,0 +1,42 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06y849wij94hs",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "",
+          "ErrorInfo": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-09-26T11:03:32Z",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Success",
+          "InvokeId": "t-hz06y849wiqqtj4",
+          "InvokeRecordStatus": "Finished",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "bG9naW4gLT4gMjAwCj09PSBsb2dpbiByZXNwb25zZSBzaGFwZSAodmFsdWVzIHJlZGFjdGVkIGZvciB0b2tlbi1saWtlIGtleXMpID09PQogIHRvcCBrZXlzOiBbJ2RhdGEnLCAnbWVzc2FnZScsICdzdWNjZXNzJ10KICBhY2Nlc3NfZXhwaXJlc19hdCAgICAgIDE3OTA0MjE1MTEKICBhY2Nlc3NfdG9rZW4gICAgICAgICAgIDxzdHIgbGVuPTM4OT4KICBzZXNzaW9uICAgICAgICAgICAgICAgIDxkaWN0IGxlbj0yMjM+CiAgdG9rZW5fdHlwZSAgICAgICAgICAgICA8c3RyIGxlbj02PgogIHVzZXIgICAgICAgICAgICAgICAgICAgeydhZmZfY29kZSc6ICcnLCAnYWZmX2NvdW50JzogMCwgJ2FmZl9oaXN0b3J5X3F1b3RhJzogMCwgJ2FmCj09PSB0cnkgYmVhcmVyIGF1dGggd2l0aCBjYW5kaWRhdGUgZmllbGRzID09PQogIGNhbmRpZGF0ZSB0b2tlbiBmb3VuZCAobGVuIDM4OSkKICB3aXRoIEJlYXJlciBvbmx5ICAgICAgICAgICAgLT4gMjAwCiAgd2l0aCBCZWFyZXIgKyBOZXctQVBJLVVzZXIgIC0+IDIwMAogIC90bXAvc2VsZjIuanNvbiBzdWNjZXNzPVRydWUgcm9sZT0xMDAgdXNlcj1yb290IG1zZz0KICAvdG1wL3NlbGYzLmpzb24gc3VjY2Vzcz1UcnVlIHJvbGU9MTAwIHVzZXI9cm9vdCBtc2c9Cj09PSBvcHRpb24gZW5kcG9pbnQgdmlhIGJlYXJlciA9PT0KICBHRVQgL2FwaS9vcHRpb24vIC0+IDIwMAogIHN1Y2Nlc3M6IFRydWUgfCBtZXNzYWdlOiAKICBvcHRpb25zOiAyMzMKICAgIERhdGFFeHBvcnREZWZhdWx0VGltZSA9IGhvdXIKICAgIERlbW9TaXRlRW5hYmxlZCA9IGZhbHNlCiAgICBEZWZhdWx0Q29sbGFwc2VTaWRlYmFyID0gZmFsc2UKICAgIFR1cm5zdGlsZUNoZWNrRW5hYmxlZCA9IGZhbHNlCiAgICBSZWdpc3RlckVuYWJsZWQgPSB0cnVlCiAgICBQYXNzd29yZFJlZ2lzdGVyRW5hYmxlZCA9IHRydWUKICAgIGNsYXVkZS5kZWZhdWx0X21heF90b2tlbnMgPSB7ImRlZmF1bHQiOjgxOTJ9CiAgICBEZWZhdWx0VXNlQXV0b0dyb3VwID0gZmFsc2UKICAgIGNoYW5uZWxfYWZmaW5pdHlfc2V0dGluZy5kZWZhdWx0X3R0bF9zZWNvbmRzID0gMzYwMAo9PT0gZG9uZSA9PT0K",
+          "Repeats": 1,
+          "StartTime": "2026-09-26T11:03:31Z",
+          "StopTime": "",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A0DD62-7770-51B3-8A94-B0B715A94228"
+}

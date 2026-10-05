@@ -20,14 +20,14 @@ def test_ensure_default_config_files_creates_every_default(tmp_path, isolated_co
         isolated_config_root / "hooks.json",
         isolated_config_root / "AGENTS.md",
         isolated_config_root / "load_context.jsonc",
-        isolated_config_root / "memory.md",
         isolated_config_root / "model_retry.jsonc",
         isolated_config_root / "subagent" / "guide.md",
         isolated_config_root / "subagent" / "settings.json",
     } | _bundled_copied(isolated_config_root)
     assert core_config_dir() == isolated_config_root
-    for name in ("hooks.json", "AGENTS.md", "load_context.jsonc", "memory.md"):
+    for name in ("hooks.json", "AGENTS.md", "load_context.jsonc"):
         assert (isolated_config_root / name).is_file()
+    assert (isolated_config_root / "memory").is_dir()
     assert (isolated_config_root / "subagent" / "guide.md").is_file()
     assert (isolated_config_root / "subagent" / "settings.json").is_file()
     assert json.loads(

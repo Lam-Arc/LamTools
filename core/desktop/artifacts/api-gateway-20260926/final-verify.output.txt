@@ -1,0 +1,48 @@
+  bridge gateway: 172.30.0.1
+=== 1) operator helper for the routing-index reload ===
+  -rwxr-xr-x 1 root root 355 Sep 26 19:26 /usr/local/bin/lamtools-api-reload
+=== 2) mock upstream listening ===
+=== 3) register a temporary channel and key ===
+  channel created: True
+  client key ready: True
+=== 4) apply the routing-index reload ===
+ Container lamtools-api-gateway Started 
+gateway restarted; new channels are now routable
+  gateway back after 6s
+=== 5) client surface without a key (must be rejected) ===
+  GET /v1/models -> 401
+=== 6) client surface with a key over public TLS ===
+  GET /v1/models -> 200
+    models: ['gpt-4o-mini']
+  POST /v1/chat/completions non-streaming -> 200
+    reply: Hello from mock | usage: {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2}
+  POST /v1/chat/completions streaming:
+    http=200
+    sse data lines: 7 | saw [DONE]: True
+    reassembled: 'Hello from mock'
+=== 7) X-Forwarded-For spoofing check ===
+  PASS: forged address absent from the log
+=== 8) key material must not appear in container logs ===
+  FAIL: key found in logs
+=== 9) console over TLS + security headers ===
+  HTTP/2 200 
+  referrer-policy: no-referrer
+  strict-transport-security: max-age=31536000
+  x-content-type-options: nosniff
+=== 10) resources ===
+lamtools-api-cache redis:7-alpine Up 3 minutes (healthy)
+lamtools-api-db postgres:16-alpine Up 3 minutes (healthy)
+lamtools-api-gateway calciumion/new-api:v0.13.2 Up 12 seconds
+                 total        used        free      shared  buff/cache   available
+  Mem:            3623         453         130          20        3039        2858
+  /dev/vda3        40G   12G   26G  31% /
+=== mock access log ===
+  POST /v1/chat/completions stream=False model=gpt-4o-mini
+  POST /v1/chat/completions stream=True model=gpt-4o-mini
+=== done ===
+=== cleanup ===
+  delete token 3 -> success=True
+  token leftovers: none
+  delete channel 3 -> success=True
+  channel leftovers: none
+  mock stopped

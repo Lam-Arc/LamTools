@@ -147,7 +147,7 @@ def default_load_tools() -> LoadTools:
             tools=[
                 "read_file", "list_dir", "search_files", "search_content",
                 "web_search", "web_fetch", "git_status", "git_diff",
-                "load_skill", "message",
+                "load_skill", "memory", "message",
             ],
         ),
         "execute": LoadToolMode(

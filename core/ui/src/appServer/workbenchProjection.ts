@@ -557,8 +557,16 @@ function coreWorkbenchPartStatus(
   isSubmittingRequest: boolean,
 ): MessagePart['status'] {
   if (isResolvedRequest) return 'completed'
-  if (isSubmittingRequest) return 'running'
-  return coreAppItemPartStatus(rawStatus)
+  const itemStatus = coreAppItemPartStatus(rawStatus)
+  // A click holds the card at "处理中" only while its item is still in flight.
+  // Once the item itself is terminal (the approved tool ran, the request was
+  // cancelled) that status is the truthful one: the submit latch is in-memory
+  // and only a later snapshot clears it, so forcing 'running' kept the request
+  // in the pending queue — the composer stayed taken over by the approval panel
+  // with every option disabled and nothing the user could do (2026-10-01).
+  const itemInFlight = itemStatus === 'pending' || itemStatus === 'running'
+  if (isSubmittingRequest && itemInFlight) return 'running'
+  return itemStatus
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

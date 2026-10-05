@@ -1,0 +1,11 @@
+  probe user id=5 starts at quota 0
+  POST   /api/user/manage     -> http 200 success=False msg=Invalid parameters | quota now=0
+  POST   /api/user/manage     -> http 200 success=True msg= | quota now=0
+  PUT    /api/user/           -> http 200 success=True msg= | quota now=
+  POST   /api/user/quota      -> http 404 success=None msg=None | quota now=
+  redemption-code route (the built-in way to hand somebody quota):
+    create code -> http 200 success=False msg=Expiration time cannot be earlier than current tim
+    codes on record: 0
+=== final cleanup ===
+admin login failed
+=== done ===

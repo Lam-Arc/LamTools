@@ -24,7 +24,6 @@ from lamtools_core.app.core_db import (
     CoreGoal,
     CoreHistoryEntry,
     CoreHandoffContext,
-    CoreMemory,
     CoreProject,
     CoreRestoreOperation,
     CoreRuntimeSession,
@@ -216,18 +215,6 @@ class ConversationExportService:
                 .order_by(CoreGoal.created_at.asc(), CoreGoal.id.asc())
             )).scalars())
             work_roots = _session_work_roots(snapshot_rows)
-            memories = list((await db.execute(
-                select(CoreMemory)
-                .where(or_(
-                    CoreMemory.thread_id.in_(owned_ids),
-                    CoreMemory.work_root.in_(work_roots),
-                ))
-                .order_by(CoreMemory.created_at.asc(), CoreMemory.id.asc())
-            )).scalars()) if work_roots else list((await db.execute(
-                select(CoreMemory)
-                .where(CoreMemory.thread_id.in_(owned_ids))
-                .order_by(CoreMemory.created_at.asc(), CoreMemory.id.asc())
-            )).scalars())
             arrange_jobs = list((await db.execute(
                 select(CoreArrangeJob)
                 .where(or_(
@@ -334,7 +321,6 @@ class ConversationExportService:
             checkpoint_blobs=tuple(workspace_blob_dicts),
             attachments=tuple(attachment_dicts),
             goals=tuple(_model_dict(row) for row in goals),
-            memories=tuple(_model_dict(row) for row in memories),
             arrange_jobs=tuple(_model_dict(row) for row in arrange_jobs),
             arrange_occurrences=tuple(_model_dict(row) for row in arrange_occurrences),
             arrange_signals=tuple(_model_dict(row) for row in arrange_signals),
@@ -435,7 +421,6 @@ async def _session_family_ids(db: Any, thread_id: str) -> set[str]:
         CoreHandoffContext.thread_id,
         CoreAttachment.session_id,
         CoreGoal.thread_id,
-        CoreMemory.thread_id,
         CoreArrangeJob.thread_id,
         CoreArrangeJob.source_thread_id,
         CoreCheckpoint.session_id,

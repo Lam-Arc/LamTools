@@ -719,3 +719,95 @@ async def test_run_subprocess_cancellation_terminates_child(tmp_path: Path):
     assert time.monotonic() - started_at < 3
     await asyncio.sleep(1)
     assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_run_command_persistent_flag_reaches_background_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    captured: dict[str, object] = {}
+
+    async def fake_background(argv, **kwargs):
+        captured.update(kwargs)
+        return CommandExecution(
+            exit_code=0,
+            background=True,
+            metadata={"pid": 321, "stdout_log": "out.log", "stderr_log": "err.log", "persistent": True},
+        )
+
+    monkeypatch.setattr(command_tools_module.sys, "platform", "linux")
+    monkeypatch.setattr(command_tools_module, "_run_background_subprocess", fake_background)
+    handlers = CommandToolHandlers(
+        work_root=tmp_path,
+        command_timeout=10,
+        loaded_skill_roots=set(),
+        background_process_registry=BackgroundProcessRegistry(),
+    )
+
+    result = await handlers.run_command(
+        ToolCall(
+            id="call-persistent",
+            name="run_command",
+            arguments={"command": "python sleep fixture", "persistent": True},
+            metadata={"_runtime_session_id": "session-1", "_runtime_run_id": "run-1"},
+        )
+    )
+
+    assert result.status == "ok"
+    assert captured["persistent"] is True
+    assert result.metadata["persistent"] is True
+    assert "[persistent: true]" in (result.content or "")
+
+
+@pytest.mark.asyncio
+async def test_list_and_kill_process_tools_are_session_scoped(tmp_path: Path):
+    registry = BackgroundProcessRegistry()
+    handlers = CommandToolHandlers(
+        work_root=tmp_path,
+        command_timeout=10,
+        loaded_skill_roots=set(),
+        background_process_registry=registry,
+    )
+    registry.register(
+        _RegisteredFakeProcess(654),
+        session_id="session-1",
+        run_id="run-1",
+        work_root=tmp_path,
+        persistent=True,
+        command="python -m http.server 8123",
+    )
+
+    listed = await handlers.list_processes(
+        ToolCall(id="list-1", name="list_processes", arguments={}, metadata={"_runtime_session_id": "session-1"})
+    )
+    assert listed.status == "ok"
+    assert "pid 654" in (listed.content or "")
+    assert "persistent" in (listed.content or "")
+    assert listed.metadata["processes"][0]["pid"] == 654
+
+    foreign = await handlers.list_processes(
+        ToolCall(id="list-2", name="list_processes", arguments={}, metadata={"_runtime_session_id": "session-2"})
+    )
+    assert foreign.metadata["processes"] == []
+
+    wrong_session = await handlers.kill_process(
+        ToolCall(id="kill-1", name="kill_process", arguments={"pid": 654}, metadata={"_runtime_session_id": "session-2"})
+    )
+    assert wrong_session.status == "failed"
+    assert "No registered background process" in (wrong_session.error or "")
+
+    killed = await handlers.kill_process(
+        ToolCall(id="kill-2", name="kill_process", arguments={"pid": 654}, metadata={"_runtime_session_id": "session-1"})
+    )
+    assert killed.status == "ok"
+    assert killed.metadata["terminated"] is True
+    assert registry.list() == []
+
+
+class _RegisteredFakeProcess:
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        return self.returncode

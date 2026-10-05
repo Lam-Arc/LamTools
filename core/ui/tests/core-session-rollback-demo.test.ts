@@ -13,7 +13,7 @@ describe('Shared Core App rollback host wiring', () => {
     expect(source).not.toMatch(/loadCheckpointGraph\(/)
   })
 
-  it('reconnects the active thread after conversation and files are restored', () => {
+  it('reconnects the active thread after the conversation is restored', () => {
     expect(source).toContain("const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))")
     expect(source).toMatch(/async function refreshAfterRollback\(\)[\s\S]*await refreshSessions\(\)[\s\S]*await selectSession\(sessionId\)/)
   })
@@ -37,7 +37,24 @@ describe('Shared Core App rollback host wiring', () => {
     expect(source).not.toMatch(/:checkpoint-turn-ids=/)
   })
 
-  it('confirms a rollback with a short prompt that states the file outcome', () => {
-    expect(source).toMatch(/window\.confirm\('删除这条消息及之后的全部对话？有可用检查点时会一并恢复文件；没有则只清对话。'\)/)
+  it('confirms a rollback in the app dialog, and says files are untouched', () => {
+    // 原生 confirm 会顶着 "127.0.0.1:5173 显示" 这样的地址标题，观感与应用无关；
+    // 撤回确认走应用内确认框。
+    const handler = source.slice(
+      source.indexOf('function handleRollbackMessage'),
+      source.indexOf('async function confirmRollbackMessage'),
+    )
+    expect(handler).not.toMatch(/window\.confirm/)
+    expect(handler).toMatch(/askConfirm\(\{ title: '撤回'/)
+    expect(source).toMatch(/<CoreConfirmDialog[\s\S]*?:open="Boolean\(appConfirm\)"/)
+    expect(source).toMatch(/@cancel="appConfirm = null"/)
+    expect(source).toMatch(/@confirm="confirmAppAction"/)
+
+    const confirmed = source.slice(
+      source.indexOf('async function rollbackTurn'),
+      source.indexOf('async function handleEditMessage'),
+    )
+    expect(confirmed).toMatch(/session\.rollback[\s\S]*turn_id: turnId/)
+    expect(confirmed).toMatch(/showToast\('notice', '已删除此轮及之后的对话；文件与成果保持不变。'\)/)
   })
 })

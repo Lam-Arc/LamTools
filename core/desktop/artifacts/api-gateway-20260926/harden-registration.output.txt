@@ -1,0 +1,26 @@
+=== before ===
+  authenticated as root (token len 389)
+200  RegisterEnabled = true
+200  PasswordRegisterEnabled = true
+200  EmailVerificationEnabled = false
+200  TurnstileCheckEnabled = false
+200  SelfUseModeEnabled = false
+200  DemoSiteEnabled = false
+200  QuotaForNewUser = 0
+=== apply hardening ===
+  PUT RegisterEnabled=false -> 200 | success=True msg=
+  PUT PasswordRegisterEnabled=false -> 200 | success=True msg=
+=== after (re-read from server) ===
+200  RegisterEnabled = false
+200  PasswordRegisterEnabled = false
+200  SelfUseModeEnabled = false
+200  QuotaForNewUser = 0
+=== public status flags after ===
+  setup = True
+  register_enabled = False
+  password_register_enabled = False
+  self_use_mode_enabled = False
+  demo_site_enabled = False
+=== live registration attempt (must be rejected) ===
+  POST /api/user/register -> 200 | success=False msg=New user registration has been disabled by administrator
+=== done ===

@@ -1,0 +1,27 @@
+  bridge gateway: 172.30.0.1
+  mock listening
+=== timeline ===
+Traceback (most recent call last):
+  File "/tmp/probe.py", line 70, in <module>
+    KEY = cand if cand.startswith("sk-") else "sk-" + cand
+AttributeError: 'NoneType' object has no attribute 'startswith'
+=== after a channel update (PUT) ===
+  no channel to update
+=== waiting out SYNC_FREQUENCY (75s) ===
+Traceback (most recent call last):
+  File "<stdin>", line 28, in <module>
+AttributeError: 'NoneType' object has no attribute 'get'
+=== after gateway restart ===
+ Container lamtools-api-gateway Restarting 
+ Container lamtools-api-gateway Started 
+  gateway back after 6s
+Traceback (most recent call last):
+  File "<stdin>", line 28, in <module>
+AttributeError: 'NoneType' object has no attribute 'get'
+=== mock access log ===
+  nothing reached the mock
+=== done ===
+=== cleanup ===
+  token leftovers: none
+  channel leftovers: none
+  mock stopped

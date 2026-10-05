@@ -207,10 +207,9 @@ export function completeStartupSplash(): void {
     const titlebar = app?.querySelector<HTMLElement>('.titlebar') ?? null
     const leftSidebar = app?.querySelector<HTMLElement>('[data-workspace-left-drawer]') ?? null
     const mainSurface = app?.querySelector<HTMLElement>('.workspace-main') ?? null
-    const stageSurface = app?.querySelector<HTMLElement>('.workspace-stage') ?? null
     const rightSidebar = app?.querySelector<HTMLElement>('[data-workspace-right-drawer]') ?? null
     const composer = app?.querySelector<HTMLElement>('.floating-composer') ?? null
-    const entranceGroups = [titlebar, leftSidebar, mainSurface, stageSurface, rightSidebar, composer]
+    const entranceGroups = [titlebar, leftSidebar, mainSurface, rightSidebar, composer]
     const entranceTargets = entranceGroups.filter((target): target is HTMLElement => Boolean(target))
 
     if (reducedMotion) {
@@ -237,7 +236,6 @@ export function completeStartupSplash(): void {
     if (titlebar) gsap.set(titlebar, { y: -6 })
     if (leftSidebar) gsap.set(leftSidebar, { x: -10 })
     if (mainSurface) gsap.set(mainSurface, { y: 8 })
-    if (stageSurface) gsap.set(stageSurface, { y: 6 })
     if (rightSidebar) gsap.set(rightSidebar, { x: 10 })
     if (composer) gsap.set(composer, { y: 10 })
     // Keep the mounted shell hidden until its initial entrance state is in
@@ -272,7 +270,7 @@ export function completeStartupSplash(): void {
         ease: 'power3.out',
       }, 0.62)
     }
-    const mainRegions = [mainSurface, stageSurface].filter((target): target is HTMLElement => Boolean(target))
+    const mainRegions = [mainSurface].filter((target): target is HTMLElement => Boolean(target))
     if (mainRegions.length) {
       timeline.to(mainRegions, {
         autoAlpha: 1,

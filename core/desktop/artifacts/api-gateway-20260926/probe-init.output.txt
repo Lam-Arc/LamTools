@@ -1,0 +1,35 @@
+=== security-relevant status flags ===
+  checkin_enabled = False
+  demo_site_enabled = False
+  discord_oauth = False
+  email_verification = False
+  github_oauth = False
+  linuxdo_oauth = False
+  oidc_authorization_endpoint = 
+  oidc_client_id = 
+  oidc_display_name = OIDC
+  oidc_enabled = False
+  passkey_login = False
+  password_login_enabled = True
+  password_login_encryption_enabled = False
+  password_register_enabled = True
+  quota_per_unit = 500000
+  register_enabled = True
+  self_use_mode_enabled = False
+  setup = False
+  telegram_bot_name = 
+  telegram_oauth = False
+  telegram_oauth_configured = False
+  turnstile_check = False
+  turnstile_site_key = 
+  version = v1.0.0-rc.40
+  wechat_login = False
+  wechat_qrcode = 
+=== setup endpoint state ===
+GET /api/setup -> 200
+  success: True | message: None
+  data keys: ['database_type', 'root_init', 'status']
+=== are default root credentials still live? ===
+POST /api/user/login -> 200
+  login success flag: False | message: Username or password is incorrect, or user has been banned
+=== done ===

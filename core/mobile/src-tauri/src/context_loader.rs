@@ -27,7 +27,6 @@ pub fn load_project_context(
         ContextSpec { name: "AGENTS.md".into(), priority: 10, memory: false },
         ContextSpec { name: "CLAUDE.md".into(), priority: 10, memory: false },
         ContextSpec { name: "CONTEXT.md".into(), priority: 10, memory: false },
-        ContextSpec { name: "MEMORY.md".into(), priority: 20, memory: true },
     ];
     let mut excluded = BTreeSet::new();
     for config in [global_config, &project_config] {
@@ -109,19 +108,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_default_and_configured_files_with_exclusions_and_memory() {
+    fn loads_default_and_configured_files_with_exclusions() {
         let root = std::env::temp_dir().join(format!("sunday-context-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("AGENTS.md"), "base").unwrap();
         fs::write(root.join("CLAUDE.md"), "claude").unwrap();
-        fs::write(root.join("MEMORY.md"), "remember").unwrap();
         fs::write(root.join("custom.md"), "added").unwrap();
         fs::write(root.join("load_context.jsonc"), "{addition:[{name:'custom.md',kind:'system'}],except:['CLAUDE.md']}").unwrap();
         let context = load_project_context(&root, AgentContext::default(), &Value::Null).unwrap();
         assert!(context.project_instructions.contains("base"));
         assert!(context.project_instructions.contains("added"));
         assert!(!context.project_instructions.contains("claude"));
-        assert!(context.memory.contains("remember"));
         let excluded = load_project_context(&root, AgentContext::default(), &serde_json::json!({"except":["AGENTS.md"]})).unwrap();
         assert!(!excluded.project_instructions.contains("base"));
         fs::remove_dir_all(root).unwrap();

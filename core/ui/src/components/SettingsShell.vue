@@ -1,7 +1,7 @@
 <template>
-  <div ref="settingsPageEl" class="settings-page" :style="settingsThemeStyle">
-    <!-- Sidebar -->
-    <aside class="settings-sidebar">
+  <div ref="settingsPageEl" class="settings-page" :class="{ 'settings-page--no-nav': props.hideNav }" :style="settingsThemeStyle">
+    <!-- Sidebar (hidden when the host renders the nav in the workspace drawer) -->
+    <aside v-if="!props.hideNav" class="settings-sidebar">
       <div class="settings-brand">
         <strong>{{ title }}</strong>
       </div>
@@ -37,8 +37,8 @@
       </footer>
     </aside>
 
-    <!-- Main content -->
-    <main class="settings-main" :class="{ 'settings-main--models': activeSection === 'models' }">
+    <!-- Main content (the page's own scroller) -->
+    <main ref="settingsMainEl" class="settings-main" :class="{ 'settings-main--models': activeSection === 'models' }">
       <slot name="notice" />
       <!-- No :key remount here — sections are kept alive (v-show in the
            parent slot) so draft state in child editors survives switching
@@ -59,84 +59,14 @@
  */
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
-import {
-  Activity,
-  AppWindow,
-  ArrowLeft,
-  Bell,
-  Bot,
-  Braces,
-  Brush,
-  Circle,
-  Database,
-  Eye,
-  FileCode2,
-  Folder,
-  Globe,
-  Image as ImageIcon,
-  Info,
-  Layers,
-  ListChecks,
-  Lock,
-  Palette,
-  Plug,
-  Puzzle,
-  Scale,
-  Search,
-  Server,
-  Smartphone,
-  Settings2,
-  Sparkles,
-  UsersRound,
-  Wand2,
-  type LucideIcon,
-} from 'lucide-vue-next'
+import { ArrowLeft, Circle, type LucideIcon } from 'lucide-vue-next'
+import { settingsSectionIcon, type SettingsSection } from './settingsSections'
 
-/**
- * 设置分区图标注册表：icon 字段填键名（如 "search"），渲染为 lucide 矢量图标。
- * 未注册的键回退到文本显示（保持向后兼容）。
- */
-const ICON_MAP: Record<string, LucideIcon> = {
-  activity: Activity,
-  'app-window': AppWindow,
-  bell: Bell,
-  bot: Bot,
-  braces: Braces,
-  brush: Brush,
-  database: Database,
-  eye: Eye,
-  'file-code': FileCode2,
-  folder: Folder,
-  globe: Globe,
-  image: ImageIcon,
-  info: Info,
-  layers: Layers,
-  'list-checks': ListChecks,
-  lock: Lock,
-  palette: Palette,
-  puzzle: Puzzle,
-  plug: Plug,
-  scale: Scale,
-  search: Search,
-  server: Server,
-  smartphone: Smartphone,
-  settings: Settings2,
-  sparkles: Sparkles,
-  users: UsersRound,
-  wand: Wand2,
+function iconComponent(icon: string | undefined): LucideIcon | null {
+  return settingsSectionIcon(icon)
 }
 
-function iconComponent(icon: string | undefined) {
-  if (!icon) return null
-  return ICON_MAP[icon.toLowerCase()] || null
-}
-
-export interface SettingsSection {
-  id: string
-  label: string
-  icon?: string
-  description?: string
-}
+export type { SettingsSection }
 
 const props = withDefaults(
   defineProps<{
@@ -145,11 +75,17 @@ const props = withDefaults(
     settingsThemeStyle?: Record<string, string>
     /** Section to open on; falls back to the first section when absent/unknown. */
     initialSection?: string
+    /** Hide the built-in left nav: the host renders it in the workspace drawer. */
+    hideNav?: boolean
+    /** Controlled section from the host's drawer nav; synced one-way in. */
+    activeSection?: string
   }>(),
   {
     title: '设置',
     settingsThemeStyle: () => ({}),
     initialSection: undefined,
+    hideNav: false,
+    activeSection: undefined,
   },
 )
 
@@ -165,7 +101,18 @@ const activeSection = ref(
 )
 const settingsPageEl = ref<HTMLElement | null>(null)
 const settingsNavEl = ref<HTMLElement | null>(null)
+const settingsMainEl = ref<HTMLElement | null>(null)
 const settingsContentEl = ref<HTMLElement | null>(null)
+
+/**
+ * 打开一页设置（或换分区）时回到顶部：滚动容器在前一版布局/上一分区里留下的
+ * 位置会原样沿用，页面一进来就从中间开始，看着像被裁掉了。
+ */
+function resetScrollPosition() {
+  if (settingsMainEl.value) settingsMainEl.value.scrollTop = 0
+  const view = settingsMainEl.value?.closest<HTMLElement>('.full-area-view')
+  if (view) view.scrollTop = 0
+}
 
 let motionContext: gsap.Context | null = null
 let motionMedia: gsap.MatchMedia | null = null
@@ -211,11 +158,25 @@ function animateActiveNavItem() {
 
 watch(activeSection, async () => {
   await nextTick()
+  resetScrollPosition()
   animateActiveNavItem()
   animateSectionChange()
 })
 
-onMounted(() => {
+// Host-controlled section (drawer nav): follow it while it names a real section.
+watch(() => props.activeSection, (id) => {
+  if (id && props.sections.some((section) => section.id === id)) {
+    activeSection.value = id
+  }
+})
+
+onMounted(async () => {
+  // Tell the host which section actually opened so its drawer nav highlights it.
+  if (activeSection.value) emit('section-change', activeSection.value)
+  resetScrollPosition()
+  // 内容（插件列表等）是异步落位的：落位后再回一次顶，别让浏览器把锚点留在中间。
+  await nextTick()
+  resetScrollPosition()
   if (!settingsPageEl.value) return
   motionContext = gsap.context(() => {}, settingsPageEl.value)
   motionMedia = gsap.matchMedia()

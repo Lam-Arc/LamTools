@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import RightSidebarHost from '../src/components/RightSidebarHost.vue'
 import RightSidebarRag from '../src/components/RightSidebarRag.vue'
 import RightSidebarWebSearch from '../src/components/RightSidebarWebSearch.vue'
 import UiSelect from '../src/components/UiSelect.vue'
+import CoreConfirmDialog from '../src/components/CoreConfirmDialog.vue'
 import RightSidebarWidgetRenderer from '../src/components/RightSidebarWidgetRenderer.vue'
 import {
   listPluginWidgets,
@@ -20,180 +21,148 @@ describe('RightSidebarHost', () => {
 beforeEach(() => localStorage.clear())
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.useRealTimers()
+  // 卡片挂在 body 上：清干净，别让上一例的卡片混进 document 查询。
+  document.body.innerHTML = ''
   pluginUIRegistry.clear()
 })
 
-  it('renders the modular first-party stack with Runtime Status collapsed by default', () => {
-    const wrapper = mount(RightSidebarHost, { props: { storageKey: 'test.sidebar' } })
+  it('shows a low-transmission glass card next to the rail while hovering an icon', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(RightSidebarHost, {
+      props: { pluginContributions: [{ id: 'surface', title: 'Surface', order: 0 } as never] },
+      attachTo: document.body,
+    })
 
-    expect(wrapper.find('[data-right-sidebar-host]').exists()).toBe(true)
-    expect(wrapper.get('[data-module-id="runtime"]').classes()).toContain('right-sidebar-module--collapsed')
-    expect(wrapper.find('[data-module-id="resources"]').exists()).toBe(true)
-    expect(wrapper.find('[data-module-id="web-search"]').exists()).toBe(true)
-    expect(wrapper.find('[data-module-id="rag"]').exists()).toBe(true)
-    expect(wrapper.get('[data-module-id="artifacts"]').classes()).toContain('right-sidebar-module--disabled')
+    // 竖栏 = 内置模块，一模块一图标，按固定顺序排列；插件/表面条目不入栏。
+    const railIds = wrapper.findAll('[data-right-rail-module]').map(b => b.attributes('data-right-rail-module'))
+    expect(railIds).toEqual(['runtime', 'resources', 'sub-agents', 'web-search', 'processes', 'rag'])
+    // 未悬停时不出卡。
+    expect(document.querySelector('[data-right-sidebar-card]')).toBeNull()
+
+    // 悬停图标：左侧浮出对应模块卡（低透玻璃，压住背后的亮色文字）。
+    await wrapper.get('[data-right-rail-module="runtime"]').trigger('mouseenter')
+    // 卡片挂在 body 上：嵌在带玻璃的抽屉里时，内层模糊采样不到窗外内容。
+    const card = new DOMWrapper(document.querySelector('[data-right-sidebar-card]') as HTMLElement)
+    expect(card.classes()).toContain('optical-glass')
+    expect(card.classes()).toContain('optical-glass--low-trans')
+    expect(card.text()).toContain('Runtime Status')
+
+    // 移进卡片保持显示；两侧都离开并越过后，才收起。
+    await card.trigger('mouseenter')
+    await wrapper.get('[data-right-rail-module="runtime"]').trigger('mouseleave')
+    expect(document.querySelector('[data-right-sidebar-card]')).not.toBeNull()
+    await card.trigger('mouseleave')
+    vi.advanceTimersByTime(1000)
+    await wrapper.vm.$nextTick()
+    expect(document.querySelector('[data-right-sidebar-card]')).toBeNull()
 
     wrapper.unmount()
+    vi.useRealTimers()
   })
 
-  it('keeps motion retained, scoped, and reduced-motion safe', () => {
+  it('keeps the card alive while the pointer crosses from the rail onto the card', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(RightSidebarHost, {
+      props: { requestRpc: vi.fn(async () => ({})) },
+      attachTo: document.body,
+    })
+    const rail = wrapper.get('nav.right-sidebar-rail')
+    const button = wrapper.get('[data-right-rail-module="processes"]')
+    const cardElement = () => document.querySelector('[data-right-sidebar-card]') as HTMLElement | null
+
+    await button.trigger('mouseenter')
+    expect(cardElement()).not.toBeNull()
+
+    // 指针离开图标、走进竖栏里图标之间的空白：竖栏整列都是悬停区，卡片不收起。
+    await button.trigger('mouseleave')
+    vi.advanceTimersByTime(400)
+    await wrapper.vm.$nextTick()
+    expect(cardElement()).not.toBeNull()
+
+    // 指针走出竖栏、落在竖栏与卡片之间的缝隙里：宽限之内卡片仍然在。
+    await rail.trigger('mouseleave')
+    vi.advanceTimersByTime(60)
+    await wrapper.vm.$nextTick()
+    expect(cardElement()).not.toBeNull()
+
+    // 缝隙上的搭桥层接管悬停：停在缝里也不会丢卡，宽限作废。
+    const bridge = document.querySelector('[data-right-sidebar-bridge]') as HTMLElement
+    expect(bridge).not.toBeNull()
+    await new DOMWrapper(bridge).trigger('mouseenter')
+    vi.advanceTimersByTime(1000)
+    await wrapper.vm.$nextTick()
+    expect(cardElement()).not.toBeNull()
+
+    // 指针继续走到卡片上：卡片接管。
+    await new DOMWrapper(cardElement() as HTMLElement).trigger('mouseenter')
+    vi.advanceTimersByTime(1000)
+    await wrapper.vm.$nextTick()
+    expect(cardElement()).not.toBeNull()
+
+    // 从卡片离开且不回到竖栏：宽限走完才收起。
+    await new DOMWrapper(cardElement() as HTMLElement).trigger('mouseleave')
+    vi.advanceTimersByTime(159)
+    await wrapper.vm.$nextTick()
+    expect(cardElement()).not.toBeNull()
+    vi.advanceTimersByTime(1)
+    await wrapper.vm.$nextTick()
+    expect(cardElement()).toBeNull()
+
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
+  it('reports the occupied right-rail area to the shell while the card is out', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(RightSidebarHost, {
+      props: { requestRpc: vi.fn(async () => ({})) },
+      attachTo: document.body,
+    })
+
+    expect(wrapper.emitted('hover-change')).toBeUndefined()
+    await wrapper.get('[data-right-rail-module="rag"]').trigger('mouseenter')
+    expect(wrapper.emitted('hover-change')?.at(-1)).toEqual([true])
+
+    // 卡片收起的同时交还区域，壳层才知道可以跟着收竖栏。
+    await wrapper.get('nav.right-sidebar-rail').trigger('mouseleave')
+    vi.advanceTimersByTime(1000)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('hover-change')?.at(-1)).toEqual([false])
+
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
+  it('keeps the hover card content-sized with a large radius and motion fallbacks', () => {
     const hostSource = readFileSync(resolve(import.meta.dirname, '../src/components/RightSidebarHost.vue'), 'utf8')
-    const moduleSource = readFileSync(resolve(import.meta.dirname, '../src/components/RightSidebarModule.vue'), 'utf8')
 
-    expect(hostSource).toContain('<TransitionGroup')
-    expect(hostSource).toContain('<Transition name="right-sidebar-mode" mode="out-in">')
-    expect(hostSource).toContain('.right-sidebar-mode-enter-active')
-    expect(hostSource).toContain('async function animateModuleModeChange()')
-    expect(hostSource).toContain("clearProps: 'opacity,transform,visibility,willChange'")
-    expect(hostSource).toContain('move-class="right-sidebar-module-list-move"')
-    expect(hostSource).toContain('duration: 0.18')
-    expect(hostSource).toContain('hostMotionContext?.revert()')
-    expect(hostSource).toContain("'(prefers-reduced-motion: reduce)'")
-    expect(moduleSource).toContain('v-show="!collapsed"')
-    expect(moduleSource).toContain('gridTemplateRows')
-    expect(moduleSource).toContain('duration: 0.2')
-    expect(moduleSource).toContain("overflow: 'hidden'")
-    expect(moduleSource).toContain("clearProps: 'gridTemplateRows,opacity,visibility,overflow,willChange'")
-    expect(moduleSource).toMatch(/\.right-sidebar-module-body\s*\{[^}]*overflow: visible;/)
-    expect(moduleSource).toMatch(/\.right-sidebar-module-body-content\s*\{[^}]*overflow: visible;/)
-    expect(moduleSource).toContain('moduleMotionContext?.revert()')
-    expect(moduleSource).toContain("'(prefers-reduced-motion: reduce)'")
+    expect(hostSource).toContain('class="right-sidebar-card optical-glass optical-glass--low-trans"')
+    // 卡片头已带模块名：面板内部同名标题在卡内隐藏，避免重复。
+    expect(hostSource).toMatch(/\.right-sidebar-card-body :deep\(\.runtime-widget-head h3\)\s*\{[^}]*display: none;/)
+    // 大圆角 + 只设尺寸上限（可小于、不可大于）。
+    expect(hostSource).toMatch(/\.right-sidebar-card\s*\{[^}]*border-radius: var\(--radius-lg\);/)
+    expect(hostSource).toMatch(/\.right-sidebar-card\s*\{[^}]*width: 285px;[^}]*max-height: 505px;/)
+    // 缝隙上铺一条不可见的搭桥层：右端压住卡片边缘、左端压进竖栏内缘。
+    // 它必须与卡片同级——玻璃面 overflow: hidden，挂在卡片内部会被裁掉；
+    // 也不能复用 ::after，那是玻璃材质的折射层且 pointer-events: none。
+    expect(hostSource).toContain('class="right-sidebar-card-bridge"')
+    expect(hostSource).toMatch(/\.right-sidebar-card-bridge\s*\{[^}]*right: calc\(var\(--right-rail-width, 46px\) - 2px\);[^}]*width: calc\(var\(--space-2\) \+ 4px\);/)
+    expect(hostSource).not.toMatch(/\.right-sidebar-card::after/)
+    // 入场只做透明度淡入，且带减弱动态效果回退。
+    expect(hostSource).toMatch(/@keyframes right-card-in\s*\{[^}]*opacity/)
+    expect(hostSource).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?right-sidebar-card \{ animation: none; \}/)
   })
 
-  it('persists visibility, collapsed state, and order independently per project', async () => {
-    const first = mount(RightSidebarHost, {
-      props: { storageKey: 'test.sidebar', projectId: 'project-a' },
-    })
-    await first.get('.right-sidebar-host-edit').trigger('click')
-    const resourcesToggle = first.findAll('.right-sidebar-layout-editor-item input')[1]
-    if (!resourcesToggle) throw new Error('resources toggle not rendered')
-    await resourcesToggle.setValue(false)
-    const runtime = first.get('[data-module-id="runtime"]')
-    await runtime.get('.right-sidebar-module-collapse').trigger('click')
-    await runtime.get('.right-sidebar-module-move').trigger('click')
-    first.unmount()
-
-    const raw = JSON.parse(localStorage.getItem('test.sidebar.right-sidebar') || '{}')
-    expect(raw.projects['project-a'].visible.resources).toBe(false)
-    expect(raw.projects['project-a'].collapsed.runtime).toBe(false)
-
-    const second = mount(RightSidebarHost, {
-      props: { storageKey: 'test.sidebar', projectId: 'project-b' },
-    })
-    expect(second.find('[data-module-id="resources"]').exists()).toBe(true)
-    second.unmount()
-
-    const restored = mount(RightSidebarHost, {
-      props: { storageKey: 'test.sidebar', projectId: 'project-a' },
-    })
-    expect(restored.find('[data-module-id="resources"]').exists()).toBe(false)
-    expect(restored.get('[data-module-id="runtime"]').classes()).not.toContain('right-sidebar-module--collapsed')
-    restored.unmount()
-  })
-
-  it('renders declarative plugin snapshots and never requires raw markup evaluation', () => {
-    const entry: PluginWidgetEntry = {
-      pluginId: 'example',
-      id: 'health',
-      title: 'Example Health',
-      renderer: 'blocks',
-      snapshot: {
-        schemaVersion: 1,
-        state: 'ok',
-        blocks: [
-          { type: 'metric', label: 'Jobs', value: 3 },
-          { type: 'text', text: '<b>literal</b>' },
-        ],
-      },
-    }
-    const wrapper = mount(RightSidebarHost, {
-      props: {
-        storageKey: 'test.sidebar',
-        pluginWidgets: [entry],
-      },
-    })
-
-    expect(wrapper.get('[data-module-id="plugin:example:health"]').text()).toContain('Jobs')
-    expect(wrapper.get('[data-module-id="plugin:example:health"]').text()).toContain('<b>literal</b>')
-    expect(wrapper.find('[data-module-id="plugin:example:health"] b').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('keeps the Stage slot as the right-panel mode', () => {
-    const wrapper = mount(RightSidebarHost, {
-      props: { storageKey: 'test.sidebar', stageOpen: true },
-      slots: { stage: '<div data-stage-tree>tree</div>' },
-    })
-    expect(wrapper.get('[data-right-sidebar-stage]').text()).toContain('tree')
-    expect(wrapper.find('[data-right-sidebar-module-list]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('keeps module instances mounted while animating runtime and artifacts mode changes', async () => {
-    const wrapper = mount(RightSidebarHost, { props: { storageKey: 'test.sidebar.mode-motion' } })
-    const runtimeModule = wrapper.get('[data-module-id="runtime"]').element
-
-    ;(wrapper.vm as unknown as { selectMode: (mode: 'artifacts') => void }).selectMode('artifacts')
-    await flushPromises()
-
-    expect(wrapper.get('[data-module-id="runtime"]').element).toBe(runtimeModule)
-    expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toContain('成果')
-    wrapper.unmount()
-  })
-
-  it('accepts backend widget discovery and preserves a missing optional facade as a clean state', async () => {
-    const rpc = vi.fn(async (method: string) => {
-      if (method === 'plugin.widget.list') return { widgets: [] }
-      return {}
-    })
+  it('loads module data only when its card opens', async () => {
+    const rpc = vi.fn(async () => ({}))
     const wrapper = mount(RightSidebarHost, { props: { requestRpc: rpc } })
-    await Promise.resolve()
-    expect(wrapper.get('[data-module-id="rag"]').text()).toContain('未安装 RAG 插件')
-    expect(rpc).toHaveBeenCalledWith('plugin.widget.list', expect.any(Object))
-    wrapper.unmount()
-  })
-
-  it('loads session-level sub-agent snapshots and routes source rows to message navigation', async () => {
-    const requestRpc = vi.fn(async (method: string) => {
-      if (method === 'sub_agent.list') {
-        return {
-          runs: [{
-            id: 'sub-1',
-            sub_session_id: 'sub-1',
-            name: 'reviewer',
-            type: 'execute',
-            model: 'model-a',
-            reasoning_level: 'medium',
-            status: 'running',
-            source_message_id: 'parent-1',
-            source_part_id: 'agent-1',
-            started_at: '2026-07-18T00:00:00.000Z',
-          }],
-        }
-      }
-      return {}
-    })
-    const locateSubAgent = vi.fn()
-    const wrapper = mount(RightSidebarHost, {
-      props: {
-        storageKey: 'test.sidebar.sub-agent',
-        sessionId: 'thread-1',
-        requestRpc,
-        locateSubAgent,
-      },
-    })
-
     await flushPromises()
-    const row = wrapper.get('[data-module-id="sub-agents"] [data-sub-agent-id="sub-1"]')
-    expect(row.text()).toContain('execute')
-    expect(row.text()).toContain('运行中')
-    expect(row.attributes('title')).toBe('model-a · medium')
-    await row.trigger('click')
-    expect(locateSubAgent).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'reviewer',
-      sourceMessageId: 'parent-1',
-      sourcePartId: 'agent-1',
-    }))
+    expect(rpc).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-right-rail-module="web-search"]').trigger('mouseenter')
+    await flushPromises()
+    expect(rpc).toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -301,7 +270,6 @@ afterEach(() => {
 
   it('uses descriptor action metadata and only merges snapshot enabled state', async () => {
     const rpc: RightSidebarRpc = vi.fn(async () => ({}))
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const wrapper = mount(RightSidebarWidgetRenderer, {
       props: {
         entry: {
@@ -340,9 +308,21 @@ afterEach(() => {
     const button = wrapper.get('.right-sidebar-widget-action')
     expect(wrapper.findAll('.right-sidebar-widget-action')).toHaveLength(1)
     expect(button.text()).toBe('清理索引')
+    // 危险动作先问一次：应用内确认框，未确认不动手。
     await button.trigger('click')
-    expect(confirm).toHaveBeenCalledWith('确定执行「清理索引」？')
+    const dialog = wrapper.getComponent(CoreConfirmDialog)
+    expect(dialog.props('open')).toBe(true)
+    expect(dialog.props('title')).toBe('清理索引')
     expect(rpc).not.toHaveBeenCalled()
+
+    // 取消就不执行；确认才执行。
+    dialog.vm.$emit('cancel')
+    await flushPromises()
+    expect(rpc).not.toHaveBeenCalled()
+    await button.trigger('click')
+    wrapper.getComponent(CoreConfirmDialog).vm.$emit('confirm')
+    await flushPromises()
+    expect(rpc).toHaveBeenCalled()
     wrapper.unmount()
   })
 

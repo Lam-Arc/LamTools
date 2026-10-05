@@ -1,0 +1,42 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06y86kmcm1xj4",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "",
+          "ErrorInfo": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-09-26T11:29:18Z",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Success",
+          "InvokeId": "t-hz06y86kmctjmkg",
+          "InvokeRecordStatus": "Finished",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "PT09IHRva2VuIHJvd3MgPT09CiAgdG90YWw9NiBsaXZlPTAKICBsaXZlIHRva2Vuczogbm9uZQo9PT0gcmVnaXN0cmF0aW9uIGNvbnRyb2wgPT09CiAgUmVnaXN0ZXJFbmFibGVkPWZhbHNlLCBQYXNzd29yZFJlZ2lzdGVyRW5hYmxlZD1mYWxzZSwgRW1haWxWZXJpZmljYXRpb25FbmFibGVkPWZhbHNlLCBUdXJuc3RpbGVDaGVja0VuYWJsZWQ9ZmFsc2UKPT09IGxpdmUgcmVnaXN0cmF0aW9uIGF0dGVtcHQgKGF1dGhvcml0YXRpdmUgY2hlY2spID09PQogIGh0dHA9MjAwIHN1Y2Nlc3M9RmFsc2UgbXNnPU5ldyB1c2VyIHJlZ2lzdHJhdGlvbiBoYXMgYmVlbiBkaXNhYmxlZCBieSBhZG1pbmlzdHJhdG9yCj09PSBkb25lID09PQo=",
+          "Repeats": 1,
+          "StartTime": "2026-09-26T11:29:17Z",
+          "StopTime": "",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A0DD7A-0C58-59A7-B102-75456192B356"
+}

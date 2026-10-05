@@ -215,7 +215,9 @@ describe('CoreSettings 关于与更新 section (source contract)', () => {
 
   it('registers the about section and its data-* hooks in CoreSettings', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/CoreSettings.vue'), 'utf8')
-    expect(source).toContain("{ id: 'about', label: '关于与更新', icon: 'info' }")
+    // 分区清单集中在 settingsSections.ts（会话栏导航与内置导航共用一份）。
+    const sections = readFileSync(resolve(process.cwd(), 'src/components/settingsSections.ts'), 'utf8')
+    expect(sections).toContain("{ id: 'about', label: '关于与更新', icon: 'info' }")
     expect(source).toContain("activeSection === 'about'")
     expect(source).toContain('data-current-version')
     expect(source).toContain('data-check-updates')
@@ -230,8 +232,8 @@ describe('CoreSettings 关于与更新 section (source contract)', () => {
     expect(source).toContain('useCoreUpdateState(props.requestRpc || defaultRequestRpc)')
   })
 
-  it('registers the info icon in SettingsShell', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/components/SettingsShell.vue'), 'utf8')
+  it('registers the info icon in the shared sections registry', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/settingsSections.ts'), 'utf8')
     expect(source).toContain('Info,')
     expect(source).toContain('info: Info,')
   })

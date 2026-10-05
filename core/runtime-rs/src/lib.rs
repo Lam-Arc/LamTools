@@ -15,7 +15,6 @@ pub mod fetch_tools;
 pub mod hooks;
 pub mod mcp;
 pub mod image_gen;
-pub mod memory;
 pub mod plan_tools;
 pub mod plugin_catalog;
 mod profiles;
@@ -383,7 +382,6 @@ pub struct TurnResult {
     #[serde(default)]
     pub runtime_history: Vec<Message>,
     pub compaction: Option<compaction::CompactionReport>,
-    pub dreaming: Option<memory::DreamingOutcome>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -1017,7 +1015,6 @@ where
                 runtime_warnings: continuation.runtime_warnings,
                 runtime_history,
                 compaction: continuation.compaction,
-                dreaming: None,
             },
         })
     }

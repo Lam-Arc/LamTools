@@ -1,0 +1,20 @@
+=== containers ===
+lamtools-api-cache redis:7-alpine Up 6 minutes (healthy)
+lamtools-api-db postgres:16-alpine Up 6 minutes (healthy)
+lamtools-api-gateway calciumion/new-api:v0.13.2 Up 47 seconds
+=== no test artefacts left ===
+  channels=0 abilities=0 tokens=6
+=== public reachability ===
+  console   -> 200
+  no-key API-> 401
+=== registration state ===
+  version = v0.13.2
+  setup = True
+  self_use_mode_enabled = False
+  register_enabled = None
+=== credential file ===
+  -rw------- 1 root root 236 Sep 26 19:22 /opt/lamtools-api/admin-credentials.txt
+  -rwxr-xr-x 1 root root 355 Sep 26 19:26 /usr/local/bin/lamtools-api-reload
+=== caddy site present ===
+  matches: 2
+=== done ===

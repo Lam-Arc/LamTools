@@ -1,6 +1,6 @@
 import { shallowReactive } from 'vue'
 import { copyText } from '../../helpers/clipboard'
-import type { ContextMenuEntry, ContextMenuAttributes, OpenContextMenuOptions } from './types'
+import type { ContextMenuAnchor, ContextMenuEntry, ContextMenuAttributes, OpenContextMenuOptions } from './types'
 
 export interface ContextMenuState {
   /** Changes for every open call, including replacement of an already open menu. */
@@ -8,6 +8,8 @@ export interface ContextMenuState {
   open: boolean
   x: number
   y: number
+  /** 显式锚点（如贴住触发按钮）：给了就不再跟随鼠标点。 */
+  anchor: ContextMenuAnchor | null
   items: ContextMenuEntry[]
   ownerId?: string
   panelAttributes?: ContextMenuAttributes
@@ -19,6 +21,7 @@ export const contextMenuState = shallowReactive<ContextMenuState>({
   open: false,
   x: 0,
   y: 0,
+  anchor: null,
   items: [],
   ownerId: undefined,
   panelAttributes: undefined,
@@ -441,6 +444,7 @@ export function openContextMenu(options: OpenContextMenuOptions): void {
   contextMenuState.open = true
   contextMenuState.x = options.event.clientX
   contextMenuState.y = options.event.clientY
+  contextMenuState.anchor = options.anchor ?? null
   contextMenuState.items = options.items
   contextMenuState.ownerId = options.ownerId
   contextMenuState.panelAttributes = options.panelAttributes
@@ -458,6 +462,7 @@ export function closeContextMenu(options: { restoreFocus?: boolean } = {}): void
   closeCallback = undefined
   contextMenuState.open = false
   contextMenuState.items = []
+  contextMenuState.anchor = null
   contextMenuState.ownerId = undefined
   contextMenuState.panelAttributes = undefined
   removeListeners()

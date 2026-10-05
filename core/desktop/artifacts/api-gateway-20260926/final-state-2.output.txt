@@ -1,0 +1,8 @@
+=== token rows ===
+  total=6 live=0
+  live tokens: none
+=== registration control ===
+  RegisterEnabled=false, PasswordRegisterEnabled=false, EmailVerificationEnabled=false, TurnstileCheckEnabled=false
+=== live registration attempt (authoritative check) ===
+  http=200 success=False msg=New user registration has been disabled by administrator
+=== done ===

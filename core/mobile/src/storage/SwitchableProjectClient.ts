@@ -18,6 +18,12 @@ export function createSwitchableProjectClient(active: () => CoreProjectClient): 
     readRawFile: (...args) => active().readRawFile(...args),
     browseDirectory: (...args) => active().browseDirectory(...args),
     listPlanLibrary: (...args) => active().listPlanLibrary(...args),
+    createPlanLibraryFile: (...args) => active().createPlanLibraryFile(...args),
+    createPlanLibraryFolder: (...args) => active().createPlanLibraryFolder(...args),
+    deletePlanLibraryFolder: (...args) => active().deletePlanLibraryFolder(...args),
+    renamePlanLibraryFile: (...args) => active().renamePlanLibraryFile(...args),
+    movePlanLibraryFile: (...args) => active().movePlanLibraryFile(...args),
+    favoritePlanLibraryFile: (...args) => active().favoritePlanLibraryFile(...args),
     deletePlanLibraryFile: (...args) => active().deletePlanLibraryFile(...args),
   }
 }

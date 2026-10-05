@@ -1,0 +1,39 @@
+=== redis key inventory (no values printed) ===
+3
+    rateLimit:v2:ip:CT:172.30.0.1
+    rateLimit:v2:ip:GA:172.30.0.1
+    auth:user:version:1
+=== delete only rate-limit / login throttle keys ===
+  matching keys: 2
+    rateLimit:v2:ip:CT:172.30.0.1
+    rateLimit:v2:ip:GA:172.30.0.1
+  key count before/after: 3 / 1
+=== read gating settings ===
+  login OK on attempt 1
+  options read: 233 http 200
+    StreamCacheQueueLength                           = 0
+    channel_affinity_setting.switch_on_success       = true
+    performance_setting.disk_cache_path              = 
+    performance_setting.disk_cache_max_size_mb       = 1024
+    CacheRatio                                       = {"claude-3-5-haiku-20241022":0.1,"claude-3-5-sonnet-20240620":0.1,"claude-3-5-sonnet-20241022":0.1,"claude-3-7
+    performance_setting.disk_cache_enabled           = false
+    channel_affinity_setting.rules                   = [{"name":"codex cli trace","model_regex":["^gpt-.*$"],"path_regex":["/v1/responses"],"key_sources":[{"type":"g
+    channel_affinity_setting.keep_on_channel_disabled = false
+    CreateCacheRatio                                 = {"claude-3-5-haiku-20241022":1.25,"claude-3-5-sonnet-20240620":1.25,"claude-3-5-sonnet-20241022":1.25,"claude-
+    performance_setting.disk_cache_threshold_mb      = 10
+    channel_affinity_setting.max_entries             = 100000
+    channel_affinity_setting.session_mode            = 
+    channel_affinity_setting.enabled                 = true
+    channel_affinity_setting.default_ttl_seconds     = 3600
+  --- rate-limit settings ---
+    ModelRequestRateLimitDurationMinutes             = 1
+    ModelRequestRateLimitSuccessCount                = 1000
+    ModelRequestRateLimitCount                       = 0
+    ModelRequestRateLimitEnabled                     = false
+    ModelRequestRateLimitGroup                       = {}
+  --- pricing / model registry ---
+    /api/pricing/ http=200 entries=0 gpt-4o-mini=False
+    /api/models/ http=401 entries=0 gpt-4o-mini=False
+  --- groups configured ---
+    /api/group/ http=200 data=["svip", "default", "vip"]
+=== done ===

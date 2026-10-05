@@ -263,7 +263,6 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   justify-content: center;
   padding: var(--space-5);
   background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(6px);
   animation: overlay-in 0.2s ease-out;
 }
 

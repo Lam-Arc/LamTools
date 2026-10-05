@@ -1,0 +1,27 @@
+  bridge gateway: 172.30.0.1
+  mock listening on 172.30.0.1:8323
+=== trials ===
+  key ready (len 51)
+  [weight=1] created id=4 weight=1 priority=0 | test success=True
+      relay http=503 msg=No available channel for model gpt-4o-mini under group default (distributor) (request id: 20260926110807569771
+      channel deleted: True
+  [weight=1 priority=1] created id=5 weight=1 priority=1 | test success=True
+      relay http=503 msg=No available channel for model gpt-4o-mini under group default (distributor) (request id: 20260926110807625625
+      channel deleted: True
+  [weight=10 priority=10] created id=6 weight=10 priority=10 | test success=True
+      relay http=503 msg=No available channel for model gpt-4o-mini under group default (distributor) (request id: 20260926110807678374
+      channel deleted: True
+  [weight=1 + model_mapping] created id=7 weight=1 priority=0 | test success=True
+      relay http=503 msg=No available channel for model gpt-4o-mini under group default (distributor) (request id: 20260926110807725946
+      channel deleted: True
+=== mock access log ===
+  POST /v1/chat/completions stream=False model=gpt-4o-mini
+  POST /v1/chat/completions stream=False model=gpt-4o-mini
+  POST /v1/chat/completions stream=False model=gpt-4o-mini
+  POST /v1/chat/completions stream=False model=gpt-4o-mini
+=== done ===
+=== cleanup ===
+  delete token 5 -> success=True
+  token leftovers: none
+  channel leftovers: none
+  mock stopped

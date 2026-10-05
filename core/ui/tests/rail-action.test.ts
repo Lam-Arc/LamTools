@@ -113,13 +113,16 @@ describe('RailAction', () => {
     expect(variablesCss).toMatch(/--rail-action-size-full: 32px/)
   })
 
-  it('keeps the compact rail width in two tiers around the full-screen breakpoint', () => {
-    // 小界面 = 紧凑档（--sidebar-width，标准的 70%）；大界面/全屏回到标准宽度。
+  it('keeps the left rail width in three tiers and lets the sidebar width drive the icon fold', () => {
+    // 小界面 = 紧凑档（--sidebar-width）；窗口宽裕先升中间档；大界面/全屏回到标准宽度。
     expect(variablesCss).toContain('--sidebar-width: 162px')
+    expect(variablesCss).toContain('--sidebar-width-mid: 200px')
     expect(variablesCss).toContain('--sidebar-width-full: 232px')
+    expect(shellCss).toMatch(/@media \(min-width: 1200px\) \{\s*\.workspace-shell \{\s*--sidebar-width: var\(--sidebar-width-mid\);\s*\}\s*\}/)
     expect(shellCss).toMatch(/@media \(min-width: 1600px\) \{\s*\.workspace-shell \{\s*--sidebar-width: var\(--sidebar-width-full\);\s*--rail-action-size: var\(--rail-action-size-full\);\s*\}\s*\}/)
-    // 紧凑档同时让项目行交出左侧图标与折叠键（同一对断点）。
-    expect(sidebarCss).toMatch(/@media \(min-width: 641px\) and \(max-width: 1599px\) \{[\s\S]*?\.project-toggle \{ display: none; \}[\s\S]*?\.project-main \{ grid-template-columns: minmax\(0, 1fr\); \}[\s\S]*?\.project-name \.project-visual-icon \{ display: none; \}/)
+    // 项目行左侧图标是否让出，跟随侧栏实际宽度（容器查询），不再依赖窗口断点。
+    expect(shellCss).toMatch(/\.drawer-left \{[\s\S]*?container: sidebar \/ inline-size;/)
+    expect(sidebarCss).toMatch(/@container sidebar \(max-width: 189px\) \{[\s\S]*?\.project-main \{ grid-template-columns: minmax\(0, 1fr\); \}[\s\S]*?\.project-name \.project-visual-icon \{ display: none; \}/)
   })
 
   it('styles the project name like a session name with a background-leaning tone', () => {

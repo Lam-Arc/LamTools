@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Braces, Code2, Eye, FilePlus2, GitBranch, ListTree, LockKeyhole, MessageSquare, Pencil, Quote, Save, Table2, UnlockKeyhole } from 'lucide-vue-next'
 import MarkdownRenderer from '../components/MarkdownRenderer.vue'
+import CoreConfirmDialog from '../components/CoreConfirmDialog.vue'
 import { openContextMenu, registerTextSelectionMenuContributor } from '../components/context-menu'
 import type { ContextMenuEntry, TextSelectionMenuContext } from '../components/context-menu'
 import { extractMarkdownHeadings } from './api'
@@ -136,13 +137,26 @@ type NoteNavigationAction = () => void | Promise<void>
  * outside this component (the file tree, workspace back button and header
  * chat action), so a dirty draft cannot be bypassed by changing chrome.
  */
+/** 放弃草稿的确认：等一次用户回答（应用内胶囊，不用系统弹窗）。 */
+const pendingDiscardDraft = ref(false)
+let discardDraftResolver: ((confirmed: boolean) => void) | null = null
+
+function askDiscardDraft(): Promise<boolean> {
+  pendingDiscardDraft.value = true
+  return new Promise<boolean>(resolve => { discardDraftResolver = resolve })
+}
+
+function resolveDiscardDraft(confirmed: boolean): void {
+  pendingDiscardDraft.value = false
+  discardDraftResolver?.(confirmed)
+  discardDraftResolver = null
+}
+
 async function requestNavigation(action: NoteNavigationAction): Promise<boolean> {
   const leavingNoteId = dirty.value ? props.selected?.id : undefined
   const leavingDraft = leavingNoteId ? drafts.value[leavingNoteId] : undefined
   if (dirty.value) {
-    const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
-      ? window.confirm('当前笔记有未保存修改，确定放弃修改并继续吗？')
-      : false
+    const confirmed = await askDiscardDraft()
     if (!confirmed) return false
   }
   await action()
@@ -373,5 +387,12 @@ defineExpose({ requestNavigation, isDirty: dirty })
         </main>
       </div>
     </article>
+
+    <CoreConfirmDialog
+      :open="pendingDiscardDraft"
+      title="放弃未保存的修改？"
+      @cancel="resolveDiscardDraft(false)"
+      @confirm="resolveDiscardDraft(true)"
+    />
   </section>
 </template>

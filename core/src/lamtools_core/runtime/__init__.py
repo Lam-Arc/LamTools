@@ -247,6 +247,10 @@ class RuntimeTaskRegistry:
             background_process_registry or default_background_process_registry()
         )
 
+    @property
+    def background_process_registry(self) -> BackgroundProcessRegistry:
+        return self._background_process_registry
+
     def get_cancel_event(self, thread_id: str) -> asyncio.Event:
         if thread_id not in self._cancel_events:
             self._cancel_events[thread_id] = asyncio.Event()

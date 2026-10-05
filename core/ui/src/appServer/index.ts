@@ -2,6 +2,7 @@ export {
   CoreAppServerClient,
   CoreAppServerClosedError,
   type CoreAppServerClientOptions,
+  type CoreSyncChangeNotification,
   type JsonRpcClientResponse,
   type JsonRpcRequest,
   type JsonRpcResponse,

@@ -10,6 +10,7 @@ import type {
   CoreAppThreadStatus,
 } from './protocol.ts'
 import { TransportRpcError } from '../transport'
+import type { CoreSyncChangeNotification } from './client.ts'
 import {
   compareSnapshotVersion,
   CoreSessionStateStore,
@@ -51,6 +52,7 @@ export interface CoreAppServerRuntimeControllerOptions<
   createClient(params: {
     onEvent: (event: CoreAppEvent) => void
     onSnapshot: (snapshot: Snapshot) => void
+    onSyncChange?: (change: CoreSyncChangeNotification) => void
     onConnectionState: (state: CoreAppServerRuntimeState<Snapshot, Client>['connectionState']) => void
   }): Promise<Client> | Client
   hydrateSnapshot?: (snapshot: Snapshot) => Snapshot
@@ -169,6 +171,7 @@ export function createCoreAppServerRuntimeController<
     const client = await options.createClient({
       onEvent: (event) => enqueueEvent(event),
       onSnapshot: (snapshot) => hydrate(snapshot),
+      onSyncChange: (change) => applySyncChangeRevision(change),
       onConnectionState: (state) => {
         if (runtime.connectionGeneration !== generation) return
         runtime.connectionState = state
@@ -293,6 +296,26 @@ export function createCoreAppServerRuntimeController<
     if (!result.applied || !result.state) return false
     runtime.state = result.state.snapshot as Snapshot
     return true
+  }
+
+  /**
+   * Persisted events arrive twice: as a `core/runItem` projection notification
+   * (no revision) and as a `sync/change` journal notification (revision
+   * included). Advancing the CAS revision from the latter keeps the tracked
+   * revision in step with the server during a turn; without it the next
+   * `command.execute` (for example /compact right after a reply) fails with
+   * REVISION_CONFLICT. Content itself still arrives via the runItem path.
+   */
+  function applySyncChangeRevision(change: CoreSyncChangeNotification) {
+    const threadId = typeof change?.thread_id === 'string' ? change.thread_id : ''
+    if (!threadId) return
+    const revision = Number(change.revision ?? change.snapshot_revision)
+    if (!Number.isFinite(revision) || revision <= 0) return
+    if (!sessionStateStore.advanceRevision(threadId, revision)) return
+    const next = sessionStateStore.get(threadId)
+    if (next && runtime.state?.thread_id === threadId) {
+      runtime.state = next.snapshot as Snapshot
+    }
   }
 
   function enqueueEvent(event: CoreAppEvent) {
@@ -488,7 +511,7 @@ export function createCoreAppServerRuntimeController<
       command,
       arguments: argumentsText,
       ...(workRoot ? { work_root: workRoot } : {}),
-    }, threadId, 30 * 60_000)
+    }, threadId, 30 * 60_000, true)
     applyResponse(response)
     return response.result && typeof response.result === 'object'
       ? response.result as Record<string, unknown>

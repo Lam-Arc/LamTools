@@ -91,10 +91,10 @@ describe('ContextMenuHost', () => {
   })
 
   it('keeps every root and submenu card on the stable liquid-glass substrate', () => {
-    expect(contextMenuPanelSource).toContain('class="context-menu-panel optical-glass"')
+    expect(contextMenuPanelSource).toContain('class="context-menu-panel optical-glass optical-glass--low-trans"')
     expect(opticalGlassCss).toMatch(/\.optical-glass\s*\{[\s\S]*?blur\(var\(--optical-glass-blur\)\)[\s\S]*?saturate\(var\(--optical-glass-saturation\)\)[\s\S]*?brightness\(var\(--optical-glass-brightness\)\)[\s\S]*?contrast\(var\(--optical-glass-contrast\)\)/)
-    expect(opticalGlassCss).toMatch(/\.optical-glass::before\s*\{[\s\S]*?box-shadow:/)
-    expect(opticalGlassCss).not.toMatch(/\.optical-glass::before\s*\{[^}]*radial-gradient/)
+    // New glass: no inset edge pseudo at all — the pane keeps only the lower refraction.
+    expect(opticalGlassCss).not.toContain('.optical-glass::before')
     expect(opticalGlassCss).toMatch(/\.optical-glass::after\s*\{[\s\S]*?radial-gradient[\s\S]*?optical-glass-refraction-color/)
     expect(opticalGlassCss).not.toContain('conic-gradient')
     expect(opticalGlassCss).not.toContain('mask-composite')
@@ -140,6 +140,29 @@ describe('ContextMenuHost', () => {
     expect(panel?.style.top).toBe('92px')
     expect(panel?.dataset.placement).toBe('up')
     expect(document.activeElement).toBe(menuButton(0))
+  })
+
+  it('renders an explicit anchor and a two-line description for switcher entries', async () => {
+    const event = contextEvent(300, 300)
+    openContextMenu({
+      event,
+      anchor: { type: 'point', x: 24, y: 96 },
+      items: [
+        { id: 'agent', label: 'Agent', description: '处理您的日常任务', action: vi.fn() },
+        { id: 'study', label: 'Study', description: '学习、探索、温习', action: vi.fn() },
+      ],
+    })
+    await settleRender()
+
+    // 锚点生效：菜单不出现在鼠标点（300,300），而是贴着锚点。
+    const panel = menuPanel()
+    expect(panel?.style.left).toBe('24px')
+    expect(panel?.style.top).toBe('96px')
+
+    const item = menuButton(0)
+    expect(item?.textContent).toContain('Agent')
+    expect(item?.querySelector('.context-menu-item-description')?.textContent).toBe('处理您的日常任务')
+    expect(contextMenuState.anchor).toEqual({ type: 'point', x: 24, y: 96 })
   })
 
   it('recognizes native editing, media, link, and control targets', () => {

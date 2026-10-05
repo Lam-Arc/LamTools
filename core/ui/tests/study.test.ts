@@ -8,6 +8,7 @@ import { stableLayeredStudyLayout } from '../src/study/layout'
 import { CORE_PLUGIN_MODE_CONTEXT, CORE_PLUGIN_MODE_RUNTIME, createPluginModeRuntime } from '../src/plugins/context'
 import StudyView from '../src/study/StudyView.vue'
 import NotesManager from '../src/study/NotesManager.vue'
+import CoreConfirmDialog from '../src/components/CoreConfirmDialog.vue'
 import StudySidebar from '../src/study/StudySidebar.vue'
 import StudySidebarHost from '../src/study/StudySidebarHost.vue'
 import StudyNoteRelationGraph from '../src/study/StudyNoteRelationGraph.vue'
@@ -762,35 +763,51 @@ describe('Study v2 layout and notes', () => {
     await sidebar.selectNote({ id: first.id, note_id: first.id, title: first.title, path: first.path, kind: 'note' }); await flushPromises()
     await wrapper.findAll('button').find(button => button.text() === '编辑')!.trigger('click')
     await wrapper.find('.study-note-full-editor').setValue('# 未保存草稿')
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
 
-    await sidebar.selectNote({ id: second.id, note_id: second.id, title: second.title, path: second.path, kind: 'note' }); await flushPromises()
-    expect(confirm).toHaveBeenCalledTimes(1)
+    // 草稿闸门现在是应用内确认框：它开着才算问过一次，回答后才继续。
+    const gate = () => wrapper.findComponent(CoreConfirmDialog)
+    async function answerDirtyGate(confirmed: boolean): Promise<boolean> {
+      await flushPromises()
+      if (!gate().exists()) return false
+      expect(gate().props('open')).toBe(true)
+      gate().vm.$emit(confirmed ? 'confirm' : 'cancel')
+      await flushPromises()
+      return true
+    }
+
+    const pendingSelection = sidebar.selectNote({ id: second.id, note_id: second.id, title: second.title, path: second.path, kind: 'note' })
+    expect(await answerDirtyGate(false)).toBe(true)
+    await pendingSelection
     expect(wrapper.find('.study-note-full-editor').element).toHaveProperty('value', '# 未保存草稿')
 
-    await wrapper.find('[data-study-header] > button.text-btn').trigger('click'); await flushPromises()
-    expect(confirm).toHaveBeenCalledTimes(2)
+    await wrapper.find('[data-study-header] > button.text-btn').trigger('click')
+    expect(await answerDirtyGate(false)).toBe(true)
     expect(wrapper.find('[data-study-header] .study-note-header-chat').exists()).toBe(true)
 
-    await wrapper.find('[data-study-header] .study-note-header-chat').trigger('click'); await flushPromises()
-    expect(confirm).toHaveBeenCalledTimes(3)
+    await wrapper.find('[data-study-header] .study-note-header-chat').trigger('click')
+    expect(await answerDirtyGate(false)).toBe(true)
     expect(wrapper.find('[data-study-header] .study-note-header-chat').exists()).toBe(true)
 
     const noteSidebar = toValue(surface.sidebar!.componentProps) as { leaveNotes: () => Promise<void>; noteWorkspaceActive: boolean }
-    await noteSidebar.leaveNotes(); await flushPromises()
-    expect(confirm).toHaveBeenCalledTimes(4)
+    const pendingLeave = noteSidebar.leaveNotes()
+    expect(await answerDirtyGate(false)).toBe(true)
+    await pendingLeave
     expect(wrapper.find('.study-note-full-editor').element).toHaveProperty('value', '# 未保存草稿')
     expect((toValue(surface.sidebar!.componentProps) as { noteWorkspaceActive: boolean }).noteWorkspaceActive).toBe(true)
     expect(ctx.selectSession).toHaveBeenLastCalledWith('study:notes')
 
-    confirm.mockReturnValue(true)
     ctx.selectSession.mockRejectedValueOnce(new Error('session unavailable'))
-    await noteSidebar.leaveNotes(); await flushPromises()
+    const rejectedLeave = noteSidebar.leaveNotes()
+    expect(await answerDirtyGate(true)).toBe(true)
+    await rejectedLeave
     expect(wrapper.find('.study-note-full-editor').element).toHaveProperty('value', '# 未保存草稿')
     expect((toValue(surface.sidebar!.componentProps) as { noteWorkspaceActive: boolean }).noteWorkspaceActive).toBe(true)
     expect(wrapper.get('.study-error').text()).toContain('session unavailable')
 
-    await wrapper.find('[data-study-header] .study-note-header-chat').trigger('click'); await flushPromises()
+    // 放行后离开笔记：这次真走了。
+    await wrapper.find('[data-study-header] .study-note-header-chat').trigger('click')
+    expect(await answerDirtyGate(true)).toBe(true)
+    await flushPromises()
     expect(ctx.selectSession).toHaveBeenLastCalledWith('study:notes')
     expect(wrapper.find('[data-study-header] .study-note-header-chat').exists()).toBe(false)
     wrapper.unmount()

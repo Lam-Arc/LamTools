@@ -9,7 +9,7 @@
 <script setup lang="ts">
 /**
  * FullAreaActions — the action group of a full-area view (搜索 / 资料库 /
- * 长期安排 / 设置 / 插件 / 账号).
+ * 定时任务 / 设置 / 插件 / 账号).
  *
  * One row, one axis: on desktop the actions ride in the header band next to the
  * view title; on phones there is no band, so they render where the view's own

@@ -1,0 +1,18 @@
+  bridge gateway: 172.30.0.1
+  key ready: True
+=== baseline: does the key appear in logs BEFORE any relay call? ===
+  occurrences: 0
+=== make exactly one relayed call ===
+=== occurrences after the call ===
+  occurrences: 0
+=== the offending lines, key redacted ===
+  
+=== also check the on-disk log files ===
+  on-disk logs are clean
+=== done ===
+=== cleanup ===
+  delete token 4 -> success=True
+  token leftovers: none
+  delete channel 4 -> success=True
+  channel leftovers: none
+  mock stopped

@@ -42,6 +42,8 @@ use tauri::{
 
 mod remote;
 #[cfg(windows)]
+mod windows_close_request;
+#[cfg(windows)]
 mod windows_snap_layout;
 use remote::{
     start_local_control_server, ControlServer, DesktopAccountSession, DesktopAccountStatus,
@@ -1039,13 +1041,22 @@ fn show_main_window(app: tauri::AppHandle) {
     reveal_main_window(&app);
 }
 
-#[tauri::command]
-fn quit_app(app: tauri::AppHandle, state: tauri::State<'_, BackendState>) {
+/// Shut the desktop shell down for real: the tray window is hidden, not
+/// closed, so nothing else would stop the backend. Shared by the tray's quit
+/// item, the `quit_app` command, and the system close requests handled in
+/// `windows_close_request`.
+pub(crate) fn request_quit(app: &tauri::AppHandle) {
+    let state = app.state::<BackendState>();
     state.quitting.store(true, Ordering::SeqCst);
     let _ = state.remote_gateway.shutdown();
     stop_local_control_server(state.inner());
     stop_backend(state.inner());
     app.exit(0);
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    request_quit(&app);
 }
 
 /// Start the desktop-only RemoteGateway.  Core itself remains on the
@@ -1244,10 +1255,7 @@ fn handle_tray_menu(app: &tauri::AppHandle, event: MenuEvent) {
     match event.id().as_ref() {
         TRAY_TOGGLE_PET_ID => toggle_desktop_plugin_window(app),
         TRAY_OPEN_MAIN_ID => reveal_main_window(app),
-        TRAY_QUIT_ID => {
-            let state = app.state::<BackendState>();
-            quit_app(app.clone(), state);
-        }
+        TRAY_QUIT_ID => request_quit(app),
         _ => {}
     }
 }
@@ -1315,6 +1323,8 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 windows_snap_layout::install(&window)
                     .map_err(|error| format!("snap layout setup failed: {error}"))?;
+                windows_close_request::install(&window)
+                    .map_err(|error| format!("system close handler setup failed: {error}"))?;
             }
 
             let state = app.state::<BackendState>();

@@ -133,7 +133,7 @@ export function useComposerLayout(options: ComposerLayoutOptions) {
     // shrink with the keyboard (the Android shell runs edge-to-edge), where the
     // viewport measurement above cannot see it. Keep this expression in step
     // with the stylesheet default in workspace-shell.css.
-    '--composer-bottom-offset': 'max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom))',
+    '--composer-bottom-offset': 'calc(max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom)) + var(--shell-bottom-inset, 6px))',
     '--composer-height': `${composerHeight.value}px`,
   }))
   const shellClass = computed(() => `workspace-shell--composer-${placement.value}`)

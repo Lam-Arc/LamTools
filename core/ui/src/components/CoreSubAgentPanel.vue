@@ -160,7 +160,8 @@ const summaryText = computed(() => {
   if (props.runs.length > 0) return props.runs.length + ' 个记录'
   if (props.loading) return '读取中'
   if (props.errorText) return '读取失败'
-  return props.emptyText
+  // 空状态由列表里的 emptyText 呈现一次，头部摘要不再重复同一句话。
+  return ''
 })
 
 watch(

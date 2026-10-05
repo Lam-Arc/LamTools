@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+
 import asyncio
 import os
 import uuid
@@ -36,8 +38,10 @@ from lamtools_core.export import ConversationExportService, build_handoff_contex
 from lamtools_core.attachment.service import MAX_ATTACHMENT_BYTES
 from lamtools_core.runtime import RuntimeTaskRegistry
 from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arranged_operation_payload
+from lamtools_core.runtime.background_processes import default_background_process_registry
 from lamtools_core.runtime.goal import GoalManager
 from lamtools_core.runtime.observer import ObserverSupervisor
+from lamtools_core.runtime.persistent_process_store import PersistentProcessStore
 from lamtools_core.member import MemberKit, MemberManifest
 from lamtools_core.session import build_session_record
 from lamtools_core.plugins.lifecycle import shutdown_plugin_backends
@@ -285,6 +289,11 @@ def create_core_agent_http_app(
     resolved_data_dir = Path(data_dir or os.environ.get("LAMTOOLS_CORE_DATA_DIR") or core_db_path.parent / "core-agent").resolve()
     resolved_work_root.mkdir(parents=True, exist_ok=True)
     resolved_data_dir.mkdir(parents=True, exist_ok=True)
+    # Long-lived background processes archive here so a restart can still
+    # account for the processes a session had registered.
+    default_background_process_registry().attach_store(
+        PersistentProcessStore(resolved_data_dir / "background-processes.json")
+    )
     # Register the project work_root so load_llm_config resolves project-scoped
     # model jsonc files (models/providers are jsonc-only).
     configure_model_store_context(work_root=str(resolved_work_root))
@@ -432,7 +441,6 @@ def create_core_agent_http_app(
             enable_turn_checkpoints=True,
             model_display_resolver=_resolve_model_display,
             attachment_service=app_state.get("attachment_store"),
-            memory_store=core_db_handle.memory_store,
             model_context_sink=capture_model_context,
         )
         _logger.info("[startup] operation catalog ready in %.3fs", perf_counter() - phase_started)
@@ -443,7 +451,11 @@ def create_core_agent_http_app(
             project_store=core_db_handle.project_store,
             artifact_store=core_db_handle.artifact_store,
         )
-        _register_core_session_operations(agent_operations, session_store=session_store)
+        _register_core_session_operations(
+            agent_operations,
+            session_store=session_store,
+            background_process_registry=default_background_process_registry(),
+        )
         _register_core_config_operations(
             agent_operations,
             default_model_id=config.model_record_id,
@@ -785,6 +797,34 @@ def create_core_agent_http_app(
         await register_uploaded_artifact(record, project_id)
         return record
 
+    @app.post("/api/core/projects/{project_id}/artifacts")
+    async def upload_project_artifact(
+        project_id: str,
+        file: UploadFile = File(...),
+        folder: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        """用户从资料库上传的文件落到「资料/」，并立刻登记成一份可交付前的输入成果。"""
+        project = await app_state["core_db"].project_store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if file.size is not None and file.size > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds the {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB size limit",
+            )
+        try:
+            record = await app_state["core_db"].artifact_store.upload(
+                project_id=project.id,
+                work_root=project.work_root,
+                name=file.filename or "file",
+                content=await file.read(),
+                mime_type=file.content_type or "",
+                folder=folder or "",
+            )
+        except (LookupError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return record.to_dict()
+
     @app.get("/api/core/attachments/{attachment_id}/download")
     async def download_attachment(attachment_id: str) -> FileResponse:
         record = await attachment_store().get(attachment_id)
@@ -800,12 +840,11 @@ def create_core_agent_http_app(
         project_id: str,
         artifact_id: str,
         path: str | None = Query(default=None),
-        revision_id: str | None = Query(default=None),
     ) -> FileResponse:
-        """按 Artifact ID 读取不可变 Revision；无快照时兼容底层文件路径。
+        """按 Artifact ID 读取当前内容：工作区文件，或上传原件。
 
         ``path`` 为兜底：旧会话事件里的 artifact_id 是投影派生 id（artifact-{sha1}），
-        无法直接命中 V2 事实层时按路径解析旧 manifest 别名。
+        无法直接命中事实层时按路径解析旧 manifest 别名。
         """
         project = await app_state["core_db"].project_store.get(project_id)
         if project is None:
@@ -820,31 +859,10 @@ def create_core_agent_http_app(
                 record = await store.get(resolved_id)
         if record is None or record.project_id != project_id:
             raise HTTPException(status_code=404, detail="Artifact not found")
-        target_revision_id = revision_id or record.latest_revision_id
-        if target_revision_id:
-            historical = await store.revision_path(record.artifact_id, target_revision_id)
-            if historical is None or not historical.is_file():
-                raise HTTPException(status_code=404, detail="Artifact revision not found")
-            path = historical
-            filename = record.name
-            mime = record.mime_type
-        elif record.path.startswith("attachment://"):
-            attachment = await attachment_store().get(record.path[len("attachment://"):])
-            if attachment is None:
-                raise HTTPException(status_code=404, detail="Attachment not found")
-            path = Path(attachment.storage_path)
-            filename = attachment.filename
-            mime = attachment.mime_type
-        elif record.path.startswith("workspace://"):
-            rel = record.path[len("workspace://"):]
-            path = Path(project.work_root) / rel
-            filename = record.name
-            mime = record.mime_type
-        else:
-            raise HTTPException(status_code=404, detail="Unsupported artifact path")
-        if not path.is_file():
+        target = await store.current_content_path(record)
+        if target is None:
             raise HTTPException(status_code=404, detail="Artifact file missing")
-        return FileResponse(path, media_type=mime or None, filename=filename)
+        return FileResponse(target, media_type=record.mime_type or None, filename=record.name)
 
     async def register_uploaded_artifact(record: dict[str, Any], project_id: str | None) -> None:
         """上传即登记为项目输入 Artifact（best-effort，失败不影响上传）。"""
@@ -858,8 +876,6 @@ def create_core_agent_http_app(
             if project is None:
                 return
             store: ArtifactStore = app_state["core_db"].artifact_store
-            attachment_record = await attachment_store().get(artifact_id)
-            attachment_path = Path(attachment_record.storage_path) if attachment_record is not None else Path()
             await store.register(
                 project_id=project_id,
                 work_root=project.work_root,
@@ -870,7 +886,6 @@ def create_core_agent_http_app(
                 source="user_upload",
                 role="input",
                 preferred_id=artifact_id,
-                content=attachment_path.read_bytes() if attachment_path.is_file() else None,
                 provenance={"attachment_id": artifact_id},
             )
         except Exception:  # noqa: BLE001 — registration must never break uploads
@@ -1054,7 +1069,12 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
             catalog.register(name, handler)
 
 
-def _register_core_session_operations(catalog: OperationCatalog, *, session_store: Any) -> None:
+def _register_core_session_operations(
+    catalog: OperationCatalog,
+    *,
+    session_store: Any,
+    background_process_registry: Any | None = None,
+) -> None:
     async def session_list(request: OperationRequest) -> OperationResult:
         sessions = await session_store.list()
         return OperationResult(name="session.list", payload={
@@ -1073,6 +1093,10 @@ def _register_core_session_operations(catalog: OperationCatalog, *, session_stor
         from lamtools_core.sub_agent_supervisor import shutdown_parent_sub_agents
 
         await shutdown_parent_sub_agents(sid)
+        if background_process_registry is not None and sid:
+            # Deleting a session also ends its long-lived processes; force
+            # cleanup is what exempts nothing (ordinary records die anyway).
+            background_process_registry.cleanup_session(sid, force=True)
         await session_store.delete(sid)
         return OperationResult(name="session.delete", payload={"deleted": sid})
 
@@ -1116,14 +1140,6 @@ def _register_core_artifact_operations(
             return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
         return OperationResult(name=request.name, payload={"artifact": record.to_dict()})
 
-    async def artifact_revisions(request: OperationRequest) -> OperationResult:
-        read = await artifact_read(request)
-        if read.status == "error":
-            return read
-        artifact = read.payload["artifact"]
-        revisions = await artifact_store.revisions(str(artifact["artifact_id"]))
-        return OperationResult(name=request.name, payload={"artifact": artifact, "revisions": [r.to_dict() for r in revisions]})
-
     async def artifact_remove(request: OperationRequest) -> OperationResult:
         project = await _project_for(request)
         if project is None:
@@ -1154,20 +1170,6 @@ def _register_core_artifact_operations(
             },
         )
 
-    async def artifact_revision_restore(request: OperationRequest) -> OperationResult:
-        project = await _project_for(request)
-        if project is None:
-            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
-        try:
-            record = await artifact_store.restore_revision(
-                str(request.payload.get("artifact_id") or request.payload.get("artifactId") or ""),
-                str(request.payload.get("revision_id") or request.payload.get("revisionId") or ""),
-                project_id=project.id,
-            )
-        except (LookupError, OSError, ValueError) as exc:
-            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
-        return OperationResult(name=request.name, payload={"artifact": record.to_dict()})
-
     async def artifact_open(request: OperationRequest) -> OperationResult:
         project = await _project_for(request)
         if project is None:
@@ -1193,16 +1195,85 @@ def _register_core_artifact_operations(
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         return OperationResult(name=request.name, payload={"status": "opened", "path": artifact_path})
 
+    async def artifact_favorite(request: OperationRequest) -> OperationResult:
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
+        if not artifact_id:
+            return OperationResult(name=request.name, status="error", payload={"error": "artifact_id is required"})
+        record = await artifact_store.get(artifact_id)
+        if record is None or record.project_id != project.id:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
+        try:
+            updated = await artifact_store.set_favorite(
+                record.artifact_id, bool(request.payload.get("favorite")),
+            )
+        except (LookupError, OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"artifact": updated.to_dict()})
+
+    async def artifact_folder(request: OperationRequest) -> OperationResult:
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
+        if not artifact_id:
+            return OperationResult(name=request.name, status="error", payload={"error": "artifact_id is required"})
+        record = await artifact_store.get(artifact_id)
+        if record is None or record.project_id != project.id:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
+        try:
+            updated = await artifact_store.set_folder(record.artifact_id, str(request.payload.get("folder") or ""))
+        except (LookupError, OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"artifact": updated.to_dict()})
+
+    async def artifact_stats(request: OperationRequest) -> OperationResult:
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        stats = await artifact_store.stats(project.id)
+        return OperationResult(name=request.name, payload=stats)
+
+    async def artifact_upload(request: OperationRequest) -> OperationResult:
+        """用户从资料库放进来的文件：落成「资料/」下的真实文件并登记为成果。"""
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        name = str(request.payload.get("name") or "").strip()
+        raw = request.payload.get("content")
+        if not name or raw is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "name and content are required"})
+        try:
+            content = bytes(raw) if isinstance(raw, (bytes, bytearray)) else base64.b64decode(str(raw))
+        except (ValueError, TypeError):
+            return OperationResult(name=request.name, status="error", payload={"error": "content must be base64 or bytes"})
+        try:
+            record = await artifact_store.upload(
+                project_id=project.id,
+                work_root=project.work_root,
+                name=name,
+                content=content,
+                mime_type=str(request.payload.get("mime_type") or request.payload.get("mimeType") or ""),
+                folder=str(request.payload.get("folder") or ""),
+            )
+        except (LookupError, OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"artifact": record.to_dict()})
+
     handlers = {
         "artifact.list": artifact_list,
         "artifact.read": artifact_read,
         "artifact.show": artifact_read,
-        "artifact.revisions": artifact_revisions,
         "artifact.delete": artifact_remove,
         "artifact.remove": artifact_remove,
         "artifact.restore": artifact_restore,
-        "artifact.revision.restore": artifact_revision_restore,
         "artifact.open": artifact_open,
+        "artifact.favorite": artifact_favorite,
+        "artifact.folder": artifact_folder,
+        "artifact.stats": artifact_stats,
+        "artifact.upload": artifact_upload,
     }
     for name, handler in handlers.items():
         if not catalog.has(name):
@@ -1874,38 +1945,205 @@ def _register_subagent_guide_operations(
 
 
 def _register_memory_operations(catalog: OperationCatalog) -> None:
-    """config.memory.get/set — read & write the global memory.md file.
+    """memory.* — browse and edit the two-tier memory library.
 
-    The file lives in the unified config directory and is injected into every
-    workspace's prompt as the global memory tier (before the project
-    MEMORY.md).
+    Memory is a directory of plain files per tier (``project`` and ``global``);
+    ``INDEX.md`` is generated from the tree and is never editable here. The
+    project tier resolves against the ``work_root`` supplied by the caller.
     """
-    from lamtools_core.config.root import core_config_file
+    from lamtools_core import mem as memory
 
-    async def memory_get(request: OperationRequest) -> OperationResult:
-        del request
-        path = core_config_file("memory.md")
-        if not path.is_file():
-            return OperationResult(name="config.memory.get", payload={"content": "", "exists": False})
-        try:
-            content = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            content = path.read_text(encoding="utf-8", errors="replace")
-        return OperationResult(name="config.memory.get", payload={"content": content, "exists": True})
+    def _work_root(request: OperationRequest) -> str:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        value = (
+            payload.get("work_root")
+            or payload.get("workRoot")
+            or metadata.get("work_root")
+            or metadata.get("workRoot")
+        )
+        return str(value or "")
 
-    async def memory_set(request: OperationRequest) -> OperationResult:
-        content = str(request.payload.get("content") or "")
-        path = core_config_file("memory.md")
+    def _payload(request: OperationRequest) -> dict[str, Any]:
+        return request.payload if isinstance(request.payload, dict) else {}
+
+    def _ok(name: str, **fields: Any) -> OperationResult:
+        return OperationResult(name=name, payload=fields)
+
+    def _error(name: str, exc: memory.MemoryError) -> OperationResult:
+        return OperationResult(
+            name=name,
+            status="error",
+            payload={"error": str(exc), "error_code": getattr(exc, "code", "memory_error")},
+        )
+
+    def _run(name: str, action: Callable[[], Any]) -> OperationResult:
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            result = action()
+        except memory.MemoryError as exc:
+            return _error(name, exc)
+        except ValueError as exc:
+            # Bad numeric arguments (max_depth / occurrence) surface as a clean
+            # error result instead of an unhandled exception.
+            return OperationResult(
+                name=name,
+                status="error",
+                payload={"error": str(exc), "error_code": "invalid_argument"},
+            )
         except OSError as exc:
-            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
-        return OperationResult(name="config.memory.set", payload={"content": content, "exists": True})
+            return OperationResult(name=name, status="error", payload={"error": str(exc)})
+        if isinstance(result, dict):
+            return OperationResult(name=name, payload=result)
+        return _ok(name, path=str(result))
+
+    async def memory_tree(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request)
+
+        def action() -> dict[str, Any]:
+            entries = memory.list_entries(
+                scope,
+                root or None,
+                path=str(args.get("path") or ""),
+                recursive=bool(args.get("recursive", True)),
+                max_depth=int(args.get("max_depth") or 0),
+            )
+            return {
+                "scope": memory.normalize_scope(scope),
+                "root": str(memory.memory_root(scope, root or None)),
+                "index": memory.refresh_index(scope, root or None),
+                "entries": [entry.to_dict() for entry in entries],
+            }
+
+        return _run("memory.tree", action)
+
+    async def memory_read(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request)
+        path = str(args.get("path") or "")
+        return _run(
+            "memory.read",
+            lambda: {"path": path, "content": memory.read_memory(scope, root or None, path)},
+        )
+
+    async def memory_write(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request)
+        path = str(args.get("path") or "")
+        content = str(args.get("content") or "")
+        return _run(
+            "memory.write",
+            lambda: memory.write_memory(scope, root or None, path, content).to_dict(),
+        )
+
+    async def memory_append(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request)
+        path = str(args.get("path") or "")
+        content = str(args.get("content") or "")
+        return _run(
+            "memory.append",
+            lambda: memory.append_memory(scope, root or None, path, content).to_dict(),
+        )
+
+    async def memory_edit(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request)
+        path = str(args.get("path") or "")
+        old_string = str(args.get("old_string") or "")
+        new_string = str(args.get("new_string") or "")
+
+        def action() -> dict[str, Any]:
+            raw_occurrence = args.get("occurrence")
+            occurrence = int(raw_occurrence) if raw_occurrence else None
+            return memory.edit_memory(
+                scope, root or None, path, old_string, new_string, occurrence=occurrence
+            ).to_dict()
+
+        return _run("memory.edit", action)
+
+    async def memory_delete(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request)
+        path = str(args.get("path") or "")
+        return _run("memory.delete", lambda: {"path": memory.delete_memory(scope, root or None, path)})
+
+    async def memory_rename(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request)
+        path = str(args.get("path") or "")
+        new_path = str(args.get("new_path") or "")
+        return _run(
+            "memory.rename",
+            lambda: {"path": memory.rename_memory(scope, root or None, path, new_path)},
+        )
+
+    async def memory_mkdir(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request)
+        path = str(args.get("path") or "")
+        return _run("memory.mkdir", lambda: {"path": memory.make_directory(scope, root or None, path)})
+
+    async def memory_reveal(request: OperationRequest) -> OperationResult:
+        args = _payload(request)
+        scope = str(args.get("scope") or memory.SCOPE_PROJECT)
+        root = _work_root(request)
+        return _run(
+            "memory.reveal",
+            lambda: {"path": memory.reveal_memory(scope, root or None)},
+        )
+
+    async def memory_projects(request: OperationRequest) -> OperationResult:
+        """Which of the caller's candidate projects already hold memory.
+
+        The project list itself belongs to the caller (its project store); this
+        only filters candidates by on-disk project-tier content — no directory
+        is created and no index is refreshed, so probing is side-effect free.
+        """
+        args = _payload(request)
+        candidates = args.get("projects")
+        if not isinstance(candidates, list):
+            return _error(
+                "memory.projects",
+                memory.MemoryPathError("'projects' must be a list of {id, name, work_root}"),
+            )
+
+        def action() -> dict[str, Any]:
+            kept: list[dict[str, str]] = []
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                work_root = str(candidate.get("work_root") or candidate.get("workRoot") or "")
+                if not work_root or not memory.has_content(memory.SCOPE_PROJECT, work_root):
+                    continue
+                kept.append({
+                    "id": str(candidate.get("id") or ""),
+                    "name": str(candidate.get("name") or ""),
+                    "work_root": work_root,
+                })
+            return {"projects": kept}
+
+        return _run("memory.projects", action)
 
     for name, handler in {
-        "config.memory.get": memory_get,
-        "config.memory.set": memory_set,
+        "memory.reveal": memory_reveal,
+        "memory.projects": memory_projects,
+        "memory.tree": memory_tree,
+        "memory.read": memory_read,
+        "memory.write": memory_write,
+        "memory.append": memory_append,
+        "memory.edit": memory_edit,
+        "memory.delete": memory_delete,
+        "memory.rename": memory_rename,
+        "memory.mkdir": memory_mkdir,
     }.items():
         if not catalog.has(name):
             catalog.register(name, handler)

@@ -351,6 +351,7 @@ def format_command_output(
     readiness_state: str = "",
     background_requested: bool | None = None,
     background_inferred: bool | None = None,
+    persistent: bool | None = None,
     max_length: int = DEFAULT_MAX_TEXT_LENGTH,
 ) -> str:
     sections: list[str] = [f"[command] {command}"]
@@ -368,6 +369,8 @@ def format_command_output(
         sections.append(f"[background_requested: {str(background_requested).lower()}]")
     if background_inferred is not None:
         sections.append(f"[background_inferred: {str(background_inferred).lower()}]")
+    if persistent:
+        sections.append("[persistent: true] process survives turn end; registered for this session")
     if stdout:
         sections.append("[stdout]")
         sections.append(stdout.rstrip("\n"))

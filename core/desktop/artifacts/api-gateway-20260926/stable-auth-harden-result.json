@@ -1,0 +1,42 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06y861kwimj28",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "ExitCodeNonzero",
+          "ErrorInfo": "The command execution exit code is not zero.",
+          "ExitCode": 1,
+          "FinishedTime": "2026-09-26T11:23:22Z",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Failed",
+          "InvokeId": "t-hz06y861kwnmbr4",
+          "InvokeRecordStatus": "Finished",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "PT09IDEpIHdoeSB0aGUgY29va2llIGRpZCBub3QgYXV0aGVudGljYXRlIChuYW1lcy9hdHRycyBvbmx5KSA9PT0KPT09IDIpIGxvY2F0ZSB0aGUgYWRtaW4gYWNjZXNzIHRva2VuIGNvbHVtbiA9PT0KICBhY2Nlc3NfdG9rZW4KICBhZmZfY29kZQogIGFmZl9jb3VudAogIGFmZl9oaXN0b3J5CiAgYWZmX3F1b3RhCiAgY3JlYXRlZF9hdAogIGRlbGV0ZWRfYXQKICBkaXNjb3JkX2lkCiAgZGlzcGxheV9uYW1lCiAgZW1haWwKICBnaXRodWJfaWQKICBncm91cAogIGlkCiAgaW52aXRlcl9pZAogIGxhc3RfbG9naW5fYXQKICBsaW51eF9kb19pZAogIG9pZGNfaWQKICBwYXNzd29yZAogIHF1b3RhCiAgcmVtYXJrCiAgcmVxdWVzdF9jb3VudAogIHJvbGUKICBzZXR0aW5nCiAgc3RhdHVzCiAgc3RyaXBlX2N1c3RvbWVyCiAgdGVsZWdyYW1faWQKICB1c2VkX3F1b3RhCiAgdXNlcm5hbWUKICB3ZWNoYXRfaWQKPT09IDMpIGF1dGhlbnRpY2F0ZWQgYWRtaW4gcHJvYmUgKHRva2VuIG5ldmVyIHByaW50ZWQpID09PQogIHRva2VuIGxlbmd0aDogMCB8IHJvb3QgdXNlciBpZDogMQogIEZBVEFMOiBubyBhY2Nlc3MgdG9rZW4gaW4gZGF0YWJhc2UK",
+          "Repeats": 1,
+          "StartTime": "2026-09-26T11:23:21Z",
+          "StopTime": "",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A0DD74-9EBE-57C3-84CF-330ABC06EDC6"
+}

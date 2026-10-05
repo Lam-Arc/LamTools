@@ -55,11 +55,11 @@ interface SubmenuPanelState {
   panelAttributes?: Record<string, string | number | boolean | undefined>
 }
 
-const rootAnchor = computed<ContextMenuAnchor>(() => ({
+const rootAnchor = computed<ContextMenuAnchor>(() => contextMenuState.anchor ?? {
   type: 'point',
   x: contextMenuState.x,
   y: contextMenuState.y,
-}))
+})
 const submenuPanels = ref<SubmenuPanelState[]>([])
 const expandedPath = computed(() => submenuPanels.value.at(-1)?.path || [])
 

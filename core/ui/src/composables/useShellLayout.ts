@@ -40,8 +40,9 @@ export function useShellLayout(options: ShellLayoutOptions) {
   const rightOpen = ref(false)
   const leftPinned = ref(true)
   const rightPinned = ref(false)
-  const stageOpen = ref(false)
-  const stageHeight = ref(300)
+  // 整界面切走：宿主进入整版分区（资料库/定时任务/…）或插件整面时，
+  // 会话栏整列退场，只剩最左竖栏；退出后回到原状态。
+  const sidebarCollapsed = ref(false)
   const isNarrowViewport = ref(false)
   const density = ref<DensityMode>(options.density ?? 'standard')
   const contentWidth = ref(options.contentWidth ?? 780)
@@ -49,26 +50,26 @@ export function useShellLayout(options: ShellLayoutOptions) {
 
   // --- shell class ---
   const shellClass = computed(() => ({
-    'left-open': leftOpen.value,
+    'left-open': leftOpen.value && !sidebarCollapsed.value,
     'right-open': rightOpen.value,
     'right-pinned': rightPinned.value,
-    'stage-open': stageOpen.value,
     [`density-${density.value}`]: true,
   }))
 
   const rightDrawerModal = computed(() => rightOpen.value && isNarrowViewport.value)
 
-  /** True whenever the right rail occupies the workspace, staged or hovered. */
-  const rightDrawerShown = computed(() => rightOpen.value || stageOpen.value)
+  /** True whenever the right rail occupies the workspace. */
+  const rightDrawerShown = computed(() => rightOpen.value)
 
   // The native title bar lives outside `.workspace-shell`, so mirror only the
   // two live main-surface insets to :root for title-bar extensions such as
   // Workflow tabs. This keeps them aligned while drawers open, close or pin.
   const titlebarMainInsets = computed(() => {
-    const rightWidth = density.value === 'compact' ? 272 : density.value === 'loose' ? 324 : 292
+    // 右侧抽屉只剩贴边图标竖栏，宽度恒等于 --right-rail-width。
+    const rightWidth = 46
     return {
       left: leftOpen.value ? 'var(--sidebar-width)' : '18px',
-      right: (stageOpen.value || (rightOpen.value && rightPinned.value)) ? `${rightWidth}px` : '18px',
+      right: (rightOpen.value && rightPinned.value) ? `${rightWidth}px` : '18px',
     }
   })
 
@@ -82,7 +83,6 @@ export function useShellLayout(options: ShellLayoutOptions) {
     const titlebarBg = stops.length > 0 ? (stops[0].color || '#111111') : '#111111'
     return {
       '--content-width': `${Math.min(1120, Math.max(560, contentWidth.value))}px`,
-      '--stage-height': `${stageHeight.value}px`,
       '--theme-titlebar-bg': titlebarBg,
       ...cssVars,
     } as Record<string, string>
@@ -123,6 +123,10 @@ export function useShellLayout(options: ShellLayoutOptions) {
   )
 
   // --- drawer controls ---
+  function setSidebarCollapsed(collapsed: boolean) {
+    sidebarCollapsed.value = collapsed
+  }
+
   function toggleLeftPinned() {
     leftPinned.value = !leftPinned.value
     if (leftPinned.value) leftOpen.value = true
@@ -190,34 +194,6 @@ export function useShellLayout(options: ShellLayoutOptions) {
     }, RIGHT_DRAWER_RETRACT_MS)
   })
 
-  function toggleStage() {
-    stageOpen.value = !stageOpen.value
-  }
-
-  // --- stage resize (drag handle) ---
-  let resizeActive = false
-  function startStageResize(event: PointerEvent) {
-    resizeActive = true
-    const target = event.target as HTMLElement
-    target.setPointerCapture(event.pointerId)
-    target.classList.add('dragging')
-    document.body.style.cursor = 'ns-resize'
-    document.body.style.userSelect = 'none'
-  }
-  function onStageResizeMove(event: PointerEvent) {
-    if (!resizeActive) return
-    const newHeight = Math.max(80, Math.min(window.innerHeight - 120, event.clientY))
-    stageHeight.value = newHeight
-  }
-  function endStageResize(event: PointerEvent) {
-    if (!resizeActive) return
-    resizeActive = false
-    const target = event.target as HTMLElement
-    target.classList.remove('dragging')
-    document.body.style.cursor = ''
-    document.body.style.userSelect = ''
-  }
-
   function onPointerDown(event: PointerEvent) {
     const target = event.target as HTMLElement | null
     if (!target) return
@@ -237,7 +213,9 @@ export function useShellLayout(options: ShellLayoutOptions) {
       !rightPinned.value &&
       rightOpen.value &&
       !target.closest('.drawer-right') &&
-      !target.closest('.edge-right')
+      !target.closest('.edge-right') &&
+      // 悬停卡与其搭桥层浮在抽屉之外，点它们上面的控件同样不算“点在抽屉外”。
+      !target.closest('[data-right-sidebar-card],[data-right-sidebar-bridge]')
     ) {
       rightOpen.value = false
     }
@@ -298,7 +276,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
 
   // --- auto-save with debounce ---
   let saveTimer: ReturnType<typeof setTimeout> | undefined
-  watch([density, contentWidth, theme, stageHeight], () => {
+  watch([density, contentWidth, theme], () => {
     clearTimeout(saveTimer)
     saveTimer = setTimeout(saveSettings, 500)
   })
@@ -349,8 +327,6 @@ export function useShellLayout(options: ShellLayoutOptions) {
       if (saved.density) density.value = saved.density
       if (saved.contentWidth) contentWidth.value = saved.contentWidth
       if (saved.theme) theme.value = migrateThemeDefaults({ ...DEFAULT_THEME, ...saved.theme })
-      if (saved.stageOpen !== undefined) stageOpen.value = saved.stageOpen
-      if (saved.stageHeight) stageHeight.value = saved.stageHeight
     } catch {
       /* ignore */
     }
@@ -364,8 +340,6 @@ export function useShellLayout(options: ShellLayoutOptions) {
           density: density.value,
           contentWidth: contentWidth.value,
           theme: theme.value,
-          stageOpen: stageOpen.value,
-          stageHeight: stageHeight.value,
         }),
       )
     } catch {
@@ -380,8 +354,6 @@ export function useShellLayout(options: ShellLayoutOptions) {
     leftPinned,
     rightPinned,
     rightRetracting,
-    stageOpen,
-    stageHeight,
     isNarrowViewport,
     density,
     contentWidth,
@@ -391,7 +363,9 @@ export function useShellLayout(options: ShellLayoutOptions) {
     shellStyle,
     rightDrawerModal,
     rightDrawerShown,
+    sidebarCollapsed,
     // actions
+    setSidebarCollapsed,
     toggleLeftPinned,
     toggleRightPinned,
     onLeftDrawerLeave,
@@ -401,10 +375,6 @@ export function useShellLayout(options: ShellLayoutOptions) {
     toggleLeftDrawer,
     toggleRightDrawer,
     closeDrawers,
-    toggleStage,
-    startStageResize,
-    onStageResizeMove,
-    endStageResize,
     goSettings: options.onSettings ?? (() => {}),
     // persistence
     loadSettings,

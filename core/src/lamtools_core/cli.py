@@ -1363,6 +1363,34 @@ def build_parser(
     queue_guide.add_argument("--raw", action="store_true")
     queue_guide.set_defaults(func=cmd_queue_guide)
 
+    process = sub.add_parser("process", help="Manage long-lived background processes of a session")
+    process_sub = process.add_subparsers(dest="process_command", required=True)
+    process_list = process_sub.add_parser("list", help="List background processes registered for a session")
+    process_list.add_argument("session_id")
+    process_list.add_argument("--raw", action="store_true")
+    _add_live_connection_arguments(process_list)
+    process_list.set_defaults(func=cmd_process_list)
+    process_kill = process_sub.add_parser("kill", help="Terminate a registered background process")
+    process_kill.add_argument("session_id")
+    process_kill.add_argument("--pid", type=int, required=True)
+    process_kill.add_argument("--raw", action="store_true")
+    _add_live_connection_arguments(process_kill)
+    process_kill.set_defaults(func=cmd_process_kill)
+    process_forget = process_sub.add_parser("forget", help="Remove a finished/lost process record")
+    process_forget.add_argument("session_id")
+    process_forget.add_argument("--pid", type=int, required=True)
+    process_forget.add_argument("--raw", action="store_true")
+    _add_live_connection_arguments(process_forget)
+    process_forget.set_defaults(func=cmd_process_forget)
+    process_logs = process_sub.add_parser("logs", help="Print recent output of a registered process")
+    process_logs.add_argument("session_id")
+    process_logs.add_argument("--pid", type=int, required=True)
+    process_logs.add_argument("--stream", choices=("stdout", "stderr"), default="stdout")
+    process_logs.add_argument("--max-bytes", type=int, default=8192)
+    process_logs.add_argument("--raw", action="store_true")
+    _add_live_connection_arguments(process_logs)
+    process_logs.set_defaults(func=cmd_process_logs)
+
     approval = sub.add_parser("approval", help="Respond to a live Sunday approval")
     approval_sub = approval.add_subparsers(dest="approval_command", required=True)
     approval_respond = approval_sub.add_parser("respond", help="Respond to a pending Core approval")
@@ -1646,7 +1674,7 @@ def build_parser(
     account.add_argument("--password", required=True)
     account.set_defaults(func=cmd_mobile_control, mobile_action="account")
 
-    artifact = sub.add_parser("artifact", help="Manage project artifacts and immutable revisions")
+    artifact = sub.add_parser("artifact", help="Manage project artifacts")
     artifact_sub = artifact.add_subparsers(dest="artifact_command", required=True)
     artifact_list = artifact_sub.add_parser("list", help="List artifacts of a project workspace")
     artifact_list.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
@@ -1669,7 +1697,7 @@ def build_parser(
     artifact_preview.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     artifact_preview.add_argument("--max-chars", type=int, default=200000, help="Maximum text characters to print")
     artifact_preview.set_defaults(func=cmd_artifact_preview)
-    artifact_delete = artifact_sub.add_parser("delete", help="Soft-remove artifacts while retaining identity and revisions")
+    artifact_delete = artifact_sub.add_parser("delete", help="Soft-remove artifacts while retaining identity")
     artifact_delete.add_argument("artifact_ids", nargs="+")
     artifact_delete.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
     artifact_delete.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
@@ -1679,18 +1707,6 @@ def build_parser(
     artifact_restore.add_argument("--work-root", default="")
     artifact_restore.add_argument("--core-db", default="")
     artifact_restore.set_defaults(func=cmd_artifact_restore)
-    artifact_revisions = artifact_sub.add_parser("revisions", help="List immutable artifact revisions")
-    artifact_revisions.add_argument("artifact_id")
-    artifact_revisions.add_argument("--work-root", default="")
-    artifact_revisions.add_argument("--core-db", default="")
-    artifact_revisions.set_defaults(func=cmd_artifact_revisions)
-    artifact_revision_restore = artifact_sub.add_parser("restore-revision", help="Restore one historical revision")
-    artifact_revision_restore.add_argument("artifact_id")
-    artifact_revision_restore.add_argument("revision_id")
-    artifact_revision_restore.add_argument("--work-root", default="")
-    artifact_revision_restore.add_argument("--core-db", default="")
-    artifact_revision_restore.set_defaults(func=cmd_artifact_restore_revision)
-
     session = sub.add_parser("session", help="Query Sunday sessions")
     session_sub = session.add_subparsers(dest="session_command", required=True)
     session_list = session_sub.add_parser("list", help="List Sunday sessions")
@@ -1849,13 +1865,37 @@ def build_parser(
     plan_library_list.add_argument("--work-root", required=True, help="Project work root (the folder holding 方案/)")
     plan_library_list.set_defaults(func=cmd_plan_library_list, raw=False)
     plan_library_show = plan_library_sub.add_parser("show", help="Print one plan document")
-    plan_library_show.add_argument("name", help="Plan file name inside 方案/ (e.g. 导出显示进度.md)")
+    plan_library_show.add_argument("name", help="Plan inside 方案/ (e.g. 导出显示进度.md or 归档/导出显示进度.md)")
     plan_library_show.add_argument("--work-root", required=True, help="Project work root")
     plan_library_show.set_defaults(func=cmd_plan_library_show, raw=False)
     plan_library_delete = plan_library_sub.add_parser("delete", help="Delete one plan document")
-    plan_library_delete.add_argument("name", help="Plan file name inside 方案/")
+    plan_library_delete.add_argument("name", help="Plan inside 方案/ (e.g. 导出显示进度.md or 归档/导出显示进度.md)")
     plan_library_delete.add_argument("--work-root", required=True, help="Project work root")
     plan_library_delete.set_defaults(func=cmd_plan_library_delete, raw=False)
+    plan_library_create = plan_library_sub.add_parser("create", help="Create a new skeleton plan document")
+    plan_library_create.add_argument("name", help="New plan name (e.g. 新方案 or 新方案.md)")
+    plan_library_create.add_argument("--work-root", required=True, help="Project work root")
+    plan_library_create.add_argument("--folder", default="", help="Target folder inside 方案/, nested paths allowed (optional)")
+    plan_library_create.set_defaults(func=cmd_plan_library_create, raw=False)
+    plan_library_folder = plan_library_sub.add_parser("folder", help="Create an empty folder inside 方案/")
+    plan_library_folder.add_argument("path", help="New folder path inside 方案/ (e.g. 归档 or 归档/这一期)")
+    plan_library_folder.add_argument("--work-root", required=True, help="Project work root")
+    plan_library_folder.set_defaults(func=cmd_plan_library_folder, raw=False)
+    plan_library_rename = plan_library_sub.add_parser("rename", help="Rename one plan document in place")
+    plan_library_rename.add_argument("path", help="Plan path inside the project (e.g. 方案/旧名.md)")
+    plan_library_rename.add_argument("new_name", help="New plan name")
+    plan_library_rename.add_argument("--work-root", required=True, help="Project work root")
+    plan_library_rename.set_defaults(func=cmd_plan_library_rename, raw=False)
+    plan_library_move = plan_library_sub.add_parser("move", help="Move one plan to the library root or a folder")
+    plan_library_move.add_argument("path", help="Plan path inside the project (e.g. 方案/方案.md)")
+    plan_library_move.add_argument("--folder", default="", help="Target folder inside 方案/, nested paths allowed (empty = root)")
+    plan_library_move.add_argument("--work-root", required=True, help="Project work root")
+    plan_library_move.set_defaults(func=cmd_plan_library_move, raw=False)
+    plan_library_favorite = plan_library_sub.add_parser("favorite", help="Star (or unstar) one plan")
+    plan_library_favorite.add_argument("path", help="Plan path inside the project (e.g. 方案/方案.md)")
+    plan_library_favorite.add_argument("--off", action="store_true", help="Remove the star instead of adding it")
+    plan_library_favorite.add_argument("--work-root", required=True, help="Project work root")
+    plan_library_favorite.set_defaults(func=cmd_plan_library_favorite, raw=False)
 
     arrange = sub.add_parser("arrange", help="Manage durable arrangements")
     arrange_sub = arrange.add_subparsers(dest="arrange_command", required=True)
@@ -2129,25 +2169,76 @@ def build_parser(
     loadtools_delete.add_argument("--mode", required=True)
     loadtools_delete.set_defaults(func=cmd_loadtools_delete_mode)
 
-    memory = sub.add_parser("memory", help="Read or write the global memory.md (unified config dir)")
+    memory = sub.add_parser(
+        "memory",
+        help="浏览 / 编辑两档记忆库（project：<工作区>/.lam/memory/；global：配置目录 memory/）",
+    )
     memory_sub = memory.add_subparsers(dest="memory_command", required=True)
-    memory_get = memory_sub.add_parser("get", help="Print the global memory.md content")
-    memory_get.set_defaults(func=cmd_memory_get)
-    memory_set = memory_sub.add_parser("set", help="Write the global memory.md from a UTF-8 file or stdin")
-    memory_set.add_argument("source_file", help="Path to a markdown file, or '-' for stdin")
-    memory_set.set_defaults(func=cmd_memory_set)
-    memory_dream = memory_sub.add_parser(
-        "dream", help="Show or configure automatic memory consolidation (Dreaming, 设置 → 上下文与记忆)"
+
+    def _memory_scope_args(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--global", dest="memory_global", action="store_true", help="作用于全局档（默认项目档）")
+        parser.add_argument("--work-root", default="", help="项目档的工作区根（默认当前目录）")
+
+    memory_tree = memory_sub.add_parser("tree", help="列出某档记忆库的目录树")
+    memory_tree.add_argument("--path", default="", help="相对记忆库根的路径（默认根目录）")
+    memory_tree.add_argument("--max-depth", default=0, type=int, help="最大深度，0 表示不限")
+    memory_tree.add_argument("--flat", action="store_true", help="只列当前层，不递归")
+    _memory_scope_args(memory_tree)
+    memory_tree.set_defaults(func=cmd_memory)
+
+    memory_read = memory_sub.add_parser("read", help="读取一个记忆文件")
+    memory_read.add_argument("path", help="相对记忆库根的路径")
+    _memory_scope_args(memory_read)
+    memory_read.set_defaults(func=cmd_memory)
+
+    memory_write = memory_sub.add_parser("write", help="写入（覆盖）一个记忆文件")
+    memory_write.add_argument("path", help="相对记忆库根的路径")
+    memory_write.add_argument("--content", default="", help="要写入的内容（与 --from-file 二选一；都省略则读 stdin）")
+    memory_write.add_argument("--from-file", default="", help="从该 UTF-8 文件读取内容，'-' 表示 stdin")
+    _memory_scope_args(memory_write)
+    memory_write.set_defaults(func=cmd_memory)
+
+    memory_append = memory_sub.add_parser("append", help="在记忆文件末尾追加内容")
+    memory_append.add_argument("path", help="相对记忆库根的路径")
+    memory_append.add_argument("--content", default="", help="要追加的内容（与 --from-file 二选一；都省略则读 stdin）")
+    memory_append.add_argument("--from-file", default="", help="从该 UTF-8 文件读取内容，'-' 表示 stdin")
+    _memory_scope_args(memory_append)
+    memory_append.set_defaults(func=cmd_memory)
+
+    memory_edit = memory_sub.add_parser("edit", help="局部替换记忆文件中的文本")
+    memory_edit.add_argument("path", help="相对记忆库根的路径")
+    memory_edit.add_argument("--old", required=True, help="要替换的原文")
+    memory_edit.add_argument("--new", required=True, help="替换后的文本")
+    memory_edit.add_argument("--occurrence", default=0, type=int, help="原文出现多次时替换第几次（1 起；0 表示未指定，此时多处匹配会报错）")
+    _memory_scope_args(memory_edit)
+    memory_edit.set_defaults(func=cmd_memory)
+
+    memory_delete = memory_sub.add_parser("delete", help="删除一个记忆文件或目录")
+    memory_delete.add_argument("path", help="相对记忆库根的路径")
+    _memory_scope_args(memory_delete)
+    memory_delete.set_defaults(func=cmd_memory)
+
+    memory_rename = memory_sub.add_parser("rename", help="重命名 / 移动记忆条目")
+    memory_rename.add_argument("path", help="源路径")
+    memory_rename.add_argument("new_path", help="目标路径")
+    _memory_scope_args(memory_rename)
+    memory_rename.set_defaults(func=cmd_memory)
+
+    memory_mkdir = memory_sub.add_parser("mkdir", help="在记忆库中新建目录")
+    memory_mkdir.add_argument("path", help="相对记忆库根的路径")
+    _memory_scope_args(memory_mkdir)
+    memory_mkdir.set_defaults(func=cmd_memory)
+
+    memory_reveal = memory_sub.add_parser("reveal", help="在系统文件资源管理器中打开某档记忆文件夹")
+    _memory_scope_args(memory_reveal)
+    memory_reveal.set_defaults(func=cmd_memory)
+
+    memory_projects = memory_sub.add_parser(
+        "projects",
+        help="在候选项目工作区中列出真正存有记忆的（纯探测：不创建目录、不生成索引）",
     )
-    memory_dream_sub = memory_dream.add_subparsers(dest="memory_dream_command", required=True)
-    memory_dream_show = memory_dream_sub.add_parser("show", help="Show the current dreaming configuration")
-    memory_dream_show.set_defaults(func=cmd_memory_dream_show)
-    memory_dream_config = memory_dream_sub.add_parser(
-        "config", help="Update the dreaming configuration (enabled / min_turns)"
-    )
-    memory_dream_config.add_argument("--enabled", default=None, choices=["true", "false"], help="Enable/disable automatic dreaming")
-    memory_dream_config.add_argument("--min-turns", default=None, type=int, help="Minimum turns between dream passes (default 3)")
-    memory_dream_config.set_defaults(func=cmd_memory_dream_config)
+    memory_projects.add_argument("roots", nargs="+", help="候选项目的工作区根目录")
+    memory_projects.set_defaults(func=cmd_memory)
 
     onboarding = sub.add_parser("onboarding", help="首次启动引导（Onboarding）状态：显示 / 标记完成 / 重置")
     onboarding_sub = onboarding.add_subparsers(dest="onboarding_command", required=True)
@@ -2754,6 +2845,80 @@ async def cmd_steer(args: argparse.Namespace) -> int:
         ),
     )
     _print_live_result(args, result, f"steered {args.thread_id}")
+    return 0
+
+
+def _format_process_row(item: dict[str, Any]) -> str:
+    state = "running" if item.get("alive") else "exited"
+    kind = "persistent" if item.get("persistent") else "turn-scoped"
+    ownership = "" if item.get("owned") else " | not-owned (predates last restart)"
+    return (
+        f"pid {item.get('pid')} | {state} | {kind}{ownership} | "
+        f"{item.get('command') or '<unknown command>'}"
+    )
+
+
+async def cmd_process_list(args: argparse.Namespace) -> int:
+    result = await _invoke_live(args, lambda client: client.request("process.list", {"thread_id": args.session_id}))
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        return 0
+    processes = result.get("processes") if isinstance(result, dict) else []
+    if not processes:
+        print("no registered background processes", flush=True)
+        return 0
+    for item in processes:
+        if isinstance(item, dict):
+            print(_format_process_row(item), flush=True)
+    return 0
+
+
+async def cmd_process_kill(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args,
+        lambda client: client.request("process.kill", {"thread_id": args.session_id, "pid": args.pid}),
+    )
+    _print_live_result(args, result, f"terminated pid {args.pid}")
+    return 0
+
+
+async def cmd_process_forget(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args,
+        lambda client: client.request("process.forget", {"thread_id": args.session_id, "pid": args.pid}),
+    )
+    removed = bool(result.get("removed")) if isinstance(result, dict) else False
+    message = f"removed record for pid {args.pid}" if removed else f"no removable record for pid {args.pid}"
+    _print_live_result(args, result, message)
+    return 0
+
+
+async def cmd_process_logs(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args,
+        lambda client: client.request(
+            "process.log",
+            {
+                "thread_id": args.session_id,
+                "pid": args.pid,
+                "stream": args.stream,
+                "max_bytes": args.max_bytes,
+            },
+        ),
+    )
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        return 0
+    if not isinstance(result, dict) or result.get("missing"):
+        print(f"(no log captured for pid {args.pid} {args.stream})", flush=True)
+        return 0
+    content = str(result.get("content") or "")
+    if result.get("truncated"):
+        print(f"[... truncated to the last {args.max_bytes} bytes ...]", flush=True)
+    if content:
+        print(content, flush=True)
+    else:
+        print("(log is empty)", flush=True)
     return 0
 
 
@@ -3727,11 +3892,23 @@ async def cmd_goal_update(args: argparse.Namespace) -> int:
 
 
 def _plan_library_path(work_root: str, name: str) -> Path | None:
-    """A plan file inside 方案/, refusing anything that climbs out of it."""
-    from lamtools_core.app.plan_library import plan_library_root
+    """A plan file inside 方案/, refusing anything that climbs out of it.
+
+    Accepts the bare name (``导出显示进度.md``), a path relative to the library
+    (``归档/导出显示进度.md``) and the full library path the scan reports
+    (``方案/归档/导出显示进度.md``) — the same spellings ``rename`` / ``move``
+    already take.
+    """
+    from lamtools_core.app.plan_library import PLAN_LIBRARY_DIRNAME, plan_library_root
 
     root = plan_library_root(work_root).resolve()
-    target = (root / name).resolve()
+    cleaned = (name or "").strip().replace("\\", "/").strip("/")
+    prefix = f"{PLAN_LIBRARY_DIRNAME}/"
+    if cleaned.startswith(prefix):
+        cleaned = cleaned[len(prefix):]
+    if not cleaned:
+        return None
+    target = (root / cleaned).resolve()
     try:
         target.relative_to(root)
     except ValueError:
@@ -3739,7 +3916,7 @@ def _plan_library_path(work_root: str, name: str) -> Path | None:
     return target
 
 
-def cmd_plan_library_list(args: argparse.Namespace) -> int:
+async def cmd_plan_library_list(args: argparse.Namespace) -> int:
     from lamtools_core.app.plan_library import scan_plan_library
 
     entries = scan_plan_library(args.work_root)
@@ -3751,7 +3928,7 @@ def cmd_plan_library_list(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_plan_library_show(args: argparse.Namespace) -> int:
+async def cmd_plan_library_show(args: argparse.Namespace) -> int:
     path = _plan_library_path(args.work_root, args.name)
     if path is None:
         print("error: name escapes the plan library", file=sys.stderr)
@@ -3763,7 +3940,7 @@ def cmd_plan_library_show(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_plan_library_delete(args: argparse.Namespace) -> int:
+async def cmd_plan_library_delete(args: argparse.Namespace) -> int:
     path = _plan_library_path(args.work_root, args.name)
     if path is None:
         print("error: name escapes the plan library", file=sys.stderr)
@@ -3773,6 +3950,66 @@ def cmd_plan_library_delete(args: argparse.Namespace) -> int:
         return 1
     path.unlink()
     print(f"[plan-library] deleted {args.name}")
+    return 0
+
+
+def _plan_library_command_error(cause: Exception) -> int:
+    print(f"error: {cause}", file=sys.stderr)
+    return 1
+
+
+async def cmd_plan_library_create(args: argparse.Namespace) -> int:
+    from lamtools_core.app.plan_library import PlanLibraryError, create_plan
+
+    try:
+        entry = create_plan(args.work_root, args.name, folder=args.folder)
+    except PlanLibraryError as cause:
+        return _plan_library_command_error(cause)
+    print(f"[plan-library] created {entry['path']}")
+    return 0
+
+
+async def cmd_plan_library_folder(args: argparse.Namespace) -> int:
+    from lamtools_core.app.plan_library import PlanLibraryError, create_folder
+
+    try:
+        folder = create_folder(args.work_root, args.path)
+    except PlanLibraryError as cause:
+        return _plan_library_command_error(cause)
+    print(f"[plan-library] created folder {folder['path']}")
+    return 0
+
+
+async def cmd_plan_library_rename(args: argparse.Namespace) -> int:
+    from lamtools_core.app.plan_library import PlanLibraryError, rename_plan
+
+    try:
+        entry = rename_plan(args.work_root, args.path, args.new_name)
+    except PlanLibraryError as cause:
+        return _plan_library_command_error(cause)
+    print(f"[plan-library] renamed to {entry['path']}")
+    return 0
+
+
+async def cmd_plan_library_move(args: argparse.Namespace) -> int:
+    from lamtools_core.app.plan_library import PlanLibraryError, move_plan
+
+    try:
+        entry = move_plan(args.work_root, args.path, folder=args.folder)
+    except PlanLibraryError as cause:
+        return _plan_library_command_error(cause)
+    print(f"[plan-library] moved to {entry['path']}")
+    return 0
+
+
+async def cmd_plan_library_favorite(args: argparse.Namespace) -> int:
+    from lamtools_core.app.plan_library import PlanLibraryError, set_plan_favorite
+
+    try:
+        entry = set_plan_favorite(args.work_root, args.path, favorite=not args.off)
+    except PlanLibraryError as cause:
+        return _plan_library_command_error(cause)
+    print(f"[plan-library] favorite={'on' if entry['favorite'] else 'off'} {entry['path']}")
     return 0
 
 
@@ -4786,7 +5023,7 @@ async def cmd_artifact_show(args: argparse.Namespace) -> int:
         if record is None or record.project_id != project.id:
             print(f"[artifact] not found: {args.artifact_id}", file=sys.stderr)
             return 1
-        for key in ("artifact_id", "kind", "mime_type", "name", "path", "source", "role", "latest_revision_id", "revision_count", "created_at", "deleted"):
+        for key in ("artifact_id", "kind", "mime_type", "name", "path", "source", "role", "availability", "created_at", "deleted"):
             print(f"{key}: {getattr(record, key)}")
         return 0
     finally:
@@ -4858,7 +5095,7 @@ async def cmd_artifact_delete(args: argparse.Namespace) -> int:
     db, project, _root = await _artifact_store_for_cli(args)
     try:
         deleted = await db.artifact_store.soft_remove(args.artifact_ids, project_id=project.id)
-        print(f"[artifact] 已软删 {deleted} 个（内容与历史保留）")
+        print(f"[artifact] 已移出资料库 {deleted} 个（只改成果库状态，不动磁盘文件）")
         return 0
     finally:
         await db.close()
@@ -4873,34 +5110,6 @@ async def cmd_artifact_restore(args: argparse.Namespace) -> int:
             project_id=project.id,
         )
         print(f"[artifact] 已恢复 {restored} 个")
-        return 0
-    finally:
-        await db.close()
-
-
-async def cmd_artifact_revisions(args: argparse.Namespace) -> int:
-    db, project, _root = await _artifact_store_for_cli(args)
-    try:
-        record = await db.artifact_store.get(args.artifact_id)
-        if record is None or record.project_id != project.id:
-            print(f"[artifact] not found: {args.artifact_id}", file=sys.stderr)
-            return 1
-        for revision in await db.artifact_store.revisions(record.artifact_id):
-            print(f"{revision.ordinal:>4} {revision.revision_id} {revision.sha256} {revision.size}")
-        return 0
-    finally:
-        await db.close()
-
-
-async def cmd_artifact_restore_revision(args: argparse.Namespace) -> int:
-    db, project, _root = await _artifact_store_for_cli(args)
-    try:
-        record = await db.artifact_store.restore_revision(
-            args.artifact_id,
-            args.revision_id,
-            project_id=project.id,
-        )
-        print(f"[artifact] restored {record.artifact_id} -> {record.latest_revision_id}")
         return 0
     finally:
         await db.close()
@@ -4966,76 +5175,103 @@ async def cmd_loadtools_delete_mode(args: argparse.Namespace) -> int:
     return 0
 
 
-async def cmd_memory_get(args: argparse.Namespace) -> int:
-    from lamtools_core.config.root import core_config_file
+async def cmd_memory(args: argparse.Namespace) -> int:
+    """Browse and edit the two-tier memory library (see ``mem.library``)."""
+    from pathlib import Path as _Path
 
-    path = core_config_file("memory.md")
-    if not path.is_file():
-        print("[memory] (no global memory.md yet)", flush=True)
-        return 0
-    print(path.read_text(encoding="utf-8", errors="replace"), end="")
-    return 0
+    from lamtools_core import mem as memory
 
+    scope = memory.SCOPE_GLOBAL if getattr(args, "memory_global", False) else memory.SCOPE_PROJECT
+    work_root = str(getattr(args, "work_root", "") or "") or str(_Path.cwd())
+    command = args.memory_command
 
-async def cmd_memory_set(args: argparse.Namespace) -> int:
-    from lamtools_core.config.root import core_config_file
+    def _content() -> str:
+        source = str(getattr(args, "from_file", "") or "")
+        if source:
+            if source == "-":
+                return sys.stdin.read()
+            return _Path(source).read_text(encoding="utf-8")
+        inline = getattr(args, "content", None)
+        if inline:
+            return str(inline)
+        return sys.stdin.read()
 
-    if args.source_file == "-":
-        content = sys.stdin.read()
-    else:
-        try:
-            content = Path(args.source_file).read_text(encoding="utf-8")
-        except OSError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-    path = core_config_file("memory.md")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        if command == "tree":
+            entries = memory.list_entries(
+                scope,
+                work_root,
+                path=str(getattr(args, "path", "") or ""),
+                recursive=not getattr(args, "flat", False),
+                max_depth=int(getattr(args, "max_depth", 0) or 0),
+            )
+            root = memory.memory_root(scope, work_root)
+            print(f"[memory] {memory.normalize_scope(scope)} tier: {root}")
+            if not entries:
+                print("(empty)")
+                return 0
+            for entry in entries:
+                suffix = "/" if entry.is_dir else ""
+                summary = f"  — {entry.summary}" if entry.summary else ""
+                print(f"{entry.path}{suffix}{summary}")
+            return 0
+        if command == "read":
+            print(memory.read_memory(scope, work_root, args.path), end="")
+            return 0
+        if command == "write":
+            entry = memory.write_memory(scope, work_root, args.path, _content())
+            print(f"[memory] wrote {entry.path} ({entry.size} bytes)")
+            return 0
+        if command == "append":
+            entry = memory.append_memory(scope, work_root, args.path, _content())
+            print(f"[memory] appended to {entry.path} ({entry.size} bytes)")
+            return 0
+        if command == "edit":
+            raw_occurrence = int(getattr(args, "occurrence", 0) or 0)
+            entry = memory.edit_memory(
+                scope,
+                work_root,
+                args.path,
+                str(args.old),
+                str(args.new),
+                occurrence=raw_occurrence or None,
+            )
+            print(f"[memory] edited {entry.path}")
+            return 0
+        if command == "delete":
+            print(f"[memory] deleted {memory.delete_memory(scope, work_root, args.path)}")
+            return 0
+        if command == "rename":
+            renamed = memory.rename_memory(scope, work_root, args.path, args.new_path)
+            print(f"[memory] renamed {args.path} -> {renamed}")
+            return 0
+        if command == "mkdir":
+            print(f"[memory] created directory {memory.make_directory(scope, work_root, args.path)}")
+            return 0
+        if command == "reveal":
+            opened = memory.reveal_memory(scope, work_root)
+            print(f"[memory] {memory.normalize_scope(scope)} tier: {opened}")
+            return 0
+        if command == "projects":
+            kept = [
+                str(root)
+                for root in args.roots
+                if memory.has_content(memory.SCOPE_PROJECT, str(root))
+            ]
+            if not kept:
+                print("(none)")
+                return 0
+            for root in kept:
+                print(root)
+            return 0
+    except memory.MemoryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"[memory] saved {len(content)} chars to {path}")
-    return 0
-
-
-_DREAMING_NAMESPACE = "core.dreaming"
-
-
-def _memory_dream_settings() -> dict[str, Any]:
-    """Read core.dreaming settings from settings.jsonc."""
-    value = get_setting(_DREAMING_NAMESPACE)
-    return dict(value) if isinstance(value, dict) else {}
-
-
-async def cmd_memory_dream_show(args: argparse.Namespace) -> int:
-    del args
-    value = _memory_dream_settings()
-    enabled = bool(value.get("enabled"))
-    print(f"enabled:  {'yes' if enabled else 'no'}")
-    print(f"min_turns: {int(value.get('min_turns') or 3)}")
-    print("说明:     开启后每轮会话结束时自动把值得长期保留的内容蒸馏到工作区 MEMORY.md；/dream 命令始终可手动触发")
-    return 0
-
-
-async def cmd_memory_dream_config(args: argparse.Namespace) -> int:
-    value = _memory_dream_settings()
-    changed = False
-    if args.enabled is not None:
-        value["enabled"] = args.enabled == "true"
-        changed = True
-    if args.min_turns is not None:
-        if args.min_turns < 1:
-            print("error: --min-turns must be >= 1", file=sys.stderr)
-            return 1
-        value["min_turns"] = args.min_turns
-        changed = True
-    if not changed:
-        print("error: nothing to change (pass --enabled / --min-turns)", file=sys.stderr)
-        return 1
-    set_setting(_DREAMING_NAMESPACE, value)
-    print(f"[memory dream] saved: enabled={bool(value.get('enabled'))} min_turns={int(value.get('min_turns') or 3)}")
-    return 0
+    print(f"error: unknown memory command '{command}'", file=sys.stderr)
+    return 1
 
 
 _ONBOARDING_NAMESPACE = "core.onboarding"

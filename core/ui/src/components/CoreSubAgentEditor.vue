@@ -53,6 +53,7 @@
           :options="availableDelegationStrategyOptions"
           :disabled="settingsLoading || delegationStrategySaving"
           aria-label="子代理委派策略"
+          :menu-min-width="0"
         />
         <p class="delegation-strategy-description">
           {{ delegationStrategyDescription }}
@@ -724,11 +725,6 @@ onMounted(() => {
   width: 100%;
   color: var(--settings-control-text, var(--theme-control-text));
   font-size: 13px;
-}
-
-.delegation-strategy-select :deep(.ui-select-menu) {
-  width: 100%;
-  min-width: 0;
 }
 
 .delegation-strategy-description {

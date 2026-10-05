@@ -1484,3 +1484,127 @@ def test_disabled_plugin_cannot_ensure_session(tmp_path: Path, isolated_config_r
         response = client.post("/api/core/desktop-plugins/emotion-ball-pet/session")
 
     assert response.status_code == 404
+
+
+def test_artifact_library_rpcs_round_trip(
+    tmp_path: Path,
+    isolated_config_root: Path,
+) -> None:
+    """资料库的四件事（收藏 / 归档 / 占用 / 上传）经真实 RPC 往返一次。
+
+    这四条是资料区界面唯一依赖的库侧能力，所以走 app-server 的 websocket，
+    而不是直接调 store——接口挂错了界面就是空的。
+    """
+    _write_jsonc_config(isolated_config_root)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=workspace,
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            _initialize_websocket(websocket)
+            websocket.send_json({
+                "id": 10,
+                "method": "project.create",
+                "params": {"name": "Docs", "work_root": str(workspace)},
+            })
+            project_id = _receive_rpc_response(websocket, 10)["result"]["project"]["id"]
+
+            # 上传：真文件落在「资料/」，并登记成 user_upload 的输入成果。
+            uploaded = client.post(
+                f"/api/core/projects/{project_id}/artifacts",
+                files={"file": ("提纲.md", b"# \xe6\x8f\x90\xe7\xba\xb2\n", "text/markdown")},
+            )
+            assert uploaded.status_code == 200, uploaded.text
+            artifact = uploaded.json()
+            artifact_id = artifact["artifact_id"]
+            assert artifact["source"] == "user_upload"
+            assert artifact["role"] == "input"
+            assert (workspace / "资料" / "提纲.md").read_text(encoding="utf-8") == "# 提纲\n"
+
+            websocket.send_json({
+                "id": 11,
+                "method": "artifact.favorite",
+                "params": {"project_id": project_id, "artifact_id": artifact_id, "favorite": True},
+            })
+            assert _receive_rpc_response(websocket, 11)["result"]["artifact"]["favorite"] is True
+
+            websocket.send_json({
+                "id": 12,
+                "method": "artifact.folder",
+                "params": {"project_id": project_id, "artifact_id": artifact_id, "folder": "项目A/这一期"},
+            })
+            assert _receive_rpc_response(websocket, 12)["result"]["artifact"]["folder"] == "项目A/这一期"
+
+            websocket.send_json({
+                "id": 13,
+                "method": "artifact.stats",
+                "params": {"project_id": project_id},
+            })
+            stats = _receive_rpc_response(websocket, 13)["result"]
+            assert stats["count"] == 1
+            assert stats["bytes"] == len(b"# \xe6\x8f\x90\xe7\xba\xb2\n")
+
+            websocket.send_json({
+                "id": 14,
+                "method": "artifact.list",
+                "params": {"project_id": project_id},
+            })
+            listed = _receive_rpc_response(websocket, 14)["result"]["artifacts"][0]
+            assert listed["favorite"] is True
+            assert listed["folder"] == "项目A/这一期"
+            assert listed["updated_at"]
+            assert "latest_revision_id" not in listed and "revision_count" not in listed
+
+            # 打开成果读的是磁盘上的当前文件：文件改了读出来就是新的；
+            # 旧的 revision_id 查询已无意义（成果不再保留历史版本），照常读当前内容。
+            (workspace / "资料" / "提纲.md").write_bytes("# 提纲 v2\n".encode())
+            fetched = client.get(
+                f"/api/core/projects/{project_id}/artifacts/{artifact_id}/file?revision_id=rev-old"
+            )
+            assert fetched.status_code == 200, fetched.text
+            assert fetched.content == "# 提纲 v2\n".encode()
+
+            # 文件真的不在了就是 404 —— 没有历史版本可以兜底。
+            (workspace / "资料" / "提纲.md").unlink()
+            gone = client.get(f"/api/core/projects/{project_id}/artifacts/{artifact_id}/file")
+            assert gone.status_code == 404
+
+            # 越界与不认识的目标都如实报错，不静默写坏。
+            websocket.send_json({
+                "id": 15,
+                "method": "artifact.folder",
+                "params": {"project_id": project_id, "artifact_id": artifact_id, "folder": "../逃逸"},
+            })
+            assert "error" in _receive_rpc_response(websocket, 15)
+            websocket.send_json({
+                "id": 16,
+                "method": "artifact.favorite",
+                "params": {"project_id": project_id, "artifact_id": "不存在", "favorite": True},
+            })
+            assert "error" in _receive_rpc_response(websocket, 16)
+
+
+def test_artifact_upload_refuses_a_foreign_project(tmp_path: Path, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=workspace,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/core/projects/没有这个项目/artifacts",
+            files={"file": ("a.md", b"x", "text/markdown")},
+        )
+
+    assert response.status_code == 404

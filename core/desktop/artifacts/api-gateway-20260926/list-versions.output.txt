@@ -1,0 +1,6 @@
+=== github tags (api) ===
+  unexpected payload: {'message': 'Moved Permanently', 'url': 'https://api.github.com/repositories/717197250/tags?per_page=100', 'documentation_url': 'https://docs.github.com/rest/guides/best-practices-for-using-the-rest-a
+=== docker hub tags for calciumion/new-api ===
+  docker hub api unreachable
+  could not read: FileNotFoundError
+=== done ===

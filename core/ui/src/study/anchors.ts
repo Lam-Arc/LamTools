@@ -2,7 +2,7 @@ import type { MarkAnchor } from './types'
 import { codePointToUtf16, expandEnglishWord, utf16ToCodePoint } from './selection'
 
 const BLOCKS = '.markdown-renderer__content, .user-bubble, [data-selection-block], p, pre, li, h1, h2, h3, td, label'
-const SURFACES = ['.settings-overlay', '.editor-overlay', '.drawer-left', '.drawer-right', '.workspace-main']
+const SURFACES = ['.editor-overlay', '.drawer-left', '.drawer-right', '.workspace-main']
 
 function element(node: Node | null): Element | null { return node instanceof Element ? node : node?.parentElement || null }
 

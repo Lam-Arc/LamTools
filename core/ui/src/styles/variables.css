@@ -50,12 +50,14 @@
   --optical-glass-contrast: 1.03;
   --optical-glass-tint: 16%;
   --optical-glass-fallback-tint: 22%;
-  --optical-glass-highlight-color: rgb(255 255 255);
   --optical-glass-refraction-color: rgb(82 104 91);
   --optical-glass-refraction: 13%;
   --theme-optical-glass-border-color: rgb(95 95 95);
-  --optical-glass-inset-bottom: 14%;
   --optical-glass-shadow: 0 7px 14px rgba(30, 40, 35, .12), 0 1px 4px rgba(30, 40, 35, .06);
+  /* 低透玻璃（.optical-glass--low-trans）：重着色，浮层/菜单用；
+     高透（默认 16%）只留给右侧栏等大面积承载面。 */
+  --optical-glass-low-trans-tint: 40%;
+  --optical-glass-low-trans-fallback-tint: 58%;
 
   /* —— 交互态 alpha（替代 4%–18% 的随机取值；hover→active 恒 +4pp）—— */
   --alpha-hover: 8%;
@@ -79,9 +81,15 @@
   --right-drawer-retract: 180ms;
 
   /* —— Core 左侧栏标尺（桌面端紧凑密度）—— */
-  /* 左栏宽度：小界面用紧凑档（标准宽度的 70%），大界面/全屏恢复标准宽度
-     （workspace-shell.css 的 min-width 断点负责切换；手机抽屉另有宽度）。 */
+  /* 左栏宽度：小界面用紧凑档（标准宽度的 70%），窗口宽裕先升中间档，
+     大界面/全屏恢复标准宽度（workspace-shell.css 的 min-width 断点负责切换；
+     手机抽屉另有宽度）。 */
+  /* 会话栏与聊天区共用的面板圆角：外侧（贴窗口边缘）用大圆角，
+     内侧（两栏相交的间隙处）用小白角。 */
+  --workspace-panel-radius-outer: var(--radius);
+  --workspace-panel-radius-inner: var(--radius-sm);
   --sidebar-width: 162px;
+  --sidebar-width-mid: 200px;
   --sidebar-width-full: 232px;
   --sidebar-padding-x: 14px;
   --sidebar-padding-y: 0;

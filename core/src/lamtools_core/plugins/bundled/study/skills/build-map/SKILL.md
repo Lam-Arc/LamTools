@@ -31,7 +31,7 @@ In one sentence: Organize the confirmed learning scope into a knowledge system t
 
 ## 4. Keep content useful for teaching
 4.1) Store general teaching guidance in teaching_hint or the host's equivalent field: a good entry point, common confusion, a representative example type, and important limits. A few sentences usually suffice; do not put a full lecture or personal history there.
-4.2) Send personal learning preferences and persistent error patterns through the shared Dreaming candidate process with source and scope. Do not duplicate personal memory in the graph or place grades in comments.
+4.2) Keep personal learning preferences and persistent error patterns out of the graph, and do not place grades in comments.
 4.3) Modules may contain brief teaching points: learning goal, topic order, example or illustration needs, and direction for independent assessment. Do not mechanically generate a full lesson plan for every formula.
 4.4) Put course-specific requirements on that course or its membership relationship; keep general knowledge shared. For detailed curriculum design, read [Curriculum design](references/curriculum.md).
 

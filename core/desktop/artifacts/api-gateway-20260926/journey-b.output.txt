@@ -1,0 +1,37 @@
+  target user id=3 quota now=0
+  attempt 1: POST /api/user/manage with quota
+    http 200 success=True 
+    quota in database: 0
+  attempt 2: POST /api/user/topup
+    http 200 success=False 未提供兑换码
+    quota in database: 0
+  operator-friendly path: give new users quota by default
+    set QuotaForNewUser -> http 200 success=True
+    option now: 1000000
+    create zznewuser -> http 200 success=True
+    its quota: 1000000
+  quota before the calls:
+    user=zztest2 quota=0 used=0
+user=zznewuser quota=1000000 used=0
+=== reload so the staged channel is routable ===
+=== call with each key the user made ===
+  zz-key-a   -> 403
+      error: {'message': '用户额度不足, 剩余额度: ＄0.000000 (request id: 202609261135208800340568268d9d6wAKdNGv3)', 'type': 'new_api_error', 'param': '', 'code': 'insufficie
+  zz-key-b   -> 403
+      error: {'message': '用户额度不足, 剩余额度: ＄0.000000 (request id: 202609261135211339116968268d9d6Mui1Q4jl)', 'type': 'new_api_error', 'param': '', 'code': 'insufficie
+  quota after the calls:
+    zztest2: quota=0 used=0 reqs=0 | zznewuser: quota=1000000 used=0 reqs=0
+    zz-key-a: remain=100000 unlimited=false used=0 | zz-key-b: remain=0 unlimited=true used=0
+=== cleanup ===
+  restoring the default quota for new users
+    QuotaForNewUser back to: 0
+    delete user 4 (zznewuser) -> http 200 success=None
+    delete user 3 (zztest2) -> http 200 success=None
+    delete channel 8 (zz-journey-channel) -> http 200 success=True
+  database state: users=1 tokens=3 channels=ERROR:  column "deleted_at" does not exist
+LINE 1: select count(*) from channels where deleted_at is null
+                                            ^
+  live usernames: root
+  live tokens: zz-journey-user-token,zz-key-a,zz-key-b
+  mock provider stopped
+=== done ===

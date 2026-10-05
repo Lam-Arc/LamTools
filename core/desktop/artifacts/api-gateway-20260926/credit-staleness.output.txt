@@ -1,0 +1,30 @@
+  bridge gateway: 172.30.0.1
+  mock provider listening
+=== set up channel, customer, key, voucher ===
+  channel added: True
+  customer created: True
+  customer id: 8 | credit: 0
+  key minted: True
+  voucher ready: True
+=== make the channel routable first, so this test isolates credit ===
+=== 1. before purchase (expect refusal) ===
+  unpaid                             -> 403 | 用户额度不足, 剩余额度: ＄0.000000 (request id: 202609261158142754538438268d9d6pN
+=== 2. purchase, then call straight away ===
+  redeemed -> success=True
+  credit in database: 1000000
+  credit as the API reports it to the customer:
+    {'quota': 1000000, 'used_quota': 0, 'group': 'default'}
+  immediately after purchase         -> 403 | 用户额度不足, 剩余额度: ＄0.000000 (request id: 202609261158163645272508268d9d6F0
+=== 3. wait 70s and call again (is it a timed cache?) ===
+  70s after purchase                 -> 200 | paid ok
+=== 4. restart the gateway, then call (in-process cache?) ===
+  after gateway restart              -> 200 | paid ok
+=== cleanup ===
+  removed voucher 3
+  removed channel 10
+  removed customer 8
+  leftover tokens: zzstal-key
+DELETE 1
+  final: users=root | channels=0 | live tokens=none
+  mock provider stopped
+=== done ===

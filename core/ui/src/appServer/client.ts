@@ -18,11 +18,26 @@ export interface JsonRpcClientResponse {
   result: Record<string, unknown>
 }
 
+/** Persisted-change notification from the sync journal (`sync/change`). */
+export interface CoreSyncChangeNotification {
+  change_id?: string
+  thread_id?: string
+  entity_id?: string
+  entity_type?: string
+  operation?: string
+  revision?: number
+  snapshot_revision?: number
+  seq?: number
+  payload?: unknown
+  entity?: unknown
+}
+
 export interface CoreAppServerClientOptions {
   transport: LamToolsTransport
   clientInfo: { name: string; title?: string; version?: string }
   onEvent?: (event: CoreAppEvent) => void
   onSnapshot?: (snapshot: CoreAppSnapshot) => void
+  onSyncChange?: (change: CoreSyncChangeNotification) => void
   onConnectionState?: (state: 'connecting' | 'open' | 'closed' | 'error') => void
 }
 
@@ -178,6 +193,10 @@ export class CoreAppServerClient {
     if ((message.type === 'notification' || message.type === 'event') && params) {
       if (message.method === 'thread/snapshot') {
         this.options.onSnapshot?.(params as unknown as CoreAppSnapshot)
+        return
+      }
+      if (message.method === 'sync/change') {
+        this.options.onSyncChange?.(params as unknown as CoreSyncChangeNotification)
         return
       }
       this.options.onEvent?.(params as unknown as CoreAppEvent)

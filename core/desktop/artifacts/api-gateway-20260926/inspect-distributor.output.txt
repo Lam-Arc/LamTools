@@ -1,0 +1,9 @@
+  login ok: False | http 429 | None
+  options: 0 | success: False
+  --- pricing: is gpt-4o-mini a known model? ---
+    priced models: 0
+    gpt-4o-like entries: []
+    gpt-4o-mini present: False
+=== full channel record (all fields of the most recent channel) ===
+  channels on record: 0
+=== done ===

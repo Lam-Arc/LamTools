@@ -18,64 +18,21 @@
 @import './session-sidebar.css';
 
 /* =========================================================================
-   Stage pane — generic viewport behind the main card
-   (code editor, image/video preview, browser, etc.)
-   ========================================================================= */
-.workspace-stage {
-  position: fixed;
-  top: var(--titlebar-offset, 0px);
-  height: var(--stage-reveal, 0px);
-  left: var(--left-reveal);
-  right: var(--right-reveal);
-  z-index: var(--z-stage, 15);
-  overflow: hidden;
-  border-radius: var(--radius-sm);
-  border-left: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
-  border-right: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
-  background: color-mix(in srgb, var(--theme-titlebar-bg, #202020), var(--theme-main-solid, #111111));
-  color: var(--theme-backdrop-text);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .3s ease;
-}
-.workspace-shell.stage-open .workspace-stage {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* Drag handle at the bottom edge of the stage */
-.stage-resize-handle {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 6px;
-  z-index: 1;
-  cursor: ns-resize;
-  background: transparent;
-  border-radius: 0 0 12px 12px;
-  transition: background .15s ease;
-}
-.stage-resize-handle:hover,
-.stage-resize-handle.dragging {
-  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 20%, transparent);
-}
-
-/* =========================================================================
    Main card — centered content area with top rounding & shadow
    ========================================================================= */
 .workspace-main {
   --text: var(--theme-main-text);
   position: fixed;
-  top: calc(var(--titlebar-offset, 0px) + var(--stage-reveal, 0px)); bottom: 0;
+  top: var(--titlebar-offset, 0px); bottom: var(--shell-bottom-inset, 6px);
   left: var(--main-left);
   right: var(--main-right);
   z-index: var(--z-main-surface, 20);
-  height: calc(100vh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px));
+  height: calc(100vh - var(--titlebar-offset, 0px) - var(--shell-bottom-inset, 6px));
   overflow: hidden;
   padding: 44px var(--main-x-padding) var(--composer-height, 120px) var(--main-x-padding);
   border: 1px solid var(--theme-main-border);
-  border-radius: 22px 22px 0 0;
+  border-radius: var(--workspace-panel-radius-inner) var(--workspace-panel-radius-outer)
+    var(--workspace-panel-radius-outer) var(--workspace-panel-radius-inner);
   background: var(--theme-main-background);
   color: var(--theme-main-text);
   display: flex;
@@ -96,17 +53,26 @@
   padding: 0;
 }
 
-/* 整版界面（搜索/资料库/长期安排）打开时输入栏隐藏，底部留白随之收回。 */
+/* 整版界面（搜索/资料库/定时任务）打开时输入栏隐藏，底部留白随之收回。 */
 .workspace-main--no-composer {
   padding-bottom: var(--space-6);
 }
 
-/* 整版界面本体：占住聊天区域的一块可滚动面板（输入栏隐藏，高度即主卡内高）。 */
+/* 设置 / 插件：页名与分区都在会话栏里，主卡不再渲染标题条。
+   原来留给标题条的那条高度（44px）随之收回，只留一点上沿留白，
+   内容直接顶到页面顶部、独占整页。 */
+.workspace-main--no-header {
+  padding-top: var(--space-4);
+}
+
+/* 整版界面本体：占住聊天区域的一块可滚动面板（输入栏隐藏，高度即主卡内高）。
+   横向一律裁掉：任何浮层（如下拉菜单）伸出去都不得把页面撑宽出横向滚动。 */
 .full-area-view {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   --text: var(--theme-main-text);
   color: var(--text);
@@ -147,10 +113,12 @@
   gap: var(--space-2);
 }
 
-/* 空态：不是一句孤零零的话，而是教人怎么开始的一小块内容。 */
+/* 空态：不是一句孤零零的话，而是教人怎么开始的一小块内容。
+   子项一律按内容宽排（左对齐），按钮不随容器拉伸成一条通栏。 */
 .full-area-empty {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: var(--space-3);
   max-width: 52ch;
   padding: var(--space-5) 0 0;
@@ -206,7 +174,7 @@
 
 @supports (height: 100dvh) {
   .workspace-main {
-    height: calc(100dvh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px));
+    height: calc(100dvh - var(--titlebar-offset, 0px) - var(--shell-bottom-inset, 6px));
   }
 }
 
@@ -439,8 +407,7 @@
 .workspace-shell--composer-center .floating-composer {
   top: calc(
     var(--titlebar-offset, 0px) +
-    var(--stage-reveal, 0px) +
-    (100vh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px) - var(--composer-height, 120px)) / 2
+    (100vh - var(--titlebar-offset, 0px) - var(--composer-height, 120px)) / 2
   );
   bottom: auto;
 }
@@ -454,8 +421,7 @@
   .workspace-shell--composer-center .floating-composer {
     top: calc(
       var(--titlebar-offset, 0px) +
-      var(--stage-reveal, 0px) +
-      (100dvh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px) - var(--composer-height, 120px)) / 2
+      (100dvh - var(--titlebar-offset, 0px) - var(--composer-height, 120px)) / 2
     );
   }
 }
@@ -474,8 +440,7 @@
   --empty-session-composer-top: min(
     calc(
       var(--titlebar-offset, 0px) +
-      var(--stage-reveal, 0px) +
-      (100vh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px) - var(--composer-height, 120px)) / 2 +
+      (100vh - var(--titlebar-offset, 0px) - var(--composer-height, 120px)) / 2 +
       calc(var(--space-6) * 2)
     ),
     calc(
@@ -492,8 +457,7 @@
     --empty-session-composer-top: min(
       calc(
         var(--titlebar-offset, 0px) +
-        var(--stage-reveal, 0px) +
-        (100dvh - var(--titlebar-offset, 0px) - var(--stage-reveal, 0px) - var(--composer-height, 120px)) / 2 +
+        (100dvh - var(--titlebar-offset, 0px) - var(--composer-height, 120px)) / 2 +
         calc(var(--space-6) * 2)
       ),
       calc(
@@ -870,6 +834,11 @@
   color: var(--theme-main-text, var(--text));
 }
 
+/* 会话栏当侧栏时（hideNav）：内置导航列退场，内容占满整行。 */
+.settings-page.settings-page--no-nav {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .settings-sidebar {
   min-width: 0;
   width: max-content;
@@ -955,6 +924,14 @@
   background: var(--settings-main-background, #141515);
   color: var(--settings-main-text, var(--text));
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
+}
+
+/* 会话栏当侧栏时（hideNav）：内容不再套一层带边框的岛，直接铺满整页。 */
+.settings-page--no-nav .settings-main {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .settings-content {
@@ -1819,10 +1796,6 @@
   border-radius: var(--radius-sm);
 }
 .composer-model-row .ui-select-arrow { right: 10px; }
-.composer-model-row .ui-select--up .ui-select-menu {
-  top: auto;
-  bottom: calc(100% + 6px);
-}
 
 .agents-editor {
   width: 100%;
@@ -3229,29 +3202,6 @@
   }
 }
 
-/* ── Settings overlay shell（CoreSettings / PluginsShell 共用骨架）── */
-.settings-overlay {
-  position: fixed;
-  inset: var(--titlebar-offset, 36px) 0 0 0;
-  z-index: var(--z-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.settings-card {
-  position: relative;
-  width: min(960px, calc(100vw - 48px));
-  max-height: calc(100dvh - var(--titlebar-offset, 36px) - 48px);
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #f2efeb) 12%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--settings-card-background, var(--theme-main-background, #111111));
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
 /* ── Floating editor popover（CoreSettings / CorePluginsEditor 共用）── */
 .editor-overlay {
   position: absolute;
@@ -3261,8 +3211,6 @@
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
   padding: 24px;
 }
 .editor-popover {

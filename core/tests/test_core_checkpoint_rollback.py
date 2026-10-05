@@ -56,19 +56,6 @@ def _init_mixed_workspace(work_root: Path) -> None:
     _write(work_root / "ignored.txt", "ignored-before\n")
 
 
-async def _backup_workspace_files(coordinator: Any, session_id: str, work_root: Path) -> None:
-    """Simulate agent tool writes: back each existing file up before mutating.
-
-    With lazy capture only files passed through backup_file() are restored on
-    rollback — files created (or renamed) after the checkpoint are not backed
-    up and are intentionally left alone.
-    """
-    for name in ("tracked.txt", "deleted.txt", "rename-old.txt", "untracked.txt", "ignored.txt"):
-        path = work_root / name
-        if path.is_file():
-            await coordinator.backup_file(session_id=session_id, path=path)
-
-
 def _mutate_workspace_after_checkpoint(work_root: Path) -> None:
     _write(work_root / "tracked.txt", "tracked-after\n")
     (work_root / "deleted.txt").unlink()
@@ -77,21 +64,6 @@ def _mutate_workspace_after_checkpoint(work_root: Path) -> None:
     _write(work_root / "created.txt", "created-after\n")
     _write(work_root / "ignored.txt", "ignored-after\n")
     _write(work_root / "created-ignored.txt", "created-ignored-after\n")
-
-
-def _assert_workspace_restored_lazy(work_root: Path) -> None:
-    """Lazy-capture restore: backed-up files come back, files created/renamed
-    after the checkpoint are not touched."""
-    assert (work_root / "tracked.txt").read_text(encoding="utf-8") == "tracked-before\n"
-    assert (work_root / "deleted.txt").read_text(encoding="utf-8") == "deleted-before\n"
-    assert (work_root / "rename-old.txt").read_text(encoding="utf-8") == "rename-before\n"
-    # rename-new.txt was never backed up -> it stays (renamed file not rolled back)
-    assert (work_root / "rename-new.txt").read_text(encoding="utf-8") == "rename-before\n"
-    assert (work_root / "untracked.txt").read_text(encoding="utf-8") == "untracked-before\n"
-    # created.txt / created-ignored.txt were never backed up -> they stay
-    assert (work_root / "created.txt").read_text(encoding="utf-8") == "created-after\n"
-    assert (work_root / "ignored.txt").read_text(encoding="utf-8") == "ignored-before\n"
-    assert (work_root / "created-ignored.txt").read_text(encoding="utf-8") == "created-ignored-after\n"
 
 
 def _assert_workspace_after_turn(work_root: Path) -> None:
@@ -176,10 +148,10 @@ async def _append_turn_completed(db: Any, *, session_id: str, turn_id: str, mess
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_restores_conversation_and_all_workspace_file_classes(
+async def test_checkpoint_restore_leans_on_the_conversation_only(
     tmp_path: Path,
 ) -> None:
-    """One public checkpoint must own conversation and workspace rollback together."""
+    """公开的检查点恢复只回对话；工作区文件一律保持当前状态。"""
     work_root = tmp_path / "workspace"
     _init_mixed_workspace(work_root)
     db = await open_core_app_db(tmp_path / "core.db")
@@ -189,7 +161,6 @@ async def test_checkpoint_restores_conversation_and_all_workspace_file_classes(
         work_root=work_root,
         session_factory=db.session_factory,
         write_coordinator=db.persistence.write_coordinator,
-        storage_root=tmp_path / "checkpoint-data",
     )
     try:
         await sessions.create(SessionRecord(
@@ -216,8 +187,6 @@ async def test_checkpoint_restores_conversation_and_all_workspace_file_classes(
             actor_kind="main",
         )
 
-        # simulate agent tool writes (back up before mutating)
-        await _backup_workspace_files(coordinator, "session-rollback", work_root)
         _mutate_workspace_after_checkpoint(work_root)
         await sessions.add_message(MessageRecord(
             id="message-after",
@@ -243,7 +212,8 @@ async def test_checkpoint_restores_conversation_and_all_workspace_file_classes(
         assert await db.runtime_state_store.get_history("session-rollback") == [
             {"role": "user", "content": "first turn"}
         ]
-        _assert_workspace_restored_lazy(work_root)
+        # 恢复只作用于对话：工作区保持改动后的当前状态。
+        _assert_workspace_after_turn(work_root)
     finally:
         await db.close()
 
@@ -260,7 +230,6 @@ async def test_checkpoint_restore_keeps_runtime_projection_and_events_consistent
         work_root=work_root,
         session_factory=db.session_factory,
         write_coordinator=db.persistence.write_coordinator,
-        storage_root=tmp_path / "checkpoint-data",
     )
     try:
         await _append_turn_start(db, session_id=session_id, turn_id=first_turn, text="first")

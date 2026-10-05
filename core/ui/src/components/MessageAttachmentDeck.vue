@@ -103,7 +103,6 @@
       title="使用默认应用打开？"
       description="此文件将交给系统默认应用处理。"
       :detail="pendingOpenItem?.name"
-      confirm-label="打开"
       :loading="Boolean(openingKey)"
       :error="openError"
       @cancel="cancelOpen"
@@ -978,8 +977,6 @@ onBeforeUnmount(() => {
   place-items: center;
   padding: var(--space-4);
   background: color-mix(in srgb, var(--theme-backdrop-text) 20%, transparent);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
 }
 
 .message-attachment-deck__text-dialog {

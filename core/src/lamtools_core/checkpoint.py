@@ -12,19 +12,13 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
-import logging
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-import hashlib
-import json
 import os
 from pathlib import Path
 import re
-import shutil
-import stat
-import tempfile
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol
 import uuid
 from weakref import WeakValueDictionary
 
@@ -35,14 +29,12 @@ from lamtools_core.app.core_db import (
     CoreAppEvent,
     CoreCheckpoint,
     CoreCheckpointAttachmentRef,
-    CoreCheckpointArtifactRef,
     CoreCheckpointBlob,
     CoreCheckpointBlobRef,
     CoreCheckpointV2,
     CoreCheckpointV2Materialized,
     CoreCheckpointV2SessionHistory,
     CoreCheckpointV2SessionMessages,
-    CoreArtifact,
     CoreHistoryEntry,
     CoreDbBase,
     CoreRestoreOperation,
@@ -61,6 +53,7 @@ from lamtools_core.app.operation_catalog import OperationCatalog, OperationReque
 ActorKind = Literal["main", "sub_agent", "tool", "hook", "restore", "fork"]
 CheckpointEdgeKind = Literal["checkpoint", "hook", "rollback", "session_fork"]
 RestoreScope = Literal["conversation", "workspace", "all"]
+#: 恢复只作用于对话上下文；workspace/all 是旧调用方的历史取值，按对话处理。
 _RESTORE_SCOPES = frozenset({"conversation", "workspace", "all"})
 _FORK_TITLE_SUFFIX = re.compile(r"^(?P<base>.+)（(?P<number>[1-9]\d*)）$")
 
@@ -171,12 +164,6 @@ class CheckpointConversationBackend(Protocol):
     ) -> ForkConversationResult: ...
 
 _WORKSPACE_LOCKS: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
-_SKIPPED_DIRECTORIES = {".git", ".hg", ".svn", "node_modules", "__pycache__"}
-
-_logger = logging.getLogger(__name__)
-# Files larger than this are never copied into checkpoint blob storage (full
-# copies of huge files on every tool edit would balloon disk usage).
-MAX_BACKUP_FILE_BYTES = 200 * 1024 * 1024  # 200 MB
 # Each session keeps only this many most-recent TURNS on its main line
 # (nodes with actor_kind == "main"). Restore bookkeeping (undo/derived) and
 # fork markers never consume the window, so the pool of rollback targets is
@@ -203,26 +190,13 @@ class CoreCheckpointCoordinator:
         work_root: str | Path,
         session_factory: async_sessionmaker,
         write_coordinator: SQLiteWriteCoordinator | None = None,
-        storage_root: str | Path | None = None,
         conversation_backend: CheckpointConversationBackend | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.session_factory = session_factory
         self.write_coordinator = write_coordinator or SQLiteWriteCoordinator(session_factory)
         self.database_path = _database_path(session_factory)
-        self.storage_root = (
-            Path(storage_root).resolve()
-            if storage_root is not None
-            else _default_storage_root(session_factory)
-        )
-        self.storage_root.mkdir(parents=True, exist_ok=True)
         self.conversation_backend = conversation_backend or CoreCheckpointConversationBackend(session_factory)
-        from lamtools_core.artifact.store import ArtifactStore
-        self.artifact_store = ArtifactStore(
-            session_factory,
-            self.storage_root / "blobs",
-            self.write_coordinator,
-        )
         self._schema_ready = False
         self._schema_lock = asyncio.Lock()
         key = os.path.normcase(str(self.work_root))
@@ -231,10 +205,6 @@ class CoreCheckpointCoordinator:
             lock = asyncio.Lock()
             _WORKSPACE_LOCKS[key] = lock
         self._workspace_lock = lock
-        # Most-recent checkpoint ref for this workspace, so backup_file can
-        # append to its manifest. Initialised to None so the `if ref is None`
-        # early-return in backup_file works before any save() has run.
-        self._latest_checkpoint: CheckpointRef | None = None
 
     async def begin_turn(
         self,
@@ -267,7 +237,7 @@ class CoreCheckpointCoordinator:
         if not normalized_session_id:
             raise ValueError("session_id is required")
         async with self._workspace_lock:
-            ref = await self._capture(
+            return await self._capture(
                 session_id=normalized_session_id,
                 turn_id=str(turn_id or "manual").strip() or "manual",
                 actor_kind=str(actor_kind or "main"),
@@ -276,159 +246,6 @@ class CoreCheckpointCoordinator:
                 edge_kind=str(edge_kind or "checkpoint"),
                 parent_checkpoint_id=parent_checkpoint_id,
             )
-            self._latest_checkpoint = ref
-            return ref
-
-    async def backup_file(self, *, session_id: str, path: str | Path) -> None:
-        """Back up a single file before it is modified by a tool.
-
-        Reads the current content, writes a blob, and appends the file entry
-        to the latest checkpoint's workspace manifest. Files larger than
-        ``MAX_BACKUP_FILE_BYTES`` are skipped so a huge file being touched by
-        a tool cannot balloon blob storage (full copies of a multi-GB file on
-        every edit).
-        """
-        await self._ensure_schema()
-        file_path = Path(path).resolve()
-        if not file_path.is_file():
-            return
-        if not _is_within(file_path, self.work_root):
-            # Outside the workspace (allow_access_outside_workdir or a symlink
-            # escape): skip backing up instead of recording an absolute-path
-            # manifest key — _apply_manifest rejects absolute paths, so one
-            # such entry would permanently break every later rollback
-            # (audit 08 S2).
-            _logger.warning("checkpoint backup skipped (outside workspace): %s", file_path)
-            return
-        relative = str(file_path.relative_to(self.work_root).as_posix())
-        # No checkpoint yet — writing a blob now would create an unreferenced
-        # orphan (audit 08 S3). Skip before any storage I/O.
-        async with self._workspace_lock:
-            if self._latest_checkpoint is None:
-                return
-        try:
-            size = file_path.stat().st_size
-        except OSError:
-            return
-        if size > MAX_BACKUP_FILE_BYTES:
-            _logger.warning(
-                "checkpoint backup skipped (file too large: %.1f MB > %d MB): %s",
-                size / 1e6,
-                MAX_BACKUP_FILE_BYTES / 1e6,
-                relative,
-            )
-            return
-        data = file_path.read_bytes()
-        digest = hashlib.sha256(data).hexdigest()
-        blob_path = await self._write_blob(digest, data)
-        mode = stat.S_IMODE(file_path.stat().st_mode)
-        entry = {"hash": digest, "size": len(data), "mode": mode}
-        async with self._workspace_lock:
-            ref = self._latest_checkpoint
-            if ref is None:
-                return
-            await self._append_file_to_manifest(
-                checkpoint_id=ref.id,
-                relative=relative,
-                entry=entry,
-                digest=digest,
-                blob_path=blob_path,
-                size=len(data),
-            )
-
-    async def _write_blob(self, digest: str, data: bytes) -> Path:
-        """Persist a content-addressed blob, returning its storage path."""
-        blob_root = self.storage_root / "blobs"
-        blob_path = blob_root / digest[:2] / digest
-        if not blob_path.exists():
-            blob_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, temp_name = tempfile.mkstemp(prefix=f"{digest}.", dir=blob_path.parent)
-            try:
-                with os.fdopen(fd, "wb") as handle:
-                    handle.write(data)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                try:
-                    os.replace(temp_name, blob_path)
-                except FileExistsError:
-                    os.unlink(temp_name)
-            except BaseException:
-                try:
-                    os.unlink(temp_name)
-                except OSError:
-                    pass
-                raise
-        return blob_path
-
-    async def _backup_manifest_files(self, checkpoint_id: str, manifest_hash: str) -> None:
-        """Back up the *current* content of every file the target manifest
-        touches, appended to the given (undo) checkpoint's manifest.
-
-        A rollback replaces files with target content; if it fails mid-way,
-        the already-replaced files must be reversible. The undo node is a
-        lazy capture with an empty manifest, so without this real backup a
-        failed rollback leaves the workspace in a mixed state with no way to
-        compensate (audit 08 S3).
-        """
-        target = await self._manifest(manifest_hash)
-        if not target:
-            return
-        for relative in sorted(target):
-            destination = _safe_workspace_path(self.work_root, relative)
-            if not destination.is_file():
-                continue
-            try:
-                size = destination.stat().st_size
-                if size > MAX_BACKUP_FILE_BYTES:
-                    continue
-                data = destination.read_bytes()
-            except OSError:
-                continue
-            digest = hashlib.sha256(data).hexdigest()
-            blob_path = await self._write_blob(digest, data)
-            entry = {"hash": digest, "size": len(data), "mode": stat.S_IMODE(destination.stat().st_mode)}
-            await self._append_file_to_manifest(
-                checkpoint_id=checkpoint_id,
-                relative=relative,
-                entry=entry,
-                digest=digest,
-                blob_path=blob_path,
-                size=len(data),
-            )
-
-    async def _append_file_to_manifest(
-        self,
-        *,
-        checkpoint_id: str,
-        relative: str,
-        entry: dict[str, Any],
-        digest: str,
-        blob_path: Path,
-        size: int,
-    ) -> None:
-        async def write(db: Any) -> None:
-            cp = await db.get(CoreCheckpoint, checkpoint_id)
-            if cp is None:
-                return
-            old_hash = cp.manifest_hash
-            if old_hash:
-                manifest_row = await db.get(CoreWorkspaceManifest, old_hash)
-                merged = dict(manifest_row.entries_json or {}) if manifest_row is not None else {}
-            else:
-                merged = {}
-            if relative in merged:
-                return  # already backed up
-            merged[relative] = entry
-            new_hash = hashlib.sha256(
-                json.dumps(merged, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
-            if await db.get(CoreWorkspaceManifest, new_hash) is None:
-                db.add(CoreWorkspaceManifest(hash=new_hash, entries_json=merged))
-            if await db.get(CoreCheckpointBlob, digest) is None:
-                db.add(CoreCheckpointBlob(hash=digest, size=size, storage_path=str(blob_path)))
-            cp.manifest_hash = new_hash
-            db.add(cp)
-        await self.write_coordinator.run(write)
 
     async def list(self, session_id: str) -> list[CheckpointRef]:
         await self._ensure_schema()
@@ -498,8 +315,7 @@ class CoreCheckpointCoordinator:
                 raise ValueError("Checkpoint does not belong to this session family")
             if Path(target.work_root).resolve() != self.work_root:
                 raise ValueError("Checkpoint belongs to a different workspace")
-            if restore_scope != "workspace":
-                await self.conversation_backend.require_inactive(target.session_id)
+            await self.conversation_backend.require_inactive(target.session_id)
             undo = await self._capture(
                 session_id=target.session_id,
                 turn_id=f"restore:{checkpoint_id}",
@@ -516,21 +332,12 @@ class CoreCheckpointCoordinator:
             operation_id = uuid.uuid4().hex
             await self._create_operation(operation_id, target, undo.id, restore_scope)
             undo_row = await self._checkpoint(undo.id)
-            restored_paths: tuple[str, ...] = ()
-            workspace_touched = False
             conversation_touched = False
             rollback_event: AppEventEnvelope | None = None
             try:
-                if restore_scope in {"workspace", "all"}:
-                    workspace_touched = True
-                    # Real backup of every file the rollback will touch, so a
-                    # mid-rollback failure stays fully reversible (audit 08 S3).
-                    await self._backup_manifest_files(undo.id, target.manifest_hash)
-                    restored_paths = tuple(await self._apply_manifest(target.manifest_hash))
-                    await self.artifact_store.restore_checkpoint(target.id, work_root=self.work_root)
-                if restore_scope in {"conversation", "all"}:
-                    conversation_touched = True
-                    await self._restore_conversation(target, operation_id)
+                # 恢复只作用于上下文：文件与成果不参与，也不再记录内容历史。
+                conversation_touched = True
+                await self._restore_conversation(target, operation_id)
                 append_rollback_event = getattr(self.conversation_backend, "append_rollback_event", None)
                 if callable(append_rollback_event):
                     target_event_seq = await self._checkpoint_event_seq(target)
@@ -565,9 +372,6 @@ class CoreCheckpointCoordinator:
                 try:
                     if conversation_touched:
                         await self._restore_conversation(undo_row, operation_id)
-                    if workspace_touched:
-                        await self._apply_manifest(undo_row.manifest_hash)
-                        await self.artifact_store.restore_checkpoint(undo.id, work_root=self.work_root)
                 finally:
                     await self._fail_operation(operation_id, str(exc))
                 raise
@@ -578,7 +382,7 @@ class CoreCheckpointCoordinator:
                 derived_checkpoint_id=derived.id,
                 scope=restore_scope,
                 status="committed",
-                restored_paths=restored_paths,
+                restored_paths=(),
                 rollback_event=rollback_event,
             )
 
@@ -784,14 +588,9 @@ class CoreCheckpointCoordinator:
         edge_kind: str,
         parent_checkpoint_id: str | None = None,
     ) -> CheckpointRef:
-        # Lazy workspace capture only: files are snapshotted individually by
-        # backup_file() right before a tool modifies them. There is no full
-        # workspace scan anywhere — a huge work_root (e.g. a game-save
-        # directory) can never stall the app. See _apply_manifest for rollback
-        # semantics (only tool-backed files are restored).
+        # 检查点只保存对话上下文（历史、事件边界、运行时状态），不再扫描或备份
+        # 工作区文件：文件内容不保留历史版本，撤回/编辑也不回退文件。
         manifest_hash = ""
-        entries: dict[str, Any] = {}
-        blobs: list[tuple[str, int, str]] = []
         root_session_id = _root_session_id(session_id)
         checkpoint_id = uuid.uuid4().hex
         created_at = datetime.now()
@@ -804,12 +603,6 @@ class CoreCheckpointCoordinator:
                 parent_checkpoint_id=parent_checkpoint_id,
             )
             graph_id = str(parent.graph_id or parent.root_session_id) if parent is not None else root_session_id
-            manifest = await db.get(CoreWorkspaceManifest, manifest_hash)
-            if manifest is None:
-                db.add(CoreWorkspaceManifest(hash=manifest_hash, entries_json=entries))
-            for blob_hash, size, storage_path in blobs:
-                if await db.get(CoreCheckpointBlob, blob_hash) is None:
-                    db.add(CoreCheckpointBlob(hash=blob_hash, size=size, storage_path=storage_path))
             row = CoreCheckpoint(
                 id=checkpoint_id,
                 graph_id=graph_id,
@@ -881,17 +674,6 @@ class CoreCheckpointCoordinator:
                 metadata_json={"v2_only": True},
                 created_at=created_at,
             ))
-            artifact_rows = list((await db.execute(select(CoreArtifact).where(
-                CoreArtifact.work_root == str(self.work_root),
-                CoreArtifact.deleted.is_(False),
-                CoreArtifact.latest_revision_id != "",
-            ))).scalars())
-            for artifact in artifact_rows:
-                db.add(CoreCheckpointArtifactRef(
-                    checkpoint_id=checkpoint_id,
-                    artifact_id=artifact.id,
-                    revision_id=artifact.latest_revision_id,
-                ))
             await db.flush()
             await self._prune_mainline(db, root_session_id=root_session_id, latest_id=checkpoint_id)
             return _checkpoint_ref(row)
@@ -984,20 +766,8 @@ class CoreCheckpointCoordinator:
                 CoreCheckpointV2SessionHistory.checkpoint_id.in_(deleted_sorted)
             )
         )
-        await db.execute(
-            delete(CoreCheckpointArtifactRef).where(
-                CoreCheckpointArtifactRef.checkpoint_id.in_(deleted_sorted)
-            )
-        )
-        # Blob refs of the pruned checkpoints, then the blobs they leave behind
-        # (2026-09-25 审计 P2: pruning dropped checkpoints but kept every backup
-        # file and row forever, so checkpoint storage only ever grew).
-        await db.execute(
-            delete(CoreCheckpointBlobRef).where(
-                CoreCheckpointBlobRef.checkpoint_id.in_(deleted_sorted)
-            )
-        )
-        await self._gc_checkpoint_blobs(db)
+        # 被裁掉的只是对话检查点本身。旧的文件备份行与 blob（若有）原样留在库里：
+        # 内容不再记录历史版本，也就没有任何东西会在背后回收它们。
         # Drop restore operations that reference pruned checkpoints (their
         # undo/redo targets no longer exist).
         await db.execute(
@@ -1007,55 +777,6 @@ class CoreCheckpointCoordinator:
                 | CoreRestoreOperation.derived_checkpoint_id.in_(deleted_sorted)
             )
         )
-
-    async def _gc_checkpoint_blobs(self, db: Any) -> int:
-        """Drop manifests and blobs that no live checkpoint references.
-
-        A rollback resolves file content through its checkpoint's manifest
-        (``CoreWorkspaceManifest.entries_json[relative]["hash"]``), *not*
-        through ``CoreCheckpointBlobRef`` — so both count as references.
-        Everything here is content-addressed and shared between checkpoints,
-        hence the "no live reference" test rather than "was referenced by a
-        pruned checkpoint".
-        """
-        live_manifests = {
-            str(item)
-            for item in (await db.execute(select(CoreCheckpoint.manifest_hash).distinct())).scalars().all()
-        }
-        referenced = {
-            str(item)
-            for item in (await db.execute(select(CoreCheckpointBlobRef.blob_hash).distinct())).scalars().all()
-        }
-        for manifest_hash, entries in (await db.execute(
-            select(CoreWorkspaceManifest.hash, CoreWorkspaceManifest.entries_json)
-        )).all():
-            if str(manifest_hash) not in live_manifests:
-                # Unreachable: nothing can look its blobs up any more.
-                await db.execute(
-                    delete(CoreWorkspaceManifest).where(CoreWorkspaceManifest.hash == manifest_hash)
-                )
-                continue
-            for entry in (entries or {}).values():
-                digest = str((entry or {}).get("hash") or "") if isinstance(entry, dict) else ""
-                if digest:
-                    referenced.add(digest)
-
-        stale = (await db.execute(
-            select(CoreCheckpointBlob).where(
-                CoreCheckpointBlob.hash.not_in(referenced or {"__no_reference__"})
-            )
-        )).scalars().all()
-        removed = 0
-        for row in stale:
-            try:
-                Path(str(row.storage_path)).unlink(missing_ok=True)
-            except OSError:
-                # Database ownership still goes away; a missing file is a
-                # cleanup warning, not a reason to keep the row.
-                _logger.warning("checkpoint blob unlink failed: %s", row.storage_path, exc_info=True)
-            await db.delete(row)
-            removed += 1
-        return removed
 
     async def _resolve_parent(
         self,
@@ -1117,62 +838,6 @@ class CoreCheckpointCoordinator:
                 default=0,
             )
         return 0
-
-    async def _manifest(self, manifest_hash: str) -> dict[str, Any]:
-        if not manifest_hash:
-            return {}
-        async with self.session_factory() as db:
-            row = await db.get(CoreWorkspaceManifest, manifest_hash)
-            if row is None:
-                raise LookupError("Workspace manifest not found")
-            return dict(row.entries_json or {})
-
-    async def _apply_manifest(self, manifest_hash: str) -> list[str]:
-        if not manifest_hash:
-            return []  # lazy checkpoint — no files to restore
-        target = await self._manifest(manifest_hash)
-        # Lazy manifests only contain tool-backed files; restore just those —
-        # never scan the workspace and never delete anything else.
-        changed = sorted(target)
-        stage_root = Path(tempfile.mkdtemp(prefix="restore-", dir=self.storage_root))
-        applied: list[str] = []
-        try:
-            for relative in changed:
-                target_entry = target.get(relative)
-                if target_entry is None:
-                    continue  # lazy manifest — nothing to delete
-                destination = _safe_workspace_path(self.work_root, relative)
-                blob_hash = str(target_entry.get("hash") or "")
-                source = await self._blob_path(blob_hash)
-                if not source.is_file():
-                    raise FileNotFoundError(f"Checkpoint blob is missing: {blob_hash}")
-                staged = stage_root / relative
-                staged.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, staged)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(staged, destination)
-                try:
-                    os.chmod(destination, int(target_entry.get("mode") or 0o644))
-                except OSError:
-                    pass
-                applied.append(relative)
-            _remove_empty_directories(
-                self.work_root,
-                self.storage_root,
-                [destination.parent for destination in (
-                    _safe_workspace_path(self.work_root, relative) for relative in applied
-                )],
-            )
-            return applied
-        finally:
-            shutil.rmtree(stage_root, ignore_errors=True)
-
-    async def _blob_path(self, blob_hash: str) -> Path:
-        async with self.session_factory() as db:
-            row = await db.get(CoreCheckpointBlob, blob_hash)
-            if row is None:
-                raise LookupError(f"Checkpoint blob is not registered: {blob_hash}")
-            return Path(row.storage_path)
 
     async def _create_operation(
         self,
@@ -1827,7 +1492,6 @@ def register_checkpoint_operations(
     catalog: OperationCatalog,
     *,
     session_factory: async_sessionmaker,
-    data_dir: str | Path,
     default_work_root: str | Path,
     conversation_backend: CheckpointConversationBackend | None = None,
     work_root_resolver: Callable[[str], Awaitable[str | Path]] | None = None,
@@ -1837,7 +1501,6 @@ def register_checkpoint_operations(
 ) -> None:
     """Register the one public operation surface used by RPC and CLI."""
 
-    storage_root = Path(data_dir).resolve() / "checkpoints"
     coordinators: dict[str, CoreCheckpointCoordinator] = {}
     effective_conversation_backend = conversation_backend or CoreCheckpointConversationBackend(
         session_factory,
@@ -1853,7 +1516,6 @@ def register_checkpoint_operations(
         created = CoreCheckpointCoordinator(
             work_root=work_root,
             session_factory=session_factory,
-            storage_root=storage_root,
             conversation_backend=effective_conversation_backend,
         )
         coordinators[normalized] = created
@@ -1923,9 +1585,7 @@ def register_checkpoint_operations(
         if not session_id or not checkpoint_id:
             return _operation_error(request, "session_id and checkpoint_id are required")
         try:
-            scope = "all" if request.name == "session.rollback" else _normalize_restore_scope(
-                request.payload.get("scope") or "all"
-            )
+            scope = _normalize_restore_scope(request.payload.get("scope"))
             schema_coordinator = coordinator(default_work_root)
             await schema_coordinator._ensure_schema()
             checkpoint = await _checkpoint_for_session(session_factory, session_id, checkpoint_id)
@@ -1940,6 +1600,7 @@ def register_checkpoint_operations(
         return OperationResult(name=request.name, payload=_restore_payload(result))
 
     async def rollback_to_turn(request: OperationRequest, *, session_id: str, turn_id: str) -> OperationResult:
+        """删掉该轮及之后的对话上下文。文件、成果与外部操作一概不动。"""
         work_root = await session_work_root(session_id)
         turn_backend = CoreCheckpointConversationBackend(
             session_factory,
@@ -1949,38 +1610,6 @@ def register_checkpoint_operations(
         rollback_events: list[AppEventEnvelope] = []
         try:
             await turn_backend.require_inactive(session_id)
-            checkpoint_id = await _checkpoint_id_at_turn_boundary(
-                session_factory,
-                session_id=session_id,
-                turn_id=turn_id,
-                conversation_backend=turn_backend,
-            )
-            if checkpoint_id:
-                result = await coordinator(work_root).load(
-                    checkpoint_id,
-                    scope="all",
-                    requesting_session_id=session_id,
-                )
-                await publish_rollback_event(result.rollback_event)
-                return OperationResult(name=request.name, payload={
-                    "mode": "checkpoint",
-                    "turn_id": turn_id,
-                    "checkpoint_id": checkpoint_id,
-                    "operation_id": result.operation_id,
-                    "rollback_event": (
-                        result.rollback_event.to_dict()
-                        if result.rollback_event is not None
-                        else None
-                    ),
-                    "rollback_event_seq": result.rollback_event.seq if result.rollback_event is not None else 0,
-                    "restored": {
-                        "conversation": True,
-                        "runtime": True,
-                        "workspace": True,
-                        "external_effects": False,
-                    },
-                    "restored_paths": list(result.restored_paths),
-                })
             boundary_seq = await coordinator(work_root).write_coordinator.run(
                 lambda db: turn_backend.rollback_conversation_before_turn(
                     db,
@@ -2001,10 +1630,11 @@ def register_checkpoint_operations(
             "rollback_event": rollback_events[0].to_dict() if rollback_events else None,
             "restored": {
                 "conversation": True,
-                "runtime": False,
+                "runtime": True,
                 "workspace": False,
                 "external_effects": False,
             },
+            "restored_paths": [],
         })
 
     async def fork_session(request: OperationRequest) -> OperationResult:
@@ -2104,14 +1734,6 @@ def register_checkpoint_operations(
     catalog.register("session.fork", fork_session)
 
 
-def _default_storage_root(session_factory: async_sessionmaker) -> Path:
-    database_path = _database_path(session_factory)
-    if database_path is not None:
-        return database_path.parent / "core-checkpoints"
-    bind = getattr(session_factory, "kw", {}).get("bind")
-    return Path(tempfile.gettempdir()) / f"lamtools-core-checkpoints-{id(bind)}"
-
-
 def _database_path(session_factory: async_sessionmaker) -> Path | None:
     bind = getattr(session_factory, "kw", {}).get("bind")
     database = getattr(getattr(bind, "url", None), "database", None)
@@ -2125,18 +1747,20 @@ def _root_session_id(session_id: str) -> str:
 
 
 def _normalize_restore_scope(value: object) -> RestoreScope:
-    scope = str(value or "all").strip().lower()
+    """恢复只作用于对话上下文。
+
+    ``workspace`` / ``all`` 是旧调用方留下的取值（当时还要求回退文件）；文件与成果
+    不再保留历史版本，这两个值按"只恢复对话"处理，而不是让调用失败。
+    """
+    scope = str(value or "conversation").strip().lower()
     if scope not in _RESTORE_SCOPES:
         raise ValueError("scope must be one of: conversation, workspace, all")
-    return cast(RestoreScope, scope)
+    return "conversation"
 
 
 def _restore_label(scope: RestoreScope) -> str:
-    return {
-        "conversation": "仅回退对话",
-        "workspace": "仅回退文件",
-        "all": "全部回退",
-    }[scope]
+    del scope  # 只存在一种恢复：对话上下文
+    return "仅回退对话"
 
 
 async def _require_inactive_session(session_factory: async_sessionmaker, session_id: str) -> None:
@@ -2670,30 +2294,6 @@ def _is_within(path: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
-
-
-def _remove_empty_directories(work_root: Path, storage_root: Path, roots: Iterable[Path]) -> None:
-    """Remove directories left empty by a restore, walking only *upward*
-    from each restored file's parent directory.
-
-    Never scans the workspace: on a huge work_root (e.g. a game-save
-    directory) a full walk would stall the app, and the rollback contract is
-    to touch only the files it restored.
-    """
-    work_root = work_root.resolve()
-    storage_root = storage_root.resolve()
-    seen: set[Path] = set()
-    for root in roots:
-        cursor = Path(root).resolve()
-        while _is_within(cursor, work_root) and cursor != work_root and cursor not in seen:
-            seen.add(cursor)
-            if cursor.name in _SKIPPED_DIRECTORIES or _is_within(cursor, storage_root):
-                break
-            try:
-                cursor.rmdir()
-            except OSError:
-                break  # not empty (or locked) — stop walking up
-            cursor = cursor.parent
 
 
 __all__ = [

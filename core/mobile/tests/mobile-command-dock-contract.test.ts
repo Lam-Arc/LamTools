@@ -24,20 +24,18 @@ describe('mobile command dock host contract', () => {
 
   it('keeps narrow drawers simplified while restoring all wide Pad actions', () => {
     expect(shellSource).toContain("const showMobileFooterFallback = computed(() => appRuntime.platform === 'mobile' && props.mobileCommandDockAvailable !== true)")
-    // 桌面把搜索/插件入口移到了左栏顶部的搜索行，页脚只留设置；手机降级页脚
-    // 仍旧自己带这几个入口。
+    // 桌面这些入口都在最左竖栏里，页脚整体只服务于手机降级形态。
     expect(shellSource).toContain(':show-sidebar-search-action="showMobileFooterFallback"')
     expect(shellSource).toContain(':show-sidebar-plugins-action="showMobileFooterFallback"')
-    expect(shellSource).toContain(':show-sidebar-settings-action="appRuntime.platform !== \'mobile\' || showMobileFooterFallback"')
+    expect(shellSource).toContain(':show-sidebar-settings-action="showMobileFooterFallback"')
     expect(shellSource).toContain('v-if="showSidebarFooter" #sidebar-footer')
-    // 手机降级页脚仍是带文字的竖排行；桌面底部是账号显示 + 设置。
+    // 手机降级页脚仍是带文字的竖排行；桌面账号在竖栏底部。
     expect(shellSource).toContain('class="drawer-footer-stack"')
     expect(shellSource).toContain('data-mobile-footer-library @click="openLibrary"')
     expect(shellSource).toContain('data-mobile-footer-arrange @click="openArrange"')
-    expect(shellSource).toContain('class="drawer-footer-account"')
-    expect(shellSource).toContain('label="长期安排"')
+    expect(shellSource).toContain('data-mobile-footer-account @click="emit(\'open-account\')"')
+    expect(shellSource).toMatch(/#app-rail[\s\S]*?<AppRail :active="railActiveView" @open="onRailOpen" \/>/)
     expect(shellSource).toContain('@click="selectAppModeByKey(option.id)"')
-    expect(shellSource).toContain('@click="emit(\'open-account\')"')
     expect(shellSource).toContain('openPlugins,')
     expect(shellSource).toContain('openArrange,')
   })

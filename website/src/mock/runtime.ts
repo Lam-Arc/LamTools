@@ -299,7 +299,7 @@ async function handleRpcRequest(
   }
   if (method === 'websearch.widget.health') return { state: 'disabled', error: '网站预览未连接搜索服务。' }
   if (method === 'rag.docs.search') return { results: [] }
-  if (method === 'artifact.list' || method === 'artifact.revisions') return { artifacts: [], revisions: [] }
+  if (method === 'artifact.list') return { artifacts: [] }
   if (method === 'update.check') return {
     status: 'up_to_date',
     current_version: '0.3.10',

@@ -79,6 +79,13 @@
         </button>
       </div>
     </template>
+
+    <CoreConfirmDialog
+      :open="Boolean(pendingDangerous)"
+      :title="pendingDangerous?.title || '执行动作？'"
+      @cancel="resolveDangerous(false)"
+      @confirm="resolveDangerous(true)"
+    />
   </div>
 </template>
 
@@ -87,6 +94,7 @@ import { computed, ref, watch } from 'vue'
 import type { Component } from 'vue'
 import { getPluginWidget, invokePluginWidget } from '../plugins/api'
 import { getWidget } from '../plugins/registry'
+import CoreConfirmDialog from './CoreConfirmDialog.vue'
 import type {
   PluginWidgetEntry,
   RightSidebarRpc,
@@ -250,10 +258,25 @@ function progressLabel(value: unknown, max: unknown): string {
   return `${Math.round(progressRatio(value, max) * 100)}%`
 }
 
+/** 危险动作的确认：等一次用户回答（应用内胶囊，不用系统弹窗）。 */
+const pendingDangerous = ref<RightSidebarWidgetAction | null>(null)
+let dangerousResolver: ((confirmed: boolean) => void) | null = null
+
+function askDangerous(action: RightSidebarWidgetAction): Promise<boolean> {
+  pendingDangerous.value = action
+  return new Promise<boolean>(resolve => { dangerousResolver = resolve })
+}
+
+function resolveDangerous(confirmed: boolean): void {
+  pendingDangerous.value = null
+  dangerousResolver?.(confirmed)
+  dangerousResolver = null
+}
+
 async function invoke(action: RightSidebarWidgetAction): Promise<void> {
   if (!props.requestRpc || invoking.value) return
   if ((action as RenderedWidgetAction).enabled === false) return
-  if (action.dangerous && typeof window !== 'undefined' && !window.confirm(`确定执行「${action.title}」？`)) return
+  if (action.dangerous && !(await askDangerous(action))) return
   invoking.value = action.id
   error.value = ''
   try {

@@ -86,7 +86,9 @@ version: 0.1.0
 ### 光学液态玻璃（true glass surface）
 统一复用 `core/ui/src/styles/optical-glass.css` 的 `.optical-glass`，不得另建 `.liquid-glass` 或在消费者中重复 `backdrop-filter`、主体背景和悬浮阴影。材质 token 位于 `variables.css`：blur 8px、saturate 1.14、brightness 1.02；主体使用所在 theme area 的 `--text` 以约 16% 透明度混合，保持高透射，不用组件级 `opacity`。
 
-玻璃边缘由原语统一提供 2px 纯中性灰物理边：浅色模式使用浅灰，深色模式使用深灰，边框自身不得叠加镜面、透明或渐变效果。玻璃上缘必须保持无高光（既无左上 radial specular，也无顶部 inset 高光），玻璃内部只保留左右 1px 边缘过渡、灰绿色下缘折射，以及短的双层阴影。消费者只负责几何、`--text` area 映射和语义 modifier；交互玻璃 hover 只可轻微增亮，active 使用 0.97–0.98 缩放。原语必须同时提供 `-webkit-backdrop-filter`、不支持 backdrop 时的半透明 fallback，并在 `prefers-reduced-motion: reduce` 下不引入持续运动。
+透射分两档，均为原语语义 modifier，不得在消费者里自调 tint：**高透**（默认，tint 16%）只用于右侧栏等大面积承载面；**低透**（`.optical-glass--low-trans`，tint 由 `--optical-glass-low-trans-tint` 控制）用于浮层与菜单——上下文菜单、附件来源菜单、goal 区、回到最新按钮、outline 预览、Study selection card、移动端顶栏。低透的意义：小模糊下背后亮色文字会透成可辨认的亮斑，浮层需要重着色压住。
+
+玻璃边缘由原语统一提供 2px 纯中性灰物理边：浅色模式使用浅灰，深色模式使用深灰，边框自身不得叠加镜面、透明或渐变效果。玻璃内部不得有任何 inset 描线——左右 1px 边缘过渡线、顶部高光线都在禁止之列，描线会与 2px 物理边在圆角处形成肉眼可见的第二道边线；玻璃内部只保留灰绿色下缘折射（弥散渐变，非描线）与短的双层阴影。消费者只负责几何、`--text` area 映射和语义 modifier；交互玻璃 hover 只可轻微增亮，active 使用 0.97–0.98 缩放。原语必须同时提供 `-webkit-backdrop-filter`、不支持 backdrop 时的半透明 fallback，并在 `prefers-reduced-motion: reduce` 下不引入持续运动。
 
 true glass surface 清单：右侧 rail、上下文菜单 root/submenu、Study selection card、Workflow catalog popover/runtime dock、回到最新按钮、移动端顶栏按钮/同步状态、goal 区。模态 dimmer、opaque panel、左侧 drawer、Workflow node card 不得套用该原语。
 
@@ -96,8 +98,13 @@ true glass surface 清单：右侧 rail、上下文菜单 root/submenu、Study s
 ### 滚动条
 复用 `base.css` 全局样式，不另做：`*::-webkit-scrollbar` 8px、透明轨道、thumb `color-mix(--theme-main-text 18%)` + `border-radius:999px` + `background-clip:content-box`、hover 加深到 34%。
 
+### 确认 / 输入（CoreConfirmDialog，唯一弹窗原语）
+一行胶囊，不再有标题+正文+分隔条+底部操作栏：`border-radius: 999px` · `--shadow-lg` · 背景 `--theme-main-background` · `--z-modal` · 遮罩 `color-mix(--theme-backdrop-text 20%)`（只用底色压暗，不做模糊）。从左到右：标题（13px/680）；一格说明位（对象名，出错时换成 `--red` 的错误文本）；需要输入时在同一行内嵌一个 999px 输入格（`color-mix(--text var(--alpha-hover))` 底）；两个胶囊按钮——取消纯文字（`--theme-control-text` 65%，hover `--alpha-*`）、确认填 `--theme-control-background`/`--theme-control-text`（hover `brightness(.94)`）。动作入口一律走它：不得回到 `window.confirm/alert/prompt`，这类调用会顶着 "127.0.0.1:5173 显示" 的地址标题且观感与应用无关；失败提示走应用内提示条，不弹窗。
+
 ## 硬禁令
 
+- 禁止全屏遮罩做 backdrop 模糊（引导、预览、资料库弹层、工作流建卡、确认框一律只用底色压暗）
+- 禁止使用 `window.confirm/alert/prompt`（用 `CoreConfirmDialog` 胶囊或应用内提示条）
 - 禁止 control 控件误用 `--theme-main-text` 而非 `--theme-control-text`
 - 禁止直接用静态 `--panel/--line/--text` 绕过主题层
 - 禁止 hardcode 主题色值（如 `#2c2c2b`）而非引用 `--theme-*-background`
@@ -108,7 +115,7 @@ true glass surface 清单：右侧 rail、上下文菜单 root/submenu、Study s
 - 禁止第二个下拉 / button 原语
 - 禁止覆盖输入框 focus 为 outline:none 之外的聚焦态（输入框无聚焦态，光标即可）
 - 禁止动效无 `prefers-reduced-motion` 回退
-- 禁止给玻璃上缘加高光（左上 specular 径向光、`inset 0 1px 0` 顶部亮线），也禁止为此新建 `--optical-glass-reflection` / `--optical-glass-inset-top` 之类 token
+- 禁止给玻璃加任何 inset 描线或高光（上缘亮线、左上 specular 径向光、左右 1px 边缘过渡线等——描线在圆角处形成第二道边）
 
 ## 审计
 

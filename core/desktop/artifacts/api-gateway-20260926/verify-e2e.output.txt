@@ -1,0 +1,46 @@
+=== 0) bridge address for the mock upstream ===
+  bridge gateway: 172.30.0.1
+=== 1) existing request-log format ===
+total 8
+-rw-r--r-- 1 root root 7503 Sep 26 19:05 oneapi-20260926190102.log
+[SYS] 2026/09/26 - 19:05:03 | channels synced from database 
+[SYS] 2026/09/26 - 19:05:03 | syncing options from database 
+=== 2) start temporary mock upstream on the bridge (not public) ===
+  mock listening on 172.30.0.1:8323 (pid 39824)
+=== 3) admin API: channel + token ===
+  admin authenticated
+  create channel -> 200 success= False channel cannot be empty
+  FATAL: channel not found after creation
+  create token -> 200 success= True 
+  token minted, length 21
+=== 4) client surface WITHOUT a key (must be rejected) ===
+  GET /v1/models -> 401
+{"error":{"code":"","message":"Invalid token (request id: 202609261105479120157988268d9d65uyl2k8J)","type":"new_api_error"}}
+=== 5) client surface WITH a key, over public TLS ===
+  GET /v1/models -> 401
+    models visible: []
+  POST /v1/chat/completions (non-streaming) -> 401
+    reply: None
+  POST /v1/chat/completions (streaming) -> capturing SSE
+    http=401
+    sse data lines: 0
+    saw [DONE]: False
+    reassembled text: ''
+=== 6) X-Forwarded-For spoofing check ===
+  scanning /opt/lamtools-api/logs/oneapi-20260926190102.log
+  PASS: forged client address did not appear in the gateway log
+  PASS: genuine client address recorded instead
+=== 7) CORS headers on the public API (browser clients) ===
+    access-control-allow-credentials: true
+    access-control-allow-headers: *
+    access-control-allow-methods: GET,POST,PUT,DELETE,OPTIONS
+    access-control-allow-origin: *
+    access-control-max-age: 43200
+=== 8) response headers on the console ===
+    referrer-policy: no-referrer
+    strict-transport-security: max-age=31536000
+    x-content-type-options: nosniff
+=== live checks complete ===
+=== 9) cleanup ===
+  mock upstream stopped
+  8323 released

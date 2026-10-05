@@ -1,0 +1,24 @@
+  bridge gateway: 172.30.0.1
+  throttle cleared
+  mock listening
+  login OK
+  --- register the model ---
+    POST /api/models/ {"model_name": "gpt-4o-mini", "vendor": "openai"} -> http=200 success=True msg=
+    registry total: 1 | items: [{'id': 1, 'model_name': 'gpt-4o-mini', 'status': 0, 'sync_official': 0, 'created_time': 1790421484, 'updated_time': 1790421484, 'name_rule': 0, 'has_metadata': True, 'configured_channel_count': 0, 'square_state': 'hidden'}]
+  --- channel + token ---
+    channel success=True msg=
+    key ready: True
+  --- relay ---
+    stream=False http=503 No available channel for model gpt-4o-mini under group default (distributor) (request id: 2026092611
+    stream=True  http=503 No available channel for model gpt-4o-mini under group default (distributor) (request id: 2026092611
+=== mock access log ===
+  nothing reached the mock
+=== done ===
+=== cleanup ===
+  delete token 8 -> success=True
+  token leftovers: none
+  delete channel 9 -> success=True
+  channel leftovers: none
+  delete model 1 -> success=True
+  model registry total now: 0
+  mock stopped

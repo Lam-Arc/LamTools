@@ -71,6 +71,7 @@ def _run_background_subprocess_blocking(
     session_id: str = "",
     run_id: str = "",
     cancel_event: threading.Event | None = None,
+    persistent: bool = False,
 ) -> _CommandExecution:
     started_at = time.monotonic()
     log_dir = cwd / ".lamtools" / "background"
@@ -199,6 +200,10 @@ def _run_background_subprocess_blocking(
                 session_id=session_id,
                 run_id=run_id,
                 work_root=cwd,
+                persistent=persistent,
+                command=command,
+                stdout_log=str(stdout_path),
+                stderr_log=str(stderr_path),
             )
         except Exception as exc:
             _terminate_process_tree(process)
@@ -223,6 +228,7 @@ def _run_background_subprocess_blocking(
             "pid": process.pid,
             "stdout_log": str(stdout_path),
             "stderr_log": str(stderr_path),
+            "persistent": bool(persistent),
             **({
                 "server_probe_url": http_probe.url,
                 "server_probe_path": http_probe.path,
@@ -244,6 +250,7 @@ async def _run_background_subprocess(
     process_registry: Any | None = None,
     session_id: str = "",
     run_id: str = "",
+    persistent: bool = False,
 ) -> _CommandExecution:
     cancel_event = threading.Event()
     future = asyncio.create_task(
@@ -257,7 +264,7 @@ async def _run_background_subprocess(
             process_registry=process_registry,
             session_id=session_id,
             run_id=run_id,
-            cancel_event=cancel_event,
+            persistent=persistent,
         )
     )
     try:

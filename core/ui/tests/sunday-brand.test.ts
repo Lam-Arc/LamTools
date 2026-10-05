@@ -4,6 +4,9 @@ import { resolve } from 'node:path'
 import { inflateSync } from 'node:zlib'
 
 import { describe, expect, it } from 'vitest'
+import { mount } from '@vue/test-utils'
+
+import SundayLogo from '../src/components/SundayLogo.vue'
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8')
 
@@ -147,13 +150,21 @@ describe('Sunday ivory and graphite brand assets', () => {
     }
   })
 
-  it('passes the resolved application theme into the title-bar icon', () => {
-    const app = read('src/app/LamToolsApp.vue')
+  it('keeps the title-bar brand as a wordmark without the app-icon logo', () => {
     const titleBar = read('src/components/TitleBar.vue')
 
-    expect(app).toContain(':effective-theme-mode="effectiveThemeMode"')
-    expect(titleBar).toContain(':surface-theme="props.effectiveThemeMode"')
-    expect(titleBar).toContain("effectiveThemeMode?: 'light' | 'dark'")
+    expect(titleBar).toContain('<strong class="brand-name">Sunday</strong>')
+    expect(titleBar).not.toContain('SundayLogo')
+    expect(titleBar).not.toContain('effectiveThemeMode')
+  })
+
+  it('selects the normalized display app icon from the surface theme', async () => {
+    const wrapper = mount(SundayLogo, { props: { surface: true, surfaceTheme: 'light' } })
+
+    expect(wrapper.get('.sunday-logo__app-icon').attributes('src')).toContain('sunday-app-icon-light-display.png')
+    await wrapper.setProps({ surfaceTheme: 'dark' })
+    expect(wrapper.get('.sunday-logo__app-icon').attributes('src')).toContain('sunday-app-icon-dark-display.png')
+    wrapper.unmount()
   })
 
   it('uses the same explicit border token for the main boundary and composer', () => {

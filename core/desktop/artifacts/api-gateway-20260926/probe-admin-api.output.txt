@@ -1,0 +1,17 @@
+login -> 200
+=== cookie names captured ===
+  new_api_has_session
+=== authenticated identity ===
+GET /api/user/self -> 401
+  success: False | message: Unauthorized, invalid access token
+  role: None | username: None | id: None
+  keys: []
+=== option endpoint variants ===
+  GET /api/option/ -> 401 | success=False message=Unauthorized, invalid access token
+  GET /api/option -> 301 | (unparsable)
+  GET /api/options/ -> 404 | success=None message=None
+=== access token endpoint ===
+GET /api/user/token -> 401
+  success: False | message: Unauthorized, invalid access token
+  data present: False
+=== done ===

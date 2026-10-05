@@ -1,0 +1,117 @@
+=== codex-api unit ===
+# /etc/systemd/system/codex-api.service
+[Unit]
+Description=Codex API authenticated gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codex-api
+Group=codex-api
+WorkingDirectory=/opt/codex-api
+ExecStart=/usr/bin/python3 /opt/codex-api/server.py --config /etc/codex-api/config.json --host 127.0.0.1 --port 8322
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=10s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
+=== process cmdline ===
+/usr/bin/python3 /opt/codex-api/server.py --config /etc/codex-api/config.json --host 127.0.0.1 --port 8322 
+=== /opt/lamtools ===
+total 28
+drwxr-xr-x 7 root root 4096 Sep  9 18:52 .
+drwxr-xr-x 8 root root 4096 Sep 25 20:58 ..
+drwxr-xr-x 3 root root 4096 Sep  9 18:52 builds
+drwxr-xr-x 2 root root 4096 Sep  9 19:08 relay
+drwxr-xr-x 4 root root 4096 Sep  8 11:10 relay-build
+drwxr-xr-x 3 root root 4096 Sep  8 10:47 relay-src
+drwx---r-x 4 root root 4096 Sep  8 14:32 relay-src-new
+=== /etc/lamtools (names + modes only) ===
+total 16
+drwx------   2 root root 4096 Sep  9 19:08 .
+drwxr-xr-x 109 root root 4096 Sep 25 21:05 ..
+-rw-------   1 root root  188 Sep  9 19:08 relay.env
+-rw-------   1 root root  121 Sep  8 11:57 relay.env.pre-auth-20260909
+=== env files: KEY NAMES ONLY ===
+--- /etc/lamtools/relay.env (600)
+LAMTOOLS_RELAY_TOKEN=<masked>
+LAMTOOLS_RELAY_BIND=<masked>
+DATABASE_PATH=<masked>
+REGISTRATION_MODE=<masked>
+=== codex-api tree (depth 2) ===
+=== unit execstart ===
+ExecStart={ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 /opt/codex-api/server.py --config /etc/codex-api/config.json --host 127.0.0.1 --port 8322 ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+WorkingDirectory=/opt/codex-api
+User=codex-api
+Group=codex-api
+=== frps ===
+# /etc/systemd/system/frps.service
+[Unit]
+Description=frp server (Minecraft relay: control + game port)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=frp
+Group=frp
+Restart=always
+RestartSec=5
+ExecStart=/opt/frp/frps -c /opt/frp/frps.toml
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+=== cloudflared ===
+# /etc/systemd/system/lamtools-cloudflared.service
+[Unit]
+Description=LamTools Cloudflare Quick Tunnel
+After=network-online.target caddy-lamtools.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cloudflared
+Group=cloudflared
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:80
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+=== local probe: codex-api ===
+root=200
+models_noauth=401
+{"service":"Codex Mock API","mock_text":"一段mock信息","model":"mock-model","endpoints":["GET /v1/models","POST /v1/responses","POST /v1/chat/completions","POST /v1/mock"]}
+=== docker disk ===
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          1         0         11.49MB   11.49MB (99%)
+Containers      0         0         0B        0B
+Local Volumes   0         0         0B        0B
+Build Cache     9         0         31.11MB   19.62MB
+=== done ===

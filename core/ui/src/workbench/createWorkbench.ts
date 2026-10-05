@@ -21,6 +21,7 @@ import {
   type CoreAppEvent,
   type CoreAppServerRuntimeClient,
   type CoreAppSnapshot,
+  type CoreSyncChangeNotification,
 } from '../appServer'
 import {
   useCoreApprovalController,
@@ -47,6 +48,7 @@ export interface WorkbenchClientOptions {
   transport: LamToolsTransport
   onEvent?: (event: CoreAppEvent) => void
   onSnapshot?: (snapshot: CoreAppSnapshot) => void
+  onSyncChange?: (change: CoreSyncChangeNotification) => void
   onConnectionState?: (state: 'connecting' | 'open' | 'closed' | 'error') => void
   clientInfo?: { name: string; title?: string; version?: string }
 }
@@ -62,6 +64,7 @@ export function createWorkbenchClient(options: WorkbenchClientOptions): CoreAppS
     },
     onEvent: options.onEvent,
     onSnapshot: options.onSnapshot,
+    onSyncChange: options.onSyncChange,
     onConnectionState: options.onConnectionState,
   })
 }
@@ -161,6 +164,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   let sharedCallbacks: {
     onEvent: (event: CoreAppEvent) => void
     onSnapshot: (snapshot: CoreAppSnapshot) => void
+    onSyncChange?: (change: CoreSyncChangeNotification) => void
     onConnectionState: (state: 'connecting' | 'open' | 'closed' | 'error') => void
   } | null = null
 
@@ -204,12 +208,13 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     hydrateSnapshot,
     onSessionCreated: () => { void refreshSessions() },
     onSessionUpdated: () => { void refreshSessions() },
-    createClient: async ({ onEvent, onSnapshot, onConnectionState }) => {
+    createClient: async ({ onEvent, onSnapshot, onSyncChange, onConnectionState }) => {
       if (options.clientFactory) {
         return await options.clientFactory.createClient({
           transport: options.transport,
           onEvent,
           onSnapshot,
+          onSyncChange,
           onConnectionState,
         })
       }
@@ -224,10 +229,11 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
             sharedCallbacks?.onEvent(event)
           },
           onSnapshot: (value) => sharedCallbacks?.onSnapshot(value),
+          onSyncChange: (change) => sharedCallbacks?.onSyncChange?.(change),
           onConnectionState: (state) => sharedCallbacks?.onConnectionState(state),
         })
       }
-      sharedCallbacks = { onEvent, onSnapshot, onConnectionState }
+      sharedCallbacks = { onEvent, onSnapshot, onSyncChange, onConnectionState }
       return sharedClient
     },
   })

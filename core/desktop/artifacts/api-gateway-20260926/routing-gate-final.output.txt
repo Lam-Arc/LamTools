@@ -1,0 +1,30 @@
+  bridge gateway: 172.30.0.1
+  throttle cleared
+  mock listening
+  login OK
+  channel created: True 
+  key ready: True
+  --- gate 1: self-use mode (accepts unset-ratio models) ---
+    [self-use mode ON              ] http=503 No available channel for model gpt-4o-mini under group default (distributor) (request id: 
+  --- gate 2: explicit billing config for the model ---
+    [billing config set            ] http=503 No available channel for model gpt-4o-mini under group default (distributor) (request id: 
+  --- gate 3: both together ---
+    [billing + self-use            ] http=503 No available channel for model gpt-4o-mini under group default (distributor) (request id: 
+    [billing + self-use (stream)   ] http=503 No available channel for model gpt-4o-mini under group default (distributor) (request id: 
+  --- restore original settings ---
+    restore SelfUseModeEnabled     -> True
+    restore ModelRatio             -> True
+    restore CompletionRatio        -> True
+    [after restore                 ] http=503 No available channel for model gpt-4o-mini under group default (distributor) (request id: 
+  _re_t_ = 503 <- expecting rejection again
+=== mock access log ===
+  nothing reached the mock
+=== done ===
+=== cleanup ===
+  delete token 11 -> success=True
+  token leftovers: none
+  delete channel 12 -> success=True
+  channel leftovers: none
+  delete model 4 -> success=True
+  model registry total now: 0
+  mock stopped

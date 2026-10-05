@@ -25,11 +25,27 @@ export interface CoreFileEntry {
 export interface CorePlanLibraryEntry {
   name: string
   path: string
+  /** Directory inside 「方案/」 the file lives in ('' = top level). */
+  folder: string
   title: string
   status: 'draft' | 'ready' | 'executing' | 'done'
   summary: string
+  favorite: boolean
   size: number
   updated_at: number
+}
+
+/** One folder inside 「方案/」, at any depth. */
+export interface CorePlanLibraryFolder {
+  name: string
+  /** Library path, e.g. `方案/归档/这一期`. */
+  path: string
+  /** Directory relative to 「方案/」 ('' = the library root), matching entry.folder. */
+  dir: string
+  /** The `dir` of the folder holding this one ('' for a top-level folder). */
+  parent: string
+  /** Plans at any depth under this folder. */
+  count: number
 }
 
 export interface CoreProjectClient {
@@ -48,7 +64,13 @@ export interface CoreProjectClient {
   writeFile(projectId: string, path: string, content: string): Promise<{ content: string; path: string }>
   readRawFile(projectId: string, path: string): Promise<TransportHttpResponse>
   browseDirectory(path?: string): Promise<{ entries: CoreFileEntry[]; path: string }>
-  listPlanLibrary(projectId: string): Promise<{ dir: string; entries: CorePlanLibraryEntry[] }>
+  listPlanLibrary(projectId: string): Promise<{ dir: string; entries: CorePlanLibraryEntry[]; folders: CorePlanLibraryFolder[] }>
+  createPlanLibraryFile(projectId: string, name: string, folder?: string): Promise<{ entry: CorePlanLibraryEntry }>
+  createPlanLibraryFolder(projectId: string, path: string): Promise<{ folder: CorePlanLibraryFolder }>
+  deletePlanLibraryFolder(projectId: string, path: string): Promise<{ deleted: string }>
+  renamePlanLibraryFile(projectId: string, path: string, name: string): Promise<{ entry: CorePlanLibraryEntry }>
+  movePlanLibraryFile(projectId: string, path: string, folder: string): Promise<{ entry: CorePlanLibraryEntry }>
+  favoritePlanLibraryFile(projectId: string, path: string, favorite: boolean): Promise<{ entry: CorePlanLibraryEntry }>
   deletePlanLibraryFile(projectId: string, path: string): Promise<{ deleted: string }>
 }
 
@@ -141,10 +163,46 @@ export function createCoreProjectClient(transport: LamToolsTransport): CoreProje
       return await requestJson<{ entries: CoreFileEntry[]; path: string }>(transport, `/browse-directory${query}`)
     },
     async listPlanLibrary(projectId) {
-      return await requestJson<{ dir: string; entries: CorePlanLibraryEntry[] }>(
+      return await requestJson<{ dir: string; entries: CorePlanLibraryEntry[]; folders: CorePlanLibraryFolder[] }>(
         transport,
         `${projectPath(projectId)}/plan-library`,
       )
+    },
+    async createPlanLibraryFile(projectId, name, folder = '') {
+      return await requestJson<{ entry: CorePlanLibraryEntry }>(transport, `${projectPath(projectId)}/plan-library/files`, {
+        method: 'POST',
+        body: { name, folder },
+      })
+    },
+    async createPlanLibraryFolder(projectId, path) {
+      return await requestJson<{ folder: CorePlanLibraryFolder }>(transport, `${projectPath(projectId)}/plan-library/folders`, {
+        method: 'POST',
+        body: { path },
+      })
+    },
+    async deletePlanLibraryFolder(projectId, path) {
+      const query = `?path=${encodeURIComponent(path)}`
+      return await requestJson<{ deleted: string }>(transport, `${projectPath(projectId)}/plan-library/folders${query}`, {
+        method: 'DELETE',
+      })
+    },
+    async renamePlanLibraryFile(projectId, path, name) {
+      return await requestJson<{ entry: CorePlanLibraryEntry }>(transport, `${projectPath(projectId)}/plan-library/rename`, {
+        method: 'POST',
+        body: { path, name },
+      })
+    },
+    async movePlanLibraryFile(projectId, path, folder) {
+      return await requestJson<{ entry: CorePlanLibraryEntry }>(transport, `${projectPath(projectId)}/plan-library/move`, {
+        method: 'POST',
+        body: { path, folder },
+      })
+    },
+    async favoritePlanLibraryFile(projectId, path, favorite) {
+      return await requestJson<{ entry: CorePlanLibraryEntry }>(transport, `${projectPath(projectId)}/plan-library/favorite`, {
+        method: 'POST',
+        body: { path, favorite },
+      })
     },
     async deletePlanLibraryFile(projectId, path) {
       const query = `?path=${encodeURIComponent(path)}`

@@ -1,21 +1,9 @@
 <template>
   <div v-if="shouldDisplayTitleBar" class="titlebar" data-tauri-drag-region>
     <div class="titlebar-left">
-      <SundayLogo :size="24" surface :surface-theme="props.effectiveThemeMode" decorative />
       <span class="brand">
         <strong class="brand-name">Sunday</strong>
       </span>
-
-      <!-- mode toggle: shows the current application mode -->
-      <button
-        v-if="props.canToggleMode"
-        class="mode-toggle"
-        :title="props.modeTitle"
-        :disabled="!props.canToggleMode"
-        @click="$emit('cycleMode')"
-      >
-        <span class="mode-word mode-current">· {{ props.modeLabel }}</span>
-      </button>
     </div>
 
     <div class="titlebar-workflow-tabs" data-titlebar-workflow-tabs></div>
@@ -128,12 +116,10 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { Smartphone } from 'lucide-vue-next'
 import type { MobileControlAccountDevice, MobileControlAccountStatus } from './MobileControlPanel.vue'
-import SundayLogo from './SundayLogo.vue'
 
 const props = defineProps<{
   leftPinned?: boolean
   rightPinned?: boolean
-  effectiveThemeMode?: 'light' | 'dark'
   modeLabel?: string
   modeTitle?: string
   canToggleMode?: boolean

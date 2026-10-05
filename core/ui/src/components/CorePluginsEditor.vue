@@ -286,6 +286,14 @@
         @selected="onBrowseSelected"
         @update:model-value="onBrowseDismissed"
       />
+
+      <CoreConfirmDialog
+        :open="Boolean(pendingUninstall)"
+        title="卸载插件及目录？"
+        :detail="pendingUninstall ? `${pendingUninstall.name}${pendingUninstall.dependencies.length ? ' · 依赖保留' : ''}` : ''"
+        @cancel="pendingUninstall = null"
+        @confirm="confirmUninstall"
+      />
     </div>
   </section>
 </template>
@@ -294,6 +302,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Settings, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
 import FolderBrowserDialog from './FolderBrowserDialog.vue'
+import CoreConfirmDialog from './CoreConfirmDialog.vue'
 import type { LamToolsTransport } from '../transport'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
@@ -548,8 +557,16 @@ async function doInstall() {
   }
 }
 
-async function doUninstall(plugin: PluginItem) {
-  if (!window.confirm(`卸载插件「${plugin.name}」？将删除其目录${plugin.dependencies.length ? '（依赖默认保留）' : ''}。`)) return
+const pendingUninstall = ref<PluginItem | null>(null)
+
+function doUninstall(plugin: PluginItem): void {
+  pendingUninstall.value = plugin
+}
+
+async function confirmUninstall(): Promise<void> {
+  const plugin = pendingUninstall.value
+  pendingUninstall.value = null
+  if (!plugin) return
   try {
     await props.requestRpc('plugin.uninstall', { name: plugin.name })
     if (configPlugin.value?.name === plugin.name) closeConfig()

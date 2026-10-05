@@ -110,21 +110,17 @@ describe('standalone named config operations', () => {
       agents_md: { content: '', exists: false },
     })
     await config.handleRpc('config.agents_md.set', { content: '# Global rules' })
-    await config.handleRpc('config.memory.set', { content: 'Remember this' })
     expect(await config.settings('core.globalContext')).toEqual({
       instructions: '# Global rules',
-      memory: 'Remember this',
     })
 
     const restored = new StandaloneConfigStore(secrets, storage)
     expect(await restored.handleRpc('config.agents_md.get', {})).toEqual({
       agents_md: { content: '# Global rules', exists: true },
     })
-    expect(await restored.handleRpc('config.memory.get', {})).toEqual({ content: 'Remember this', exists: true })
     await restored.handleRpc('config.agents_md.set', { content: '' })
     expect(await new StandaloneConfigStore(secrets, storage).settings('core.globalContext')).toEqual({
       instructions: '',
-      memory: 'Remember this',
     })
   })
 
@@ -274,7 +270,6 @@ describe('standalone named config operations', () => {
       value: { model_retries: 4, retry_delays_seconds: [0.1], model_stream_idle_timeout_seconds: null },
     })
     await config.handleRpc('config.agents_md.set', { content: 'Global instructions' })
-    await config.handleRpc('config.memory.set', { content: 'Global memory' })
     await config.handleRpc('config.load_context.set', {
       addition: [{ name: 'TEAM.md', priority: 20, kind: 'system' }], except: ['CLAUDE.md'],
     })
@@ -297,7 +292,7 @@ describe('standalone named config operations', () => {
         model_stream_idle_timeout_seconds: null,
       }),
       loadContextConfig: { addition: [{ name: 'TEAM.md', priority: 20, kind: 'system' }], except: ['CLAUDE.md'] },
-      context: { modeContext: '', globalInstructions: 'Global instructions', memory: 'Global memory' },
+      context: { modeContext: '', globalInstructions: 'Global instructions' },
     }))
     await transport.close()
   })

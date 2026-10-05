@@ -94,27 +94,113 @@ async def test_loadtools_set_rejects_invalid_payload(isolated_config_root):
 
 
 @pytest.mark.asyncio
-async def test_memory_get_returns_empty_when_missing(isolated_config_root):
+async def test_memory_tree_and_write_roundtrip(tmp_path, isolated_config_root):
     catalog = _context_catalog()
+    work = tmp_path / "work"
+    work.mkdir()
 
-    result = await catalog.execute("config.memory.get")
+    tree = await catalog.execute("memory.tree", {"scope": "project", "work_root": str(work)})
 
-    assert result.status == "ok"
-    assert result.payload == {"content": "", "exists": False}
+    assert tree.status == "ok"
+    assert tree.payload["entries"] == []
+    assert "暂无记忆" in tree.payload["index"]
+
+    written = await catalog.execute("memory.write", {
+        "scope": "project",
+        "work_root": str(work),
+        "path": "notes/a.md",
+        "content": "hello",
+    })
+    assert written.status == "ok"
+
+    tree = await catalog.execute("memory.tree", {"scope": "project", "work_root": str(work)})
+    assert [entry["path"] for entry in tree.payload["entries"]] == ["notes", "notes/a.md"]
+    assert "a.md" in tree.payload["index"]
+
+    read = await catalog.execute(
+        "memory.read", {"scope": "project", "work_root": str(work), "path": "notes/a.md"}
+    )
+    assert read.status == "ok"
+    assert read.payload["content"] == "hello"
 
 
 @pytest.mark.asyncio
-async def test_memory_set_then_get_roundtrips(isolated_config_root):
+async def test_memory_projects_filters_to_projects_that_hold_memory(tmp_path, isolated_config_root):
+    catalog = _context_catalog()
+    filled = tmp_path / "filled"
+    filled.mkdir()
+    await catalog.execute("memory.write", {
+        "scope": "project",
+        "work_root": str(filled),
+        "path": "a.md",
+        "content": "hello",
+    })
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    result = await catalog.execute("memory.projects", {"projects": [
+        {"id": "p1", "name": "有记忆", "work_root": str(filled)},
+        {"id": "p2", "name": "没记忆", "work_root": str(empty)},
+        {"id": "p3", "name": "没给根", "work_root": ""},
+    ]})
+
+    assert result.status == "ok"
+    assert [project["id"] for project in result.payload["projects"]] == ["p1"]
+    assert result.payload["projects"][0]["work_root"] == str(filled)
+    # 纯探测：没记忆的项目不被顺手建出记忆目录。
+    assert not (empty / ".lam").exists()
+
+    bad = await catalog.execute("memory.projects", {"projects": "nope"})
+    assert bad.status == "error"
+
+
+@pytest.mark.asyncio
+async def test_memory_write_refuses_generated_index(tmp_path, isolated_config_root):
+    catalog = _context_catalog()
+    work = tmp_path / "work"
+    work.mkdir()
+
+    result = await catalog.execute("memory.write", {
+        "scope": "project",
+        "work_root": str(work),
+        "path": "INDEX.md",
+        "content": "hack",
+    })
+
+    assert result.status == "error"
+    assert result.payload["error_code"] == "reserved_name"
+
+
+@pytest.mark.asyncio
+async def test_memory_global_scope_ignores_work_root(tmp_path, isolated_config_root):
     catalog = _context_catalog()
 
-    set_result = await catalog.execute("config.memory.set", {"content": "# Global memory\n跨项目事实"})
-    assert set_result.status == "ok"
-    assert (isolated_config_root / "memory.md").read_text(encoding="utf-8") == "# Global memory\n跨项目事实"
+    result = await catalog.execute(
+        "memory.write", {"scope": "global", "path": "facts.md", "content": "shared"}
+    )
 
-    get_result = await catalog.execute("config.memory.get")
-    assert get_result.status == "ok"
-    assert get_result.payload["content"] == "# Global memory\n跨项目事实"
-    assert get_result.payload["exists"] is True
+    assert result.status == "ok"
+    assert (isolated_config_root / "memory" / "facts.md").read_text(encoding="utf-8") == "shared"
+
+
+@pytest.mark.asyncio
+async def test_memory_reveal_opens_the_tier_folder(tmp_path, isolated_config_root, monkeypatch):
+    catalog = _context_catalog()
+    work = tmp_path / "work"
+    work.mkdir()
+    opened: list[str] = []
+    monkeypatch.setattr(
+        "lamtools_core.attachment.files.open_with_default_app",
+        lambda path: opened.append(str(path)),
+    )
+
+    result = await catalog.execute("memory.reveal", {"scope": "project", "work_root": str(work)})
+
+    expected = work / ".lam" / "memory"
+    assert result.status == "ok"
+    assert result.payload["path"] == str(expected)
+    assert expected.is_dir()
+    assert opened == [str(expected)]
 
 
 # --- load_context -----------------------------------------------------------
@@ -197,19 +283,32 @@ async def test_cli_loadtools_show_edit_delete(isolated_config_root, capsys):
 
 @pytest.mark.asyncio
 async def test_cli_memory_and_load_context_set_get(isolated_config_root, capsys):
-    from lamtools_core.cli import cmd_load_context_get, cmd_load_context_set, cmd_memory_get, cmd_memory_set
+    from lamtools_core.cli import cmd_load_context_get, cmd_load_context_set, cmd_memory
 
     import io
     import sys
 
+    write_args = argparse.Namespace(
+        memory_command="write",
+        path="cli.md",
+        content="",
+        from_file="-",
+        memory_global=True,
+        work_root="",
+    )
     monkey_stdin = io.StringIO("# cli memory\n")
     original = sys.stdin
     sys.stdin = monkey_stdin
     try:
-        assert await cmd_memory_set(argparse.Namespace(source_file="-")) == 0
+        assert await cmd_memory(write_args) == 0
     finally:
         sys.stdin = original
-    assert await cmd_memory_get(argparse.Namespace()) == 0
+    assert (isolated_config_root / "memory" / "cli.md").read_text(encoding="utf-8") == "# cli memory\n"
+
+    read_args = argparse.Namespace(
+        memory_command="read", path="cli.md", memory_global=True, work_root=""
+    )
+    assert await cmd_memory(read_args) == 0
     assert "# cli memory" in capsys.readouterr().out
 
     monkey_stdin = io.StringIO('{"addition":[{"name":"X.md","priority":20}],"except":[]}')

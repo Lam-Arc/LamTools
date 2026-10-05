@@ -9,12 +9,12 @@ live at ``{config_dir}/settings.jsonc`` under two-level namespaces, e.g.::
       },
       "core": {
         "imagegen":   { "enabled": false, "api_url": "", "api_key": "", "model": "" },
-        "dreaming":   { "enabled": false, "min_turns": 3 },
+        "commandShell": { "preference": "auto" },
         "onboarding": { "completed": false }
       }
     }
 
-``get_setting("core.dreaming")`` reads ``["core"]["dreaming"]``; setting a
+``get_setting("core.commandShell")`` reads ``["core"]["commandShell"]``; setting a
 namespace creates intermediate objects as needed. Missing namespaces return
 ``None`` so callers can fall back to their defaults.
 """

@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lamtools_core.config.agents_md import global_agents_md_path
-from lamtools_core.config.defaults import DEFAULT_AGENTS_MD, DEFAULT_MEMORY_MD
+from lamtools_core.config.defaults import DEFAULT_AGENTS_MD
 from lamtools_core.config.root import core_config_dir
+from lamtools_core.mem import library as memory_library
 from lamtools_core.prompt import PromptPart, PromptPartKind
 
 
@@ -14,7 +15,6 @@ DEFAULT_PROJECT_CONTEXT_FILES: list[tuple[str, int, PromptPartKind]] = [
     ("AGENTS.md", 10, "system"),
     ("CLAUDE.md", 10, "system"),
     ("CONTEXT.md", 10, "system"),
-    ("MEMORY.md", 20, "memory"),
 ]
 
 _CONTEXT_CONFIG_FILE = "load_context.jsonc"
@@ -126,21 +126,24 @@ class ProjectContextLoader:
                         kind="system",
                     )
                 )
-        # Global memory (unified config directory) applies to every workspace;
-        # it sits between the global instructions and the workspace MEMORY.md.
-        global_memory_path = core_config_dir() / "memory.md"
-        if global_memory_path.is_file():
-            content = self._read(global_memory_path, self._max_chars_per_file)
-            if content.strip() and content.strip() != DEFAULT_MEMORY_MD.strip():
-                results.append(
-                    ProjectContextFile(
-                        name="GLOBAL_MEMORY.md",
-                        path=global_memory_path,
-                        content=content,
-                        priority=15,
-                        kind="memory",
-                    )
+        # Global memory library index — generated from ``.lam/core/config/memory/``
+        # and injected for every workspace so the model knows what the global
+        # memory tier holds.  The model reads/edits the files through the
+        # ``memory`` tool.
+        global_memory_text = memory_library.index_text_for_prompt(
+            memory_library.SCOPE_GLOBAL, None
+        )
+        if global_memory_text:
+            results.append(
+                ProjectContextFile(
+                    name="GLOBAL_MEMORY.md",
+                    path=memory_library.memory_root(memory_library.SCOPE_GLOBAL, None)
+                    / memory_library.INDEX_FILENAME,
+                    content=global_memory_text,
+                    priority=15,
+                    kind="memory",
                 )
+            )
         if not work_root:
             return results
         root = Path(work_root).resolve()
@@ -162,6 +165,21 @@ class ProjectContextLoader:
                         kind=kind,
                     )
                 )
+        # Project memory library index — stacks after the project instructions.
+        project_memory_text = memory_library.index_text_for_prompt(
+            memory_library.SCOPE_PROJECT, root
+        )
+        if project_memory_text:
+            results.append(
+                ProjectContextFile(
+                    name="MEMORY.md",
+                    path=memory_library.memory_root(memory_library.SCOPE_PROJECT, root)
+                    / memory_library.INDEX_FILENAME,
+                    content=project_memory_text,
+                    priority=20,
+                    kind="memory",
+                )
+            )
         return results
 
     def to_prompt_parts(self, work_root: str | Path | None) -> list[PromptPart]:

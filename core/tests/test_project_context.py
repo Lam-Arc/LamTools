@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from lamtools_core.app.project_context import ProjectContextLoader
-from lamtools_core.config.defaults import DEFAULT_AGENTS_MD, DEFAULT_MEMORY_MD
+from lamtools_core.config.defaults import DEFAULT_AGENTS_MD
 
 
 def test_global_agents_md_is_injected_before_project_files(tmp_path, isolated_config_root):
@@ -24,14 +24,16 @@ def test_global_agents_md_is_injected_before_project_files(tmp_path, isolated_co
     assert "work everywhere" in str(content["project_global_agents"])
 
 
-def test_global_memory_md_is_injected_before_workspace_memory(tmp_path, isolated_config_root):
-    isolated_config_root.mkdir(parents=True)
-    (isolated_config_root / "memory.md").write_text(
-        "cross-project facts", encoding="utf-8"
+def test_memory_index_is_injected_per_tier(tmp_path, isolated_config_root):
+    global_memory = isolated_config_root / "memory"
+    (global_memory / "topics").mkdir(parents=True)
+    (global_memory / "topics" / "api.md").write_text(
+        "# API 决策\n\nREST over GraphQL.\n", encoding="utf-8"
     )
     work = tmp_path / "work"
-    work.mkdir()
-    (work / "MEMORY.md").write_text("workspace memory", encoding="utf-8")
+    project_memory = work / ".lam" / "memory"
+    project_memory.mkdir(parents=True)
+    (project_memory / "prefs.md").write_text("# 偏好\n中文用 UTF-8\n", encoding="utf-8")
 
     parts = ProjectContextLoader().to_prompt_parts(work)
 
@@ -40,13 +42,28 @@ def test_global_memory_md_is_injected_before_workspace_memory(tmp_path, isolated
     assert "project_memory" in names
     assert names.index("project_global_memory") < names.index("project_memory")
     content = {p.key: p.content for p in parts}
-    assert "cross-project facts" in str(content["project_global_memory"])
+    assert "api.md" in str(content["project_global_memory"])
+    assert "prefs.md" in str(content["project_memory"])
+    # The generated index lands next to the tree it describes.
+    assert (global_memory / "INDEX.md").is_file()
+    assert (project_memory / "INDEX.md").is_file()
+
+
+def test_empty_memory_tiers_are_not_injected(tmp_path, isolated_config_root):
+    isolated_config_root.mkdir(parents=True)
+    work = tmp_path / "work"
+    work.mkdir()
+
+    parts = ProjectContextLoader().to_prompt_parts(work)
+
+    keys = {part.key for part in parts}
+    assert "project_global_memory" not in keys
+    assert "project_memory" not in keys
 
 
 def test_seeded_global_templates_are_not_injected(tmp_path, isolated_config_root):
     isolated_config_root.mkdir(parents=True)
     (isolated_config_root / "AGENTS.md").write_text(DEFAULT_AGENTS_MD, encoding="utf-8")
-    (isolated_config_root / "memory.md").write_text(DEFAULT_MEMORY_MD, encoding="utf-8")
     work = tmp_path / "work"
     work.mkdir()
     (work / "AGENTS.md").write_text("project rules", encoding="utf-8")
@@ -55,7 +72,6 @@ def test_seeded_global_templates_are_not_injected(tmp_path, isolated_config_root
     keys = {part.key for part in parts}
 
     assert "project_global_agents" not in keys
-    assert "project_global_memory" not in keys
     assert "project_agents" in keys
 
 

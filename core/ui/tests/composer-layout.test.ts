@@ -148,7 +148,7 @@ describe('useComposerLayout', () => {
     expect(wrapper.vm.layout.placement.value).toBe('bottom')
     expect(wrapper.vm.layout.state.value.hasEnteredWorkMode).toBe(true)
     expect(wrapper.vm.layout.style.value['--composer-bottom-offset']).toBe(
-      'max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom))',
+      'calc(max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom)) + var(--shell-bottom-inset, 6px))',
     )
 
     wrapper.vm.sessionReady = false

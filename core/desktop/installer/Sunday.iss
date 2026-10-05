@@ -62,8 +62,12 @@ MinVersion=10.0.17763
 WizardStyle=modern
 WizardSizePercent=110
 DisableWelcomePage=no
-CloseApplications=yes
-CloseApplicationsFilter=lamcore.exe;LamCore.exe
+; Sunday keeps running in the tray after its window is closed, so the update
+; path has to close it. "force" also handles an app that ignores the shutdown
+; request; the filter is a comma-separated wildcard list (a semicolon-separated
+; list matches no file at all and silently disables the whole check).
+CloseApplications=force
+CloseApplicationsFilter=*.exe,*.dll,*.pyd
 RestartApplications=no
 UsePreviousAppDir=yes
 SetupLogging=yes
@@ -147,6 +151,7 @@ Filename: "{app}\{#AppExeName}"; Description: "启动 Sunday"; WorkingDir: "{app
 
 [Code]
 const
+  AppMainExe = 'lamcore.exe';
   LegacyLamCoreKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\LamCore';
   LegacyLamToolsCoreKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\LamTools Core';
   WebView2ClientKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
@@ -257,6 +262,154 @@ begin
     RegQueryStringValue(HKLM32, WebView2ClientKey, 'pv', Version) or
     RegQueryStringValue(HKLM64, WebView2ClientKey, 'pv', Version) or
     RegQueryStringValue(HKCU, WebView2ClientKey, 'pv', Version));
+end;
+
+// ---------------------------------------------------------------------------
+// Locked-file guard.
+//
+// Updating deletes the whole lamcore-backend tree and rewrites lamcore.exe. If
+// one of those files is still open, the delete fails halfway and leaves an
+// installation the user cannot start. Closing the running programs comes first
+// (the close-applications check, then StopProcessesInInstallDir); this guard is
+// the backstop for whatever closing cannot reach, and it runs before the first
+// delete, so refusing leaves the previous installation untouched.
+// ---------------------------------------------------------------------------
+function CreateFileW(lpFileName: String; dwDesiredAccess: Cardinal;
+  dwShareMode: Cardinal; lpSecurityAttributes: Cardinal;
+  dwCreationDisposition: Cardinal; dwFlagsAndAttributes: Cardinal;
+  hTemplateFile: Cardinal): Cardinal;
+  external 'CreateFileW@kernel32.dll stdcall';
+function CloseHandle(hObject: Cardinal): Boolean;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+var
+  LockedFileCount: Integer;
+  FirstLockedFile: String;
+
+// Exclusive open: succeeds only when nothing else holds the file, which is the
+// same condition the delete and overwrite below need.
+function FileIsLocked(const Path: String): Boolean;
+var
+  Handle: Cardinal;
+begin
+  Handle := CreateFileW(Path, $C0000000, 0, 0, 3, $80, 0);
+  Result := Handle = $FFFFFFFF;
+  if not Result then
+    CloseHandle(Handle);
+end;
+
+procedure NoteLockedFile(const Path: String);
+begin
+  if FileExists(Path) and FileIsLocked(Path) then
+  begin
+    Inc(LockedFileCount);
+    if FirstLockedFile = '' then
+      FirstLockedFile := Path;
+  end;
+end;
+
+procedure ScanLockedFiles(const Dir: String);
+var
+  FindRec: TFindRec;
+  Child: String;
+begin
+  if not DirExists(Dir) then
+    Exit;
+  if not FindFirst(AddBackslash(Dir) + '*', FindRec) then
+    Exit;
+  try
+    repeat
+      Child := AddBackslash(Dir) + FindRec.Name;
+      if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+      begin
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+          ScanLockedFiles(Child);
+      end
+      else
+        NoteLockedFile(Child);
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+end;
+
+function CountLockedProgramFiles(var Sample: String): Integer;
+begin
+  LockedFileCount := 0;
+  FirstLockedFile := '';
+  NoteLockedFile(ExpandConstant('{app}\') + AppMainExe);
+  ScanLockedFiles(ExpandConstant('{app}\lamcore-backend'));
+  ScanLockedFiles(ExpandConstant('{app}\LamCore'));
+  Sample := FirstLockedFile;
+  Result := LockedFileCount;
+end;
+
+// The close-applications check asks Windows to shut the programs down, but
+// Windows cannot close an application that hides instead of closing, nor a
+// windowless backend, and it reports success either way. So close our own
+// programs here - only processes whose executable lives in the directory being
+// updated, never a same-named program installed elsewhere.
+function StopProcessesInInstallDir: Boolean;
+var
+  Directory: String;
+  Parameters: String;
+  ResultCode: Integer;
+begin
+  Directory := ExpandConstant('{app}');
+  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "'
+    + '$d=' + #39 + Directory + #39 + '; '
+    + 'Get-CimInstance Win32_Process | '
+    + 'Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d, [System.StringComparison]::OrdinalIgnoreCase) } | '
+    + 'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
+  Result := Exec('powershell.exe', Parameters, Directory, SW_HIDE,
+    ewWaitUntilTerminated, ResultCode);
+  Log('Closing Sunday processes in "' + Directory + '" finished with ' +
+    IntToStr(ResultCode));
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Attempt: Integer;
+  Locked: Integer;
+  Sample: String;
+begin
+  if CurStep <> ssInstall then
+    Exit;
+  Locked := 0;
+  // Retry before refusing: the close-applications check above asks Windows to
+  // shut applications down, and that shutdown lands asynchronously. Staying
+  // patient here is what lets a slow close finish instead of refusing an
+  // update that would have succeeded a second later.
+  for Attempt := 1 to 6 do
+  begin
+    Locked := CountLockedProgramFiles(Sample);
+    if Locked = 0 then
+      Break;
+    Sleep(1000);
+  end;
+  if Locked > 0 then
+  begin
+    StopProcessesInInstallDir;
+    for Attempt := 1 to 5 do
+    begin
+      Locked := CountLockedProgramFiles(Sample);
+      if Locked = 0 then
+        Break;
+      Sleep(1000);
+    end;
+  end;
+  if Locked = 0 then
+    Exit;
+  Log('Refusing to install: ' + IntToStr(Locked) +
+    ' program file(s) are still open; first is ' + Sample);
+  // A script message box is shown even under /VERYSILENT, which would hang an
+  // unattended install; silent runs get the log line and the exit code instead.
+  if not WizardSilent then
+    MsgBox('安装程序无法替换正在被占用的程序文件，本次安装已经停止，原有版本保持可用。' + #13#10 + #13#10 +
+      '请先从系统托盘退出 Sunday（在托盘图标上点击右键，选择“退出”），然后重新运行安装程序；' +
+      '如果 Sunday 已经退出，请在任务管理器中结束仍残留的相关进程后重试。' + #13#10 + #13#10 +
+      '仍被占用的文件：' + #13#10 + Sample, mbError, MB_OK);
+  Abort;
 end;
 
 procedure InitializeWizard;

@@ -87,7 +87,6 @@ def full_to_jsonl(export: FullConversationExport) -> dict[str, str]:
         "checkpoint-blobs.jsonl": to_jsonl(list(export.checkpoint_blobs)),
         "attachments.jsonl": to_jsonl(list(export.attachments)),
         "goals.jsonl": to_jsonl(list(export.goals)),
-        "memories.jsonl": to_jsonl(list(export.memories)),
         "arrange-jobs.jsonl": to_jsonl(list(export.arrange_jobs)),
         "arrange-occurrences.jsonl": to_jsonl(list(export.arrange_occurrences)),
         "arrange-signals.jsonl": to_jsonl(list(export.arrange_signals)),

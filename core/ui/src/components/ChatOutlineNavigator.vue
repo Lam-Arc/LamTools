@@ -25,7 +25,7 @@
       v-if="previewItem"
       ref="previewEl"
       type="button"
-      class="chat-outline-navigator__preview optical-glass"
+      class="chat-outline-navigator__preview optical-glass optical-glass--low-trans"
       :style="previewStyle"
       data-chat-outline-preview
       @pointerenter="handlePreviewEnter"

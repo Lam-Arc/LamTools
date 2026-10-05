@@ -1,0 +1,6 @@
+=== dump every option row, filter on the host ===
+  rows read: 7
+  total options in the database: 7
+  options whose name hints at money/display: 0
+  --- is there any key containing 'rice', 'urrency', 'isplay'? ---
+=== done ===

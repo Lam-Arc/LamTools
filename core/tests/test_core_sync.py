@@ -353,7 +353,6 @@ async def test_rollback_is_a_persisted_sync_boundary_that_requires_a_snapshot(tm
     register_checkpoint_operations(
         catalog,
         session_factory=db.session_factory,
-        data_dir=tmp_path / "core-data",
         default_work_root=work_root,
         app_event_store=db.event_store,
         thread_snapshot_store=db.snapshot_store,

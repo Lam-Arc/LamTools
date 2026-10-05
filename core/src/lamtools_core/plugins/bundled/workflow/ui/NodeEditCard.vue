@@ -37,6 +37,9 @@
               :model-value="p.type"
               :options="portTypeOptions"
               aria-label="输入端口类型"
+              menu-align="right"
+              :menu-width="132"
+              :menu-max-height="260"
               @update:model-value="p.type = $event"
             />
             <button class="port-del" type="button" @click="inputPorts.splice(i, 1)">
@@ -55,6 +58,9 @@
               :options="portTypeOptions"
               direction="up"
               aria-label="输出端口类型"
+              menu-align="right"
+              :menu-width="132"
+              :menu-max-height="260"
               @update:model-value="p.type = $event"
             />
             <AutoTextarea v-if="node.kind === 'content' || node.kind === 'constant'" v-model="p.value" :min-rows="2" :max-rows="4" placeholder="常量值" />
@@ -504,13 +510,6 @@ function apply() {
   color: inherit;
   padding: 0 16px 0 6px;
   font-size: 11px;
-}
-/* 菜单右对齐触发器的右缘，避免被 320px 卡片的 overflow:hidden 裁剪 */
-.port-type :deep(.ui-select-menu) {
-  left: auto;
-  right: 0;
-  width: 132px;
-  max-height: 260px;
 }
 .port-value { flex: 1 1 auto; min-width: 0; background: var(--theme-main-subtle-background); border: 1px solid var(--theme-main-border); border-radius: var(--radius-sm, 6px); color: inherit; padding: 4px 6px; font-size: 11px; }
 .port-del {

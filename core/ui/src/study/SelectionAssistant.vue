@@ -291,7 +291,7 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <Teleport to="body">
-    <section v-if="selected" ref="card" class="selection-card optical-glass"
+    <section v-if="selected" ref="card" class="selection-card optical-glass optical-glass--low-trans"
       :style="{ left: x + 'px', top: y + 'px' }" role="dialog" :aria-label="titles[action]" @mouseenter="keepOpen" @pointerdown="hover = false">
       <header>
         <button v-for="(title, kind) in titles" :key="kind" class="text-btn" :aria-pressed="action === kind" :disabled="busy" @click="action = kind; hover = false; error = ''">{{ title }}</button>

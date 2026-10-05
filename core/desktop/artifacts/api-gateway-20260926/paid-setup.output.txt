@@ -1,0 +1,33 @@
+  settings available: 212
+=== the knobs that decide what a user pays ===
+  GroupRatio                         = {"default":1,"svip":1,"vip":1}
+  TopupGroupRatio                    = {"default":1,"svip":1,"vip":1}
+  QuotaPerUnit                       = 500000
+  DisplayInCurrencyEnabled           = true
+  Price                              = 7.3
+  MinTopUp                           = 1
+  payment_setting.amount_options     = [10,20,50,100,200,500]
+  PayMethods                         = [{"color":"rgba(var(--semi-blue-5), 1)","name":"支付宝","type":"alipay"},{"color":"rgba(var(--semi-green-5), 1)",
+  EpayId                             = 
+  PayAddress                         = 
+  StripePriceId                      = 
+=== is there a per-model price table? ===
+  models with a set ratio: 239
+    360GPT_S2_V9                         ratio=0.8572
+    360gpt-pro                           ratio=0.8572
+    360gpt-turbo                         ratio=0.0858
+    360gpt-turbo-responsibility-8k       ratio=0.8572
+    360gpt2-pro                          ratio=0.8572
+    BLOOMZ-7B                            ratio=0.273972602739726
+  completion ratios set for: 4 models
+=== switch registration on for a self-service station ===
+    RegisterEnabled            -> success=True
+    PasswordRegisterEnabled    -> success=True
+  stored now: ERROR:  column "options.key" must appear in the GROUP BY clause or be used in an aggregate function
+LINE 1: ...alue, ', ') from options where key ~ 'Register' order by key
+                                                                    ^
+=== a stranger registers through the public endpoint ===
+  register -> http 200 success=True msg=
+  account quota right after registering:
+      username=zzpay1 quota=0 group=default
+=== part 1 done ===

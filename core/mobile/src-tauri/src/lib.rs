@@ -3,7 +3,6 @@ use lamtools_runtime::{
     plan_tools::PlanTools,
     hooks::{HookEngine, HookListPayload, HookRegistry, HookRunContext},
     mcp::{load_server_configs, CompositeToolRuntime, McpLoadReport, McpServerConfig, McpToolRuntime},
-    memory::{dream_with_model, DreamingConfig, DreamingOutcome},
     project_tools::ProjectFileTools,
     provider::{HttpModelBackend, ProviderConfig, RetryPolicy},
     skills::{CombinedSkillTools, SkillTools},
@@ -21,7 +20,7 @@ use lamtools_runtime::{
     image_gen::{GenerateImageTools, ImageGenConfig, ImageSink},
     web_search::WebSearchTools,
     AgentContext, AgentRuntime, ApprovalResponse, DeviceCapabilities, HostPlatform, Message,
-    ModelBackend, ToolCall, ToolObserver, ToolRuntime, TurnContinuation, TurnOptions, TurnProgress,
+    ToolCall, ToolObserver, ToolRuntime, TurnContinuation, TurnOptions, TurnProgress,
     TurnRequest,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -440,7 +439,6 @@ struct SecureGetResponse {
 
 struct MobileAgentState {
     sub_agents: Arc<SubAgentHub>,
-    dreaming: Arc<SqliteDreamStateStore>,
     turn_cancellations: TurnCancellationRegistry,
 }
 
@@ -1156,97 +1154,6 @@ fn unix_time_ms() -> u64 {
         .unwrap_or_default()
 }
 
-struct SqliteDreamStateStore {
-    path: PathBuf,
-}
-
-impl SqliteDreamStateStore {
-    fn new(path: PathBuf) -> Result<Self, String> {
-        let store = Self { path };
-        let connection = store.open()?;
-        Self::ensure_schema(&connection)?;
-        Ok(store)
-    }
-
-    fn open(&self) -> Result<Connection, String> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        let connection = Connection::open(&self.path).map_err(|error| error.to_string())?;
-        connection
-            .busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(|error| error.to_string())?;
-        Ok(connection)
-    }
-
-    fn ensure_schema(connection: &Connection) -> Result<(), String> {
-        connection
-            .execute_batch(
-                "PRAGMA journal_mode=WAL;
-                 PRAGMA synchronous=FULL;
-                 CREATE TABLE IF NOT EXISTS dreaming_state (
-                   scope TEXT PRIMARY KEY NOT NULL,
-                   turns_since_dream INTEGER NOT NULL,
-                   last_counted_turn_id TEXT NOT NULL,
-                   updated_at INTEGER NOT NULL
-                 );",
-            )
-            .map_err(|error| error.to_string())
-    }
-
-    fn register_turn(
-        &self,
-        scope: &str,
-        turn_id: &str,
-        min_turns: u32,
-        worthy: bool,
-    ) -> Result<bool, String> {
-        let mut connection = self.open()?;
-        Self::ensure_schema(&connection)?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| error.to_string())?;
-        let current = transaction
-            .query_row(
-                "SELECT turns_since_dream, last_counted_turn_id FROM dreaming_state WHERE scope = ?1",
-                [scope],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        let count = match current {
-            Some((count, previous)) if previous == turn_id => count.max(0) as u32,
-            Some((count, _)) => count.max(0).saturating_add(1) as u32,
-            None => 1,
-        };
-        transaction
-            .execute(
-                "INSERT INTO dreaming_state(scope, turns_since_dream, last_counted_turn_id, updated_at)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(scope) DO UPDATE SET
-                   turns_since_dream = excluded.turns_since_dream,
-                   last_counted_turn_id = excluded.last_counted_turn_id,
-                   updated_at = excluded.updated_at",
-                rusqlite::params![scope, count, turn_id, unix_time_ms() as i64],
-            )
-            .map_err(|error| error.to_string())?;
-        transaction.commit().map_err(|error| error.to_string())?;
-        Ok(worthy && count >= min_turns.max(1))
-    }
-
-    fn mark_dreamed(&self, scope: &str) -> Result<(), String> {
-        let connection = self.open()?;
-        Self::ensure_schema(&connection)?;
-        connection
-            .execute(
-                "UPDATE dreaming_state SET turns_since_dream = 0, updated_at = ?2 WHERE scope = ?1",
-                rusqlite::params![scope, unix_time_ms() as i64],
-            )
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MobileTurnPayload {
@@ -1274,8 +1181,6 @@ struct MobileTurnPayload {
     trusted_hook_hashes: Vec<String>,
     #[serde(default)]
     mcp_config: Value,
-    #[serde(default)]
-    dreaming: DreamingConfig,
     #[serde(default = "default_true")]
     sub_agent_enabled: bool,
     #[serde(default)]
@@ -1388,15 +1293,13 @@ fn timestamp_iso() -> String {
 /// The artifact store lives beside the other host databases.
 fn native_artifact_store(app: &tauri::AppHandle) -> Result<artifacts::ArtifactStore, String> {
     let data = app.path().app_data_dir().map_err(|error| error.to_string())?;
-    artifacts::ArtifactStore::open(&data.join("artifacts.db"), &data.join("blobs"))
+    artifacts::ArtifactStore::open(&data.join("artifacts.db"))
 }
 
-/// Record a write the agent just made as an artifact revision.
+/// 把 agent 刚写完的项目文件登记/刷新成一份成果。
 ///
-/// The desktop derives the same fact from its event stream; the phone has no
-/// projector, so the observation of the tool call is the source. Only tools that
-/// produce project files are recorded, and an unchanged write is not a new
-/// revision (the store decides that).
+/// 桌面端从事件流里推导同一件事；手机端没有投影器，工具调用的观测就是来源。
+/// 只有产出项目文件的工具会登记，内容就是磁盘上的那个文件（不记历史版本）。
 fn record_tool_artifact(
     app: &tauri::AppHandle,
     project_root: &std::path::Path,
@@ -1435,21 +1338,6 @@ async fn sunday_artifact_list(
 }
 
 #[tauri::command]
-async fn sunday_artifact_revisions(
-    app: tauri::AppHandle,
-    project_id: String,
-    artifact_id: String,
-) -> Result<Value, String> {
-    let store = native_artifact_store(&app)?;
-    let artifact = store
-        .artifact(&artifact_id)?
-        .filter(|record| record.project_id == project_id)
-        .ok_or_else(|| "Artifact not found".to_owned())?;
-    let revisions = store.revisions(&artifact_id)?;
-    Ok(serde_json::json!({"artifact": artifact, "revisions": revisions}))
-}
-
-#[tauri::command]
 async fn sunday_artifact_set_deleted(
     app: tauri::AppHandle,
     project_id: String,
@@ -1468,20 +1356,7 @@ async fn sunday_artifact_set_deleted(
     })
 }
 
-#[tauri::command]
-async fn sunday_artifact_restore_revision(
-    app: tauri::AppHandle,
-    project_id: String,
-    artifact_id: String,
-    revision_id: String,
-) -> Result<Value, String> {
-    let store = native_artifact_store(&app)?;
-    let root = native_project_root(&app, &project_id)?;
-    let record = store.restore_revision(&project_id, &root, &artifact_id, &revision_id)?;
-    Ok(serde_json::json!({"artifact": record}))
-}
-
-/// Hand one artifact revision to the system's default application.
+/// Hand one artifact's current file to the system's default application.
 ///
 /// Android-only for the same reason the attachment opener is: it goes through
 /// the mobile plugin handle that only exists there.
@@ -1497,7 +1372,6 @@ async fn sunday_artifact_open(
     opener: tauri::State<'_, MobileAttachmentOpen<tauri::Wry>>,
     project_id: String,
     artifact_id: String,
-    revision_id: Option<String>,
 ) -> Result<Value, String> {
     let store = native_artifact_store(&app)?;
     let record = store
@@ -1507,7 +1381,8 @@ async fn sunday_artifact_open(
     if record.path.starts_with("attachment://") {
         return Err("附件型成果请使用附件打开".into());
     }
-    let (bytes, mime_type) = store.revision_bytes(&record, revision_id.as_deref())?;
+    let root = native_project_root(&app, &project_id)?;
+    let (bytes, mime_type) = artifacts::file_bytes(&root, &record)?;
     let directory = opener
         .0
         .run_mobile_plugin::<AttachmentCacheDirectory>("cacheDirectory", serde_json::json!({}))
@@ -1533,13 +1408,12 @@ async fn sunday_artifact_open(
     Ok(serde_json::json!({"status": "opened", "path": record.path}))
 }
 
-/// Bytes of one artifact revision; `null` when the artifact is not this project's.
+/// 成果当前内容的字节；不属于这个项目时返回 `null`。
 #[tauri::command]
 async fn sunday_artifact_file(
     app: tauri::AppHandle,
     project_id: String,
     artifact_id: String,
-    revision_id: Option<String>,
 ) -> Result<Option<Value>, String> {
     let store = native_artifact_store(&app)?;
     let Some(record) = store
@@ -1548,7 +1422,8 @@ async fn sunday_artifact_file(
     else {
         return Ok(None);
     };
-    let (bytes, mime_type) = store.revision_bytes(&record, revision_id.as_deref())?;
+    let root = native_project_root(&app, &project_id)?;
+    let (bytes, mime_type) = artifacts::file_bytes(&root, &record)?;
     use base64::Engine;
     Ok(Some(serde_json::json!({
         "path": record.path,
@@ -1636,47 +1511,6 @@ fn native_checkpoint_store(app: &tauri::AppHandle) -> Result<checkpoints::Checkp
     checkpoints::CheckpointStore::open(&data.join("checkpoints.db"))
 }
 
-/// Record a checkpoint for one turn, at the turn boundary.
-fn record_turn_checkpoint(
-    app: &tauri::AppHandle,
-    project_root: &std::path::Path,
-    session_id: &str,
-    turn_id: &str,
-) {
-    let Ok(store) = native_checkpoint_store(app) else {
-        return;
-    };
-    let _ = store.create(
-        project_root,
-        session_id,
-        turn_id,
-        "",
-        "",
-        checkpoints::ActorKind::Agent,
-    );
-}
-
-#[tauri::command]
-async fn sunday_checkpoint_create(
-    app: tauri::AppHandle,
-    session_id: String,
-    turn_id: Option<String>,
-    label: Option<String>,
-    reason: Option<String>,
-) -> Result<Value, String> {
-    let store = native_checkpoint_store(&app)?;
-    let root = native_project_root(&app, &String::new())?;
-    let record = store.create(
-        &root,
-        &session_id,
-        turn_id.as_deref().unwrap_or_default(),
-        label.as_deref().unwrap_or_default(),
-        reason.as_deref().unwrap_or_default(),
-        checkpoints::ActorKind::User,
-    )?;
-    Ok(serde_json::json!({"checkpoint": record, "nodes": [record]}))
-}
-
 #[tauri::command]
 async fn sunday_checkpoint_get(app: tauri::AppHandle, checkpoint_id: String) -> Result<Value, String> {
     let store = native_checkpoint_store(&app)?;
@@ -1698,29 +1532,6 @@ async fn sunday_checkpoint_list(app: tauri::AppHandle, session_id: String) -> Re
     let store = native_checkpoint_store(&app)?;
     let nodes = store.list(&session_id)?;
     Ok(serde_json::json!({"nodes": nodes}))
-}
-
-#[tauri::command]
-async fn sunday_checkpoint_restore(
-    app: tauri::AppHandle,
-    project_id: String,
-    session_id: String,
-    checkpoint_id: String,
-    scope: Option<String>,
-) -> Result<Value, String> {
-    let store = native_checkpoint_store(&app)?;
-    let artifacts = native_artifact_store(&app)?;
-    let root = native_project_root(&app, &project_id)?;
-    let outcome = checkpoints::restore(
-        &store,
-        &artifacts,
-        &root,
-        &project_id,
-        &session_id,
-        &checkpoint_id,
-        scope.as_deref().unwrap_or("workspace"),
-    )?;
-    Ok(checkpoints::restore_payload(&outcome))
 }
 
 /// Every tool this host can advertise, for the mode tool-set editor.
@@ -2086,9 +1897,6 @@ async fn sunday_agent_turn_inner(
                 runtime_foreground_model.store(false, Ordering::Relaxed);
             }
         });
-    let turn_id = payload.turn_id.clone();
-    let model_record_id = payload.model_record_id.clone();
-    let dreaming_options = payload.options.clone();
     emit_agent_stage(&app, &trace_turn_id, "native_runtime_start");
     let mut progress = runtime
         .run_turn_progress(TurnRequest {
@@ -2104,19 +1912,6 @@ async fn sunday_agent_turn_inner(
         .map_err(|error| error.to_string())?;
     append_runtime_warnings(&mut progress, &mcp_warnings);
     emit_agent_stage(&app, &trace_turn_id, "native_runtime_done");
-    apply_dreaming_with_options(
-        agent_state,
-        &project_root,
-        &turn_id,
-        &model_record_id,
-        model.as_ref(),
-        &payload.dreaming,
-        &dreaming_options,
-        &mut progress,
-    )
-    .await;
-    record_turn_checkpoint(&app, &project_root, &parent_thread_id, &trace_turn_id);
-    emit_agent_stage(&app, &trace_turn_id, "native_dreaming_done");
     Ok(progress)
 }
 
@@ -2141,8 +1936,6 @@ struct MobileResumePayload {
     trusted_hook_hashes: Vec<String>,
     #[serde(default)]
     mcp_config: Value,
-    #[serde(default)]
-    dreaming: DreamingConfig,
     #[serde(default = "default_true")]
     sub_agent_enabled: bool,
     #[serde(default)]
@@ -2396,9 +2189,6 @@ async fn sunday_agent_resume_inner(
                 runtime_foreground_model.store(false, Ordering::Relaxed);
             }
         });
-    let turn_id = payload.continuation.turn_id.clone();
-    let model_record_id = payload.continuation.model_record_id.clone();
-    let options = payload.continuation.options.clone();
     emit_agent_stage(&app, &trace_turn_id, "native_runtime_start");
     let mut progress = runtime
         .resume_turn(payload.continuation, payload.response)
@@ -2406,19 +2196,6 @@ async fn sunday_agent_resume_inner(
         .map_err(|error| error.to_string())?;
     append_runtime_warnings(&mut progress, &mcp_warnings);
     emit_agent_stage(&app, &trace_turn_id, "native_runtime_done");
-    apply_dreaming_with_options(
-        agent_state,
-        &project_root,
-        &turn_id,
-        &model_record_id,
-        model.as_ref(),
-        &payload.dreaming,
-        &options,
-        &mut progress,
-    )
-    .await;
-    record_turn_checkpoint(&app, &project_root, &parent_thread_id, &trace_turn_id);
-    emit_agent_stage(&app, &trace_turn_id, "native_dreaming_done");
     Ok(progress)
 }
 
@@ -2482,112 +2259,16 @@ const fn default_true() -> bool {
     true
 }
 
-async fn apply_dreaming_with_options<M: ModelBackend + ?Sized>(
-    state: &MobileAgentState,
-    project_root: &std::path::Path,
-    turn_id: &str,
-    model_record_id: &str,
-    model: &M,
-    config: &DreamingConfig,
-    options: &TurnOptions,
-    progress: &mut TurnProgress,
-) {
-    if !config.enabled {
-        return;
-    }
-    let TurnProgress::Completed { result } = progress else {
-        return;
-    };
-    let worthy = result.tool_rounds > 0 || result.compaction.is_some();
-    let scope = project_root.to_string_lossy();
-    let should_dream =
-        match state
-            .dreaming
-            .register_turn(&scope, turn_id, config.min_turns.max(1), worthy)
-        {
-            Ok(value) => value,
-            Err(error) => {
-                result.dreaming = Some(DreamingOutcome {
-                    status: "failed".into(),
-                    summary: format!("dreaming state failed: {error}"),
-                    memory_updated: false,
-                });
-                return;
-            }
-        };
-    if !should_dream {
-        return;
-    }
-    let memory_path = project_root.join("MEMORY.md");
-    let existing = match read_optional_utf8(memory_path.clone()).await {
-        Ok(value) => value,
-        Err(error) => {
-            result.dreaming = Some(DreamingOutcome {
-                status: "failed".into(),
-                summary: format!("dreaming memory read failed: {error}"),
-                memory_updated: false,
-            });
-            return;
-        }
-    };
-    match dream_with_model(
-        model,
-        model_record_id,
-        &existing,
-        &result.runtime_history,
-        options,
-    )
-    .await
-    {
-        Ok(updated) => {
-            let changed = updated != existing;
-            if changed {
-                if let Err(error) = write_memory_atomic(&memory_path, updated.as_bytes()) {
-                    result.dreaming = Some(DreamingOutcome {
-                        status: "failed".into(),
-                        summary: format!("dreaming memory write failed: {error}"),
-                        memory_updated: false,
-                    });
-                    return;
-                }
-            }
-            if let Err(error) = state.dreaming.mark_dreamed(&scope) {
-                result.dreaming = Some(DreamingOutcome {
-                    status: "failed".into(),
-                    summary: format!("dreaming checkpoint failed: {error}"),
-                    memory_updated: changed,
-                });
-                return;
-            }
-            result.dreaming = Some(DreamingOutcome {
-                status: if changed { "completed" } else { "no_changes" }.into(),
-                summary: if changed {
-                    "Durable memory was appended to MEMORY.md.".into()
-                } else {
-                    "No new durable memory was found.".into()
-                },
-                memory_updated: changed,
-            });
-        }
-        Err(error) => {
-            result.dreaming = Some(DreamingOutcome {
-                status: "failed".into(),
-                summary: error,
-                memory_updated: false,
-            });
-        }
-    }
-}
 
-/// Replace MEMORY.md from a fully written sibling file. A failed replacement
+/// Replace a file from a fully written sibling. A failed replacement
 /// leaves the committed document intact, including on Windows.
-fn write_memory_atomic(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+fn write_file_atomic(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
-        .unwrap_or("MEMORY.md");
+        .unwrap_or("file");
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|value| value.as_nanos())
@@ -2611,13 +2292,13 @@ fn write_memory_atomic(path: &std::path::Path, contents: &[u8]) -> std::io::Resu
 }
 
 #[cfg(test)]
-mod memory_write_tests {
-    use super::write_memory_atomic;
+mod atomic_file_write_tests {
+    use super::write_file_atomic;
 
     #[test]
-    fn atomic_memory_write_replaces_existing_document() {
+    fn atomic_write_replaces_existing_document() {
         let root = std::env::temp_dir().join(format!(
-            "lamtools-memory-write-{}-{}",
+            "lamtools-file-write-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -2625,10 +2306,10 @@ mod memory_write_tests {
                 .as_nanos()
         ));
         std::fs::create_dir(&root).unwrap();
-        let path = root.join("MEMORY.md");
-        write_memory_atomic(&path, b"# Memory\nold\n").unwrap();
-        write_memory_atomic(&path, b"# Memory\nnew\n").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Memory\nnew\n");
+        let path = root.join("out.md");
+        write_file_atomic(&path, b"old\n").unwrap();
+        write_file_atomic(&path, b"new\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(root).unwrap();
     }
@@ -3411,7 +3092,7 @@ async fn project_file_write(
         tokio_create_dir_all(parent).await?;
     }
     let written = content.clone();
-    tokio::task::spawn_blocking(move || write_memory_atomic(&resolved, written.as_bytes()))
+    tokio::task::spawn_blocking(move || write_file_atomic(&resolved, written.as_bytes()))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
@@ -3433,6 +3114,46 @@ async fn project_file_delete(
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Err(format!("文件不存在: {path}"))
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Create one directory inside the project tree (parents included).
+///
+/// The library's folders (「方案/<folder>」) are real directories on the
+/// desktop; the phone's WebView has no filesystem of its own, so the same
+/// shape needs this command. Refuses to reuse an existing path so a caller
+/// never silently adopts a file or an unrelated directory.
+#[tauri::command]
+async fn project_directory_create(
+    app: tauri::AppHandle,
+    project_id: String,
+    path: String,
+) -> Result<(), String> {
+    let root = native_project_root(&app, &project_id)?;
+    let resolved = safe_project_relative_path(&root, &path, false)?;
+    match tokio::fs::symlink_metadata(&resolved).await {
+        Ok(_) => return Err(format!("同名文件夹已存在: {path}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    tokio_create_dir_all(&resolved).await
+}
+
+/// Delete one empty directory inside the project tree.
+#[tauri::command]
+async fn project_directory_delete(
+    app: tauri::AppHandle,
+    project_id: String,
+    path: String,
+) -> Result<(), String> {
+    let root = native_project_root(&app, &project_id)?;
+    let resolved = safe_project_relative_path(&root, &path, false)?;
+    match tokio::fs::remove_dir(&resolved).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(format!("文件夹不存在: {path}"))
         }
         Err(error) => Err(error.to_string()),
     }
@@ -3965,7 +3686,7 @@ async fn create_user_skill(
     let body = format!("---\nname: {name}\ndescription: {description}\n---\n\n{content}\n");
     let target = skill_dir.join("SKILL.md");
     let written = body.clone();
-    tokio::task::spawn_blocking(move || write_memory_atomic(&target, written.as_bytes()))
+    tokio::task::spawn_blocking(move || write_file_atomic(&target, written.as_bytes()))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
@@ -4039,13 +3760,6 @@ async fn tokio_create_dir_all(path: &std::path::Path) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-async fn read_optional_utf8(path: std::path::PathBuf) -> Result<String, String> {
-    match tokio::fs::read_to_string(path).await {
-        Ok(value) => Ok(value),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(error.to_string()),
-    }
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -4131,17 +3845,9 @@ pub fn run() {
             .map_err(|error| error.to_string())?
             .join("state")
             .join("sub-agents.db");
-        let store = Arc::new(SqliteSubAgentStore::new(database_path)?);
-        let dreaming_path = app
-            .path()
-            .app_data_dir()
-            .map_err(|error| error.to_string())?
-            .join("state")
-            .join("dreaming.db");
-        app.manage(UpdateDownloadState::default());
+        let store = Arc::new(SqliteSubAgentStore::new(database_path)?);        app.manage(UpdateDownloadState::default());
         app.manage(MobileAgentState {
             sub_agents: SubAgentHub::new(store),
-            dreaming: Arc::new(SqliteDreamStateStore::new(dreaming_path)?),
             turn_cancellations: TurnCancellationRegistry::default(),
         });
         Ok(())
@@ -4167,19 +3873,15 @@ pub fn run() {
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
         sunday_model_reasoning_declaration,
-        sunday_checkpoint_create,
         sunday_checkpoint_get,
         sunday_checkpoint_graph,
         sunday_checkpoint_list,
-        sunday_checkpoint_restore,
         sunday_goal_create,
         sunday_goal_get,
         sunday_goal_list,
         sunday_goal_update,
         sunday_artifact_list,
-        sunday_artifact_revisions,
         sunday_artifact_set_deleted,
-        sunday_artifact_restore_revision,
         sunday_artifact_file,
         sunday_user_skills,
         sunday_skill_create,
@@ -4199,6 +3901,8 @@ pub fn run() {
         project_file_list,
         project_file_delete,
         project_directory_browse,
+        project_directory_create,
+        project_directory_delete,
         project_file_read,
         project_file_read_raw,
         project_file_write,
@@ -4225,19 +3929,15 @@ pub fn run() {
         sunday_plugin_mode_tools,
         sunday_plugin_schemas,
         sunday_model_reasoning_declaration,
-        sunday_checkpoint_create,
         sunday_checkpoint_get,
         sunday_checkpoint_graph,
         sunday_checkpoint_list,
-        sunday_checkpoint_restore,
         sunday_goal_create,
         sunday_goal_get,
         sunday_goal_list,
         sunday_goal_update,
         sunday_artifact_list,
-        sunday_artifact_revisions,
         sunday_artifact_set_deleted,
-        sunday_artifact_restore_revision,
         sunday_artifact_file,
         sunday_user_skills,
         sunday_skill_create,
@@ -4254,6 +3954,8 @@ pub fn run() {
         project_file_list,
         project_file_delete,
         project_directory_browse,
+        project_directory_create,
+        project_directory_delete,
         project_file_read,
         project_file_read_raw,
         project_file_write
@@ -4266,7 +3968,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lamtools_runtime::{study_skills::catalog_prompt, ModelTurn, ToolCall};
+    use lamtools_runtime::{study_skills::catalog_prompt, ModelBackend, ModelTurn, ToolCall};
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
 
@@ -5285,20 +4987,4 @@ name: a
         assert!(explained.message().contains("Configure a model first"));
     }
 
-    #[test]
-    fn dreaming_throttle_is_durable_and_turn_idempotent() {
-        let root = std::env::temp_dir().join(format!("sunday-dreaming-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("dreaming.db");
-        let store = SqliteDreamStateStore::new(path.clone()).unwrap();
-        assert!(!store.register_turn("scope", "turn-1", 2, true).unwrap());
-        drop(store);
-
-        let reopened = SqliteDreamStateStore::new(path).unwrap();
-        assert!(reopened.register_turn("scope", "turn-2", 2, true).unwrap());
-        assert!(reopened.register_turn("scope", "turn-2", 2, true).unwrap());
-        reopened.mark_dreamed("scope").unwrap();
-        assert!(!reopened.register_turn("scope", "turn-3", 2, true).unwrap());
-        std::fs::remove_dir_all(root).unwrap();
-    }
 }

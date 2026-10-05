@@ -11,7 +11,8 @@
         "git_status",
         "git_diff",
         "load_skill",
-        "sub_agent"
+        "sub_agent",
+        "memory"
       ]
     },
     "limited_edit": {
@@ -25,6 +26,7 @@
         "git_diff",
         "load_skill",
         "sub_agent",
+        "memory",
         "write_file",
         "edit_file",
         "arrange",

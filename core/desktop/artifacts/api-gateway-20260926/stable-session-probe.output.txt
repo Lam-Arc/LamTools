@@ -1,0 +1,12 @@
+  bridge gateway: 172.30.0.1
+  mock listening
+=== admin session over TLS ===
+  public TLS login path not used directly; using curl for cookie capture
+  TLS login http: 200
+  login success: True
+  cookies captured: []
+  /api/user/self over TLS -> 401 success: False role: None
+  /api/user/token -> 401 success: False | token obtained: False
+  FATAL: no access token; stopping
+=== cleanup ===
+  mock stopped

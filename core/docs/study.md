@@ -31,6 +31,14 @@ Notes 对话；Note 的总体关系图归属 Note，显示在右侧栏，只展�
 
 五个请求技能 `build-map`、`teach`、`answer`、`take-exam`、`curate-notes` 由现有
 `SkillRegistry`/`load_skill` 按需加载，只有 active mode `study:study` 可见。
+`teach` 是教学技能组（teaching group）的入口：它持有目标、来源、图示、密度、
+反馈与发送前检查的共同协议，并按学科加载成员技能——`teach-humanities`（历史、
+哲学、文学、宗教、法律、政治、伦理、艺术与文化解释）或 `teach-science`（数学、
+物理、化学、生物、统计、计算机、电子与工程）。两个成员在 `agents/openai.yaml`
+声明 `allow_implicit_invocation: false`，只由入口按名加载，因此技能索引里只有入口；
+成员把硬性要求叠加在共同协议之上：文科必须先讲一个具体寓言承载道理，再命名道理
+并逐项映射、说明故事边界；理科必须在每个定义、公式或定理之后立刻给出"正常人能
+直接体会或理解"的释义，再进入推导。成员不新增工具权限，也不替代入口协议。
 Study 会话自动加入 `prompts/study-system.md`，公共安全、权限、工具和验证协议
 仍来自宿主；普通 Agent 的项目/业务提示词不会注入 Study。`notes` 使用当前
 `study.notes` 三层 RPC/存储合同并在 Study 工具集中保持稳定，`curate-notes` 正文

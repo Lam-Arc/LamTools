@@ -1,0 +1,56 @@
+  bridge gateway: 172.30.0.1
+  cleared self-inflicted login throttle keys
+  mock listening
+  channel created: True
+  client key ready: True
+  client key length: 51 (guard: must be > 0 for the leak test to mean anything)
+=== log occurrences of the key before the call: 0 ===
+=== acceptance: client surface ===
+  no key  /v1/models           -> 401
+  with key /v1/models          -> 200
+    models: ['gpt-4o-mini']
+  with key chat non-streaming  -> 200
+    reply: Hello from mock
+  with key chat streaming      -> 200
+    sse lines: 6 | [DONE]: True | text: 'Hello from mock'
+=== log occurrences after the call: 0 | files in /opt/lamtools-api/logs containing it: 0 ===
+  PASS: client key not written to container stdout or on-disk logs
+=== X-Forwarded-For spoofing check ===
+  PASS: forged address absent from the log
+=== regression: pre-existing sites ===
+  homepage -> 200
+  downloads manifest -> 200
+  desktop installer -> 200
+  mobile relay health -> 200
+  codex mock api -> 200
+  api gateway console -> 200
+=== final container and host state ===
+lamtools-api-cache redis:7-alpine Up 5 minutes (healthy)
+lamtools-api-db postgres:16-alpine Up 5 minutes (healthy)
+lamtools-api-gateway calciumion/new-api:v0.13.2 Up 13 seconds
+                 total        used        free      shared  buff/cache   available
+  Mem:            3623         469         129          20        3024        2842
+  /dev/vda3        40G   12G   26G  31% /
+  listening sockets (public ports):
+    0.0.0.0:22
+    127.0.0.1:2019
+    127.0.0.1:20241
+    127.0.0.1:3000
+    127.0.0.1:34771
+    127.0.0.1:8322
+    127.0.0.1:8787
+    127.0.0.53%lo:53
+    172.30.0.1:8323
+    [::]:22
+    *:443
+    *:7000
+    *:80
+=== done ===
+=== cleanup ===
+  delete token 6 -> success=True
+  delete token 5 -> success=True
+  token leftovers: none
+  delete channel 5 -> success=True
+  delete channel 6 -> success=True
+  channel leftovers: none
+  mock stopped

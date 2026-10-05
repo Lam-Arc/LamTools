@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -11,7 +12,11 @@ import lamtools_core.runtime.background_processes as process_module
 import lamtools_core.tool.command_tools as command_tools_module
 import lamtools_core.tool.command_runner as command_runner_module
 from lamtools_core.runtime import RuntimeTaskRegistry
-from lamtools_core.runtime.background_processes import BackgroundProcessRegistry
+from lamtools_core.runtime.background_processes import (
+    BackgroundProcessRecord,
+    BackgroundProcessRegistry,
+    persistent_process_prompt,
+)
 from lamtools_core.tool import ToolCall
 from lamtools_core.tool.command import CommandExecution
 from lamtools_core.tool.command_tools import CommandToolHandlers
@@ -253,3 +258,234 @@ async def test_cancelling_background_start_cannot_register_process_after_cleanup
 
     assert registry.list() == []
     assert terminated == [555]
+
+
+@pytest.mark.asyncio
+async def test_persistent_process_survives_turn_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    process_registry = BackgroundProcessRegistry()
+    runtime_registry = RuntimeTaskRegistry(background_process_registry=process_registry)
+    process = _FakeProcess(777)
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        process_module,
+        "terminate_process_tree",
+        lambda owned: terminated.append(owned.pid),
+    )
+    process_registry.register(
+        process,  # type: ignore[arg-type]
+        session_id="thread-1",
+        run_id="turn-1",
+        work_root=tmp_path,
+        persistent=True,
+        command="python -m http.server 8123",
+    )
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    assert runtime_registry.register("thread-1", task, run_id="turn-1") is True
+    await task
+    await asyncio.sleep(0)
+
+    assert terminated == []
+    assert [record.pid for record in process_registry.list()] == [777]
+    [status] = process_registry.list_status(session_id="thread-1")
+    assert status.alive is True
+    assert status.owned is True
+    assert status.record.persistent is True
+
+
+def test_persistent_process_survives_stop_and_session_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    registry = BackgroundProcessRegistry()
+    persistent = _FakeProcess(811)
+    ordinary = _FakeProcess(812)
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        process_module,
+        "terminate_process_tree",
+        lambda owned: terminated.append(owned.pid),
+    )
+    registry.register(persistent, session_id="s1", run_id="r1", work_root=tmp_path, persistent=True)  # type: ignore[arg-type]
+    registry.register(ordinary, session_id="s1", run_id="r2", work_root=tmp_path)  # type: ignore[arg-type]
+
+    # Stopping the run (cleanup_run) and finishing the session (cleanup_session)
+    # must spare the persistent record while ordinary records still die.
+    assert registry.cleanup_run("s1", "r1") == []
+    assert registry.cleanup_session("s1") == [812]
+    assert [record.pid for record in registry.list()] == [811]
+    assert terminated == [812]
+
+    # Deleting the session (force cleanup) also ends the persistent process.
+    assert registry.cleanup_session("s1", force=True) == [811]
+    assert terminated == [812, 811]
+    assert registry.list() == []
+
+
+def test_persistent_record_stays_listed_after_natural_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    registry = BackgroundProcessRegistry()
+    persistent = _FakeProcess(821)
+    ordinary = _FakeProcess(822)
+    registry.register(persistent, session_id="s1", run_id="r1", work_root=tmp_path, persistent=True)  # type: ignore[arg-type]
+    registry.register(ordinary, session_id="s1", run_id="r2", work_root=tmp_path)  # type: ignore[arg-type]
+    persistent.returncode = 0
+    ordinary.returncode = 0
+
+    assert [record.pid for record in registry.list()] == [821]
+    [status] = registry.list_status(session_id="s1")
+    assert status.alive is False
+    assert status.owned is True
+
+
+def test_kill_and_forget_respect_session_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    registry = BackgroundProcessRegistry()
+    owned = _FakeProcess(831)
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        process_module,
+        "terminate_process_tree",
+        lambda owned_process: terminated.append(owned_process.pid),
+    )
+    registry.register(owned, session_id="s1", run_id="r1", work_root=tmp_path, persistent=True)  # type: ignore[arg-type]
+
+    assert registry.kill("s2", 831) == "not_found"
+    assert registry.kill("s1", 999) == "not_found"
+    assert registry.kill("s1", 831) == "terminated"
+    assert terminated == [831]
+    assert registry.list() == []
+
+    adopted = BackgroundProcessRecord(
+        pid=832, session_id="s1", run_id="r0", work_root=str(tmp_path),
+        started_at=0.0, persistent=True,
+    )
+    with registry._lock:
+        registry._adopted[832] = adopted
+    assert registry.kill("s1", 832) == "not_owned"
+    assert terminated == [831]
+    assert registry.forget("s1", 832) is True
+    assert registry.list() == []
+
+
+def test_forget_refuses_live_owned_process(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    registry = BackgroundProcessRegistry()
+    owned = _FakeProcess(841)
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        process_module,
+        "terminate_process_tree",
+        lambda owned_process: terminated.append(owned_process.pid),
+    )
+    registry.register(owned, session_id="s1", run_id="r1", work_root=tmp_path, persistent=True)  # type: ignore[arg-type]
+
+    assert registry.forget("s1", 841) is False
+    assert terminated == []
+    assert [record.pid for record in registry.list()] == [841]
+    owned.returncode = 0
+    assert registry.forget("s1", 841) is True
+    assert registry.list() == []
+
+
+def test_persistent_archive_round_trip_and_adoption(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from lamtools_core.runtime.persistent_process_store import PersistentProcessStore
+
+    store_path = tmp_path / "background-processes.json"
+    store = PersistentProcessStore(store_path)
+    live = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        process_module,
+        "terminate_process_tree",
+        lambda owned: terminated.append(owned.pid),
+    )
+    try:
+        # Crash simulation: an archive left by a previous backend run adopts
+        # into a fresh registry as display-only records.
+        previous = BackgroundProcessRecord(
+            pid=live.pid, session_id="s1", run_id="r0", work_root=str(tmp_path),
+            started_at=1.0, persistent=True, command="python long-lived fixture",
+        )
+        store.save([previous.to_archive()])
+        adopted_registry = BackgroundProcessRegistry(store=store)
+        [status] = adopted_registry.list_status(session_id="s1")
+        assert status.owned is False
+        assert status.alive is True
+        assert status.record.command == "python long-lived fixture"
+        assert adopted_registry.kill("s1", live.pid) == "not_owned"
+        assert terminated == []
+
+        # Shutdown kills owned persistent processes and clears their archive;
+        # adopted records stay archived so the next start can still see them.
+        assert adopted_registry.shutdown() == []
+        assert [int(item["pid"]) for item in store.load()] == [live.pid]
+
+        # Owned persistent lifecycle: registration archives, shutdown clears.
+        owned_store = PersistentProcessStore(tmp_path / "owned.json")
+        owned_registry = BackgroundProcessRegistry(store=owned_store)
+        record = owned_registry.register(
+            live,
+            session_id="s1",
+            run_id="r1",
+            work_root=tmp_path,
+            persistent=True,
+            command="python long-lived fixture",
+        )
+        assert [int(item["pid"]) for item in owned_store.load()] == [record.pid]
+        assert owned_registry.shutdown() == [record.pid]
+        assert terminated == [record.pid]
+        assert owned_registry.list() == []
+        assert owned_store.load() == []
+    finally:
+        live.kill()
+        live.wait(timeout=5)
+
+
+def test_persistent_prompt_lists_running_session_processes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    registry = BackgroundProcessRegistry()
+    assert persistent_process_prompt(registry, "s1") == ""
+
+    process = _FakeProcess(851)
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        process_module,
+        "terminate_process_tree",
+        lambda owned: terminated.append(owned.pid),
+    )
+    registry.register(
+        process,  # type: ignore[arg-type]
+        session_id="s1",
+        run_id="r1",
+        work_root=tmp_path,
+        persistent=True,
+        command="python -m http.server 8123",
+    )
+    prompt = persistent_process_prompt(registry, "s1")
+    assert "[Persistent Background Processes]" in prompt
+    assert "pid 851" in prompt
+    assert "python -m http.server 8123" in prompt
+    assert persistent_process_prompt(registry, "other-session") == ""
+
+    process.returncode = 0
+    assert persistent_process_prompt(registry, "s1") == ""
+    registry.cleanup_session("s1", force=True)

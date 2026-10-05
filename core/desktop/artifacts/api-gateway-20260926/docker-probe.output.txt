@@ -1,0 +1,33 @@
+=== docker info ===
+29.8.0 storage=overlayfs cgroup=2 root=/var/lib/docker
+=== registry mirrors ===
+{
+    "registry-mirrors": [
+        "https://0vmzj3q6.mirror.aliyuncs.com",
+        "https://docker.m.daocloud.io",
+        "https://mirror.baidubce.com",
+        "https://dockerproxy.com",
+        "https://mirror.iscas.ac.cn",
+        "https://huecker.io",
+        "https://dockerhub.timeweb.cloud",
+        "https://noohub.ru",
+        "https://vlgh0kqj.mirror.aliyuncs.com"
+    ]
+}
+=== disk ===
+/dev/vda3        40G   11G   27G  28% /
+=== pull test: alpine (small) ===
+25f1d6b1951a: Download complete
+25f1d6b1951a: Pull complete
+Digest: sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+Status: Downloaded newer image for alpine:3.20
+docker.io/library/alpine:3.20
+=== docker hub api reachability ===
+auth.docker.io unreachable
+registry unreachable
+=== compose plugin ===
+Docker Compose version v5.5.1
+=== memory headroom ===
+               total        used        free      shared  buff/cache   available
+Mem:            3623         365         118           2        3139        2965
+=== done ===

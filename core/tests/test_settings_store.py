@@ -10,44 +10,44 @@ from lamtools_core.config.settings_store import delete_setting, get_setting, set
 
 
 def test_get_missing_namespace_returns_none(isolated_config_root: Path) -> None:
-    assert get_setting("core.dreaming") is None
+    assert get_setting("core.imagegen") is None
     assert not (isolated_config_root / "settings.jsonc").exists()
 
 
 def test_set_and_get_round_trip(isolated_config_root: Path) -> None:
-    set_setting("core.dreaming", {"enabled": True, "min_turns": 5})
-    assert get_setting("core.dreaming") == {"enabled": True, "min_turns": 5}
+    set_setting("core.imagegen", {"enabled": True, "min_turns": 5})
+    assert get_setting("core.imagegen") == {"enabled": True, "min_turns": 5}
 
 
 def test_set_preserves_other_groups(isolated_config_root: Path) -> None:
-    set_setting("core.dreaming", {"enabled": True})
+    set_setting("core.sampleGroup", {"enabled": True})
     set_setting("core.imagegen", {"enabled": False, "model": "gpt-5"})
     set_setting("lamtools.modelRouting", {"routes": {"core": {"model_id": "m1"}}})
 
     data = __import__("json").loads((isolated_config_root / "settings.jsonc").read_text(encoding="utf-8"))
-    assert data["core"]["dreaming"] == {"enabled": True}
+    assert data["core"]["sampleGroup"] == {"enabled": True}
     assert data["core"]["imagegen"] == {"enabled": False, "model": "gpt-5"}
     assert data["lamtools"]["modelRouting"]["routes"]["core"]["model_id"] == "m1"
 
 
 def test_set_overwrites_namespace_value(isolated_config_root: Path) -> None:
-    set_setting("core.dreaming", {"enabled": True, "min_turns": 3})
-    set_setting("core.dreaming", {"enabled": False})
-    assert get_setting("core.dreaming") == {"enabled": False}
+    set_setting("core.imagegen", {"enabled": True, "min_turns": 3})
+    set_setting("core.imagegen", {"enabled": False})
+    assert get_setting("core.imagegen") == {"enabled": False}
 
 
 def test_delete_removes_namespace(isolated_config_root: Path) -> None:
-    set_setting("core.dreaming", {"enabled": True})
-    assert delete_setting("core.dreaming") is True
-    assert get_setting("core.dreaming") is None
-    assert delete_setting("core.dreaming") is False
+    set_setting("core.imagegen", {"enabled": True})
+    assert delete_setting("core.imagegen") is True
+    assert get_setting("core.imagegen") is None
+    assert delete_setting("core.imagegen") is False
 
 
 def test_delete_removes_group_when_last_key(isolated_config_root: Path) -> None:
-    set_setting("core.dreaming", {"enabled": True})
-    delete_setting("core.dreaming")
+    set_setting("core.imagegen", {"enabled": True})
+    delete_setting("core.imagegen")
     data = __import__("json").loads((isolated_config_root / "settings.jsonc").read_text(encoding="utf-8"))
-    assert "core" not in data or "dreaming" not in data["core"]
+    assert "core" not in data or "imagegen" not in data["core"]
 
 
 def test_jsonc_comments_and_trailing_commas_are_tolerated(isolated_config_root: Path) -> None:
@@ -56,12 +56,12 @@ def test_jsonc_comments_and_trailing_commas_are_tolerated(isolated_config_root: 
     path.write_text(
         '{\n'
         '  "core": {\n'
-        '    "dreaming": { "enabled": true, }, // trailing comma + comment\n'
+        '    "imagegen": { "enabled": true, }, // trailing comma + comment\n'
         '  },\n'
         '}\n',
         encoding="utf-8",
     )
-    assert get_setting("core.dreaming") == {"enabled": True}
+    assert get_setting("core.imagegen") == {"enabled": True}
 
 
 @pytest.mark.parametrize("content", ["{ broken", "[]"])
@@ -73,12 +73,12 @@ def test_set_preserves_malformed_settings_before_recovery(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
-    set_setting("core.dreaming", {"enabled": True})
+    set_setting("core.imagegen", {"enabled": True})
 
     backups = list(path.parent.glob("settings.jsonc.corrupt-*.bak"))
     assert len(backups) == 1
     assert backups[0].read_text(encoding="utf-8") == content
-    assert get_setting("core.dreaming") == {"enabled": True}
+    assert get_setting("core.imagegen") == {"enabled": True}
 
 
 def test_concurrent_updates_preserve_every_namespace(isolated_config_root: Path) -> None:
@@ -104,7 +104,7 @@ def test_failed_corrupt_backup_blocks_overwrite(
 
     monkeypatch.setattr(Path, "rename", fail_rename)
     with pytest.raises(PermissionError, match="backup denied"):
-        set_setting("core.dreaming", {"enabled": True})
+        set_setting("core.imagegen", {"enabled": True})
     assert path.read_text(encoding="utf-8") == "{ broken"
 
 

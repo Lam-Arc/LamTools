@@ -1560,35 +1560,64 @@ async def test_core_cli_run_loads_builtin_office_skill_outside_repo(tmp_path: Pa
     assert all('Skill "office-documents" not found' not in content for content in event_contents)
 
 
-def test_core_cli_memory_dream_config_writes_settings_jsonc(isolated_config_root: Path) -> None:
-    assert core_cli.main(["memory", "dream", "config", "--enabled", "true", "--min-turns", "5"]) == 0
-    path = isolated_config_root / "settings.jsonc"
-    assert path.is_file()
-    value = json.loads(path.read_text(encoding="utf-8"))["core"]["dreaming"]
-    assert value["enabled"] is True
-    assert value["min_turns"] == 5
+def test_core_cli_memory_write_read_tree(tmp_path: Path, isolated_config_root: Path, capsys) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+
+    assert core_cli.main(
+        ["memory", "write", "notes/a.md", "--content", "# A\n", "--work-root", str(work)]
+    ) == 0
+    assert (work / ".lam" / "memory" / "notes" / "a.md").read_text(encoding="utf-8") == "# A\n"
+
+    assert core_cli.main(["memory", "read", "notes/a.md", "--work-root", str(work)]) == 0
+    assert "# A" in capsys.readouterr().out
+
+    assert core_cli.main(["memory", "tree", "--work-root", str(work)]) == 0
+    assert "notes/a.md" in capsys.readouterr().out
 
 
-def test_core_cli_memory_dream_show_reports_saved_settings(isolated_config_root: Path, capsys) -> None:
-    _write_settings_jsonc(isolated_config_root, "core.dreaming", {"enabled": True, "min_turns": 7})
+def test_core_cli_memory_reveal_opens_the_folder(
+    tmp_path: Path, isolated_config_root: Path, monkeypatch, capsys
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    opened: list[str] = []
+    monkeypatch.setattr(
+        "lamtools_core.attachment.files.open_with_default_app",
+        lambda path: opened.append(str(path)),
+    )
 
-    rc = core_cli.main(["memory", "dream", "show"])
-    assert rc == 0
-    captured = capsys.readouterr()
-    assert "enabled:  yes" in captured.out
-    assert "min_turns: 7" in captured.out
+    assert core_cli.main(["memory", "reveal", "--work-root", str(work)]) == 0
+
+    expected = work / ".lam" / "memory"
+    assert opened == [str(expected)]
+    assert str(expected) in capsys.readouterr().out
 
 
-def test_core_cli_memory_dream_show_defaults_when_absent(capsys) -> None:
-    rc = core_cli.main(["memory", "dream", "show"])
-    assert rc == 0
-    captured = capsys.readouterr()
-    assert "enabled:  no" in captured.out
-    assert "min_turns: 3" in captured.out
+def test_core_cli_memory_global_flag_writes_config_tier(isolated_config_root: Path) -> None:
+    assert core_cli.main(["memory", "write", "facts.md", "--content", "shared", "--global"]) == 0
+
+    assert (isolated_config_root / "memory" / "facts.md").read_text(encoding="utf-8") == "shared"
 
 
-def test_core_cli_memory_dream_config_validates_min_turns(capsys) -> None:
-    rc = core_cli.main(["memory", "dream", "config", "--min-turns", "0"])
+def test_core_cli_memory_rejects_path_escape(tmp_path: Path, isolated_config_root: Path, capsys) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+
+    rc = core_cli.main(["memory", "read", "../escape.md", "--work-root", str(work)])
+
+    assert rc == 1
+    assert ".." in capsys.readouterr().err
+
+
+def test_core_cli_memory_refuses_generated_index(tmp_path: Path, isolated_config_root: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+
+    rc = core_cli.main(
+        ["memory", "write", "INDEX.md", "--content", "x", "--work-root", str(work)]
+    )
+
     assert rc == 1
 
 
@@ -1682,3 +1711,44 @@ async def test_core_cli_plugin_install_requires_confirmation_without_yes(monkeyp
     args = parser.parse_args(["plugin", "install", "local", str(tmp_path / "demo")])
     assert await args.func(args) == 1  # 用户拒绝 → 退出码 1，未调用 operation
     assert calls == []
+
+
+def test_core_cli_plan_library_commands_run_to_completion(tmp_path: Path, capsys) -> None:
+    """Every plan-library subcommand must exit 0 and actually act on disk.
+
+    The dispatcher awaits ``args.func(args)``; a synchronous handler raises
+    "An asyncio.Future, a coroutine or an awaitable is required", so a working
+    command has to be an awaitable. The earlier synchronous handlers ran their
+    side effect and then reported failure, which read as "the library cannot
+    create folders" wherever the exit code was trusted.
+    """
+    work_root = str(tmp_path)
+
+    assert main(["plan-library", "folder", "归档", "--work-root", work_root]) == 0
+    assert main(["plan-library", "create", "实验方案", "--folder", "归档", "--work-root", work_root]) == 0
+    assert (tmp_path / "方案" / "归档" / "实验方案.md").is_file()
+
+    assert main(["plan-library", "list", "--work-root", work_root]) == 0
+    assert "方案/归档/实验方案.md" in capsys.readouterr().out
+
+    # 夹内方案：库内相对路径与扫描给出的完整路径都要能定位到同一份。
+    for spelling in ("归档/实验方案.md", "方案/归档/实验方案.md"):
+        assert main(["plan-library", "show", spelling, "--work-root", work_root]) == 0
+        assert "实验方案" in capsys.readouterr().out
+    # 根上的方案仍然可以用裸文件名。
+    assert main(["plan-library", "create", "根方案", "--work-root", work_root]) == 0
+    assert main(["plan-library", "show", "根方案.md", "--work-root", work_root]) == 0
+    assert "根方案" in capsys.readouterr().out
+    assert main(["plan-library", "show", "../逃逸.md", "--work-root", work_root]) == 1
+
+    assert main(["plan-library", "favorite", "方案/归档/实验方案.md", "--work-root", work_root]) == 0
+    assert "收藏: true" in (tmp_path / "方案" / "归档" / "实验方案.md").read_text(encoding="utf-8")
+    assert main(["plan-library", "favorite", "方案/归档/实验方案.md", "--off", "--work-root", work_root]) == 0
+
+    assert main(["plan-library", "rename", "方案/归档/实验方案.md", "改名后", "--work-root", work_root]) == 0
+    assert main(["plan-library", "move", "方案/归档/改名后.md", "--work-root", work_root]) == 0
+    assert (tmp_path / "方案" / "改名后.md").is_file()
+
+    assert main(["plan-library", "delete", "方案/改名后.md", "--work-root", work_root]) == 0
+    assert not (tmp_path / "方案" / "改名后.md").exists()
+    assert main(["plan-library", "delete", "不存在.md", "--work-root", work_root]) == 1

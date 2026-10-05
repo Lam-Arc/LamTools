@@ -140,11 +140,3 @@ export {
   type CoreUpdateStatus,
 } from './useCoreUpdateState'
 
-export {
-  useCheckpoints,
-  type CoreCheckpointNode,
-  type CoreCheckpointRequest,
-  type CoreCheckpointRestoreResult,
-  type CoreCheckpointRestoreScope,
-  type CoreCheckpointState,
-} from './useCheckpoints'

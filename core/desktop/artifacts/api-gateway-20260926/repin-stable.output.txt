@@ -1,0 +1,60 @@
+=== 1) pull the stable image ===
+  pulled calciumion/new-api:v0.13.2
+  digest: calciumion/new-api@sha256:0c6aa7afce4747f0fc4fab9c7934d7c2e4b69fda6844065acca6a5e1bf258506
+=== 2) current (rc) state, for the record ===
+lamtools-api-cache redis:7-alpine Up 21 minutes (healthy)
+lamtools-api-db postgres:16-alpine Up 21 minutes (healthy)
+lamtools-api-gateway calciumion/new-api:v1.0.0-rc.40 Up 3 minutes
+=== 3) stop the stack and drop the rc-era database ===
+ Container lamtools-api-db Removed 
+ Container lamtools-api-cache Stopped 
+ Container lamtools-api-cache Removing 
+ Container lamtools-api-cache Removed 
+ Network lamtools-api_internal Removing 
+ Volume lamtools-api_pgdata Removing 
+ Volume lamtools-api_pgdata Removed 
+ Network lamtools-api_internal Removed 
+=== 4) re-pin the image tag ===
+  12:    image: calciumion/new-api:v0.13.2
+  52:    image: postgres:16-alpine
+  89:    image: redis:7-alpine
+  compose sha256: f9a555db422b46131989cf5ac394e5bab286db0092d2189de50c290470691289  /opt/lamtools-api/docker-compose.yml
+=== 5) rotate the administrator password ===
+  credential file rotated: mode 600
+=== 6) start the stable stack ===
+ Container lamtools-api-db Waiting 
+ Container lamtools-api-cache Waiting 
+ Container lamtools-api-db Healthy 
+ Container lamtools-api-cache Healthy 
+ Container lamtools-api-gateway Starting 
+ Container lamtools-api-gateway Started 
+ Container lamtools-api-cache Waiting 
+ Container lamtools-api-gateway Waiting 
+ Container lamtools-api-db Waiting 
+ Container lamtools-api-db Healthy 
+ Container lamtools-api-gateway Healthy 
+ Container lamtools-api-cache Healthy 
+lamtools-api-cache redis:7-alpine Up 6 seconds (healthy)
+lamtools-api-db postgres:16-alpine Up 7 seconds (healthy)
+lamtools-api-gateway calciumion/new-api:v0.13.2 Up Less than a second
+=== 7) wait for the API ===
+  HTTP 200 after 6s
+  last code: 200
+  version: v0.13.2
+  setup: False
+  register_enabled: None
+=== 8) first-run setup on the stable build ===
+  setup state: {'status': False, 'root_init': False, 'database_type': 'postgres'} | success: True
+  POST /api/setup -> 200
+  success: True | message: 系统初始化成功
+=== 9) determine the working auth method ===
+  POST /api/user/login -> 200
+  login success: True | message: 
+  login data keys: ['display_name', 'group', 'id', 'role', 'status', 'username']
+  --- session cookie attempt ---
+  cookie /api/user/self -> 401
+  no token in login response (session-cookie build)
+=== 10) registration-related option keys ===
+  option read success: False
+  count: 0
+=== done ===

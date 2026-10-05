@@ -38,6 +38,12 @@ from lamtools_core.tool.outside_access import (
     outside_access_grant,
     outside_access_granted,
 )
+from lamtools_core.tool.memory_tools import (
+    MEMORY_TOOL_DESCRIPTION,
+    MEMORY_TOOL_NAME,
+    MEMORY_TOOL_SCHEMA,
+    make_memory_handler,
+)
 from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW, HARD_BLOCK, PermissionTier
 from lamtools_core.tool.web_tools import make_web_fetch_handler
 from lamtools_core.tool.search import build_web_search_handler
@@ -154,9 +160,12 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "search_files": AUTO_ALLOW,
     "search_content": AUTO_ALLOW,
     "load_skill": AUTO_ALLOW,
+    MEMORY_TOOL_NAME: AUTO_ALLOW,
     "write_file": ASK_USER,
     "edit_file": ASK_USER,
     "run_command": ASK_USER,
+    "list_processes": AUTO_ALLOW,
+    "kill_process": AUTO_ALLOW,
     "git_status": AUTO_ALLOW,
     "git_diff": AUTO_ALLOW,
     "web_search": AUTO_ALLOW,
@@ -178,9 +187,12 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "search_files",
     "search_content",
     "load_skill",
+    MEMORY_TOOL_NAME,
     "write_file",
     "edit_file",
     "run_command",
+    "list_processes",
+    "kill_process",
     "git_status",
     "git_diff",
     "web_search",
@@ -202,9 +214,12 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "search_files": "file_read",
     "search_content": "file_read",
     "load_skill": "skill",
+    MEMORY_TOOL_NAME: "memory",
     "write_file": "file_write",
     "edit_file": "file_write",
     "run_command": "command",
+    "list_processes": "command",
+    "kill_process": "command",
     "git_status": "git",
     "git_diff": "git",
     "web_search": "web",
@@ -256,6 +271,7 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
         {"type": "sensitive_pattern", "message": "Blocked: path contains sensitive pattern"},
         {"type": "edit_rejected", "message": "EDIT REJECTED: {reason}"},
     ],
+    "memory": [],
     "run_command": [
         {"type": "command_rejected", "message": "Command rejected: {reason}"},
         {"type": "command_failed", "message": "Command failed with exit code {code}"},
@@ -295,11 +311,14 @@ DEFAULT_TOOL_RECOVERY: dict[str, str] = {
     "read_file": "Check path exists, use list_dir to find correct path",
     "write_file": "Check path bounds and content; on file_version_changed, re-read before retrying",
     "edit_file": "Read file first; on a version or match conflict, re-read and use exact context or occurrence",
+    "memory": "List the tier first; paths are relative to the memory root and INDEX.md is generated and read-only",
     "search_content": "Use an exact substring from the file or narrow the search path",
     "run_command": (
         "Fix command syntax, check platform compatibility, or increase timeout. For local preview servers, use "
         "recommended_action from tool metadata; for port_in_use choose a free port instead of retrying the same command."
     ),
+    "list_processes": "Use a returned pid with kill_process; log paths point at the workspace background log directory",
+    "kill_process": "Only pids from list_processes can be terminated; a not_owned result means the process predates the last backend restart",
     "web_search": "Retry with simpler query, try different search terms",
     "web_fetch": "Check URL validity, try alternative URL",
     "generate_image": (
@@ -453,11 +472,17 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        "name": MEMORY_TOOL_NAME,
+        "description": MEMORY_TOOL_DESCRIPTION,
+        "input_schema": MEMORY_TOOL_SCHEMA,
+    },
+    {
         "name": "run_command",
         "description": (
             "Run a shell command inside the workspace. Servers and watchers must use background=true; "
             "do not append &, nohup, or start. Results separately report process_state, shell_state, "
-            "and readiness_state."
+            "and readiness_state. persistent=true (together with background=true) registers a long-lived "
+            "process that survives turn end; check it with list_processes and terminate it with kill_process."
         ),
         "input_schema": _schema(
             {
@@ -467,10 +492,33 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                     "type": "boolean",
                     "description": "Start a server/watcher as a tracked background process instead of shell-level detachment",
                 },
+                "persistent": {
+                    "type": "boolean",
+                    "description": "Register the background process as long-lived: it survives turn end, shows in the session process list, and keeps running until killed or the app exits",
+                },
                 "readiness_url": {"type": "string", "description": "HTTP URL to check when background=true"},
                 "readiness_text": {"type": "string", "description": "Optional text expected at readiness_url"},
             },
             ["command"],
+        ),
+    },
+    {
+        "name": "list_processes",
+        "description": (
+            "List background processes registered for this session, including long-lived ones that keep "
+            "running after the turn ends. Returns pid, liveness, command and log paths."
+        ),
+        "input_schema": _schema({}),
+    },
+    {
+        "name": "kill_process",
+        "description": (
+            "Terminate a background process that was started in this session. The pid must be registered "
+            "in this session's process list; unrelated processes cannot be terminated."
+        ),
+        "input_schema": _schema(
+            {"pid": {"type": "integer", "description": "Process id from list_processes"}},
+            ["pid"],
         ),
     },
     {
@@ -2060,6 +2108,7 @@ class CoreToolbox:
         handlers: dict[str, ToolHandler] = {
             **read_tools.as_dict(),
             "load_skill": load_skill,
+            MEMORY_TOOL_NAME: make_memory_handler(self.work_root),
             "write_file": make_write_file_handler(
                 self.work_root,
                 allow_access_outside_workdir=self._outside_access_allowed,
@@ -2069,6 +2118,8 @@ class CoreToolbox:
                 allow_access_outside_workdir=self._outside_access_allowed,
             ),
             "run_command": command_handlers.run_command,
+            "list_processes": command_handlers.list_processes,
+            "kill_process": command_handlers.kill_process,
             "git_status": make_git_status_handler(
                 self.work_root,
                 command_timeout=command_timeout,

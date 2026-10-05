@@ -4410,6 +4410,123 @@ class TestKernelCancellation:
         assert "pending_waiting_request" not in saved.metadata
 
     @pytest.mark.asyncio
+    async def test_external_task_cancel_keeps_this_turns_history(self):
+        """Stop must keep what the turn had already produced.
+
+        The app layer's Stop cancels the run task outright
+        (``RuntimeTaskRegistry.request_cancel(force=True)``). Assistant replies
+        and tool results are still only in the in-memory history at that
+        moment, so the cancel path has to persist that list; reloading the
+        stored rows instead dropped them and the next message was sent with no
+        record of the stopped turn.
+        """
+
+        class ReplyThenBlockLLM:
+            """Answers the first call with a tool call, then blocks forever."""
+
+            def __init__(self) -> None:
+                self.calls = 0
+                self.second_call_started = asyncio.Event()
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(
+                        content="I will read the file first.",
+                        tool_calls=[
+                            LLMToolCall(id="c1", name="read_file", arguments={"path": "a.txt"})
+                        ],
+                    )
+                self.second_call_started.set()
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                reply="I will read the file first.",
+                tool_calls=[ToolCall(id="c1", name="read_file", arguments={"path": "a.txt"})],
+                decision="continue",
+            ),
+            MockKitStep(reply="all done", decision="done"),
+        ])
+        store = InMemoryRuntimeStateStore()
+        llm = ReplyThenBlockLLM()
+        kernel = _make_kernel(
+            kit,
+            llm_client=llm,
+            state_store=store,
+            policy=LoopPolicy(model_timeout_seconds=60, model_retries=1),
+        )
+
+        task = asyncio.create_task(kernel.run(_make_turn_input(session_id="stopped-turn-history")))
+        # Let step 0 finish (reply + tool result in history), then stop mid step 1.
+        await asyncio.wait_for(llm.second_call_started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        history = await store.get_history("stopped-turn-history")
+        assert [message["role"] for message in history] == ["user", "assistant", "tool"]
+        assert history[1]["content"] == "I will read the file first."
+        assert history[1]["tool_calls"][0]["id"] == "c1"
+        assert history[2]["tool_call_id"] == "c1"
+
+    @pytest.mark.asyncio
+    async def test_external_task_cancel_closes_an_unanswered_tool_call(self):
+        """Stop between a tool call and its result must not leave a dangling call.
+
+        Providers reject an assistant tool call with no matching tool message,
+        so the next run's history load has to close it. (Mobile fixed the same
+        contract in 7a95ea1c.)
+        """
+        tool_started = asyncio.Event()
+
+        class BlockingToolKit(MockRuntimeKit):
+            async def execute_tool(self, state, call):
+                tool_started.set()
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        kit = BlockingToolKit(steps=[
+            MockKitStep(
+                reply="reading",
+                tool_calls=[ToolCall(id="c1", name="read_file", arguments={"path": "a.txt"})],
+                decision="done",
+            ),
+        ])
+        store = InMemoryRuntimeStateStore()
+        kernel = _make_kernel(kit, state_store=store)
+
+        task = asyncio.create_task(kernel.run(_make_turn_input(session_id="stopped-dangling-call")))
+        await asyncio.wait_for(tool_started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # The assistant call is kept — only its result never arrived.
+        persisted = await store.get_history("stopped-dangling-call")
+        assert [message["role"] for message in persisted] == ["user", "assistant"]
+
+        # The next run loads it provider-safe: the call is answered.
+        seen: list[list[ChatMessage]] = []
+
+        class RecordingKit(MockRuntimeKit):
+            async def build_context(self, state, turn_input, history, step_index):
+                seen.append(list(history))
+                return await super().build_context(state, turn_input, history, step_index)
+
+        follow_up = RecordingKit(steps=[MockKitStep(reply="ok", decision="done")])
+        await _make_kernel(follow_up, state_store=store).run(_make_turn_input(
+            user_message="continue",
+            session_id="stopped-dangling-call",
+        ))
+
+        assert [message.role for message in seen[0]] == ["user", "assistant", "tool", "user"]
+        closing = seen[0][2]
+        assert closing.tool_call_id == "c1"
+        assert "interrupted" in str(closing.content)
+
+    @pytest.mark.asyncio
     async def test_cancel_stops_loop(self):
         """Calling cancel() during an async gap causes the kernel to stop with error='cancelled'."""
         cancel_event = asyncio.Event()

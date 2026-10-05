@@ -195,17 +195,6 @@ export class StandaloneConfigStore {
       await this.persist()
       return { agents_md: { content: globalContext.instructions, exists: true } }
     }
-    if (method === 'config.memory.get') {
-      const globalContext = state.settings['core.globalContext'] || {}
-      return { content: stringSetting(globalContext.memory), exists: hasOwn(globalContext, 'memory') }
-    }
-    if (method === 'config.memory.set') {
-      const globalContext = { ...normalizeGlobalContext(state.settings['core.globalContext'] || {}) }
-      globalContext.memory = String(params.content || '')
-      state.settings['core.globalContext'] = globalContext
-      await this.persist()
-      return { content: globalContext.memory, exists: true }
-    }
     if (method === 'config.load_context.get') {
       const exists = hasOwn(state.settings, 'core.loadContext')
       return { ...normalizeLoadContext(state.settings['core.loadContext'] || {}), exists }
@@ -900,7 +889,7 @@ const DEFAULT_MODEL_RETRY_CONFIG: Record<string, unknown> = {
 
 function normalizeGlobalContext(value: unknown): Record<string, unknown> {
   const raw = isRecord(value) ? value : {}
-  return { instructions: stringSetting(raw.instructions), memory: stringSetting(raw.memory) }
+  return { instructions: stringSetting(raw.instructions) }
 }
 
 function normalizeLoadContext(value: unknown): Record<string, unknown> {

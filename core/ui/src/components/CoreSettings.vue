@@ -10,7 +10,10 @@
           title="Sunday 设置"
           :initial-section="props.section"
           :settings-theme-style="settingsThemeStyle"
+          :hide-nav="props.hideNav"
+          :active-section="props.activeSection"
           @close="requestCloseSettings"
+          @section-change="$emit('section-change', $event)"
         >
           <template #default="{ activeSection }">
       <section v-if="activeSection === 'models'" class="settings-panel models-panel">
@@ -350,7 +353,6 @@
 
       <section v-if="activeSection === 'permissions'" class="settings-panel permissions-panel">
         <header class="settings-title">
-          <h1>权限</h1>
           <p>控制新会话的默认权限；当前任务可以在输入框中临时调整。</p>
         </header>
 
@@ -501,8 +503,8 @@
 
       <section v-if="activeSection === 'agents'" class="settings-panel">
         <header class="settings-title">
-          <h1>上下文与记忆</h1>
-          <p>全局上下文三件套，对所有项目生效。注入顺序：全局 AGENTS.md（优先级 5）→ 全局 memory.md（15）→ 项目 AGENTS.md / MEMORY.md（10 / 20）；load_context 的 addition/except 全局叠加到每个工作区。</p>
+          <h1>上下文</h1>
+          <p>全局上下文。注入顺序：全局 AGENTS.md（优先级 5）→ 项目 AGENTS.md（10）；load_context 的 addition/except 全局叠加到每个工作区。</p>
         </header>
         <div class="settings-surface settings-surface--stack">
         <article class="setting-card">
@@ -526,33 +528,8 @@
             :disabled="agentsLoading"
           />
           <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
-          <p v-if="commandShellPlatform === 'mobile'" class="hook-meta">保存在此设备的应用私有 SQLite 配置中。项目级规则请在「项目设置 → 项目规则」内编辑，两者会相加注入系统提示词。</p>
-          <p v-else class="hook-meta">保存到 <code>.lam/core/config/AGENTS.md</code>（统一配置目录）。项目级规则请在「项目设置 → 项目规则」内编辑，两者会相加注入系统提示词。</p>
-        </article>
-
-        <article class="setting-card">
-          <div class="subhead">
-            <span class="muted subhead-title">
-              全局记忆
-              <span v-if="commandShellPlatform === 'mobile'" class="subhead-sub">memory.md · 移动端全局记忆</span>
-              <span v-else class="subhead-sub">memory.md · .lam/core/config/</span>
-            </span>
-            <div class="subhead-actions">
-              <button class="text-btn" type="button" :disabled="memoryLoading" @click="fetchGlobalMemory">刷新</button>
-              <button class="text-btn" type="button" :disabled="memoryLoading || memorySaving" @click="saveGlobalMemory">保存</button>
-            </div>
-          </div>
-          <textarea
-            v-model="memoryDraft"
-            class="guide-editor"
-            rows="10"
-            spellcheck="false"
-            :placeholder="memoryLoading ? '加载中…' : '# 全局记忆\n跨项目长期记忆，以 memory 优先级注入每个会话；工作区 MEMORY.md 会叠加在它之后…'"
-            :disabled="memoryLoading"
-          />
-          <p v-if="memoryError" class="skill-error" role="alert">{{ memoryError }}</p>
-          <p v-if="commandShellPlatform === 'mobile'" class="hook-meta">保存在此设备的应用私有 SQLite 配置中，仅供本机移动端工作区使用。</p>
-          <p v-else class="hook-meta">保存到 <code>.lam/core/config/memory.md</code>。CLI：<code>core memory get/set</code>。</p>
+          <p v-if="commandShellPlatform === 'mobile'" class="hook-meta">保存在此设备的应用私有 SQLite 配置中。项目级规则请在「项目设置 → 项目」内编辑，两者会相加注入系统提示词。</p>
+          <p v-else class="hook-meta">保存到 <code>.lam/core/config/AGENTS.md</code>（统一配置目录）。项目级规则请在「项目设置 → 项目」内编辑，两者会相加注入系统提示词。</p>
         </article>
 
         <article class="setting-card">
@@ -601,7 +578,7 @@
                 v-model="contextExceptDraft"
                 class="lc-input lc-name"
                 spellcheck="false"
-                placeholder="如 AGENTS.md / MEMORY.md"
+                placeholder="如 AGENTS.md / CONTEXT.md"
                 :disabled="contextLoading"
                 @keydown.enter.prevent="addContextExcept"
               />
@@ -612,55 +589,6 @@
           <p v-if="contextError" class="skill-error" role="alert">{{ contextError }}</p>
           <p v-if="commandShellPlatform === 'mobile'" class="hook-meta">保存在此设备的应用私有 SQLite 配置中，全局规则叠加到本机工作区。</p>
           <p v-else class="hook-meta">保存到 <code>.lam/core/config/load_context.jsonc</code>，全局叠加到每个工作区（工作区自己的 load_context.jsonc 在其上叠加）。CLI：<code>core load-context get/set</code>。</p>
-        </article>
-
-        <article class="setting-card">
-          <div class="subhead">
-            <span class="muted subhead-title">
-              记忆整理
-              <span class="subhead-sub">Dreaming · 自动沉淀会话记忆</span>
-            </span>
-            <div class="subhead-actions">
-              <button class="text-btn" type="button" :disabled="dreamingLoading" @click="fetchDreamingSettings">刷新</button>
-            </div>
-          </div>
-          <div class="dream-row">
-            <div class="dream-toggle">
-          <button
-            type="button"
-            class="toggle-btn"
-            :class="{ 'is-on': dreamingEnabled }"
-            :aria-label="'自动记忆整理'"
-            :aria-pressed="dreamingEnabled ? 'true' : 'false'"
-            :disabled="dreamingSaving"
-            @click="toggleDreamingSettings"
-          >
-            <ToggleRight v-if="dreamingEnabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
-          </button>
-              <span class="dream-toggle-label">自动记忆整理</span>
-            </div>
-            <span class="muted">每轮会话结束时自动把值得长期保留的内容蒸馏到工作区 MEMORY.md</span>
-          </div>
-          <div class="dream-row">
-            <label class="dream-min-turns" for="dream-min-turns-input">
-              最小触发间隔（轮）
-            </label>
-            <input
-              id="dream-min-turns-input"
-              v-model.number="dreamingMinTurns"
-              type="number"
-              class="lc-input lc-priority"
-              min="1"
-              max="20"
-              :disabled="dreamingLoading"
-              @input="markSettingsDirty"
-            />
-            <button class="small-btn quiet" type="button" :disabled="dreamingLoading || dreamingSaving" @click="saveDreamingSettings">保存</button>
-          </div>
-          <p v-if="dreamingError" class="skill-error" role="alert">{{ dreamingError }}</p>
-          <p v-if="commandShellPlatform === 'mobile'" class="hook-meta">整理后的内容写入当前工作区的 MEMORY.md，下个会话自动加载；短期记忆保存在此设备的应用私有 SQLite 中。</p>
-          <p v-else class="hook-meta">内容写入 <code>&lt;workRoot&gt;/MEMORY.md</code>，下个会话自动加载；<code>/dream</code> 命令始终可手动触发；短期记忆存 SQLite（<code>core_memories</code> 表）。CLI：<code>core memory dream show/config</code>。</p>
         </article>
 
         <article class="setting-card" data-context-compaction-card>
@@ -1073,6 +1001,14 @@
           </div>
         </div>
       </div>
+
+    <CoreConfirmDialog
+      :open="pendingCloseSettings"
+      title="关闭设置？"
+      detail="有未保存的修改"
+      @cancel="pendingCloseSettings = false"
+      @confirm="confirmCloseSettings"
+    />
 </template>
 
 <script setup lang="ts">
@@ -1098,7 +1034,8 @@ import {
 } from '../helpers/theme'
 import { openUpdatePage } from '../helpers/update'
 import { openExternalUrl } from '../helpers/openUrl'
-import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
+import SettingsShell from './SettingsShell.vue'
+import { CORE_SETTINGS_SECTIONS, type SettingsSection } from './settingsSections'
 import ThemeEditor from './ThemeEditor.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
 import CoreLoadToolsEditor from './CoreLoadToolsEditor.vue'
@@ -1112,6 +1049,7 @@ import MobileControlPanel, {
 } from './MobileControlPanel.vue'
 import UiSelect from './UiSelect.vue'
 import CoreModelCatalogViewToggle from './CoreModelCatalogViewToggle.vue'
+import CoreConfirmDialog from './CoreConfirmDialog.vue'
 import {
   readUpdateAutoCheck,
   setUpdateAutoCheck,
@@ -1191,6 +1129,10 @@ const props = withDefaults(defineProps<{
   catalogView?: CoreModelCatalogView
   /** Section the settings surface opens on (e.g. the rail's account entry). */
   section?: string
+  /** Hide the built-in left nav: the host renders it in the workspace drawer. */
+  hideNav?: boolean
+  /** Controlled section from the host's drawer nav. */
+  activeSection?: string
   density: CoreSettingsDensity
   theme: ThemeData
   contentWidth?: number
@@ -1220,6 +1162,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   close: []
+  'section-change': [id: string]
   'update:density': [density: CoreSettingsDensity]
   'update:content-width': [width: number]
   'update:theme-mode': [mode: ThemeMode]
@@ -1258,16 +1201,7 @@ const emit = defineEmits<{
   'remote-account-logout': []
 }>()
 
-const sections: SettingsSection[] = [
-  { id: 'models', label: '模型与供应商', icon: 'database' },
-  { id: 'appearance', label: '界面', icon: 'palette' },
-  { id: 'loadtools', label: '工具模式', icon: 'list-checks' },
-  { id: 'permissions', label: '权限', icon: 'lock' },
-  { id: 'mobile-control', label: '手机控制', icon: 'smartphone' },
-  { id: 'agents', label: '上下文与记忆', icon: 'file-code' },
-  { id: 'subagent', label: 'Sub agent', icon: 'bot' },
-  { id: 'about', label: '关于与更新', icon: 'info' },
-]
+const sections = CORE_SETTINGS_SECTIONS
 
 // ── Update check state (共享实例由 App.vue 传入以便启动时自动检查；缺省自建) ──
 const updateAutoCheck = ref(readUpdateAutoCheck())
@@ -1409,40 +1343,6 @@ async function saveGlobalAgentsMd() {
   }
 }
 
-// ── Global memory.md (上下文与记忆) editor state ──
-const memoryDraft = ref('')
-const memoryLoading = ref(false)
-const memorySaving = ref(false)
-const memoryError = ref('')
-
-async function fetchGlobalMemory() {
-  const rpc = props.requestRpc || defaultRequestRpc
-  memoryLoading.value = true
-  memoryError.value = ''
-  try {
-    const result = await rpc('config.memory.get')
-    memoryDraft.value = String(result.content ?? '')
-  } catch (e) {
-    memoryError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    memoryLoading.value = false
-  }
-}
-
-async function saveGlobalMemory() {
-  const rpc = props.requestRpc || defaultRequestRpc
-  memorySaving.value = true
-  memoryError.value = ''
-  try {
-    await rpc('config.memory.set', { content: memoryDraft.value })
-    await fetchGlobalMemory()
-  } catch (e) {
-    memoryError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    memorySaving.value = false
-  }
-}
-
 // ── Global load_context.jsonc (上下文与记忆) editor state ──
 interface ContextAdditionDraft {
   name: string
@@ -1505,60 +1405,6 @@ async function saveLoadContext() {
   }
 }
 
-// ── Dreaming settings (记忆整理, app_settings core.dreaming) ──
-const dreamingEnabled = ref(false)
-const dreamingMinTurns = ref(3)
-const dreamingLoading = ref(false)
-const dreamingSaving = ref(false)
-const dreamingError = ref('')
-
-async function fetchDreamingSettings() {
-  const rpc = props.requestRpc || defaultRequestRpc
-  dreamingLoading.value = true
-  dreamingError.value = ''
-  try {
-    const result = await rpc('settings.get', { namespace: 'core.dreaming' })
-    const value = (result.value ?? {}) as Record<string, unknown>
-    dreamingEnabled.value = Boolean(value.enabled)
-    const rawTurns = Number(value.min_turns ?? 3)
-    dreamingMinTurns.value = Number.isFinite(rawTurns) && rawTurns >= 1 ? Math.floor(rawTurns) : 3
-  } catch (e) {
-    dreamingError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    dreamingLoading.value = false
-  }
-}
-
-async function saveDreamingSettings() {
-  const rpc = props.requestRpc || defaultRequestRpc
-  dreamingSaving.value = true
-  dreamingError.value = ''
-  try {
-    // The input is not inside a <form>, so native min/max never fire —
-    // enforce the domain here (audit 17 S3).
-    const rawTurns = Math.floor(Number(dreamingMinTurns.value))
-    const minTurns = Number.isFinite(rawTurns) ? Math.min(20, Math.max(1, rawTurns)) : 3
-    dreamingMinTurns.value = minTurns
-    await rpc('settings.update', {
-      namespace: 'core.dreaming',
-      value: { enabled: dreamingEnabled.value, min_turns: minTurns },
-    })
-    settingsDirty.value = false
-    return true
-  } catch (e) {
-    dreamingError.value = e instanceof Error ? e.message : String(e)
-    return false
-  } finally {
-    dreamingSaving.value = false
-  }
-}
-
-async function toggleDreamingSettings() {
-  const previous = dreamingEnabled.value
-  dreamingEnabled.value = !previous
-  if (!await saveDreamingSettings()) dreamingEnabled.value = previous
-}
-
 // ── Context compaction settings (上下文压缩, core.contextCompaction) ──
 const CONTEXT_COMPACTION_DEFAULT_RETAINED_STEPS = 0
 const CONTEXT_COMPACTION_MIN_RETAINED_STEPS = 0
@@ -1602,7 +1448,7 @@ async function saveContextCompactionSettings() {
   contextCompactionError.value = ''
   try {
     // Native min/max validation does not run because this row is not a form;
-    // normalize the value before persisting it (the same guard as Dreaming).
+    // normalize the value before persisting it.
     const retainedSteps = normalizeContextCompactionRetainedSteps(contextCompactionRetainedSteps.value)
     contextCompactionRetainedSteps.value = retainedSteps
     await rpc('settings.update', {
@@ -2182,8 +2028,8 @@ function getTextColor(area: ThemeArea): string {
 const presets = THEME_PRESETS
 
 // ── Unsaved-changes guard (audit 17 S3) ─────────────────────────
-// Any open editor, or a settings form (such as Dreaming or context
-// compaction) touched after the last save, makes a close without confirmation
+// Any open editor, or a settings form (such as context compaction) touched
+// after the last save, makes a close without confirmation
 // risky (Esc / backdrop click / header close all discard silently today).
 const settingsDirty = ref(false)
 const editorOverlayEl = ref<HTMLElement | null>(null)
@@ -2194,8 +2040,18 @@ function markSettingsDirty() {
   settingsDirty.value = true
 }
 
-function requestCloseSettings() {
-  if (settingsDirty.value && !window.confirm('有未保存的修改，确定关闭设置吗？')) return
+const pendingCloseSettings = ref(false)
+
+function requestCloseSettings(): void {
+  if (settingsDirty.value) {
+    pendingCloseSettings.value = true
+    return
+  }
+  emit('close')
+}
+
+function confirmCloseSettings(): void {
+  pendingCloseSettings.value = false
   emit('close')
 }
 
@@ -2231,9 +2087,7 @@ onMounted(() => {
     measureSettingsSurface()
   }
   void fetchGlobalAgentsMd()
-  void fetchGlobalMemory()
   void fetchLoadContext()
-  void fetchDreamingSettings()
   void fetchContextCompactionSettings()
   void fetchCommandShellSettings()
 })
@@ -2287,7 +2141,7 @@ onUnmounted(() => {
   width: 110px;
 }
 
-/* ── 记忆整理 (Dreaming) card ── */
+/* ── Settings row + toggle ── （.dream-* 为历史类名，被多张卡片共用） */
 .dream-row {
   display: flex;
   align-items: center;

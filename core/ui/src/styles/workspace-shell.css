@@ -27,26 +27,33 @@
    ========================================================================= */
 .workspace-shell {
   --left-card-width: var(--sidebar-width);
-  --left-overlap: 0px;
+  /* 会话栏与聊天区之间留 3px 间距（负 overlap 即让位）。 */
+  /* 描边之间的可见背景带 1px。 */
+  --left-overlap: -3px;
   --left-peek: 18px;
-  --main-left: var(--left-peek);
+  /* 面板与界面下沿的留白（背景色由此透出）。 */
+  --shell-bottom-inset: 6px;
+  /* 最左竖栏（整界面导航）：桌面常驻，移动端为 0 宽不参与几何。 */
+  --rail-width: var(--app-rail-width, 46px);
+  --main-left: calc(var(--left-peek) + var(--rail-width));
   --left-reveal: calc(var(--left-card-width) - var(--left-overlap));
   --left-visible-width: min(var(--left-card-width), var(--main-left));
-  --right-drawer-width: 292px;
+  /* 右侧栏 = 贴右缘的图标竖栏（46px），悬停浮出的卡片浮在内容之上，
+     不再挤压聊天区宽度。 */
+  --right-rail-width: 46px;
+  --right-drawer-width: var(--right-rail-width);
   --right-overlap: 0px;
-  --right-peek: 18px;
-  --right-panel-gap: 2px;
+  --right-peek: 6px;
   --main-right: var(--right-peek);
   --right-reveal: calc(var(--right-drawer-width) - var(--right-overlap));
   --main-x-padding: max(22px, 5vw);
   --content-width: 780px;
-  --stage-reveal: 0px;
   --keyboard-inset: 0px;
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   /* --native-keyboard-inset is published by a host whose window does not shrink
      with the keyboard (the Android shell runs edge-to-edge), where the shared
      viewport measurement cannot see it. Either source lifts the composer. */
-  --composer-bottom-offset: max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom));
+  --composer-bottom-offset: calc(max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom)) + var(--shell-bottom-inset, 6px));
   --composer-height: 120px;
   --composer-rest-bottom: 16px;
   --composer-clearance: 24px;
@@ -75,11 +82,48 @@
   color: var(--theme-backdrop-text);
 }
 
-.workspace-shell.left-open  { --main-left: var(--left-reveal); }
-.workspace-shell.right-open.right-pinned { --main-right: var(--right-reveal); }
-.workspace-shell.stage-open { --stage-reveal: var(--stage-height, 300px); }
-.workspace-shell.stage-open { --main-left: var(--left-reveal); }
-.workspace-shell.stage-open { --main-right: var(--right-reveal); }
+/* 会话栏与聊天区之间的可见背景带：垫一层聊天区底色（七成不透明的遮罩），
+   让两卡之间那道缝由纯背景色转为向聊天区的过渡，不再是一条硬边。
+   带宽 = 两卡间距 + 两侧朝内的圆角偏移（各自半径），并整体左移一个半径，
+   正好把两条圆角让出来的凹口一并盖住；上下两端各以一个圆角半径渐隐到全透明，
+   端头不留硬边。收起侧栏时间距为负，带宽归零。 */
+@media (min-width: 641px) {
+  .workspace-shell::before {
+    content: '';
+    position: absolute;
+    top: var(--titlebar-offset, 0px);
+    bottom: var(--shell-bottom-inset, 6px);
+    left: calc(var(--rail-width) + var(--left-card-width) - var(--workspace-panel-radius-inner));
+    width: max(0px, calc(
+      var(--main-left) - var(--rail-width) - var(--left-card-width)
+      + var(--workspace-panel-radius-inner) + var(--workspace-panel-radius-inner)
+    ));
+    background: var(--theme-main-background);
+    opacity: .7;
+    -webkit-mask-image: linear-gradient(to bottom,
+      transparent 0,
+      #000 var(--workspace-panel-radius-inner),
+      #000 calc(100% - var(--workspace-panel-radius-inner)),
+      transparent 100%);
+    mask-image: linear-gradient(to bottom,
+      transparent 0,
+      #000 var(--workspace-panel-radius-inner),
+      #000 calc(100% - var(--workspace-panel-radius-inner)),
+      transparent 100%);
+    pointer-events: none;
+  }
+}
+
+.workspace-shell.left-open  { --main-left: calc(var(--left-reveal) + var(--rail-width)); }
+.workspace-shell.right-open.right-pinned { --main-right: var(--right-peek); }
+
+/* 没有会话栏时（左右都收起的整界面态），聊天区左侧不再与大圆角相接，
+   整体回到和右侧一致的大圆角。 */
+@media (min-width: 641px) {
+  .workspace-shell:not(.left-open) .workspace-main {
+    border-radius: var(--workspace-panel-radius-outer);
+  }
+}
 
 /* The drawer backdrop is only needed while a gesture-opened drawer is active;
    its ≤640px surface rule lives in the responsive section below. */
@@ -89,11 +133,9 @@
 
 .workspace-shell.density-compact {
   --left-card-width: var(--sidebar-width);
-  --right-drawer-width: 272px;
 }
 .workspace-shell.density-loose {
   --left-card-width: var(--sidebar-width);
-  --right-drawer-width: 324px;
 }
 
 /* =========================================================================
@@ -138,15 +180,38 @@
     opacity var(--dur-base) ease;
 }
 
+/* 会话栏与聊天区同底色：不做分隔线，靠自身圆角面板与聊天卡分开
+   （外侧两角大圆角，朝向聊天区的内侧两角收白）。 */
 .drawer-left {
-  top: var(--titlebar-offset, 0px); bottom: 0; left: 0;
+  top: var(--titlebar-offset, 0px); bottom: var(--shell-bottom-inset, 6px); left: var(--rail-width);
   width: var(--left-visible-width);
-  border-radius: 0;
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--workspace-panel-radius-outer) var(--workspace-panel-radius-inner)
+    var(--workspace-panel-radius-inner) var(--workspace-panel-radius-outer);
+  background: var(--theme-main-background);
+  box-shadow: var(--shadow-sm);
   transform: none;
   opacity: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* 侧栏自身作为尺寸容器：session-sidebar.css 按栏的实际宽度（而非窗口宽度）
+     决定项目行是否让出左侧图标与折叠键。 */
+  container: sidebar / inline-size;
+}
+
+/* 桌面：会话栏落主区底色，侧栏的派生文字/遮罩色随之改由主区色派生
+   （手机抽屉仍是 backdrop 底，保持原派生不变）。 */
+@media (min-width: 641px) {
+  .drawer-left {
+    --sidebar-text-primary: var(--theme-main-text);
+    --sidebar-text-project: color-mix(in srgb, var(--theme-main-text) 62%, var(--theme-main-background));
+    --sidebar-text-secondary: color-mix(in srgb, var(--theme-main-text) 100%, transparent);
+    --sidebar-text-muted: color-mix(in srgb, var(--theme-main-text) 46%, transparent);
+    --sidebar-text-disabled: color-mix(in srgb, var(--theme-main-text) 28%, transparent);
+    --sidebar-hover: color-mix(in srgb, var(--theme-main-text) 5%, transparent);
+    --sidebar-selected: color-mix(in srgb, var(--theme-main-text) 8%, transparent);
+  }
 }
 .drawer-left.open {
   /* A revealed drawer uses its configured width even when the main surface
@@ -165,33 +230,91 @@
   transform: translateX(-10px);
 }
 
+/* =========================================================================
+   最左竖栏（app rail）— 整界面导航，桌面常驻
+   ========================================================================= */
+.app-rail {
+  position: fixed;
+  left: 0;
+  top: var(--titlebar-offset, 0px);
+  bottom: 0;
+  z-index: var(--z-edge-trigger);
+  width: var(--rail-width);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  color: var(--theme-backdrop-text);
+}
+
+.app-rail__spacer { flex: 1 1 auto; }
+
+.app-rail__button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  /* 用不透明色画图标：颜色里带 alpha 时，同一段路径被画两遍会叠深
+     （IconPark 的 book-one 就把书脊那条线画了两遍），未选中态会冒出一条更黑的线。
+     层次的区分交给背景（hover / pressed），不再靠颜色里的透明度。 */
+  color: var(--theme-backdrop-text);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.app-rail__button:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+}
+
+.app-rail__button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent);
+}
+
+.app-rail__button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+
 .drawer-right {
-  top: calc(var(--titlebar-offset, 0px) + var(--space-2));
-  bottom: var(--space-2);
+  /* 右侧栏 = 贴右缘的图标竖栏：高度只包住图标（竖直居中），不再通到窗口上下缘。
+   悬停浮出的卡片已下线，容器自身就是这张贴边小玻璃条。 */
+  top: 0;
+  bottom: 0;
+  height: fit-content;
+  margin-block: auto;
   right: 0;
-  width: calc(var(--right-drawer-width) - var(--right-panel-gap));
+  width: var(--right-drawer-width);
   max-height: none;
-  /* The rail meets the viewport on the right; only the exposed left edge is
-     rounded. Keep the 2px main-panel gap intact via its width calculation. */
+  overflow: visible;
   border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  border-right: 0;
+  transform: none;
+  /* 出入位移动画：贴边滑入/滑出。试验项——带 blur 的容器一旦被 transform，
+     WebView2 可能重建 backdrop root 使毛玻璃失效（见下注释），真机确认后定去留。 */
+  transition: transform var(--dur-slow) var(--ease-inout), visibility 0s linear var(--dur-slow);
   opacity: 1;
   pointer-events: auto;
-  transform: none;
   visibility: visible;
   /* The backdrop-filter ancestor must remain untransformed and fully opaque;
      otherwise WebView2 creates a new backdrop root and the blur disappears. */
-  transition: visibility 0s linear 0s;
 }
 .workspace-drawer.optical-glass {
   --text: var(--theme-backdrop-text);
+  --optical-glass-surface: var(--theme-backdrop-solid);
   --optical-glass-overlay: transparent;
 }
 .drawer-right:not(.open) {
   visibility: hidden;
   pointer-events: none;
-  /* The shell only leaves after the body has retracted, so the exit stays
-     visible on the raised layer instead of being cut in half. */
-  transition-delay: var(--right-drawer-retract);
+  transform: translateX(calc(100% + var(--right-peek)));
+  /* 出场先滑完（--dur-slow），再把整层藏起来；入场立即开始滑。 */
+  transition-delay: 0s, var(--dur-slow);
 }
 .drawer-right > .drawer-body {
   opacity: 1;
@@ -199,9 +322,8 @@
   transition: transform 240ms var(--ease-out), opacity 240ms var(--ease-out);
 }
 .drawer-right:not(.open) > .drawer-body {
-  opacity: 0;
-  transform: translateX(10px);
-  transition-duration: var(--right-drawer-retract), var(--right-drawer-retract);
+  opacity: 1;
+  transform: none;
 }
 .drawer-right.open { visibility: visible; }
 .drawer-right.open:not(.pinned) {
@@ -217,9 +339,6 @@
 .drawer-right.drawer-retracting {
   z-index: var(--z-popover);
 }
-
-/* Force drawers visible when stage is open */
-.workspace-shell.stage-open .drawer-right { visibility: visible; pointer-events: auto; }
 
 .drawer-head {
   flex: 0 0 auto;
@@ -265,7 +384,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-row-gap);
-  padding: 0 var(--sidebar-inline-padding) var(--space-2);
+  /* 顶部留白与最左竖栏的第一个图标对齐。 */
+  padding: var(--space-2) var(--sidebar-inline-padding) var(--space-2);
 }
 
 .core-project-primary-actions {
@@ -273,6 +393,82 @@
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-row-gap);
+}
+
+/* 模式下拉（Codex 里产品名的位置）：当前模式 + 下拉箭头；右侧是搜索入口。 */
+.core-sidebar-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  /* 与下方「新建项目」拉开距离。 */
+  margin-bottom: var(--space-2);
+}
+
+.core-sidebar-search-entry {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 62%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.core-sidebar-search-entry:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  color: var(--theme-backdrop-text);
+}
+
+.core-sidebar-search-entry:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+
+.core-sidebar-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--theme-backdrop-text);
+  font-size: var(--sidebar-font-title);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 24px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.core-sidebar-mode:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+}
+
+.core-sidebar-mode:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+
+.core-sidebar-mode__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 设置 / 插件占用整版界面时，页名顶替模式下拉的位置（纯标题，不可点）。 */
+.core-sidebar-mode.is-static {
+  cursor: default;
 }
 
 .core-project-primary-row {
@@ -309,21 +505,25 @@
   display: flex;
   align-items: center;
   gap: var(--sidebar-item-gap);
-  padding: 0 var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
-  border-radius: var(--radius);
-  background: var(--theme-control-background);
-  color: var(--theme-control-text);
+  padding: 0 var(--space-2);
+  /* 无底色：只有文字与 hover 遮罩。 */
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--theme-main-text);
   font: inherit;
   font-size: var(--sidebar-font);
   font-weight: 400;
   text-align: left;
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .sidebar-create-project:hover {
-  filter: brightness(.97);
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
 }
-.sidebar-create-project:active { filter: brightness(.93); }
+.sidebar-create-project:active {
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent);
+}
 .sidebar-create-project:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
   outline-offset: 1px;
@@ -438,7 +638,9 @@
   -ms-overflow-style: none;
 }
 .drawer-right > .drawer-body::-webkit-scrollbar { width: 0; height: 0; display: none; }
-.right-body { max-height: none; padding: 0; }
+/* 右侧栏内容只有图标竖栏，本体不滚动；悬停卡浮在抽屉左外侧，
+   必须用 visible 让它逃出裁剪（卡片是 host 的绝对定位子元素）。 */
+.right-body { max-height: none; padding: 0; overflow: visible; }
 
 .drawer-footer {
   flex: 0 0 auto;
@@ -657,9 +859,16 @@
 /* =========================================================================
    Responsive drawer surfaces
    ========================================================================= */
-/* 左栏宽度分两档：小界面用 70% 紧凑档（--sidebar-width），大界面/全屏回到标准
-   宽度，行内图标入口同步放大一档。1599/1600 两个断点必须成对——session-sidebar.css
-   用同一对断点决定项目行是否让出左侧图标与折叠键。 */
+/* 左栏宽度分三档：小界面用 70% 紧凑档（--sidebar-width），窗口宽裕先升到中间档
+   （--sidebar-width-mid），大界面/全屏回到标准宽度，行内图标入口同步放大一档。
+   项目行左侧图标与折叠键是否让出，由 session-sidebar.css 按 .drawer-left 的
+   容器查询（sidebar）按栏实际宽度决定，不再依赖窗口断点成对维护。 */
+@media (min-width: 1200px) {
+  .workspace-shell {
+    --sidebar-width: var(--sidebar-width-mid);
+  }
+}
+
 @media (min-width: 1600px) {
   .workspace-shell {
     --sidebar-width: var(--sidebar-width-full);
@@ -675,7 +884,12 @@
   .workspace-shell {
     --sidebar-width: min(86vw, 320px);
     --left-card-width: var(--sidebar-width);
+    /* 移动端没有竖栏：几何归零，整界面切换沿用抽屉语义。 */
+    --app-rail-width: 0px;
+    /* 手机满幅，不做下沿留白。 */
+    --shell-bottom-inset: 0px;
   }
+  .app-rail { display: none; }
   .workspace-shell { --right-drawer-width: 100vw; }
   .workspace-shell { --main-x-padding: 14px; }
   .edge { display: none; }
@@ -688,6 +902,8 @@
   /* Keep the project rail's established mobile surface treatment. */
   .drawer-left {
     background: var(--theme-backdrop-background);
+    border: 0;
+    border-radius: 0;
     box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
     /* Mobile drawers overlay the main surface; their width must not follow
        the desktop peek inset (18px) while the shell is opening. */
@@ -709,12 +925,19 @@
   }
   .drawer-right.open { opacity: 1; pointer-events: auto; }
   /* The right rail is a full-width mobile drawer; keep the left project rail
-     constrained to its comfortable reading width. */
+     constrained to its comfortable reading width. Narrow windows float the
+     drawer again, so the flat desktop right edge is restored there. */
   .drawer-right {
+    top: var(--titlebar-offset, 0px);
+    bottom: 0;
+    height: auto;
+    margin-block: 0;
     left: var(--space-2);
     right: var(--space-2);
     width: auto;
     max-width: none;
+    border-radius: var(--radius-lg);
+    border-right: 2px solid var(--theme-optical-glass-border-color);
   }
   .workspace-shell {
     touch-action: pan-y;

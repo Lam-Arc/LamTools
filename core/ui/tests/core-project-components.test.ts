@@ -235,6 +235,36 @@ describe('CoreProjectSettings project visual', () => {
     expect(wrapper.text()).not.toContain('保存外观')
   })
 
+  it('has no memory section in project settings: it lives in the 资料库', async () => {
+    const rpc = vi.fn(async () => ({}))
+    const wrapper = mount(CoreProjectSettings, {
+      props: {
+        project: {
+          id: 'docs',
+          name: 'Docs',
+          workRoot: 'E:\\docs',
+          iconKey: 'folder',
+          colorKey: 'gray',
+        },
+        theme: structuredClone(DEFAULT_THEME),
+        requestRpc: rpc,
+        projectNameDraft: 'Docs',
+        agentsContent: '',
+        agentsLoading: false,
+        agentsError: '',
+        projectActionLoading: false,
+        projectActionError: '',
+      },
+      global: { stubs: { Teleport: true } },
+    })
+
+    // 项目设置不再有记忆分区：项目记忆从资料库的记忆区按项目浏览。
+    expect(wrapper.find('[data-settings-section="memory"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('查看记忆')
+    expect(rpc).not.toHaveBeenCalledWith('memory.reveal', expect.anything())
+    wrapper.unmount()
+  })
+
   it('shows the current session prefix and confirms copying the complete ID', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
@@ -394,7 +424,8 @@ describe('Core project session ID contract', () => {
   it('hides the ordinary header short ID and guards settings to the active project session', () => {
     const appSource = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
     const layoutSource = readFileSync(resolve(process.cwd(), 'src/styles/layout.css'), 'utf8')
-    const mainHeader = appSource.match(/<template #main-header>[\s\S]*?<\/template>/)?.[0] || ''
+    // 头部区段以整个 slot 为界：内部还会有自己的 <template v-if> 包装。
+    const mainHeader = appSource.match(/<template #main-header>[\s\S]*?<template #main-content>/)?.[0] || ''
 
     expect(mainHeader).toContain('<CoreSessionTitleEditor')
     expect(mainHeader).toContain('class="thread-header" data-session-header')

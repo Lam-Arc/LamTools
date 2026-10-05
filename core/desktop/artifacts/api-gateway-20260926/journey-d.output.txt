@@ -1,0 +1,32 @@
+  created zzfin1 -> http 200 success=True
+    starts at quota: 0
+  created a redemption code worth 1000000 -> http 200 success=True msg=
+    codes on record: 1 | code id: 1
+  user signs in: True | id: 6
+    quota before redeeming: 0
+  user redeems the code -> http 200 success=True msg=
+    quota after redeeming: 1000000
+  key minted by the funded user: length 51
+=== the funded user calls through the gateway ===
+  chat completion -> 503
+    error: {'code': 'model_not_found', 'message': 'No available channel for model gpt-4o-mini under group default (distributor) (request id: 202609261138066453607038268d9d
+=== final cleanup and state ===
+  delete redemption code 1
+  delete user 6 (zzfin1)
+  remove rehearsal token rows: zz-smoke-key-do-not-keep
+zz-smoke-key-do-not-keep
+zz-smoke-key-do-not-keep
+zz-smoke-key-do-not-keep
+zz-smoke-key-do-not-keep
+zz-smoke-key-do-not-keep
+zz-journey-user-token
+zz-key-a
+zz-key-b
+zzfin-key
+DELETE 10
+  FINAL users: root,
+  FINAL live tokens: none
+  FINAL channels: 0
+  FINAL redemption codes: none
+  credential file mode: 600 root
+=== done ===

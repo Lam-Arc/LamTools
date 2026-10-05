@@ -85,6 +85,29 @@ function finishTransition() {
   activeTimeline = null
 }
 
+/**
+ * 把按钮放回当前形态的静止态。
+ *
+ * 过渡被中途打断时（运行态一闪而过：发送/停止在几十毫秒里翻来翻去），被杀掉的
+ * timeline 会把 scaleX/scaleY 和字形变量留在半途——按钮就一直是个压扁的椭圆。
+ * 中断与"减少动态效果"走同一条复位：形状本身由 CSS 决定，这里只清运行时状态。
+ */
+function settleVisualState() {
+  const button = buttonElement.value
+  if (!button) return
+  gsap.set(button, {
+    '--glyph-x': '0px',
+    '--glyph-y': '0px',
+    '--glyph-scale-x': 1,
+    '--glyph-scale-y': 1,
+    '--glyph-rotate': '0deg',
+    '--glyph-opacity': 1,
+    '--trail-scale': 0,
+    '--trail-opacity': 0,
+    clearProps: 'scale,scaleX,scaleY',
+  })
+}
+
 function animateTo(mode: ActionMode) {
   const button = buttonElement.value
   if (!button) {
@@ -98,17 +121,7 @@ function animateTo(mode: ActionMode) {
 
   if (prefersReducedMotion()) {
     setVisualMode(mode)
-    gsap.set(button, {
-      '--glyph-x': '0px',
-      '--glyph-y': '0px',
-      '--glyph-scale-x': 1,
-      '--glyph-scale-y': 1,
-      '--glyph-rotate': '0deg',
-      '--glyph-opacity': 1,
-      '--trail-scale': 0,
-      '--trail-opacity': 0,
-      clearProps: 'scale,scaleX,scaleY',
-    })
+    settleVisualState()
     finishTransition()
     return
   }
@@ -233,10 +246,13 @@ watch(
     }
     if (mode === visualMode.value && !activeTimeline) return
     if (mode === visualMode.value && activeTimeline && transitionTarget !== mode) {
+      // 运行态翻回当前形态：在途的过渡作废。必须复位——半途被打断的 timeline
+      // 已经把按钮压扁（scaleX/scaleY）并挪走字形，不清就会一直留在屏幕上。
       activeTimeline.kill()
       activeTimeline = null
       busy = false
       transitionTarget = null
+      settleVisualState()
       return
     }
     animateTo(mode)

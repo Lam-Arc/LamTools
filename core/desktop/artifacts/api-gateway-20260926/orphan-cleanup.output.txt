@@ -1,0 +1,16 @@
+=== all live user rows ===
+  1 | username=root | display=Root User | role=100 | quota=99999992
+  5 | username=(empty) | display= | role=1 | quota=0
+=== remove the orphan row left by my probing (never touches root) ===
+  deleted id 5
+  deleted id DELETE 1
+=== final state ===
+  users=root | live_tokens=none | channels=0 | codes=none
+=== quota units and currency ===
+=== public service still healthy ===
+  console   -> 200
+  no-key API-> 401
+lamtools-api-cache Up 15 minutes (healthy)
+lamtools-api-db Up 15 minutes (healthy)
+lamtools-api-gateway Up 3 minutes
+=== done ===

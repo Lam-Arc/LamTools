@@ -26,6 +26,10 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "artifact.open",
     "artifact.list",
     "artifact.delete",
+    "artifact.favorite",
+    "artifact.folder",
+    "artifact.stats",
+    "artifact.upload",
     "command.catalog",
     "command.execute",
     "attachment.list",
@@ -84,6 +88,10 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "project.agents_md.get",
     "project.agents_md.update",
     "session.rollback",
+    "process.list",
+    "process.kill",
+    "process.forget",
+    "process.log",
 )
 
 

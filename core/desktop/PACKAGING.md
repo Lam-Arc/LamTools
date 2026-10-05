@@ -99,6 +99,29 @@ CI 固定使用 Inno Setup 6.6.1，避免编译器版本漂移导致产物或
 - 应用内部兼容边界继续使用 lamcore.exe、
   lamcore-backend/LamCore.exe 与 identifier com.lamtools.lamcore。
 
+## 升级与正在运行的应用
+
+关闭主窗口只会把 Sunday 收进托盘，进程和打包的后端仍在运行，所以覆盖安装必须
+先让旧程序退出：
+
+- 安装器用 Restart Manager 关闭占用 lamcore.exe、lamcore-backend/ 内程序文件的
+  进程（`CloseApplications=force`）。`CloseApplicationsFilter` 是**逗号分隔**的
+  通配列表；写成分号会让它匹配不到任何文件、整条保护静默失效。
+- Restart Manager 对这一对进程并不可靠（它关不掉「隐藏而不退出」的窗口应用，也
+  关不掉无窗口的后端，却仍报告已处理），所以安装步骤开始时会自行结束安装目录内的
+  Sunday 进程：只匹配可执行文件路径位于 `{app}` 下的进程，不会误伤同名但装在别处的
+  程序。
+- 应用收到系统级关闭请求（注销、关机）时走完整退出流程，不再只收进托盘，随后由
+  后端作业对象保证不留孤儿进程（`windows_close_request`）。普通关闭窗口仍只收进
+  托盘。
+- 结束进程后确认 lamcore.exe 与 lamcore-backend/ 内所有文件都能独占打开；仍被占用
+  （例如扫描器持有一个数据文件）则拒绝本次安装并保持既有安装完整（`CurStepChanged`
+  守卫）。删除动作在该守卫之后，所以拒绝时不会留下半残安装。静默安装不弹窗，以非零
+  退出码和 `Refusing to install:` 日志行体现。
+- 验收：`scripts/verify-desktop-lifecycle.ps1` 覆盖安装、系统关闭请求、运行中升级、
+  拒绝升级不损坏、卸载保留数据；release.yml 的安装冒烟步骤调用它，也可本地对任意
+  安装包运行（机器上不要另有一个 Sunday 实例在跑）。
+
 ## 旧 NSIS 安装迁移与用户数据
 
 旧版把用户数据保存在安装目录内：

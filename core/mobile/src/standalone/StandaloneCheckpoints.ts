@@ -3,16 +3,13 @@ import {
   hasEmbeddedRustCore,
   readEmbeddedCheckpoint,
   readEmbeddedCheckpointGraph,
-  restoreEmbeddedCheckpoint,
 } from '../native/rustAgent'
 
 /**
  * Session checkpoints for the standalone transport.
  *
- * The desktop records a checkpoint at every turn boundary and keeps the file
- * manifest in its database; the phone does the same in the host, and the panel
- * reads it through the same RPC names. Fork and rollback are assembled here,
- * because only this side owns the session store.
+ * 撤回与恢复都只作用于对话上下文：手机端截断本地会话快照，永不触碰文件与成果
+ * （成果没有历史版本）。分叉同样只复制对话，因为只有这一侧持有会话存储。
  */
 export interface CheckpointDeps {
   /** Session metadata, used to find the project a checkpoint belongs to. */
@@ -42,14 +39,18 @@ export function createCheckpointRpc(deps: CheckpointDeps) {
     }
     if (method === 'session.checkpoints.restore') {
       if (!sessionId || !checkpointId) throw new Error('session_id 与 checkpoint_id 必填')
-      if (!hasEmbeddedRustCore()) throw new Error('移动端独立模式不支持 session.checkpoints.restore')
-      const projectId = await deps.sessionProjectId(sessionId)
-      return await restoreEmbeddedCheckpoint(
-        projectId,
-        sessionId,
-        checkpointId,
-        String(params.scope || 'workspace'),
-      )
+      const turnId = await deps.checkpointTurn(checkpointId)
+      if (!turnId) throw new Error('该检查点没有可回退的回合')
+      const truncated = await deps.truncateSession(sessionId, turnId)
+      return {
+        session_id: sessionId,
+        checkpoint_id: checkpointId,
+        turn_id: turnId,
+        mode: 'conversation_only',
+        restored: { conversation: true, runtime: true, workspace: false, external_effects: false },
+        restored_paths: [],
+        ...truncated,
+      }
     }
     if (method === 'session.fork') {
       if (!sessionId || !checkpointId) throw new Error('session_id 与 checkpoint_id 必填')
@@ -61,22 +62,26 @@ export function createCheckpointRpc(deps: CheckpointDeps) {
     }
     if (method === 'session.rollback') {
       if (!sessionId) throw new Error('session_id 必填')
-      const graph = hasEmbeddedRustCore()
-        ? await readEmbeddedCheckpointGraph(sessionId)
-        : { nodes: [], heads: {} }
       const requested = String(params.turn_id || params.turnId || '')
-      // Without a turn the newest checkpoint of the session is the target, which
-      // is the desktop's "undo the last turn" behaviour.
-      const target = requested
-        ? graph.nodes.find(node => node.turn_id === requested && node.session_id === sessionId)
-        : graph.nodes.filter(node => node.session_id === sessionId).at(-1)
-      if (!target) throw new Error('找不到对应的检查点')
-      const projectId = await deps.sessionProjectId(sessionId)
-      const restored = hasEmbeddedRustCore()
-        ? await restoreEmbeddedCheckpoint(projectId, sessionId, target.id, 'workspace')
-        : {}
-      const truncated = await deps.truncateSession(sessionId, target.turn_id)
-      return { session_id: sessionId, checkpoint_id: target.id, turn_id: target.turn_id, ...restored, ...truncated }
+      let turnId = requested
+      if (!turnId) {
+        // 没给回合时退回到最近一个检查点，也就是桌面的"撤销最后一轮"。
+        const graph = hasEmbeddedRustCore()
+          ? await readEmbeddedCheckpointGraph(sessionId)
+          : { nodes: [], heads: {} }
+        const target = graph.nodes.filter(node => node.session_id === sessionId).at(-1)
+        if (!target) throw new Error('找不到对应的检查点')
+        turnId = target.turn_id
+      }
+      const truncated = await deps.truncateSession(sessionId, turnId)
+      return {
+        session_id: sessionId,
+        turn_id: turnId,
+        mode: 'conversation_only',
+        restored: { conversation: true, runtime: true, workspace: false, external_effects: false },
+        restored_paths: [],
+        ...truncated,
+      }
     }
     return null
   }

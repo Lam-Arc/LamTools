@@ -1,0 +1,37 @@
+  bridge gateway: 172.30.0.1
+  mock listening
+=== channel + token setup ===
+  authenticated as root id 1
+  channel create success: True
+  client key ready: True
+  channel id=2 status=1 group=default models=gpt-4o-mini
+=== routing index immediately after channel creation ===
+  tables: abilities,channels,checkins,custom_oauth_providers,logs,midjourneys,models,options,passkey_credentials,prefill_groups,quota_data,redemptions,setups,subscription_orders,subscription_plans,subscription_pre_consume_records,tasks,tokens,top_ups,two_fa_backup_codes,two_fas,user_oauth_bindings,user_subscriptions,users,vendors
+  channels rows: 1
+  channels status/models: 2|s=1|g=default|m=gpt-4o-mini
+  abilities rows: 1
+  abilities detail: default|gpt-4o-mini|ch=2|en=true
+=== relay attempt ===
+  chat/completions -> 503
+     {'code': 'model_not_found', 'message': 'No available channel for model gpt-4o-mini under group default (distributor) (request id: 2026092611
+=== restart the gateway, index with the channel already present ===
+ Container lamtools-api-gateway Started 
+  gateway back after 6s
+=== routing index after restart ===
+  tables: abilities,channels,checkins,custom_oauth_providers,logs,midjourneys,models,options,passkey_credentials,prefill_groups,quota_data,redemptions,setups,subscription_orders,subscription_plans,subscription_pre_consume_records,tasks,tokens,top_ups,two_fa_backup_codes,two_fas,user_oauth_bindings,user_subscriptions,users,vendors
+  channels rows: 1
+  channels status/models: 2|s=1|g=default|m=gpt-4o-mini
+  abilities rows: 1
+  abilities detail: default|gpt-4o-mini|ch=2|en=true
+  relay after restart ->
+    http=200
+     Hello from mock
+=== mock access log ===
+  POST /v1/chat/completions stream=False model=gpt-4o-mini
+=== done ===
+=== cleanup ===
+  delete token 2 -> success=True
+  token leftovers: none
+  delete channel 2 -> success=True
+  channel leftovers: none
+  mock stopped

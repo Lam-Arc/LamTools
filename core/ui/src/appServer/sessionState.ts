@@ -89,6 +89,25 @@ export class CoreSessionStateStore {
     return true
   }
 
+  /**
+   * Advance the CAS revision from a `sync/change` notification without
+   * touching projection content. Persisted run-item events reach the client
+   * through `core/runItem` notifications that carry no revision, so without
+   * this the tracked revision stalls behind the server and the next
+   * `command.execute` fails CAS with REVISION_CONFLICT. `seq` is a different
+   * numbering space (workspace cursor), so snapshot_seq is left alone.
+   */
+  advanceRevision(threadId: string, revision: number): boolean {
+    const current = this.states.get(threadId)
+    if (!current || !Number.isFinite(revision) || revision <= current.revision) return false
+    // Advance in place, like the redundant-snapshot path in the store: the
+    // projection content is unchanged, and replacing the snapshot object
+    // would rebuild every item through the projection cache.
+    current.revision = revision
+    current.snapshot.revision = revision
+    return true
+  }
+
   applyEvent(
     event: CoreAppEvent,
     reducer: (snapshot: CoreAppSnapshot, event: CoreAppEvent) => CoreAppSnapshot,

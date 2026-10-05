@@ -1,0 +1,32 @@
+=== gateway environment (names only) ===
+  BATCH_UPDATE_ENABLED
+  CRYPTO_SECRET
+  ERROR_LOG_ENABLED
+  HOME
+  HOSTNAME
+  NODE_TYPE
+  PATH
+  REDIS_CONN_STRING
+  SESSION_SECRET
+  SQL_DSN
+  STREAMING_TIMEOUT
+  TRUSTED_PROXIES
+  TZ
+=== loopback HTTP ===
+  [loopback] login -> 200
+  [loopback] jar lines: 4
+  [loopback] /api/user/self -> 401 | success=False msg=Unauthorized, New-Api-User header not provided
+  [loopback] /api/user/token -> 401 | success=False msg=Unauthorized, New-Api-User header not provided
+  [loopback] /api/option/ -> 401 | success=False msg=Unauthorized, New-Api-User header not provided
+=== public TLS ===
+  [tls] login -> 200
+  [tls] jar lines: 4
+  [tls] /api/user/self -> 401 | success=False msg=Unauthorized, New-Api-User header not provided
+  [tls] /api/user/token -> 401 | success=False msg=Unauthorized, New-Api-User header not provided
+  [tls] /api/option/ -> 401 | success=False msg=Unauthorized, New-Api-User header not provided
+=== access token via the session, if any method worked ===
+curl: option --resolve api.47.114.43.99.nip.io:443:127.0.0.1: is unknown
+curl: try 'curl --help' or 'curl --manual' for more information
+  success: False | message: Unauthorized, invalid access token
+  no token value in response
+=== done ===

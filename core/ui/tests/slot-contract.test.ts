@@ -211,7 +211,7 @@ describe('WorkspaceShell rendering', () => {
 
     await wrapper.get('.mobile-drawer-backdrop').trigger('click');
     expect(drawer.classes()).not.toContain('open');
-    expect(drawer.attributes('inert')).toBeDefined();
+    expect(drawer.attributes('inert')).toBeUndefined();
     wrapper.unmount();
   });
 

@@ -18,7 +18,18 @@ from lamtools_core.export import ConversationExportService
 from lamtools_core.export.serializers import full_to_zip, handoff_to_json, transcript_to_jsonl, transcript_to_markdown, transcript_to_text
 
 from ..app.operation_catalog import OperationCatalog
-from ..app.plan_library import PLAN_LIBRARY_DIRNAME, scan_plan_library
+from ..app.plan_library import (
+    PLAN_LIBRARY_DIRNAME,
+    PlanLibraryError,
+    create_folder,
+    create_plan,
+    delete_folder,
+    list_plan_folders,
+    move_plan,
+    rename_plan,
+    scan_plan_library,
+    set_plan_favorite,
+)
 from ..app.project_store import ActiveProjectSessionsError, CoreProjectStore
 from ..app.project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
 from ..provider import ProviderConfig, ProviderRegistry
@@ -648,7 +659,84 @@ def create_core_router(
         project = await store.get(project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
-        return {"dir": PLAN_LIBRARY_DIRNAME, "entries": scan_plan_library(project.work_root)}
+        return {
+            "dir": PLAN_LIBRARY_DIRNAME,
+            "entries": scan_plan_library(project.work_root),
+            "folders": list_plan_folders(project.work_root),
+        }
+
+    @router.post("/projects/{project_id}/plan-library/files")
+    async def create_plan_library_file(project_id: str, body: dict) -> dict[str, Any]:
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            entry = create_plan(project.work_root, str(body.get("name") or ""), folder=str(body.get("folder") or ""))
+        except PlanLibraryError as cause:
+            raise HTTPException(status_code=400, detail=str(cause)) from cause
+        return {"entry": entry}
+
+    @router.post("/projects/{project_id}/plan-library/folders")
+    async def create_plan_library_folder(project_id: str, body: dict) -> dict[str, Any]:
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            # path 是库内相对目录：`归档` 就是一级，`归档/这一期` 再深一层。
+            folder = create_folder(project.work_root, str(body.get("path") or ""))
+        except PlanLibraryError as cause:
+            raise HTTPException(status_code=400, detail=str(cause)) from cause
+        return {"folder": folder}
+
+    @router.delete("/projects/{project_id}/plan-library/folders")
+    async def delete_plan_library_folder(project_id: str, path: str) -> dict[str, Any]:
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            delete_folder(project.work_root, path)
+        except PlanLibraryError as cause:
+            raise HTTPException(status_code=400, detail=str(cause)) from cause
+        return {"deleted": path}
+
+    @router.post("/projects/{project_id}/plan-library/rename")
+    async def rename_plan_library_file(project_id: str, body: dict) -> dict[str, Any]:
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            entry = rename_plan(project.work_root, str(body.get("path") or ""), str(body.get("name") or ""))
+        except PlanLibraryError as cause:
+            raise HTTPException(status_code=400, detail=str(cause)) from cause
+        return {"entry": entry}
+
+    @router.post("/projects/{project_id}/plan-library/move")
+    async def move_plan_library_file(project_id: str, body: dict) -> dict[str, Any]:
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            entry = move_plan(project.work_root, str(body.get("path") or ""), folder=str(body.get("folder") or ""))
+        except PlanLibraryError as cause:
+            raise HTTPException(status_code=400, detail=str(cause)) from cause
+        return {"entry": entry}
+
+    @router.post("/projects/{project_id}/plan-library/favorite")
+    async def favorite_plan_library_file(project_id: str, body: dict) -> dict[str, Any]:
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            entry = set_plan_favorite(project.work_root, str(body.get("path") or ""), favorite=bool(body.get("favorite")))
+        except PlanLibraryError as cause:
+            raise HTTPException(status_code=400, detail=str(cause)) from cause
+        return {"entry": entry}
 
     @router.delete("/projects/{project_id}/plan-library")
     async def delete_plan_library_file(project_id: str, path: str) -> dict[str, Any]:

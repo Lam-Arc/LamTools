@@ -4,7 +4,6 @@
     :show-in-preview="props.showPreviewTitleBar"
     :left-pinned="leftPinned"
     :right-pinned="rightPinned"
-    :effective-theme-mode="effectiveThemeMode"
     :mode-label="activeAppMode.title"
     :mode-title="nextAppModeTitle"
     :can-toggle-mode="appModes.length > 1"
@@ -67,9 +66,12 @@
     :show-sidebar-header-action="false"
     :show-sidebar-search-action="showMobileFooterFallback"
     :show-sidebar-plugins-action="showMobileFooterFallback"
-    :show-sidebar-settings-action="appRuntime.platform !== 'mobile' || showMobileFooterFallback"
+    :show-sidebar-settings-action="showMobileFooterFallback"
+    :collapse-left-sidebar="Boolean(fullAreaView && !sidebarNavView)"
+    :hide-main-header="Boolean(sidebarNavView)"
     :show-right-panel="appRuntime.platform !== 'mobile'"
     :show-right-panel-header="false"
+    :right-panel-hold="rightSidebarHold"
     :main-content-full-bleed="activePluginMode?.pluginId === 'workflow'"
     :workflow-mode="activePluginMode?.pluginId === 'workflow'"
     :composer-has-value="Boolean(composerText.trim())"
@@ -81,7 +83,6 @@
     :empty-session="isEmptySession"
     :composer-session-key="activeSessionId"
     :composer-session-ready="!historyLoading"
-    v-model:stage-open="stageOpen"
     @new-session="handleShellNewSession"
     @update:left-open="onLeftDrawerChange"
     @update:left-pinned="syncLeftPinned"
@@ -92,9 +93,43 @@
     @composer-submit="submitComposer"
     @composer-drop="handleComposerDrop"
   >
+    <template v-if="appRuntime.platform !== 'mobile'" #app-rail>
+      <AppRail :active="railActiveView" @open="onRailOpen" />
+    </template>
+
     <template #primary>
       <div class="core-project-primary-actions">
-        <div class="core-project-primary-row">
+        <div class="core-sidebar-mode-row">
+          <span
+            v-if="sidebarNavView"
+            class="core-sidebar-mode is-static"
+            data-sidebar-nav-title
+          >{{ sidebarNavTitle }}</span>
+          <button
+            v-else
+            class="core-sidebar-mode"
+            type="button"
+            data-sidebar-mode-trigger
+            :aria-label="`切换模式，当前 ${activeAppMode.title}`"
+            :title="`切换模式，当前 ${activeAppMode.title}`"
+            @click="openModeMenu"
+          >
+            <span class="core-sidebar-mode__label">{{ activeAppMode.title }}</span>
+            <ChevronDown :size="13" :stroke-width="1.9" aria-hidden="true" />
+          </button>
+          <button
+            v-if="!sidebarNavView && appRuntime.platform !== 'mobile'"
+            class="core-sidebar-search-entry"
+            type="button"
+            data-sidebar-search-entry
+            aria-label="搜索"
+            title="搜索"
+            @click="openSearch"
+          >
+            <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+        </div>
+        <div v-if="!sidebarNavView" class="core-project-primary-row">
           <button
             v-if="sidebarPrimaryActionLabel"
             class="sidebar-create-project"
@@ -135,9 +170,30 @@
     </template>
 
     <template #sidebar-body>
+      <FullAreaSidebarNav
+        v-if="sidebarNavView === 'settings'"
+        :sections="CORE_SETTINGS_SECTIONS"
+        :active-id="settingsSection"
+        aria-label="设置分区"
+        @select="settingsSection = $event"
+      />
+      <FullAreaSidebarNav
+        v-else-if="sidebarNavView === 'plugins'"
+        :sections="PLUGIN_SHELL_SECTIONS"
+        :active-id="pluginsSection"
+        aria-label="插件分区"
+        @select="pluginsSection = $event"
+      />
+      <FullAreaSidebarNav
+        v-else-if="sidebarNavView === 'project'"
+        :sections="PROJECT_SETTINGS_SECTIONS"
+        :active-id="projectSettingsSection"
+        aria-label="项目设置分区"
+        @select="projectSettingsSection = $event"
+      />
       <component
+        v-else-if="activePluginSurface?.sidebar?.component"
         :is="activePluginSurface.sidebar.component"
-        v-if="activePluginSurface?.sidebar?.component"
         v-bind="readPluginSurface(activePluginSurface.sidebar.componentProps, {})"
       />
       <SessionSidebar
@@ -171,51 +227,14 @@
             <div v-if="!activePluginMode" class="sidebar-empty-backdrop" aria-hidden="true">暂无</div>
           </div>
         </template>
-        <!-- 桌面：全局搜索、资料库、长期安排、插件并作一排同规格图标。 -->
-        <template v-if="appRuntime.platform !== 'mobile'" #toolbar-actions>
-          <RailAction
-            action-id="search"
-            label="搜索"
-            description="跨项目查找会话、消息、方案与文件。"
-            tip-placement="below"
-            @click="openSearch"
-          >
-            <Search :size="16" :stroke-width="1.8" />
-          </RailAction>
-          <RailAction
-            action-id="library"
-            label="资料库"
-            description="浏览「方案/」文件夹里的方案，点开读全文，就绪后可直接开工。"
-            tip-placement="below"
-            @click="openLibrary"
-          >
-            <BookOpen :size="16" :stroke-width="1.8" />
-          </RailAction>
-          <RailAction
-            action-id="arrange"
-            label="长期安排"
-            description="查看并调整长期任务安排，让 Sunday 按计划继续执行。"
-            tip-placement="below"
-            @click="openArrange"
-          >
-            <CalendarClock :size="16" :stroke-width="1.8" />
-          </RailAction>
-          <RailAction
-            action-id="plugins"
-            label="插件"
-            description="管理已安装的插件，开关它们带来的界面与工具。"
-            tip-placement="below"
-            @click="openPlugins"
-          >
-            <Puzzle :size="16" :stroke-width="1.8" />
-          </RailAction>
-        </template>
+        <!-- 桌面：全局搜索、资料库、定时任务、插件并作一排同规格图标。 -->
       </SessionSidebar>
     </template>
 
     <template v-if="showSidebarFooter" #sidebar-footer>
-      <!-- 手机降级页脚（无 hover 可依赖）：仍是带文字的竖排行，与今天一致。 -->
-      <div v-if="showMobileFooterFallback" class="drawer-footer-stack">
+      <!-- 手机降级页脚（无 hover 可依赖）：仍是带文字的竖排行，与今天一致。
+          桌面账号在竖栏底部，页脚不再渲染。 -->
+      <div class="drawer-footer-stack">
         <button
           v-for="option in mobileModeOptions"
           :key="option.id"
@@ -235,76 +254,60 @@
           <span aria-hidden="true"><Library :size="14" :stroke-width="1.8" /></span><span>资料库</span>
         </button>
         <button class="sidebar-action" type="button" data-mobile-footer-arrange @click="openArrange">
-          <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>长期安排</span>
+          <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>定时任务</span>
         </button>
       </div>
-      <!-- 桌面底部只留账号显示 + 设置（设置由左侧栏自身提供）。 -->
-      <button
-        v-else
-        class="drawer-footer-account"
-        type="button"
-        data-sidebar-account
-        :title="accountLabel"
-        @click="openAccount"
-      >
-        <UserRound :size="16" :stroke-width="1.8" aria-hidden="true" />
-        <span class="drawer-footer-account__label">{{ accountLabel }}</span>
-      </button>
     </template>
 
     <template #main-header>
-      <!-- 整版界面：顶部标题跟着切换，返回键就放在标题原来的位置。 -->
-      <div
-        v-if="appRuntime.platform !== 'mobile' && fullAreaView"
-        class="thread-header full-area-header"
-        data-full-area-header
-      >
-        <button
-          type="button"
-          class="full-area-back"
-          title="返回会话（Esc）"
-          aria-label="返回会话"
-          data-full-area-back
-          @click="closeFullArea"
+      <!-- 整版界面：顶部标题跟着切换，返回键就放在标题原来的位置。
+           设置 / 插件例外：会话栏已经写着页名并列出分区，标题条整条撤掉，内容独占一页
+           （整版界面这一层仍然成立，不会被下面的插件头部顶替）。 -->
+      <template v-if="appRuntime.platform !== 'mobile' && fullAreaView">
+        <div
+          v-if="!sidebarNavView"
+          class="thread-header full-area-header"
+          data-full-area-header
         >
-          <ArrowLeft :size="15" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-        <div class="full-area-heading">
-          <h1 data-full-area-title>{{ fullAreaHeading.title }}</h1>
-          <span>{{ fullAreaHeading.subtitle }}</span>
+          <button
+            type="button"
+            class="full-area-back"
+            title="返回会话（Esc）"
+            aria-label="返回会话"
+            data-full-area-back
+            @click="onFullAreaBack"
+          >
+            <ArrowLeft :size="15" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+          <div class="full-area-heading">
+            <h1 data-full-area-title>{{ fullAreaHeading.title }}</h1>
+            <span>{{ fullAreaHeading.subtitle }}</span>
+          </div>
+          <div id="full-area-band-actions" class="full-area-band-actions"></div>
         </div>
-        <div id="full-area-band-actions" class="full-area-band-actions"></div>
-      </div>
+      </template>
       <div v-else-if="appRuntime.platform !== 'mobile' && activePluginMode" class="workspace-plugin-header" data-plugin-header></div>
       <div v-else-if="appRuntime.platform !== 'mobile' && activeSessionId" class="thread-header" data-session-header>
         <CoreSessionTitleEditor
           :title="activeSessionTitle"
           :rename="renameActiveSession"
         />
-        <button
-          type="button"
-          class="stage-toggle-btn"
-          :class="{ active: stageOpen }"
-          :title="stageOpen ? '关闭视窗' : '打开视窗'"
-          @click="toggleStage"
-        >
-          <ChevronDown v-if="stageOpen" :size="14" :stroke-width="1.8" aria-hidden="true" />
-          <ChevronUp v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </button>
       </div>
     </template>
 
     <template #main-content>
-      <!-- 整版界面：搜索 / 资料库 / 长期安排 互斥地占住聊天区域，返回或 Esc 退出。 -->
+      <!-- 整版界面：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出。 -->
       <template v-if="fullAreaView">
         <CoreArrangeManager
           v-if="showArrange"
+          ref="arrangeRef"
           class="full-area-view"
           :band-actions="appRuntime.platform !== 'mobile'"
-          
+
           :work-root="currentWorkRoot()"
           :request-rpc="requestConfigOperation"
           @back="closeFullArea"
+          @heading="arrangeHeading = $event"
         />
         <SearchShell
           v-else-if="showSearch"
@@ -322,17 +325,24 @@
           :commands="searchCommands"
           @close="closeFullArea"
         />
-        <PlanLibraryView
+        <!-- 资料库 = 一个入口三个分区（资料 / 记忆 / 方案），见 LibraryHomeView。 -->
+        <LibraryHomeView
           v-else-if="showLibrary"
+          ref="libraryRef"
           class="full-area-view"
           :band-actions="appRuntime.platform !== 'mobile'"
-          
           :client="projectClient"
           :project-id="activeProjectId ?? selectedProjectId"
+          :work-root="currentWorkRoot()"
+          :transport="transport"
+          :request-rpc="requestConfigOperation"
+          :artifact-signal="lastWorkbenchEvent"
+          :upload-files="uploadArtifactFiles"
           :refresh-signal="libraryRefreshTick"
+          :platform="appRuntime.platform"
           @back="closeFullArea"
           @start-plan="startPlanFromLibrary"
-          @edit-plan="openPlanFileInStage"
+          @heading="libraryHeading = $event"
         />
         <CoreSettings
           v-else-if="showSettings"
@@ -343,6 +353,8 @@
           :model-groups="modelGroups"
           :catalog-view="modelCatalogView"
           :section="settingsSection"
+          :active-section="settingsSection"
+          :hide-nav="appRuntime.platform !== 'mobile'"
           :density="density"
           :theme="theme"
           :content-width="contentWidth"
@@ -364,6 +376,7 @@
           :remote-account-loading="effectiveAccountLoading"
           :remote-account-devices="effectiveAccountDevices"
           @close="closeFullArea"
+          @section-change="settingsSection = $event"
           @update:density="uiPreferences.setDensity"
           @update:content-width="uiPreferences.setContentWidth"
           @update:theme-mode="uiPreferences.setThemeMode"
@@ -408,7 +421,10 @@
           :transport="transport"
           :theme="theme"
           :initial-section="pluginsSection"
+          :active-section="pluginsSection"
+          :hide-nav="appRuntime.platform !== 'mobile'"
           @capabilities-changed="handleCapabilitiesChanged"
+          @section-change="pluginsSection = $event"
           @close="closeFullArea"
           />
         <AccountShell
@@ -424,6 +440,36 @@
           :on-open-settings="openAccountSettings"
           :on-refresh="refreshRemoteAccount"
           @close="closeFullArea"
+          />
+        <CoreProjectSettings
+          v-else-if="showProjectView && selectedProject && !activePluginMode"
+            class="full-area-view full-area-wide"
+          :project="{
+            id: selectedProject.id,
+            name: selectedProject.name,
+            workRoot: selectedProject.workRoot,
+            iconKey: selectedProject.iconKey,
+            colorKey: selectedProject.colorKey,
+          }"
+          :session-id="projectSettingsSessionId"
+          :theme="theme"
+          :request-rpc="requestConfigOperation"
+          :models="availableModels"
+          :project-name-draft="projectNameDraft"
+          :agents-content="agentsContent"
+          :agents-loading="agentsLoading"
+          :agents-saving="agentsSaving"
+          :agents-error="agentsError"
+          :project-action-loading="projectActionLoading"
+          :project-action-error="projectActionError"
+          :active-section="projectSettingsSection"
+          :hide-nav="appRuntime.platform !== 'mobile'"
+          @section-change="projectSettingsSection = $event"
+          @close="closeProjectSettings"
+          @rename-project="renameProject"
+          @update-project-visual="updateProjectVisual"
+          @save-agents="saveAgents"
+          @refresh-agents="refreshAgentsContent"
           />
       </template>
       <div
@@ -520,7 +566,7 @@
           <button
             v-if="!isEmptySession && !threadScroll.autoFollow.value"
             type="button"
-            class="thread-jump-latest optical-glass"
+            class="thread-jump-latest optical-glass optical-glass--low-trans"
             aria-label="回到最新消息"
             title="回到最新消息"
             @click="threadScroll.scrollToBottom(true)"
@@ -548,32 +594,6 @@
 
     <template #modals>
       <div v-if="activePluginMode" class="workspace-plugin-modal" data-plugin-modal></div>
-      <CoreProjectSettings
-        v-if="showProjectSettings && selectedProject && !activePluginMode"
-        :project="{
-          id: selectedProject.id,
-          name: selectedProject.name,
-          workRoot: selectedProject.workRoot,
-          iconKey: selectedProject.iconKey,
-          colorKey: selectedProject.colorKey,
-        }"
-        :session-id="projectSettingsSessionId"
-        :theme="theme"
-        :request-rpc="requestConfigOperation"
-        :models="availableModels"
-        :project-name-draft="projectNameDraft"
-        :agents-content="agentsContent"
-        :agents-loading="agentsLoading"
-        :agents-saving="agentsSaving"
-        :agents-error="agentsError"
-        :project-action-loading="projectActionLoading"
-        :project-action-error="projectActionError"
-        @close="closeProjectSettings"
-        @rename-project="renameProject"
-        @update-project-visual="updateProjectVisual"
-        @save-agents="saveAgents"
-        @refresh-agents="refreshAgentsContent"
-      />
     </template>
 
     <template #runtime-overlay>
@@ -581,7 +601,7 @@
     </template>
 
     <template #composer-preamble>
-      <div v-if="activeGoal" class="core-goal-area optical-glass" :data-status="activeGoal.status">
+      <div v-if="activeGoal" class="core-goal-area optical-glass optical-glass--low-trans" :data-status="activeGoal.status">
         <CoreGoalStrip :goal="activeGoal" @cancel="handleCancelGoal" />
         <CoreQueuedInputTray
           v-model:draft="queuedInputDraft"
@@ -693,20 +713,6 @@
       </CoreExecutionControls>
     </template>
 
-    <template #stage="{ open: stageIsOpen, toggle: stageToggle }">
-      <StagePane
-        v-if="stageIsOpen"
-        ref="stagePaneRef"
-        :tabs="stageTabs"
-        :active-id="stageActiveId"
-        @activate="stageActivate"
-        @close="stageClose"
-        @update-content="stageUpdateContent"
-        @save="stageSave"
-        @toggle-preview="stageTogglePreview"
-      />
-    </template>
-
     <template #right-panel>
       <RightSidebarHost
         :project-id="activeProjectId"
@@ -718,29 +724,31 @@
         :context-window="executionControls.activeModel.value?.context_window"
         :runtime-status="latestStatus"
         :runtime-mode-label="runtimeModeLabel"
-        :stage-open="stageOpen"
-        :mode="rightPanelMode"
-        :artifact-signal="lastWorkbenchEvent"
-        :open-artifact="openArtifactInStage"
+        :process-signal="lastWorkbenchEvent"
         :active-plugin-id="activePluginMode?.pluginId || null"
         :active-mode-id="activePluginMode?.id || null"
         :plugin-contributions="activePluginSidebarContributions"
         :locate-sub-agent="locateSubAgentRun"
-        @mode-change="handleRightPanelMode"
-      >
-        <template #stage>
-          <FileTreePanel
-            v-if="activeProjectId"
-            :project-id="activeProjectId"
-            :client="projectClient"
-            @open-file="openFileInStage"
-          />
-        </template>
-      </RightSidebarHost>
+        @hover-change="rightSidebarHold = $event"
+      />
     </template>
   </WorkspaceShell>
 
   <ContextMenuHost />
+  <CoreConfirmDialog
+    :open="Boolean(appConfirm)"
+    :title="appConfirm?.title || ''"
+    :detail="appConfirm?.detail || ''"
+    @cancel="appConfirm = null"
+    @confirm="confirmAppAction"
+  />
+  <!-- 开工前先问清楚：这份方案在哪个项目里开工。 -->
+  <CoreProjectPicker
+    v-if="pendingPlanStart"
+    :projects="projects"
+    @select="confirmPlanStartProject"
+    @cancel="pendingPlanStart = null"
+  />
   <SelectionAssistant
     :session-id="activeSessionId"
     :mode="activeAppModeKey"
@@ -788,11 +796,9 @@ import {
   LoaderCircle,
   MonitorPlay,
   MonitorSmartphone,
-  BookOpen,
   PanelLeft,
   PanelRight,
   Plus,
-  Puzzle,
   Scissors,
   Search,
   Settings,
@@ -836,7 +842,6 @@ import {
   usePendingAttachments,
   useCoreUiPreferences,
   useCoreUpdateState,
-  useCheckpoints,
   createCoreConnectionErrorToastGate,
   showToast,
 } from '../composables'
@@ -846,17 +851,15 @@ import AttachmentSourceMenu from '../components/AttachmentSourceMenu.vue'
 import ChatThread from '../components/ChatThread.vue'
 import ChatOutlineNavigator from '../components/ChatOutlineNavigator.vue'
 import CommandPalette from '../components/CommandPalette.vue'
-import RailAction from '../components/RailAction.vue'
+import AppRail, { type AppRailView } from '../components/AppRail.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreWorkspaceMenu from '../components/CoreWorkspaceMenu.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
+import CoreConfirmDialog from '../components/CoreConfirmDialog.vue'
 import CorePendingDecisionPanel from '../components/CorePendingDecisionPanel.vue'
 import CoreArrangeManager from '../components/CoreArrangeManager.vue'
 import CoreGoalStrip from '../components/CoreGoalStrip.vue'
 import HistoryLoadingIndicator from '../components/HistoryLoadingIndicator.vue'
-import FileTreePanel from '../components/FileTreePanel.vue'
-import type { StageResource, StageKind } from '../types'
-import type { ArtifactRevision, ProjectArtifact } from '../types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreProjectPicker from '../components/CoreProjectPicker.vue'
 import CoreStartPage, { type CoreRecentProject } from '../components/CoreStartPage.vue'
@@ -869,9 +872,12 @@ import { openContextMenu } from '../components/context-menu/context-menu'
 import type { ContextMenuEntry } from '../components/context-menu/types'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import PluginsShell from '../components/PluginsShell.vue'
+import FullAreaSidebarNav from '../components/FullAreaSidebarNav.vue'
+import { CORE_SETTINGS_SECTIONS, PLUGIN_SHELL_SECTIONS, PROJECT_SETTINGS_SECTIONS } from '../components/settingsSections'
 import AccountShell from '../components/AccountShell.vue'
 import SearchShell, { type SearchCommand, type StudySearchHit } from '../components/SearchShell.vue'
-import PlanLibraryView, { type PlanLibraryEntry } from '../components/PlanLibraryView.vue'
+import { type PlanLibraryEntry } from '../components/PlanLibraryView.vue'
+import LibraryHomeView from '../components/LibraryHomeView.vue'
 import type {
   CoreSettingsModelPayload,
   CoreSettingsProviderPayload,
@@ -904,11 +910,9 @@ import type { PluginModeSurface } from '../plugins/context'
 import type { PluginMode } from '../plugins/types'
 import type { CoreModelCatalogView, CorePermissionPreset } from '../composer/execution'
 import { copyText } from '../helpers/clipboard'
+import { absoluteArtifactPath } from '../artifacts/model'
 
 const CoreSettings = defineAsyncComponent(() => import('../components/CoreSettings.vue'))
-const StagePane = defineAsyncComponent(() => import('../components/StagePane.vue'))
-
-type StagePaneInstance = InstanceType<(typeof import('../components/StagePane.vue'))['default']>
 
 type RawSession = {
   id: string
@@ -982,7 +986,7 @@ function onLeftDrawerChange(value: boolean): void {
 }
 const appRuntime = props.runtime
 const showMobileFooterFallback = computed(() => appRuntime.platform === 'mobile' && props.mobileCommandDockAvailable !== true)
-const showSidebarFooter = computed(() => appRuntime.platform !== 'mobile' || showMobileFooterFallback.value)
+const showSidebarFooter = computed(() => showMobileFooterFallback.value)
 const commandShellPlatform = (() => {
   if (appRuntime.platform === 'mobile') return 'mobile' as const
   if (appRuntime.platform !== 'desktop') return 'web' as const
@@ -1042,7 +1046,6 @@ const selectedProjectId = ref<string | null>(null)
 const projectNameDraft = ref('')
 const projectActionLoading = ref(false)
 const projectActionError = ref('')
-const showProjectSettings = ref(false)
 
 const RECENT_PROJECTS_STORAGE_KEY = 'lamtools-core.recent-projects'
 const recentProjectOpenings = ref<CoreRecentProject[]>(readRecentProjectOpenings())
@@ -1112,9 +1115,9 @@ function syncRightPinned(value: boolean) {
 const settingsStorageKey = 'lamtools.core.ui'
 /** Section the settings surface opens on; the rail's account entry targets it. */
 const settingsSection = ref<string | undefined>(undefined)
-// 整版界面状态：搜索 / 资料库 / 长期安排 互斥地占住聊天区域，返回或 Esc 退出；
+// 整版界面状态：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出；
 // 打开同一个入口相当于退出（与旧浮层的开合直觉一致）。
-type FullAreaViewId = 'library' | 'search' | 'arrange' | 'settings' | 'plugins' | 'account'
+type FullAreaViewId = 'library' | 'search' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project'
 const fullAreaView = ref<FullAreaViewId | null>(null)
 const showSearch = computed(() => fullAreaView.value === 'search')
 const showArrange = computed(() => fullAreaView.value === 'arrange')
@@ -1122,31 +1125,123 @@ const showLibrary = computed(() => fullAreaView.value === 'library')
 const showSettings = computed(() => fullAreaView.value === 'settings')
 const showPlugins = computed(() => fullAreaView.value === 'plugins')
 const showAccount = computed(() => fullAreaView.value === 'account')
+const showProjectView = computed(() => fullAreaView.value === 'project')
+// 设置 / 插件打开时会话栏不收起：让给整版界面当左侧竖排导航（页名顶替模式位）。
+const sidebarNavView = computed<'settings' | 'plugins' | 'project' | null>(() => {
+  if (appRuntime.platform === 'mobile') return null
+  const view = fullAreaView.value
+  if (view === 'settings' || view === 'plugins' || view === 'project') return view
+  return null
+})
+// 会话栏顶部那个位置显示的页名（与竖排导航同一族）。
+const sidebarNavTitle = computed(() => {
+  switch (sidebarNavView.value) {
+    case 'settings':
+      return '设置'
+    case 'plugins':
+      return '插件'
+    case 'project':
+      return '项目'
+    default:
+      return ''
+  }
+})
 const libraryRefreshTick = ref(0)
+// 定时任务 / 资料库的内部子页通过 heading 上报顶部标题；组件卸载即失效，避免残留面包屑。
+const arrangeHeading = ref<{ title: string; subtitle: string } | null>(null)
+const arrangeRef = ref<{ handleBack?: () => boolean } | null>(null)
+const libraryHeading = ref<{ title: string; subtitle: string } | null>(null)
+const libraryRef = ref<{ handleBack?: () => boolean } | null>(null)
+watch(showArrange, (active) => {
+  if (!active) arrangeHeading.value = null
+})
+watch(showLibrary, (active) => {
+  if (!active) libraryHeading.value = null
+})
 // 顶部标题（整版界面）：标题与说明跟着当前界面走，不再停留在会话标题上。
 const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
   switch (fullAreaView.value) {
     case 'search':
       return { title: '搜索', subtitle: '跨项目查找会话、消息、方案与文件。' }
     case 'library':
-      return { title: '资料库', subtitle: '「方案/」文件夹里的方案 — 点开读全文，就绪后开工。' }
+      return libraryHeading.value ?? { title: '资料库', subtitle: '资料 / 记忆 / 方案 — 一个入口三块内容。' }
     case 'arrange':
-      return { title: '长期安排', subtitle: '定时任务，按计划自动执行。' }
+      return arrangeHeading.value ?? { title: '定时任务', subtitle: '按计划运行任务，或在需要时随时执行。' }
     case 'settings':
       return { title: '设置', subtitle: '模型与供应商、外观主题、工具权限等应用配置。' }
     case 'plugins':
       return { title: '插件', subtitle: '管理已安装的插件，开关它们带来的界面与工具。' }
     case 'account':
       return { title: '账号', subtitle: '登录状态与已配对的设备。' }
+    case 'project':
+      return { title: '项目', subtitle: '项目作用域的元信息与 AGENTS.md 指令。' }
     default:
       return { title: '', subtitle: '' }
   }
 })
+// 整版界面的返回键：定时任务 / 资料库内部先回上一层，其余直接退出整版视图。
+function onFullAreaBack(): void {
+  if (showArrange.value && arrangeRef.value?.handleBack?.()) return
+  if (showLibrary.value && libraryRef.value?.handleBack?.()) return
+  closeFullArea()
+}
 function openFullArea(view: FullAreaViewId): void {
   fullAreaView.value = fullAreaView.value === view ? null : view
 }
 function closeFullArea(): void {
   fullAreaView.value = null
+}
+
+// 最左竖栏：整界面导航。当前分区高亮；点开的视图即“整个界面切走”的状态
+// （外壳据此折叠会话栏）。
+const railActiveView = computed<AppRailView>(() => {
+  const view = fullAreaView.value
+  // 项目设置是聊天所在项目的内页，竖栏仍停在聊天区。'search' 同理。
+  if (!view || view === 'search' || view === 'project') return 'chat'
+  return view
+})
+function onRailOpen(view: AppRailView): void {
+  if (view === 'chat') {
+    closeFullArea()
+    return
+  }
+  if (view === 'account') {
+    openAccount()
+    return
+  }
+  openFullArea(view)
+}
+
+// 侧栏顶部的模式下拉（Codex 里产品名的位置）：Agent / Study / Workflow。
+// 菜单锚在触发按钮下方（不跟鼠标点走），每项带一句小字说明。
+const MODE_DESCRIPTIONS: Record<string, string> = {
+  agent: '处理您的日常任务',
+  study: '学习、探索、温习',
+  workflow: '构建稳定的工作流程',
+}
+function openModeMenu(event: MouseEvent): void {
+  const trigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  const rect = trigger?.getBoundingClientRect()
+  const modes = appModes.value
+  openContextMenu({
+    event,
+    anchor: rect
+      ? { type: 'point', x: rect.left, y: rect.bottom + 6 }
+      : undefined,
+    items: modes.map((mode) => {
+      const key = `${mode.pluginId}:${mode.id}`
+      return {
+        id: `mode-${key}`,
+        label: mode.title,
+        description: MODE_DESCRIPTIONS[mode.id],
+        checked: key === activeAppModeKey.value,
+        attributes: { 'data-sidebar-mode-option': key },
+        action: () => selectAppModeByKey(key),
+      }
+    }),
+    ownerId: 'sidebar-mode-switcher',
+    ariaLabel: '切换模式',
+  })
 }
 const remoteGatewayStatus = ref<MobileControlGatewayStatus | null>(null)
 const remotePairing = ref<MobileControlPairing | null>(null)
@@ -1503,10 +1598,7 @@ function handleGlobalSearchKeydown(event: KeyboardEvent): void {
     toggleLeftPinned()
     return
   }
-  if (key === 'j') {
-    event.preventDefault()
-    toggleStage()
-  }
+
 }
 const showOnboarding = ref(false)
 const wizardLoading = ref(false)
@@ -1608,250 +1700,98 @@ const composerSendDisabled = computed(() => {
     || (!composerText.value.trim() && pendingAttachments.value.length === 0)
 })
 
-// --- Stage pane state ---
-const stageOpen = ref(false)
-const stageTabs = ref<StageResource[]>([])
-const stageActiveId = ref<string | null>(null)
-const stagePaneRef = ref<StagePaneInstance | null>(null)
-const rightPanelMode = ref<'runtime' | 'files' | 'artifacts'>('runtime')
 
-function handleRightPanelMode(mode: 'runtime' | 'files' | 'artifacts'): void {
-  rightPanelMode.value = mode
-  if (mode === 'files' && !stageOpen.value) stageOpen.value = true
-}
+// 右侧栏悬停卡正占着区域：壳层据此在指针移向卡片时不收竖栏。
+const rightSidebarHold = ref(false)
+
+// 开工待选项目：非空时弹「选择项目」卡片，选定后预制提示词而不是直接发送。
+const pendingPlanStart = ref<PlanLibraryEntry | null>(null)
 
 /**
- * "开工"（资料库）：方案即「方案/」文件夹里的一篇文档，开工把它变成一个普通
- * 会话回合——执行技能自己读回文件、装目标与清单，因此不需要新通道，
- * 桌面与手机走同一条路。
+ * "开工"（资料库）：方案即「方案/」文件夹里的一篇文档。点下开工先不干活——
+ * 弹卡片问清楚在哪个项目里开工；选完把执行提示词预制进输入框，发不发、
+ * 什么时候发由用户自己按。
  */
 function startPlanFromLibrary(plan: PlanLibraryEntry): void {
-  if (!activeSessionId.value) {
-    showToast('error', '请先选择一个会话，再从方案开工', 6000)
+  pendingPlanStart.value = plan
+}
+
+/** 开工选定的项目：开工 = 给这份方案开一个全新的专属会话——切到所选项目、
+ * 新建会话，再把执行提示词预制进输入框，发不发由用户自己按。 */
+async function confirmPlanStartProject(projectId: string): Promise<void> {
+  const plan = pendingPlanStart.value
+  pendingPlanStart.value = null
+  if (!plan) return
+  const project = projects.value.find((item) => item.id === projectId)
+  if (!project) return
+  const sourceProjectId = activeProjectId.value ?? selectedProjectId.value
+  selectedProjectId.value = project.id
+  rememberRecentProject(project)
+  try {
+    await projectWorkspace.createProjectSession(project.id)
+  } catch (error) {
+    showToast('error', messageFromError(error), 6000)
     return
   }
   closeFullArea()
-  composerText.value = buildPlanLibraryExecutionPrompt(plan)
-  void submitComposer()
+  composerText.value = buildPlanLibraryExecutionPrompt(plan, sourceProjectId, projectId)
+  void nextTick(resizeComposerTextarea)
+  focusComposer(composerText.value.length)
 }
 
-/** 资料库阅读页的"编辑"：关掉整版界面，在文件编辑页里直接打开方案文件。 */
-function openPlanFileInStage(path: string): void {
-  const name = path.split('/').pop() || path
-  const ext = name.includes('.') ? (name.split('.').pop() || 'md').toLowerCase() : 'md'
-  closeFullArea()
-  void openFileInStage({ path, name, ext })
-}
-
-/** 开工指令（资料库）：方案即「方案/」里的一篇文档，执行技能自己读回它。 */
-function buildPlanLibraryExecutionPrompt(plan: PlanLibraryEntry): string {
+/** 开工指令：执行技能自己读回方案文件；跨项目时给出方案的绝对位置并说明需要批准。 */
+function buildPlanLibraryExecutionPrompt(plan: PlanLibraryEntry, sourceProjectId: string | null, targetProjectId: string): string {
+  const sameProject = !sourceProjectId || sourceProjectId === targetProjectId
+  if (sameProject) {
+    return [
+      `执行方案《${plan.title}》（${plan.path}）。`,
+      '先用 read_file 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；',
+      '然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。',
+    ].join('')
+  }
+  const source = projects.value.find((project) => project.id === sourceProjectId)
+  const absolutePath = absoluteArtifactPath({ path: plan.path, uri: '' }, source?.workRoot)
   return [
-    `执行方案《${plan.title}》（${plan.path}）。`,
-    '先用 read_file 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；',
-    '然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。',
+    `执行方案《${plan.title}》。这份方案属于项目「${source?.name || sourceProjectId}」，存放在 ${absolutePath}。`,
+    '先用 read_file 读回这份方案（它在当前项目之外，读到它需要你先申请访问批准），对照仓库现状核对需求与步骤，有出入的地方先记下结论；',
+    '然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工；方案文件的更新写回它原来的位置。',
   ].join('')
 }
 
-function toggleStage() {
-  stageOpen.value = !stageOpen.value
-  rightPanelMode.value = stageOpen.value ? 'files' : 'runtime'
-}
-
-function stageActivate(id: string) {
-  stageActiveId.value = id
-}
-
-function stageClose(id: string) {
-  const closing = stageTabs.value.find((tab) => tab.id === id)
-  if (closing?.url?.startsWith('blob:')) URL.revokeObjectURL(closing.url)
-  stageTabs.value = stageTabs.value.filter((t) => t.id !== id)
-  if (stageActiveId.value === id) {
-    stageActiveId.value = stageTabs.value[0]?.id ?? null
-  }
-  if (stageTabs.value.length === 0) {
-    stageOpen.value = false
-  }
-}
-
-function stageUpdateContent(payload: { id: string; content: string }) {
-  const tab = stageTabs.value.find((t) => t.id === payload.id)
-  if (tab) tab.content = payload.content
-}
-
-async function stageSave(payload: { id: string; content: string }) {
-  const tab = stageTabs.value.find((t) => t.id === payload.id)
-  if (!tab || !tab.path) return
+/**
+ * 资料库的上传：选文件 → 落到项目「资料/」并登记成一份输入成果。
+ *
+ * 复用与会话附件同一条字节通路（手工 multipart），所以桌面与手机走的是同一形状。
+ */
+async function uploadArtifactFiles(folder: string): Promise<void> {
   const projectId = activeProjectId.value
-  if (!projectId) return
-  try {
-    await projectClient.writeFile(projectId, tab.path, payload.content)
-    stagePaneRef.value?.onSaved()
-  } catch {
-    // 保存失败：复位 saving 让用户可重试，保持 dirty 状态提示未保存
-    stagePaneRef.value?.resetSaving()
-  }
-}
-
-function stageTogglePreview(id: string, mode: 'code' | 'preview') {
-  const tab = stageTabs.value.find((t) => t.id === id)
-  if (tab) tab.previewMode = mode
-}
-
-const EXT_TO_KIND: Record<string, StageKind> = {
-  ts: 'code', tsx: 'code', js: 'code', jsx: 'code', mjs: 'code',
-  vue: 'code', py: 'code', rs: 'code', go: 'code', java: 'code',
-  json: 'code', css: 'code', scss: 'code', html: 'code',
-  yaml: 'code', yml: 'code', toml: 'code', sh: 'code', sql: 'code',
-  md: 'markdown',
-  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image',
-  webp: 'image', svg: 'image', bmp: 'image', ico: 'image',
-  mp4: 'video', webm: 'video', mov: 'video', avi: 'video',
-  mp3: 'audio', wav: 'audio', ogg: 'audio', flac: 'audio',
-  pdf: 'pdf',
-}
-
-function inferStageKind(ext: string): StageKind {
-  return EXT_TO_KIND[ext] ?? 'code'
-}
-
-async function openFileInStage(entry: { path: string; name: string; ext: string }) {
-  const projectId = activeProjectId.value
-  if (!projectId) return
-  const kind = inferStageKind(entry.ext)
-  const tabId = `file:${entry.path}`
-  const existing = stageTabs.value.find((t) => t.id === tabId)
-  if (existing) {
-    stageActiveId.value = tabId
-    if (!stageOpen.value) stageOpen.value = true
-    return
-  }
-  const tab: StageResource = {
-    id: tabId,
-    kind,
-    path: entry.path,
-    label: entry.name,
-    language: entry.ext,
-  }
-  if (kind === 'code' || kind === 'markdown') {
+  if (!projectId) throw new Error('先在左侧选择一个项目')
+  const picker = appRuntime.capabilities.files
+  if (!picker) throw new Error('当前环境不支持文件选择')
+  const files = await picker.pick({ source: 'file', multiple: true })
+  if (!files?.length) return
+  const query = folder ? `?folder=${encodeURIComponent(folder)}` : ''
+  const failures: string[] = []
+  for (const file of files) {
+    const multipart = await encodeMultipartFile(file)
     try {
-      const result = await projectClient.readFile(projectId, entry.path)
-      tab.content = result.content
-    } catch {
-      tab.content = '// 无法加载文件内容'
-    }
-  } else if (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
-    try {
-      const response = await projectClient.readRawFile(projectId, entry.path)
-      tab.url = URL.createObjectURL(new Blob([Uint8Array.from(response.body)], {
-        type: response.headers['content-type'] || 'application/octet-stream',
-      }))
-    } catch {
-      tab.url = ''
-    }
-  }
-  stageTabs.value.push(tab)
-  stageActiveId.value = tabId
-  if (!stageOpen.value) stageOpen.value = true
-}
-
-function artifactReferencePath(artifact: ProjectArtifact, revision?: ArtifactRevision): string {
-  return String(revision?.path || revision?.uri || artifact.path || artifact.uri || '')
-}
-
-function artifactStageKind(artifact: ProjectArtifact, revision?: ArtifactRevision): StageKind {
-  const mime = String(revision?.mime_type || artifact.mime_type || '').toLowerCase()
-  if (mime.startsWith('image/')) return 'image'
-  if (mime.startsWith('video/')) return 'video'
-  if (mime.startsWith('audio/')) return 'audio'
-  if (mime === 'application/pdf') return 'pdf'
-  const name = String(revision?.name || artifact.name || artifactReferencePath(artifact, revision)).split(/[?#]/, 1)[0]
-  const ext = name.split('.').pop()?.toLowerCase() || ''
-  return inferStageKind(ext)
-}
-
-function artifactHttpPath(projectId: string, artifact: ProjectArtifact, revision?: ArtifactRevision): string {
-  const reference = artifactReferencePath(artifact, revision)
-  const revisionId = String(revision?.revision_id || revision?.id || '')
-  // Artifact V2 revisions are immutable blobs. Always route an identified
-  // revision through the artifact endpoint; using the workspace path here
-  // would silently preview the current file instead of the selected history.
-  if (artifact.artifact_id) {
-    const query = new URLSearchParams()
-    if (revisionId) query.set('revision_id', revisionId)
-    if (reference) query.set('path', reference)
-    const suffix = query.toString() ? `?${query.toString()}` : ''
-    return `/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifact.artifact_id)}/file${suffix}`
-  }
-  if (reference.startsWith('attachment://')) {
-    return `/attachments/${encodeURIComponent(reference.slice('attachment://'.length))}/download`
-  }
-  if (reference.startsWith('workspace://')) {
-    return `/projects/${encodeURIComponent(projectId)}/files/raw?path=${encodeURIComponent(reference.slice('workspace://'.length))}`
-  }
-  return reference
-    ? `/projects/${encodeURIComponent(projectId)}/files/raw?path=${encodeURIComponent(reference)}`
-    : ''
-}
-
-async function openArtifactInStage(artifact: ProjectArtifact, revision?: ArtifactRevision): Promise<void> {
-  const projectId = activeProjectId.value
-  if (!projectId) return
-  rightPanelMode.value = 'artifacts'
-  const revisionId = String(revision?.revision_id || revision?.id || '')
-  const tabId = `artifact:${artifact.artifact_id}${revisionId ? `:${revisionId}` : ''}`
-  const existing = stageTabs.value.find(tab => tab.id === tabId)
-  if (existing) {
-    stageActiveId.value = tabId
-    stageOpen.value = true
-    return
-  }
-  const kind = artifactStageKind(artifact, revision)
-  const reference = artifactReferencePath(artifact, revision)
-  const tab: StageResource = {
-    id: tabId,
-    kind,
-    path: reference,
-    label: String(revision?.name || artifact.name || artifact.artifact_id),
-  }
-  const inlineContent = typeof revision?.content === 'string' ? revision.content : ''
-  if (kind === 'code' || kind === 'markdown') {
-    if (inlineContent) {
-      tab.content = inlineContent
-    } else if (reference && !reference.startsWith('attachment://') && !artifact.artifact_id && reference.startsWith('workspace://')) {
-      try {
-        tab.content = (await projectClient.readFile(projectId, reference.slice('workspace://'.length))).content
-      } catch {
-        tab.content = '// 无法加载成果内容'
+      const response = await appRuntime.request({
+        kind: 'http',
+        method: 'POST',
+        path: `/projects/${encodeURIComponent(projectId)}/artifacts${query}`,
+        headers: { 'Content-Type': multipart.contentType },
+        body: multipart.body,
+      })
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(new TextDecoder().decode(response.body) || `HTTP ${response.status}`)
       }
-    } else {
-      try {
-        const path = artifactHttpPath(projectId, artifact, revision)
-        const response = await transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path })
-        if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`)
-        tab.content = new TextDecoder().decode(Uint8Array.from(response.body))
-      } catch {
-        tab.content = '// 无法加载成果内容'
-      }
-    }
-  } else if (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
-    try {
-      const path = artifactHttpPath(projectId, artifact, revision)
-      const response = await transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path })
-      if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`)
-      tab.url = URL.createObjectURL(new Blob([Uint8Array.from(response.body)], {
-        type: response.headers['content-type'] || artifact.mime_type || 'application/octet-stream',
-      }))
-    } catch {
-      tab.url = ''
+    } catch (error) {
+      failures.push(`${file.name}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  stageTabs.value.push(tab)
-  stageActiveId.value = tabId
-  stageOpen.value = true
+  if (failures.length) throw new Error(`上传失败 ${failures.length} 个 — ${failures[0]}`)
 }
-// Split key from the shell's — useShellLayout persists stageOpen/stageHeight
-// under 'lamtools.core.ui'; writing the same key from here with a different
-// schema silently dropped those fields on every preference save (audit 19 S3).
+
 const uiPreferences = useCoreUiPreferences('lamtools.core.ui.preferences')
 const { density, contentWidth, theme, themeMode, effectiveThemeMode } = uiPreferences
 const availableModels = ref<RawModel[]>([])
@@ -2097,6 +2037,24 @@ watch(activeTurnRunning, (running, previous) => {
 })
 const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))
 
+/** 应用内确认框：标题 + 一行对象名 + 取消/确认，替代系统弹窗。 */
+type AppConfirmRequest = {
+  title: string
+  detail?: string
+  action: () => void | Promise<void>
+}
+const appConfirm = ref<AppConfirmRequest | null>(null)
+
+function askConfirm(request: AppConfirmRequest): void {
+  appConfirm.value = request
+}
+
+async function confirmAppAction(): Promise<void> {
+  const request = appConfirm.value
+  appConfirm.value = null
+  if (request) await request.action()
+}
+
 function stopLatestActivityMotion(): void {
   latestActivityTween?.kill()
   latestActivityTween = null
@@ -2200,6 +2158,10 @@ const activeSessionTitle = computed(() => (
 const selectedProject = computed(() => (
   projects.value.find((project) => project.id === selectedProjectId.value) || null
 ))
+// 项目没了（删除或取消选择）时，项目设置页跟着退出，别把主区留在空白页上。
+watch(selectedProject, (project) => {
+  if (!project && fullAreaView.value === 'project') closeFullArea()
+})
 const activeProjectId = computed(() => {
   const session = sessions.value.find((item) => item.id === activeSessionId.value)
   const workRoot = session?.metadata?.work_root
@@ -2295,10 +2257,6 @@ watch([activeSessionId, isEmptySession], ([sessionId, empty], [previousSessionId
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
 
-// Checkpoint state still powers the checkpoint graph surfaces, but the
-// edit/fork/rollback entries no longer depend on it: a normal user message is
-// always actionable unless it predates the last context compaction.
-const checkpointController = useCheckpoints(requestConfigOperation)
 // Messages the backend already replaced with a context summary: their original
 // text is gone, so edit/fork/rollback must not be offered.
 const lockedMessageIds = computed(() => lockedMessageIdsBeforeCompaction(messages.value))
@@ -2441,7 +2399,8 @@ function openProjectActions(projectId: string) {
   selectedProjectId.value = project.id
   projectNameDraft.value = project.name
   projectActionError.value = ''
-  showProjectSettings.value = true
+  projectSettingsSection.value = 'project'
+  openFullArea('project')
   // Load AGENTS.md content for the in-place editor inside project settings.
   void loadAgentsForProject(project.id)
 }
@@ -2524,9 +2483,17 @@ async function renameProject(nameFromEditor?: string) {
   }
 }
 
-async function deleteProject(projectId: string) {
+function deleteProject(projectId: string) {
   const project = projects.value.find((item) => item.id === projectId)
-  if (!project || !window.confirm(`确定删除项目「${project.name}」及其会话记录？此操作不可撤销。`)) return
+  if (!project) return
+  askConfirm({
+    title: '删除项目及会话记录？',
+    detail: project.name,
+    action: () => performDeleteProject(project),
+  })
+}
+
+async function performDeleteProject(project: CoreProject) {
   projectActionLoading.value = true
   projectActionError.value = ''
   try {
@@ -2534,7 +2501,7 @@ async function deleteProject(projectId: string) {
     if (!deleted) return
     if (selectedProjectId.value === project.id) selectedProjectId.value = null
     if (agentsProjectId.value === project.id) { agentsProjectId.value = null; agentsContent.value = '' }
-    if (showProjectSettings.value) closeProjectSettings()
+    if (fullAreaView.value === 'project') closeFullArea()
     if (deleted.wasActive) {
       workbench.disconnect()
       liveComposerController.resetForThreadChange()
@@ -2549,7 +2516,7 @@ async function deleteProject(projectId: string) {
 }
 
 function closeProjectSettings() {
-  showProjectSettings.value = false
+  if (fullAreaView.value === 'project') closeFullArea()
 }
 
 async function refreshAgentsContent() {
@@ -2675,11 +2642,17 @@ async function exportSession(sessionId: string, format: SessionExportFormat): Pr
   }
 }
 
-async function deleteSession(sessionId: string) {
+function deleteSession(sessionId: string) {
   const session = sessions.value.find((item) => item.id === sessionId)
   const title = session?.title || `Session ${sessionId.slice(0, 8)}`
-  if (!window.confirm(`确定删除会话「${title}」？会话、历史、checkpoint、附件记录都会删除。此操作不可撤销。`)) return
+  askConfirm({
+    title: '删除会话及历史？',
+    detail: title,
+    action: () => performDeleteSession(sessionId),
+  })
+}
 
+async function performDeleteSession(sessionId: string) {
   try {
     await requestJson(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
   } catch (error) {
@@ -2725,11 +2698,6 @@ async function selectSession(id: string) {
     liveComposerController.loadCommandCatalog(id),
     refreshGoal(id, true),
   ])
-  checkpointController.reset()
-  checkpointController.beginLoading()
-  // Legacy user-message editing still uses a pre-turn checkpoint.  Failure
-  // here is deliberately isolated from assistant Fork/Rollback.
-  void checkpointController.load(id)
   await Promise.all([
     sessionMetadataReady,
     threadScroll.scrollToBottom(true),
@@ -2879,7 +2847,6 @@ async function refreshAfterRollback() {
   if (!sessionId) return
   await refreshSessions()
   await selectSession(sessionId)
-  await checkpointController.load(sessionId)
 }
 
 async function handleForkMessage(payload: { turnId: string; content: string }) {
@@ -2906,7 +2873,7 @@ async function handleForkMessage(payload: { turnId: string; content: string }) {
   }
 }
 
-async function handleRollbackMessage(payload: { turnId: string; content: string }) {
+function handleRollbackMessage(payload: { turnId: string; content: string }) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
     composerErrorText.value = '当前没有可回退的会话'
@@ -2916,18 +2883,19 @@ async function handleRollbackMessage(payload: { turnId: string; content: string 
     composerErrorText.value = '任务运行中，请先停止任务再回退'
     return
   }
-  if (!window.confirm('删除这条消息及之后的全部对话？有可用检查点时会一并恢复文件；没有则只清对话。')) return
+  // 用应用内确认框，不用系统弹窗：原生 confirm 会顶着 "127.0.0.1:5173 显示"
+  // 这样的地址标题，且观感与应用无关。
+  askConfirm({ title: '撤回', action: () => rollbackTurn(sessionId, payload.turnId) })
+}
+
+async function rollbackTurn(sessionId: string, turnId: string): Promise<void> {
   try {
-    const result = await requestConfigOperation('session.rollback', {
+    await requestConfigOperation('session.rollback', {
       session_id: sessionId,
-      turn_id: payload.turnId,
+      turn_id: turnId,
     })
     await refreshAfterRollback()
-    if (result.mode === 'checkpoint') {
-      showToast('notice', '已删除此轮及之后内容：对话、运行时和工作区已恢复。')
-    } else {
-      showToast('notice', '已删除此轮及之后对话；文件、运行时和外部操作未恢复。')
-    }
+    showToast('notice', '已删除此轮及之后的对话；文件与成果保持不变。')
   } catch (error) {
     composerErrorText.value = error instanceof Error ? error.message : String(error)
   }
@@ -3416,9 +3384,13 @@ async function updateProvider(payload: CoreSettingsProviderPayload) {
   await mutateConfig('config.provider.update', payload, '供应商已更新')
 }
 
-async function deleteProvider(providerId: string) {
-  if (!window.confirm('删除供应商会同时移除其模型配置，是否继续？')) return
-  await mutateConfig('config.provider.delete', { provider_id: providerId }, '供应商已删除')
+function deleteProvider(providerId: string) {
+  const provider = availableProviders.value.find((item) => item.id === providerId)
+  askConfirm({
+    title: '删除供应商及其模型配置？',
+    detail: provider?.name || providerId,
+    action: () => mutateConfig('config.provider.delete', { provider_id: providerId }, '供应商已删除'),
+  })
 }
 
 async function createModel(payload: CoreSettingsModelPayload) {
@@ -3429,9 +3401,13 @@ async function updateModel(payload: CoreSettingsModelPayload) {
   await mutateConfig('config.models.upsert', { scope: 'global', ...payload }, '模型已更新')
 }
 
-async function deleteModel(modelRecordId: string) {
-  if (!window.confirm('删除此模型配置，是否继续？')) return
-  await mutateConfig('config.models.delete', { scope: 'global', model_id: modelRecordId }, '模型已删除')
+function deleteModel(modelRecordId: string) {
+  const model = availableModels.value.find((item) => item.id === modelRecordId)
+  askConfirm({
+    title: '删除模型配置？',
+    detail: model?.display_name || model?.model_id || modelRecordId,
+    action: () => mutateConfig('config.models.delete', { scope: 'global', model_id: modelRecordId }, '模型已删除'),
+  })
 }
 
 async function setDefaultModel(modelId: string) {
@@ -3479,12 +3455,16 @@ async function updateModelGroup(payload: { group_id: string; name: string }) {
   }, '模型组已更新')
 }
 
-async function deleteModelGroup(groupId: string) {
-  if (!window.confirm('删除模型组只会移除分组关系，不会删除模型。是否继续？')) return
-  await mutateModelCatalog('config.model_group.delete', {
-    group_id: groupId,
-    ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
-  }, '模型组已删除')
+function deleteModelGroup(groupId: string) {
+  const group = modelGroups.value.find((item) => item.id === groupId)
+  askConfirm({
+    title: '删除模型组（模型保留）？',
+    detail: group?.name || groupId,
+    action: () => mutateModelCatalog('config.model_group.delete', {
+      group_id: groupId,
+      ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
+    }, '模型组已删除'),
+  })
 }
 
 async function setModelGroupMembers(payload: { group_id: string; model_ids: string[] }) {
@@ -3536,7 +3516,7 @@ async function updateModelCatalogView(value: CoreModelCatalogView) {
   } catch (error) {
     modelCatalogView.value = previous
     const message = error instanceof Error ? error.message : String(error)
-    window.alert(`模型分类方式保存失败，已回滚：${message}`)
+    showToast('error', `模型分类方式保存失败，已回滚：${message}`)
   }
 }
 
@@ -3577,7 +3557,7 @@ async function updatePermissionMode(mode: 'read_only' | 'limited_edit' | 'full_e
     // mode that the backend did not persist (audit 17 S3).
     permissionMode.value = previous
     const message = e instanceof Error ? e.message : String(e)
-    window.alert(`权限模式保存失败，已回滚：${message}`)
+    showToast('error', `权限模式保存失败，已回滚：${message}`)
   }
 }
 
@@ -3592,7 +3572,7 @@ async function updateAllowAccessOutsideWorkdir(value: boolean) {
   } catch (e) {
     allowAccessOutsideWorkdir.value = previous
     const message = e instanceof Error ? e.message : String(e)
-    window.alert(`工作目录外访问设置保存失败，已回滚：${message}`)
+    showToast('error', `工作目录外访问设置保存失败，已回滚：${message}`)
   }
 }
 
@@ -3690,7 +3670,7 @@ async function updatePermissionPreset(preset: CorePermissionPreset) {
   } catch (e) {
     defaultPermissionPreset.value = previous
     const message = e instanceof Error ? e.message : String(e)
-    window.alert(`默认审批策略保存失败，已回滚：${message}`)
+    showToast('error', `默认审批策略保存失败，已回滚：${message}`)
   }
 }
 
@@ -3939,6 +3919,9 @@ function openArrange(): void {
 /** Which plugins section the next open should land on (search hits target one). */
 const pluginsSection = ref<string | undefined>(undefined)
 
+// 项目设置的当前分区：会话栏导航与页面双向同步。
+const projectSettingsSection = ref<string | undefined>(undefined)
+
 function openPlugins(section?: string): void {
   pluginsSection.value = section
   openFullArea('plugins')
@@ -3969,7 +3952,7 @@ const searchCommands = computed<SearchCommand[]>(() => {
   ]
   if (appRuntime.platform !== 'mobile') {
     commands.push(
-      { id: 'toggle-preview', label: '切换预览', group: '面板', shortcut: 'Ctrl+J', icon: MonitorPlay, run: () => toggleStage() },
+      
       { id: 'toggle-right-panel', label: '切换右侧栏', group: '面板', icon: PanelRight, run: () => toggleRightPinned() },
     )
   }
@@ -4238,6 +4221,7 @@ onUnmounted(() => {
 @import '../styles/base.css';
 @import '../styles/layout.css';
 @import '../styles/theme-editor.css';
+@import '../styles/library-surface.css';
 
 .plugin-mode-surface {
   flex: 1 1 auto;
@@ -4304,7 +4288,6 @@ onUnmounted(() => {
   display: grid;
   place-items: center;
   background: color-mix(in srgb, var(--theme-main-background) 88%, transparent);
-  backdrop-filter: blur(3px);
 }
 .attachment-drop-card {
   display: grid;
@@ -4337,7 +4320,6 @@ onUnmounted(() => {
   display: grid;
   place-items: center;
   background: rgba(0, 0, 0, 0.34);
-  backdrop-filter: blur(2px);
 }
 .wf-create-card {
   width: 320px;
@@ -4407,29 +4389,6 @@ onUnmounted(() => {
 .wf-create-actions .primary-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.stage-toggle-btn {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
-  cursor: pointer;
-  font-size: 14px;
-  display: grid;
-  place-items: center;
-  transition: background 0.15s, color 0.15s;
-}
-.stage-toggle-btn:hover {
-  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
-  color: var(--text, #f2efeb);
-}
-.stage-toggle-btn.active {
-  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent);
-  color: var(--text, #f2efeb);
 }
 
 /* The zero-height sticky slot keeps the paging status above the viewport

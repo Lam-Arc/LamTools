@@ -1,0 +1,24 @@
+=== prepare service dir (0700, root) ===
+drwxr-x--- 4 root root 4096 Sep 26 18:58 /opt/lamtools-api
+drwxr-x--- 2 root root 4096 Sep 26 18:58 /opt/lamtools-api/data
+drwxr-x--- 2 root root 4096 Sep 26 18:58 /opt/lamtools-api/logs
+=== disk before ===
+/dev/vda3        40G   11G   27G  28% /
+=== pull new-api (pinned rc, fallback latest) ===
+new-api tag OK: calciumion/new-api:v1.0.0-rc.40
+=== pull postgres + redis ===
+OK postgres:16-alpine
+OK redis:7-alpine
+=== resolved digests ===
+calciumion/new-api:v1.0.0-rc.40 -> calciumion/new-api@sha256:37c0f99a76ed0a5d5b376b8486173415efd1ec416042b392bd564eb0ae6a55ef
+postgres:16-alpine -> postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+redis:7-alpine -> redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+=== image sizes ===
+local/cf-edge-probe:2.3.5 11.5MB
+calciumion/new-api:v1.0.0-rc.40 328MB
+redis:7-alpine 57.8MB
+postgres:16-alpine 420MB
+alpine:3.20 12.2MB
+=== disk after ===
+/dev/vda3        40G   12G   27G  30% /
+=== done ===

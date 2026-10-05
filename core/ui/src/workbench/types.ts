@@ -3,6 +3,7 @@ import type {
   CoreAppEvent,
   CoreAppServerRuntimeClient,
   CoreAppSnapshot,
+  CoreSyncChangeNotification,
 } from '../appServer'
 import type { CoreCommandCatalogItem, CoreInputItem, CoreMessage, CoreSessionListItem } from '../types'
 import type { useComposerCommandPalette } from '../composables/useComposerCommandPalette'
@@ -25,6 +26,7 @@ export interface WorkbenchClientFactory {
     transport: LamToolsTransport
     onEvent: (event: CoreAppEvent) => void
     onSnapshot: (snapshot: CoreAppSnapshot) => void
+    onSyncChange?: (change: CoreSyncChangeNotification) => void
     onConnectionState: (state: WorkbenchConnectionState) => void
   }): CoreAppServerRuntimeClient | Promise<CoreAppServerRuntimeClient>
 }

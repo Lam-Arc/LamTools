@@ -38,6 +38,10 @@ from lamtools_core.runtime.plan import (
     new_plan_revision as _new_plan_revision,
     plan_to_active_plan as _plan_to_active_plan,
 )
+from lamtools_core.runtime.background_processes import (
+    default_background_process_registry,
+    persistent_process_prompt,
+)
 from lamtools_core.snapshot import reduce_run_item_events
 from lamtools_core.tool import ToolCall, ToolContext, ToolResult
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
@@ -443,10 +447,14 @@ class CoreBaseAgentKit:
                 "When the task is complete, reply directly with the learning results, what was actually recorded, and any matters requiring user confirmation.",
             ]
         else:
+            persistent_processes = persistent_process_prompt(
+                default_background_process_registry(), str(state.session_id or "")
+            )
             system_lines = [
                 effective_instructions,
                 f"Current project: {state.metadata.get('work_root', '')}, current session: {state.session_id}, current model: {self.config.model_display_name or self.config.model_id}",
                 command_shell_prompt(),
+                *([persistent_processes] if persistent_processes else []),
                 "Do not damage the structure or tidiness of the project directory while working.",
                 *_COMMON_TOOL_PROTOCOL,
                 "When the task is complete, reply with a short summary covering completed work, scope, output locations, and any matters requiring user confirmation. The final reply must list each deliverable file created or updated in this turn, with each real path wrapped in backticks or a Markdown file link; do not claim a nonexistent path was delivered.",

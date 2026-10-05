@@ -1,0 +1,130 @@
+# LamTools API gateway — public multi-tenant relay aggregating upstream API keys.
+#
+# Deployed to /opt/lamtools-api/docker-compose.yml on i-bp10t7y63rvbncmjstpm.
+# Secrets live in /opt/lamtools-api/.env (0600, generated on the server); this
+# file intentionally contains none.
+#
+# Exposure model: only the gateway is published, and only on the loopback
+# address. Caddy terminates TLS and is the sole public entry point. The database
+# and cache have no host port at all.
+services:
+  gateway:
+    image: calciumion/new-api:v1.0.0-rc.40
+    container_name: lamtools-api-gateway
+    restart: unless-stopped
+    command: --log-dir /app/logs
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data:/data
+      - ./logs:/app/logs
+    environment:
+      TZ: Asia/Shanghai
+      SQL_DSN: postgresql://lamtools_api:${PG_PASSWORD}@db:5432/lamtools_api
+      REDIS_CONN_STRING: redis://:${REDIS_PASSWORD}@cache:6379
+      SESSION_SECRET: ${SESSION_SECRET}
+      CRYPTO_SECRET: ${CRYPTO_SECRET}
+      # Caddy reaches the container through the bridge gateway, so that subnet is
+      # the only peer allowed to assert a client IP in X-Forwarded-For. Caddy
+      # rewrites the header rather than appending, so callers cannot spoof it.
+      TRUSTED_PROXIES: 172.30.0.0/24
+      NODE_TYPE: master
+      ERROR_LOG_ENABLED: "true"
+      BATCH_UPDATE_ENABLED: "true"
+      STREAMING_TIMEOUT: "300"
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  db:
+    image: postgres:16-alpine
+    container_name: lamtools-api-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lamtools_api
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: lamtools_api
+      TZ: Asia/Shanghai
+    # Bounded for a 3.6 GB host that also runs the site, the relay and the tunnel.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=60
+      - -c
+      - work_mem=4MB
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 448m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "lamtools_api", "-d", "lamtools_api"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+  cache:
+    image: redis:7-alpine
+    container_name: lamtools-api-cache
+    restart: unless-stopped
+    # Pure cache: no snapshotting, no AOF, evict rather than fail.
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD}
+      - --appendonly
+      - "no"
+      - --save
+      - ""
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 192m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+
+networks:
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  pgdata:

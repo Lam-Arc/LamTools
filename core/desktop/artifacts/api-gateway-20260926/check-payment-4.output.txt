@@ -1,0 +1,52 @@
+  total settings visible through the API: 212
+  settings whose name hints at money or display: 36
+    TopupGroupRatio                            = {"default":1,"svip":1,"vip":1}
+    StripePromotionCodesEnabled                = false
+    WeChatAccountQRCodeImageURL                = 
+    payment_setting.amount_discount            = {}
+    payment_setting.amount_options             = [10,20,50,100,200,500]
+    ModelPrice                                 = {"black-forest-labs/flux-1.1-pro":0.04,"dall-e-3":0.04,
+    general_setting.custom_currency_symbol     = ¤
+    WaffoPancakeMinTopUp                       = 1
+    checkin_setting.max_quota                  = 10000
+    WaffoMinTopUp                              = 1
+    general_setting.custom_currency_exchange_rate = 1
+    Price                                      = 7.3
+    EpayId                                     = 
+    WeChatServerAddress                        = 
+    tool_price_setting.prices                  = {"file_search":2.5,"google_search":14,"web_search":10,"
+    DisplayTokenStatEnabled                    = true
+    WaffoCurrency                              = 
+    PayAddress                                 = 
+    WaffoPayMethods                            = [{"name":"Card","icon":"/pay-card.png","payMethodType":
+    WaffoPancakeUnitPrice                      = 1
+    DisplayInCurrencyEnabled                   = true
+    checkin_setting.min_quota                  = 1000
+    PayMethods                                 = [{"color":"rgba(var(--semi-blue-5), 1)","name":"支付宝","t
+    passkey.rp_display_name                    = New API
+    WaffoPancakeCurrency                       = USD
+    StripeMinTopUp                             = 1
+    grok.violation_deduction_amount            = 0.05
+    StripePriceId                              = 
+    MinTopUp                                   = 1
+    StripeUnitPrice                            = 8
+    checkin_setting.enabled                    = false
+    WaffoUnitPrice                             = 1
+    general_setting.quota_display_type         = USD
+    TopUpLink                                  = 
+    WeChatAuthEnabled                          = false
+    WaffoSubscriptionReturnUrl                 = 
+  --- the ones that decide whether anyone can pay anything ---
+    TopupGroupRatio                            = {"default":1,"svip":1,"vip":1}
+    StripePromotionCodesEnabled                = false
+    payment_setting.amount_discount            = {}
+    payment_setting.amount_options             = [10,20,50,100,200,500]
+    WaffoPancakeMinTopUp                       = 1
+    WaffoMinTopUp                              = 1
+    EpayId                                     = 
+    StripeMinTopUp                             = 1
+    StripePriceId                              = 
+    MinTopUp                                   = 1
+    StripeUnitPrice                            = 8
+    TopUpLink                                  = 
+=== done ===

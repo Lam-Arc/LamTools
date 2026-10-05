@@ -12,7 +12,7 @@
       <Paperclip :size="17" :stroke-width="1.9" aria-hidden="true" />
     </button>
 
-    <div v-if="categorized && open" class="attachment-source__menu optical-glass" role="menu" aria-label="选择附件来源">
+    <div v-if="categorized && open" class="attachment-source__menu optical-glass optical-glass--low-trans" role="menu" aria-label="选择附件来源">
       <button type="button" role="menuitem" @click="select('file')">
         <FileUp :size="18" :stroke-width="1.8" aria-hidden="true" />
         <span><strong>文件</strong><small>从设备文件中选择</small></span>

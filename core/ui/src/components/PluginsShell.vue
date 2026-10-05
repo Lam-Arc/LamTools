@@ -5,7 +5,10 @@
           title="插件"
           :initial-section="props.initialSection"
           :settings-theme-style="settingsThemeStyle"
+          :hide-nav="props.hideNav"
+          :active-section="props.activeSection"
           @close="$emit('close')"
+          @section-change="$emit('section-change', $event)"
         >
           <template #default="{ activeSection }">
             <section v-if="activeSection === 'plugins'" class="settings-panel">
@@ -42,7 +45,8 @@
  * 复用 SettingsShell 骨架（同一 overlay/侧边栏布局 + --settings-* token）。
  */
 import { computed, ref } from 'vue'
-import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
+import SettingsShell from './SettingsShell.vue'
+import { PLUGIN_SHELL_SECTIONS, type SettingsSection } from './settingsSections'
 import CorePluginsEditor from './CorePluginsEditor.vue'
 import CoreSkillsEditor from './CoreSkillsEditor.vue'
 import CoreHooksEditor from './CoreHooksEditor.vue'
@@ -55,19 +59,20 @@ const props = defineProps<{
   theme?: ThemeData | null
   /** Section to open on: a search hit for a skill lands on 技能, not 插件. */
   initialSection?: string
+  /** Hide the built-in left nav: the host renders it in the workspace drawer. */
+  hideNav?: boolean
+  /** Controlled section from the host's drawer nav. */
+  activeSection?: string
 }>()
 
 const emit = defineEmits<{
   close: []
+  'section-change': [id: string]
   'capabilities-changed': [refreshDesktop: boolean]
 }>()
 
 
-const sections: SettingsSection[] = [
-  { id: 'plugins', label: '插件', icon: 'puzzle' },
-  { id: 'skills', label: '技能', icon: 'sparkles' },
-  { id: 'hooks', label: '钩子', icon: 'plug' },
-]
+const sections = PLUGIN_SHELL_SECTIONS
 
 const settingsThemeStyle = computed(() => {
   if (!props.theme) return {}

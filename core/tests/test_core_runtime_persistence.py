@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sqlite3
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -14,9 +15,157 @@ import lamtools_core.app.core_db as core_db_module
 from lamtools_core.app import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from lamtools_core.app.core_db import RuntimeStateConflictError, open_core_app_db
 from lamtools_core.app.event_store import AppEventInput
+from lamtools_core.app.persistence_host import RevisionConflictError
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.runtime import RuntimeState
 from lamtools_core.tool import ToolResult
+
+
+@pytest.mark.asyncio
+async def test_open_core_app_db_restores_columns_missing_from_an_older_copy(tmp_path) -> None:
+    """版本号已是当前值的库，缺列也要补上。
+
+    2026-10-03：本机开发库的 core_artifacts.favorite 缺失，资料库整个报
+    "no such column"。库来自旧代码或旧备份时版本号可能已经是当前值，增量迁移
+    因此整体不再运行；补列是幂等的，必须放在版本判断之外兜底。
+    """
+    db_path = tmp_path / "drifted.db"
+    first = await open_core_app_db(db_path)
+    await first.close()
+
+    with sqlite3.connect(db_path) as raw:
+        raw.execute("ALTER TABLE core_artifacts DROP COLUMN favorite")
+        raw.execute("ALTER TABLE core_artifacts DROP COLUMN folder")
+
+    reopened = await open_core_app_db(db_path)
+    try:
+        async with reopened.session_factory() as connection:
+            columns = {
+                row[1]
+                for row in (await connection.execute(text("PRAGMA table_info(core_artifacts)"))).all()
+            }
+        assert {"favorite", "folder"} <= columns
+
+        work_root = tmp_path / "work"
+        work_root.mkdir()
+        project, _ = await reopened.project_store.create(work_root)
+        assert await reopened.artifact_store.list(project.id) == []
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_open_core_app_db_raises_thread_revision_to_highest_event_revision(tmp_path) -> None:
+    """行上的 CAS 修订号低于事件里出现过的最高值时，打开库就要把它抬上去。
+
+    2026-10-04：本机开发库 d638…4b 的会话行上是 0、事件里已到 363。客户端
+    resume 时按事件修订号把本地期望值推进到 363，服务端却按行上的 0 做 CAS，
+    于是该会话的每次写入都判冲突、刷新回来的快照又因"不能回退"被丢弃——
+    压缩上下文（/compact）永远失败。修订号本应单调，打开时取较大者对齐。
+    """
+    db_path = tmp_path / "revision-drift.db"
+    first = await open_core_app_db(db_path)
+    await first.close()
+
+    with sqlite3.connect(db_path) as raw:
+        raw.execute(
+            "INSERT INTO core_thread_snapshots "
+            "(thread_id, snapshot_seq, revision, active_turn_id, snapshot_json, updated_at) "
+            "VALUES ('thread-drifted', 3, 0, NULL, '{}', ?)",
+            (datetime.now(),),
+        )
+        raw.execute(
+            "INSERT INTO core_app_events "
+            "(event_id, thread_id, seq, method, payload_json, workspace_id, entity_type, "
+            " entity_id, event_seq, revision, event_type, created_at) "
+            "VALUES ('event-drifted', 'thread-drifted', 1, 'core/runItem', '{}', '', 'thread.event', "
+            " 'thread-drifted', 1, 42, 'core/runItem', ?)",
+            (datetime.now(),),
+        )
+        # 一个行上修订号本就领先的会话：对齐只能抬，不能压回去。
+        raw.execute(
+            "INSERT INTO core_thread_snapshots "
+            "(thread_id, snapshot_seq, revision, active_turn_id, snapshot_json, updated_at) "
+            "VALUES ('thread-ahead', 1, 99, NULL, '{}', ?)",
+            (datetime.now(),),
+        )
+
+    reopened = await open_core_app_db(db_path)
+    try:
+        async with reopened.session_factory() as connection:
+            drifted = await connection.scalar(
+                text("SELECT revision FROM core_thread_snapshots WHERE thread_id = 'thread-drifted'")
+            )
+            ahead = await connection.scalar(
+                text("SELECT revision FROM core_thread_snapshots WHERE thread_id = 'thread-ahead'")
+            )
+        assert drifted == 42
+        assert ahead == 99
+
+        # 客户端拿着它见过的 42 来写入：对齐后 CAS 必须放行。
+        async with reopened.session_factory() as connection:
+            await reopened.persistence.assert_revision(connection, "thread-drifted", 42)
+            with pytest.raises(RevisionConflictError):
+                await reopened.persistence.assert_revision(connection, "thread-drifted", 41)
+    finally:
+        await reopened.close()
+
+    # 幂等：再打开一次，值不变、也不会把领先的会话压回去。
+    again = await open_core_app_db(db_path)
+    try:
+        async with again.session_factory() as connection:
+            assert await connection.scalar(
+                text("SELECT revision FROM core_thread_snapshots WHERE thread_id = 'thread-drifted'")
+            ) == 42
+            assert await connection.scalar(
+                text("SELECT revision FROM core_thread_snapshots WHERE thread_id = 'thread-ahead'")
+            ) == 99
+    finally:
+        await again.close()
+
+
+@pytest.mark.asyncio
+async def test_open_core_app_db_backfills_restored_revision_column_from_snapshot_json(tmp_path) -> None:
+    """补回来的 revision 列不能只留默认 0：按快照 JSON 与事件锚点回填。
+
+    列是后加的（或用旧代码/旧备份恢复的库），行上会得到默认 0，而快照 JSON
+    里的修订号才是客户端见过的值——不抬上去，这个会话就和上一条测试一样锁死。
+    """
+    db_path = tmp_path / "revision-restore.db"
+    first = await open_core_app_db(db_path)
+    await first.close()
+
+    with sqlite3.connect(db_path) as raw:
+        raw.execute(
+            "INSERT INTO core_thread_snapshots "
+            "(thread_id, snapshot_seq, revision, active_turn_id, snapshot_json, updated_at) "
+            "VALUES ('thread-json', 5, 7, NULL, ?, ?)",
+            (json.dumps({"revision": 7}), datetime.now()),
+        )
+        raw.execute(
+            "INSERT INTO core_app_events "
+            "(event_id, thread_id, seq, method, payload_json, workspace_id, entity_type, "
+            " entity_id, event_seq, revision, event_type, created_at) "
+            "VALUES ('event-json', 'thread-json', 1, 'core/runItem', '{}', '', 'thread.event', "
+            " 'thread-json', 1, 3, 'core/runItem', ?)",
+            (datetime.now(),),
+        )
+        raw.execute("ALTER TABLE core_thread_snapshots DROP COLUMN revision")
+
+    reopened = await open_core_app_db(db_path)
+    try:
+        async with reopened.session_factory() as connection:
+            columns = {
+                row[1]
+                for row in (await connection.execute(text("PRAGMA table_info(core_thread_snapshots)"))).all()
+            }
+            assert "revision" in columns
+            revision = await connection.scalar(
+                text("SELECT revision FROM core_thread_snapshots WHERE thread_id = 'thread-json'")
+            )
+        assert revision == 7
+    finally:
+        await reopened.close()
 
 
 @pytest.mark.asyncio

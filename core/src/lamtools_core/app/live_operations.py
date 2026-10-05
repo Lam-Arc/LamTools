@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import sys
 import time as time_module
 import uuid
@@ -26,6 +27,10 @@ from lamtools_core.composer_commands import (
     normalize_command_name,
 )
 from lamtools_core.runtime import RuntimeStateConflictError, RuntimeStateStore, default_runtime_task_registry
+from lamtools_core.runtime.background_processes import (
+    default_background_process_registry,
+    status_to_dict,
+)
 from lamtools_core.tool.approval import load_access_tools, normalize_command_policies
 from lamtools_core.tool.approval import PermissionMode, TierTools
 from lamtools_core.tool.loadtools import LoadTools, default_load_tools, load_loadtools, mode_names
@@ -287,6 +292,197 @@ async def handle_attachment_preview_operation(**kwargs):
 
 async def handle_attachment_open_operation(**kwargs):
     return await handle_attachment_operation(**kwargs, operation="open")
+
+
+def _background_process_registry_of(context: CoreLiveContext):
+    registry = getattr(context.host.runtime_task_registry, "background_process_registry", None)
+    return registry if registry is not None else default_background_process_registry()
+
+
+def _process_scope_thread_id(params: dict[str, Any]) -> str:
+    return _thread_id_from_params(params)
+
+
+async def _publish_process_changed(
+    context: CoreLiveContext,
+    thread_id: str,
+    pid: int,
+    action: str,
+) -> None:
+    envelope = AppEventEnvelope(
+        event_id=f"{thread_id}:process-changed:{action}:{pid}:{uuid.uuid4().hex[:8]}",
+        protocol_version="core.app_server.v1",
+        seq=0,
+        thread_id=thread_id,
+        method="process/changed",
+        payload={"pid": pid, "action": action},
+        created_at=datetime.now(timezone.utc),
+    )
+    await context.hub.publish(envelope)
+
+
+def _invalid_pid_response(request_id: int | str | None, raw: Any):
+    return CoreLiveOperationOutcome(
+        response=rpc_error(request_id, code=INVALID_REQUEST, message=f"pid must be an integer, got {raw!r}")
+    )
+
+
+async def handle_process_list_operation(
+    *, request_id: int | str | None = None, params: dict[str, Any] | None = None, context: CoreLiveContext
+) -> CoreLiveOperationOutcome:
+    params = params or {}
+    thread_id = _process_scope_thread_id(params)
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+    registry = _background_process_registry_of(context)
+    statuses = registry.list_status(session_id=thread_id)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(request_id, {"processes": [status_to_dict(status) for status in statuses]})
+    )
+
+
+async def handle_process_kill_operation(
+    *, request_id: int | str | None = None, params: dict[str, Any] | None = None, context: CoreLiveContext
+) -> CoreLiveOperationOutcome:
+    params = params or {}
+    thread_id = _process_scope_thread_id(params)
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+    try:
+        pid = int(params.get("pid"))
+    except (TypeError, ValueError):
+        return _invalid_pid_response(request_id, params.get("pid"))
+    if pid <= 0:
+        return _invalid_pid_response(request_id, params.get("pid"))
+    registry = _background_process_registry_of(context)
+    outcome = registry.kill(thread_id, pid)
+    if outcome == "not_owned":
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message=(
+                    f"Process {pid} was registered before the last backend restart; "
+                    "it cannot be terminated safely."
+                ),
+                data={"code": "PROCESS_NOT_OWNED", "pid": pid},
+            )
+        )
+    if outcome != "terminated":
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message=f"No registered background process with pid {pid} in this session.",
+                data={"code": "PROCESS_NOT_FOUND", "pid": pid},
+            )
+        )
+    await _publish_process_changed(context, thread_id, pid, "killed")
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, {"pid": pid, "terminated": True}))
+
+
+async def handle_process_forget_operation(
+    *, request_id: int | str | None = None, params: dict[str, Any] | None = None, context: CoreLiveContext
+) -> CoreLiveOperationOutcome:
+    params = params or {}
+    thread_id = _process_scope_thread_id(params)
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+    try:
+        pid = int(params.get("pid"))
+    except (TypeError, ValueError):
+        return _invalid_pid_response(request_id, params.get("pid"))
+    if pid <= 0:
+        return _invalid_pid_response(request_id, params.get("pid"))
+    registry = _background_process_registry_of(context)
+    removed = registry.forget(thread_id, pid)
+    if removed:
+        await _publish_process_changed(context, thread_id, pid, "forgotten")
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, {"pid": pid, "removed": removed}))
+
+
+async def handle_process_log_operation(
+    *, request_id: int | str | None = None, params: dict[str, Any] | None = None, context: CoreLiveContext
+) -> CoreLiveOperationOutcome:
+    params = params or {}
+    thread_id = _process_scope_thread_id(params)
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+    try:
+        pid = int(params.get("pid"))
+    except (TypeError, ValueError):
+        return _invalid_pid_response(request_id, params.get("pid"))
+    if pid <= 0:
+        return _invalid_pid_response(request_id, params.get("pid"))
+    stream = str(params.get("stream") or "stdout").strip().lower()
+    if stream in {"out", "stdout", ""}:
+        stream = "stdout"
+    elif stream in {"err", "stderr"}:
+        stream = "stderr"
+    else:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="stream must be 'stdout' or 'stderr'")
+        )
+    try:
+        max_bytes = int(params.get("max_bytes") or 8192)
+    except (TypeError, ValueError):
+        max_bytes = 8192
+    max_bytes = max(256, min(max_bytes, 262144))
+    registry = _background_process_registry_of(context)
+    status = next(
+        (item for item in registry.list_status(session_id=thread_id) if item.record.pid == pid),
+        None,
+    )
+    if status is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message=f"No registered background process with pid {pid} in this session.",
+                data={"code": "PROCESS_NOT_FOUND", "pid": pid},
+            )
+        )
+    path_text = status.record.stdout_log if stream == "stdout" else status.record.stderr_log
+    path = Path(path_text) if path_text else None
+    if path is None or not path.is_file():
+        return CoreLiveOperationOutcome(
+            response=rpc_result(request_id, {
+                "pid": pid,
+                "stream": stream,
+                "path": path_text,
+                "content": "",
+                "truncated": False,
+                "missing": True,
+            })
+        )
+    size = path.stat().st_size
+    truncated = size > max_bytes
+    with path.open("rb") as handle:
+        if truncated:
+            handle.seek(-max_bytes, os.SEEK_END)
+        content = handle.read(max_bytes).decode("utf-8", errors="replace")
+    if truncated:
+        newline = content.find("\n")
+        if 0 <= newline < len(content) - 1:
+            content = content[newline + 1:]
+    return CoreLiveOperationOutcome(
+        response=rpc_result(request_id, {
+            "pid": pid,
+            "stream": stream,
+            "path": str(path),
+            "content": content,
+            "truncated": truncated,
+            "missing": False,
+        })
+    )
 
 
 @dataclass
@@ -3151,6 +3347,12 @@ async def recover_stale_active_turns(*, context: "CoreLiveContext") -> int:
     that thread with "active turn already exists". This writes a ``cancelled``
     terminal run-item for every leftover active turn and reconciles the
     runtime state, unblocking the thread. Best-effort: never raises.
+
+    A turn parked on a user decision (tool approval / question) is exempt: its
+    approval is durable and ``approval.respond`` can still resume it, so the
+    user can answer it after the restart. Reaping that turn wrote a cancelled
+    terminal over the request the user was about to answer, which is how
+    closing Sunday mid-approval lost the approval entirely (2026-10-01).
     """
     try:
         async with context.session_factory() as db:
@@ -3166,6 +3368,11 @@ async def recover_stale_active_turns(*, context: "CoreLiveContext") -> int:
 
     recovered = 0
     for thread_id in thread_ids:
+        if await _active_turn_awaits_user_decision(context=context, thread_id=thread_id):
+            _logger.info(
+                "[live:recover] keeping thread_id=%s parked on a user decision", thread_id
+            )
+            continue
         async def write(db: AsyncSession, *, thread_id: str = thread_id) -> list[tuple[str, AppEventEnvelope]]:
             events: list[tuple[str, AppEventEnvelope]] = []
             seen: set[str] = set()
@@ -3248,6 +3455,48 @@ async def recover_stale_active_turns(*, context: "CoreLiveContext") -> int:
             recovered,
         )
     return recovered
+
+
+async def _active_turn_awaits_user_decision(*, context: "CoreLiveContext", thread_id: str) -> bool:
+    """Whether the thread's active turn is durably waiting for the user.
+
+    Only a turn whose runtime state still holds a *resumable* pending approval
+    qualifies — that is exactly what ``approval.respond`` continues from. Every
+    other leftover (a turn stuck mid-execution, a wait with no answerable
+    request, or one whose approval is already past the point of no return)
+    stays a crash leftover for the reaper.
+    """
+    store = context.runtime_state_store
+    if store is None:
+        return False
+    try:
+        state = await store.get(thread_id)
+    except BaseException:
+        _logger.exception("[live:recover] runtime-state read failed thread_id=%s", thread_id)
+        return False
+    if state is None or str(getattr(state, "loop_state", "") or "") != "wait":
+        return False
+    run_id = str(getattr(state, "run_id", "") or "")
+    if not run_id:
+        return False
+    metadata = state.metadata if isinstance(getattr(state, "metadata", None), dict) else {}
+    pending = metadata.get("pending_approval")
+    if not isinstance(pending, dict):
+        return False
+    if not isinstance(pending.get("tool_call"), dict):
+        return False
+    # "executing" means the decision was already recorded durably and only the
+    # continuation was cut short. approval.respond refuses that state, so
+    # keeping it would block the thread with nothing the user could answer.
+    if str(pending.get("status") or "waiting") != "waiting":
+        return False
+    try:
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, thread_id)
+    except BaseException:
+        _logger.exception("[live:recover] snapshot read failed thread_id=%s", thread_id)
+        return False
+    return latest_active_turn_id(snapshot) == run_id
 
 
 def _turn_is_terminal(snapshot: dict[str, Any], turn_id: str) -> bool:
@@ -3765,6 +4014,10 @@ _CORE_LIVE_OPERATION_EXECUTORS = {
     "queue.update": handle_queue_update_operation,
     "queue.delete": handle_queue_delete_operation,
     "queue.guide": handle_queue_guidance_operation,
+    "process.list": handle_process_list_operation,
+    "process.kill": handle_process_kill_operation,
+    "process.forget": handle_process_forget_operation,
+    "process.log": handle_process_log_operation,
 }
 
 
@@ -3788,4 +4041,8 @@ __all__ = [
     "handle_turn_force_reset_operation",
     "handle_turn_start_operation",
     "handle_turn_steer_operation",
+    "handle_process_list_operation",
+    "handle_process_kill_operation",
+    "handle_process_forget_operation",
+    "handle_process_log_operation",
 ]

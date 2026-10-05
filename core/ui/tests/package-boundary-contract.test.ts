@@ -8,7 +8,6 @@ const viteConfig = readFileSync(resolve(packageRoot, 'vite.config.ts'), 'utf8')
 const appSource = readFileSync(resolve(packageRoot, 'src/app/LamToolsApp.vue'), 'utf8')
 const runtimeSource = readFileSync(resolve(packageRoot, 'src/app/runtime.ts'), 'utf8')
 const workbenchSource = readFileSync(resolve(packageRoot, 'src/workbench/createWorkbench.ts'), 'utf8')
-const stagePane = readFileSync(resolve(packageRoot, 'src/components/StagePane.vue'), 'utf8')
 const bundledPlugins = readFileSync(resolve(packageRoot, 'src/plugins/bundled.ts'), 'utf8')
 const layoutCss = readFileSync(resolve(packageRoot, 'src/styles/layout.css'), 'utf8')
 const workspaceShellCss = readFileSync(resolve(packageRoot, 'src/styles/workspace-shell.css'), 'utf8')
@@ -58,11 +57,12 @@ describe('Core UI package boundary', () => {
 
   it('keeps low-frequency workspaces out of the desktop startup chunk', () => {
     expect(appSource).toContain("defineAsyncComponent(() => import('../components/CoreSettings.vue'))")
-    expect(appSource).toContain("defineAsyncComponent(() => import('../components/StagePane.vue'))")
     expect(appSource).toContain('<PluginModeHost')
     expect(appSource).not.toContain('WorkflowCanvas.vue')
     expect(bundledPlugins).toContain("'workflow:workflow': () => import('@lamtools/bundled-workflow-ui')")
-    expect(stagePane).toContain("defineAsyncComponent(() => import('./StageCodeEditor.vue'))")
+    // 视窗已归档：主程序不再挂载 StagePane，组件只留在归档目录里。
+    expect(appSource).not.toContain('StagePane')
+    expect(appSource).not.toContain('workspace-stage')
   })
 
   it('keeps the shared composer inside the main workspace when a narrow viewport still has a pinned sidebar', () => {

@@ -1,0 +1,28 @@
+login -> 200
+=== login response shape (values redacted for token-like keys) ===
+  top keys: ['data', 'message', 'success']
+  access_expires_at      1790421511
+  access_token           <str len=389>
+  session                <dict len=223>
+  token_type             <str len=6>
+  user                   {'aff_code': '', 'aff_count': 0, 'aff_history_quota': 0, 'af
+=== try bearer auth with candidate fields ===
+  candidate token found (len 389)
+  with Bearer only            -> 200
+  with Bearer + New-API-User  -> 200
+  /tmp/self2.json success=True role=100 user=root msg=
+  /tmp/self3.json success=True role=100 user=root msg=
+=== option endpoint via bearer ===
+  GET /api/option/ -> 200
+  success: True | message: 
+  options: 233
+    DataExportDefaultTime = hour
+    DemoSiteEnabled = false
+    DefaultCollapseSidebar = false
+    TurnstileCheckEnabled = false
+    RegisterEnabled = true
+    PasswordRegisterEnabled = true
+    claude.default_max_tokens = {"default":8192}
+    DefaultUseAutoGroup = false
+    channel_affinity_setting.default_ttl_seconds = 3600
+=== done ===

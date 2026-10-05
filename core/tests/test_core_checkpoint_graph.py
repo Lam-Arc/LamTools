@@ -88,7 +88,6 @@ async def test_turn_fork_keeps_selected_turn_and_rollback_removes_it_without_che
     register_checkpoint_operations(
         catalog,
         session_factory=db.session_factory,
-        data_dir=tmp_path / "core-data",
         default_work_root=work_root,
     )
     try:
@@ -132,7 +131,9 @@ async def test_turn_fork_keeps_selected_turn_and_rollback_removes_it_without_che
         })
         assert rolled_back.status == "ok", rolled_back.payload
         assert rolled_back.payload["mode"] == "conversation_only"
-        assert rolled_back.payload["restored"]["runtime"] is False
+        # 对话与运行上下文一起回到该轮之前；工作区不动，所以永远没有文件恢复。
+        assert rolled_back.payload["restored"]["runtime"] is True
+        assert rolled_back.payload["restored"]["workspace"] is False
         async with db.session_factory() as session:
             events = await db.event_store.list_thread(session, thread_id="turn-source")
             snapshot = await db.snapshot_store.load(session, "turn-source")
@@ -161,7 +162,6 @@ async def test_turn_fork_uses_message_text_when_source_title_is_a_default(tmp_pa
     register_checkpoint_operations(
         catalog,
         session_factory=db.session_factory,
-        data_dir=tmp_path / "core-data",
         default_work_root=work_root,
     )
     try:
@@ -209,7 +209,6 @@ async def test_edit_first_turn_clears_the_conversation_and_keeps_a_regenerable_t
     register_checkpoint_operations(
         catalog,
         session_factory=db.session_factory,
-        data_dir=tmp_path / "core-data",
         default_work_root=work_root,
     )
     try:
@@ -286,16 +285,18 @@ async def test_edit_first_turn_clears_the_conversation_and_keeps_a_regenerable_t
 
 
 @pytest.mark.asyncio
-async def test_turn_rollback_uses_only_an_exact_boundary_checkpoint(tmp_path: Path) -> None:
+async def test_turn_rollback_always_truncates_the_conversation_only(tmp_path: Path) -> None:
+    """撤回只删对话：即使那一轮的开头正好有一个检查点，也不走文件回档。"""
     work_root = tmp_path / "workspace"
     work_root.mkdir()
+    state_file = work_root / "state.txt"
+    state_file.write_text("before", encoding="utf-8")
     db = await open_core_app_db(tmp_path / "core.db")
     sessions = CoreDbSessionStore(lambda: db)
     coordinator = CoreCheckpointCoordinator(
         work_root=work_root,
         session_factory=db.session_factory,
         write_coordinator=db.persistence.write_coordinator,
-        storage_root=tmp_path / "checkpoint-data",
     )
     from lamtools_core.app.operation_catalog import OperationCatalog
 
@@ -303,7 +304,6 @@ async def test_turn_rollback_uses_only_an_exact_boundary_checkpoint(tmp_path: Pa
     register_checkpoint_operations(
         catalog,
         session_factory=db.session_factory,
-        data_dir=tmp_path / "core-data",
         default_work_root=work_root,
     )
     try:
@@ -314,22 +314,25 @@ async def test_turn_rollback_uses_only_an_exact_boundary_checkpoint(tmp_path: Pa
         await _runtime(db, "checkpoint-source", history=[])
         await _append_message_turn(db, "checkpoint-source", "turn-1", "one")
         # A checkpoint taken before turn-2 is the exact complete boundary for
-        # removing turn-2.  It preserves turn-1 and restores the workspace to
-        # the state before the selected turn began.
-        checkpoint = await coordinator.save(
+        # removing turn-2 — it still only means "cut the conversation here".
+        await coordinator.save(
             session_id="checkpoint-source", turn_id="turn-2", actor_kind="main", reason="manual",
         )
         await _append_message_turn(db, "checkpoint-source", "turn-2", "two")
+        state_file.write_text("after", encoding="utf-8")
 
         restored = await catalog.execute("session.rollback", {
             "session_id": "checkpoint-source", "turn_id": "turn-2",
         })
         assert restored.status == "ok", restored.payload
-        assert restored.payload["mode"] == "checkpoint"
-        assert restored.payload["checkpoint_id"] == checkpoint.id
+        assert restored.payload["mode"] == "conversation_only"
+        assert restored.payload["restored"]["workspace"] is False
+        assert restored.payload["restored_paths"] == []
         async with db.session_factory() as session:
             events = await db.event_store.list_thread(session, thread_id="checkpoint-source")
         assert {event.turn_id for event in events if event.turn_id} == {"turn-1"}
+        # 文件原样不动：撤回不碰工作区。
+        assert state_file.read_text(encoding="utf-8") == "after"
     finally:
         await db.close()
 
@@ -338,13 +341,13 @@ async def test_turn_rollback_uses_only_an_exact_boundary_checkpoint(tmp_path: Pa
 async def test_restore_creates_a_new_branch_and_prunes_the_abandoned_future(tmp_path: Path) -> None:
     work_root = tmp_path / "workspace"
     work_root.mkdir()
-    (work_root / "state.txt").write_text("one", encoding="utf-8")
+    state_file = work_root / "state.txt"
+    state_file.write_text("one", encoding="utf-8")
     db = await open_core_app_db(tmp_path / "core.db")
     coordinator = CoreCheckpointCoordinator(
         work_root=work_root,
         session_factory=db.session_factory,
         write_coordinator=db.persistence.write_coordinator,
-        storage_root=tmp_path / "checkpoint-data",
     )
     try:
         await _runtime(db, "session-graph", history=[{"role": "user", "content": "one"}])
@@ -356,9 +359,7 @@ async def test_restore_creates_a_new_branch_and_prunes_the_abandoned_future(tmp_
             label="first",
         )
 
-        # simulate a tool write: back the file up before modifying it (lazy capture)
-        await coordinator.backup_file(session_id="session-graph", path=work_root / "state.txt")
-        (work_root / "state.txt").write_text("two", encoding="utf-8")
+        state_file.write_text("two", encoding="utf-8")
         await _runtime(db, "session-graph", history=[{"role": "user", "content": "two"}])
         second = await coordinator.save(
             session_id="session-graph",
@@ -383,33 +384,22 @@ async def test_restore_creates_a_new_branch_and_prunes_the_abandoned_future(tmp_
         derived = nodes.get(restored.derived_checkpoint_id)
         assert undo is not None and undo.parent_checkpoint_id == first.id
         assert derived is not None and derived.edge_kind == "rollback"
-        assert derived.reason == "rollback_all"
+        assert derived.reason == "rollback_conversation"
         assert derived.parent_checkpoint_id == undo.id
         assert nodes[third.id].parent_checkpoint_id == derived.id
         # Rolling back to `first` abandons the old future (`second`) — it is
         # pruned from the main line and can no longer be revisited.
         assert second.id not in nodes
         assert graph.heads["session-graph"] == third.id
-        assert (work_root / "state.txt").read_text(encoding="utf-8") == "one"
+        # 文件保持当前内容，不跟着回退。
+        assert state_file.read_text(encoding="utf-8") == "two"
     finally:
         await db.close()
 
 
-@pytest.mark.parametrize(
-    ("scope", "expected_history", "expected_file"),
-    [
-        ("conversation", "before", "after"),
-        ("workspace", "after", "before"),
-        ("all", "before", "before"),
-    ],
-)
 @pytest.mark.asyncio
-async def test_restore_applies_only_the_requested_scope(
-    tmp_path: Path,
-    scope: str,
-    expected_history: str,
-    expected_file: str,
-) -> None:
+async def test_restore_only_touches_the_conversation(tmp_path: Path) -> None:
+    """scope 只剩一种含义：恢复对话。旧取值 workspace/all 也只是对话恢复。"""
     work_root = tmp_path / "workspace"
     work_root.mkdir()
     state_file = work_root / "state.txt"
@@ -419,7 +409,6 @@ async def test_restore_applies_only_the_requested_scope(
         work_root=work_root,
         session_factory=db.session_factory,
         write_coordinator=db.persistence.write_coordinator,
-        storage_root=tmp_path / "checkpoint-data",
     )
     try:
         await _runtime(db, "session-scope", history=[{"role": "user", "content": "before"}])
@@ -428,23 +417,21 @@ async def test_restore_applies_only_the_requested_scope(
             turn_id="turn-before",
             reason="manual",
         )
-        # simulate a tool write: back the file up before modifying it (lazy capture)
-        await coordinator.backup_file(session_id="session-scope", path=state_file)
         state_file.write_text("after", encoding="utf-8")
         await _runtime(db, "session-scope", history=[{"role": "user", "content": "after"}])
 
-        restored = await coordinator.load(checkpoint.id, scope=scope)
+        restored = await coordinator.load(checkpoint.id, scope="workspace")
 
-        assert restored.scope == scope
+        assert restored.scope == "conversation"
+        assert restored.restored_paths == ()
         assert await db.runtime_state_store.get_history("session-scope") == [
-            {"role": "user", "content": expected_history}
+            {"role": "user", "content": "before"}
         ]
-        assert state_file.read_text(encoding="utf-8") == expected_file
-        assert restored.restored_paths == (() if scope == "conversation" else ("state.txt",))
+        assert state_file.read_text(encoding="utf-8") == "after"
         graph = await coordinator.graph("session-scope")
         derived = next(node for node in graph.nodes if node.id == restored.derived_checkpoint_id)
         undo = next(node for node in graph.nodes if node.id == restored.undo_checkpoint_id)
-        assert derived.reason == f"rollback_{scope}"
+        assert derived.reason == "rollback_conversation"
         assert derived.parent_checkpoint_id == undo.id
         assert undo.parent_checkpoint_id == checkpoint.id
     finally:
@@ -452,17 +439,14 @@ async def test_restore_applies_only_the_requested_scope(
 
 
 @pytest.mark.asyncio
-async def test_workspace_only_restore_is_allowed_during_an_active_turn(tmp_path: Path) -> None:
+async def test_restore_is_rejected_while_a_turn_is_active(tmp_path: Path) -> None:
     work_root = tmp_path / "workspace"
     work_root.mkdir()
-    state_file = work_root / "state.txt"
-    state_file.write_text("before", encoding="utf-8")
     db = await open_core_app_db(tmp_path / "core.db")
     coordinator = CoreCheckpointCoordinator(
         work_root=work_root,
         session_factory=db.session_factory,
         write_coordinator=db.persistence.write_coordinator,
-        storage_root=tmp_path / "checkpoint-data",
     )
     try:
         await _runtime(db, "session-active", history=[{"role": "user", "content": "before"}])
@@ -471,25 +455,16 @@ async def test_workspace_only_restore_is_allowed_during_an_active_turn(tmp_path:
             turn_id="turn-before",
             reason="manual",
         )
-        # simulate a tool write: back the file up before modifying it (lazy capture)
-        await coordinator.backup_file(session_id="session-active", path=state_file)
-        state_file.write_text("after", encoding="utf-8")
         await _runtime(
             db,
             "session-active",
             history=[{"role": "user", "content": "active"}],
             status="running",
         )
-
-        restored = await coordinator.load(checkpoint.id, scope="workspace")
-
-        assert restored.scope == "workspace"
-        assert state_file.read_text(encoding="utf-8") == "before"
-        assert await db.runtime_state_store.get_history("session-active") == [
-            {"role": "user", "content": "active"}
-        ]
-        with pytest.raises(ValueError, match="active"):
-            await coordinator.load(checkpoint.id, scope="conversation")
+        # 恢复只作用于对话上下文，运行中的会话一律拒绝；没有"只回文件"的口子。
+        for scope in ("conversation", "workspace", "all"):
+            with pytest.raises(ValueError, match="active"):
+                await coordinator.load(checkpoint.id, scope=scope)
     finally:
         await db.close()
 
@@ -506,7 +481,6 @@ async def test_sub_agent_checkpoint_branches_from_main_and_restores_only_child_c
         work_root=work_root,
         session_factory=db.session_factory,
         write_coordinator=db.persistence.write_coordinator,
-        storage_root=tmp_path / "checkpoint-data",
     )
     child_id = "session-parent:sub:implementation"
     try:
@@ -525,8 +499,6 @@ async def test_sub_agent_checkpoint_branches_from_main_and_restores_only_child_c
             reason="before_user_prompt",
         )
 
-        # simulate a tool write: back the file up before modifying it (lazy capture)
-        await coordinator.backup_file(session_id=child_id, path=work_root / "state.txt")
         (work_root / "state.txt").write_text("after-child", encoding="utf-8")
         await _runtime(db, "session-parent", history=[{"role": "user", "content": "main-after"}])
         await _runtime(db, child_id, history=[{"role": "user", "content": "child-after"}])
@@ -542,7 +514,7 @@ async def test_sub_agent_checkpoint_branches_from_main_and_restores_only_child_c
         assert await db.runtime_state_store.get_history("session-parent") == [
             {"role": "user", "content": "main-after"}
         ]
-        assert (work_root / "state.txt").read_text(encoding="utf-8") == "before-child"
+        assert (work_root / "state.txt").read_text(encoding="utf-8") == "after-child"
         assert {node.session_id for node in graph.nodes} == {"session-parent", child_id}
     finally:
         await db.close()
@@ -558,7 +530,6 @@ async def test_fork_creates_a_new_session_and_marks_the_graph_edge(tmp_path: Pat
         work_root=work_root,
         session_factory=db.session_factory,
         write_coordinator=db.persistence.write_coordinator,
-        storage_root=tmp_path / "checkpoint-data",
     )
     try:
         await sessions.create(SessionRecord(
@@ -599,7 +570,6 @@ async def test_fork_creates_a_new_session_and_marks_the_graph_edge(tmp_path: Pat
         with pytest.raises(ValueError, match="session family"):
             await coordinator.load(
                 source.id,
-                scope="workspace",
                 requesting_session_id="session-forked",
             )
     finally:
@@ -621,7 +591,6 @@ async def test_fork_with_events_remaps_item_keys_and_regenerates_event_ids(tmp_p
         work_root=work_root,
         session_factory=db.session_factory,
         write_coordinator=db.persistence.write_coordinator,
-        storage_root=tmp_path / "checkpoint-data",
     )
     try:
         await sessions.create(SessionRecord(
@@ -763,7 +732,6 @@ async def test_checkpoint_tools_share_the_coordinator_for_save_load_and_graph(tm
         work_root=work_root,
         session_factory=db.session_factory,
         write_coordinator=db.persistence.write_coordinator,
-        storage_root=tmp_path / "checkpoint-data",
     )
     from lamtools_core.app.operation_catalog import OperationCatalog, OperationResult
 
@@ -773,7 +741,6 @@ async def test_checkpoint_tools_share_the_coordinator_for_save_load_and_graph(tm
     register_checkpoint_operations(
         catalog,
         session_factory=db.session_factory,
-        data_dir=tmp_path / "core-data",
         default_work_root=work_root,
     )
 

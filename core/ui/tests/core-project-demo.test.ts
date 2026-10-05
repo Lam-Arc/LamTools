@@ -41,6 +41,14 @@ function createWorkspace() {
     writeFile: vi.fn().mockResolvedValue({ content: '', path: '' }),
     readRawFile: vi.fn().mockResolvedValue({ status: 200, headers: {}, body: new Uint8Array() }),
     browseDirectory: vi.fn().mockResolvedValue({ entries: [], path: '' }),
+    listPlanLibrary: vi.fn().mockResolvedValue({ dir: '方案', entries: [], folders: [] }),
+    createPlanLibraryFile: vi.fn().mockResolvedValue({ entry: null }),
+    createPlanLibraryFolder: vi.fn().mockResolvedValue({ folder: null }),
+    deletePlanLibraryFolder: vi.fn().mockResolvedValue({ deleted: '方案/x' }),
+    renamePlanLibraryFile: vi.fn().mockResolvedValue({ entry: null }),
+    movePlanLibraryFile: vi.fn().mockResolvedValue({ entry: null }),
+    favoritePlanLibraryFile: vi.fn().mockResolvedValue({ entry: null }),
+    deletePlanLibraryFile: vi.fn().mockResolvedValue({ deleted: '方案/x.md' }),
   } satisfies CoreProjectClient
   const projects = ref<CoreProject[]>([])
   const sessions = ref<CoreSessionListItem[]>([])

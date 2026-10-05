@@ -768,7 +768,14 @@ class SqlAlchemyThreadSnapshotStore:
                 existing.updated_at = now
         row.snapshot_seq = int(state.get("snapshot_seq") or 0)
         if hasattr(row, "revision"):
-            row.revision = max(0, int(state.get("revision") or 0))
+            # 修订号是客户端的乐观锁期望值，只能前进：一旦写回一个更低的值，
+            # 已经见过更高值的客户端就再也改不动这个会话（客户端丢弃回退的
+            # 快照，CAS 永远失败）。回填/重建快照等路径传入的 state 可能没有
+            # 修订号，这里取行上已有值与新值的较大者。
+            row.revision = max(
+                _row_revision(row, state),
+                max(0, int(state.get("revision") or 0)),
+            )
         row.snapshot_json = metadata_state
         if hasattr(row, "updated_at"):
             row.updated_at = now

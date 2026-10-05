@@ -592,14 +592,14 @@ class TestExternalConfigChangeNotices:
     def test_external_settings_edit_produces_notice(self, isolated_config_root: Path):
         from lamtools_core.config.settings_store import get_setting
 
-        get_setting("core.dreaming")
+        get_setting("core.imagegen")
         isolated_config_root.mkdir(parents=True, exist_ok=True)
         settings_path = isolated_config_root / "settings.jsonc"
         settings_path.write_text(
-            '{\n  "core": {\n    "dreaming": {"enabled": true}\n  }\n}\n',
+            '{\n  "core": {\n    "imagegen": {"enabled": true}\n  }\n}\n',
             encoding="utf-8",
         )
-        assert get_setting("core.dreaming") == {"enabled": True}
+        assert get_setting("core.imagegen") == {"enabled": True}
         notices = drain_config_change_notices()
         assert [notice["kind"] for notice in notices] == ["settings"]
 

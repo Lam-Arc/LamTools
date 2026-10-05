@@ -9,6 +9,7 @@ from lamtools_core.event import CoreEvent
 from lamtools_core.runtime.background_processes import (
     BackgroundProcessRegistry,
     default_background_process_registry,
+    status_to_dict,
 )
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
 from lamtools_core.tool.command import CommandExecution as _CommandExecution
@@ -191,6 +192,7 @@ class CommandToolHandlers:
         command = args.get("command", "")
         timeout = args.get("timeout", None)
         background = bool(args.get("background")) if args.get("background") is not None else False
+        persistent = bool(args.get("persistent")) if args.get("persistent") is not None else False
         readiness_url = args.get("readiness_url")
         readiness_text = args.get("readiness_text")
 
@@ -292,7 +294,7 @@ class CommandToolHandlers:
                 status="failed", error=str(exc),
             )
 
-        run_in_background = background or background_inferred
+        run_in_background = background or background_inferred or persistent
         http_probe: _BackgroundHttpProbe | None = None
         execution: _CommandExecution | None = None
         try:
@@ -349,6 +351,7 @@ class CommandToolHandlers:
                         process_registry=self._background_process_registry,
                         session_id=runtime_session_id,
                         run_id=runtime_run_id,
+                        persistent=persistent,
                     )
                 else:
                     async def _emit_command_progress(stdout: str, stderr: str) -> None:
@@ -404,6 +407,7 @@ class CommandToolHandlers:
             **lifecycle,
             background_requested=background,
             background_inferred=background_inferred,
+            persistent=bool(persistent and execution.background),
         )
         metadata = {
             **public_call_metadata,
@@ -416,6 +420,7 @@ class CommandToolHandlers:
             "background": execution.background,
             "background_requested": background,
             "background_inferred": background_inferred,
+            "persistent": bool(persistent and execution.background),
             "duration_seconds": execution.duration_seconds,
             **lifecycle,
             **({"readiness_url": readiness_url} if readiness_url else {}),
@@ -437,6 +442,7 @@ class CommandToolHandlers:
                 "background": execution.background,
                 "background_requested": background,
                 "background_inferred": background_inferred,
+                "persistent": bool(persistent and execution.background),
                 "duration_seconds": execution.duration_seconds,
                 **lifecycle,
                 "stdout": execution.stdout,
@@ -481,4 +487,94 @@ class CommandToolHandlers:
             status="ok", content=output,
             artifacts=[artifact],
             metadata=metadata,
+        )
+
+    def _session_scope_from_call(self, call: ToolCall) -> str:
+        return str((call.metadata or {}).get("_runtime_session_id") or "").strip()
+
+    async def list_processes(self, call: ToolCall) -> ToolResult:
+        """List background processes registered for this session."""
+        session_id = self._session_scope_from_call(call)
+        if not session_id:
+            return ToolResult(
+                call_id=call.id, name=call.name, status="ok",
+                content="No session scope is available, so no registered processes can be listed.",
+                metadata={"processes": []},
+            )
+        statuses = self._background_process_registry.list_status(session_id=session_id)
+        processes = [status_to_dict(status) for status in statuses]
+        if not processes:
+            content = "No background processes are registered for this session."
+        else:
+            lines = [f"Registered background processes for this session: {len(processes)}"]
+            for item in processes:
+                state = "running" if item["alive"] else "exited"
+                kind = "persistent (survives turn end)" if item["persistent"] else "turn-scoped"
+                lines.append(
+                    f"- pid {item['pid']} | {state} | {kind} | {item['command'] or '<unknown command>'}"
+                )
+                if item["stdout_log"]:
+                    lines.append(f"  stdout log: {item['stdout_log']}")
+                if item["stderr_log"]:
+                    lines.append(f"  stderr log: {item['stderr_log']}")
+                if not item["owned"]:
+                    lines.append(
+                        "  note: started before the last backend restart; it cannot be terminated from here"
+                    )
+            content = "\n".join(lines)
+        return ToolResult(
+            call_id=call.id, name=call.name,
+            status="ok", content=content,
+            metadata={"processes": processes},
+        )
+
+    async def kill_process(self, call: ToolCall) -> ToolResult:
+        """Terminate a background process registered by this session."""
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        raw_pid = args.get("pid")
+        try:
+            pid = int(raw_pid)
+        except (TypeError, ValueError):
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed", error=f"Invalid pid value: {raw_pid!r}",
+            )
+        if pid <= 0:
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed", error="pid must be a positive integer",
+            )
+        session_id = self._session_scope_from_call(call)
+        if not session_id:
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed",
+                error="No session scope is available; cannot terminate a registered process.",
+            )
+        outcome = self._background_process_registry.kill(session_id, pid)
+        if outcome == "terminated":
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="ok",
+                content=f"Terminated background process (pid {pid}).",
+                metadata={"pid": pid, "terminated": True},
+            )
+        if outcome == "not_owned":
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed",
+                error=(
+                    f"Process {pid} was registered before the last backend restart; "
+                    "it cannot be terminated safely from here."
+                ),
+                metadata={"pid": pid, "terminated": False, "reason": "not_owned"},
+            )
+        return ToolResult(
+            call_id=call.id, name=call.name,
+            status="failed",
+            error=(
+                f"No registered background process with pid {pid} in this session; "
+                "only processes started in this session can be terminated."
+            ),
+            metadata={"pid": pid, "terminated": False, "reason": "not_found"},
         )

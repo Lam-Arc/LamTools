@@ -515,7 +515,6 @@ async def _run_case(
                 compact_limit_tokens=LIMIT,
                 compact_summary_output_tokens=2_048,
                 persist_steps=True,
-                dreaming_enabled=False,
             ),
             retry_policy=RetryPolicy(delay_sequence_seconds=(0,), jitter=False),
         )

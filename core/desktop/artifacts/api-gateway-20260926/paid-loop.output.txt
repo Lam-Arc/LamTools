@@ -1,0 +1,36 @@
+  bridge gateway: 172.30.0.1
+=== set up: provider channel, unpaid customer, voucher ===
+  mock provider listening
+  provider channel added: True
+  customer signs in: True | id: 7
+  key minted before any payment: True
+  credit voucher created (worth 1000000 = US$2): True
+    voucher id=2
+  customer credit before paying: 0
+=== reload so the channel is routable ===
+=== before paying: must be refused ===
+  call with the customer key -> 403
+     {'message': '用户额度不足, 剩余额度: ＄0.000000 (request id: 202609261157274123573518268d9d66wu8OEm5)', 'type': 'new_api_error', 'param': '', 'code': 'insufficie
+=== customer pays: redeems the voucher ===
+  credit before redeeming: 0
+  customer redeems the purchased voucher -> success=True msg=
+  credit after redeeming: 1000000
+=== after paying: must work ===
+  call with the customer key -> 403
+    error: {'message': '用户额度不足, 剩余额度: ＄0.000000 (request id: 202609261157297804199608268d9d6rrf27mBi)', 'type': 'new_api_error', 'param': '', 'code': 'insufficie
+  second call (metering) -> 403
+=== metering, call log, cleanup ===
+  metering: user quota / used / requests
+    quota=1000000 used=0 reqs=0
+  call log (what the operator can see per request):
+    gpt-4o-mini tokens=2 quota=1 | gpt-4o-mini tokens=2 quota=1 | gpt-4o-mini tokens=2 quota=1 | gpt-4o-mini tokens=13 quota=2 | gpt-4o-mini tokens=2 quota=1 | gpt-4o-mini tokens=2 quota=1 | gpt-4o-mini tokens=13 quota=2 |  tokens=0 quota=0 |  tokens=0 quota=0 |  tokens=0 quota=0
+  cleanup
+    removed voucher 2
+    removed provider channel 9
+    removed customer 7 (zzpay1)
+  leftover token rows: zzpay-key
+DELETE 1
+  final: users=root | live tokens=none | channels=0 | vouchers=none
+  registration state: PasswordRegisterEnabled=true, RegisterEnabled=true
+  mock provider stopped
+=== done ===

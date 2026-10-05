@@ -10,6 +10,7 @@
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "ignoreDeprecations": "6.0",
+    "jsx": "preserve",
     "baseUrl": ".",
     "paths": {
       "@lamtools/ui": ["../ui/src/index.ts"],

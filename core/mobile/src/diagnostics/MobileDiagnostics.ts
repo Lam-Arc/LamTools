@@ -27,7 +27,6 @@ const NATIVE_STAGES = new Set([
   'native_subagents_ready',
   'native_runtime_start',
   'native_runtime_done',
-  'native_dreaming_done',
   'runtime_compaction_start',
   'runtime_compaction_done',
   'runtime_hooks_start',

@@ -1,0 +1,7 @@
+=== every option whose name hints at payment, currency or charging ===
+=== is money-style display switched on? ===
+=== any configured payment provider at all? ===
+  payment rows in top_ups: 0 | subscription orders: 0 | subscription plans: 0 | redemption codes: 1 | users with a stripe customer id: 0
+=== who currently holds quota, and how much ===
+  root quota=99999992
+=== done ===

@@ -1,0 +1,44 @@
+=== 1) pre-change baseline ===
+-rw-r--r-- 1 root root 738 Sep 25 23:50 /etc/caddy/Caddyfile
+--- caddy unit reload capability ---
+ExecStart={ path=/usr/local/bin/caddy ; argv[]=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+ExecReload={ path=/usr/local/bin/caddy ; argv[]=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force ; ignore_errors=no ; start_time=[Fri 2026-09-25 23:50:02 CST] ; stop_time=[Fri 2026-09-25 23:50:02 CST] ; pid=16320 ; code=exited ; status=0 }
+--- caddy binary ---
+/usr/local/bin/caddy
+--- current config validates? ---
+{"level":"info","ts":1790420679.5613067,"logger":"http","msg":"servers shutting down with eternal grace period"}
+{"level":"info","ts":1790420679.561418,"logger":"tls.cache.maintenance","msg":"stopped background certificate maintenance","cache":"0x23fef6d40500"}
+Valid configuration
+=== 2) guard + backup ===
+  backup: /etc/caddy/Caddyfile.before-api-gateway-20260926T110439Z
+  old sha256: c6da45995684b5d4b1575e676dc2e148dbba32855cf0d0cd6e4a4cfc8bf7b7a5  /etc/caddy/Caddyfile
+=== 3) append new site block ===
+  new sha256: dfc849f93891a506ed6cd0ab07ec97d4a1a34b628729029c3e72a5e719843098  /etc/caddy/Caddyfile
+=== 4) validate new config ===
+{"level":"info","ts":1790420679.6616764,"logger":"http","msg":"servers shutting down with eternal grace period"}
+{"level":"info","ts":1790420679.6617985,"logger":"tls.cache.maintenance","msg":"stopped background certificate maintenance","cache":"0x3a6a0eff9e00"}
+Valid configuration
+=== 5) graceful reload (no restart of the web server) ===
+  systemctl reload caddy-lamtools: OK
+  unit state: active
+=== 6) wait for certificate issuance ===
+  gateway reachable over TLS after 16s
+  last code: 200
+=== 7) certificate served for the new name ===
+subject=CN = api.47.114.43.99.nip.io
+issuer=C = US, O = Let's Encrypt, CN = YE1
+notBefore=Sep 26 10:06:19 2026 GMT
+notAfter=Dec 25 10:06:18 2026 GMT
+=== 8) regression check: every pre-existing site still answers ===
+  homepage -> 200
+  downloads manifest -> 200
+  desktop installer -> 200
+  mobile relay health -> 200
+  codex mock api -> 200
+  new api gateway -> 200
+=== 9) log directory inventory (for later client-IP verification) ===
+total 16
+drwxr-x--- 2 root root 4096 Sep 26 19:01 .
+drwxr-x--- 4 root root 4096 Sep 26 19:02 ..
+-rw-r--r-- 1 root root 7191 Sep 26 19:04 oneapi-20260926190102.log
+=== done ===

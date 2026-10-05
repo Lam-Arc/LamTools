@@ -1,0 +1,49 @@
+=== 1) generate secrets on-server (values never printed) ===
+env written: mode 600, 5 keys
+=== 2) write compose file ===
+c1d6cef6e55f7450b814b19ebdc71c16e1c12070ccad5aedacbf098f3cfd993d  /opt/lamtools-api/docker-compose.yml
+=== 3) validate compose ===
+compose config OK
+=== 4) bring stack up ===
+ Volume lamtools-api_pgdata Created 
+ Network lamtools-api_internal Created 
+ Network lamtools-api_internal Created 
+ Container lamtools-api-db Creating 
+ Container lamtools-api-cache Creating 
+ Container lamtools-api-cache Created 
+ Container lamtools-api-db Created 
+ Container lamtools-api-gateway Creating 
+ Container lamtools-api-gateway Created 
+ Container lamtools-api-cache Starting 
+ Container lamtools-api-db Starting 
+ Container lamtools-api-cache Started 
+ Container lamtools-api-db Started 
+ Container lamtools-api-db Waiting 
+ Container lamtools-api-cache Waiting 
+ Container lamtools-api-cache Healthy 
+ Container lamtools-api-db Healthy 
+ Container lamtools-api-gateway Starting 
+ Container lamtools-api-gateway Started 
+ Container lamtools-api-gateway Waiting 
+ Container lamtools-api-db Waiting 
+ Container lamtools-api-cache Waiting 
+ Container lamtools-api-cache Healthy 
+ Container lamtools-api-db Healthy 
+ Container lamtools-api-gateway Healthy 
+=== 5) wait for gateway on loopback ===
+gateway HTTP 200 after 6s
+last status code: 200
+--- /api/status ---
+{"data":{"HeaderNavModules":"","SidebarModulesAdmin":"","announcements":[],"announcements_enabled":true,"api_info":[],"api_info_enabled":true,"chats":[{"Cherry Studio":"cherrystudio://providers/api-keys?v=1\u0026data={cherryConfig}"},{"AionUI":"aionui://provider/add?v=1\u0026data={aionuiConfig}"},{"流畅阅读":"fluentread"},{"CC Switch":"ccswitch"},{"DeepChat":"deepchat://provider/install?v=1\u0026data={deepchatConfig}"},{"AQBot":"aqbot://providers?{aqbotConfig}"},{"Lobe Chat 官方示例":"https://chat-preview.lobehub.com/?settings={\"keyVaults\":{\"openai\":{\"apiKey\":\"{key}\",\"baseURL\":\"{address}/v1\"}}}"},{"AI as Workspace":"https://aiaw.app/set-provider?provider={\"type\":\"openai\",\"settings\":{\"apiKey\":\"{key}\",\"baseURL\":\"{address}/v1\",\"compatibility\":\"strict\"}}"},{"AMA 问天":"ama://set-api-key?server={address}\u0026key={key}"},{"OpenCat":"opencat://team/join?domain={address}\u0026token={key}"}],"checkin_enabled":false,"custom_currency_exchange_rate":1,"custom_currency_symbol":"¤","data_export_default_time":"hour","default_collapse_sidebar":false,"default_use_auto_group":false,"demo_site_enabled":false,"discord_client_id":"","discord_oauth":false,"display_in_currency":true,"docs_link":"https://docs.newapi.pro","email_verification":false,"enable_batch_update":true,"enable_data_export":true,"enable_drawing":true,"enable_task":true,"faq":[],"faq_enabled":true,"footer_html":"","github_client_id":"","github_oauth":false,"linuxdo_client_id":"","linuxdo_
+=== 6) containers ===
+NAME                   IMAGE                             COMMAND                  SERVICE   CREATED          STATUS                    PORTS
+lamtools-api-cache     redis:7-alpine                    "docker-entrypoint.s…"   cache     10 seconds ago   Up 10 seconds (healthy)   6379/tcp
+lamtools-api-db        postgres:16-alpine                "docker-entrypoint.s…"   db        10 seconds ago   Up 9 seconds (healthy)    5432/tcp
+lamtools-api-gateway   calciumion/new-api:v1.0.0-rc.40   "/new-api --log-dir …"   gateway   10 seconds ago   Up 4 seconds              127.0.0.1:3000->3000/tcp
+=== 7) port binding check (must be loopback only) ===
+LISTEN 0      4096       127.0.0.1:3000       0.0.0.0:*    users:(("docker-proxy",pid=38775,fd=8))  
+=== 8) resources ===
+               total        used        free      shared  buff/cache   available
+Mem:            3623         455         123          17        3044        2859
+/dev/vda3        40G   12G   27G  30% /
+=== done ===

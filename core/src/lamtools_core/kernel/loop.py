@@ -331,9 +331,7 @@ class CoreLoopKernel:
     # configurable field rather than a hardcoded branch so products with
     # differently-named writer tools can opt in at the assembly point
     # (audit 05 S4: "Kernel 不按产品分支").
-    backup_tool_names: tuple[str, ...] = ("write_file", "edit_file")
     completion_gate: CompletionGate | None = None
-    memory_store: Any | None = None  # MemoryStoreProtocol; Any to avoid import cycle
     # Called after the final request context is assembled and cleaned, just
     # before the request crosses into the LLM client.  The callback is
     # observational: failures must never prevent the actual model call.
@@ -348,6 +346,11 @@ class CoreLoopKernel:
     # cancel). See live_operations.handle_turn_cancel_operation.
     cancel_event_source: asyncio.Event | None = field(default=None, repr=False)
     _base_event_sink: EventSink = field(init=False, repr=False)
+    # The in-memory conversation list of the run currently executing. Assistant
+    # replies and tool results live here until loop exit, so the external-cancel
+    # path must persist this list; reloading from the store instead dropped
+    # everything the stopped turn had already produced. None outside a run.
+    _live_history: list[ChatMessage] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._base_event_sink = self.event_sink
@@ -386,6 +389,8 @@ class CoreLoopKernel:
             # all converge through the same state boundary.
             await asyncio.shield(self._persist_external_cancellation(turn_input))
             raise
+        finally:
+            self._live_history = None
 
     async def _run(self, turn_input: RuntimeTurnInput) -> KernelResult:
         """Execute the main loop.
@@ -511,6 +516,10 @@ class CoreLoopKernel:
         else:
             history = await self._load_history(state.session_id)
         _logger.info("[kernel:_run] history loaded sid=%s len=%d", state.session_id, len(history))
+        # Hand the live list to the external-cancel path: history is only
+        # written to the store at loop exit, so a run cut short by Stop must
+        # persist this list or the turn's own assistant/tool content is lost.
+        self._live_history = history
 
         # Each user turn is a new run inside the same session. Persisted state
         # carries session memory and turn_count, but a stale run_id/status from
@@ -1559,7 +1568,15 @@ class CoreLoopKernel:
         state.loop_state = "failed"
         state.metadata.pop("pending_approval", None)
         state.metadata.pop("pending_waiting_request", None)
-        history = await self._load_history(state.session_id)
+        # Persist what this run already produced. The store holds only the rows
+        # written at run start (the user message); assistant replies and tool
+        # results are still in the live list until loop exit, so reloading from
+        # the store here discarded them and the next message was sent with no
+        # record of the stopped turn. Fall back to the store only when the run
+        # never reached the history load.
+        history = self._live_history
+        if history is None:
+            history = await self._load_history(state.session_id)
         await self._replace_history_checkpoint(state, history)
 
         # Converge the same terminal tail as the normal finish path (audit 02:
@@ -2565,30 +2582,6 @@ class CoreLoopKernel:
             tags=["progress"],
         ))
 
-    async def _backup_file_for_writer_tool(self, state: RuntimeState, call: ToolCall) -> None:
-        """Back up file before a write_file / edit_file tool executes."""
-        if self.checkpoint_coordinator is None:
-            return
-        if call.name not in self.backup_tool_names:
-            return
-        file_path = (
-            call.arguments.get("path")
-            or call.arguments.get("file_path")
-            or call.arguments.get("filePath")
-            or call.arguments.get("target_file")
-            or call.arguments.get("target")
-        )
-        if not file_path or not isinstance(file_path, str):
-            return
-        try:
-            await self.checkpoint_coordinator.backup_file(
-                session_id=state.session_id,
-                path=file_path,
-            )
-        except Exception:
-            _logger.warning("[kernel:_backup_file_for_writer_tool] backup skipped sid=%s path=%s",
-                            state.session_id, file_path, exc_info=True)
-
     async def _execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
         """Execute a single tool call via Kit.
 
@@ -2597,7 +2590,6 @@ class CoreLoopKernel:
         bypassed the waiting-gate contract; do not emit a second approval event
         or execute the tool.
         """
-        await self._backup_file_for_writer_tool(state, call)
         if call.requires_approval:
             return ToolResult(
                 call_id=call.id,
@@ -2780,99 +2772,11 @@ class CoreLoopKernel:
         if decision.status_message:
             await self._emit_hook_status(state, "", decision.status_message)
 
-    async def _dream_if_needed(self, state: RuntimeState, result: Any) -> None:
-        """Consolidate session memory after a run (LamTools "dreaming").
-
-        Fires only when ``policy.dreaming_enabled`` is True and the turn
-        produced something worth dreaming (a compaction summary or tool use).
-        The entire body is wrapped in try/except so a dreaming failure can
-        never kill the run — it is best-effort background consolidation.
-        """
-        if self.memory_store is None:
-            return
-        if not getattr(self.policy, "dreaming_enabled", False):
-            return
-        try:
-            from lamtools_core.mem.dreaming import dream_session, should_dream, record_dream_turn
-
-            metadata = state.metadata if isinstance(state.metadata, dict) else {}
-            compaction = metadata.get("context_compaction")
-            had_compaction = isinstance(compaction, dict) and bool(compaction.get("summary"))
-            # A run that executed at least one tool step is "worth dreaming".
-            had_tool_use = len(getattr(result, "steps", [])) > 0
-            if not should_dream(
-                state, policy=self.policy, had_compaction=had_compaction, had_tool_use=had_tool_use
-            ):
-                return
-
-            # Reload history from the store — at this point history is already
-            # persisted (``_replace_history_checkpoint`` ran before the stop
-            # hook). Use the same loader the kernel uses elsewhere.
-            history: list[ChatMessage] = []
-            if isinstance(self.state_store, RuntimeCheckpointStore):
-                raw = await self.state_store.get_history(state.session_id)
-                history = [
-                    msg for item in raw if (msg := _chat_message_from_dict(item)) is not None
-                ]
-
-            compaction_summary: str | None = None
-            if isinstance(compaction, dict):
-                raw_summary = compaction.get("summary")
-                if isinstance(raw_summary, str) and raw_summary.strip():
-                    compaction_summary = raw_summary
-
-            work_root = str(metadata.get("work_root") or "")
-            active_model = str(metadata.get("model_id") or "")
-            # Session metadata is host-owned (loaded from the session store),
-            # unlike arbitrary model/payload fields.  Study is projectless:
-            # give it a library scope so shared memory is isolated without
-            # ever exporting a Study dream into ``<project>/MEMORY.md``.
-            memory_scope = None
-            session_metadata = metadata.get("session_metadata")
-            if isinstance(session_metadata, dict) and str(session_metadata.get("owner_plugin") or "") == "study":
-                from lamtools_core.mem import MemoryScope
-
-                raw_scope = session_metadata.get("memory_scope")
-                if isinstance(raw_scope, dict):
-                    try:
-                        memory_scope = MemoryScope.from_dict(raw_scope)
-                    except ValueError:
-                        memory_scope = None
-                if memory_scope is None:
-                    memory_scope = MemoryScope.for_study(
-                        str(session_metadata.get("user_id") or "local-user"),
-                        str(session_metadata.get("environment_id") or "local-environment"),
-                        str(session_metadata.get("library_id") or "default"),
-                    )
-
-            await dream_session(
-                session_id=state.session_id,
-                work_root=work_root,
-                history=history,
-                compaction_summary=compaction_summary,
-                memory_store=self.memory_store,
-                llm_client=self.llm_client,
-                model=active_model,
-                policy=self.policy,
-                scope=memory_scope,
-            )
-            record_dream_turn(state)
-            # Persist the updated last_dream_turn marker.
-            if isinstance(self.state_store, RuntimeCheckpointStore):
-                await self.state_store.save(state)
-        except Exception:  # noqa: BLE001 - dreaming must never kill the run
-            # Swallow: dreaming is best-effort. The run has already succeeded;
-            # a memory-consolidation failure should not surface to the user.
-            pass
-
     async def _apply_session_stop_hook(
         self,
         state: RuntimeState,
         result: KernelResult,
     ) -> None:
-        # Dreaming runs before external Stop hooks so the consolidated memory
-        # is available to any downstream process observing the run's end.
-        await self._dream_if_needed(state, result)
         if self.hook_engine is None:
             return
         cwd = str(result.metadata.get("cwd") or "")

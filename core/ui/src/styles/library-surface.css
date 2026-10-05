@@ -1,0 +1,889 @@
+/* The shared surface recipe for the two library-shaped full-area views
+   (资料库 and 记忆): toolbar, filter tabs, card grid, list rows, reader,
+   editor, dialogs and buttons. Every rule is rooted at `.library-surface`,
+   so the recipe lives in one place and cannot leak onto the rest of the app.
+   Both views render that class on their root element. The `.plan-*` names are
+   the shared card/list recipe and are used verbatim by 记忆 too. */
+
+.library-surface {
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--space-4);
+  --text: var(--theme-main-text);
+}
+
+.library-surface {
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--space-4);
+  --text: var(--theme-main-text);
+}
+/* 资料库顶部的三大项切换：和筛选页签同一套配方（同一处方两处用），
+   只加一条分界线，把「最外层分区」和分区内部的页签分开。 */
+.library-surface .library-sections {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+}
+.library-surface .library-sections button {
+  padding: 4px var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.library-surface .library-sections button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.library-surface .library-sections button.active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); color: var(--text); font-weight: 600; }
+/* ── 资料区的资料库版式（对标 ChatGPT 资料库）：大标题 + 右侧整条工具 ── */
+.library-surface .materials-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+.library-surface .materials-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  flex: 0 0 auto;
+}
+.library-surface .materials-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 420px;
+  min-width: 0;
+  justify-content: flex-end;
+}
+.library-surface .materials-search { flex: 1 1 240px; max-width: 360px; }
+.library-surface .materials-new { flex: 0 0 auto; }
+/* 一句占用实话：安静一行，不是警报。 */
+.library-surface .materials-usage {
+  margin: 0 0 var(--space-4);
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 52%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.library-surface .materials-crumb { margin-bottom: var(--space-3); }
+
+/* 卡片墙：多列瀑布流，图片按自身比例决定高度，读起来像一面墙而不是表格。
+   一行放 4~5 张：列宽下限 190px，最多 5 列。 */
+.library-surface .materials-grid {
+  columns: 190px 5;
+  column-gap: var(--space-2);
+  padding-bottom: var(--space-4);
+}
+.library-surface .material-card {
+  position: relative;
+  display: block;
+  break-inside: avoid;
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--text) 10%, transparent));
+  border-radius: var(--radius);
+  background: var(--theme-main-background, color-mix(in srgb, var(--text) 4%, transparent));
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
+}
+.library-surface .material-card:hover {
+  border-color: color-mix(in srgb, var(--text) 24%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.library-surface .material-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.library-surface .material-card--selected { border-color: color-mix(in srgb, var(--blue) 60%, transparent); }
+
+/* 内容区：有缩略图就看图，没有就一枚类型图标落在这个凹面上。 */
+.library-surface .material-thumb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 68px;
+  overflow: hidden;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--theme-main-sunken-background, color-mix(in srgb, var(--text) 6%, transparent));
+  color: color-mix(in srgb, var(--text) 52%, transparent);
+}
+.library-surface .material-thumb img { display: block; width: 100%; height: auto; }
+.library-surface .material-status { position: absolute; top: var(--space-1); right: var(--space-1); }
+
+/* 悬停出现的勾选圈：多选批量操作入口，选中后常驻。 */
+.library-surface .material-check {
+  position: absolute;
+  top: var(--space-1);
+  left: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 24%, transparent);
+  border-radius: 50%;
+  background: var(--theme-main-background, transparent);
+  color: var(--theme-control-text, currentColor);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.library-surface .material-card:hover .material-check,
+.library-surface .material-check:focus-visible,
+.library-surface .material-card--selected .material-check { opacity: 1; }
+.library-surface .material-check[aria-pressed='true'] {
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
+  border-color: transparent;
+}
+
+.library-surface .material-name {
+  margin: var(--space-2) 0 2px;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-surface .material-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.library-surface .material-star {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--orange);
+  cursor: pointer;
+}
+
+/* 成果的状态与方案的状态不是一套值，各认各的属性。 */
+.library-surface .library-status[data-artifact-status='missing'] { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
+.library-surface .library-status[data-artifact-status='failed'] { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
+.library-surface .library-status[data-artifact-status='running'] { background: color-mix(in srgb, var(--orange) 16%, transparent); color: var(--orange); }
+.library-surface .library-status[data-artifact-status='completed'] { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green); }
+
+/* 选中若干件后的批量动作条：落在底部，不遮挡内容。 */
+.library-surface .materials-selection {
+  position: sticky;
+  bottom: var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+  margin: var(--space-2) auto 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--theme-main-border);
+  border-radius: 999px;
+  background: var(--theme-main-background);
+  box-shadow: var(--shadow-md);
+  font-size: 12.5px;
+}
+
+@media (max-width: 640px) {
+  .library-surface .materials-title { font-size: 19px; }
+  .library-surface .materials-tools { flex-basis: auto; }
+  .library-surface .materials-search { max-width: none; }
+}
+
+/* 手机没有顶部条，标题与返回键留在版面里；桌面由顶部条承担。 */
+.library-surface .library-mobile-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.library-surface .library-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin-top: 2px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 68%, transparent);
+  cursor: pointer;
+}
+.library-surface .library-back:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.library-surface .library-head-copy { min-width: 0; }
+.library-surface h1 { margin: 0 0 2px; font-size: 17px; font-weight: 700; letter-spacing: 0; }
+.library-surface .library-title { font-size: 17px; }
+.library-surface .library-subtitle { margin: 0; font-size: 12px; color: color-mix(in srgb, var(--text) 62%, transparent); }
+.library-surface .library-crumb { display: flex; align-items: center; gap: 2px; margin: 4px 0 0; font-size: 13px; color: color-mix(in srgb, var(--text) 62%, transparent); min-width: 0; overflow: hidden; }
+.library-surface .crumb-sep { margin: 0 2px; color: color-mix(in srgb, var(--text) 40%, transparent); }
+/* 面包屑每一段都可点回去；最后一段是当前位置，不是链接。 */
+.library-surface .crumb-link {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.library-surface .crumb-link:hover { color: var(--text); text-decoration: underline; }
+.library-surface .crumb-link--current { font-weight: 600; color: color-mix(in srgb, var(--text) 88%, transparent); cursor: default; }
+.library-surface .crumb-link--current:hover { color: color-mix(in srgb, var(--text) 88%, transparent); text-decoration: none; }
+.library-surface .full-area-note { margin: 0; font-size: 13px; line-height: 1.7; color: color-mix(in srgb, var(--text) 62%, transparent); }
+.library-surface .full-area-note--error { color: var(--red); }
+.library-surface .tab-empty { padding: var(--space-3) 0; }
+/* ── 工具栏 ── */
+.library-surface .library-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.library-surface .library-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 460px;
+  padding: 0 var(--space-3);
+  min-height: 32px;
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+}
+.library-surface .library-search svg { flex: 0 0 auto; color: color-mix(in srgb, var(--theme-composer-text) 55%, transparent); }
+.library-surface .library-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
+  font: inherit;
+  font-size: 13px;
+}
+.library-surface .library-search input:focus { outline: 0; }
+.library-surface .library-search input::placeholder { color: color-mix(in srgb, var(--theme-composer-text) 45%, transparent); }
+/* 视图切换贴住行的右端：搜索在左、切换在右，中间的空档由搜索框自己长。 */
+.library-surface .library-view-toggle {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  border-radius: var(--radius-sm);
+}
+.library-surface .library-view-toggle button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.library-surface .library-view-toggle button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.library-surface .library-view-toggle button.active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); color: var(--text); }
+/* ── 筛选页签 ── */
+.library-surface .filter-tabs { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-4); }
+.library-surface .filter-tabs button {
+  padding: 4px var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.library-surface .filter-tabs button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.library-surface .filter-tabs button.active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); color: var(--text); font-weight: 600; }
+/* ── 方案网格 ── */
+.library-surface .plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: var(--space-2);
+  padding-bottom: var(--space-4);
+}
+.library-surface .plan-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--text) 10%, transparent));
+  border-radius: var(--radius);
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--text) 4%, transparent));
+  cursor: pointer;
+  transition:
+  box-shadow var(--dur-base) var(--ease-out);
+}
+.library-surface .plan-card:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border-color: color-mix(in srgb, var(--text) 24%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.library-surface .plan-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 卡片上半是一块「文档头」：一直铺到卡片边缘，和正文之间形成一段实色分层。 */
+.library-surface .plan-card-preview {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  min-height: 76px;
+  margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-3)) 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
+  background: var(--theme-main-sunken-background, color-mix(in srgb, var(--text) 6%, transparent));
+  overflow: hidden;
+}
+.library-surface .plan-card-summary {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.library-surface .plan-card-glyph {
+  position: absolute;
+  right: var(--space-2);
+  bottom: 6px;
+  color: color-mix(in srgb, var(--text) 14%, transparent);
+}
+.library-surface .plan-card-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.45;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+/* 同一行的卡片等高：状态与日期钉在卡底，横向扫过去是一条线。 */
+.library-surface .plan-card-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding-top: var(--space-1);
+  min-width: 0;
+}
+.library-surface .plan-card-time { margin-left: auto; font-size: 11px; color: color-mix(in srgb, var(--text) 45%, transparent); flex: 0 0 auto; }
+.library-surface .plan-card-star { color: var(--orange); flex: 0 0 auto; }
+/* 悬停出现的卡片菜单键 */
+.library-surface .card-menu-btn {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-background, color-mix(in srgb, var(--text) 10%, transparent));
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.library-surface .plan-card:hover .card-menu-btn, .library-surface .material-card:hover .card-menu-btn, .library-surface .library-row:hover .card-menu-btn, .library-surface .folder-card:hover .card-menu-btn, .library-surface .card-menu-btn:focus-visible { opacity: 1; }
+.library-surface .card-menu-btn:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.library-surface .card-menu-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+/* ── 方案列表（行） ── */
+.library-surface .library-items {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.library-surface .library-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.library-surface .library-row:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); }
+.library-surface .library-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.library-surface .library-row .card-menu-btn { top: 50%; margin-top: -13px; }
+.library-surface .library-item-top { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; padding-right: var(--space-5); }
+.library-surface .library-item-title { flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-surface .library-item-bottom { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; padding-right: var(--space-5); }
+.library-surface .library-item-summary { flex: 1 1 auto; min-width: 0; color: color-mix(in srgb, var(--text) 62%, transparent); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-surface .library-item-time { flex: 0 0 auto; color: color-mix(in srgb, var(--text) 45%, transparent); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* 状态签：色点（执行中转圈）在前、文字在后，颜色之外再看得出状态。 */
+.library-surface .library-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 1px 7px 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.library-surface .library-status::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.library-surface .library-status[data-plan-status='ready'] { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green); }
+.library-surface .library-status[data-plan-status='executing'] { background: color-mix(in srgb, var(--orange) 16%, transparent); color: var(--orange); }
+.library-surface .library-status[data-plan-status='done'] { background: color-mix(in srgb, var(--blue) 16%, transparent); color: var(--blue); }
+.library-surface .library-status[data-plan-status='executing']::before {
+  width: 7px;
+  height: 7px;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-right-color: transparent;
+  animation: library-status-spin 900ms linear infinite;
+}
+@keyframes library-status-spin { to { transform: rotate(360deg); } }
+/* ── 文件夹 ── */
+.library-surface .folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: var(--space-2);
+  padding-bottom: var(--space-4);
+}
+.library-surface .folder-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'icon name' 'icon count';
+  column-gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--text) 10%, transparent));
+  border-radius: var(--radius);
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--text) 4%, transparent));
+  cursor: pointer;
+  transition:
+  box-shadow var(--dur-base) var(--ease-out);
+}
+.library-surface .folder-card:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border-color: color-mix(in srgb, var(--text) 24%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.library-surface .folder-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.library-surface .folder-card-icon {
+  grid-area: icon;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+}
+.library-surface .folder-card-name { grid-area: name; font-size: 13.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-surface .folder-card-count { grid-area: count; font-size: 11.5px; color: color-mix(in srgb, var(--text) 52%, transparent); }
+.library-surface .folder-card .card-menu-btn { top: 50%; margin-top: -13px; }
+.library-surface .folder-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 var(--space-5);
+  padding: var(--space-5);
+  border: 1px dashed color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: var(--radius);
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+  text-align: center;
+}
+.library-surface .folder-empty p { margin: 0; font-size: 13px; }
+.library-surface .folder-empty svg { color: color-mix(in srgb, var(--text) 45%, transparent); }
+/* ── 阅读子页 ── */
+.library-surface .library-reader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  padding-bottom: var(--space-5);
+}
+.library-surface .library-reader-head {
+  display: grid;
+  gap: 2px;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+}
+.library-surface .library-reader-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-surface .library-reader-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 52%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.library-surface .library-document { max-width: 68ch; font-size: 14px; line-height: 1.75; }
+/* ── 编辑子页：方案原文，凹陷面上的等宽文本 ── */
+.library-surface .library-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  padding-bottom: var(--space-5);
+}
+.library-surface .library-editor-head {
+  display: grid;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+}
+.library-surface .library-editor-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-surface .library-editor-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 52%, transparent);
+}
+.library-surface .library-editor-state {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text) 52%, transparent);
+}
+/* 未保存不是一个着色警报，而是一个「有东西待处理」的状态，用等待色。 */
+.library-surface .library-editor-state--dirty { color: var(--orange); }
+.library-surface .library-editor-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* Ctrl+滚轮缩放：整个分区一起放大缩小（像整页缩放），不是只缩卡片。
+   档位由资料/方案视图写入 --library-zoom，范围 0.6–1.6。 */
+.library-surface .materials-view,
+.library-surface.plan-library-view {
+  zoom: var(--library-zoom, 1);
+}
+
+/* ── 文档编辑器：阅读与编辑是同一份文档的两种状态 ──
+   源文用正文的字体、字号、行高与宽度（不是等宽代码块），预览用与阅读页相同的
+   `.library-document` 排版，所以进出编辑不会"换一个界面"。 */
+.library-surface .doc-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+.library-surface .doc-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+}
+.library-surface .doc-editor-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.library-surface .doc-editor-tool:hover:not(:disabled) { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.library-surface .doc-editor-tool:disabled { opacity: 0.45; cursor: default; }
+.library-surface .doc-editor-toolbar-spacer { flex: 1 1 auto; }
+.library-surface .doc-editor-preview-toggle {
+  width: auto;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  font-size: 11.5px;
+}
+.library-surface .doc-editor-preview-toggle.active {
+  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  color: var(--text);
+}
+.library-surface .doc-editor-hint {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+}
+.library-surface .doc-editor-panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.library-surface .doc-editor-source {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 320px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  caret-color: var(--theme-composer-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.75;
+  resize: none;
+  tab-size: 2;
+}
+/* 输入框不做聚焦态：光标闪动即聚焦指示。 */
+.library-surface .doc-editor-source:focus { outline: 0; }
+.library-surface .doc-editor-preview {
+  min-width: 0;
+  overflow-y: auto;
+}
+.library-surface .doc-editor-preview > .library-document { max-width: none; }
+.library-surface .library-document h1, .library-surface .library-document h2, .library-surface .library-document h3 {
+  margin: var(--space-5) 0 var(--space-2);
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.35;
+}
+.library-surface .library-document h1 { font-size: 17px; }
+.library-surface .library-document h2 { font-size: 15px; }
+.library-surface .library-document h3 { font-size: 13.5px; color: color-mix(in srgb, var(--text) 82%, transparent); }
+.library-surface .library-document > :first-child { margin-top: 0; }
+.library-surface .library-document p { margin: 0 0 var(--space-3); }
+.library-surface .library-document ul, .library-surface .library-document ol { margin: 0 0 var(--space-3); padding-left: 1.25em; }
+.library-surface .library-document li { margin-bottom: 4px; }
+.library-surface .library-document li > ul, .library-surface .library-document li > ol { margin-top: 4px; }
+.library-surface .library-document code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.library-surface .library-document pre {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--theme-main-sunken-background, color-mix(in srgb, var(--text) 6%, transparent));
+  overflow-x: auto;
+}
+.library-surface .library-document pre code { padding: 0; background: none; }
+.library-surface .library-document blockquote {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--text) 18%, transparent);
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+}
+.library-surface .library-document hr {
+  margin: var(--space-5) 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+.library-surface .library-document table { width: 100%; border-collapse: collapse; margin: 0 0 var(--space-3); font-size: 13px; }
+.library-surface .library-document th, .library-surface .library-document td { padding: 6px var(--space-2); border-bottom: 1px solid color-mix(in srgb, var(--text) 10%, transparent); text-align: left; }
+/* ── 按钮：一种配方，两种语气 ── */
+.library-surface .library-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px var(--space-3);
+  min-height: 28px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.library-surface .library-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
+}
+.library-surface .library-button--primary {
+  border-color: transparent;
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
+  font-weight: 600;
+}
+.library-surface .library-button--primary:hover:not(:disabled) {
+  background: var(--theme-control-background);
+  /* 通用 :hover 会把文字改成正文色，深底上就和背景同色了；主按钮按规范保持 control 文字色。 */
+  color: var(--theme-control-text);
+  filter: brightness(0.94);
+}
+.library-surface .library-button:disabled { opacity: 0.45; cursor: default; }
+.library-surface .library-button--danger:hover:not(:disabled), .library-surface .library-button--danger[data-library-delete='confirm'] {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
+}
+.library-surface .icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+  cursor: pointer;
+}
+.library-surface .icon-button:hover:not(:disabled) { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.library-surface .library-link {
+  margin-left: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+/* ── 对话框：与全应用的确认框同一套（描边、底带、遮罩、入场） ── */
+.library-surface .dialog-dimmer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--theme-backdrop-text) 20%, transparent);
+}
+.library-surface .dialog-card {
+  width: min(400px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius);
+  background: var(--theme-main-background);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+.library-surface .dialog-body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+.library-surface .dialog-title { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.35; }
+.library-surface .dialog-text { margin: 0; font-size: 13px; line-height: 1.6; color: color-mix(in srgb, var(--text) 68%, transparent); }
+.library-surface .dialog-field { display: flex; flex-direction: column; gap: var(--space-1); }
+.library-surface .dialog-field span { font-size: 12.5px; color: color-mix(in srgb, var(--text) 68%, transparent); }
+.library-surface .dialog-field input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
+  font: inherit;
+  font-size: 13.5px;
+}
+.library-surface .dialog-field input:focus { outline: 0; }
+.library-surface .dialog-error { margin: 0; color: var(--red); font-size: 12.5px; }
+/* 动作落在一条底带上：与对话框正文分开，和确认框同一条分界线。 */
+.library-surface .dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--theme-main-border);
+  background: var(--theme-main-soft-background);
+}
+.library-surface .dialog-actions .library-button {
+  min-width: 72px;
+  min-height: 34px;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 650;
+}
+.library-surface .library-dialog-enter-active, .library-surface .library-dialog-leave-active { transition: opacity 160ms ease-out; }
+.library-surface .library-dialog-enter-active .dialog-card, .library-surface .library-dialog-leave-active .dialog-card { transition: transform 160ms ease-out, opacity 160ms ease-out; }
+.library-surface .library-dialog-enter-from, .library-surface .library-dialog-leave-to, .library-surface .library-dialog-enter-from .dialog-card, .library-surface .library-dialog-leave-to .dialog-card { opacity: 0; }
+.library-surface .library-dialog-enter-from .dialog-card, .library-surface .library-dialog-leave-to .dialog-card { transform: translateY(8px) scale(.98); }
+.library-surface button:disabled { cursor: default; opacity: .5; }
+/* 桌面：标题与返回键由顶部条承担，手机头整块收起。 */
+@media (min-width: 641px) {
+  .library-surface .library-mobile-head { display: none; }
+}
+@media (max-width: 640px) {
+  .library-surface { padding-top: 16px; }
+  .library-surface .plan-grid, .library-surface .folder-grid { grid-template-columns: 1fr 1fr; }
+  .library-surface .library-search { max-width: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .library-surface .library-row, .library-surface .plan-card, .library-surface .folder-card, .library-surface .library-button, .library-surface .filter-tabs button, .library-surface .library-view-toggle button, .library-surface .card-menu-btn {
+  transition: none;
+  }
+  /* 执行中不再转圈，色点仍在——状态本身不靠动画传达。 */
+  .library-surface .library-status[data-plan-status='executing']::before { animation: none; }
+  .library-surface .library-dialog-enter-active, .library-surface .library-dialog-leave-active, .library-surface .library-dialog-enter-active .dialog-card, .library-surface .library-dialog-leave-active .dialog-card { transition-duration: 0ms; }
+}

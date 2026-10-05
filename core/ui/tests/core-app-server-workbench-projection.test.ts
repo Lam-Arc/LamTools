@@ -6,6 +6,7 @@ import {
   nextCoreProcessExpandedIds,
   selectCoreQueuedInputs,
   selectCoreWorkbenchMessages,
+  selectPendingCoreDecisions,
   selectLatestActiveTurnId,
   updateCoreSessionListStatus,
 } from '../src/appServer'
@@ -827,6 +828,72 @@ describe('core appServer workbench approval recovery', () => {
     expect(answered?.status).toBe('completed')
     const answeredMetadata = answered?.metadata as Record<string, unknown> | undefined
     expect(answeredMetadata?.waitingResponse).toMatchObject({ action: 'approve' })
+  })
+
+  // 批准后工具已经执行完（item 终态），但客户端还没收到把 request 标为
+  // resolved 的快照（快照只在回合边界推送）。此时「已点击、处理中」的内存标记
+  // 不能把卡片继续扣在待办队列里——否则输入区一直被审批面板占据，选项与引导
+  // 全被禁用且没有任何反馈，用户既答不了也发不了消息（用户 2026-10-01 报
+  // 的「审批不可用/点击无反应」）。
+  it('releases the decision once its item is terminal even while the click is still latched', () => {
+    const turnId = 'turn-approval-latched'
+    const toolItemId = `${turnId}:call_00_latched:tool`
+    const buildSnapshot = (itemStatus: string) => hydrateSnapshot({
+      thread_id: 'thread-approval-latched',
+      snapshot_seq: 14,
+      core: {
+        thread_id: 'thread-approval-latched',
+        snapshot_seq: 14,
+        status: 'running',
+        item_order: [`${turnId}:user`, toolItemId],
+        turns: {
+          [turnId]: {
+            turn_id: turnId, status: 'running', last_kind: 'tool_result',
+            items: [`${turnId}:user`, toolItemId],
+          },
+        },
+        items: {
+          [`${turnId}:user`]: {
+            item_id: `${turnId}:user`, turn_id: turnId, kind: 'message', status: 'completed',
+            payload: { type: 'userMessage', content: [{ type: 'text', text: '执行命令' }] },
+          },
+          [toolItemId]: {
+            item_id: toolItemId,
+            turn_id: turnId,
+            kind: itemStatus === 'completed' ? 'tool_result' : 'tool_call',
+            last_kind: itemStatus === 'completed' ? 'tool_result' : 'approval_request',
+            status: itemStatus,
+            payload: {
+              type: 'serverRequest',
+              request_id: 'req-latched',
+              tool_name: 'run_command',
+              title: '需要确认：npm test',
+              options: [{ id: 'approve', label: '批准' }, { id: 'deny', label: '拒绝' }],
+            },
+          },
+        },
+        // 客户端还没拿到把这条 request 标成 resolved 的快照。
+        requests: {
+          'req-latched': { request_id: 'req-latched', status: 'open', item_id: toolItemId, turn_id: turnId },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const decisionsFor = (itemStatus: string) => {
+      const messages = selectCoreWorkbenchMessages(buildSnapshot(itemStatus), {
+        active: true,
+        submittingApprovalRequestIds: new Set(['req-latched']),
+      })
+      return selectPendingCoreDecisions(messages, { submittingRequestIds: new Set(['req-latched']) })
+    }
+
+    // 工具还没结果：仍然扣在待办里，显示为处理中，避免重复点击。
+    const inFlight = decisionsFor('waiting')
+    expect(inFlight).toHaveLength(1)
+    expect(inFlight[0].submitting).toBe(true)
+
+    // 工具已执行完：卡片就此释放，输入区回到用户手里。
+    expect(decisionsFor('completed')).toEqual([])
   })
 
   it('keeps a real tool_call (no approval marker) as a tool part', () => {

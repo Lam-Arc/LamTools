@@ -13,16 +13,29 @@
           role="dialog"
           aria-modal="true"
           :aria-labelledby="titleId"
-          :aria-describedby="descriptionId"
           :aria-busy="loading"
         >
-          <div class="core-confirm__body">
-            <h2 :id="titleId">{{ title }}</h2>
-            <p :id="descriptionId">{{ description }}</p>
-            <p v-if="detail" class="core-confirm__detail" :title="detail">{{ detail }}</p>
-            <p v-if="error" class="core-confirm__error" role="alert">{{ error }}</p>
-          </div>
-          <footer class="core-confirm__actions">
+          <span :id="titleId" class="core-confirm__title">{{ title }}</span>
+          <input
+            v-if="input"
+            ref="inputEl"
+            class="core-confirm__input"
+            :value="inputValue"
+            :placeholder="inputPlaceholder"
+            :aria-label="title"
+            spellcheck="false"
+            @input="$emit('update:inputValue', ($event.target as HTMLInputElement).value)"
+            @keydown.enter.prevent="confirm"
+          />
+          <!-- 一格说明位：平时显示对象名（文件/项目/插件…），出错时由错误文本顶上。 -->
+          <span
+            v-else-if="error || detail"
+            class="core-confirm__detail"
+            :class="{ 'core-confirm__detail--error': Boolean(error) }"
+            :title="error || detail"
+          >{{ error || detail }}</span>
+          <span class="core-confirm__spacer" aria-hidden="true"></span>
+          <span class="core-confirm__actions">
             <button type="button" class="core-confirm__cancel" :disabled="loading" @click="cancel">
               取消
             </button>
@@ -31,11 +44,11 @@
               type="button"
               class="core-confirm__submit"
               :disabled="loading || confirmDisabled"
-              @click="$emit('confirm')"
+              @click="confirm"
             >
-              {{ loading ? '打开中…' : confirmLabel }}
+              确认
             </button>
-          </footer>
+          </span>
         </section>
       </div>
     </Transition>
@@ -48,17 +61,23 @@ import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismis
 
 const props = withDefaults(defineProps<{
   open: boolean
+  /** 一行标题，说清要做什么（如「删除项目？」）。 */
   title: string
-  description: string
+  /** 对象名等一行补充；与 error 共用同一格，出错时显示错误。 */
   detail?: string
-  confirmLabel?: string
+  /** 需要用户填一个名字时给 true（如资料库归档的文件夹名）。 */
+  input?: boolean
+  inputValue?: string
+  inputPlaceholder?: string
   /** Additional caller-controlled guard for confirmations that require a delay. */
   confirmDisabled?: boolean
   loading?: boolean
   error?: string
 }>(), {
   detail: '',
-  confirmLabel: '确认',
+  input: false,
+  inputValue: '',
+  inputPlaceholder: '',
   confirmDisabled: false,
   loading: false,
   error: '',
@@ -67,21 +86,23 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   confirm: []
   cancel: []
+  'update:inputValue': [value: string]
 }>()
 
 const instanceId = useId()
 const titleId = `core-confirm-title-${instanceId}`
-const descriptionId = `core-confirm-description-${instanceId}`
 const backdropEl = ref<HTMLElement | null>(null)
 const dialogEl = ref<HTMLElement | null>(null)
 const confirmButtonEl = ref<HTMLButtonElement | null>(null)
+const inputEl = ref<HTMLInputElement | null>(null)
 let restoreFocus: HTMLElement | null = null
 
 watch(() => props.open, async open => {
   if (open) {
     restoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     await nextTick()
-    confirmButtonEl.value?.focus()
+    if (props.input) inputEl.value?.focus()
+    else confirmButtonEl.value?.focus()
   } else {
     restoreFocus?.focus()
     restoreFocus = null
@@ -95,6 +116,11 @@ onBeforeUnmount(() => {
 
 function cancel(): void {
   if (!props.loading) emit('cancel')
+}
+
+function confirm(): void {
+  if (props.loading || props.confirmDisabled) return
+  emit('confirm')
 }
 
 useOutsidePointerDismiss({
@@ -115,82 +141,88 @@ useOutsidePointerDismiss({
   place-items: center;
   padding: var(--space-4);
   background: color-mix(in srgb, var(--theme-backdrop-text) 20%, transparent);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
 }
 
+/* 胶囊：一行说清做什么，两端是取消与确认。 */
 .core-confirm {
-  width: min(400px, 100%);
-  overflow: hidden;
-  border: 1px solid var(--theme-main-border);
-  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: min(520px, 100%);
+  border-radius: 999px;
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
   background: var(--theme-main-background);
   box-shadow: var(--shadow-lg);
   color: var(--text);
 }
 
-.core-confirm__body {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-4);
-}
-
-.core-confirm h2,
-.core-confirm p {
-  margin: 0;
-}
-
-.core-confirm h2 {
-  font-size: 16px;
-  font-weight: 720;
-  line-height: 1.35;
-}
-
-.core-confirm p {
-  color: color-mix(in srgb, var(--text) 65%, transparent);
+.core-confirm__title {
+  flex: 0 0 auto;
   font-size: 13px;
-  line-height: 1.5;
+  font-weight: 680;
+  white-space: nowrap;
 }
 
-.core-confirm .core-confirm__detail {
+.core-confirm__detail {
   overflow: hidden;
-  color: var(--text);
-  font-weight: 680;
+  min-width: 0;
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.core-confirm .core-confirm__error {
+.core-confirm__detail--error {
   color: var(--red);
 }
 
+.core-confirm__spacer {
+  flex: 1 1 auto;
+}
+
+.core-confirm__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 var(--space-3);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.core-confirm__input::placeholder {
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+}
+
 .core-confirm__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  border-top: 1px solid var(--theme-main-border);
-  padding: var(--space-3) var(--space-4);
-  background: var(--theme-main-soft-background);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
 }
 
 .core-confirm__actions button {
-  min-width: 72px;
-  height: 34px;
-  border-radius: var(--radius-sm);
+  min-width: 56px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
   padding: 0 var(--space-3);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 680;
 }
 
 .core-confirm__cancel {
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) var(--alpha-active), transparent);
   background: transparent;
-  color: var(--theme-control-text);
+  color: color-mix(in srgb, var(--theme-control-text) 65%, transparent);
 }
 
 .core-confirm__cancel:hover:not(:disabled) {
   background: color-mix(in srgb, var(--theme-control-text) var(--alpha-hover), transparent);
+  color: var(--theme-control-text);
 }
 
 .core-confirm__cancel:active:not(:disabled) {
@@ -198,7 +230,6 @@ useOutsidePointerDismiss({
 }
 
 .core-confirm__submit {
-  border: 1px solid var(--theme-control-background);
   background: var(--theme-control-background);
   color: var(--theme-control-text);
 }

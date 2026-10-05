@@ -1,0 +1,18 @@
+  bridge gateway: 172.30.0.1
+  mock listening
+=== settings, pricing, channel, relay timeline ===
+  login attempt 1 -> http=429 msg=None
+  login attempt 2 -> http=429 msg=None
+  login attempt 3 -> http=429 msg=None
+  login attempt 4 -> http=429 msg=None
+  login attempt 5 -> http=429 msg=None
+  login attempt 6 -> http=429 msg=None
+  login attempt 7 -> http=429 msg=None
+  login attempt 8 -> http=429 msg=None
+  FATAL: could not authenticate
+=== mock access log ===
+  nothing reached the mock
+=== done ===
+=== cleanup ===
+  cleanup: login failed; leaving artefacts for manual removal
+  mock stopped

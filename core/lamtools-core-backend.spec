@@ -245,6 +245,7 @@ _hiddenimports = [
     "lamtools_core.runtime.evidence",
     "lamtools_core.runtime.goal",
     "lamtools_core.runtime.observer",
+    "lamtools_core.runtime.persistent_process_store",
     "lamtools_core.runtime.plan",
 
     # === tool/ submodules ===
@@ -275,9 +276,8 @@ _hiddenimports = [
     "lamtools_core.config.retry_store",
     "lamtools_core.config.subagent_prompt",
     "lamtools_core.llm.model_capabilities",
-    "lamtools_core.mem.dreaming",
-    "lamtools_core.mem.memory_file",
-    "lamtools_core.mem.store",
+    "lamtools_core.mem.library",
+    "lamtools_core.tool.memory_tools",
     "lamtools_core.tool.image_tools",
     "lamtools_core.tool.search.baidu",
     "lamtools_core.tool.search.bing",

@@ -92,7 +92,6 @@ class FullConversationExport(ExportEnvelope):
     checkpoint_blobs: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     attachments: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     goals: tuple[dict[str, Any], ...] = field(default_factory=tuple)
-    memories: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     arrange_jobs: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     arrange_occurrences: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     arrange_signals: tuple[dict[str, Any], ...] = field(default_factory=tuple)
@@ -123,7 +122,6 @@ class FullConversationExport(ExportEnvelope):
             "checkpoint_blobs": list(self.checkpoint_blobs),
             "attachments": list(self.attachments),
             "goals": list(self.goals),
-            "memories": list(self.memories),
             "arrange_jobs": list(self.arrange_jobs),
             "arrange_occurrences": list(self.arrange_occurrences),
             "arrange_signals": list(self.arrange_signals),

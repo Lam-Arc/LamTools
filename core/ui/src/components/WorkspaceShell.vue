@@ -46,10 +46,10 @@
       role="button"
       tabindex="0"
       aria-label="打开左侧会话栏"
-      @mouseenter="!leftPinned && openLeftDrawer()"
-      @focus="!leftPinned && openLeftDrawer()"
-      @keydown.enter.prevent="openLeftDrawer"
-      @keydown.space.prevent="openLeftDrawer"
+      @mouseenter="!leftPinned && !collapseLeftSidebar && openLeftDrawer()"
+      @focus="!leftPinned && !collapseLeftSidebar && openLeftDrawer()"
+      @keydown.enter.prevent="!collapseLeftSidebar && openLeftDrawer()"
+      @keydown.space.prevent="!collapseLeftSidebar && openLeftDrawer()"
     ></div>
     <div
       v-if="showRightPanel"
@@ -63,10 +63,13 @@
       @keydown.space.prevent="openRightDrawer"
     ></div>
 
+    <!-- ===== App Rail（最左竖栏：整界面导航，常驻） ===== -->
+    <slot name="app-rail" />
+
     <!-- ===== Left Drawer ===== -->
     <LeftSidebarShell
       :id="leftDrawerId"
-      :open="leftOpen || stageOpen"
+      :open="leftOpen && !collapseLeftSidebar"
       :pinned="leftPinned"
       :title="sidebarTitle"
       :show-sidebar-header="showSidebarHeader"
@@ -99,7 +102,10 @@
     <!-- ===== Main Area ===== -->
     <main
       class="workspace-main"
-      :class="{ 'workspace-main--no-composer': hideComposer }"
+      :class="{
+        'workspace-main--no-composer': hideComposer,
+        'workspace-main--no-header': hideMainHeader,
+      }"
       :inert="rightDrawerModal || undefined"
     >
       <div class="workspace-runtime-overlay">
@@ -112,23 +118,6 @@
         </section>
       </slot>
     </main>
-
-    <!-- ===== Stage Pane (behind main card) ===== -->
-    <div
-      class="workspace-stage"
-      :inert="!stageOpen || undefined"
-      :aria-hidden="!stageOpen"
-    >
-      <slot name="stage" :open="stageOpen" :toggle="toggleStage" />
-      <div
-        v-if="stageOpen"
-        class="stage-resize-handle"
-        @pointerdown="startStageResize"
-        @pointermove="onStageResizeMove"
-        @pointerup="endStageResize"
-        @pointercancel="endStageResize"
-      ></div>
-    </div>
 
     <!-- ===== Floating Composer ===== -->
     <ComposerBar
@@ -198,11 +187,10 @@
     <aside
       v-if="showRightPanel"
       :id="rightDrawerId"
+      ref="rightDrawerRef"
       data-workspace-right-drawer
       class="workspace-drawer drawer-right optical-glass"
       :class="{ open: rightDrawerShown, pinned: rightPinned, 'drawer-retracting': rightRetracting }"
-      :inert="!rightDrawerShown || undefined"
-      :aria-hidden="!rightDrawerShown"
       @mouseleave="onRightDrawerLeave"
     >
       <header v-if="showRightPanelHeader" class="drawer-head">
@@ -269,14 +257,25 @@ const props = withDefaults(
     composerSendTitle?: string
     composerStopTitle?: string
     showRightPanel?: boolean
-    stageOpen?: boolean
     hideComposer?: boolean
+    /** 整界面切走：为真时会话栏整列退场（最左竖栏仍常驻）。 */
+    collapseLeftSidebar?: boolean
+    /**
+     * 主卡不渲染标题条（设置 / 插件的页名与分区都在会话栏里）：
+     * 顶部那条留给标题条的高度随之收回，内容独占整页。
+     */
+    hideMainHeader?: boolean
     /** Host-controlled layout state for a Core session with no messages yet. */
     emptySession?: boolean
     /** Stable host session identity used to retain working-state placement. */
     composerSessionKey?: string | null
     /** False while the host is still loading the selected session history. */
     composerSessionReady?: boolean
+    /**
+     * 右侧栏的悬停卡正浮在抽屉之外（区域被卡片占用）：指针从竖栏移向卡片时会
+     * 先离开抽屉本体，此时不能按“离开竖栏”收起它。
+     */
+    rightPanelHold?: boolean
   }>(),
   {
     storageKey: 'lamtools.ui',
@@ -302,10 +301,11 @@ const props = withDefaults(
     composerSendTitle: '发送',
     composerStopTitle: '停止运行',
     showRightPanel: true,
-    stageOpen: false,
+    hideMainHeader: false,
     emptySession: false,
     composerSessionKey: null,
     composerSessionReady: true,
+    rightPanelHold: false,
   },
 )
 
@@ -319,7 +319,6 @@ const emit = defineEmits<{
   search: []
   'composer-submit': []
   'composer-drop': [event: DragEvent]
-  'update:stageOpen': [value: boolean]
 }>()
 
 // IME guard for the fallback textarea: composition-confirm Enter must not
@@ -340,8 +339,6 @@ const {
   leftPinned,
   rightPinned,
   rightRetracting,
-  stageOpen,
-  stageHeight,
   isNarrowViewport,
   shellClass,
   shellStyle,
@@ -353,14 +350,11 @@ const {
   toggleLeftPinned,
   toggleRightPinned,
   onLeftDrawerLeave,
-  onRightDrawerLeave,
+  onRightDrawerLeave: closeRightDrawer,
   openLeftDrawer,
   openRightDrawer,
   closeDrawers,
-  toggleStage,
-  startStageResize,
-  onStageResizeMove,
-  endStageResize,
+  setSidebarCollapsed,
 } = useShellLayout({
   storageKey: props.storageKey,
   density: props.density,
@@ -369,11 +363,39 @@ const {
   showRightPanel: props.showRightPanel,
 })
 
+watch(
+  () => props.collapseLeftSidebar,
+  (collapsed) => setSidebarCollapsed(Boolean(collapsed)),
+  { immediate: true },
+)
+
+const rightDrawerRef = ref<HTMLElement | null>(null)
+
+/**
+ * 右侧的悬停卡浮在抽屉之外。指针从竖栏移向卡片时会先离开抽屉本体，但卡片还没
+ * 接管（rightPanelHold 仍是假），按“离开即收起”会把竖栏从指针下抽走。因此：
+ * 卡片还在浮出时不算离开；卡片收起后再确认指针没有回到竖栏，才收起抽屉。
+ */
+function onRightDrawerLeave(): void {
+  if (rightPinned.value || props.rightPanelHold) return
+  closeRightDrawer()
+}
+
+watch(
+  () => props.rightPanelHold,
+  (hold) => {
+    if (hold || rightPinned.value) return
+    if (rightDrawerRef.value?.matches(':hover')) return
+    closeRightDrawer()
+  },
+)
+
 const shellElement = ref<HTMLElement | null>(null)
+// 视窗已归档：composer 布局的视口参数恒为关闭。
 const composerLayout = useComposerLayout({
   root: shellElement,
   emptySession: toRef(props, 'emptySession'),
-  viewportOpen: stageOpen,
+  viewportOpen: ref(false),
   sessionKey: toRef(props, 'composerSessionKey'),
   sessionReady: toRef(props, 'composerSessionReady'),
 })
@@ -616,13 +638,6 @@ function onSwipePointerCancel(): void {
   }
 }
 
-// Sync stageOpen: prop → useShellLayout, and useShellLayout → emit
-watch(() => props.stageOpen, (val) => {
-  if (val !== stageOpen.value) stageOpen.value = val
-})
-watch(stageOpen, (val) => {
-  if (val !== props.stageOpen) emit('update:stageOpen', val)
-})
 watch(leftOpen, (value) => {
   emit('update:left-open', value)
 }, { immediate: true })

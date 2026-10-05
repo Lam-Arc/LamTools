@@ -3738,7 +3738,6 @@ function formatContextSummary(c: ContextCounts): string {
   align-items: center;
   justify-content: center;
   background: color-mix(in srgb, #000 78%, transparent);
-  backdrop-filter: blur(3px);
   cursor: zoom-out;
 }
 

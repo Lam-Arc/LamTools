@@ -25,8 +25,6 @@ from lamtools_core.composer_commands import (
 )
 from lamtools_core.checkpoint import CoreCheckpointCoordinator, register_checkpoint_operations
 from lamtools_core.member import MemberKit, PromptFragment, StaticMemberKit
-from lamtools_core.mem import MemoryStoreProtocol
-from lamtools_core.mem.store import InMemoryMemoryStore
 from lamtools_core.kernel.loop import CoreLoopKernel
 from lamtools_core.kernel.policy import LoopPolicy
 from lamtools_core.llm import LLMClient
@@ -57,7 +55,7 @@ from .base_agent import (
     core_events_to_run_items,
     core_events_to_snapshot,
 )
-from .command_execution import CommandActionHandler, compact_runtime_history, dream_session_memory, execute_command_action
+from .command_execution import CommandActionHandler, compact_runtime_history, execute_command_action
 from .approval_resolution import ApprovalResolutionLifecycle
 from .agent_app import AgentApp, AgentSpec, ModelProvider, ModelTurnOutput, TurnInput
 from .event_store import AppEventEnvelope, CORE_RUN_ITEM_METHOD, SqlAlchemyAppEventStore
@@ -84,9 +82,6 @@ class CoreAgentSpec:
     prompt_fragments: list[PromptFragment] = field(default_factory=list)
     tool_specs: list[ToolSpec] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
-    # Dreaming (memory consolidation) — off by default, opt in via spec.
-    dreaming_enabled: bool = False
-    dream_min_turns: int = 3
 
 
 @dataclass(frozen=True)
@@ -159,7 +154,6 @@ def create_kernel(
     hook_engine: Any | None = None,
     checkpoint_coordinator: Any | None = None,
     completion_gate: CompletionGate | None = None,
-    memory_store: Any | None = None,
     model_timeout_seconds: float | None = None,
     model_retries: int | None = None,
     retry_policy: Any | None = None,
@@ -225,7 +219,6 @@ def create_kernel(
         hook_engine=hook_engine,
         checkpoint_coordinator=checkpoint_coordinator,
         completion_gate=completion_gate,
-        memory_store=memory_store,
         cancel_event_source=cancel_event_source,
         model_context_sink=model_context_sink,
     )
@@ -256,7 +249,6 @@ def create_core_agent_operations(
     enable_turn_checkpoints: bool = False,
     attachment_service: Any | None = None,
     model_display_resolver: Callable[[str], str] | None = None,
-    memory_store: MemoryStoreProtocol | None = None,
     model_context_sink: Callable[[Any, Any], Awaitable[None] | None] | None = None,
 ) -> OperationCatalog:
     spec = spec or CoreAgentSpec()
@@ -266,7 +258,6 @@ def create_core_agent_operations(
             return ""
         return model_display_resolver(model_id)
     runtime_state_store = runtime_state_store or InMemoryRuntimeStateStore()
-    memory_store = memory_store or InMemoryMemoryStore()
     runtime_task_registry = runtime_task_registry or default_runtime_task_registry()
     session_store = session_store or InMemorySessionStore()
     kit = member_kit or StaticMemberKit(
@@ -300,7 +291,6 @@ def create_core_agent_operations(
 
         artifact_store = ArtifactStore(
             db_session_factory,  # type: ignore[arg-type]
-            Path(paths.data_dir) / "artifact-blobs",
             write_coordinator,
         )
     resolved_command_core_roots = [
@@ -315,7 +305,6 @@ def create_core_agent_operations(
         return CoreCheckpointCoordinator(
             work_root=work_root,
             session_factory=db_session_factory,  # type: ignore[arg-type]
-            storage_root=Path(paths.data_dir) / "checkpoints",
         )
 
     def command_skill_registry() -> SkillRegistry:
@@ -441,21 +430,7 @@ def create_core_agent_operations(
             if goal.status == "blocked":
                 await goal_manager.update(goal.id, status="active", status_reason="")
         runtime_work_root = _work_root_from_request(paths, request)
-        # Dreaming settings are read from app_settings (namespace core.dreaming)
-        # on every turn so a settings change takes effect without a restart —
-        # same pattern as live_operations' core.runtimeControls resolution.
-        # Failures fall back silently to the spec defaults.
         turn_spec = spec
-        if catalog.has("settings.get"):
-            try:
-                dream_result = await catalog.execute("settings.get", {"namespace": "core.dreaming"})
-                dream_value = dream_result.payload.get("value") or {}
-                dream_enabled = bool(dream_value.get("enabled"))
-                dream_min_turns = int(dream_value.get("min_turns") or 3)
-                if dream_enabled != getattr(spec, "dreaming_enabled", False) or dream_min_turns != getattr(spec, "dream_min_turns", 3):
-                    turn_spec = replace(spec, dreaming_enabled=dream_enabled, dream_min_turns=dream_min_turns)
-            except Exception:
-                turn_spec = spec
         if _is_llm_client(model_provider):
             from lamtools_core.tool.default_toolbox import build_core_toolbox
 
@@ -645,8 +620,6 @@ def create_core_agent_operations(
                     context_window_tokens=runtime_options.context_window_tokens,
                     compact_trigger_tokens=runtime_options.compact_trigger_tokens,
                     compact_limit_tokens=runtime_options.compact_limit_tokens,
-                    dreaming_enabled=getattr(turn_spec, "dreaming_enabled", False),
-                    dream_min_turns=getattr(turn_spec, "dream_min_turns", 3),
                     hook_engine=plugin_assembly["hook_engine"],
                     checkpoint_coordinator=turn_checkpoint_coordinator,
                     completion_gate=create_goal_gate(
@@ -655,7 +628,6 @@ def create_core_agent_operations(
                         runtime_model_provider,
                         runtime_options.model_id,
                     ),
-                    memory_store=memory_store,
                     cancel_event_source=runtime_task_registry.get_cancel_event(thread_id),
                     model_context_sink=model_context_sink,
                 )
@@ -1931,17 +1903,6 @@ def create_core_agent_operations(
                 on_event=on_event,
             ),
         )
-        handlers.setdefault(
-            "dream",
-            lambda thread_id, on_event=None: dream_session_memory(
-                runtime_state_store=runtime_state_store,
-                memory_store=memory_store,
-                thread_id=thread_id,
-                llm_client=model_provider if _is_llm_client(model_provider) else None,  # type: ignore[arg-type]
-                model=_background_scene_model(),
-                on_event=on_event,
-            ),
-        )
 
         async def fork_action(thread_id: str, arguments: str = "", **_: Any) -> dict[str, Any]:
             del arguments
@@ -1979,7 +1940,6 @@ def create_core_agent_operations(
         register_checkpoint_operations(
             catalog,
             session_factory=db_session_factory,  # type: ignore[arg-type]
-            data_dir=paths.data_dir,
             default_work_root=paths.work_root,
             app_event_store=app_event_store,
             thread_snapshot_store=thread_snapshot_store,
@@ -2307,7 +2267,7 @@ async def _inherit_turn_model(
 
 
 def _background_scene_model() -> str:
-    """Model for background work (auto-title, compaction, dreaming, sub-agents).
+    """Model for background work (auto-title, compaction, sub-agents).
 
     Background calls follow the *background* scene's most recent model — never
     the main conversation's, and never a boot-time "default".  An empty result

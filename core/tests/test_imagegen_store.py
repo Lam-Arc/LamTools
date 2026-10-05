@@ -78,7 +78,7 @@ async def test_settings_rpc_routes_core_imagegen_to_imagegen_jsonc(isolated_conf
 @pytest.mark.asyncio
 async def test_settings_rpc_other_namespaces_still_use_settings_jsonc(isolated_config_root: Path) -> None:
     catalog = build_config_operation_catalog()
-    await catalog.execute("settings.update", {"namespace": "core.dreaming", "value": {"enabled": True}}, metadata={})
+    await catalog.execute("settings.update", {"namespace": "core.commandShell", "value": {"enabled": True}}, metadata={})
     assert (isolated_config_root / "settings.jsonc").is_file()
     assert not (isolated_config_root / "imagegen.jsonc").exists()
 

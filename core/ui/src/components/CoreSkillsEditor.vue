@@ -113,12 +113,21 @@
         </div>
       </section>
     </div>
+
+    <CoreConfirmDialog
+      :open="Boolean(pendingDeleteSkill)"
+      title="删除技能及目录？"
+      :detail="pendingDeleteSkill?.name || ''"
+      @cancel="pendingDeleteSkill = null"
+      @confirm="confirmDeleteSkill"
+    />
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
+import CoreConfirmDialog from './CoreConfirmDialog.vue'
 import type { CoreSkillItem } from '../types'
 
 const props = defineProps<{
@@ -218,8 +227,17 @@ async function submitCreate() {
   }
 }
 
-async function deleteSkill(skill: CoreSkillItem) {
-  if (!skill.deletable || !window.confirm(`删除技能“${skill.name}”及其目录？此操作无法撤销。`)) return
+const pendingDeleteSkill = ref<CoreSkillItem | null>(null)
+
+function deleteSkill(skill: CoreSkillItem): void {
+  if (!skill.deletable) return
+  pendingDeleteSkill.value = skill
+}
+
+async function confirmDeleteSkill(): Promise<void> {
+  const skill = pendingDeleteSkill.value
+  pendingDeleteSkill.value = null
+  if (!skill) return
   deletingName.value = skill.name
   error.value = ''
   try {

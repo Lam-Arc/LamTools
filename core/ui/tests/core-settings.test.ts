@@ -290,16 +290,6 @@ describe('CoreSettings', () => {
     expect(updateToggle.attributes('aria-pressed')).toBe('false')
     expect(localStorage.getItem('lamtools.update.autoCheck')).toBe('false')
 
-    await wrapper.get('[data-settings-section="agents"]').trigger('click')
-    const dreamingToggle = wrapper.get('[aria-label="自动记忆整理"]')
-    await dreamingToggle.trigger('click')
-    await flushPromises()
-    expect(dreamingToggle.attributes('aria-pressed')).toBe('true')
-    expect(rpc).toHaveBeenCalledWith('settings.update', {
-      namespace: 'core.dreaming',
-      value: { enabled: true, min_turns: 3 },
-    })
-
     wrapper.unmount()
     localStorage.clear()
   })
@@ -468,10 +458,21 @@ describe('CoreSettings', () => {
     await desktop.get('[data-settings-section="agents"]').trigger('click')
     const desktopCopy = desktop.get('.settings-panel').text()
     expect(desktopCopy).toContain('.lam/core/config/AGENTS.md')
-    expect(desktopCopy).toContain('core memory get/set')
     expect(desktopCopy).toContain('core load-context get/set')
-    expect(desktopCopy).toContain('core memory dream show/config')
+    // 记忆浏览已整体移入资料库：上下文分区不再承载记忆内容。
+    expect(desktopCopy).not.toContain('INDEX.md')
     desktop.unmount()
+  })
+
+  it('has no memory section: memory browsing lives in the 资料库', async () => {
+    const rpc = vi.fn(async (method: string, params?: Record<string, unknown>) => ({}))
+    const wrapper = mountSettings(rpc, { commandShellPlatform: 'windows' })
+
+    // 分区清单里没有记忆：导航与面板都不会出现，避免和资料库的记忆区并存两份入口。
+    expect(wrapper.find('[data-settings-section="memory"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('查看记忆')
+    expect(rpc).not.toHaveBeenCalledWith('memory.reveal', expect.anything())
+    wrapper.unmount()
   })
 })
 
@@ -512,9 +513,8 @@ describe('Shared Core App settings entry', () => {
 
     expect(source).toContain('@settings="openSettings"')
     expect(source).toContain('<CoreSettings')
-    // Preferences persist under a key split from the shell's (which also
-    // stores stageOpen/stageHeight) so neither schema clobbers the other
-    // (audit 19 S3).
+    // Preferences persist under a key split from the shell's so neither
+    // schema clobbers the other (audit 19 S3).
     expect(source).toContain("useCoreUiPreferences('lamtools.core.ui.preferences')")
     expect(source).toContain(':content-width="contentWidth"')
     expect(source).toContain('@update:content-width="uiPreferences.setContentWidth"')

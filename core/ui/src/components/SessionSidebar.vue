@@ -2,7 +2,7 @@
   <div class="session-sidebar-content">
     <span ref="dragImageRef" class="sidebar-drag-image" aria-hidden="true"></span>
     <div
-      v-if="hasProjectData || localFilter || $slots['toolbar-actions']"
+      v-if="localFilter || $slots['toolbar-actions']"
       class="sidebar-toolbar"
       :class="{ 'sidebar-toolbar--actions': !localFilter }"
     >
@@ -61,10 +61,25 @@
       class="sidebar-section"
       :data-sidebar-section="section.id"
     >
-      <h2 v-if="section.label" class="sidebar-section-title">{{ section.label }}</h2>
+      <div v-if="section.label" class="sidebar-section-head">
+        <h2 class="sidebar-section-title">{{ section.label }}</h2>
+        <button
+          v-if="section.groups.length > 0"
+          class="sidebar-section-toggle"
+          type="button"
+          :title="isSectionCollapsed(section.id) ? '展开' : '收起'"
+          :aria-label="isSectionCollapsed(section.id) ? `展开${section.label}分区` : `折叠${section.label}分区`"
+          :aria-expanded="!isSectionCollapsed(section.id)"
+          :data-sidebar-section-more="section.id"
+          @click.stop="toggleSectionCollapsed(section.id)"
+        >
+          <ChevronDown v-if="isSectionCollapsed(section.id)" :size="14" :stroke-width="1.8" aria-hidden="true" />
+          <ChevronUp v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+      </div>
       <TransitionGroup name="sidebar-sort" tag="div" class="sidebar-project-groups">
         <article
-          v-for="group in section.groups"
+          v-for="group in visibleSectionGroups(section)"
           :key="group.id"
           class="project-block"
           :class="{ active: isGroupActive(group) }"
@@ -82,17 +97,6 @@
         @drop.prevent="dropProject(group.id, section.id)"
         @dragend="finishDrag"
       >
-        <button
-          class="project-action project-fold project-toggle"
-          type="button"
-          :title="isCollapsed(group.id) ? '展开会话' : '收起会话'"
-          :aria-label="isCollapsed(group.id) ? `展开 ${group.name} 会话` : `收起 ${group.name} 会话`"
-          :aria-expanded="!isCollapsed(group.id)"
-          :data-project-fold="group.id"
-          @click.stop="toggleProjectCollapse(group.id)"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
-        </button>
         <button
           type="button"
           class="project-name project-main clickable"
@@ -226,12 +230,93 @@
       </TransitionGroup>
     </section>
 
+    <!-- 最近：跨项目的最近会话（平铺） -->
+    <section
+      v-if="hasProjectData && recentEntriesAll.length > 0"
+      class="sidebar-section"
+      data-sidebar-section="recent"
+    >
+      <div class="sidebar-section-head">
+        <h2 class="sidebar-section-title">最近</h2>
+        <button
+          v-if="recentEntriesAll.length > 0"
+          class="sidebar-section-toggle"
+          type="button"
+          :title="recentCollapsed ? '展开' : '收起'"
+          :aria-label="recentCollapsed ? '展开最近会话' : '折叠最近会话'"
+          :aria-expanded="!recentCollapsed"
+          data-sidebar-recent-toggle
+          @click.stop="recentCollapsed = !recentCollapsed"
+        >
+          <ChevronDown v-if="recentCollapsed" :size="14" :stroke-width="1.8" aria-hidden="true" />
+          <ChevronUp v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+      </div>
+      <div class="conversation-items">
+        <div
+          v-for="entry in recentEntries"
+          :key="`recent-${entry.session.id}`"
+          class="conversation session-row"
+          :class="{ active: entry.session.id === activeSessionId, 'is-active': entry.session.id === activeSessionId }"
+          :data-sidebar-recent-row="entry.session.id"
+          @contextmenu="handleSessionContextMenu(entry.session.id, $event)"
+        >
+          <button
+            v-if="editingSessionId !== entry.session.id"
+            class="conversation-select session-main"
+            type="button"
+            :data-sidebar-recent-select="entry.session.id"
+            :aria-label="`打开会话 ${entry.session.title || entry.session.id.slice(0, 8)}`"
+            @click="selectSession(entry.session.id)"
+          >
+            <span class="conversation-main">
+              <strong class="session-title">{{ entry.session.title || `Session ${entry.session.id.slice(0, 8)}` }}</strong>
+              <span>{{ entry.group.name }}</span>
+            </span>
+          </button>
+          <div v-else class="conversation-select session-main session-editing" @click.stop>
+            <span class="conversation-main">
+              <input
+                v-model="sessionNameDraft"
+                class="session-name-input"
+                type="text"
+                :data-sidebar-recent-name-input="entry.session.id"
+                :aria-label="`重命名会话 ${entry.session.title || entry.session.id.slice(0, 8)}`"
+                autocomplete="off"
+                spellcheck="false"
+                @click.stop
+                @keydown.enter.prevent.stop="commitSessionRename(entry.session.id)"
+                @keydown.esc.prevent.stop="cancelSessionRename"
+              />
+            </span>
+          </div>
+          <span class="conversation-actions">
+            <button
+              v-if="showSessionActions && editingSessionId !== entry.session.id"
+              class="conversation-action session-menu-button"
+              type="button"
+              title="会话操作"
+              :aria-label="`${entry.session.title || entry.session.id.slice(0, 8)} 会话操作`"
+              :aria-expanded="isContextMenuOpen(sessionMenuOwner(entry.session.id))"
+              data-context-menu-trigger
+              :data-sidebar-recent-menu="entry.session.id"
+              @click.stop="toggleSessionMenu(entry.session.id, $event)"
+            >
+              <MoreHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+          </span>
+        </div>
+      </div>
+    </section>
+
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, reactive, watch } from 'vue'
 import {
+  ChevronDown,
+  ChevronUp,
   MessageSquarePlus,
   MoreHorizontal,
   Pencil,
@@ -406,10 +491,51 @@ const projectSections = computed(() => {
   })
   const others = orderedGroups.value.filter((group) => !isPinned(group.id))
   return [
-    { id: 'pinned', label: 'PINNED', groups: pinned },
+    { id: 'pinned', label: '置顶', groups: pinned },
     { id: 'default', label: '项目', groups: others },
   ].filter((section) => section.groups.length > 0)
 })
+
+/* ---- 最近：跨项目的最近会话（平铺，不按项目分组） ---- */
+const RECENT_SESSION_LIMIT = 12
+const recentCollapsed = ref(false)
+
+const recentEntriesAll = computed(() => {
+  const entries: Array<{ group: ProjectGroup; session: SessionItem }> = []
+  for (const group of orderedGroups.value) {
+    for (const session of group.sessions) {
+      entries.push({ group, session })
+    }
+  }
+  const now = Date.now()
+  return entries
+    .map((entry) => {
+      const timestamp = Date.parse(entry.session.updatedAt || entry.session.createdAt || '')
+      return { ...entry, timestamp: Number.isFinite(timestamp) ? timestamp : now }
+    })
+    .sort((left, right) => right.timestamp - left.timestamp)
+})
+
+/* 完全折叠（不列内容）/ 完全展开（最多 12 条）。 */
+const recentEntries = computed(() => (
+  recentCollapsed.value ? [] : recentEntriesAll.value.slice(0, RECENT_SESSION_LIMIT)
+))
+
+/* ---- 分区级折叠：完全折叠（不列内容）/ 完全展开（项目全量） ---- */
+const sectionCollapsed = reactive<Record<string, boolean>>({})
+
+function isSectionCollapsed(sectionId: string): boolean {
+  if (normalizedQuery.value) return false
+  return Boolean(sectionCollapsed[sectionId])
+}
+
+function visibleSectionGroups(section: { id: string; groups: ProjectGroup[] }): ProjectGroup[] {
+  return isSectionCollapsed(section.id) ? [] : section.groups
+}
+
+function toggleSectionCollapsed(sectionId: string): void {
+  sectionCollapsed[sectionId] = !sectionCollapsed[sectionId]
+}
 
 function focusSearchInput() {
   searchExpanded.value = true
@@ -1179,8 +1305,7 @@ function statusLabel(status: string): string {
 
 <style scoped>
 .conversation-more {
-  width: calc(100% - var(--sidebar-indent));
-  margin-left: var(--sidebar-indent);
+  width: 100%;
   height: var(--sidebar-row-height);
   padding: 0 var(--space-2);
   border-radius: var(--sidebar-row-radius);
@@ -1200,7 +1325,6 @@ function statusLabel(status: string): string {
   flex-direction: column;
   align-items: flex-start;
   gap: 0;
-  margin-left: var(--sidebar-indent);
   padding: var(--space-1) var(--space-2);
   color: var(--sidebar-text-muted);
   font-size: var(--sidebar-font-section);

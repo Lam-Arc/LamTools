@@ -1,0 +1,53 @@
+  bridge gateway: 172.30.0.1
+  mock listening
+=== admin API on the stable build ===
+  login success: True | root id: 1
+  /api/user/self with session+user header -> 200 success: True role: 100
+  access token obtained (length 32); admin API now uses it
+  --- close self-service registration ---
+    RegisterEnabled            -> 200 success=True 
+    PasswordRegisterEnabled    -> 200 success=True 
+    EmailVerificationEnabled   -> 200 success=True 
+    TurnstileCheckEnabled      -> 200 success=True 
+  --- registration options now ---
+    DemoSiteEnabled                    = false
+    PasswordRegisterEnabled            = false
+    SelfUseModeEnabled                 = false
+    RegisterEnabled                    = false
+    TurnstileCheckEnabled              = false
+  --- channel ---
+    payload flat -> 500 success=None msg=None
+    payload wrapped -> 200 success=True msg=
+    channel id=1 status=1 group=default models=gpt-4o-mini
+    connectivity test -> 200 success=True
+  --- token ---
+    create -> 200 success=True msg=
+    client key ready: True
+=== public status ===
+  demo_site_enabled = False
+  self_use_mode_enabled = False
+  setup = True
+  turnstile_check = False
+  turnstile_site_key = 
+  version = v0.13.2
+=== registration attempt (must be rejected) ===
+  http=200 success=False msg=New user registration has been disabled by administrator
+=== without a key (must be rejected) ===
+  GET /v1/models -> 401
+=== with a key, over public TLS ===
+  GET /v1/models -> 200
+    models: ['gpt-4o-mini']
+  POST /v1/chat/completions (non-streaming) -> 503
+    error: {'code': 'model_not_found', 'message': 'No available channel for model gpt-4o-mini under group default (distributor) (request id: 202609261125176814057318268d9d6uWtHY6iG)', 'type': 'new_api_error'}
+  POST /v1/chat/completions (streaming) ->
+    http=503
+    json body: {"error":{"code":"model_not_found","message":"No available channel for model gpt-4o-mini under group default (distributor) (request id: 202609261125177891165948268d9d6Eiv0H5il)","type":"new_api_error"
+=== mock access log ===
+  POST /v1/chat/completions stream=False model=gpt-4o-mini
+=== done ===
+=== cleanup ===
+  delete token 1 -> success=True
+  token leftovers: none
+  delete channel 1 -> success=True
+  channel leftovers: none
+  mock stopped

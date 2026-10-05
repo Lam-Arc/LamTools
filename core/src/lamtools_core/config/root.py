@@ -89,7 +89,7 @@ def core_config_dir() -> Path:
 
     Every user-editable configuration file (loadtools.jsonc,
     access_tools.jsonc, hooks.json, AGENTS.md, load_context.jsonc,
-    memory.md, subagent/, models/) lives under this single directory so
+    memory/, subagent/, models/) lives under this single directory so
     installs and migrations have exactly one place to seed defaults.
     """
     return core_config_root() / "config"

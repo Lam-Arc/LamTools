@@ -1,0 +1,33 @@
+  bridge gateway: 172.30.0.1
+=== clear stale login throttle keys ===
+  throttle keys cleared
+  mock listening
+  login OK
+  --- model registry endpoints (authenticated) ---
+    /api/models/                 http=200 success=True size=5
+      model registry sample: {'items': [], 'page': 1, 'page_size': 10, 'total': 0, 'vendor_counts': {}}
+    /api/model/                  http=404 success=None size=n/a
+    /api/pricing/                http=200 success=True size=0
+    /api/option/?key=ModelRatio  http=200 success=True size=233
+  --- channel with several models ---
+    create http=200 success=True msg=
+    stored models=gpt-4o-mini,gpt-4o,claude-3-5-sonnet-20241022 status=1 group=default weight=1 priority=0
+    key ready: True
+  --- relay by model ---
+    [                          ] gpt-4o-mini                  http=503 No available channel for model gpt-4o-mini under group default (distributor) (re
+    [                          ] gpt-4o                       http=503 No available channel for model gpt-4o under group default (distributor) (request
+    [                          ] claude-3-5-sonnet-20241022   http=503 No available channel for model claude-3-5-sonnet-20241022 under group default (d
+  --- toggle channel affinity off, then retry ---
+    disable affinity -> http=200 success=True
+    [affinity OFF              ] gpt-4o-mini                  http=503 No available channel for model gpt-4o-mini under group default (distributor) (re
+    restore affinity -> success=True
+=== mock access log ===
+  nothing reached the mock
+=== done ===
+=== cleanup ===
+  delete token 7 -> success=True
+  delete token 6 -> success=True
+  token leftovers: none
+  delete channel 8 -> success=True
+  channel leftovers: none
+  mock stopped

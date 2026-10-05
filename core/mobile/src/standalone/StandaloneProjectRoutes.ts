@@ -81,7 +81,8 @@ export function createStandaloneProjectRoutes(
     }
 
     // GET|DELETE /projects/{id}/plan-library — the 资料库 scan over 「方案/」,
-    // same shape the desktop's Python route answers.
+    // same shape the desktop's Python route answers. POST subpaths mirror the
+    // desktop's create / folder / rename / move / favorite routes.
     if (segments.length === 3 && segments[2] === 'plan-library') {
       if (request.method === 'GET') {
         try {
@@ -98,6 +99,40 @@ export function createStandaloneProjectRoutes(
         } catch (error) {
           return projectErrorResponse(error, '方案删除失败')
         }
+      }
+    }
+
+    if (segments.length === 4 && segments[2] === 'plan-library' && request.method === 'POST') {
+      const body = decodeJson(request.body) as Record<string, unknown>
+      const action = segments[3]
+      try {
+        if (action === 'files') {
+          return jsonResponse(await client.createPlanLibraryFile(projectId, String(body.name || ''), String(body.folder || '')))
+        }
+        if (action === 'folders') {
+          return jsonResponse(await client.createPlanLibraryFolder(projectId, String(body.path || '')))
+        }
+        if (action === 'rename') {
+          return jsonResponse(await client.renamePlanLibraryFile(projectId, String(body.path || ''), String(body.name || '')))
+        }
+        if (action === 'move') {
+          return jsonResponse(await client.movePlanLibraryFile(projectId, String(body.path || ''), String(body.folder || '')))
+        }
+        if (action === 'favorite') {
+          return jsonResponse(await client.favoritePlanLibraryFile(projectId, String(body.path || ''), Boolean(body.favorite)))
+        }
+      } catch (error) {
+        return projectErrorResponse(error, '资料库操作失败')
+      }
+    }
+
+    if (segments.length === 4 && segments[2] === 'plan-library' && segments[3] === 'folders' && request.method === 'DELETE') {
+      const path = url.searchParams.get('path') || ''
+      if (!path) return jsonResponse({ error: '缺少 path 参数' }, 400)
+      try {
+        return jsonResponse(await client.deletePlanLibraryFolder(projectId, path))
+      } catch (error) {
+        return projectErrorResponse(error, '文件夹删除失败')
       }
     }
 

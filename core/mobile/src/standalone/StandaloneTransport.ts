@@ -104,7 +104,6 @@ const stageLabels: Record<string, string> = {
   native_subagents_ready: '子代理已就绪',
   native_runtime_start: '开始执行代理',
   native_runtime_done: '代理执行结束',
-  native_dreaming_done: '后台整理结束',
   runtime_compaction_start: '开始整理上下文',
   runtime_compaction_done: '上下文整理完成',
   runtime_hooks_start: '开始运行钩子',
@@ -1283,9 +1282,8 @@ export class StandaloneTransport implements LamToolsTransport {
       if (studyEnabled && !skillState.studyEnabled) throw new Error('Study 插件已禁用，请启用后重试')
       trace.record('js_extensions_ready')
       if (this.generations.get(threadId) !== generation) return
-      const [models, dreaming, subAgent, retryConfig, loadContextConfig, imagegenConfig, websearchConfig] = await Promise.all([
+      const [models, subAgent, retryConfig, loadContextConfig, imagegenConfig, websearchConfig] = await Promise.all([
         this.config.runtimeModels().then(value => { trace.record('js_model_keys_ready'); return value }),
-        this.config.settings('core.dreaming').then(value => { trace.record('js_settings_ready'); return value }),
         this.config.subAgentRuntime(projectId).then(value => { trace.record('js_subagent_ready'); return value }),
         this.config.settings('core.modelRetry'),
         this.config.settings('core.loadContext'),
@@ -1307,7 +1305,6 @@ export class StandaloneTransport implements LamToolsTransport {
           model: activeModel.model,
           apiKey: activeModel.apiKey,
           models,
-          dreaming,
           subAgent,
           study: { enabled: studyEnabled },
           disabledSkillNames: skillState.disabledSkillNames,
@@ -1521,12 +1518,9 @@ export class StandaloneTransport implements LamToolsTransport {
     const studyEnabled = isStudySession(snapshot, options)
     if (studyEnabled && !skillState.studyEnabled) throw new Error('Study 插件已禁用，请启用后重试')
     recordStage('js_extensions_ready')
-    const [models, [dreaming, contextCompaction], subAgent, retryConfig, globalContext, loadContextConfig, imagegenConfig, websearchConfig] = await Promise.all([
+    const [models, contextCompaction, subAgent, retryConfig, globalContext, loadContextConfig, imagegenConfig, websearchConfig] = await Promise.all([
       this.config.runtimeModels().then(value => { recordStage('js_model_keys_ready'); return value }),
-      Promise.all([
-        this.config.settings('core.dreaming'),
-        this.config.settings('core.contextCompaction'),
-      ]).then(value => { recordStage('js_settings_ready'); return value }),
+      this.config.settings('core.contextCompaction').then(value => { recordStage('js_settings_ready'); return value }),
       this.config.subAgentRuntime(workspaceId).then(value => { recordStage('js_subagent_ready'); return value }),
       this.config.settings('core.modelRetry'),
       this.config.settings('core.globalContext'),
@@ -1563,7 +1557,6 @@ export class StandaloneTransport implements LamToolsTransport {
         model,
         apiKey,
         models,
-        dreaming,
         contextCompaction,
         subAgent,
         study: { enabled: studyEnabled },
@@ -1586,11 +1579,8 @@ export class StandaloneTransport implements LamToolsTransport {
         context: {
           modeContext,
           ...(!studyEnabled ? {
-            // Neither is capped here: the desktop passes both through as read
-            // (and its memory file is already trimmed to 20 000 chars on write,
-            // which this host's writer does too).
+            // Passed through as read: the desktop does not cap it here either.
             globalInstructions: String(globalContext.instructions || ''),
-            memory: String(globalContext.memory || ''),
           } : {}),
         },
       }), recordStage, signal)

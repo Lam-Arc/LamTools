@@ -1,16 +1,18 @@
-"""SQLite-backed Artifact V2 facts and immutable content revisions."""
+"""SQLite-backed artifact facts for the project library.
+
+成果只记录"当前是什么"：路径、类型、来源、角色与出处。内容就是磁盘上的
+那个文件（或附件系统托管的上传原件），不再保留历史版本——改错了直接改回来，
+项目自带的版本管理也在。
+"""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import mimetypes
 import os
 import re
-import tempfile
 import uuid
-from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -23,9 +25,7 @@ _logger = logging.getLogger(__name__)
 from lamtools_core.app.core_db import (
     CoreArtifact,
     CoreArtifactAlias,
-    CoreArtifactRevision,
-    CoreCheckpointArtifactRef,
-    CoreCheckpointBlob,
+    CoreAttachment,
     CoreDbMetadata,
     CoreProject,
 )
@@ -48,41 +48,16 @@ _WINDOWS_ABSOLUTE_PATH = re.compile(
 _LINE_SUFFIX = re.compile(r":\d+(?::\d+)?$")
 
 
-@dataclass(frozen=True)
-class ArtifactRevisionRecord:
-    revision_id: str
-    artifact_id: str
-    ordinal: int
-    sha256: str
-    size: int
-    mime_type: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-    project_id: str = ""
-    thread_id: str = ""
-    turn_id: str = ""
-    item_id: str = ""
-    tool_name: str = ""
-    source_event_id: str = ""
-    restored_from_revision_id: str = ""
-    created_at: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
 class ArtifactStore:
-    """Durable artifact repository sharing Core's runtime SQLite database."""
+    """Durable artifact registry sharing Core's runtime SQLite database."""
 
     def __init__(
         self,
         session_factory: async_sessionmaker,
-        blob_root: str | Path,
         write_coordinator: SQLiteWriteCoordinator | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.write_coordinator = write_coordinator or SQLiteWriteCoordinator(session_factory)
-        self.blob_root = Path(blob_root).resolve()
-        self.blob_root.mkdir(parents=True, exist_ok=True)
 
     async def migrate_legacy(self, *, project_id: str, work_root: str | Path) -> int:
         root = Path(work_root).resolve()
@@ -114,7 +89,6 @@ class ArtifactStore:
                 preferred_id=legacy.artifact_id,
                 deleted=legacy.deleted,
                 provenance={"legacy_manifest": str(manifest)},
-                snapshot_if_available=True,
                 reactivate=False,
             )
             await self.add_alias(legacy.artifact_id, record.artifact_id)
@@ -141,21 +115,19 @@ class ArtifactStore:
         preferred_id: str = "",
         deleted: bool = False,
         provenance: dict[str, Any] | None = None,
-        content: bytes | None = None,
-        snapshot_if_available: bool = True,
-        force_revision: bool = False,
-        restored_from_revision_id: str = "",
         reactivate: bool = True,
     ) -> ArtifactRecord:
+        """登记（或刷新）一份成果：只记"当前是什么"，内容就是路径上的文件。
+
+        同一路径再次登记仍是同一条成果——刷新元信息，默认把软删状态复活；
+        不保留任何历史版本。
+        """
         root = Path(work_root).resolve()
-        normalized, canonical_path, local_path = _normalize_path(root, path)
+        normalized, canonical_path, _local_path = _normalize_path(root, path)
         if not mime_type:
             mime_type = mimetypes.guess_type(name or canonical_path)[0] or ""
-        if content is None and snapshot_if_available and local_path is not None and local_path.is_file():
-            content = local_path.read_bytes()
         now = datetime.now()
         provenance = dict(provenance or {})
-        source_event_id = str(provenance.get("event_id") or "")
 
         async def write(db: Any) -> ArtifactRecord:
             row = (await db.execute(select(CoreArtifact).where(
@@ -201,47 +173,10 @@ class ArtifactStore:
                 if parent is not None and row.id not in list(parent.children_ids_json or []):
                     parent.children_ids_json = [*list(parent.children_ids_json or []), row.id]
 
-            if source_event_id:
-                existing_event = (await db.execute(select(CoreArtifactRevision).where(
-                    CoreArtifactRevision.artifact_id == row.id,
-                    CoreArtifactRevision.source_event_id == source_event_id,
-                ))).scalar_one_or_none()
-                if existing_event is not None:
-                    return _artifact_record(row)
-
-            if content is not None:
-                digest = hashlib.sha256(content).hexdigest()
-                latest = await db.get(CoreArtifactRevision, row.latest_revision_id) if row.latest_revision_id else None
-                if force_revision or latest is None or latest.blob_hash != digest:
-                    blob = await db.get(CoreCheckpointBlob, digest)
-                    if blob is None:
-                        blob_path = _write_blob(self.blob_root, digest, content)
-                        db.add(CoreCheckpointBlob(hash=digest, size=len(content), storage_path=str(blob_path)))
-                    revision_id = uuid.uuid4().hex
-                    revision = CoreArtifactRevision(
-                        id=revision_id,
-                        artifact_id=row.id,
-                        ordinal=int(row.revision_count or 0) + 1,
-                        blob_hash=digest,
-                        size=len(content),
-                        mime_type=mime_type or row.mime_type,
-                        metadata_json={k: v for k, v in provenance.items() if k != "content"},
-                        project_id=project_id,
-                        thread_id=str(provenance.get("thread_id") or ""),
-                        turn_id=str(provenance.get("turn_id") or ""),
-                        item_id=str(provenance.get("item_id") or ""),
-                        tool_name=str(provenance.get("tool_name") or ""),
-                        source_event_id=source_event_id or f"internal:{uuid.uuid4().hex}",
-                        restored_from_revision_id=restored_from_revision_id,
-                        created_at=now,
-                    )
-                    db.add(revision)
-                    row.latest_revision_id = revision_id
-                    row.revision_count = revision.ordinal
-                    row.thread_id = revision.thread_id or row.thread_id
-                    row.turn_id = revision.turn_id or row.turn_id
-                    row.item_id = revision.item_id or row.item_id
-                    row.tool_name = revision.tool_name or row.tool_name
+            row.thread_id = str(provenance.get("thread_id") or row.thread_id or "")
+            row.turn_id = str(provenance.get("turn_id") or row.turn_id or "")
+            row.item_id = str(provenance.get("item_id") or row.item_id or "")
+            row.tool_name = str(provenance.get("tool_name") or row.tool_name or "")
             await db.flush()
             return _artifact_record(row)
 
@@ -287,9 +222,9 @@ class ArtifactStore:
                 continue
             if _workspace_candidate(Path(work_root).resolve(), path) is None:
                 # An approved out-of-workspace file is not a project artifact:
-                # revisions and rollback write back through the workspace, so
-                # there is nothing to version here.  Keep the tool's own entry
-                # (the file card still renders) instead of failing the turn.
+                # the library only means something inside the project.  Keep the
+                # tool's own entry (the file card still renders) instead of
+                # failing the turn.
                 _logger.info("[artifact] skipped out-of-workspace path %s", path)
                 canonical.append(raw)
                 continue
@@ -318,7 +253,6 @@ class ArtifactStore:
             if historical_id and historical_id != record.artifact_id:
                 await self.add_alias(historical_id, record.artifact_id)
             projected["artifact_id"] = record.artifact_id
-            projected["revision_id"] = record.latest_revision_id
             projected["path"] = record.path
             canonical.append(projected)
         item.artifacts = canonical
@@ -394,7 +328,6 @@ class ArtifactStore:
             )
             canonical.append({
                 "artifact_id": record.artifact_id,
-                "revision_id": record.latest_revision_id,
                 "kind": "file_change",
                 "name": record.name,
                 "path": record.path,
@@ -429,34 +362,104 @@ class ArtifactStore:
             rows = list((await db.execute(query.order_by(CoreArtifact.created_at, CoreArtifact.id))).scalars())
             return [_artifact_record(row) for row in rows]
 
-    async def revisions(self, artifact_id: str) -> list[ArtifactRevisionRecord]:
-        record = await self.get(artifact_id)
-        if record is None:
-            return []
-        async with self.session_factory() as db:
-            rows = list((await db.execute(select(CoreArtifactRevision).where(
-                CoreArtifactRevision.artifact_id == record.artifact_id
-            ).order_by(CoreArtifactRevision.ordinal))).scalars())
-            return [_revision_record(row) for row in rows]
-
-    async def revision(self, artifact_id: str, revision_id: str = "") -> ArtifactRevisionRecord | None:
+    async def content_path(self, artifact_id: str) -> Path | None:
+        """成果当前内容的落点；文件不在了就返回 ``None``。"""
         record = await self.get(artifact_id)
         if record is None:
             return None
-        target = revision_id or record.latest_revision_id
-        async with self.session_factory() as db:
-            row = await db.get(CoreArtifactRevision, target)
-            if row is None or row.artifact_id != record.artifact_id:
+        return await self.current_content_path(record)
+
+    async def current_content_path(self, record: ArtifactRecord) -> Path | None:
+        """把成果的路径解析到磁盘上的当前文件（工作区文件或上传原件）。"""
+        path = str(record.path or "")
+        if path.startswith(ATTACHMENT_PREFIX):
+            attachment_id = path[len(ATTACHMENT_PREFIX):].strip()
+            async with self.session_factory() as db:
+                row = await db.get(CoreAttachment, attachment_id)
+            if row is None:
                 return None
-            return _revision_record(row)
-
-    async def revision_path(self, artifact_id: str, revision_id: str = "") -> Path | None:
-        revision = await self.revision(artifact_id, revision_id)
-        if revision is None:
+            candidate = Path(row.storage_path)
+        elif path.startswith(WORKSPACE_PREFIX):
+            relative = path[len(WORKSPACE_PREFIX):]
+            try:
+                candidate = _safe_workspace_path(Path(record.work_root), relative)
+            except ValueError:
+                return None
+        else:
             return None
-        async with self.session_factory() as db:
-            blob = await db.get(CoreCheckpointBlob, revision.sha256)
-            return Path(blob.storage_path) if blob is not None else None
+        return candidate if candidate.is_file() else None
+
+    async def set_favorite(self, artifact_id: str, favorite: bool) -> ArtifactRecord:
+        """资料库里的收藏标记；只改这一个字段，不动 updated_at（整理不等于修改）。"""
+        async def write(db: Any) -> ArtifactRecord:
+            row = await db.get(CoreArtifact, artifact_id)
+            if row is None:
+                raise LookupError(f"Artifact not found: {artifact_id}")
+            row.favorite = bool(favorite)
+            return _artifact_record(row)
+        return await self.write_coordinator.run(write)
+
+    async def set_folder(self, artifact_id: str, folder: str) -> ArtifactRecord:
+        """把一个成果归到资料库的某一层（空串 = 取消归档）。"""
+        cleaned = _clean_artifact_folder(folder)
+        async def write(db: Any) -> ArtifactRecord:
+            row = await db.get(CoreArtifact, artifact_id)
+            if row is None:
+                raise LookupError(f"Artifact not found: {artifact_id}")
+            row.folder = cleaned
+            return _artifact_record(row)
+        return await self.write_coordinator.run(write)
+
+    async def upload(
+        self,
+        *,
+        project_id: str,
+        work_root: str | Path,
+        name: str,
+        content: bytes,
+        mime_type: str = "",
+        folder: str = "",
+        role: str = "input",
+    ) -> ArtifactRecord:
+        """用户从资料库放进来的文件。
+
+        落在「资料/」下（真实文件，助手能直接读，和方案同一套语义），并登记成
+        一份 source=user_upload 的成果；重名自动改名，不覆盖既有文件。
+        """
+        root = Path(work_root).resolve()
+        safe_name = _safe_upload_name(name)
+        cleaned = _clean_artifact_folder(folder)
+        prefix = f"{UPLOAD_DIRNAME}/{cleaned}/" if cleaned else f"{UPLOAD_DIRNAME}/"
+        target = _unique_workspace_path(root, f"{prefix}{safe_name}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        relative = target.relative_to(root).as_posix()
+        record = await self.register(
+            project_id=project_id,
+            work_root=root,
+            path=f"{WORKSPACE_PREFIX}{relative}",
+            kind=kind_from_mime(mime_type or safe_name),
+            mime_type=mime_type,
+            name=target.name,
+            source="user_upload",
+            role=role,
+        )
+        return await self.set_folder(record.artifact_id, cleaned) if cleaned else record
+
+    async def stats(self, project_id: str) -> dict[str, int]:
+        """资料库的占用：成果条数，以及各成果当前文件的字节合计。"""
+        records = await self.list(project_id)
+        total = 0
+        for record in records:
+            path = await self.current_content_path(record)
+            if path is None:
+                continue
+            # 带路径的成果按磁盘上的当前文件计；上传原件按附件登记的大小计。
+            try:
+                total += path.stat().st_size
+            except OSError:
+                continue
+        return {"count": len(records), "bytes": int(total)}
 
     async def soft_remove(
         self,
@@ -483,92 +486,6 @@ class ArtifactStore:
             return changed
         return await self.write_coordinator.run(write)
 
-    async def restore_revision(
-        self,
-        artifact_id: str,
-        revision_id: str,
-        *,
-        project_id: str = "",
-    ) -> ArtifactRecord:
-        record = await self.get(artifact_id)
-        if record is not None and project_id and record.project_id != project_id:
-            record = None
-        revision = await self.revision(artifact_id, revision_id)
-        blob_path = await self.revision_path(artifact_id, revision_id)
-        if record is None or revision is None or blob_path is None or not blob_path.is_file():
-            raise LookupError("Artifact revision not found")
-        content = blob_path.read_bytes()
-        if record.path.startswith(WORKSPACE_PREFIX):
-            destination = _safe_workspace_path(Path(record.work_root), record.path.removeprefix(WORKSPACE_PREFIX))
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            _atomic_write(destination, content)
-        return await self.register(
-            project_id=record.project_id,
-            work_root=record.work_root,
-            path=record.path,
-            kind=record.kind,
-            mime_type=record.mime_type,
-            name=record.name,
-            source=record.source,
-            role=record.role,
-            prompt=record.prompt,
-            content=content,
-            force_revision=True,
-            restored_from_revision_id=revision_id,
-            provenance={"tool_name": "artifact.restore_revision"},
-        )
-
-    async def capture_checkpoint(self, checkpoint_id: str, work_root: str | Path) -> None:
-        normalized_root = os.path.normcase(str(Path(work_root).resolve()))
-        async def write(db: Any) -> None:
-            rows = list((await db.execute(select(CoreArtifact).where(
-                CoreArtifact.work_root == str(Path(work_root).resolve()),
-                CoreArtifact.deleted.is_(False),
-                CoreArtifact.latest_revision_id != "",
-            ))).scalars())
-            for row in rows:
-                if os.path.normcase(row.work_root) != normalized_root:
-                    continue
-                if await db.get(CoreCheckpointArtifactRef, (checkpoint_id, row.id)) is None:
-                    db.add(CoreCheckpointArtifactRef(
-                        checkpoint_id=checkpoint_id,
-                        artifact_id=row.id,
-                        revision_id=row.latest_revision_id,
-                    ))
-        await self.write_coordinator.run(write)
-
-    async def restore_checkpoint(
-        self,
-        checkpoint_id: str,
-        *,
-        work_root: str | Path | None = None,
-    ) -> list[str]:
-        async with self.session_factory() as db:
-            refs = list((await db.execute(select(CoreCheckpointArtifactRef).where(
-                CoreCheckpointArtifactRef.checkpoint_id == checkpoint_id
-            ))).scalars())
-        referenced_ids = {ref.artifact_id for ref in refs}
-        if work_root is not None:
-            resolved_root = str(Path(work_root).resolve())
-
-            async def remove_post_checkpoint_artifacts(db: Any) -> None:
-                rows = list((await db.execute(select(CoreArtifact).where(
-                    CoreArtifact.work_root == resolved_root,
-                    CoreArtifact.deleted.is_(False),
-                ))).scalars())
-                now = datetime.now()
-                for row in rows:
-                    if row.id not in referenced_ids:
-                        row.deleted = True
-                        row.updated_at = now
-
-            await self.write_coordinator.run(remove_post_checkpoint_artifacts)
-        restored: list[str] = []
-        for ref in refs:
-            await self.restore_revision(ref.artifact_id, ref.revision_id)
-            restored.append(ref.artifact_id)
-        return restored
-
     async def add_alias(self, alias: str, artifact_id: str) -> None:
         if not alias:
             return
@@ -584,9 +501,8 @@ def _workspace_candidate(work_root: Path, value: str) -> Path | None:
     Tool results name files relative to the workspace, but for a file the
     operator allowed outside it (``relative_workspace_uri`` falls back to an
     absolute path) the name is absolute.  Artifact records only mean something
-    inside the project — revisions, blobs and rollback all write back through
-    the workspace — so callers that ingest run items skip those instead of
-    failing the turn that produced them.
+    inside the project, so callers that ingest run items skip those instead
+    of failing the turn that produced them.
     """
 
     rel = str(value or "").strip().removeprefix(WORKSPACE_PREFIX).replace("\\", "/")
@@ -625,39 +541,39 @@ def _safe_workspace_path(root: Path, relative: str) -> Path:
     return candidate
 
 
-def _write_blob(root: Path, digest: str, content: bytes) -> Path:
-    target = root / digest[:2] / digest
-    if target.is_file():
-        return target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f"{digest}.", dir=target.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
-    finally:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-    return target
+#: 用户从资料库放进来的文件所在目录（项目根下，和「方案/」同一层语义）。
+UPLOAD_DIRNAME = "资料"
 
 
-def _atomic_write(path: Path, content: bytes) -> None:
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
+def _clean_artifact_folder(value: str) -> str:
+    """资料库的归档层级：相对路径，逐段校验，拒绝越界。"""
+    raw = str(value or "").strip().replace("\\", "/").strip("/")
+    if not raw:
+        return ""
+    segments = [segment.strip() for segment in raw.split("/") if segment.strip()]
+    if any(segment in {".", ".."} for segment in segments):
+        raise ValueError("folder must not contain '..'")
+    return "/".join(segments)
+
+
+def _safe_upload_name(value: str) -> str:
+    name = Path(str(value or "").strip()).name.strip()
+    if not name or name in {".", ".."}:
+        raise ValueError("upload name is required")
+    return name
+
+
+def _unique_workspace_path(root: Path, relative: str) -> Path:
+    """重名就加序号（name (2).ext），绝不覆盖既有文件。"""
+    candidate = _safe_workspace_path(root, relative)
+    if not candidate.exists():
+        return candidate
+    stem, suffix = candidate.stem, candidate.suffix
+    for index in range(2, 1000):
+        candidate = _safe_workspace_path(root, f"{candidate.parent.relative_to(root).as_posix()}/{stem} ({index}){suffix}")
+        if not candidate.exists():
+            return candidate
+    raise ValueError("too many files with the same name")
 
 
 def _artifact_record(row: CoreArtifact) -> ArtifactRecord:
@@ -674,8 +590,6 @@ def _artifact_record(row: CoreArtifact) -> ArtifactRecord:
         created_at=row.created_at.isoformat(),
         deleted=bool(row.deleted),
         role=row.role,
-        latest_revision_id=row.latest_revision_id,
-        revision_count=int(row.revision_count or 0),
         project_id=row.project_id,
         work_root=row.work_root,
         thread_id=row.thread_id,
@@ -683,31 +597,25 @@ def _artifact_record(row: CoreArtifact) -> ArtifactRecord:
         item_id=row.item_id,
         tool_name=row.tool_name,
         provenance=dict(row.provenance_json or {}),
-        availability="available" if row.latest_revision_id else "metadata_only",
+        availability="available" if _content_exists(row) else "missing",
+        favorite=bool(row.favorite),
+        folder=row.folder or "",
+        updated_at=row.updated_at.isoformat() if row.updated_at else row.created_at.isoformat(),
     )
 
 
-def _revision_record(row: CoreArtifactRevision) -> ArtifactRevisionRecord:
-    return ArtifactRevisionRecord(
-        revision_id=row.id,
-        artifact_id=row.artifact_id,
-        ordinal=row.ordinal,
-        sha256=row.blob_hash,
-        size=row.size,
-        mime_type=row.mime_type,
-        metadata=dict(row.metadata_json or {}),
-        project_id=row.project_id,
-        thread_id=row.thread_id,
-        turn_id=row.turn_id,
-        item_id=row.item_id,
-        tool_name=row.tool_name,
-        source_event_id=row.source_event_id,
-        restored_from_revision_id=row.restored_from_revision_id,
-        created_at=row.created_at.isoformat(),
-    )
+def _content_exists(row: CoreArtifact) -> bool:
+    """工作区成果看文件在不在；附件与别的形态交给读取时判定。"""
+    path = str(row.path or "")
+    if not path.startswith(WORKSPACE_PREFIX):
+        return True
+    try:
+        return _safe_workspace_path(Path(row.work_root), path[len(WORKSPACE_PREFIX):]).is_file()
+    except (OSError, ValueError):
+        return False
 
 
-__all__ = ["ArtifactRevisionRecord", "ArtifactStore", "ELIGIBLE_OUTPUT_KINDS", "EXCLUDED_KINDS"]
+__all__ = ["ArtifactStore", "ELIGIBLE_OUTPUT_KINDS", "EXCLUDED_KINDS"]
 
 
 def _existing_workspace_paths(content: str, root: Path) -> list[Path]:

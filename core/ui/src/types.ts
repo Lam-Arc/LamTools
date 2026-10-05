@@ -149,8 +149,6 @@ export interface ToolArtifact {
   /** Registry identity (optional on legacy streamed tool artifacts). */
   artifact_id?: string;
   role?: ArtifactRole;
-  latest_revision_id?: string;
-  revision_count?: number;
   thread_id?: string;
   turn_id?: string;
   item_id?: string;
@@ -159,7 +157,6 @@ export interface ToolArtifact {
   path?: string;
   mime_type?: string;
   availability?: string;
-  revisions?: ArtifactRevision[];
 }
 
 /** The three artifact roles surfaced by the project成果库. */
@@ -167,29 +164,7 @@ export type ArtifactRole = 'input' | 'intermediate' | 'deliverable' | string;
 
 export type ArtifactStatus = 'ready' | 'running' | 'completed' | 'failed' | 'missing' | 'deleted' | string;
 
-export interface ArtifactRevision {
-  revision_id?: string;
-  id?: string;
-  artifact_id?: string;
-  revision?: number;
-  ordinal?: number;
-  created_at?: string;
-  updated_at?: string;
-  status?: ArtifactStatus;
-  path?: string;
-  uri?: string;
-  mime_type?: string;
-  name?: string;
-  size_bytes?: number;
-  size?: number;
-  content?: string;
-  missing?: boolean;
-  deleted?: boolean;
-  provenance?: unknown;
-  [key: string]: unknown;
-}
-
-/** Compatibility envelope for the V2 artifact registry projection. */
+/** Compatibility envelope for the artifact registry projection. */
 export interface ProjectArtifact {
   artifact_id: string;
   name: string;
@@ -201,18 +176,19 @@ export interface ProjectArtifact {
   status?: ArtifactStatus;
   source?: string;
   provenance?: unknown;
-  /** Backend availability: available or metadata_only when no blob exists. */
+  /** 后端可用性：available；工作区文件不在了就是 missing。 */
   availability?: string;
   created_at?: string;
   updated_at?: string;
-  latest_revision_id?: string;
-  revision_count?: number;
-  revisions?: ArtifactRevision[];
   thread_id?: string;
   turn_id?: string;
   item_id?: string;
   missing?: boolean;
   deleted?: boolean;
+  /** 资料库里的收藏标记。 */
+  favorite?: boolean;
+  /** 资料库里的归档层级（'' = 未归档）。 */
+  folder?: string;
   prompt?: string;
   parent_ids?: string[];
   children_ids?: string[];
@@ -499,23 +475,6 @@ export interface ProjectGroup {
   /** False marks compatibility/read-only groups that cannot be mutated. */
   canManage?: boolean;
   sessions: SessionItem[];
-}
-
-// ---------------------------------------------------------------------------
-// Stage pane types
-// ---------------------------------------------------------------------------
-
-export type StageKind = 'code' | 'image' | 'video' | 'audio' | 'pdf' | 'browser' | 'markdown' | 'empty';
-
-export interface StageResource {
-  id: string;
-  kind: StageKind;
-  path?: string;
-  url?: string;
-  language?: string;
-  label?: string;
-  content?: string;
-  previewMode?: 'code' | 'preview';
 }
 
 // ---------------------------------------------------------------------------

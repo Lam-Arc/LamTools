@@ -23,6 +23,8 @@ const STATUS_ALIASES: Record<string, CorePlanLibraryEntry['status']> = {
   done: 'done',
 }
 
+const FAVORITE_TRUTHY = new Set(['true', 'yes', '1', '是', 'on'])
+
 export type PlanLibraryScanEntry = CorePlanLibraryEntry
 
 export function isPlanLibraryPath(path: string): boolean {
@@ -37,13 +39,14 @@ export function normalizePlanStatus(raw: string | null | undefined): CorePlanLib
   return STATUS_ALIASES[(raw ?? '').trim().toLowerCase()] ?? 'draft'
 }
 
-export function parsePlanFrontmatter(text: string): { status: string | null; summary: string | null } {
-  if (!text.startsWith('---')) return { status: null, summary: null }
+export function parsePlanFrontmatter(text: string): { status: string | null; summary: string | null; favorite: boolean } {
+  if (!text.startsWith('---')) return { status: null, summary: null, favorite: false }
   const lines = text.split('\n')
   for (let index = 1; index < lines.length; index += 1) {
     if (lines[index].trim() !== '---') continue
     let status: string | null = null
     let summary: string | null = null
+    let favorite = false
     for (const line of lines.slice(1, index)) {
       const separator = line.indexOf(':')
       if (separator <= 0) continue
@@ -51,10 +54,11 @@ export function parsePlanFrontmatter(text: string): { status: string | null; sum
       const value = line.slice(separator + 1).trim()
       if (key === '状态' || key === 'status') status = value
       if (key === '摘要' || key === 'summary') summary = value
+      if (key === '收藏') favorite = FAVORITE_TRUTHY.has(value.toLowerCase())
     }
-    return { status, summary }
+    return { status, summary, favorite }
   }
-  return { status: null, summary: null }
+  return { status: null, summary: null, favorite: false }
 }
 
 export function parsePlanDocument(
@@ -63,7 +67,7 @@ export function parsePlanDocument(
   updatedAt: number,
   path?: string,
 ): PlanLibraryScanEntry {
-  const { status, summary } = parsePlanFrontmatter(text)
+  const { status, summary, favorite } = parsePlanFrontmatter(text)
   const body = text.startsWith('---')
     ? text.slice(text.indexOf('\n---', 3) + 1)
     : text
@@ -75,15 +79,38 @@ export function parsePlanDocument(
       break
     }
   }
+  const fullPath = path ?? planPath(name)
+  const withoutLibrary = fullPath.startsWith(`${PLAN_LIBRARY_DIRNAME}/`)
+    ? fullPath.slice(PLAN_LIBRARY_DIRNAME.length + 1)
+    : fullPath
+  const separator = withoutLibrary.lastIndexOf('/')
+  const folder = separator > 0 ? withoutLibrary.slice(0, separator) : ''
   return {
-    name,
-    path: path ?? planPath(name),
+    name: withoutLibrary.slice(separator + 1),
+    path: fullPath,
+    folder,
     title,
     status: normalizePlanStatus(status),
     summary: summary ?? '',
+    favorite,
     size: new TextEncoder().encode(text).length,
     updated_at: Math.floor(updatedAt),
   }
+}
+
+/** Set (or remove) one `key: value` line in the document's frontmatter. */
+export function upsertPlanFrontmatterField(text: string, key: string, value: string | null): string {
+  if (text.startsWith('---')) {
+    const lines = text.split('\n')
+    for (let index = 1; index < lines.length; index += 1) {
+      if (lines[index].trim() !== '---') continue
+      const head = lines.slice(1, index).filter(line => !line.trim().toLowerCase().startsWith(`${key.toLowerCase()}:`))
+      if (value !== null) head.push(`${key}: ${value}`)
+      return ['---', ...head, '---', ...lines.slice(index + 1)].join('\n')
+    }
+  }
+  if (value === null) return text
+  return ['---', `${key}: ${value}`, '---', text].join('\n')
 }
 
 export function sortPlanEntries(entries: PlanLibraryScanEntry[]): PlanLibraryScanEntry[] {

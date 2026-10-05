@@ -237,89 +237,15 @@ jobs:
           path: core/desktop/update-manifest.json
 
       # ---------- 4.5 安装 / 运行 / 升级 / 卸载真冒烟 ----------
+      # 与本地共用同一份验收脚本（scripts/verify-desktop-lifecycle.ps1）：
+      # 静默安装 → 启动并健康检查 → 系统关闭请求使应用真正退出且不留孤儿后端 →
+      # 应用运行中升级（程序文件被替换、运行中的应用被关闭、数据保留、升级后
+      # 仍能启动）→ 程序文件被占用时拒绝升级且不破坏既有安装 → 卸载保留数据。
       - name: Smoke Sunday installer lifecycle and data preservation
         shell: pwsh
         run: |
-          $installDir = Join-Path $env:RUNNER_TEMP "sunday-installed"
           $installer = Get-ChildItem "core/desktop/src-tauri/target/release/bundle/inno/Sunday_*_x64-setup.exe" -ErrorAction Stop | Select-Object -First 1
-          $installArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir")
-          $p = Start-Process -FilePath $installer.FullName -ArgumentList $installArgs -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Write-Error "Installer exited nonzero ($($p.ExitCode))"; exit 1 }
-          if (-not (Test-Path (Join-Path $installDir "lamcore.exe"))) {
-            Write-Error "lamcore.exe missing after install"
-            exit 1
-          }
-          if (-not (Test-Path (Join-Path $installDir "lamcore-backend/LamCore.exe"))) {
-            Write-Error "Bundled backend missing after install"
-            exit 1
-          }
-          Write-Host "Installed to $installDir"
-
-          $app = Start-Process -FilePath (Join-Path $installDir "lamcore.exe") -PassThru
-          $port = $null
-          $ok = $false
-          try {
-            for ($i = 0; $i -lt 90; $i++) {
-              Start-Sleep -Seconds 1
-              if ($app.HasExited) { Write-Host "lamcore.exe exited early (code $($app.ExitCode))"; break }
-              if (-not $port) {
-                $log = Join-Path $installDir ".lam\backend.log"
-                if (Test-Path $log) {
-                  $m = Select-String -Path $log -Pattern "Starting LamCore backend on 127\.0\.0\.1:(\d+)" | Select-Object -Last 1
-                  if ($m -and $m.Matches.Count -gt 0) { $port = [int]$m.Matches[0].Groups[1].Value }
-                }
-              }
-              if ($port) {
-                try {
-                  $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 2 -UseBasicParsing
-                  if ($r.StatusCode -eq 200) { $ok = $true; break }
-                } catch { }
-              }
-            }
-            if (-not $ok) {
-              Write-Error "Installed app health failed — Sunday cannot boot its bundled backend"
-              exit 1
-            }
-            Write-Host "Installed Sunday health OK on port $port after $($i + 1)s"
-          } finally {
-            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
-            $installPrefix = $installDir.TrimEnd('\') + '\'
-            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-              Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase) } |
-              ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-          }
-
-          # A same-AppId upgrade must never erase green-mode user data.
-          New-Item -ItemType Directory -Path (Join-Path $installDir ".lam") -Force | Out-Null
-          New-Item -ItemType Directory -Path (Join-Path $installDir "lam_projects") -Force | Out-Null
-          Set-Content -LiteralPath (Join-Path $installDir ".lam/upgrade-marker.txt") -Value "keep"
-          Set-Content -LiteralPath (Join-Path $installDir "lam_projects/upgrade-marker.txt") -Value "keep"
-          $upgrade = Start-Process -FilePath $installer.FullName -ArgumentList $installArgs -Wait -PassThru
-          if ($upgrade.ExitCode -ne 0) { Write-Error "Upgrade exited nonzero ($($upgrade.ExitCode))"; exit 1 }
-          foreach ($marker in @(".lam/upgrade-marker.txt", "lam_projects/upgrade-marker.txt")) {
-            if (-not (Test-Path -LiteralPath (Join-Path $installDir $marker))) {
-              Write-Error "Upgrade removed user data: $marker"
-              exit 1
-            }
-          }
-
-          # Default uninstall removes program files/shortcuts but keeps user data.
-          $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "unins*.exe" -File | Select-Object -First 1
-          if (-not $uninstaller) { Write-Error "Inno uninstaller was not registered"; exit 1 }
-          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
-          if ($uninstall.ExitCode -ne 0) { Write-Error "Uninstaller exited nonzero ($($uninstall.ExitCode))"; exit 1 }
-          if (Test-Path -LiteralPath (Join-Path $installDir "lamcore.exe")) {
-            Write-Error "Uninstaller left the Sunday executable behind"
-            exit 1
-          }
-          foreach ($marker in @(".lam/upgrade-marker.txt", "lam_projects/upgrade-marker.txt")) {
-            if (-not (Test-Path -LiteralPath (Join-Path $installDir $marker))) {
-              Write-Error "Uninstaller removed preserved user data: $marker"
-              exit 1
-            }
-          }
-          Remove-Item -LiteralPath $installDir -Recurse -Force
-          Write-Host "Install, launch, in-place upgrade, uninstall, and data-preservation checks passed"
+          ./scripts/verify-desktop-lifecycle.ps1 -Installer $installer.FullName
 
       # ---------- 5. 上传 ----------
       # tag 触发 → 发布到 GitHub Releases；手动触发 → 仅作为构建产物保留

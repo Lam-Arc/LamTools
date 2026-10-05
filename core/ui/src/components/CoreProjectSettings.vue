@@ -1,17 +1,15 @@
 <template>
-  <Teleport to="body">
-    <div
-      ref="settingsOverlayEl"
-      class="settings-overlay"
+  <div class="full-area-column full-area-surface">
+    <SettingsShell
+      :sections="sections"
+      :title="`${project.name} · 项目设置`"
+      :settings-theme-style="settingsThemeStyle"
+      :hide-nav="props.hideNav"
+      :active-section="props.activeSection"
+      @close="$emit('close')"
+      @section-change="$emit('section-change', $event)"
     >
-      <div ref="settingsCardEl" class="settings-card">
-        <SettingsShell
-          :sections="sections"
-          :title="`${project.name} · 项目设置`"
-          :settings-theme-style="settingsThemeStyle"
-          @close="$emit('close')"
-        >
-          <template #default="{ activeSection }">
+      <template #default="{ activeSection }">
             <!-- 项目分区：即时保存的名称/外观 + work root + AGENTS.md -->
             <section v-if="activeSection === 'project'" class="settings-panel">
               <header class="settings-title">
@@ -94,7 +92,7 @@
                   :disabled="agentsLoading"
                 />
                 <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
-                <p class="hook-meta">保存到 <code>{{ project.workRoot || '(项目根)' }}/AGENTS.md</code>。注入顺序：先全局约束（.lam/core/config/AGENTS.md），再本文件，两者相加。全局约束在「设置 → 项目规则」内编辑。</p>
+                <p class="hook-meta">保存到 <code>{{ project.workRoot || '(项目根)' }}/AGENTS.md</code>。注入顺序：先全局约束（.lam/core/config/AGENTS.md），再本文件，两者相加。全局约束在「设置 → 上下文」内编辑。</p>
               </article>
 
               <p v-if="projectActionError" class="skill-error" role="alert">{{ projectActionError }}</p>
@@ -114,11 +112,9 @@
               />
             </section>
 
-          </template>
-        </SettingsShell>
-      </div>
-    </div>
-  </Teleport>
+      </template>
+    </SettingsShell>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -129,11 +125,11 @@ import {
   relativeLuminance,
   type ThemeData,
 } from '../helpers/theme'
-import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
+import SettingsShell from './SettingsShell.vue'
+import { PROJECT_SETTINGS_SECTIONS } from './settingsSections'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
 import ProjectVisualPicker from './ProjectVisualPicker.vue'
 import type { CoreSettingsModel } from './CoreSettings.vue'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 import { copyText } from '../helpers/clipboard'
 import type { CoreProjectColorKey, CoreProjectIconKey } from '../projects/types'
 
@@ -158,20 +154,22 @@ const props = defineProps<{
   agentsError: string
   projectActionLoading: boolean
   projectActionError: string
+  /** Hide the built-in left nav: the host renders it in the workspace drawer. */
+  hideNav?: boolean
+  /** Controlled section from the host's drawer nav. */
+  activeSection?: string
 }>()
 
 const emit = defineEmits<{
   close: []
+  'section-change': [id: string]
   'rename-project': [name: string]
   'update-project-visual': [iconKey: CoreProjectIconKey, colorKey: CoreProjectColorKey]
   'save-agents': [content: string]
   'refresh-agents': []
 }>()
 
-const sections: SettingsSection[] = [
-  { id: 'project', label: '项目', icon: 'folder' },
-  { id: 'subagent', label: 'Sub agent', icon: 'bot' },
-]
+const sections = PROJECT_SETTINGS_SECTIONS
 
 // Local mirrors of draft inputs so editing doesn't mutate parent state per keystroke.
 const projectNameInput = ref(props.projectNameDraft)
@@ -182,8 +180,6 @@ const pendingVisual = ref<string | null>(null)
 const agentsDraft = ref(props.agentsContent)
 const copiedSessionId = ref(false)
 let copiedSessionIdTimer: ReturnType<typeof setTimeout> | null = null
-const settingsOverlayEl = ref<HTMLElement | null>(null)
-const settingsCardEl = ref<HTMLElement | null>(null)
 
 watch(() => props.projectNameDraft, (value) => { projectNameInput.value = value })
 watch(() => props.project.iconKey, (value) => { projectIconKey.value = value })
@@ -297,12 +293,6 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
 }
 
-useOutsidePointerDismiss({
-  overlay: settingsOverlayEl,
-  card: settingsCardEl,
-  onDismiss: () => emit('close'),
-})
-
 onMounted(() => document.addEventListener('keydown', onKeydown))
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
@@ -311,40 +301,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* ── Overlay — full-viewport backdrop with centered card (mirrors CoreSettings) ── */
-.settings-overlay {
-  position: fixed;
-  inset: var(--titlebar-offset, 36px) 0 0 0;
-  z-index: 90;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-}
-
-.settings-card {
-  position: relative;
-  width: min(960px, calc(100vw - 48px));
-  max-height: calc(100dvh - var(--titlebar-offset, 36px) - 48px);
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #f2efeb) 12%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--settings-card-background, var(--theme-main-background, #111111));
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-@media (max-width: 640px) {
-  .settings-card {
-    width: 100vw;
-    max-height: calc(100dvh - var(--titlebar-offset, 36px));
-    border-radius: 0;
-  }
-}
-
 /* ── Project rename form ── */
 .core-project-rename {
   display: grid;

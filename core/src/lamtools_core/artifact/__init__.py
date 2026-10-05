@@ -9,14 +9,13 @@ from lamtools_core.artifact.registry import (
     ArtifactRegistry,
     kind_from_mime,
 )
-from lamtools_core.artifact.store import ArtifactRevisionRecord, ArtifactStore
+from lamtools_core.artifact.store import ArtifactStore
 
 __all__ = [
     "ATTACHMENT_PREFIX",
     "WORKSPACE_PREFIX",
     "ArtifactRecord",
     "ArtifactRegistry",
-    "ArtifactRevisionRecord",
     "ArtifactStore",
     "kind_from_mime",
 ]

@@ -1,0 +1,170 @@
+=== time ===
+2026-09-26T10:52:50Z
+=== host ===
+Linux 5.15.0-190-generic x86_64 GNU/Linux
+Ubuntu 22.04.5 LTS
+=== cpu/mem/disk ===
+2
+               total        used        free      shared  buff/cache   available
+Mem:            3623         370         141           2        3111        2960
+/dev/vda3        40G   11G   27G  28% /
+/dev/vda3        40G   11G   27G  28% /
+/dev/vda3        40G   11G   27G  28% /
+=== running services ===
+aegis.service
+aliyun.service
+atd.service
+caddy-lamtools.service
+chrony.service
+codex-api.service
+containerd.service
+cron.service
+dbus.service
+docker.service
+frps.service
+fwupd.service
+getty@tty1.service
+hbrclient.service
+hbrclientupdater.service
+lamtools-cloudflared.service
+lamtools-relay.service
+multipathd.service
+networkd-dispatcher.service
+packagekit.service
+polkit.service
+rsyslog.service
+serial-getty@ttyS0.service
+snapd.service
+ssh.service
+systemd-journald.service
+systemd-logind.service
+systemd-networkd.service
+systemd-resolved.service
+systemd-udevd.service
+tuned.service
+udisks2.service
+unattended-upgrades.service
+=== docker ===
+Docker version 29.8.0, build 88096ef
+Docker Compose version v5.5.1
+--- containers ---
+--- volumes ---
+=== listeners ===
+State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                   
+LISTEN 0      4096       127.0.0.1:20241      0.0.0.0:*    users:(("cloudflared",pid=1066,fd=9))    
+LISTEN 0      4096       127.0.0.1:34771      0.0.0.0:*    users:(("hbrclient",pid=743,fd=9))       
+LISTEN 0      4096       127.0.0.1:2019       0.0.0.0:*    users:(("caddy",pid=752,fd=16))          
+LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=685,fd=14))
+LISTEN 0      5          127.0.0.1:8322       0.0.0.0:*    users:(("python3",pid=730,fd=3))         
+LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=883,fd=3))            
+LISTEN 0      128        127.0.0.1:8787       0.0.0.0:*    users:(("lamtools-relay",pid=751,fd=12)) 
+LISTEN 0      4096               *:7000             *:*    users:(("frps",pid=13251,fd=4))          
+LISTEN 0      4096               *:443              *:*    users:(("caddy",pid=752,fd=4))           
+LISTEN 0      128             [::]:22            [::]:*    users:(("sshd",pid=883,fd=4))            
+LISTEN 0      4096               *:80               *:*    users:(("caddy",pid=752,fd=17))          
+=== runtimes ===
+Python 3.10.12
+/usr/local/share/aliyun-assist/work/script/t-hz06y83blvaio00.sh: 18: node: not found
+/usr/local/share/aliyun-assist/work/script/t-hz06y83blvaio00.sh: 19: go: not found
+=== unit states ===
+active
+active
+=== caddy config dirs ===
+total 28
+drwxr-xr-x   2 caddy caddy 4096 Sep 25 23:50 .
+drwxr-xr-x 109 root  root  4096 Sep 25 21:05 ..
+-rw-r--r--   1 root  root   738 Sep 25 23:50 Caddyfile
+-rw-r--r--   1 caddy caddy   57 Sep  8 11:53 Caddyfile.bak.20260908141116
+-rw-r--r--   1 caddy caddy  247 Sep 17 23:32 Caddyfile.before-0.3.5-20260919T112347Z
+-rw-r--r--   1 caddy caddy  141 Sep  9 20:10 Caddyfile.pre-codex-api-20260917T153225Z
+-rw-r--r--   1 caddy caddy  155 Sep  8 14:14 Caddyfile.pre-stable-tls-20260909
+--- Caddyfile ---
+47.114.43.99.nip.io {
+	# The mobile app fetches this file from its own WebView origin
+	# (https://tauri.localhost), so the response needs CORS; it is a release
+	# pointer and must never be served from a cache.
+	@mobileupdate path /downloads/mobile-update.json
+	header @mobileupdate Access-Control-Allow-Origin "*"
+	header @mobileupdate Cache-Control "no-store"
+
+	handle_path /downloads/* {
+		root * /var/www/lamtools
+		file_server
+	}
+
+	@relay path /v1/* /health /healthz /readyz /metrics
+	handle @relay {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	handle {
+		root * /var/www/lamtools/site
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+codex-api.47.114.43.99.nip.io {
+	header -Server
+	reverse_proxy 127.0.0.1:8322 {
+		flush_interval -1
+	}
+}
+=== web root ===
+/var/www/lamtools
+total 5004876
+drwxr-xr-x  3 root root     12288 Sep 26 17:16 .
+drwxr-xr-x  3 root root      4096 Sep  8 14:11 ..
+-rw-r--r--  1 root root       346 Sep 26 17:16 desktop-update.json
+-rw-r--r--  1 root root  56228136 Sep 10 15:05 LamCore_0.3.2_x64-setup.exe
+-rw-r--r--  1 root root  28999569 Sep 10 15:05 LamTool_0.1.1-test-debug.apk
+-rw-r--r--  1 root root  36913625 Sep  8 14:18 lamtools-mobile-debug.apk
+-rw-r--r--  1 root root       311 Sep 26 16:55 mobile-update.json
+lrwxrwxrwx  1 root root        60 Sep 26 17:16 site -> /var/www/lamtools/site-releases/0.3.7-mobile-0.1.36-20260926
+drwxr-xr-x 34 root root      4096 Sep 26 17:16 site-releases
+-rw-r--r--  1 root root  93990114 Sep 19 22:33 Sunday_0.3.5_x64-setup.exe
+-rw-r--r--  1 root root  93990114 Sep 19 22:33 Sunday_0.3.5_x64-setup.exe.before-0.3.6-20260920T162351Z
+-rw-r--r--  1 root root  93975956 Sep 19 19:23 Sunday_0.3.5_x64-setup.exe.before-study-rpc-hotfix-20260919T143333Z
+-rw-r--r--  1 root root  94081829 Sep 21 00:23 Sunday_0.3.6_x64-setup.exe
+-rwxr-xr-x  2 root root  58166212 Sep 26 17:16 Sunday_0.3.7_x64-setup.exe
+-rw-r--r--  1 root root  94124582 Sep 22 10:29 Sunday-latest-x64-setup-0.3.6-before-0.3.7-20260926.exe
+-rwxr-xr-x  2 root root  58166212 Sep 26 17:16 Sunday-latest-x64-setup.exe
+-rw-r--r--  1 root root  93990114 Sep 19 22:33 Sunday-latest-x64-setup.exe.before-0.3.6-20260920T162351Z
+-rw-r--r--  1 root root  94081829 Sep 21 00:23 Sunday-latest-x64-setup.exe.before-20260922T023008Z
+-rw-r--r--  1 root root  93975956 Sep 19 19:23 Sunday-latest-x64-setup.exe.before-study-rpc-hotfix-20260919T143333Z
+-rw-r--r--  2 root root  51810424 Sep 24 12:17 Sunday-mobile_0.1.10.apk
+-rw-r--r--  2 root root  52198708 Sep 24 12:39 Sunday-mobile_0.1.11.apk
+-rw-r--r--  2 root root  52503704 Sep 24 12:54 Sunday-mobile_0.1.12.apk
+-rw-r--r--  2 root root  52504748 Sep 24 14:39 Sunday-mobile_0.1.13.apk
+-rw-r--r--  2 root root  52638440 Sep 24 15:10 Sunday-mobile_0.1.14.apk
+=== relay unit ===
+# /etc/systemd/system/lamtools-relay.service
+[Unit]
+Description=LamTools Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lamtools
+Group=lamtools
+WorkingDirectory=/opt/lamtools/relay
+StateDirectory=lamtools
+EnvironmentFile=/etc/lamtools/relay.env
+ExecStart=/opt/lamtools/relay/lamtools-relay
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+=== users with shells ===
+=== ssh ===
+1 /root/.ssh/authorized_keys
+=== ufw ===
+Status: inactive
+=== done ===

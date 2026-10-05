@@ -1,0 +1,45 @@
+  bridge gateway: 172.30.0.1
+=== part 1: settings and console labels (read-only) ===
+=== settings that shape the flow ===
+  SelfUseModeEnabled           = false
+  EmailVerificationEnabled     = false
+  Price                        = 7.3
+  QuotaForNewUser              = 0
+  PasswordRegisterEnabled      = false
+  RegisterEnabled              = false
+  TurnstileCheckEnabled        = false
+=== groups available ===
+   ["default", "vip", "svip"]
+=== console menu labels (as the operator will see them) ===
+  http: 200 | distinct labels found: 1
+   New API
+=== part 2: rehearse the operator and user journey ===
+  mock provider listening
+  1. admin authenticated
+  2. provider added: True
+     channel id=7 group=default models=gpt-4o-mini
+  3. user created -> 200 success: True 
+     user id=2 group=default remaining quota=0
+  4. user signed in -> 200 success: True | user id: 2
+  5. user minted own key -> 200 success: True 
+     token id=7 token quota=0 (0 means it draws on the user's quota)
+  6. user key ready: True
+=== part 3: the routing-index reload the operator must run ===
+gateway restarted; new channels are now routable
+  gateway back after 6s
+=== part 4: the user calls with their own key ===
+  user key length: 51
+  chat completion -> 401
+    error: {'code': '', 'message': 'Invalid token (request id: 202609261133177632088218268d9d6PhSdL1L8)', 'type': 'new_api_error'}
+  streaming -> 401
+    sse frames: 0 | [DONE]: False
+=== part 5: accounting and cleanup ===
+  8. after the call: user quota=0 used=0
+  9. cleanup
+     delete user -> None
+Traceback (most recent call last):
+  File "/tmp/after.py", line 70, in <module>
+    print("     delete channel %s -> %s" % (it.get("id"), r.get("success")))
+AttributeError: 'tuple' object has no attribute 'get'
+  mock provider stopped
+=== done ===

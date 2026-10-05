@@ -167,7 +167,6 @@
   place-items: center;
   padding: var(--space-5);
   background: color-mix(in srgb, var(--settings-backdrop-background, var(--theme-backdrop-background)) 28%, transparent);
-  backdrop-filter: blur(2px);
 }
 
 .theme-area-popover {

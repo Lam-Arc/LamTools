@@ -57,7 +57,7 @@ This skill is the entry of a teaching group. It owns the shared protocol and dec
 6.2) When the learner responds, use their actual steps for feedback: identify the specific correct part, the first important divergence, and how to fix it. Do not give empty praise, shame them, or endorse an error. The current user request determines whether to give only a hint or a complete solution.
 6.3) If they follow a worked example but cannot handle a new problem, focus on recognizing conditions and choosing a method instead of drilling the same number pattern. Link to a useful cross-course application when appropriate, explaining both structural correspondence and limits.
 6.4) Finish with only the key conclusion from this turn and the agreed next step. Move to take-exam when the user requests an exam or previously agreed to one after the lesson; otherwise do not force a test or scheduled retest.
-6.5) Being taught, copying, marking material, or saying “I understand” is not independent mastery evidence. Neither this skill nor its members call sign. Record the learning position; send material worth retaining to the note service, and propose only source-backed enduring personal patterns to the Dreaming candidate process.
+6.5) Being taught, copying, marking material, or saying “I understand” is not independent mastery evidence. Neither this skill nor its members call sign. Record the learning position and send material worth retaining to the note service.
 
 ## 7. Check before sending
 7.1) Did the response teach the actual goal? Are conditions, symbols, units, and connecting steps correct? Is the approach based on available evidence rather than a label? Does the image help? Have external facts been checked? Did the turn include an unapproved exam or write action?

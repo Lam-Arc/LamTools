@@ -75,9 +75,8 @@ describe('session checkpoints', () => {
     ])
   })
 
-  it('answers graph, restore, fork and rollback with the desktop payloads', async () => {
+  it('answers graph, restore, fork and rollback as conversation-only payloads', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
-    const restores: Array<Record<string, unknown>> = []
     const forks: Array<{ sessionId: string; turnId: string; title: string }> = []
     const truncations: Array<{ sessionId: string; turnId: string }> = []
     const rpc = createCheckpointRpc({
@@ -96,10 +95,6 @@ describe('session checkpoints', () => {
       if (command === 'sunday_checkpoint_graph') {
         return { nodes, heads: { s1: 'ckpt-3' } }
       }
-      if (command === 'sunday_checkpoint_restore') {
-        restores.push(args)
-        return { status: 'completed', restored_paths: ['a.txt'], removed_paths: [] }
-      }
       if (command === 'sunday_checkpoint_get') {
         return { checkpoint: nodes.find(node => node.id === args.checkpointId) }
       }
@@ -113,23 +108,34 @@ describe('session checkpoints', () => {
     expect((list?.nodes as unknown[]).length).toBe(3)
     expect(list?.heads).toBeUndefined()
 
+    // 恢复只作用于对话：截断到该检查点的回合，并如实说明工作区没有动。
     expect(await rpc('session.checkpoints.restore', { session_id: 's1', checkpoint_id: 'ckpt-2' }))
-      .toMatchObject({ status: 'completed', restored_paths: ['a.txt'] })
-    expect(restores[0]).toEqual({
-      projectId: 'p1', sessionId: 's1', checkpointId: 'ckpt-2', scope: 'workspace',
-    })
+      .toMatchObject({
+        mode: 'conversation_only',
+        turn_id: 'turn-2',
+        restored_paths: [],
+        restored: { conversation: true, runtime: true, workspace: false },
+        removed_items: 2,
+      })
+    expect(truncations).toEqual([{ sessionId: 's1', turnId: 'turn-2' }])
 
     const forked = await rpc('session.fork', { session_id: 's1', checkpoint_id: 'ckpt-2', title: '分支' })
     expect(forks).toEqual([{ sessionId: 's1', turnId: 'turn-2', title: '分支' }])
     expect(forked).toEqual({ session: { id: 's2', title: '分支' }, checkpoint_id: 'ckpt-2' })
 
-    // Rollback with an explicit turn uses that checkpoint; without one it uses
-    // the newest, which is "undo the last turn".
+    // 撤回给回合就直接截断；没给回合就退到最近一个检查点（撤销最后一轮）。
+    // 两条路径都只删对话，文件与成果不动。
     const rolledBack = await rpc('session.rollback', { session_id: 's1', turn_id: 'turn-2' })
-    expect(rolledBack).toMatchObject({ checkpoint_id: 'ckpt-2', turn_id: 'turn-2', removed_items: 2 })
+    expect(rolledBack).toMatchObject({
+      mode: 'conversation_only',
+      turn_id: 'turn-2',
+      removed_items: 2,
+      restored: { conversation: true, runtime: true, workspace: false, external_effects: false },
+    })
     const lastTurn = await rpc('session.rollback', { session_id: 's1' })
-    expect(lastTurn).toMatchObject({ checkpoint_id: 'ckpt-3', turn_id: 'turn-3' })
+    expect(lastTurn).toMatchObject({ mode: 'conversation_only', turn_id: 'turn-3' })
     expect(truncations).toEqual([
+      { sessionId: 's1', turnId: 'turn-2' },
       { sessionId: 's1', turnId: 'turn-2' },
       { sessionId: 's1', turnId: 'turn-3' },
     ])

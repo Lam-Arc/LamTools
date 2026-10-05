@@ -35,11 +35,6 @@ export interface RustTurnResult {
     compactedTokens: number
     summarizedMessages: number
   } | null
-  dreaming?: {
-    status: string
-    summary: string
-    memoryUpdated: boolean
-  } | null
 }
 
 export type RustAgentStreamEvent = {
@@ -159,8 +154,6 @@ export interface EmbeddedArtifact {
   mime_type: string
   source: string
   role: string
-  latest_revision_id: string
-  revision_count: number
   thread_id: string
   turn_id: string
   item_id: string
@@ -168,17 +161,6 @@ export interface EmbeddedArtifact {
   deleted: boolean
   created_at: string
   updated_at: string
-}
-
-export interface EmbeddedArtifactRevision {
-  revision_id: string
-  artifact_id: string
-  ordinal: number
-  blob_hash: string
-  size: number
-  mime_type: string
-  restored_from_revision_id: string
-  created_at: string
 }
 
 export async function listEmbeddedArtifacts(
@@ -193,13 +175,6 @@ export async function listEmbeddedArtifacts(
   return payload.artifacts || []
 }
 
-export async function readEmbeddedArtifactRevisions(
-  projectId: string,
-  artifactId: string,
-): Promise<{ artifact: EmbeddedArtifact; revisions: EmbeddedArtifactRevision[] }> {
-  return await invoke('sunday_artifact_revisions', { projectId, artifactId })
-}
-
 export async function setEmbeddedArtifactsDeleted(
   projectId: string,
   artifactIds: string[],
@@ -208,35 +183,21 @@ export async function setEmbeddedArtifactsDeleted(
   return await invoke('sunday_artifact_set_deleted', { projectId, artifactIds, deleted })
 }
 
-export async function restoreEmbeddedArtifactRevision(
-  projectId: string,
-  artifactId: string,
-  revisionId: string,
-): Promise<{ artifact: EmbeddedArtifact }> {
-  return await invoke('sunday_artifact_restore_revision', { projectId, artifactId, revisionId })
-}
-
-/** Hand one revision to the system's default app; Android only. */
+/** Hand one artifact to the system's default app; Android only. */
 export async function openEmbeddedArtifact(
   projectId: string,
   artifactId: string,
-  revisionId?: string,
 ): Promise<{ status: string; path: string }> {
-  return await invoke('sunday_artifact_open', {
-    projectId,
-    artifactId,
-    revisionId: revisionId || null,
-  })
+  return await invoke('sunday_artifact_open', { projectId, artifactId })
 }
 
 export async function readEmbeddedArtifactFile(
   projectId: string,
   artifactId: string,
-  revisionId?: string,
 ): Promise<{ path: string; mimeType: string; bytes: Uint8Array } | null> {
   const raw = await invoke<{ path: string; mimeType: string; dataBase64: string } | null>(
     'sunday_artifact_file',
-    { projectId, artifactId, revisionId: revisionId || null },
+    { projectId, artifactId },
   )
   if (!raw) return null
   const binary = atob(raw.dataBase64)
@@ -279,15 +240,6 @@ export async function readEmbeddedCheckpointGraph(
 export async function readEmbeddedCheckpoint(checkpointId: string): Promise<EmbeddedCheckpoint> {
   const payload = await invoke<{ checkpoint: EmbeddedCheckpoint }>('sunday_checkpoint_get', { checkpointId })
   return payload.checkpoint
-}
-
-export async function restoreEmbeddedCheckpoint(
-  projectId: string,
-  sessionId: string,
-  checkpointId: string,
-  scope = 'workspace',
-): Promise<Record<string, unknown>> {
-  return await invoke('sunday_checkpoint_restore', { projectId, sessionId, checkpointId, scope })
 }
 
 /** One durable goal, shaped like the desktop's `Goal.to_dict()`. */
@@ -508,7 +460,6 @@ export async function runEmbeddedSundayTurn(input: {
   hookConfig?: Record<string, unknown>
   trustedHookHashes?: string[]
   mcpConfig?: Record<string, unknown>
-  dreaming?: { enabled?: boolean; min_turns?: number }
   contextCompaction?: { retained_steps?: number }
   subAgent?: { enabled?: boolean; guide?: string }
   study?: { enabled?: boolean }
@@ -553,10 +504,6 @@ export async function runEmbeddedSundayTurn(input: {
       hookConfig: input.hookConfig || {},
       trustedHookHashes: input.trustedHookHashes || [],
       mcpConfig: input.mcpConfig || {},
-      dreaming: {
-        enabled: input.dreaming?.enabled === true,
-        minTurns: Math.max(1, Math.floor(Number(input.dreaming?.min_turns) || 3)),
-      },
       subAgentEnabled: input.subAgent?.enabled !== false,
       subAgentGuide: String(input.subAgent?.guide || ''),
       studyTools: input.study?.enabled === true,
@@ -584,7 +531,6 @@ export async function resumeEmbeddedSundayTurn(input: {
   hookConfig?: Record<string, unknown>
   trustedHookHashes?: string[]
   mcpConfig?: Record<string, unknown>
-  dreaming?: { enabled?: boolean; min_turns?: number }
   subAgent?: { enabled?: boolean; guide?: string }
   study?: { enabled?: boolean }
   disabledSkillNames?: string[]
@@ -609,10 +555,6 @@ export async function resumeEmbeddedSundayTurn(input: {
       hookConfig: input.hookConfig || {},
       trustedHookHashes: input.trustedHookHashes || [],
       mcpConfig: input.mcpConfig || {},
-      dreaming: {
-        enabled: input.dreaming?.enabled === true,
-        minTurns: Math.max(1, Math.floor(Number(input.dreaming?.min_turns) || 3)),
-      },
       subAgentEnabled: input.subAgent?.enabled !== false,
       subAgentGuide: String(input.subAgent?.guide || ''),
       studyTools: input.study?.enabled === true,
@@ -749,6 +691,22 @@ export async function deleteEmbeddedProjectFile(
   path: string,
 ): Promise<void> {
   await invoke('project_file_delete', { projectId, path })
+}
+
+/** Create one directory (parents included) inside the project tree. */
+export async function createEmbeddedProjectDirectory(
+  projectId: string,
+  path: string,
+): Promise<void> {
+  await invoke('project_directory_create', { projectId, path })
+}
+
+/** Delete one empty directory inside the project tree. */
+export async function deleteEmbeddedProjectDirectory(
+  projectId: string,
+  path: string,
+): Promise<void> {
+  await invoke('project_directory_delete', { projectId, path })
 }
 
 export interface EmbeddedProjectRawFile {

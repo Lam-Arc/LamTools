@@ -13,7 +13,7 @@
 
     <div
       v-show="syncing"
-      class="mobile-top-bar__sync optical-glass"
+      class="mobile-top-bar__sync optical-glass optical-glass--low-trans"
       role="status"
       aria-live="polite"
     >
@@ -53,7 +53,7 @@
         id="mobile-command-panel"
         ref="panel"
         v-show="panelOpen"
-        class="mobile-command-dock__panel optical-glass"
+        class="mobile-command-dock__panel optical-glass optical-glass--low-trans"
         aria-label="快捷操作"
         data-mobile-command-panel
       >
@@ -88,7 +88,7 @@
             <span>设置</span>
           </button>
           <button type="button" data-mobile-plugins-button @click="runAction('open-plugins')">
-            <Puzzle :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <Plug :size="16" :stroke-width="1.8" aria-hidden="true" />
             <span>插件</span>
           </button>
           <button type="button" data-mobile-library-button @click="runAction('open-library')">
@@ -96,8 +96,8 @@
             <span>资料库</span>
           </button>
           <button type="button" data-mobile-arrange-button @click="runAction('open-arrange')">
-            <CalendarClock :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <span>长期安排</span>
+            <Clock :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <span>定时任务</span>
           </button>
           <button type="button" data-mobile-account-button @click="runAction('open-account')">
             <UserRound :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -111,7 +111,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Blocks, CalendarClock, Check, Library, PanelLeft, Puzzle, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
+import { Blocks, Check, Clock, Library, PanelLeft, Plug, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
 import { gsap } from 'gsap'
 
 export interface MobileModeOption {

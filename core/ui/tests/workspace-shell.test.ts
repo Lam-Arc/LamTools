@@ -135,7 +135,7 @@ describe('WorkspaceShell responsive drawers', () => {
     const shell = wrapper.get('.workspace-shell')
 
     expect(leftDrawer.attributes('inert')).toBeDefined()
-    expect(rightDrawer.attributes('inert')).toBeDefined()
+    expect(rightDrawer.attributes('inert')).toBeUndefined()
     expect(wrapper.find('[data-mobile-left-toggle]').exists()).toBe(false)
     expect(wrapper.find('[data-mobile-right-toggle]').exists()).toBe(false)
 
@@ -185,6 +185,57 @@ describe('WorkspaceShell responsive drawers', () => {
     await wrapper.vm.$nextTick()
     expect(rightDrawer.attributes('inert')).toBeUndefined()
 
+    wrapper.unmount()
+  })
+
+  it('keeps the right rail open while its hover card owns the pointer zone', async () => {
+    installMatchMedia(false)
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Sunday', rightPanelHold: true },
+      slots: { 'right-panel': '<div data-right-content>运行状态</div>' },
+    })
+    await wrapper.vm.$nextTick()
+    const drawer = wrapper.get('[data-workspace-right-drawer]')
+
+    await wrapper.get('.edge-right').trigger('mouseenter')
+    await wrapper.vm.$nextTick()
+    expect(drawer.classes()).toContain('open')
+
+    // 指针离开竖栏去够卡片（卡片还没接管）：抽屉不能先一步收起。
+    await drawer.trigger('mouseleave')
+    await wrapper.vm.$nextTick()
+    expect(drawer.classes()).toContain('open')
+
+    // 卡片收起，指针也没回到竖栏：抽屉跟着退出。
+    await wrapper.setProps({ rightPanelHold: false })
+    await wrapper.vm.$nextTick()
+    expect(drawer.classes()).not.toContain('open')
+
+    wrapper.unmount()
+  })
+
+  it('keeps the right rail open while the pointer sits on its hover card', async () => {
+    installMatchMedia(false)
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Sunday' },
+      slots: { 'right-panel': '<div data-right-content>运行状态</div>' },
+      attachTo: document.body,
+    })
+    await wrapper.vm.$nextTick()
+    const drawer = wrapper.get('[data-workspace-right-drawer]')
+
+    await wrapper.get('.edge-right').trigger('mouseenter')
+    await wrapper.vm.$nextTick()
+
+    // 卡片自己带鼠标离开监听：点卡上的控件不算“点在抽屉外”。
+    const card = document.createElement('button')
+    card.setAttribute('data-right-sidebar-card', '')
+    document.body.appendChild(card)
+    card.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }))
+    await wrapper.vm.$nextTick()
+    expect(drawer.classes()).toContain('open')
+
+    card.remove()
     wrapper.unmount()
   })
 
@@ -264,7 +315,7 @@ describe('WorkspaceShell responsive drawers', () => {
     })
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.get('[data-workspace-right-drawer]').attributes('inert')).toBeDefined()
+    expect(wrapper.get('[data-workspace-right-drawer]').attributes('inert')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -284,19 +335,31 @@ describe('WorkspaceShell responsive drawers', () => {
 
     expect(variablesCss).toContain('--sidebar-width: 162px')
     expect(shellCss).toMatch(/--sidebar-width: min\(86vw, 320px\)/)
-    expect(shellCss).toContain('--right-panel-gap: 2px')
+    expect(shellCss).toContain('--right-drawer-width: var(--right-rail-width)')
+    // 宽卡时代的旧尺寸必须保持清除：右侧只剩贴边竖栏，任何密度都不再预留宽卡。
+    expect(shellCss).not.toMatch(/--right-drawer-width: \d+px/)
+    expect(shellCss).not.toContain('--right-card-width')
+    expect(shellCss).not.toContain('--right-panel-gap')
     expect(shellCss).toContain('.workspace-shell.right-open.right-pinned')
     expect(shellCss).toMatch(/\.drawer-right\.open:not\(\.pinned\)\s*\{[\s\S]*?z-index: var\(--z-popover\);/)
     expect(shellCss).toMatch(/\.sidebar-create-project\s*\{[\s\S]*?border-radius: var\(--radius\)/)
-    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?right: 0;[\s\S]*?width: calc\(var\(--right-drawer-width\) - var\(--right-panel-gap\)\);/)
-    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?border-radius: var\(--radius-lg\) 0 0 var\(--radius-lg\);/)
+    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?right: 0;[\s\S]*?width: var\(--right-drawer-width\);/)
+    // 桌面端右侧栏高度只包住图标（窗口内竖直居中），不再通到上下缘。
+    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?height: fit-content;[\s\S]*?margin-block: auto;/)
+    // 悬停卡浮在抽屉左外侧：右侧栏本体不得裁剪它。
+    expect(shellCss).toMatch(/\.right-body\s*\{[^}]*overflow: visible;/)
+    expect(shellCss).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.drawer-right\s*\{[\s\S]*?height: auto;[\s\S]*?margin-block: 0;/)
+    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?border-radius: var\(--radius-lg\);/)
     expect(shellCss).toContain('.workspace-drawer.optical-glass')
     expect(shellCss).not.toContain('.drawer-right::before')
     expect(shellSource).toContain('class="workspace-drawer drawer-right optical-glass"')
-    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?transform: none;[\s\S]*?visibility: visible;[\s\S]*?transition: visibility 0s linear 0s;/)
+    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?transform: none;[\s\S]*?visibility: visible;/)
+    // 出入位移动画：滑入/滑出走 --dur-slow，出场滑完才隐藏。
+    expect(shellCss).toMatch(/\.drawer-right\s*\{[\s\S]*?transition: transform var\(--dur-slow\) var\(--ease-inout\), visibility 0s linear var\(--dur-slow\);/)
+    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\)\s*\{[\s\S]*?transition-delay: 0s, var\(--dur-slow\);/)
     expect(shellCss).toMatch(/\.drawer-right > \.drawer-body\s*\{[\s\S]*?transition: transform 240ms var\(--ease-out\), opacity 240ms var\(--ease-out\);/)
-    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\)\s*\{[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none;[\s\S]*?transition-delay: var\(--right-drawer-retract\);/)
-    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\) > \.drawer-body\s*\{[\s\S]*?opacity: 0;[\s\S]*?transform: translateX\(10px\);[\s\S]*?transition-duration: var\(--right-drawer-retract\), var\(--right-drawer-retract\);/)
+    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\)\s*\{[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none;[\s\S]*?transition-delay: 0s, var\(--dur-slow\);/)
+    expect(shellCss).toMatch(/\.drawer-right:not\(\.open\) > \.drawer-body\s*\{[\s\S]*?opacity: 1;[\s\S]*?transform: none;/)
     expect(shellCss).toMatch(/\.drawer-right\.drawer-retracting\s*\{\s*z-index: var\(--z-popover\);/)
     expect(variablesCss).toMatch(/--right-drawer-retract:\s*180ms/)
     expect(shellCss).not.toMatch(/\.drawer-right\s*\{[^}]*will-change:/)
@@ -439,9 +502,6 @@ describe('WorkspaceShell responsive drawers', () => {
     await wrapper.get('.floating-composer').trigger('submit')
     expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-bottom')
 
-    await wrapper.setProps({ stageOpen: true })
-    await wrapper.setProps({ stageOpen: false })
-    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-bottom')
 
     wrapper.unmount()
   })

@@ -84,10 +84,59 @@ describe('SessionSidebar sections', () => {
     expect(titleRule).not.toContain('border')
   })
 
-  it('does not render the removed recent-session section', () => {
+  it('renders the 最近 section as a flat cross-project list', () => {
     const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
-    expect(wrapper.find('[data-sidebar-section="recent"]').exists()).toBe(false)
-    expect(wrapper.find('[data-sidebar-recent-toggle]').exists()).toBe(false)
+    const recent = wrapper.get('[data-sidebar-section="recent"]')
+    expect(recent.text()).toContain('最近')
+    expect(recent.findAll('[data-sidebar-recent-row]').length).toBeGreaterThan(0)
+    // 平铺行里带项目名做来源提示。
+    expect(recent.get('[data-sidebar-recent-row]').text()).toContain(groups[0].name)
+  })
+
+  it('folds a section fully and expands it fully from the section-head icon', async () => {
+    const many = Array.from({ length: 6 }, (_value, index) => ({
+      id: `p${index}`,
+      name: `项目 ${index}`,
+      sessions: [{ id: `s${index}`, title: `会话 ${index}` }],
+    }))
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: many } })
+    const section = wrapper.get('[data-sidebar-section="default"]')
+    // 默认完全展开：全部项目都在。
+    expect(section.findAll('[data-project-row]')).toHaveLength(6)
+
+    const toggle = wrapper.get('[data-sidebar-section-more="default"]')
+    expect(toggle.find('svg').exists()).toBe(true)
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+
+    // 完全折叠：一条不留。
+    await toggle.trigger('click')
+    expect(section.findAll('[data-project-row]')).toHaveLength(0)
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+
+    // 再点恢复完全展开。
+    await toggle.trigger('click')
+    expect(section.findAll('[data-project-row]')).toHaveLength(6)
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+  })
+
+  it('caps the expanded 最近 list at twelve entries and folds it fully', async () => {
+    const sixteen = Array.from({ length: 16 }, (_value, index) => ({
+      id: `r${index}`,
+      name: `最近项目 ${index}`,
+      sessions: [{ id: `rs${index}`, title: `最近会话 ${index}`, updatedAt: `2026-07-${String(index + 1).padStart(2, '0')}T08:00:00Z` }],
+    }))
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: sixteen } })
+    const recent = wrapper.get('[data-sidebar-section="recent"]')
+    // 完全展开档最多 12 条。
+    expect(recent.findAll('[data-sidebar-recent-row]')).toHaveLength(12)
+
+    const toggle = recent.get('[data-sidebar-recent-toggle]')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+
+    // 完全折叠：一条不留。
+    await toggle.trigger('click')
+    expect(wrapper.get('[data-sidebar-section="recent"]').findAll('[data-sidebar-recent-row]')).toHaveLength(0)
+    expect(toggle.attributes('aria-expanded')).toBe('false')
   })
 
   it('keeps project rows limited to the project name', () => {
@@ -167,16 +216,16 @@ describe('SessionSidebar sections', () => {
       props: { projectGroups: searchGroups, pinStorageKey: 'search-collapse', localFilter: true },
     })
 
-    const betaFold = wrapper.get('[data-project-fold="beta"]')
-    await betaFold.trigger('click')
-    expect(betaFold.attributes('aria-expanded')).toBe('false')
+    const betaEntry = wrapper.get('[data-project-entry="beta"]')
+    await betaEntry.trigger('click')
+    expect(betaEntry.attributes('aria-expanded')).toBe('false')
 
     await wrapper.get('[data-sidebar-search]').setValue('needle')
     expect(wrapper.find('[data-project-entry="beta"]').exists()).toBe(true)
-    expect(betaFold.attributes('aria-expanded')).toBe('true')
+    expect(betaEntry.attributes('aria-expanded')).toBe('true')
 
     await wrapper.get('[data-sidebar-search]').setValue('')
-    expect(betaFold.attributes('aria-expanded')).toBe('false')
+    expect(betaEntry.attributes('aria-expanded')).toBe('false')
 
     await wrapper.get('[data-sidebar-search]').setValue('alpha')
     expect(wrapper.findAll('[data-session-row^="alpha-"]')).toHaveLength(2)
@@ -193,7 +242,7 @@ describe('SessionSidebar sections', () => {
     await wrapper.get('[data-project-empty-new="empty"]').trigger('click')
     expect(wrapper.emitted('new-session')).toEqual([['empty']])
 
-    await wrapper.get('[data-project-fold="empty"]').trigger('click')
+    await wrapper.get('[data-project-entry="empty"]').trigger('click')
     expect(wrapper.find('[data-project-empty]').isVisible()).toBe(false)
   })
 
@@ -279,7 +328,7 @@ describe('SessionSidebar sections', () => {
     expect(menu?.textContent).not.toContain('项目设置')
   })
 
-  it('keeps project toggle, main action, and menu as separate row controls', async () => {
+  it('keeps the project row to name and menu without a fold chevron', async () => {
     const wrapper = mount(SessionSidebar, {
       props: {
         projectGroups: groups,
@@ -289,14 +338,14 @@ describe('SessionSidebar sections', () => {
 
     const row = wrapper.get('[data-project-entry="recent-new"]').element.parentElement!
     expect(row.classList.contains('project-row')).toBe(true)
-    expect(row.querySelector('.project-toggle')).not.toBeNull()
+    expect(row.querySelector('.project-toggle')).toBeNull()
     expect(row.querySelector('.project-main')).not.toBeNull()
     expect(row.querySelector('.project-menu-button')).not.toBeNull()
     expect(row.querySelector('.project-main button')).toBeNull()
 
     await wrapper.get('[data-project-menu-trigger="recent-new"]').trigger('click')
     expect(document.body.querySelector('[data-project-menu="recent-new"]')).not.toBeNull()
-    expect(wrapper.get('[data-project-fold="recent-new"]').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.get('[data-project-entry="recent-new"]').attributes('aria-expanded')).toBe('true')
   })
 
   it('opens only the clicked project menu when a project is projected in both sections', async () => {
@@ -431,7 +480,9 @@ describe('SessionSidebar sections', () => {
   it('keeps project and session actions quiet until their row is active', () => {
     const css = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
 
-    expect(css).toMatch(/\.project-btns \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/)
+    expect(css).toMatch(/\.project-btns \{[\s\S]*?position: absolute;[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/)
+    // 「···」是行内浮层：不占项目名的布局空间（不得回到 flex 占位）。
+    expect(css).not.toMatch(/\.project-btns \{[^}]*flex: 0 0 28px/)
     expect(css).toMatch(/\.project-block:hover \.project-btns,[\s\S]*?\.project-btns:has\(\.project-menu-button\[aria-expanded="true"\]\)/)
     expect(css).not.toContain('.conversation-hover-actions')
     expect(css).not.toContain('.session-context-menu')

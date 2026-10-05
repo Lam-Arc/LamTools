@@ -1,0 +1,13 @@
+=== the only settings explicitly stored (i.e. changed from defaults) ===
+  DemoSiteEnabled = false
+  EmailVerificationEnabled = false
+  PasswordRegisterEnabled = false
+  QuotaForNewUser = 0
+  RegisterEnabled = false
+  SelfUseModeEnabled = false
+  TurnstileCheckEnabled = false
+Traceback (most recent call last):
+  File "/tmp/paycheck.py", line 30, in <module>
+    code, d = call("GET", "/api/user/token", headers=h)
+TypeError: call() got an unexpected keyword argument 'headers'
+=== done ===

@@ -39,8 +39,6 @@ export type {
   SlotValidationResult,
   SessionItem,
   ProjectGroup,
-  StageKind,
-  StageResource,
   ThemeStop,
   ThemeArea,
   ThemeData,
@@ -169,13 +167,6 @@ export type {
   RightSidebarWidgetListBlock,
   RightSidebarWidgetProgressBlock,
 } from './right-sidebar/types';
-export { default as StagePane } from './components/StagePane.vue';
-export { default as StageCodeEditor } from './components/StageCodeEditor.vue';
-export { default as StageImagePreview } from './components/StageImagePreview.vue';
-export { default as StageMediaPreview } from './components/StageMediaPreview.vue';
-export { default as StageBrowser } from './components/StageBrowser.vue';
-export { default as FileTreePanel } from './components/FileTreePanel.vue';
-export { default as FileTreeNode } from './components/FileTreeNode.vue';
 export { default as FolderBrowserDialog } from './components/FolderBrowserDialog.vue';
 export {
   ContextMenuHost,
@@ -317,6 +308,7 @@ export {
   createCoreProjectClient,
   type CoreFileEntry,
   type CorePlanLibraryEntry,
+  type CorePlanLibraryFolder,
   type CoreProjectClient,
 } from './projects/client';
 
@@ -530,3 +522,4 @@ import './styles/variables.css';
 import './styles/base.css';
 import './styles/layout.css';
 import './styles/theme-editor.css';
+import './styles/library-surface.css';

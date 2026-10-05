@@ -7,9 +7,12 @@
  * as glass. Keep motion and component geometry on the host consumer.
  */
 .optical-glass {
-  background:
-    var(--optical-glass-overlay, transparent),
-    color-mix(in srgb, var(--text, var(--theme-main-text, #f2efeb)) var(--optical-glass-tint), transparent);
+  /* 底色与叠加层必须分开写：background 简写里只允许最后一层是颜色，
+     两层颜色并列会让整条声明失效，玻璃面会退化成全透明。
+     着色取所在区域的面色（--optical-glass-surface）：用文字色会正好反过来——
+     浅色主题文字深、玻璃压成深灰，暗色主题文字浅、玻璃泛白。 */
+  background-color: color-mix(in srgb, var(--optical-glass-surface, var(--theme-main-solid, #f2efeb)) var(--optical-glass-tint), transparent);
+  background-image: linear-gradient(var(--optical-glass-overlay, transparent), var(--optical-glass-overlay, transparent));
   border: 2px solid var(--theme-optical-glass-border-color);
   box-shadow: var(--optical-glass-shadow);
   overflow: hidden;
@@ -30,13 +33,11 @@
    when backdrop sampling is unavailable. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .optical-glass {
-    background:
-      var(--optical-glass-overlay, transparent),
-      color-mix(in srgb, var(--text, var(--theme-main-text, #f2efeb)) var(--optical-glass-fallback-tint), transparent);
+    background-color: color-mix(in srgb, var(--optical-glass-surface, var(--theme-main-solid, #f2efeb)) var(--optical-glass-fallback-tint), transparent);
+    background-image: linear-gradient(var(--optical-glass-overlay, transparent), var(--optical-glass-overlay, transparent));
   }
 }
 
-.optical-glass::before,
 .optical-glass::after {
   content: '';
   position: absolute;
@@ -44,16 +45,8 @@
   pointer-events: none;
 }
 
-/* Restrained inset edge only. The top of the pane is deliberately free of any
-   specular glow or inset highlight, so the glass reads as a neutral sheet. */
-.optical-glass::before {
-  z-index: 0;
-  inset: 0;
-  box-shadow:
-    inset 0 -1px 0 color-mix(in srgb, var(--optical-glass-refraction-color) var(--optical-glass-inset-bottom), transparent),
-    inset 1px 0 0 color-mix(in srgb, var(--optical-glass-highlight-color) 20%, transparent),
-    inset -1px 0 0 color-mix(in srgb, var(--optical-glass-refraction-color) 8%, transparent);
-}
+/* No inset edge lines of any kind: a hairline inset stroke parallels the 2px
+   physical border and reads as a second border along the rounded corners. */
 
 /* A small gray-green lower refraction keeps the glass from reading as plastic. */
 .optical-glass::after {
@@ -73,4 +66,12 @@
 .optical-glass > * {
   position: relative;
   z-index: 1;
+}
+
+/* Low-transmission variant: same substrate, heavier tint so floating menus and
+   popovers stop showing backdrop text through. Large hosting panes (right
+   sidebar) stay on the default high-transmission material. */
+.optical-glass--low-trans {
+  --optical-glass-tint: var(--optical-glass-low-trans-tint);
+  --optical-glass-fallback-tint: var(--optical-glass-low-trans-fallback-tint);
 }

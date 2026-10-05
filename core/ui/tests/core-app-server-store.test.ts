@@ -231,6 +231,59 @@ describe('core appServer runtime store', () => {
     expect(turnCalls[0].params.client_message_id).toBe(turnCalls[1].params.client_message_id)
   })
 
+  it('advances the tracked revision from sync/change so the next command sends a fresh expected_revision', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+    const syncChangeSink: { current: ((change: { thread_id?: string; revision?: number }) => void) | null } = {
+      current: null,
+    }
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: ({ onSyncChange }) => {
+        syncChangeSink.current = onSyncChange ?? null
+        return fakeClient(async (method, params) => {
+          calls.push({ method, params })
+          if (method === 'thread/resume') return { snapshot: versionedSnapshot(1, 'completed', 10) }
+          return {}
+        })
+      },
+    })
+    await controller.connect('thread-1')
+    expect(runtime.state?.revision).toBe(10)
+
+    // Persisted run-item notifications carry no revision; the journal
+    // sync/change notification is what keeps the CAS token current mid-turn.
+    syncChangeSink.current?.({ thread_id: 'thread-1', revision: 42 })
+    expect(runtime.state?.revision).toBe(42)
+
+    await controller.executeCommand('thread-1', 'compact')
+    const commandCalls = calls.filter((call) => call.method === 'command.execute')
+    expect(commandCalls).toHaveLength(1)
+    expect(commandCalls[0].params.expected_revision).toBe(42)
+  })
+
+  it('refreshes and retries command.execute once after a revision conflict', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+    let commandAttempts = 0
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method, params) => {
+        calls.push({ method, params })
+        if (method === 'thread/resume') return { snapshot: versionedSnapshot(1, 'completed', 1) }
+        if (method === 'thread/read') return { snapshot: versionedSnapshot(2, 'completed', 2) }
+        if (method === 'command.execute' && commandAttempts++ === 0) {
+          throw new TransportRpcError('REVISION_CONFLICT', 'stale', { code: 'REVISION_CONFLICT' })
+        }
+        return {}
+      }),
+    })
+    await controller.connect('thread-1')
+    await controller.executeCommand('thread-1', 'compact')
+
+    const commandCalls = calls.filter((call) => call.method === 'command.execute')
+    expect(commandCalls).toHaveLength(2)
+    expect(commandCalls.map((call) => call.params.expected_revision)).toEqual([1, 2])
+  })
+
   it('aggregates multiple usage events of one turn instead of overwriting', async () => {
     // A multi-step tool turn emits one usage event per model call; the last
     // event must not clobber earlier per-call counters, and the turn-level

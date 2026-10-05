@@ -1,7 +1,7 @@
 <template>
   <div
     ref="panelRef"
-    class="context-menu-panel optical-glass"
+    class="context-menu-panel optical-glass optical-glass--low-trans"
     role="menu"
     tabindex="-1"
     :aria-label="ariaLabel"
@@ -372,6 +372,28 @@ defineExpose({
   white-space: nowrap;
 }
 
+/* 两行条目：标签 + 小字说明（模式切换等）。 */
+.context-menu-item-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.context-menu-item-text > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-menu-item-description {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--text) 56%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .context-menu-item-icon,
 .context-menu-submenu-chevron {
   flex: 0 0 auto;
@@ -382,6 +404,14 @@ defineExpose({
   margin-left: var(--space-4);
   color: color-mix(in srgb, var(--text) 56%, transparent);
   font-size: 12px;
+}
+
+/* 行右侧的选中对号：全文字色，与左侧图标区分开。 */
+.context-menu-item-check {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: var(--space-4);
+  color: var(--text);
 }
 
 .context-menu-separator {

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 import uuid
 
-from sqlalchemy import DateTime, Float, Index, Integer, JSON, String, UniqueConstraint, delete, event, func, select, text, update
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, JSON, String, UniqueConstraint, delete, event, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -48,7 +48,7 @@ class CoreDbBase(DeclarativeBase):
     pass
 
 
-CORE_SCHEMA_VERSION = 2
+CORE_SCHEMA_VERSION = 3
 
 
 class CoreDbMetadata(CoreDbBase):
@@ -447,12 +447,16 @@ class CoreCheckpointAttachmentRef(CoreDbBase):
 
 
 class CoreCheckpointBlobRef(CoreDbBase):
+    """旧：检查点备份的 blob 引用。备份不再记录，这里只留历史数据。"""
+
     __tablename__ = "core_checkpoint_blob_refs"
     checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     blob_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
 
 
 class CoreWorkspaceManifest(CoreDbBase):
+    """旧：检查点的文件清单。文件不再做回档备份，这里只留历史数据。"""
+
     __tablename__ = "core_workspace_manifests"
 
     hash: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -461,6 +465,8 @@ class CoreWorkspaceManifest(CoreDbBase):
 
 
 class CoreCheckpointBlob(CoreDbBase):
+    """旧：内容寻址的备份 blob。文件与成果都不再记历史版本，这里只留历史数据。"""
+
     __tablename__ = "core_checkpoint_blobs"
 
     hash: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -522,7 +528,7 @@ class CoreAttachment(CoreDbBase):
 
 
 class CoreArtifact(CoreDbBase):
-    """Stable logical artifact identity; bytes live in immutable revisions."""
+    """一份成果的当前身份与出处；内容就是路径上的那个文件（或上传原件）。"""
 
     __tablename__ = "core_artifacts"
     __table_args__ = (
@@ -550,12 +556,17 @@ class CoreArtifact(CoreDbBase):
     item_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     tool_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     provenance_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # 资料库的用户状态：收藏，以及归档到哪一层（空串 = 未归档）。
+    favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    folder: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     deleted: Mapped[bool] = mapped_column(nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
 class CoreArtifactRevision(CoreDbBase):
+    """旧：成果的历史版本。成果不再记版本，这里只留历史数据。"""
+
     __tablename__ = "core_artifact_revisions"
     __table_args__ = (
         UniqueConstraint("artifact_id", "source_event_id", name="uq_core_artifact_revision_event"),
@@ -587,38 +598,12 @@ class CoreArtifactAlias(CoreDbBase):
 
 
 class CoreCheckpointArtifactRef(CoreDbBase):
+    """旧：检查点指向成果版本的指针。成果不再记版本，这里只留历史数据。"""
+
     __tablename__ = "core_checkpoint_artifact_refs"
     checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     revision_id: Mapped[str] = mapped_column(String(64), nullable=False)
-
-
-class CoreMemory(CoreDbBase):
-    """Short-term memory entries produced by dreaming.
-
-    Mirrors :class:`lamtools_core.mem.MemoryEntry`. ``work_root`` is indexed so
-    memories can be scoped per project (same isolation pattern as
-    ``core_arrange_jobs``). Long-term memory lives in ``MEMORY.md``; this table
-    holds the structured, searchable, decayable layer used for de-duplication
-    during dreaming.
-    """
-
-    __tablename__ = "core_memories"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    thread_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="")
-    work_root: Mapped[str] = mapped_column(String(2048), index=True, nullable=False, default="")
-    kind: Mapped[str] = mapped_column(String(64), nullable=False, default="fact")
-    content: Mapped[str] = mapped_column(String, nullable=False, default="")
-    domain: Mapped[str] = mapped_column(String(128), nullable=False, default="")
-    source: Mapped[str] = mapped_column(String(128), nullable=False, default="")
-    layer: Mapped[str] = mapped_column(String(16), nullable=False, default="warm")
-    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
-    accessed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
-    access_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class SqlAlchemyRuntimeStateStore:
@@ -1661,7 +1646,6 @@ class CoreAppDb:
     sync_journal: Any
     workspace_id: str
     persistence: AppPersistenceHost
-    memory_store: Any = None  # MemoryStoreProtocol; typed as Any to avoid import cycle
     member_defaults: dict = field(default_factory=dict)
     session_actors: SessionActorRegistry = field(default_factory=SessionActorRegistry)
     artifact_store: Any = None
@@ -1693,11 +1677,12 @@ async def open_core_app_db(
         if schema_version < CORE_SCHEMA_VERSION:
             await _migrate_core_app_schema(conn, workspace_id=resolved_workspace_id)
             await _set_core_schema_version(conn, CORE_SCHEMA_VERSION)
+        # 版本号已经是当前值、但库来自旧代码或旧备份时，缺的列照样要补上。
+        await _ensure_late_columns(conn)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     write_coordinator = SQLiteWriteCoordinator(session_factory)
     from .project_store import CoreProjectStore
     from .sync_store import CoreSyncJournal
-    from lamtools_core.mem.store import SqlAlchemyMemoryStore
     from lamtools_core.artifact.store import ArtifactStore
 
     sync_journal = CoreSyncJournal(
@@ -1748,12 +1733,10 @@ async def open_core_app_db(
         sync_journal=sync_journal,
         workspace_id=resolved_workspace_id,
         persistence=persistence,
-        memory_store=SqlAlchemyMemoryStore(session_factory, write_coordinator),
         member_defaults=dict(member_defaults or {}),
         session_actors=session_actors,
         artifact_store=ArtifactStore(
             session_factory,
-            db_path.parent / "core-agent" / "artifact-blobs",
             write_coordinator,
         ),
     )
@@ -1848,7 +1831,99 @@ async def _set_core_schema_version(connection: Any, version: int) -> None:
     )
 
 
+#: 模型里后加的列（表名 → 列名 → 列定义）。`create_all` 只建缺的表、从不补列，
+#: 而增量迁移整体挂在 schema 版本号后面：一个版本号已经是当前值、内容却来自旧代码
+#: 或旧备份的库，这些列就永远补不上（2026-10-03：本机开发库的
+#: core_artifacts.favorite 缺失，资料库整个报 "no such column"）。
+#: 补列本身幂等，所以每次打开都兜一遍，外加载荷只是一次 PRAGMA。
+_LATE_COLUMNS: dict[str, dict[str, str]] = {
+    "core_app_events": {
+        "workspace_id": "VARCHAR(128) NOT NULL DEFAULT ''",
+        "entity_type": "VARCHAR(64) NOT NULL DEFAULT 'thread.event'",
+        "entity_id": "VARCHAR(256) NOT NULL DEFAULT ''",
+        "event_seq": "INTEGER NOT NULL DEFAULT 0",
+        "revision": "INTEGER NOT NULL DEFAULT 0",
+        "event_type": "VARCHAR(128) NOT NULL DEFAULT ''",
+    },
+    "core_thread_snapshots": {
+        "revision": "INTEGER NOT NULL DEFAULT 0",
+        "active_turn_id": "VARCHAR(64)",
+    },
+    "core_artifacts": {
+        "favorite": "BOOLEAN NOT NULL DEFAULT 0",
+        "folder": "VARCHAR(512) NOT NULL DEFAULT ''",
+    },
+    "core_projects": {
+        "workspace_id": "VARCHAR(128) NOT NULL DEFAULT ''",
+        "revision": "INTEGER NOT NULL DEFAULT 1",
+        "icon_key": "VARCHAR(32) NOT NULL DEFAULT 'folder'",
+        "color_key": "VARCHAR(32) NOT NULL DEFAULT 'gray'",
+    },
+    "core_history_entries": {"revision": "INTEGER NOT NULL DEFAULT 0"},
+    "core_sync_changes": {
+        "workspace_id": "VARCHAR(128) NOT NULL DEFAULT ''",
+        "event_type": "VARCHAR(128) NOT NULL DEFAULT ''",
+        "revision": "INTEGER NOT NULL DEFAULT 0",
+    },
+}
+
+
+async def _ensure_late_columns(connection: Any) -> None:
+    """补齐模型里后加的列；表还不存在时跳过（`create_all` 会按当前模型建全）。"""
+    for table, columns in _LATE_COLUMNS.items():
+        existing = {
+            row["name"]
+            for row in (await connection.execute(text(f"PRAGMA table_info({table})"))).mappings()
+        }
+        if not existing:
+            continue
+        added: set[str] = set()
+        for column, definition in columns.items():
+            if column not in existing:
+                await connection.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                ))
+                added.add(column)
+        if table == "core_thread_snapshots" and "revision" in added:
+            # 刚补的列全是默认 0，而快照 JSON / 事件锚点里可能已经有值。
+            # 客户端见过的修订号不能高于服务端，所以补完立刻按手头的最可靠
+            # 依据回填一次（只在这张表这一次；之后由写入侧维持单调）。
+            await connection.execute(text(
+                "UPDATE core_thread_snapshots SET revision = MAX("
+                "revision, snapshot_seq, "
+                "COALESCE(json_extract(CASE WHEN json_valid(snapshot_json) "
+                "THEN snapshot_json END, '$.revision'), 0)) "
+                "WHERE revision = 0"
+            ))
+    await _repair_thread_revisions(connection)
+
+
+async def _repair_thread_revisions(connection: Any) -> None:
+    """把会话的 CAS 修订号抬到"该会话事件里出现过的最高值"。
+
+    修订号是客户端写入时的乐观锁期望值：客户端只要见过更高的值（快照与
+    事件都在其中）本地就只增不减，而服务端是按快照行上的修订号做 CAS 的。
+    行上的值一旦低于客户端见过的值，该会话的每次写入都会被判冲突；刷新
+    回来的快照又因"不能回退"被客户端丢弃，会话从此改不动——压缩上下文、
+    发消息、编辑全部失败（2026-10-04：本机开发库 d638…4b 的会话行上是 0、
+    事件里已到 363，症状即"无法压缩，压缩失败"）。修订号本应单调，取两者
+    较大者即可对齐两边；只在该行确实偏低时才写，幂等，载荷是一次索引聚合。
+    """
+    await connection.execute(text(
+        "UPDATE core_thread_snapshots SET revision = ("
+        "SELECT MAX(revision) FROM core_app_events "
+        "WHERE core_app_events.thread_id = core_thread_snapshots.thread_id"
+        ") WHERE revision < ("
+        "SELECT MAX(revision) FROM core_app_events "
+        "WHERE core_app_events.thread_id = core_thread_snapshots.thread_id"
+        ")"
+    ))
+
+
 async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -> None:
+    # v3: the structured memory store was replaced by a file-backed memory
+    # library; drop the orphaned table from existing databases.
+    await connection.execute(text("DROP TABLE IF EXISTS core_memories"))
     app_event_columns = {
         row["name"]
         for row in (await connection.execute(text("PRAGMA table_info(core_app_events)"))).mappings()
@@ -1937,6 +2012,19 @@ async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -
                     ),
                     {"active_turn_id": active_turn_id, "thread_id": row["thread_id"]},
                 )
+
+    artifact_columns = {
+        row["name"]
+        for row in (await connection.execute(text("PRAGMA table_info(core_artifacts)"))).mappings()
+    }
+    if "favorite" not in artifact_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_artifacts ADD COLUMN favorite BOOLEAN NOT NULL DEFAULT 0"
+        ))
+    if "folder" not in artifact_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_artifacts ADD COLUMN folder VARCHAR(512) NOT NULL DEFAULT ''"
+        ))
 
     project_columns = {
         row["name"]

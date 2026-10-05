@@ -24,7 +24,13 @@
         :stroke-width="1.8"
         aria-hidden="true"
       />
-      <span>{{ entry.label }}</span>
+      <span class="context-menu-item-text">
+        <span>{{ entry.label }}</span>
+        <small v-if="entry.description" class="context-menu-item-description">{{ entry.description }}</small>
+      </span>
+    </span>
+    <span v-if="entry.checked" class="context-menu-item-check" aria-hidden="true">
+      <Check :size="16" :stroke-width="1.8" />
     </span>
     <span v-if="entry.shortcut" class="context-menu-item-shortcut">{{ entry.shortcut }}</span>
   </button>
@@ -32,6 +38,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { Check } from 'lucide-vue-next'
 import type { ContextMenuAction } from './types'
 
 defineProps<{

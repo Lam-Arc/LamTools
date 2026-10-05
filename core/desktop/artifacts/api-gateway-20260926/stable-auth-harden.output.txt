@@ -1,0 +1,34 @@
+=== 1) why the cookie did not authenticate (names/attrs only) ===
+=== 2) locate the admin access token column ===
+  access_token
+  aff_code
+  aff_count
+  aff_history
+  aff_quota
+  created_at
+  deleted_at
+  discord_id
+  display_name
+  email
+  github_id
+  group
+  id
+  inviter_id
+  last_login_at
+  linux_do_id
+  oidc_id
+  password
+  quota
+  remark
+  request_count
+  role
+  setting
+  status
+  stripe_customer
+  telegram_id
+  used_quota
+  username
+  wechat_id
+=== 3) authenticated admin probe (token never printed) ===
+  token length: 0 | root user id: 1
+  FATAL: no access token in database

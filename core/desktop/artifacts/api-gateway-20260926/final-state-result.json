@@ -1,0 +1,42 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06y86k39ehiio",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "",
+          "ErrorInfo": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-09-26T11:29:08Z",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Success",
+          "InvokeId": "t-hz06y86k39jhb7k",
+          "InvokeRecordStatus": "Finished",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "PT09IGNvbnRhaW5lcnMgPT09CmxhbXRvb2xzLWFwaS1jYWNoZSByZWRpczo3LWFscGluZSBVcCA2IG1pbnV0ZXMgKGhlYWx0aHkpCmxhbXRvb2xzLWFwaS1kYiBwb3N0Z3JlczoxNi1hbHBpbmUgVXAgNiBtaW51dGVzIChoZWFsdGh5KQpsYW10b29scy1hcGktZ2F0ZXdheSBjYWxjaXVtaW9uL25ldy1hcGk6djAuMTMuMiBVcCA0NyBzZWNvbmRzCj09PSBubyB0ZXN0IGFydGVmYWN0cyBsZWZ0ID09PQogIGNoYW5uZWxzPTAgYWJpbGl0aWVzPTAgdG9rZW5zPTYKPT09IHB1YmxpYyByZWFjaGFiaWxpdHkgPT09CiAgY29uc29sZSAgIC0+IDIwMAogIG5vLWtleSBBUEktPiA0MDEKPT09IHJlZ2lzdHJhdGlvbiBzdGF0ZSA9PT0KICB2ZXJzaW9uID0gdjAuMTMuMgogIHNldHVwID0gVHJ1ZQogIHNlbGZfdXNlX21vZGVfZW5hYmxlZCA9IEZhbHNlCiAgcmVnaXN0ZXJfZW5hYmxlZCA9IE5vbmUKPT09IGNyZWRlbnRpYWwgZmlsZSA9PT0KICAtcnctLS0tLS0tIDEgcm9vdCByb290IDIzNiBTZXAgMjYgMTk6MjIgL29wdC9sYW10b29scy1hcGkvYWRtaW4tY3JlZGVudGlhbHMudHh0CiAgLXJ3eHIteHIteCAxIHJvb3Qgcm9vdCAzNTUgU2VwIDI2IDE5OjI2IC91c3IvbG9jYWwvYmluL2xhbXRvb2xzLWFwaS1yZWxvYWQKPT09IGNhZGR5IHNpdGUgcHJlc2VudCA9PT0KICBtYXRjaGVzOiAyCj09PSBkb25lID09PQo=",
+          "Repeats": 1,
+          "StartTime": "2026-09-26T11:29:07Z",
+          "StopTime": "",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A0DD79-E5B2-5560-A8DE-309D3C13D976"
+}

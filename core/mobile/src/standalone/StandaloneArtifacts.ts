@@ -2,9 +2,7 @@ import type { TransportHttpRequest, TransportHttpResponse } from '@lamtools/ui'
 import {
   hasEmbeddedRustCore,
   readEmbeddedArtifactFile,
-  readEmbeddedArtifactRevisions,
   setEmbeddedArtifactsDeleted,
-  restoreEmbeddedArtifactRevision,
   openEmbeddedArtifact,
   listEmbeddedArtifacts,
   type EmbeddedArtifact,
@@ -36,10 +34,6 @@ export async function artifactRpc(
     if (!artifact) throw new Error('Artifact not found')
     return { artifact }
   }
-  if (method === 'artifact.revisions') {
-    if (!artifactId) throw new Error('artifact_id is required')
-    return await readEmbeddedArtifactRevisions(projectId, artifactId)
-  }
   if (method === 'artifact.delete' || method === 'artifact.remove' || method === 'artifact.restore') {
     const raw = params.artifact_ids || params.artifactIds
     const ids = Array.isArray(raw) ? raw.map(String).filter(id => id.trim()) : []
@@ -49,14 +43,7 @@ export async function artifactRpc(
   }
   if (method === 'artifact.open') {
     if (!artifactId) throw new Error('artifact_id is required')
-    const revisionId = String(params.revision_id || params.revisionId || '')
-    return await openEmbeddedArtifact(projectId, artifactId, revisionId || undefined)
-  }
-  if (method === 'artifact.revision.restore') {
-    if (!artifactId) throw new Error('artifact_id is required')
-    const revisionId = String(params.revision_id || params.revisionId || '')
-    if (!revisionId) throw new Error('revision_id is required')
-    return await restoreEmbeddedArtifactRevision(projectId, artifactId, revisionId)
+    return await openEmbeddedArtifact(projectId, artifactId)
   }
   return null
 }
@@ -71,8 +58,7 @@ export async function handleStandaloneArtifactHttp(
   if (request.method !== 'GET') return null
   const projectId = decodeURIComponent(segments[1])
   const artifactId = decodeURIComponent(segments[3])
-  const revisionId = url.searchParams.get('revision_id') || undefined
-  const bytes = await readEmbeddedArtifactFile(projectId, artifactId, revisionId)
+  const bytes = await readEmbeddedArtifactFile(projectId, artifactId)
   if (!bytes) return jsonResponse({ error: 'Artifact not found' }, 404)
   return {
     status: 200,

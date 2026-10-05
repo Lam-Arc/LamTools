@@ -1,0 +1,42 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06y84djnbcx6o",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "",
+          "ErrorInfo": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-09-26T11:04:55Z",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Success",
+          "InvokeId": "t-hz06y84djngcpvk",
+          "InvokeRecordStatus": "Finished",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "PT09IDEpIHByZS1jaGFuZ2UgYmFzZWxpbmUgPT09Ci1ydy1yLS1yLS0gMSByb290IHJvb3QgNzM4IFNlcCAyNSAyMzo1MCAvZXRjL2NhZGR5L0NhZGR5ZmlsZQotLS0gY2FkZHkgdW5pdCByZWxvYWQgY2FwYWJpbGl0eSAtLS0KRXhlY1N0YXJ0PXsgcGF0aD0vdXNyL2xvY2FsL2Jpbi9jYWRkeSA7IGFyZ3ZbXT0vdXNyL2xvY2FsL2Jpbi9jYWRkeSBydW4gLS1lbnZpcm9uIC0tY29uZmlnIC9ldGMvY2FkZHkvQ2FkZHlmaWxlIDsgaWdub3JlX2Vycm9ycz1ubyA7IHN0YXJ0X3RpbWU9W24vYV0gOyBzdG9wX3RpbWU9W24vYV0gOyBwaWQ9MCA7IGNvZGU9KG51bGwpIDsgc3RhdHVzPTAvMCB9CkV4ZWNSZWxvYWQ9eyBwYXRoPS91c3IvbG9jYWwvYmluL2NhZGR5IDsgYXJndltdPS91c3IvbG9jYWwvYmluL2NhZGR5IHJlbG9hZCAtLWNvbmZpZyAvZXRjL2NhZGR5L0NhZGR5ZmlsZSAtLWZvcmNlIDsgaWdub3JlX2Vycm9ycz1ubyA7IHN0YXJ0X3RpbWU9W0ZyaSAyMDI2LTA5LTI1IDIzOjUwOjAyIENTVF0gOyBzdG9wX3RpbWU9W0ZyaSAyMDI2LTA5LTI1IDIzOjUwOjAyIENTVF0gOyBwaWQ9MTYzMjAgOyBjb2RlPWV4aXRlZCA7IHN0YXR1cz0wIH0KLS0tIGNhZGR5IGJpbmFyeSAtLS0KL3Vzci9sb2NhbC9iaW4vY2FkZHkKLS0tIGN1cnJlbnQgY29uZmlnIHZhbGlkYXRlcz8gLS0tCnsibGV2ZWwiOiJpbmZvIiwidHMiOjE3OTA0MjA2NzkuNTYxMzA2NywibG9nZ2VyIjoiaHR0cCIsIm1zZyI6InNlcnZlcnMgc2h1dHRpbmcgZG93biB3aXRoIGV0ZXJuYWwgZ3JhY2UgcGVyaW9kIn0KeyJsZXZlbCI6ImluZm8iLCJ0cyI6MTc5MDQyMDY3OS41NjE0MTgsImxvZ2dlciI6InRscy5jYWNoZS5tYWludGVuYW5jZSIsIm1zZyI6InN0b3BwZWQgYmFja2dyb3VuZCBjZXJ0aWZpY2F0ZSBtYWludGVuYW5jZSIsImNhY2hlIjoiMHgyM2ZlZjZkNDA1MDAifQpWYWxpZCBjb25maWd1cmF0aW9uCj09PSAyKSBndWFyZCArIGJhY2t1cCA9PT0KICBiYWNrdXA6IC9ldGMvY2FkZHkvQ2FkZHlmaWxlLmJlZm9yZS1hcGktZ2F0ZXdheS0yMDI2MDkyNlQxMTA0MzlaCiAgb2xkIHNoYTI1NjogYzZkYTQ1OTk1Njg0YjVkNGIxNTc1ZTY3NmRjMmUxNDhkYmJhMzI4NTVjZjBkMGNkNmU0YTRjZmM4YmY3YjdhNSAgL2V0Yy9jYWRkeS9DYWRkeWZpbGUKPT09IDMpIGFwcGVuZCBuZXcgc2l0ZSBibG9jayA9PT0KICBuZXcgc2hhMjU2OiBkZmM4NDlmOTM4OTFhNTA2ZWQ2Y2QwYWIwN2VjOTdkNGExYTM0YjYyODcyOTAyOWMzZTcyYTVlNzE5ODQzMDk4ICAvZXRjL2NhZGR5L0NhZGR5ZmlsZQo9PT0gNCkgdmFsaWRhdGUgbmV3IGNvbmZpZyA9PT0KeyJsZXZlbCI6ImluZm8iLCJ0cyI6MTc5MDQyMDY3OS42NjE2NzY0LCJsb2dnZXIiOiJodHRwIiwibXNnIjoic2VydmVycyBzaHV0dGluZyBkb3duIHdpdGggZXRlcm5hbCBncmFjZSBwZXJpb2QifQp7ImxldmVsIjoiaW5mbyIsInRzIjoxNzkwNDIwNjc5LjY2MTc5ODUsImxvZ2dlciI6InRscy5jYWNoZS5tYWludGVuYW5jZSIsIm1zZyI6InN0b3BwZWQgYmFja2dyb3VuZCBjZXJ0aWZpY2F0ZSBtYWludGVuYW5jZSIsImNhY2hlIjoiMHgzYTZhMGVmZjllMDAifQpWYWxpZCBjb25maWd1cmF0aW9uCj09PSA1KSBncmFjZWZ1bCByZWxvYWQgKG5vIHJlc3RhcnQgb2YgdGhlIHdlYiBzZXJ2ZXIpID09PQogIHN5c3RlbWN0bCByZWxvYWQgY2FkZHktbGFtdG9vbHM6IE9LCiAgdW5pdCBzdGF0ZTogYWN0aXZlCj09PSA2KSB3YWl0IGZvciBjZXJ0aWZpY2F0ZSBpc3N1YW5jZSA9PT0KICBnYXRld2F5IHJlYWNoYWJsZSBvdmVyIFRMUyBhZnRlciAxNnMKICBsYXN0IGNvZGU6IDIwMAo9PT0gNykgY2VydGlmaWNhdGUgc2VydmVkIGZvciB0aGUgbmV3IG5hbWUgPT09CnN1YmplY3Q9Q04gPSBhcGkuNDcuMTE0LjQzLjk5Lm5pcC5pbwppc3N1ZXI9QyA9IFVTLCBPID0gTGV0J3MgRW5jcnlwdCwgQ04gPSBZRTEKbm90QmVmb3JlPVNlcCAyNiAxMDowNjoxOSAyMDI2IEdNVApub3RBZnRlcj1EZWMgMjUgMTA6MDY6MTggMjAyNiBHTVQKPT09IDgpIHJlZ3Jlc3Npb24gY2hlY2s6IGV2ZXJ5IHByZS1leGlzdGluZyBzaXRlIHN0aWxsIGFuc3dlcnMgPT09CiAgaG9tZXBhZ2UgLT4gMjAwCiAgZG93bmxvYWRzIG1hbmlmZXN0IC0+IDIwMAogIGRlc2t0b3AgaW5zdGFsbGVyIC0+IDIwMAogIG1vYmlsZSByZWxheSBoZWFsdGggLT4gMjAwCiAgY29kZXggbW9jayBhcGkgLT4gMjAwCiAgbmV3IGFwaSBnYXRld2F5IC0+IDIwMAo9PT0gOSkgbG9nIGRpcmVjdG9yeSBpbnZlbnRvcnkgKGZvciBsYXRlciBjbGllbnQtSVAgdmVyaWZpY2F0aW9uKSA9PT0KdG90YWwgMTYKZHJ3eHIteC0tLSAyIHJvb3Qgcm9vdCA0MDk2IFNlcCAyNiAxOTowMSAuCmRyd3hyLXgtLS0gNCByb290IHJvb3QgNDA5NiBTZXAgMjYgMTk6MDIgLi4KLXJ3LXItLXItLSAxIHJvb3Qgcm9vdCA3MTkxIFNlcCAyNiAxOTowNCBvbmVhcGktMjAyNjA5MjYxOTAxMDIubG9nCj09PSBkb25lID09PQo=",
+          "Repeats": 1,
+          "StartTime": "2026-09-26T11:04:39Z",
+          "StopTime": "",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A0DD63-BFFA-586B-BB1A-7C90081A8A6A"
+}

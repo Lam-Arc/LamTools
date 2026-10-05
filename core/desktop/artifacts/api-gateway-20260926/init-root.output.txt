@@ -1,0 +1,23 @@
+=== 1) setup state before ===
+   {'status': False, 'root_init': False, 'database_type': 'postgres'}
+=== 2) write root credential record (values not echoed) ===
+  credential file: mode 600, 236 bytes
+=== 3) first-run setup ===
+  POST /api/setup -> 200
+  success: True | message: 系统初始化成功
+=== 4) authenticated login check ===
+  POST /api/user/login -> 200
+  login success: True | message: 
+=== 5) session cookie captured? ===
+  cookie jar populated: 1 session entries
+=== 6) setup state after ===
+  setup = True
+  register_enabled = True
+  password_register_enabled = True
+  self_use_mode_enabled = False
+  demo_site_enabled = False
+  turnstile_check = False
+=== 7) available option keys (security-relevant only) ===
+  GET /api/option/ success: False
+  unexpected shape: None
+=== done ===

@@ -49,9 +49,6 @@ describe('TitleBar mobile pairing', () => {
     expect(source).toContain('var(--titlebar-main-left, 18px)')
     expect(source).toContain('var(--titlebar-main-right, 18px)')
     expect(source).toContain('var(--radius-xl) + var(--space-6)')
-    expect(wrapper.get('.titlebar-left .sunday-logo').attributes('aria-hidden')).toBe('true')
-    expect(wrapper.get('.titlebar-left .sunday-logo').classes()).toContain('sunday-logo--surface')
-    expect(wrapper.get('.titlebar-left .sunday-logo__app-icon').attributes('src')).toContain('sunday-app-icon-dark-display.png')
     await trigger.trigger('click')
 
     expect(wrapper.get('.mobile-pairing-card').text()).toContain('012345')
@@ -74,18 +71,6 @@ describe('TitleBar mobile pairing', () => {
     expect(wrapper.get('.mobile-pairing-card').text()).toContain('尚未生成配对码')
     await wrapper.get('.mobile-pairing-action').trigger('click')
     expect(wrapper.emitted('mobilePairingCreate')).toHaveLength(1)
-    wrapper.unmount()
-  })
-
-  it('selects the normalized display app icon from the effective theme', async () => {
-    ;(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = { invoke: vi.fn() }
-    const wrapper = mount(TitleBar, {
-      props: { effectiveThemeMode: 'light' },
-    })
-
-    expect(wrapper.get('.sunday-logo__app-icon').attributes('src')).toContain('sunday-app-icon-light-display.png')
-    await wrapper.setProps({ effectiveThemeMode: 'dark' })
-    expect(wrapper.get('.sunday-logo__app-icon').attributes('src')).toContain('sunday-app-icon-dark-display.png')
     wrapper.unmount()
   })
 
@@ -113,6 +98,15 @@ describe('TitleBar mobile pairing', () => {
     window.dispatchEvent(new CustomEvent('lamtools:maximize-hover', { detail: false }))
     await wrapper.vm.$nextTick()
     expect(maximize.classes()).not.toContain('native-hover')
+    wrapper.unmount()
+  })
+
+  it('keeps the brand as a wordmark, with no app-icon logo in the title bar', () => {
+    ;(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = { invoke: vi.fn() }
+    const wrapper = mount(TitleBar, { props: { modeLabel: 'Agent', canToggleMode: false } })
+
+    expect(wrapper.get('.titlebar-left .brand-name').text()).toBe('Sunday')
+    expect(wrapper.find('.titlebar-left .sunday-logo').exists()).toBe(false)
     wrapper.unmount()
   })
 })

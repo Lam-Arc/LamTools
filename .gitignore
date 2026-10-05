@@ -23,6 +23,8 @@ ENV/
 # Database
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 data_backup*/
@@ -187,10 +189,12 @@ core/desktop/update-manifest.json
 # 运行/实验输出：日期化的产物目录不入库（生成脚本按需重建）
 core/tests/fixtures/context_compaction/real_api_runs/
 /e2e/real-task-runs/
+/e2e/sunday-cli-*/
 
 # 临时文件与归档
 *.7z
 .tmp_*
+.tmp-*/
 
 # codex-workflow-managed-start
 .codex_workflow_hidden_resources/

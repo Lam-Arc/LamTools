@@ -200,6 +200,14 @@
         </div>
       </section>
     </div>
+
+    <CoreConfirmDialog
+      :open="Boolean(pendingDeleteHook)"
+      title="删除 Hook？"
+      :detail="pendingDeleteHook?.label || ''"
+      @cancel="pendingDeleteHook = null"
+      @confirm="confirmDeleteHook"
+    />
   </section>
 </template>
 
@@ -207,6 +215,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ChevronLeft } from 'lucide-vue-next'
 import UiSelect from './UiSelect.vue'
+import CoreConfirmDialog from './CoreConfirmDialog.vue'
 import type { CoreHookItem, CoreHookListPayload } from '../types'
 
 const props = defineProps<{
@@ -353,12 +362,21 @@ async function untrustHook(id: string) {
   }
 }
 
-async function deleteHook(id: string) {
+const pendingDeleteHook = ref<{ label: string; id: string } | null>(null)
+
+function deleteHook(id: string): void {
   const hook = hooks.value.find((h) => h.id === id)
   const label = hook ? `${hook.event} · ${hook.handler_type || ''}` : id
   // A hook (command hooks can execute arbitrary shell) is deleted
   // irreversibly — require confirmation (audit 17 S3).
-  if (!window.confirm(`确定删除 Hook「${label}」？此操作不可撤销。`)) return
+  pendingDeleteHook.value = { label, id }
+}
+
+async function confirmDeleteHook(): Promise<void> {
+  const pending = pendingDeleteHook.value
+  pendingDeleteHook.value = null
+  if (!pending) return
+  const id = pending.id
   try {
     await props.requestRpc('hook.delete', { hook_id: id })
     hooks.value = hooks.value.filter((h) => h.id !== id)

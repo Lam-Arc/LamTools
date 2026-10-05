@@ -52,6 +52,19 @@ export interface LocalProjectFile {
   updatedAt: string
 }
 
+/**
+ * One directory in the cached project tree.
+ *
+ * The offline cache stores files as a flat path map, so a directory that holds
+ * no files yet (a freshly created 「方案/」 folder) has nothing else to record
+ * it. The embedded store uses the real filesystem and never consults this.
+ */
+export interface LocalProjectDirectory {
+  projectId: string
+  path: string
+  updatedAt: string
+}
+
 export interface LocalPendingOperation {
   localOpId: string
   operation: string
@@ -100,6 +113,8 @@ export interface LocalState {
   threads: Record<string, LocalThread>
   messages: Record<string, LocalMessage>
   files: Record<string, LocalProjectFile>
+  /** Explicitly created directories that hold no files yet. */
+  directories: Record<string, LocalProjectDirectory>
   runtimeState: Record<string, Record<string, unknown>>
   snapshots: Record<string, CoreAppSnapshot>
   pendingOperations: Record<string, LocalPendingOperation>
@@ -130,6 +145,10 @@ export interface LocalRepository {
   readProjectFile(projectId: string, path: string): Promise<LocalProjectFile | null>
   writeProjectFile(projectId: string, path: string, content: string): Promise<LocalProjectFile>
   deleteProjectFile(projectId: string, path: string): Promise<void>
+  /** Directories directly inside `path` (plus explicitly created empty ones). */
+  listProjectDirectories(projectId: string, path?: string): Promise<LocalProjectDirectory[]>
+  createProjectDirectory(projectId: string, path: string): Promise<LocalProjectDirectory>
+  deleteProjectDirectory(projectId: string, path: string): Promise<void>
   createLocalSession(projectId?: string, title?: string): Promise<LocalThread>
   updateLocalSession(threadId: string, input: { title?: string; metadata?: Record<string, unknown>; status?: string }): Promise<LocalThread>
   deleteLocalSession(threadId: string): Promise<void>
@@ -357,6 +376,72 @@ export function createLocalRepository(
     const key = fileKey(projectId, normalizedPath)
     if (!state.value.files[key]) throw new Error('文件不存在')
     await update(next => { delete next.files[key] })
+  }
+
+  /** Directories directly inside `path`; a nested file path implies its parents. */
+  async function listProjectDirectories(projectId: string, path = ''): Promise<LocalProjectDirectory[]> {
+    await init()
+    const base = normalizeProjectPath(path)
+    const prefix = base ? `${base}/` : ''
+    const names = new Set<string>()
+    // A path deeper than this level names its first segment as a child. A file
+    // sitting directly here does not — only an explicitly created directory can
+    // be a child without a slash behind it.
+    const collect = (value: string, isDirectory: boolean) => {
+      if (!value.startsWith(prefix) || value === prefix) return
+      const rest = value.slice(prefix.length)
+      const separator = rest.indexOf('/')
+      if (separator > 0) names.add(rest.slice(0, separator))
+      else if (isDirectory && separator === -1) names.add(rest)
+    }
+    for (const file of Object.values(state.value.files)) {
+      if (file.projectId === projectId) collect(file.path, false)
+    }
+    for (const directory of Object.values(state.value.directories)) {
+      if (directory.projectId === projectId) collect(directory.path, true)
+    }
+    return [...names]
+      .sort((left, right) => left.localeCompare(right))
+      .map((name) => {
+        const directoryPath = prefix ? `${prefix}${name}` : name
+        return {
+          projectId,
+          path: directoryPath,
+          updatedAt: state.value.directories[directoryKey(projectId, directoryPath)]?.updatedAt || '',
+        }
+      })
+  }
+
+  async function createProjectDirectory(projectId: string, path: string): Promise<LocalProjectDirectory> {
+    await init()
+    const project = state.value.projects[projectId]
+    if (!project || project.deleted) throw new Error('项目不存在')
+    const normalizedPath = normalizeProjectPath(path)
+    if (!normalizedPath) throw new Error('文件夹路径不能为空')
+    const key = directoryKey(projectId, normalizedPath)
+    if (state.value.directories[key] || state.value.files[fileKey(projectId, normalizedPath)]) {
+      throw new Error('同名文件夹已存在')
+    }
+    const directory: LocalProjectDirectory = {
+      projectId,
+      path: normalizedPath,
+      updatedAt: new Date().toISOString(),
+    }
+    await update(next => { next.directories[key] = directory })
+    return clone(directory)
+  }
+
+  async function deleteProjectDirectory(projectId: string, path: string): Promise<void> {
+    await init()
+    const normalizedPath = normalizeProjectPath(path)
+    const hasFiles = Object.values(state.value.files).some(file =>
+      file.projectId === projectId && file.path.startsWith(`${normalizedPath}/`))
+    const hasChildren = Object.values(state.value.directories).some(directory =>
+      directory.projectId === projectId && directory.path.startsWith(`${normalizedPath}/`))
+    if (hasFiles || hasChildren) throw new Error('文件夹不是空的，先移走或删除里面的方案')
+    const key = directoryKey(projectId, normalizedPath)
+    if (!state.value.directories[key]) throw new Error('文件夹不存在')
+    await update(next => { delete next.directories[key] })
   }
 
   async function createLocalSession(projectId?: string, title = '新会话'): Promise<LocalThread> {
@@ -717,6 +802,9 @@ export function createLocalRepository(
     readProjectFile,
     writeProjectFile,
     deleteProjectFile,
+    listProjectDirectories,
+    createProjectDirectory,
+    deleteProjectDirectory,
     createLocalSession,
     updateLocalSession,
     deleteLocalSession,
@@ -979,6 +1067,7 @@ function emptyLocalState(): LocalState {
     threads: {},
     messages: {},
     files: {},
+    directories: {},
     runtimeState: {},
     snapshots: {},
     pendingOperations: {},
@@ -1087,6 +1176,7 @@ function normalizeState(value: LocalState | null | undefined): LocalState {
     threads,
     messages,
     files: value.files || {},
+    directories: value.directories || {},
     runtimeState: value.runtimeState || {},
     snapshots,
     pendingOperations: value.pendingOperations || {},
@@ -1102,6 +1192,10 @@ function normalizeProjectPath(path: string): string {
 
 function fileKey(projectId: string, path: string): string {
   return `${projectId}:${normalizeProjectPath(path)}`
+}
+
+function directoryKey(projectId: string, path: string): string {
+  return `dir:${projectId}:${normalizeProjectPath(path)}`
 }
 
 function normalizeRecord(

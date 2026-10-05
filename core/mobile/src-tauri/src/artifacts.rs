@@ -1,20 +1,12 @@
-//! Artifact store for the mobile host.
+//! Artifact registry for the mobile host.
 //!
-//! The desktop derives artifacts from session events and keeps the facts in
-//! `core_artifacts` / `core_artifact_revisions` with blobs on disk. The phone has
-//! no event projector, so a revision is recorded at the moment the agent writes
-//! a project file (the host observes every tool call), which is the same fact:
-//! this file, written by this tool, in this turn, at this point in time.
-//!
-//! Revisions are immutable: the bytes are stored once under their hash, and
-//! restoring a revision writes those bytes back and records a new revision that
-//! says where it came from. The artifact id is derived from the project and the
-//! path, so repeated writes to one file update one artifact instead of creating
-//! a new one per write.
+//! 成果只记"当前是什么"：哪份文件、谁写的、属于哪一轮。内容就是项目里的那个
+//! 文件，不保留历史版本（旧库里的 `artifact_revisions` 表原样留着，不再读写）。
+//! 成果 id 由项目与路径派生，所以同一个文件反复写入仍然是同一份成果。
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// One artifact as the panels read it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,8 +18,6 @@ pub struct ArtifactRecord {
     pub mime_type: String,
     pub source: String,
     pub role: String,
-    pub latest_revision_id: String,
-    pub revision_count: i64,
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
@@ -35,23 +25,6 @@ pub struct ArtifactRecord {
     pub deleted: bool,
     pub created_at: String,
     pub updated_at: String,
-}
-
-/// One immutable revision of an artifact.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArtifactRevision {
-    pub revision_id: String,
-    pub artifact_id: String,
-    pub ordinal: i64,
-    pub blob_hash: String,
-    pub size: i64,
-    pub mime_type: String,
-    pub thread_id: String,
-    pub turn_id: String,
-    pub item_id: String,
-    pub tool_name: String,
-    pub restored_from_revision_id: String,
-    pub created_at: String,
 }
 
 /// Where one write came from. The desktop fills the same fields from events.
@@ -65,35 +38,33 @@ pub struct ArtifactOrigin {
 
 pub struct ArtifactStore {
     connection: Connection,
-    blob_root: PathBuf,
 }
 
 impl ArtifactStore {
-    /// Open (and migrate) the store. `blob_root` is created on demand.
-    pub fn open(database: &Path, blob_root: &Path) -> Result<Self, String> {
+    /// Open (and migrate) the store.
+    pub fn open(database: &Path) -> Result<Self, String> {
         if let Some(parent) = database.parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
-        let connection = Connection::open(database).map_err(|error| error.to_string())?;
         let store = Self {
-            connection,
-            blob_root: blob_root.to_path_buf(),
+            connection: Connection::open(database).map_err(|error| error.to_string())?,
         };
         store.migrate()?;
         Ok(store)
     }
 
     #[cfg(test)]
-    fn open_in_memory(blob_root: &Path) -> Result<Self, String> {
+    fn open_in_memory() -> Result<Self, String> {
         let store = Self {
             connection: Connection::open_in_memory().map_err(|error| error.to_string())?,
-            blob_root: blob_root.to_path_buf(),
         };
         store.migrate()?;
         Ok(store)
     }
 
     fn migrate(&self) -> Result<(), String> {
+        // `latest_revision_id` / `revision_count` / `artifact_revisions` 是旧版本的
+        // 历史数据：表原样保留（不删列、不删表），但现在的读写都不再碰它们。
         self.connection
             .execute_batch(
                 "create table if not exists artifacts (
@@ -135,7 +106,7 @@ impl ArtifactStore {
             .map_err(|error| error.to_string())
     }
 
-    /// Record the current bytes of one project file as a new revision.
+    /// 登记（或刷新）一份成果：内容就是项目里的那个文件。
     ///
     /// Returns `None` when the path is not a readable file inside the project —
     /// a failed write must not create an empty artifact.
@@ -148,28 +119,21 @@ impl ArtifactStore {
     ) -> Result<Option<ArtifactRecord>, String> {
         let runtime_path = format!("workspace://{relative_path}");
         let absolute = project_root.join(relative_path);
-        let bytes = match std::fs::read(&absolute) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.to_string()),
-        };
-        let artifact_id = artifact_id_for(project_id, &runtime_path);
-        let blob_hash = sha256_hex(&bytes);
-        let mime_type = mime_for(&relative_path);
-        let now = now_iso();
-
-        if let Some(existing) = self.artifact(&artifact_id)? {
-            // An unchanged write is not a new revision; the desktop's projector
-            // collapses those too, or every no-op edit would add history.
-            if existing_latest_hash(self, &existing)?.as_deref() == Some(blob_hash.as_str()) {
-                return Ok(Some(existing));
+        if let Err(error) = std::fs::metadata(&absolute) {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
             }
-        } else {
+            return Err(error.to_string());
+        }
+        let artifact_id = artifact_id_for(project_id, &runtime_path);
+        let mime_type = mime_for(relative_path);
+        let now = now_iso();
+        if self.artifact(&artifact_id)?.is_none() {
             self.connection
                 .execute(
                     "insert into artifacts (artifact_id, project_id, name, path, mime_type, source, role,
-                        revision_count, thread_id, turn_id, item_id, tool_name, created_at, updated_at)
-                     values (?1, ?2, ?3, ?4, ?5, 'agent_generated', 'deliverable', 0, ?6, ?7, ?8, ?9, ?10, ?10)",
+                        thread_id, turn_id, item_id, tool_name, created_at, updated_at)
+                     values (?1, ?2, ?3, ?4, ?5, 'agent_generated', 'deliverable', ?6, ?7, ?8, ?9, ?10, ?10)",
                     params![
                         artifact_id,
                         project_id,
@@ -184,63 +148,28 @@ impl ArtifactStore {
                     ],
                 )
                 .map_err(|error| error.to_string())?;
+        } else {
+            self.connection
+                .execute(
+                    "update artifacts set mime_type = ?2,
+                        thread_id = case when ?3 = '' then thread_id else ?3 end,
+                        turn_id = case when ?4 = '' then turn_id else ?4 end,
+                        item_id = case when ?5 = '' then item_id else ?5 end,
+                        tool_name = case when ?6 = '' then tool_name else ?6 end,
+                        updated_at = ?7
+                     where artifact_id = ?1",
+                    params![
+                        artifact_id,
+                        mime_type,
+                        origin.thread_id,
+                        origin.turn_id,
+                        origin.item_id,
+                        origin.tool_name,
+                        now,
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
         }
-        self.store_blob(&blob_hash, &bytes)?;
-        let ordinal = self
-            .connection
-            .query_row(
-                "select coalesce(max(ordinal), 0) + 1 from artifact_revisions where artifact_id = ?1",
-                params![artifact_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|error| error.to_string())?;
-        let revision_id = format!(
-            "rev-{}",
-            short_hash(&format!("{artifact_id}:{ordinal}:{blob_hash}"))
-        );
-        self.connection
-            .execute(
-                "insert into artifact_revisions (revision_id, artifact_id, ordinal, blob_hash, size, mime_type,
-                    project_id, thread_id, turn_id, item_id, tool_name, created_at)
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                params![
-                    revision_id,
-                    artifact_id,
-                    ordinal,
-                    blob_hash,
-                    bytes.len() as i64,
-                    mime_type,
-                    project_id,
-                    origin.thread_id,
-                    origin.turn_id,
-                    origin.item_id,
-                    origin.tool_name,
-                    now,
-                ],
-            )
-            .map_err(|error| error.to_string())?;
-        self.connection
-            .execute(
-                "update artifacts set latest_revision_id = ?2, revision_count = ?3, mime_type = ?4,
-                    thread_id = case when ?5 = '' then thread_id else ?5 end,
-                    turn_id = case when ?6 = '' then turn_id else ?6 end,
-                    item_id = case when ?7 = '' then item_id else ?7 end,
-                    tool_name = case when ?8 = '' then tool_name else ?8 end,
-                    updated_at = ?9
-                 where artifact_id = ?1",
-                params![
-                    artifact_id,
-                    revision_id,
-                    ordinal,
-                    mime_type,
-                    origin.thread_id,
-                    origin.turn_id,
-                    origin.item_id,
-                    origin.tool_name,
-                    now,
-                ],
-            )
-            .map_err(|error| error.to_string())?;
         self.artifact(&artifact_id)
     }
 
@@ -248,8 +177,8 @@ impl ArtifactStore {
         let mut statement = self
             .connection
             .prepare(
-                "select artifact_id, project_id, name, path, mime_type, source, role, latest_revision_id,
-                        revision_count, thread_id, turn_id, item_id, tool_name, deleted, created_at, updated_at
+                "select artifact_id, project_id, name, path, mime_type, source, role,
+                        thread_id, turn_id, item_id, tool_name, deleted, created_at, updated_at
                  from artifacts
                  where project_id = ?1 and (?2 = 1 or deleted = 0)
                  order by created_at desc, artifact_id",
@@ -265,44 +194,13 @@ impl ArtifactStore {
     pub fn artifact(&self, artifact_id: &str) -> Result<Option<ArtifactRecord>, String> {
         self.connection
             .query_row(
-                "select artifact_id, project_id, name, path, mime_type, source, role, latest_revision_id,
-                        revision_count, thread_id, turn_id, item_id, tool_name, deleted, created_at, updated_at
+                "select artifact_id, project_id, name, path, mime_type, source, role,
+                        thread_id, turn_id, item_id, tool_name, deleted, created_at, updated_at
                  from artifacts where artifact_id = ?1",
                 params![artifact_id],
                 read_artifact_row,
             )
             .optional()
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn revisions(&self, artifact_id: &str) -> Result<Vec<ArtifactRevision>, String> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "select revision_id, artifact_id, ordinal, blob_hash, size, mime_type, thread_id, turn_id,
-                        item_id, tool_name, restored_from_revision_id, created_at
-                 from artifact_revisions where artifact_id = ?1 order by ordinal desc",
-            )
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map(params![artifact_id], |row| {
-                Ok(ArtifactRevision {
-                    revision_id: row.get(0)?,
-                    artifact_id: row.get(1)?,
-                    ordinal: row.get(2)?,
-                    blob_hash: row.get(3)?,
-                    size: row.get(4)?,
-                    mime_type: row.get(5)?,
-                    thread_id: row.get(6)?,
-                    turn_id: row.get(7)?,
-                    item_id: row.get(8)?,
-                    tool_name: row.get(9)?,
-                    restored_from_revision_id: row.get(10)?,
-                    created_at: row.get(11)?,
-                })
-            })
-            .map_err(|error| error.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())
     }
 
@@ -323,150 +221,16 @@ impl ArtifactStore {
         Ok(changed)
     }
 
-    /// Write an older revision's bytes back and record that as a new revision.
-    pub fn restore_revision(
-        &self,
-        project_id: &str,
-        project_root: &Path,
-        artifact_id: &str,
-        revision_id: &str,
-    ) -> Result<ArtifactRecord, String> {
-        let artifact = self
-            .artifact(artifact_id)?
-            .filter(|record| record.project_id == project_id)
-            .ok_or_else(|| format!("工件 '{artifact_id}' 不存在"))?;
-        let revision = self
-            .revisions(artifact_id)?
-            .into_iter()
-            .find(|revision| revision.revision_id == revision_id)
-            .ok_or_else(|| format!("版本 '{revision_id}' 不存在"))?;
-        let bytes = self.read_blob(&revision.blob_hash)?;
-        let relative = artifact
-            .path
-            .strip_prefix("workspace://")
-            .ok_or_else(|| format!("工件 '{artifact_id}' 不是工作区文件，无法回滚"))?;
-        if relative != artifact.path && relative.contains("..") {
-            return Err("工件路径越界".into());
-        }
-        let absolute = project_root.join(relative);
-        if let Some(parent) = absolute.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        std::fs::write(&absolute, &bytes).map_err(|error| error.to_string())?;
-
-        let blob_hash = sha256_hex(&bytes);
-        let ordinal = self
-            .connection
-            .query_row(
-                "select coalesce(max(ordinal), 0) + 1 from artifact_revisions where artifact_id = ?1",
-                params![artifact_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|error| error.to_string())?;
-        let now = now_iso();
-        let new_revision_id = format!(
-            "rev-{}",
-            short_hash(&format!("{artifact_id}:{ordinal}:{blob_hash}:restored"))
-        );
-        self.store_blob(&blob_hash, &bytes)?;
-        self.connection
-            .execute(
-                "insert into artifact_revisions (revision_id, artifact_id, ordinal, blob_hash, size, mime_type,
-                    project_id, restored_from_revision_id, created_at)
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    new_revision_id,
-                    artifact_id,
-                    ordinal,
-                    blob_hash,
-                    bytes.len() as i64,
-                    artifact.mime_type,
-                    project_id,
-                    revision_id,
-                    now,
-                ],
-            )
-            .map_err(|error| error.to_string())?;
-        self.connection
-            .execute(
-                "update artifacts set latest_revision_id = ?2, revision_count = ?3, updated_at = ?4
-                 where artifact_id = ?1",
-                params![artifact_id, new_revision_id, ordinal, now],
-            )
-            .map_err(|error| error.to_string())?;
-        self.artifact(artifact_id)?
-            .ok_or_else(|| "工件在回滚后消失".to_owned())
-    }
-
-    /// Bytes of one revision (or of the latest one), with the artifact's MIME
-    /// type. This is what the file route serves.
-    pub fn revision_bytes(
-        &self,
-        artifact: &ArtifactRecord,
-        revision_id: Option<&str>,
-    ) -> Result<(Vec<u8>, String), String> {
-        let wanted = revision_id.unwrap_or(artifact.latest_revision_id.as_str());
-        let revision = self
-            .revisions(&artifact.artifact_id)?
-            .into_iter()
-            .find(|revision| revision.revision_id == wanted)
-            .ok_or_else(|| format!("版本 '{wanted}' 不存在"))?;
-        let mime = if revision.mime_type.is_empty() {
-            artifact.mime_type.clone()
-        } else {
-            revision.mime_type.clone()
-        };
-        Ok((self.read_blob(&revision.blob_hash)?, mime))
-    }
-
-    /// Where one blob lives, for stores that share this content address space.
-    pub fn blob_path(&self, hash: &str) -> PathBuf {
-        self.blob_root.join(hash)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn store_bytes_for_test(&self, hash: &str, bytes: &[u8]) -> Result<(), String> {
-        self.store_blob(hash, bytes)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn open_in_memory_at(blob_root: &std::path::Path) -> Self {
-        let store = Self {
-            connection: Connection::open_in_memory().expect("in-memory artifacts"),
-            blob_root: blob_root.to_path_buf(),
-        };
-        store.migrate().expect("artifacts schema");
-        store
-    }
-
-    fn store_blob(&self, hash: &str, bytes: &[u8]) -> Result<(), String> {
-        std::fs::create_dir_all(&self.blob_root).map_err(|error| error.to_string())?;
-        let target = self.blob_root.join(hash);
-        if target.is_file() {
-            return Ok(());
-        }
-        let temporary = self.blob_root.join(format!("{hash}.tmp"));
-        std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-        std::fs::rename(&temporary, &target).map_err(|error| error.to_string())
-    }
-
-    fn read_blob(&self, hash: &str) -> Result<Vec<u8>, String> {
-        std::fs::read(self.blob_root.join(hash)).map_err(|error| format!("读取版本内容失败: {error}"))
-    }
 }
 
-fn existing_latest_hash(
-    store: &ArtifactStore,
-    artifact: &ArtifactRecord,
-) -> Result<Option<String>, String> {
-    if artifact.latest_revision_id.is_empty() {
-        return Ok(None);
-    }
-    Ok(store
-        .revisions(&artifact.artifact_id)?
-        .into_iter()
-        .find(|revision| revision.revision_id == artifact.latest_revision_id)
-        .map(|revision| revision.blob_hash))
+/// 读取成果当前的内容：工作区里的那个文件（附件型成果由附件通路负责）。
+pub fn file_bytes(root: &Path, record: &ArtifactRecord) -> Result<(Vec<u8>, String), String> {
+    let relative = record
+        .path
+        .strip_prefix("workspace://")
+        .ok_or_else(|| "该成果不是工作区文件，请使用附件打开".to_owned())?;
+    let bytes = std::fs::read(root.join(relative)).map_err(|error| format!("读取成果内容失败: {error}"))?;
+    Ok((bytes, record.mime_type.clone()))
 }
 
 fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactRecord> {
@@ -478,15 +242,13 @@ fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactRecord
         mime_type: row.get(4)?,
         source: row.get(5)?,
         role: row.get(6)?,
-        latest_revision_id: row.get(7)?,
-        revision_count: row.get(8)?,
-        thread_id: row.get(9)?,
-        turn_id: row.get(10)?,
-        item_id: row.get(11)?,
-        tool_name: row.get(12)?,
-        deleted: row.get::<_, i64>(13)? != 0,
-        created_at: row.get(14)?,
-        updated_at: row.get(15)?,
+        thread_id: row.get(7)?,
+        turn_id: row.get(8)?,
+        item_id: row.get(9)?,
+        tool_name: row.get(10)?,
+        deleted: row.get::<_, i64>(11)? != 0,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -674,12 +436,13 @@ pub fn empty_artifacts() -> Value {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
 
     fn fixture() -> (tempdir::TempPath, ArtifactStore, PathBuf) {
         let root = tempdir::new("sunday-artifacts");
         let project = root.join("project");
         fs::create_dir_all(&project).unwrap();
-        let store = ArtifactStore::open_in_memory(&root.join("blobs")).unwrap();
+        let store = ArtifactStore::open_in_memory().unwrap();
         (root, store, project)
     }
 
@@ -730,96 +493,52 @@ mod tests {
     }
 
     #[test]
-    fn recording_a_file_creates_one_artifact_and_only_changed_writes_become_revisions() {
-        let (root, store, project) = fixture();
-        fs::write(project.join("notes.md"), "# 第一版").unwrap();
-        let origin = ArtifactOrigin {
+    fn recording_a_file_keeps_one_artifact_and_no_history() {
+        let (_root, store, project) = fixture();
+        let target = project.join("notes.txt");
+        fs::write(&target, "one").unwrap();
+        let origin = || ArtifactOrigin {
             thread_id: "thread-1".into(),
             turn_id: "turn-1".into(),
             item_id: "item-1".into(),
             tool_name: "write_file".into(),
         };
+
         let first = store
-            .record_file("p1", &project, "notes.md", origin.clone())
+            .record_file("project-1", &project, "notes.txt", origin())
             .unwrap()
-            .expect("recorded");
-        assert_eq!(first.source, "agent_generated");
-        assert_eq!(first.path, "workspace://notes.md");
-        assert_eq!(first.name, "notes.md");
-        assert_eq!(first.mime_type, "text/markdown");
-        assert_eq!(first.revision_count, 1);
-        assert_eq!(first.tool_name, "write_file");
+            .expect("artifact");
+        assert_eq!(first.name, "notes.txt");
+        assert_eq!(first.mime_type, "text/plain");
+        assert_eq!(first.thread_id, "thread-1");
 
-        // The same content again is not a new revision.
-        let unchanged = store
-            .record_file("p1", &project, "notes.md", origin.clone())
-            .unwrap()
-            .expect("recorded");
-        assert_eq!(unchanged.revision_count, 1);
-        assert_eq!(unchanged.latest_revision_id, first.latest_revision_id);
-
-        // Different content is.
-        fs::write(project.join("notes.md"), "# 第二版").unwrap();
-        let second = store
-            .record_file("p1", &project, "notes.md", origin)
-            .unwrap()
-            .expect("recorded");
-        assert_eq!(second.artifact_id, first.artifact_id, "one artifact per path");
-        assert_eq!(second.revision_count, 2);
-        let revisions = store.revisions(&first.artifact_id).unwrap();
-        assert_eq!(revisions.len(), 2);
-        // Newest first, and the blob of the first version is still there.
-        assert_eq!(revisions[0].ordinal, 2);
-        let (oldest_bytes, _) = store
-            .revision_bytes(&second, Some(&revisions[1].revision_id))
+        // 反复写入仍是同一份成果，读到的永远是当前文件。
+        for content in ["two", "three"] {
+            fs::write(&target, content).unwrap();
+            let again = store
+                .record_file("project-1", &project, "notes.txt", origin())
+                .unwrap()
+                .expect("artifact");
+            assert_eq!(again.artifact_id, first.artifact_id);
+            let (bytes, mime) = file_bytes(&project, &again).unwrap();
+            assert_eq!(String::from_utf8(bytes).unwrap(), content);
+            assert_eq!(mime, "text/plain");
+        }
+        assert_eq!(store.list("project-1", false).unwrap().len(), 1);
+        // 旧库里的版本表不再被写入。
+        let revisions: i64 = store
+            .connection
+            .query_row("select count(*) from artifact_revisions", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(String::from_utf8(oldest_bytes).unwrap(), "# 第一版");
+        assert_eq!(revisions, 0);
 
-        let listed = store.list("p1", false).unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].artifact_id, first.artifact_id);
-        // Another project sees nothing.
-        assert!(store.list("p2", false).unwrap().is_empty());
-
-        // A missing file is not an artifact.
+        // A failed write (file gone) records nothing new.
+        fs::remove_file(&target).unwrap();
         assert!(store
-            .record_file("p1", &project, "gone.md", ArtifactOrigin::default())
+            .record_file("project-1", &project, "notes.txt", origin())
             .unwrap()
             .is_none());
-        let _ = root;
-    }
-
-    #[test]
-    fn restoring_a_revision_writes_the_bytes_back_and_records_where_they_came_from() {
-        let (root, store, project) = fixture();
-        fs::write(project.join("a.txt"), "one").unwrap();
-        let first = store
-            .record_file("p1", &project, "a.txt", ArtifactOrigin::default())
-            .unwrap()
-            .unwrap();
-        let first_revision = first.latest_revision_id.clone();
-        fs::write(project.join("a.txt"), "two").unwrap();
-        let second = store
-            .record_file("p1", &project, "a.txt", ArtifactOrigin::default())
-            .unwrap()
-            .unwrap();
-        assert_eq!(second.revision_count, 2);
-
-        let restored = store
-            .restore_revision("p1", &project, &first.artifact_id, &first_revision)
-            .unwrap();
-        assert_eq!(std::fs::read_to_string(project.join("a.txt")).unwrap(), "one");
-        assert_eq!(restored.revision_count, 3);
-        let revisions = store.revisions(&restored.artifact_id).unwrap();
-        assert_eq!(revisions[0].restored_from_revision_id, first_revision);
-        // A revision from another artifact cannot be restored into this one.
-        assert!(store
-            .restore_revision("p1", &project, &first.artifact_id, "rev-nope")
-            .is_err());
-        assert!(store
-            .restore_revision("p2", &project, &first.artifact_id, &first_revision)
-            .is_err());
-        let _ = root;
+        let _ = fs::remove_dir_all(&_root.path);
     }
 
     #[test]

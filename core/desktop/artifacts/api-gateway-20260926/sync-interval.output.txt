@@ -1,0 +1,32 @@
+  bridge gateway: 172.30.0.1
+  mock provider listening
+=== phase 1: default sync interval (restart removed from the picture) ===
+  channel zzfast-ch1 added: True
+  operator key ready: True
+  channel just added                     -> 503 | No available channel for model gpt-4o-mini under group defau
+  70s later, no restart at all           -> 200 | cache ok
+=== phase 2: shorten the cache refresh interval to 5s ===
+  removed channel 11
+  channels left: 0
+  31:      SYNC_FREQUENCY: 5
+  32:      NODE_TYPE: master
+ Container lamtools-api-db Healthy 
+ Container lamtools-api-gateway Starting 
+ Container lamtools-api-gateway Started 
+  gateway back after 6s
+=== phase 3: with the shorter interval, channel and purchase within ~15s ===
+  channel zzfast-ch2 added (gateway already running): True
+  customer created: True
+  customer purchased credit -> success=True
+  credit: 1000000
+  channel+credit live 15s after setup    -> 200 | cache ok
+=== cleanup ===
+    removed redemption 4
+    removed channel 12
+    removed user 9
+  leftovers: zzfast-key
+zzfast-root
+DELETE 2
+  final: users=root | channels=0 | vouchers=none | live tokens=none
+  mock provider stopped
+=== done ===

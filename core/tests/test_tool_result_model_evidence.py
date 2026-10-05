@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
-from lamtools_core.config.defaults import DEFAULT_AGENTS_MD, DEFAULT_MEMORY_MD
+from lamtools_core.config.defaults import DEFAULT_AGENTS_MD
 from lamtools_core.config.root import core_config_dir
 from lamtools_core.kernel import KernelStep, KernelTurn, VerificationResult
 from lamtools_core.llm import ChatMessage, LLMResponse, LLMToolCall
@@ -99,7 +99,6 @@ async def test_base_agent_skips_seeded_global_context_templates(tmp_path):
     config_dir = core_config_dir()
     config_dir.mkdir(parents=True)
     (config_dir / "AGENTS.md").write_text(DEFAULT_AGENTS_MD, encoding="utf-8")
-    (config_dir / "memory.md").write_text(DEFAULT_MEMORY_MD, encoding="utf-8")
 
     kit = CoreBaseAgentKit(work_root=tmp_path, toolbox=_CapturingToolbox())  # type: ignore[arg-type]
     request = await kit.build_model_request(
@@ -111,7 +110,8 @@ async def test_base_agent_skips_seeded_global_context_templates(tmp_path):
     assert "GLOBAL_MEMORY.md" not in content
 
     (config_dir / "AGENTS.md").write_text(DEFAULT_AGENTS_MD + "\n\nPrefer concise answers.\n", encoding="utf-8")
-    (config_dir / "memory.md").write_text(DEFAULT_MEMORY_MD + "\n\nUse UTF-8.\n", encoding="utf-8")
+    (config_dir / "memory").mkdir(parents=True, exist_ok=True)
+    (config_dir / "memory" / "facts.md").write_text("Use UTF-8.\n", encoding="utf-8")
     request = await kit.build_model_request(
         RuntimeState(session_id="global-custom-prompt"),
         PromptContext(session_id="global-custom-prompt"),

@@ -29,7 +29,7 @@
   min-height: var(--sidebar-row-height);
   margin-bottom: var(--space-2);
 }
-/* 搜索变成入口（打开全局搜索）后，这一行还并排放下了插件/长期安排等图标。 */
+/* 搜索变成入口（打开全局搜索）后，这一行还并排放下了插件/定时任务等图标。 */
 .sidebar-toolbar--actions {
   gap: var(--space-1);
 }
@@ -165,7 +165,48 @@
   line-height: 16px;
   letter-spacing: .04em;
 }
-.sidebar-section:first-of-type .sidebar-section-title { margin-top: 18px; }
+.sidebar-section:first-of-type .sidebar-section-head { margin-top: var(--space-2); }
+
+/* 分区标题行：标题 + 可选的分区级展开/收起图标（分组/会话超过上限时出现）。 */
+.sidebar-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sidebar-item-gap);
+  margin: 0 0 6px;
+}
+.sidebar-section-head .sidebar-section-title {
+  margin: 0;
+}
+.sidebar-section-toggle {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-right: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--sidebar-text-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.sidebar-section-toggle:hover,
+.sidebar-section-toggle:focus-visible {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  color: var(--sidebar-text-primary);
+}
+.sidebar-section-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.sidebar-section-toggle svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.8;
+}
+
 .project-block {
   position: relative;
   border-radius: var(--sidebar-row-radius);
@@ -198,9 +239,6 @@
 .session-row {
   background: transparent;
 }
-.project-toggle {
-  flex: 0 0 var(--sidebar-chevron-size);
-}
 .project-name,
 .project-main {
   flex: 1 1 auto;
@@ -230,18 +268,32 @@
 .project-name.clickable { cursor: pointer; }
 .project-name.clickable:hover strong { color: var(--sidebar-text-primary); }
 
+/* 「···」是行内浮层：绝对定位悬于项目名尾部，不占布局空间、不挤压项目名；
+   底衬向右渐隐到面板底色，保证被压住的文字尾部可读。 */
 .project-btns {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
   display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
+  align-items: center;
   gap: var(--sidebar-item-gap);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-fast) var(--ease-out);
-  flex: 0 0 28px;
+}
+.project-btns::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: -18px;
+  right: -4px;
+  z-index: -1;
+  background: linear-gradient(90deg, transparent, var(--theme-main-background) 42%);
 }
 .project-menu-button {
-  flex: 0 0 28px;
+  flex: 0 0 auto;
 }
 .project-block:hover .project-btns,
 .project-block:focus-within .project-btns,
@@ -278,31 +330,16 @@
   height: var(--sidebar-icon-size);
   stroke-width: 1.8;
 }
-.project-fold svg {
-  width: var(--sidebar-chevron-size); height: var(--sidebar-chevron-size);
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: transform .16s ease;
-  transform: rotate(90deg);
-}
-.project-block[data-collapsed] .project-fold svg {
-  transform: rotate(0deg);
-}
 
-/* 紧凑左栏（断点与 workspace-shell.css 的左栏宽度分档成对）：窄栏优先保住
-   项目名，让出左侧图标与折叠键；点击项目名仍可收起/展开会话。 */
-@media (min-width: 641px) and (max-width: 1599px) {
-  .project-toggle { display: none; }
+/* 窄栏判断跟随侧栏实际宽度（.drawer-left 为 sidebar 容器，见 workspace-shell.css）：
+   栏宽不足时优先保住项目名，让出左侧图标；点击项目名收起/展开会话。 */
+@container sidebar (max-width: 189px) {
   .project-main { grid-template-columns: minmax(0, 1fr); }
   .project-name .project-visual-icon { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .sidebar-search-wrap,
   .sidebar-search,
-  .project-fold svg,
   .project-btns,
   .sidebar-sort-move {
     transition: none;
@@ -315,8 +352,7 @@
   gap: var(--sidebar-row-gap);
 }
 .conversation {
-  width: calc(100% - var(--sidebar-indent)); min-width: 0;
-  margin-left: var(--sidebar-indent);
+  width: 100%; min-width: 0;
   border: 0;
   border-radius: var(--sidebar-row-radius);
   background: transparent;
@@ -626,5 +662,82 @@
   .conversation,
   .conversation-select {
     min-height: 44px;
+  }
+}
+
+/* 设置 / 插件整版界面的竖排导航：住在会话栏那一列里，行规格与会话列表一致。 */
+.full-area-sidebar-nav {
+  display: grid;
+  gap: var(--sidebar-row-gap);
+  align-content: start;
+  padding: var(--space-1) 0;
+}
+
+.full-area-sidebar-nav__item {
+  width: 100%;
+  min-width: 0;
+  height: var(--sidebar-row-height);
+  min-height: var(--sidebar-row-height);
+  display: flex;
+  align-items: center;
+  gap: var(--sidebar-item-gap);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--sidebar-row-radius);
+  background: transparent;
+  color: var(--sidebar-text-secondary);
+  font-size: var(--sidebar-font);
+  font-weight: 400;
+  line-height: var(--sidebar-line-height-item);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.full-area-sidebar-nav__item:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  color: var(--theme-backdrop-text);
+}
+
+.full-area-sidebar-nav__item.is-active {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent);
+  color: var(--sidebar-text-primary);
+}
+
+.full-area-sidebar-nav__item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+
+.full-area-sidebar-nav__icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 62%, transparent);
+}
+
+.full-area-sidebar-nav__item.is-active .full-area-sidebar-nav__icon {
+  color: var(--sidebar-text-primary);
+}
+
+.full-area-sidebar-nav__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.full-area-sidebar-nav__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .full-area-sidebar-nav__item {
+    transition: none;
   }
 }

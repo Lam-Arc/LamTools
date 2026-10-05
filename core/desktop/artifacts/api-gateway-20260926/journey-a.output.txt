@@ -1,0 +1,28 @@
+  bridge gateway: 172.30.0.1
+=== stage 1: remove leftovers from the earlier rehearsal ===
+  removing anything named zz*
+Traceback (most recent call last):
+  File "/tmp/jr/clean.py", line 5, in <module>
+    purge('zz')
+  File "/tmp/jr/lib.py", line 68, in purge
+    for it in [i for i in (items_of(d) or []) if isinstance(i, dict)
+  File "/tmp/jr/lib.py", line 69, in <listcomp>
+    and str(it.get(field, "")).startswith(prefix)]:
+NameError: free variable 'it' referenced before assignment in enclosing scope. Did you mean: 'i'?
+=== stage 2: how is quota granted to a new user? ===
+  create a user without quota in the payload
+    create -> http 200 success=True 
+    quota in database: 0
+    QuotaForNewUser option: 
+  grant quota and set a handover password -> http 200 success=True 
+    quota now: 0
+    user id: 3 | group: default
+=== stage 3: the user's side of the journey ===
+  mock provider listening
+  provider added: True
+  user signs in with the handed-over password: True | id: 3
+  key A (own quota 100000): True 
+  key B (unlimited): True 
+  retrieved zz-key-b: length 51, own quota 0, unlimited True
+  retrieved zz-key-a: length 51, own quota 100000, unlimited False
+=== part A complete; keys staged for part B ===

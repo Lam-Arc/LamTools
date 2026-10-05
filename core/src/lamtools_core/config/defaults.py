@@ -32,19 +32,12 @@ on top of this file). Edit freely — this is your machine-wide agent guidance.
 DEFAULT_LOAD_CONTEXT_JSONC = """\
 // 全局上下文加载配置（load_context）
 // addition: 追加加载的上下文文件（相对工作区根或绝对路径）
-// except:   从默认上下文列表中排除的文件名（如 AGENTS.md / MEMORY.md）
+// except:   从默认上下文列表中排除的文件名（如 AGENTS.md / CONTEXT.md）
 // 工作区根目录的 load_context.jsonc 会叠加在本文件之上。
 {
   "addition": [],
   "except": []
 }
-"""
-
-DEFAULT_MEMORY_MD = """\
-# Global Memory
-
-跨项目长期记忆。此处内容会以 memory 优先级注入每个会话；工作区的 MEMORY.md
-会叠加在它之后（优先级更高）。
 """
 
 DEFAULT_HOOKS_JSON = '{"hooks": {}}\n'
@@ -116,14 +109,21 @@ def ensure_default_config_files() -> list[Path]:
     if not (config_dir / "hooks.json").exists() and _write_if_missing(config_dir / "hooks.json", DEFAULT_HOOKS_JSON):
         created.append(config_dir / "hooks.json")
 
-    # Instruction / context / memory files.
+    # Instruction / context files.
     for name, content in (
         ("AGENTS.md", DEFAULT_AGENTS_MD),
         ("load_context.jsonc", DEFAULT_LOAD_CONTEXT_JSONC),
-        ("memory.md", DEFAULT_MEMORY_MD),
     ):
         if _write_if_missing(config_dir / name, content):
             created.append(config_dir / name)
+
+    # Global memory library (directory tree of plain files; INDEX.md is
+    # generated on demand from the tree).
+    memory_dir = config_dir / "memory"
+    try:
+        memory_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        _log.warning("Could not create memory directory %s", memory_dir)
 
     # Model request retry configuration.
     from lamtools_core.config.retry_store import DEFAULT_MODEL_RETRY_JSONC

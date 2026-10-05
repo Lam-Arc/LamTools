@@ -1,0 +1,23 @@
+=== 0) bridge address ===
+  bridge gateway: 172.30.0.1
+=== 1) start temporary mock upstream on the bridge (not public) ===
+  listening on 172.30.0.1:8323
+=== 2) admin API: channel + token ===
+  admin authenticated
+  create channel single -> 200 success=True msg=
+  channel id=1 group=default models=gpt-4o-mini
+  connectivity test -> 200 success=True msg=
+  create token -> 200 success=True msg=
+  token id=2 status=1 masked_key=YM8R********...
+  FATAL: could not retrieve the full key
+=== 3) without a key (must be rejected) ===
+  GET /v1/models -> 401
+=== ABORT: no throwaway key; skipping live call tests ===
+=== 8) cleanup ===
+  delete token id=2 name=zz-smoke-key-do-not-keep -> success=True
+  delete token id=1 name=zz-smoke-key-do-not-keep -> success=True
+  token leftovers: none
+  delete channel id=1 name=zz-smoke-mock-do-not-keep -> success=True
+  channel leftovers: none
+  mock upstream stopped
+  port 8323 released
