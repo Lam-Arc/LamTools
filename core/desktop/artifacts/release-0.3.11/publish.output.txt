@@ -1,0 +1,13 @@
+2026-10-08T10:56:25Z
+/var/tmp/Sunday-desktop-0.3.11-20261008.upload.exe: OK
+/var/www/lamtools/Sunday-latest-x64-setup.exe: OK
+/var/www/lamtools/Sunday_0.3.11_x64-setup.exe.tmp: OK
+/var/www/lamtools/Sunday_0.3.11_x64-setup.exe: OK
+/var/www/lamtools/Sunday-latest-x64-setup.exe: OK
+/var/www/lamtools/Sunday-latest-x64-setup-0.3.10-before-0.3.11-20261008.exe: OK
+/var/www/lamtools/Sunday_0.3.11_x64-setup.exe 58057917
+/var/www/lamtools/Sunday-latest-x64-setup.exe 58057917
+/var/www/lamtools/Sunday-latest-x64-setup-0.3.10-before-0.3.11-20261008.exe 58305830
+active
+active
+2026-10-08T10:56:27Z

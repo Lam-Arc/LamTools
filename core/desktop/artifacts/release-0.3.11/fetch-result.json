@@ -1,0 +1,41 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06zerbmj5jncw",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "",
+          "ErrorInfo": "",
+          "FinishedTime": "",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Running",
+          "InvokeId": "t-hz06zerbmjd1ce8",
+          "InvokeRecordStatus": "Running",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "MjAyNi0xMC0wOFQwOTo1MTozMloKU3VuZGF5XzAuMy4xMV94NjQtc2V0dXAuZXhlIDU4MDU3OTE3IDhmODIzZTNlM2I1OGFjODZjNmUxMGVjMzhhMzkxMjk5NTNmZjk5MzU4OTExNTExZjNiZDljMTA1YjJhZWM2ZWYK",
+          "Repeats": 1,
+          "StartTime": "2026-10-08T09:51:32Z",
+          "StopTime": "",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A11AF0-0C7D-50B6-BC5A-D22714ABA55A"
+}

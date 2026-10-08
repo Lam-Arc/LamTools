@@ -1,0 +1,7 @@
+2026-10-08T10:50:44Z
+ASSET Sunday_0.3.11_x64-setup.exe 58057917 8f823e3e3b58ac86c6e10ec38a39129953ff99358911511f3bd9c105b2aec6ef
+TRY gh-proxy https://gh-proxy.com/https://github.com/Lam-Arc/LamTools/releases/download/v0.3.11
+GOT gh-proxy 58057917 8f823e3e3b58ac86c6e10ec38a39129953ff99358911511f3bd9c105b2aec6ef
+8f823e3e3b58ac86c6e10ec38a39129953ff99358911511f3bd9c105b2aec6ef  /var/tmp/Sunday-desktop-0.3.11-20261008.upload.exe
+FETCH_OK
+2026-10-08T10:50:54Z

@@ -1,0 +1,41 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06zeu7b3nvr40",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "",
+          "ErrorInfo": "",
+          "FinishedTime": "2026-10-08T10:37:19Z",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Terminated",
+          "InvokeId": "t-hz06zeu7b3svjsw",
+          "InvokeRecordStatus": "Stopped",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "MjAyNi0xMC0wOFQxMDoyMzo0OVoKQVNTRVQgU3VuZGF5XzAuMy4xMV94NjQtc2V0dXAuZXhlIDU4MDU3OTE3IDhmODIzZTNlM2I1OGFjODZjNmUxMGVjMzhhMzkxMjk5NTNmZjk5MzU4OTExNTExZjNiZDljMTA1YjJhZWM2ZWYKVFJZIGNhbm9uaWNhbCBodHRwczovL2dpdGh1Yi5jb20vTGFtLUFyYy9MYW1Ub29scy9yZWxlYXNlcy9kb3dubG9hZC92MC4zLjExCmN1cmw6ICg1NikgT3BlblNTTCBTU0xfcmVhZDogZXJyb3I6MEEwMDAxMjY6U1NMIHJvdXRpbmVzOjp1bmV4cGVjdGVkIGVvZiB3aGlsZSByZWFkaW5nLCBlcnJubyAwCmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMjkxNjIgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmNjdXVycmxsOjogICgoMjI4OCkpIEZhaWxlZCAgdEZvYSBpY2xvZW5kbiBldGNvdCAgY3Rvb24gbmdlaWN0dGggdXRiby4gY2dvaW10IGhwdW9ici50YyBvNG00IDNwIG9hcmZ0dCBlNHI0IDMxIDJhOWYydDBlN3IgIG0xczM6MCBDMm8wbjhuIGVtY3N0Omkgb0NubyBudG5pZW1jZXRkaSBvb251IHR0CmltZWQgb3V0CmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzAyNTMgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzEwNjggbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzExMTggbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmNjdXVycmxsOjogICgoMjI4OCkpICBGRmFhaWlsbGVlZGQgIHR0b28gIGNjb29ubm5uZWVjY3R0ICB0dG9vICBnZ2lpdHRoaHV1YmIuLmNjb29tbSAgcHBvb3JydHQgIDQ0NDQzMyAgYWFmZnR0ZWVyciAgMTEzMzExMTEyMjEyICBtbXNzOjogIENDb29ubm5uZWVjY3R0aWlvb25uICB0dGlpbW1lZWRkICBvb3V1dHQKCmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzExMTcgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzExMTcgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzExMTkgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmNjdXVycmxsOjogICgoMjI4OCkpICBGRmFhaWlsbGVlZGQgIHR0b28gIGNjb29ubm5uZWVjY3R0ICB0dG9vICBnZ2lpdHRoaHV1YmIuLmNjb29tbSAgcHBvb3JydHQgIDQ0NDQzMyAgYWFmZnR0ZWVyciAgMTEzMzExMTExMTQzICBtbXNzOjogIENDb29ubm5uZWVjY3R0aWlvb25uICB0dGlpbW1lZWRkICBvb3V1dHQKCmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzExMjAgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzExMTkgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmNhbm9uaWNhbCBwYXJ0LjQgYXR0ZW1wdCAxOiAwLzcyNTcyNDAgYnl0ZXMKY3VybDogKDI4KSBGYWlsZWQgdG8gY29ubmVjdCB0byBnaXRodWIuY29tIHBvcnQgNDQzIGFmdGVyIDEzMTEyNCBtczogQ29ubmVjdGlvbiB0aW1lZCBvdXQKY2Fub25pY2FsIHBhcnQuNSBhdHRlbXB0IDE6IDAvNzI1NzI0MCBieXRlcwpjdXJsOiAoMjgpIEZhaWxlZCB0byBjb25uZWN0IHRvIGdpdGh1Yi5jb20gcG9ydCA0NDMgYWZ0ZXIgMTMxMTE5IG1zOiBDb25uZWN0aW9uIHRpbWVkIG91dApjYW5vbmljYWwgcGFydC43IGF0dGVtcHQgMTogMC83MjU3MjM3IGJ5dGVzCmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzExMDcgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzExMDEgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzExMDUgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0CmN1cmw6ICgyOCkgRmFpbGVkIHRvIGNvbm5lY3QgdG8gZ2l0aHViLmNvbSBwb3J0IDQ0MyBhZnRlciAxMzExMTkgbXM6IENvbm5lY3Rpb24gdGltZWQgb3V0Cg==",
+          "Repeats": 1,
+          "StartTime": "2026-10-08T10:23:49Z",
+          "StopTime": "2026-10-08T10:37:18Z",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A11B27-5AB9-5143-800B-279A359C2526"
+}
