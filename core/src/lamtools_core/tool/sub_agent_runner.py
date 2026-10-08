@@ -191,8 +191,11 @@ class KernelSubAgentRunner:
         plugin_mode_tool_sets: dict[str, set[str]] | None = None,
         plugin_availability: Callable[[str], bool] | None = None,
         parent_guidance_sink: Callable[[str, str, str, str], bool] | None = None,
+        artifact_store: Any | None = None,
     ) -> None:
         self.work_root = Path(work_root)
+        # library 工具经它整理当前项目的成果目录；子代理与主代理同库。
+        self.artifact_store = artifact_store
         self.llm_client = llm_client
         self.model_id = model_id
         self.instructions = instructions
@@ -401,6 +404,7 @@ class KernelSubAgentRunner:
             plugin_tool_providers=self.plugin_tool_providers,
             plugin_mode_tool_sets=self.plugin_mode_tool_sets,
             plugin_availability=self.plugin_availability,
+            artifact_store=self.artifact_store,
         )
 
     def available_tool_specs(self, *, mode: str = "") -> list[ToolSpec]:

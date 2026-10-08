@@ -259,6 +259,11 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     assert toolbox.tool_permissions["write_file"] == "ask_user"
     assert toolbox.tool_permissions["read_file"] == "auto_allow"
     assert toolbox.tool_permissions["load_skill"] == "auto_allow"
+    assert "library" in names
+    assert toolbox.tool_permissions["library"] == "auto_allow"
+    assert specs["library"].metadata["category"] == "library"
+    assert "File deliberately" in specs["library"].description
+    assert "register" in specs["library"].input_schema["properties"]["action"]["enum"]
     assert "DOCX" in specs["read_file"].description
     assert "PDF" in specs["read_file"].description
     assert "path_outside_root" in {

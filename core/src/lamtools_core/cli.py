@@ -913,6 +913,7 @@ async def run_core_cli_task(
         plugin_tool_specs=plugin_tool_specs,
         data_dir=run_dir,
         allow_access_outside_workdir=allow_outside_workdir,
+        artifact_store=getattr(core_db, "artifact_store", None),
     )
     kit = CoreBaseAgentKit(
         work_root=work_root,

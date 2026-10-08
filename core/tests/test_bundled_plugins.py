@@ -30,9 +30,10 @@ def test_bundled_core_tool_specs_four_tools():
     assert names == {"git_status", "git_diff", "web_search", "generate_image"}
     # Includes the existing mcp_activate tool in the current base set.
     base = {spec.name for spec in default_core_tool_specs()}
-    assert len(base) == 19
+    assert len(base) == 20
     assert 'mcp_activate' in base
     assert 'memory' in base
+    assert 'library' in base
     assert not (base & names)  # 互斥
 
 
@@ -131,9 +132,9 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
         )
     toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=plugin_specs)
     names = {spec.name for spec in toolbox.tool_specs()}
-    # 19 base + 4 bundled + 5 Workflow + 5 Study tools; the plan plugin ships
+    # 20 base + 4 bundled + 5 Workflow + 5 Study tools; the plan plugin ships
     # skills only — plans are files in the project's 「方案/」 folder.
-    assert len(names) == 33
+    assert len(names) == 34
     assert {'get_knowledge_net', 'build_knowledge_net', 'exam', 'sign', 'notes'} <= names
     assert {"git_status", "git_diff", "web_search", "generate_image"} <= names
     assert "plan_package" not in names

@@ -362,6 +362,14 @@ class ArtifactStore:
             rows = list((await db.execute(query.order_by(CoreArtifact.created_at, CoreArtifact.id))).scalars())
             return [_artifact_record(row) for row in rows]
 
+    async def resolve_project_id(self, work_root: str | Path) -> str:
+        """按工作根定位项目；当前运行时没有对应项目就返回空串。"""
+        async with self.session_factory() as db:
+            project = (await db.execute(select(CoreProject).where(
+                CoreProject.work_root == str(Path(work_root).resolve())
+            ))).scalar_one_or_none()
+            return str(project.id) if project is not None else ""
+
     async def content_path(self, artifact_id: str) -> Path | None:
         """成果当前内容的落点；文件不在了就返回 ``None``。"""
         record = await self.get(artifact_id)

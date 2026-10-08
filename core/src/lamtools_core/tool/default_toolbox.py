@@ -44,6 +44,12 @@ from lamtools_core.tool.memory_tools import (
     MEMORY_TOOL_SCHEMA,
     make_memory_handler,
 )
+from lamtools_core.tool.library_tools import (
+    LIBRARY_TOOL_DESCRIPTION,
+    LIBRARY_TOOL_NAME,
+    LIBRARY_TOOL_SCHEMA,
+    make_library_handler,
+)
 from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW, HARD_BLOCK, PermissionTier
 from lamtools_core.tool.web_tools import make_web_fetch_handler
 from lamtools_core.tool.search import build_web_search_handler
@@ -161,6 +167,7 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "search_content": AUTO_ALLOW,
     "load_skill": AUTO_ALLOW,
     MEMORY_TOOL_NAME: AUTO_ALLOW,
+    LIBRARY_TOOL_NAME: AUTO_ALLOW,
     "write_file": ASK_USER,
     "edit_file": ASK_USER,
     "run_command": ASK_USER,
@@ -188,6 +195,7 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "search_content",
     "load_skill",
     MEMORY_TOOL_NAME,
+    LIBRARY_TOOL_NAME,
     "write_file",
     "edit_file",
     "run_command",
@@ -215,6 +223,7 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "search_content": "file_read",
     "load_skill": "skill",
     MEMORY_TOOL_NAME: "memory",
+    LIBRARY_TOOL_NAME: "library",
     "write_file": "file_write",
     "edit_file": "file_write",
     "run_command": "command",
@@ -272,6 +281,15 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
         {"type": "edit_rejected", "message": "EDIT REJECTED: {reason}"},
     ],
     "memory": [],
+    LIBRARY_TOOL_NAME: [
+        {"type": "missing_argument", "message": "Required argument is missing"},
+        {"type": "invalid_argument", "message": "Argument has an invalid type or value"},
+        {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
+        {"type": "file_not_found", "message": "File not found"},
+        {"type": "entry_not_found", "message": "Library entry not found"},
+        {"type": "project_not_found", "message": "No project is bound to the current workspace"},
+        {"type": "library_unavailable", "message": "The library catalog is unavailable"},
+    ],
     "run_command": [
         {"type": "command_rejected", "message": "Command rejected: {reason}"},
         {"type": "command_failed", "message": "Command failed with exit code {code}"},
@@ -312,6 +330,7 @@ DEFAULT_TOOL_RECOVERY: dict[str, str] = {
     "write_file": "Check path bounds and content; on file_version_changed, re-read before retrying",
     "edit_file": "Read file first; on a version or match conflict, re-read and use exact context or occurrence",
     "memory": "List the tier first; paths are relative to the memory root and INDEX.md is generated and read-only",
+    LIBRARY_TOOL_NAME: "List the library first and use the returned entry ids; layers follow the project's existing folders",
     "search_content": "Use an exact substring from the file or narrow the search path",
     "run_command": (
         "Fix command syntax, check platform compatibility, or increase timeout. For local preview servers, use "
@@ -475,6 +494,11 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "name": MEMORY_TOOL_NAME,
         "description": MEMORY_TOOL_DESCRIPTION,
         "input_schema": MEMORY_TOOL_SCHEMA,
+    },
+    {
+        "name": LIBRARY_TOOL_NAME,
+        "description": LIBRARY_TOOL_DESCRIPTION,
+        "input_schema": LIBRARY_TOOL_SCHEMA,
     },
     {
         "name": "run_command",
@@ -1081,6 +1105,7 @@ class CoreToolbox:
         permission_overrides: dict[str, str] | None = None,
         enable_plugin_manager: bool = False,
         data_dir: str | Path | None = None,
+        artifact_store: Any | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
@@ -1113,6 +1138,8 @@ class CoreToolbox:
         self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)
         self.skill_state_store = skill_state_store
         self.data_dir = Path(data_dir) if data_dir else None
+        # 项目资料库的存储句柄：library 工具经它整理当前项目的成果目录。
+        self.artifact_store = artifact_store
         # Generic plugin contributions. Plugin implementations are discovered
         # and supplied by the host's plugin assembly; Core does not name a
         # concrete plugin here.
@@ -2109,6 +2136,7 @@ class CoreToolbox:
             **read_tools.as_dict(),
             "load_skill": load_skill,
             MEMORY_TOOL_NAME: make_memory_handler(self.work_root),
+            LIBRARY_TOOL_NAME: make_library_handler(self.artifact_store, self.work_root),
             "write_file": make_write_file_handler(
                 self.work_root,
                 allow_access_outside_workdir=self._outside_access_allowed,

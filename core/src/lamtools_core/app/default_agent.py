@@ -477,8 +477,6 @@ def create_core_agent_operations(
                     thread_snapshot_store=thread_snapshot_store,
                     app_event_hub=app_event_hub,
                     write_coordinator=write_coordinator,
-                    artifact_store=artifact_store,
-                    work_root=runtime_work_root,
                 )
 
             sink = CollectingEventSink(
@@ -551,6 +549,7 @@ def create_core_agent_operations(
                 session_metadata = {}
             toolbox, mcp_registry = await _build_core_runtime_toolbox(
                 work_root=runtime_work_root,
+                artifact_store=artifact_store,
                 plugin_assembly=plugin_assembly,
                 approval_policy=approval_policy,
                 llm_client=runtime_model_provider,
@@ -738,8 +737,6 @@ def create_core_agent_operations(
                 app_event_store=app_event_store,
                 thread_snapshot_store=thread_snapshot_store,
                 write_coordinator=write_coordinator,
-                artifact_store=artifact_store,
-                work_root=runtime_work_root,
             )
             if snapshot is None:
                 snapshot = core_events_to_snapshot(sink.events, thread_id=thread_id)
@@ -1013,8 +1010,6 @@ def create_core_agent_operations(
                     thread_snapshot_store=thread_snapshot_store,
                     write_coordinator=write_coordinator,
                     app_event_hub=app_event_hub,
-                    artifact_store=artifact_store,
-                    work_root=runtime_work_root,
                 ),
                 run_items_from_events=lambda events: core_events_to_run_items(events, thread_id=event_thread_id),
                 snapshot_from_events=lambda events: core_events_to_snapshot(events, thread_id=event_thread_id),
@@ -1111,8 +1106,6 @@ def create_core_agent_operations(
                         thread_snapshot_store=thread_snapshot_store,
                         write_coordinator=write_coordinator,
                         app_event_hub=app_event_hub,
-                        artifact_store=artifact_store,
-                        work_root=runtime_work_root,
                     )
 
                 sink = CollectingEventSink(
@@ -1136,6 +1129,7 @@ def create_core_agent_operations(
                     )
                     toolbox, mcp_registry = await _build_core_runtime_toolbox(
                         work_root=runtime_work_root,
+                        artifact_store=artifact_store,
                         plugin_assembly=plugin_assembly,
                         approval_policy=approval_policy,
                         llm_client=runtime_model_provider,
@@ -1216,8 +1210,6 @@ def create_core_agent_operations(
                             app_event_store=app_event_store,
                             thread_snapshot_store=thread_snapshot_store,
                             write_coordinator=write_coordinator,
-                            artifact_store=artifact_store,
-                            work_root=runtime_work_root,
                         )
                         if snapshot is None:
                             snapshot = core_events_to_snapshot(events, thread_id=event_thread_id)
@@ -1263,8 +1255,6 @@ def create_core_agent_operations(
                             app_event_store=app_event_store,
                             thread_snapshot_store=thread_snapshot_store,
                             write_coordinator=write_coordinator,
-                            artifact_store=artifact_store,
-                            work_root=runtime_work_root,
                         )
                         if snapshot is None:
                             snapshot = core_events_to_snapshot(
@@ -1403,8 +1393,6 @@ def create_core_agent_operations(
                         db_session_factory=db_session_factory,
                         app_event_store=app_event_store,
                         thread_snapshot_store=thread_snapshot_store,
-                        artifact_store=artifact_store,
-                        work_root=runtime_work_root,
                     )
                 except BaseException as exc:
                     return await lifecycle.finalize_failure(exc)
@@ -1465,6 +1453,7 @@ def create_core_agent_operations(
                     )
                     toolbox, mcp_registry = await _build_core_runtime_toolbox(
                         work_root=runtime_work_root,
+                        artifact_store=artifact_store,
                         plugin_assembly=plugin_assembly,
                         # This continuation keeps the original turn's runtime
                         # options; the toolbox refreshes permissions from the
@@ -1587,8 +1576,6 @@ def create_core_agent_operations(
                     thread_snapshot_store=thread_snapshot_store,
                     write_coordinator=write_coordinator,
                     app_event_hub=app_event_hub,
-                    artifact_store=artifact_store,
-                    work_root=runtime_work_root,
                 )
 
             sink = CollectingEventSink(
@@ -1612,6 +1599,7 @@ def create_core_agent_operations(
                 )
                 toolbox, mcp_registry = await _build_core_runtime_toolbox(
                     work_root=runtime_work_root,
+                    artifact_store=artifact_store,
                     plugin_assembly=plugin_assembly,
                     approval_policy=approval_policy,
                     llm_client=runtime_model_provider,
@@ -1730,8 +1718,6 @@ def create_core_agent_operations(
                     db_session_factory=db_session_factory,
                     app_event_store=app_event_store,
                     thread_snapshot_store=thread_snapshot_store,
-                    artifact_store=artifact_store,
-                    work_root=runtime_work_root,
                 )
             except BaseException as exc:
                 return await lifecycle.finalize_failure(exc)
@@ -1963,8 +1949,6 @@ def create_core_agent_operations(
             app_event_store=app_event_store,
             thread_snapshot_store=thread_snapshot_store,
             app_event_hub=app_event_hub,
-            artifact_store=artifact_store,
-            work_root=paths.work_root,
         )
 
     def plugin_sub_agent_runner_factory() -> Any:
@@ -1991,6 +1975,7 @@ def create_core_agent_operations(
             approval_policy="require",
             session_prefix="plugin-sub-agent",
             state_store=runtime_state_store,
+            artifact_store=artifact_store,
             loaded_skill_roots=skill_runtime.roots,
             skill_registry=skill_runtime.registry,
             plugin_tool_specs=plugin_tooling["specs"],
@@ -2516,13 +2501,9 @@ async def _persist_run_items(
     thread_snapshot_store: SqlAlchemyThreadSnapshotStore | None,
     app_event_hub: Any | None = None,
     write_coordinator: Any | None = None,
-    artifact_store: Any | None = None,
-    work_root: str | Path | None = None,
 ) -> dict[str, Any] | None:
     if not run_items or db_session_factory is None or app_event_store is None or thread_snapshot_store is None:
         return None
-    if artifact_store is not None and work_root is not None:
-        await _ingest_run_items_quietly(artifact_store, run_items, work_root=work_root)
     persistence = AppPersistenceHost(
         app_event_store,
         thread_snapshot_store,
@@ -2549,34 +2530,6 @@ def _should_collect_core_event(event: Any) -> bool:
     return getattr(event, "metadata", {}).get("delivery") != "transient"
 
 
-async def _ingest_run_items_quietly(
-    artifact_store: Any,
-    run_items: list[Any],
-    *,
-    work_root: str | Path,
-) -> None:
-    """Register artifacts without ever failing the turn that produced them.
-
-    Artifact bookkeeping is derived state: the model and the tools already
-    succeeded and the events are persisted either way.  A file the operator
-    allowed outside the workspace used to raise here ("Artifact path escapes
-    project") and take the run down with it, so a failure is contained per item
-    and recorded as a warning instead — the same rule event persistence
-    follows.
-    """
-
-    for item in run_items:
-        try:
-            await artifact_store.ingest_run_item(item, work_root=work_root)
-        except Exception:  # noqa: BLE001 — bookkeeping must not fail the run
-            _logger.warning(
-                "[artifact] ingest failed item=%s kind=%s",
-                getattr(item, "item_id", "") or "?",
-                getattr(item, "kind", "") or "?",
-                exc_info=True,
-            )
-
-
 async def _persist_core_event_live(
     event: Any,
     *,
@@ -2586,8 +2539,6 @@ async def _persist_core_event_live(
     thread_snapshot_store: SqlAlchemyThreadSnapshotStore | None,
     app_event_hub: Any | None,
     write_coordinator: Any | None = None,
-    artifact_store: Any | None = None,
-    work_root: str | Path | None = None,
 ) -> None:
     if getattr(event, "metadata", {}).get("delivery") == "transient":
         if app_event_hub is None:
@@ -2616,8 +2567,6 @@ async def _persist_core_event_live(
     run_items = core_events_to_run_items([event], thread_id=thread_id)
     if not run_items:
         return
-    if artifact_store is not None and work_root is not None:
-        await _ingest_run_items_quietly(artifact_store, run_items, work_root=work_root)
     persistence = AppPersistenceHost(
         app_event_store,
         thread_snapshot_store,
@@ -2731,6 +2680,7 @@ async def _build_core_runtime_toolbox(
     runtime_permissions_provider: Callable[[], Mapping[str, Any] | None] | None = None,
     model_context_sink: Callable[[Any, Any], Awaitable[None] | None] | None = None,
     parent_guidance_sink: Callable[..., bool] | None = None,
+    artifact_store: Any | None = None,
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
@@ -2793,6 +2743,7 @@ async def _build_core_runtime_toolbox(
             session_prefix=sub_agent_session_prefix,
             parent_event_sink=sub_agent_event_sink,
             checkpoint_coordinator=checkpoint_coordinator,
+            artifact_store=artifact_store,
             activated_mcp_servers=activated_mcp_servers,
             active_mode=active_mode,
             load_tools=load_tools,
@@ -2914,6 +2865,7 @@ async def _build_core_runtime_toolbox(
         permission_overrides=permission_overrides,
         enable_plugin_manager=enable_plugin_manager,
         data_dir=data_dir,
+        artifact_store=artifact_store,
     )
     return toolbox, registry
 

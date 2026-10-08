@@ -1160,25 +1160,18 @@ async def test_concurrent_appends_preserve_seq_uniqueness(tmp_path) -> None:
         await db.close()
 
 
-@pytest.mark.asyncio
-async def test_artifact_ingest_failure_never_escapes_the_persistence_path() -> None:
-    """Bookkeeping failures are contained per item instead of failing the run.
+def test_persistence_path_no_longer_touches_the_artifact_store() -> None:
+    """资料库改为 Agent 归入后，持久化路径不再自动登记任何成果。
 
-    A file the operator allowed outside the workspace used to raise
-    "Artifact path escapes project" out of the live persistence path and take
-    the turn with it.  One bad item must neither raise nor stop the rest.
+    2026-10 起资料库由 Agent 用 library 工具主动归入（用户上传走自己的
+    通道）；回合事件照常落库，但绝不顺手写资料库——这是新契约，签名
+    与旧管道一并退役。
     """
-    attempted: list[str] = []
+    import inspect
 
-    class _ExplodingStore:
-        async def ingest_run_item(self, item, *, work_root):  # noqa: ANN001, ARG002
-            attempted.append(str(getattr(item, "item_id", "")))
-            raise ValueError("Artifact path escapes project")
-
-    items = [
-        SimpleNamespace(item_id="item-1", kind="tool_result"),
-        SimpleNamespace(item_id="item-2", kind="tool_result"),
-    ]
-    await default_agent._ingest_run_items_quietly(_ExplodingStore(), items, work_root="project")
-
-    assert attempted == ["item-1", "item-2"]
+    for func in (
+        default_agent._persist_run_items,
+        default_agent._persist_core_event_live,
+    ):
+        assert "artifact_store" not in inspect.signature(func).parameters
+    assert not hasattr(default_agent, "_ingest_run_items_quietly")
