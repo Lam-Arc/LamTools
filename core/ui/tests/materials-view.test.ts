@@ -142,6 +142,31 @@ describe('MaterialsView', () => {
     wrapper.unmount()
   })
 
+  it('counts a folder by its own files and keeps its sub-layers one click away', async () => {
+    const { wrapper } = mountView([
+      artifact({ artifact_id: 'a2', name: '甲.md', folder: '项目A' }),
+      artifact({ artifact_id: 'a3', name: '乙.md', folder: '项目A/这一期' }),
+      artifact({ artifact_id: 'a4', name: '丙.md', folder: '项目A/这一期' }),
+    ])
+    await settle()
+
+    await wrapper.get('[data-materials-tab="folders"]').trigger('click')
+    await settle()
+    // 卡片数字承诺的就是打开后能看到的东西：子层那两件归它们自己的入口。
+    expect(wrapper.get('[data-materials-folder="项目A"] .folder-card-count').text()).toBe('1 个文件')
+
+    await wrapper.get('[data-materials-folder="项目A"]').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-materials-crumb]').text()).toContain('项目A')
+    const chip = wrapper.get('[data-materials-subfolder="项目A/这一期"]')
+    expect(chip.text()).toContain('2')
+
+    await chip.trigger('click')
+    await settle()
+    expect(names(wrapper)).toEqual(['a3', 'a4'])
+    wrapper.unmount()
+  })
+
   it('toggles the favourite through the batch bar and confirms before removing', async () => {
     const { wrapper, calls } = mountView([artifact({ artifact_id: 'a1', name: '提纲.md' })])
     await settle()

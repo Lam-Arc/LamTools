@@ -70,6 +70,27 @@
       </template>
     </nav>
 
+    <!-- 层内：这一层下面的子层，一条可点的入口；数字同样是子层的直属文件数 -->
+    <nav
+      v-if="openFolder && activeTab === 'folders' && childFolders.length"
+      class="folder-chips"
+      data-materials-subfolders
+      aria-label="子层"
+    >
+      <button
+        v-for="folder in childFolders"
+        :key="folder.path"
+        type="button"
+        class="folder-chip"
+        :data-materials-subfolder="folder.path"
+        @click="goToFolder(folder.path)"
+      >
+        <Folder :size="13" :stroke-width="1.7" aria-hidden="true" />
+        <span class="folder-chip-name">{{ folder.name }}</span>
+        <span class="folder-chip-count">{{ folder.count }}</span>
+      </button>
+    </nav>
+
     <p v-if="!projectId" class="full-area-note">先在左侧选择一个项目 — 资料库跟随项目。</p>
     <p v-else-if="loading && !items.length" class="full-area-note" role="status">正在读取资料库…</p>
     <p v-else-if="error" class="full-area-note full-area-note--error" role="alert">
@@ -410,7 +431,10 @@ const childFolders = computed(() => folders.value
   .map(path => ({
     path,
     name: folderName(path),
-    count: items.value.filter(item => folderOf(item).startsWith(`${path}/`) || folderOf(item) === path).length,
+    // Count only this layer's own files, exactly like the listing behind the
+    // card: nested entries belong to the child layer's own card, and folding
+    // them in here promises more files than opening the folder can show.
+    count: items.value.filter(item => folderOf(item) === path).length,
   })))
 
 const folderTrail = computed(() => {

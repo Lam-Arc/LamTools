@@ -213,6 +213,7 @@ import {
   GitBranch,
   Globe2,
   Image as ImageIcon,
+  Library,
   Plus,
   RefreshCw,
   Save,
@@ -254,13 +255,14 @@ const CATEGORY_LABELS: Record<string, string> = {
   skill: '技能',
   mcp: 'MCP',
   agent: '子代理',
+  library: '资料库',
   control: '控制',
   other: '其他',
 }
 
 const CATEGORY_ORDER = [
   'file_read', 'file_write', 'command', 'git', 'web', 'image',
-  'skill', 'mcp', 'agent', 'control', 'other',
+  'skill', 'library', 'mcp', 'agent', 'control', 'other',
 ]
 
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
@@ -271,6 +273,7 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
   web: Globe2,
   image: ImageIcon,
   skill: Sparkles,
+  library: Library,
   mcp: Server,
   agent: Bot,
   control: SlidersHorizontal,
@@ -298,6 +301,7 @@ const TOOL_LABELS: Record<string, string> = {
   generate_image: '生成图片',
   load_skill: '加载技能',
   sub_agent: '调用子代理',
+  library: '资料库整理',
 }
 
 const MODE_LABELS: Record<string, string> = {

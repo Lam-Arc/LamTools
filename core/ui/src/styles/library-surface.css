@@ -489,6 +489,33 @@
   gap: var(--space-2);
   padding-bottom: var(--space-4);
 }
+/* 层内的子层入口：层名可以嵌套，根层的卡片进不来这里，用一条胶囊把它们摆出来。 */
+.library-surface .folder-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-1) 0 var(--space-3);
+}
+.library-surface .folder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px var(--space-3);
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--text) 12%, transparent));
+  border-radius: 999px;
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--text) 4%, transparent));
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.library-surface .folder-chip:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-color: color-mix(in srgb, var(--text) 24%, transparent);
+}
+.library-surface .folder-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.library-surface .folder-chip-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 .library-surface .folder-card {
   position: relative;
   display: grid;
