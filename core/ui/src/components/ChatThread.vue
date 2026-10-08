@@ -28,6 +28,7 @@
         @fork-message="onForkMessage"
         @rollback-message="onRollbackMessage"
         @edit-message="onEditMessage"
+        @open-sub-agent="onOpenSubAgent"
       >
         <template v-if="$slots['message-product']" #message-product="slotProps">
           <slot name="message-product" v-bind="slotProps" />
@@ -50,6 +51,7 @@
 <script setup lang="ts">
 import type { CoreAttachment, CoreMessage } from '../types'
 import type { LamToolsTransport } from '../transport'
+import type { CoreSubAgentRef } from '../agents/subAgentProjection'
 import MessageView from './MessageView.vue'
 
 defineOptions({ name: 'ChatThread' })
@@ -119,6 +121,7 @@ const emit = defineEmits<{
   'fork-message': [payload: AssistantActionPayload]
   'rollback-message': [payload: AssistantActionPayload]
   'edit-message': [payload: EditMessagePayload]
+  'open-sub-agent': [ref: CoreSubAgentRef]
 }>()
 
 interface DecisionOption {
@@ -161,6 +164,10 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
 
 function onEditMessage(payload: EditMessagePayload): void {
   emit('edit-message', payload)
+}
+
+function onOpenSubAgent(ref: CoreSubAgentRef): void {
+  emit('open-sub-agent', ref)
 }
 
 // ── 消息入场动效（motion-enter prop）：初始批次（挂载时已在列表中的消息）不播，
@@ -1124,6 +1131,45 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
 }
 .sub-line-heading:hover::before {
   background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+}
+
+/* 行标题 + 就地展开箭头：标题点击归右侧分屏，箭头保留原来的展开语义。 */
+.sub-line-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1);
+}
+.sub-line-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 55%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.sub-line-toggle:hover {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+  color: var(--theme-main-text, #fff);
+}
+.sub-line-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.sub-line-toggle-icon {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.sub-line-toggle-icon.is-open { transform: rotate(180deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sub-line-toggle,
+  .sub-line-toggle-icon { transition: none; }
 }
 
 .sub-line-title {

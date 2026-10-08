@@ -10,6 +10,42 @@ interface MutableSubAgentRun extends CoreSubAgentRun {
   lastOrder: number
 }
 
+/** Identity of the sub-agent a transcript part belongs to. The durable child
+ * session id leads; the name is the fallback while the first streamed events
+ * have not been assigned a session yet. */
+export interface CoreSubAgentRef {
+  subSessionId: string
+  name: string
+}
+
+export function coreSubAgentRef(part: MessagePart): CoreSubAgentRef {
+  return { subSessionId: subAgentSessionId(part), name: subAgentName(part) }
+}
+
+/** Resolve a ref against the projected runs: session id wins, the name matches
+ * only as a fallback (a resumed name can own several runs — the live one is
+ * what the operator wants to watch). */
+export function findCoreSubAgentRun(
+  runs: readonly CoreSubAgentRun[],
+  ref: CoreSubAgentRef | string,
+): CoreSubAgentRun | undefined {
+  const wanted: CoreSubAgentRef = typeof ref === 'string'
+    ? { subSessionId: ref, name: '' }
+    : ref
+  const sessionId = String(wanted.subSessionId || '').trim()
+  if (sessionId) {
+    const bySession = runs.find(run => run.subSessionId === sessionId
+      || run.id === sessionId
+      || (run.subSessionIds || []).includes(sessionId))
+    if (bySession) return bySession
+  }
+  const name = String(wanted.name || '').trim().toLowerCase()
+  if (!name) return undefined
+  const byName = runs.filter(run => String(run.name || '').trim().toLowerCase() === name)
+  if (byName.length === 0) return undefined
+  return byName.find(run => run.status === 'running') || byName[byName.length - 1]
+}
+
 export function selectCoreSubAgentRuns(messages: readonly CoreMessage[]): CoreSubAgentRun[] {
   const runs = new Map<string, MutableSubAgentRun>()
   let order = 0
@@ -243,12 +279,30 @@ function taskMessage(subSessionId: string, task: string, timestamp: string): Cor
 
 function subAgentMessages(part: MessagePart, subSessionId: string, timestamp: string): CoreMessage[] {
   const eventKind = subAgentEventKind(part)
+  const parts = subAgentTimelineParts(part)
   // Mailbox prompts are user turns in the child transcript.  The transport
   // result is only an acknowledgement ("accepted"), which must never appear
   // as a fabricated assistant answer.
+  //
+  // The same row also owns the delegated run's own process (its reasoning and
+  // tool calls arrive as nested timeline parts).  When those exist, keep the
+  // prompt as the first user turn and let the shared projection below carry
+  // the child's work — otherwise the sub-agent view can only ever show the
+  // assignment and never what the child actually did.
   if (eventKind === 'message_sent') {
     const prompt = subAgentPrompt(part)
-    return prompt ? [timelineMessage(part, subSessionId, part.startedAt || timestamp, 'user', 0, prompt, [])] : []
+    if (parts.length === 0) {
+      return prompt ? [timelineMessage(part, subSessionId, part.startedAt || timestamp, 'user', 0, prompt, [])] : []
+    }
+    const messages: CoreMessage[] = prompt
+      ? [timelineMessage(part, subSessionId, part.startedAt || timestamp, 'user', 0, prompt, [])]
+      : []
+    // The row's own content is the transport acknowledgement ("accepted"), not
+    // an answer: let the child's own final text own the answer slot.
+    const conclusion = childAnswerText(parts) || subAgentConclusion(part)
+    return messages.concat(
+      childTimeline(part, subSessionId, timestamp, parts, messages.length, conclusion),
+    )
   }
   if (eventKind === 'message_received') {
     const content = subAgentConclusion(part)
@@ -260,10 +314,33 @@ function subAgentMessages(part: MessagePart, subSessionId: string, timestamp: st
   // not the child conversation itself.
   if (eventKind === 'created' || eventKind === 'enabled' || eventKind === 'closed') return []
 
-  const parts = subAgentTimelineParts(part)
+  const conclusion = subAgentConclusion(part)
+  return childTimeline(part, subSessionId, timestamp, parts, 0, conclusion)
+}
+
+/** The child's own last model output — its answer when the parent row only
+ * carries a transport acknowledgement. */
+function childAnswerText(parts: MessagePart[]): string {
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index]
+    if (part.partType !== 'model_text') continue
+    const text = String(part.content || '').trim()
+    if (text) return text
+  }
+  return ''
+}
+
+/** Child process parts → one assistant turn per user turn they follow. */function childTimeline(
+  part: MessagePart,
+  subSessionId: string,
+  timestamp: string,
+  parts: MessagePart[],
+  startSegment: number,
+  conclusion: string,
+): CoreMessage[] {
   const messages: CoreMessage[] = []
   let assistantParts: MessagePart[] = []
-  let segment = 0
+  let segment = startSegment
 
   const flushAssistant = () => {
     if (assistantParts.length === 0) return
@@ -283,7 +360,6 @@ function subAgentMessages(part: MessagePart, subSessionId: string, timestamp: st
   }
   flushAssistant()
 
-  const conclusion = subAgentConclusion(part)
   const lastAssistant = [...messages].reverse().find(message => message.role === 'assistant')
   if (lastAssistant) lastAssistant.content = conclusion
   else if (conclusion) messages.push(assistantMessage(part, subSessionId, timestamp, [], segment, conclusion))
@@ -323,6 +399,11 @@ function subAgentProjectedStatus(part: MessagePart, previous?: CoreSubAgentRun):
     if (childStatus === 'completed') return 'idle'
     if (childStatus === 'error') return 'error'
     if (childStatus === 'paused') return 'paused'
+    // 没有子过程的投递：运行中途并入的指令永远不会有自己的子过程。若本轮已
+    // 有收敛证据（上一次调用已完结），继承它的状态，不要凭空宣称运行中。
+    if (previous && previous.status !== 'running' && previous.status !== 'pending') {
+      return previous.status
+    }
     return 'running'
   }
   if (lifecycle === 'message_received' && previous) return previous.status

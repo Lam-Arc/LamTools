@@ -44,7 +44,13 @@
   --right-drawer-width: var(--right-rail-width);
   --right-overlap: 0px;
   --right-peek: 6px;
-  --main-right: var(--right-peek);
+  /* 子代理分屏：主聊天区让出右侧一条（卡宽 + 卡间留缝），聊天区与输入栏
+     都按这个内缩自行变窄——输入栏不需要知道分屏的存在，它只是容器窄了。
+     `.workspace-shell--sub-agent-split` 打开时把这条宽度加进 --main-right。 */
+  --sub-agent-pane-width: clamp(340px, 34vw, 620px);
+  --sub-agent-split-gap: var(--space-3);
+  --main-right-base: var(--right-peek);
+  --main-right: calc(var(--main-right-base) + var(--sub-agent-split-extra, 0px));
   --right-reveal: calc(var(--right-drawer-width) - var(--right-overlap));
   --main-x-padding: max(22px, 5vw);
   --content-width: 780px;
@@ -115,7 +121,63 @@
 }
 
 .workspace-shell.left-open  { --main-left: calc(var(--left-reveal) + var(--rail-width)); }
-.workspace-shell.right-open.right-pinned { --main-right: var(--right-peek); }
+.workspace-shell.right-open.right-pinned { --main-right-base: var(--right-peek); }
+
+/* =========================================================================
+   子代理分屏（细胞分裂）：整个聊天区一分为二
+   —— 主聊天卡（含输入栏）缩到左半边，子代理卡占住让出来的右侧一条。
+   输入栏不做任何分屏处理：它的位置与宽度都从 --main-left/--main-right 推导，
+   主区变窄它自己跟着变窄（内部有容器查询，按窄容器自适应）。
+   ========================================================================= */
+.workspace-shell--sub-agent-split {
+  --sub-agent-split-extra: calc(var(--sub-agent-pane-width) + var(--sub-agent-split-gap));
+}
+
+@media (min-width: 641px) {
+  /* 两卡之间的过缝带：与左侧会话栏那条同一种做法（垫一层聊天区底色 + 上下渐隐），
+     让缝从纯背景色变成向聊天区的过渡。 */
+  .workspace-shell--sub-agent-split::after {
+    content: '';
+    position: absolute;
+    top: var(--titlebar-offset, 0px);
+    bottom: var(--shell-bottom-inset, 6px);
+    right: calc(var(--right-peek) + var(--sub-agent-pane-width) - var(--workspace-panel-radius-inner));
+    width: calc(var(--sub-agent-split-gap) + var(--workspace-panel-radius-inner) + var(--workspace-panel-radius-inner));
+    background: var(--theme-main-background);
+    opacity: .7;
+    -webkit-mask-image: linear-gradient(to bottom,
+      transparent 0,
+      #000 var(--workspace-panel-radius-inner),
+      #000 calc(100% - var(--workspace-panel-radius-inner)),
+      transparent 100%);
+    mask-image: linear-gradient(to bottom,
+      transparent 0,
+      #000 var(--workspace-panel-radius-inner),
+      #000 calc(100% - var(--workspace-panel-radius-inner)),
+      transparent 100%);
+    pointer-events: none;
+  }
+
+  /* 主卡右缘从此朝向另一张卡（不是窗口边），右两角收成内圆角；
+     左缘仍按会话栏是否展开取原值。选择器与上面的 not(.left-open) 规则同权重，
+     因此必须排在其后。 */
+  .workspace-shell.workspace-shell--sub-agent-split .workspace-main {
+    border-top-right-radius: var(--workspace-panel-radius-inner);
+    border-bottom-right-radius: var(--workspace-panel-radius-inner);
+  }
+}
+
+/* 窄窗：放不下两张卡，子代理卡独占据整个对话区（输入栏属于主聊天，一并收起）。
+   打开分屏时主区不再让宽度，子代理卡自己铺满主区。 */
+@media (max-width: 900px) {
+  .workspace-shell--sub-agent-split {
+    --sub-agent-split-extra: 0px;
+  }
+  .workspace-shell--sub-agent-split .workspace-main,
+  .workspace-shell--sub-agent-split .composer-root {
+    visibility: hidden;
+  }
+}
 
 /* 没有会话栏时（左右都收起的整界面态），聊天区左侧不再与大圆角相接，
    整体回到和右侧一致的大圆角。 */

@@ -443,3 +443,21 @@ stash 验证与本改动无关）。
 - 结束瞬间仍以整篇渲染为准（整段替换内容节点，shell/content 节点不变），这是权威结果。
 - 缩进代码块（4 空格）内含空行仍会被切开（扫描器只识别 ``` / ~~~ 围栏）；`~~~` 围栏内的 `$$` 仍会被公式保护误判（`protectMath` 只保护 ``` 围栏，属既有行为，未在本次改动范围）。
 - ≥1KB 且刚被限频的尾段在段闭合时会被重新渲染一次（闭合优先于限频），这是「闭合立即成型」换来的单次成本。
+
+## 子代理分屏包（2026-10-05）
+
+**改动**：点主线程里的子代理工具条（或右栏 Sub Agents 面板的一行）→ 整个聊天区一分为二：主聊天卡（含输入栏）缩到左半边，右侧出现子代理卡（`components/CoreSubAgentPane.vue`，只读、无输入框）；行内小箭头保留原来的就地展开。旧的「定位到源消息并高亮」（`locateSubAgentRun` / `sub-agent-source-highlight`）已被分屏取代并删除。
+
+**几何怎么来的（改这块只需看这一个变量）**：壳层新增 `--sub-agent-split-extra`（卡宽 + 卡间留缝），`--main-right` 改为 `calc(--main-right-base + --sub-agent-split-extra)`；`.workspace-shell--sub-agent-split` 只管把这个 extra 打开。主聊天卡、正文列与输入栏本来就都从 `--main-left/--main-right` 推导（`layout.css` 只有 4 处消费者），所以**输入栏不需要任何分屏逻辑**，它只是容器变窄后按自己的容器查询自适应；主卡与输入栏都已带 `--dur-morph` 过渡，分裂/合拢是同一条动画。子代理卡是壳层根节点下 `position: fixed` 的第二张卡（Teleport 到 `.workspace-shell`），圆角/描边/背景沿用主卡配方，两卡之间用与左侧会话栏同款的过缝带（`::after`）过渡。≤900px 放不下两张卡：主区与输入栏收起，子代理卡铺满对话区。
+
+**与流式热路径的关系**：分屏打开期间，壳体对每条消息变化额外跑一次 `selectCoreSubAgentRuns(messages)`（`app/LamToolsApp.vue` 的 `openSubAgentRun`），用于把身份解析成实时的运行；**分屏关闭时该 computed 提前返回、不接触 messages**，因此不构成新的每帧成本。热路径其余部分（rAF 合并、v-memo、滚动通道）未改：子代理卡的时间线复用同一套 ChatThread/MessageView 渲染与 `useCoreAutoFollowScroll` 自动吸底。
+
+**同一批修掉的投影缺口（分屏/右栏"没有过程行"的根因）**：`subAgentProjection.subAgentMessages()` 过去把 `sub_agent_message` 行当成"只发了一句话"，直接以 prompt 结束返回——而真实数据里这一行同时承载子代理自己的整段过程（`metadata.subLineParts`：reasoning / tool_call / agentMessage）。于是运行投影的 timeline 永远只有任务、没有过程，分屏与右栏因此只能显示任务与摘要。现在有子过程时按 [任务(user) + 子过程(assistant)] 组装，答案取子代理自己的最后一段 model_text（父行 content 只是 `accepted` 这类传输回执，不再当作结论）。真实会话复现：renderer_dev 145 条、sim_tester 81 条、shell_dev 28 条过程重新回到 timeline；回归用例见 `core-sub-agent.test.ts` 的「keeps a delegated run's own process on the mailbox row that carried it」。
+
+**分屏容器的硬性要求**：过程卡片、思考卡片、工具卡片的排版规则全部挂在 `.thread` 作用域（ChatThread.vue 与 layout.css 里约 20 条）。子代理卡的过程滚动区必须带 `thread` 类复用这套规则，只把属于「线程容器几何」的部分（全出血 width/margin、composer 底部留白、顶部渐隐、padding）在分屏卡里收回（`CoreSubAgentPane.vue` 的 `.sub-agent-pane-scroll`）。少了这个类，过程组标题的网格会失效——标题被挤到右侧、状态图标压到文字上。长度未知的运行不显示耗时（不编 0ms）。
+
+**委派行与子过程失联的根因（后端）**：内核只给 `sub_agent` 工具盖章 `parent_run_id/parent_turn_id`，`sub_agent_message` 没盖——换回合后再发消息，监督者记录沿用旧 run，子过程条目的 parent_item_id 指向一个不存在的「幽灵父条目」，于是那条委派永远没有过程行、投影状态永远停在 running。已改为两个委派工具都盖当前 run（`base_agent.execute_tool`）；前端选择器对历史孤儿条目按 `{call}:tool` 后缀兜底认亲（call_id 全局唯一）；投影里无子过程的投递改为继承上一轮的收敛状态而不是宣称运行中。
+
+**续跑子代理的状态真源**：消息投影看不到续跑子代理的运行边界——「运行中」的委派行若无子过程，投影会永远停在 running（运行中途收到的消息被并入上一次运行，其过程全部记在上一条委派行名下）。分屏卡因此新增 `durableRecord`（壳体在分屏打开期间拉取并每 10s 刷新 `sub_agent.list`）：状态、耗时、任务摘要以监督者记录为准，投影只负责时间线内容。
+
+**测试**：`core/ui/tests/core-sub-agent-pane.test.ts`（11 条：身份/耗时/时间线渲染、无输入控件、耗时冻结、返回键关闭、状态/类型/耗时的共用格式化、身份解析）+ `chat-thread-process.test.ts` 新增「点行开分屏、点箭头就地展开」1 条 + `core-sub-agent.test.ts` 的分屏布局契约 1 条与过程行回归 1 条；同步既有用例（原按 `.sub-line-heading` 展开的 5 处改用 `.sub-line-toggle`，源导航契约改为分屏契约）。全量 `core/ui` 120 文件 / 1032 测试全绿，`npm run typecheck`（含 tsconfig.test.json）全绿。

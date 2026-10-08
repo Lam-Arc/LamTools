@@ -597,6 +597,64 @@ describe('core appServer selectors', () => {
       metadata: { subLineItems: [{ item_id: 'mail-child' }] },
     })
   })
+
+  it('re-unites sub-agent children whose recorded run scope went stale', () => {
+    // 旧内核只给 sub_agent 盖运行章：换回合后的 sub_agent_message 沿用旧 run，
+    // 子条目的 parent_item_id 指向一个不存在的「幽灵父条目」。call_id 全局唯一，
+    // 选择器按 `{call}:tool` 后缀兜底认亲，否则那条委派永远没有过程行。
+    const callId = 'call-mailbox'
+    const parentId = `thread-stale:turn-2:${callId}:tool`
+    const staleParentRef = `thread-stale:turn-1:${callId}:tool`
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-stale',
+      snapshot_seq: 9,
+      core: {
+        thread_id: 'thread-stale',
+        snapshot_seq: 9,
+        status: 'completed',
+        item_order: [parentId, 'orphan-child', 'main-text'],
+        turns: {
+          'turn-2': { turn_id: 'turn-2', status: 'completed', items: [parentId, 'orphan-child', 'main-text'] },
+        },
+        items: {
+          [parentId]: {
+            item_id: parentId,
+            turn_id: 'turn-2',
+            kind: 'tool_result',
+            status: 'completed',
+            payload: {
+              type: 'dynamicToolCall',
+              tool_name: 'sub_agent_message',
+              arguments: { type: 'execute', name: 'renderer_dev', prompt: '继续' },
+              tool_result: 'accepted',
+            },
+          },
+          'orphan-child': {
+            item_id: 'orphan-child',
+            parent_item_id: staleParentRef,
+            turn_id: 'turn-2',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: '续跑的过程' },
+          },
+          'main-text': {
+            item_id: 'main-text',
+            turn_id: 'turn-2',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: '主线程继续' },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectChatMessages(snapshot)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.parts.map(part => part.item_id)).toEqual([parentId, 'main-text'])
+    expect(messages[0]?.parts[0]).toMatchObject({
+      metadata: { subLineItems: [{ item_id: 'orphan-child' }] },
+    })
+  })
 })
 
 // ── 审批请求快照恢复（ask-user 卡不显示修复）──

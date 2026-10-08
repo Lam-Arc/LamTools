@@ -116,7 +116,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
-import type { CoreSubAgentRun, CoreSubAgentStatus } from '../types'
+import type { CoreSubAgentRun } from '../types'
+import { normalizeSubAgentType, subAgentStatusLabel as statusLabel } from '../agents/subAgentDisplay'
 
 const props = withDefaults(defineProps<{
   runs: readonly CoreSubAgentRun[]
@@ -208,20 +209,8 @@ function updateTooltipPosition() {
   }
 }
 
-function statusLabel(status: CoreSubAgentStatus): string {
-  if (status === 'running') return '运行中'
-  if (status === 'pending') return '等待中'
-  if (status === 'paused') return '已暂停'
-  if (status === 'interrupted') return '已中断'
-  if (status === 'closed') return '已关闭'
-  if (status === 'idle') return '空闲'
-  if (status === 'error') return '失败'
-  return '已完成'
-}
-
 function runType(run: CoreSubAgentRun): string {
-  const type = String(run.type || 'execute').toLowerCase()
-  return type.includes('consider') ? 'consider' : 'execute'
+  return normalizeSubAgentType(run.type || 'execute')
 }
 
 function runIdentity(run: CoreSubAgentRun): string {

@@ -91,6 +91,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import type { CoreSubAgentRun, CoreSubAgentStatus } from '../types'
+import { subAgentStatusLabel } from '../agents/subAgentDisplay'
 import type { LamToolsTransport } from '../transport'
 import type { CoreSelectOption, CoreThinkingModeOption } from '../composer/execution'
 import { useCoreAutoFollowScroll } from '../composables/useCoreAutoFollowScroll'
@@ -234,14 +235,7 @@ function isVisibleFocusTarget(target: HTMLElement): boolean {
 }
 
 function statusLabel(status: CoreSubAgentStatus): string {
-  if (status === 'running') return '运行中'
-  if (status === 'pending') return '等待中'
-  if (status === 'paused') return '已暂停'
-  if (status === 'interrupted') return '已中断'
-  if (status === 'closed') return '已关闭'
-  if (status === 'idle') return '空闲'
-  if (status === 'error') return '失败'
-  return '已完成'
+  return subAgentStatusLabel(status)
 }
 
 watch(() => props.open, (open) => {

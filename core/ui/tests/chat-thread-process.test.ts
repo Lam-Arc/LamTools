@@ -101,8 +101,9 @@ describe('ChatThread process cards', () => {
       props: { messages, processExpandedIds: new Set(['m-sub-agent-events']) },
     })
 
-    await wrapper.get('.process-group-summary').trigger('click')
-    const rows = wrapper.findAll('.process-group-body .tool-card-header')
+    // 委派类行不再并入「思考了一会，调用了 N 个工具」：每一行都单独可见。
+    expect(wrapper.find('.process-group-summary').exists()).toBe(false)
+    const rows = wrapper.findAll('.process-stream .tool-card-header')
     expect(rows.map(row => row.text())).toEqual([
       '创建了 reviewer · model-a medium',
       '启用了 reviewer · model-a medium',
@@ -117,6 +118,44 @@ describe('ChatThread process cards', () => {
       expect.arrayContaining(['lucide-send']),
       expect.arrayContaining(['lucide-inbox']),
     ])
+    wrapper.unmount()
+  })
+
+  it('keeps delegation and skill rows out of the merged process group', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-standalone-rows',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-09-15T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [
+        { id: 'r-1', partType: 'reasoning', status: 'completed', content: '先想一下。' },
+        { id: 't-run', partType: 'tool_call', status: 'completed', toolName: 'run_command', toolArgs: { command: 'ls' }, toolResult: 'ok' },
+        {
+          id: 't-delegate',
+          partType: 'tool_call',
+          status: 'completed',
+          toolName: 'sub_agent_message',
+          toolArgs: { type: 'execute', name: 'renderer_dev', prompt: '做渲染器' },
+        },
+        { id: 't-skill', partType: 'tool_call', status: 'completed', toolName: 'load_skill', toolArgs: { name: 'gsap-core' } },
+        { id: 't-read', partType: 'tool_call', status: 'completed', toolName: 'read_file', toolArgs: { path: 'a.ts' }, toolResult: 'content' },
+      ],
+    }]
+    const wrapper = mountChatThread({
+      props: { messages, processExpandedIds: new Set(['m-standalone-rows']) },
+    })
+
+    // 普通工具仍然合并：只有 run_command 进「调用了 N 个工具」。
+    const group = wrapper.get('.process-group')
+    expect(group.get('.process-group-summary').attributes('aria-label')).toBe('思考了一会，调用了1个工具')
+    expect(group.text()).not.toContain('renderer_dev')
+    expect(group.text()).not.toContain('gsap-core')
+
+    // 委派行与 skill 行各自独立成行，在主过程流里直接可见。
+    const stream = wrapper.get('.process-stream')
+    expect(stream.text()).toContain('向 renderer_dev 发送了消息')
+    expect(stream.text()).toContain('加载技能 · gsap-core')
     wrapper.unmount()
   })
 
@@ -1037,10 +1076,10 @@ describe('ChatThread process cards', () => {
     expect(block.find('.sub-line-heading').text()).toContain('execute repo_reader');
     expect(block.find('.sub-line-heading').text()).not.toContain('子任务');
     expect(block.find('.sub-line-heading.tool-card-header').exists()).toBe(false);
-    // Sub-agent details collapse by default until the heading is opened
+    // Sub-agent details collapse by default until the inline caret is opened
     expect(block.find('.sub-line-body').exists()).toBe(false);
 
-    await block.find('.sub-line-heading').trigger('click');
+    await block.find('.sub-line-toggle').trigger('click');
     expect(block.find('.sub-line-body').exists()).toBe(true);
     expect(block.find('.sub-line-chat .user-bubble').exists()).toBe(true);
     expect(block.find('.sub-line-chat .user-bubble').text()).toContain('## Scope');
@@ -1070,6 +1109,53 @@ describe('ChatThread process cards', () => {
     expect(block.text()).toContain('## Scope');
     expect(block.text()).toContain('Use the smaller implementation.');
     expect(block.text()).not.toContain('调用子 Agent');
+  }, 20_000);
+
+  it('opens the split sub-agent view from the row, and keeps inline expand on the caret', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-agent-open',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-agent-open',
+        partType: 'agent_summary',
+        status: 'completed',
+        content: '结论已给出。',
+        label: 'Agent completed',
+        toolName: 'sub_agent_message',
+        toolArgs: { type: 'execute', name: 'renderer_dev', prompt: '做渲染器' },
+        metadata: {
+          agent_name: 'renderer_dev',
+          sub_session_id: 'thread-1:sub:renderer_dev',
+          type: 'execute',
+        },
+      }],
+    }];
+
+    const wrapper = mountChatThread({
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-agent-open']),
+      },
+    });
+
+    const block = wrapper.find('.sub-line-block');
+    expect(block.find('.sub-line-body').exists()).toBe(false);
+
+    // 行本身打开右侧分屏，只带身份（优先子会话 id），由壳体解析出运行。
+    await block.find('.sub-line-heading').trigger('click');
+    expect(wrapper.emitted('open-sub-agent')).toBeTruthy();
+    expect(wrapper.emitted('open-sub-agent')!.at(-1)).toEqual([
+      { subSessionId: 'thread-1:sub:renderer_dev', name: 'renderer_dev' },
+    ]);
+    expect(block.find('.sub-line-body').exists()).toBe(false);
+
+    // 就地展开仍走小箭头，两条路互不干扰。
+    await block.find('.sub-line-toggle').trigger('click');
+    expect(block.find('.sub-line-body').exists()).toBe(true);
+    expect(wrapper.emitted('open-sub-agent')!.length).toBe(1);
   }, 20_000);
 
   it('renders sub agent process through the same ChatThread timeline renderer', async () => {
@@ -1115,7 +1201,7 @@ describe('ChatThread process cards', () => {
     const block = wrapper.find('.sub-line-block');
     expect(block.find('.sub-line-heading').text()).toContain('execute retrospective_analyst');
     // Nested child timeline is rendered by the same MessageView, hidden until opened
-    await block.find('.sub-line-heading').trigger('click');
+    await block.find('.sub-line-toggle').trigger('click');
     expect(block.find('.message-view.sub-line-chat').exists()).toBe(true);
     expect(block.find('.sub-line-nested-process').exists()).toBe(false);
     expect(block.find('.sub-line-chat .assistant-meta').text()).toContain('execute retrospective_analyst');
@@ -1176,7 +1262,7 @@ describe('ChatThread process cards', () => {
     });
 
     const block = wrapper.find('.sub-line-block');
-    await block.find('.sub-line-heading').trigger('click');
+    await block.find('.sub-line-toggle').trigger('click');
     const chat = block.find('.sub-line-chat');
     // Historical model text renders inline in the child process stream
     const historicalText = chat.find('.process-stream .part-text-content');
@@ -1222,7 +1308,7 @@ describe('ChatThread process cards', () => {
     expect(block.text()).toContain('execute worker');
     expect(block.text()).not.toContain('执行子任务');
     // Conclusion sits inside the collapsed sub-line; open it to surface the text
-    await block.find('.sub-line-heading').trigger('click');
+    await block.find('.sub-line-toggle').trigger('click');
     expect(block.text()).toContain('已创建首页、样式和交互脚本。');
     expect(block.text()).not.toContain('Agent: sub');
     expect(block.text()).not.toContain('"handoff"');
@@ -1257,7 +1343,7 @@ describe('ChatThread process cards', () => {
     });
 
     const block = wrapper.find('.sub-line-block');
-    await block.find('.sub-line-heading').trigger('click');
+    await block.find('.sub-line-toggle').trigger('click');
     const answerText = block.find('.sub-line-chat .part-text-content').text();
     expect(answerText).toContain('子 agent 的完整结论。');
     expect(answerText).not.toBe('sub_agent');

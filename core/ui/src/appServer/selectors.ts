@@ -183,6 +183,10 @@ function subAgentChildrenByParentId(
   childrenCache?: Map<string, CoreAppItem[]>,
 ): Map<string, CoreAppItem[]> {
   const subAgentParentIds = new Set<string>()
+  /** call_id → 父条目 id。历史数据里子条目记录的运行范围可能与父行不一致
+   *  （旧内核只给 sub_agent 盖运行章，sub_agent_message 沿用了旧 run），
+   *  call_id 全局唯一，按 `{call}:tool` 后缀兜底认亲。 */
+  const subAgentParentsByCallId = new Map<string, string>()
   const orderedItems: CoreAppItem[] = []
   for (const itemId of itemOrder) {
     const rawItem = canonicalItemForId(state, itemId, cache) ?? outerProductItemForId(state, itemId)
@@ -191,13 +195,21 @@ function subAgentChildrenByParentId(
     orderedItems.push(item)
     if (isSubAgentParentItem(item)) {
       subAgentParentIds.add(item.item_id)
+      const callMatch = /:([^:]+):tool$/.exec(item.item_id)
+      if (callMatch) subAgentParentsByCallId.set(callMatch[1], item.item_id)
     }
   }
 
   const children = new Map<string, CoreAppItem[]>()
   for (const item of orderedItems) {
-    const parentId = typeof item.parent_item_id === 'string' ? item.parent_item_id : ''
-    if (!parentId || !subAgentParentIds.has(parentId)) continue
+    let parentId = typeof item.parent_item_id === 'string' ? item.parent_item_id : ''
+    if (!parentId) continue
+    if (!subAgentParentIds.has(parentId)) {
+      const callMatch = /:([^:]+):tool$/.exec(parentId)
+      const fallback = callMatch ? subAgentParentsByCallId.get(callMatch[1]) : undefined
+      if (!fallback) continue
+      parentId = fallback
+    }
     // Stable-identity children arrays: reuse the previous frame's array when
     // every child reference is identical (nothing changed). The sub-agent card
     // part in workbenchProjection is cache-keyed on the parent item's own

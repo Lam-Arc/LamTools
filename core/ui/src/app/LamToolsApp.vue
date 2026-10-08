@@ -58,6 +58,7 @@
     ref="shellRef"
     product-name="Sunday"
     sidebar-title="Sunday"
+    :class="{ 'workspace-shell--sub-agent-split': Boolean(openSubAgentRun) }"
     :storage-key="settingsStorageKey"
     :density="density"
     :theme="theme"
@@ -501,6 +502,8 @@
           :scroll-container="threadScrollEl"
           @select="locateMessage"
         />
+        <!-- 分屏：主聊天区整体让出右侧一条，子代理卡贴在让出来的位置上。
+             这里不拆任何容器——宽度由壳层变量推导，输入栏只是跟着变窄。 -->
         <section
           ref="threadScrollEl"
           class="thread"
@@ -556,6 +559,7 @@
           @fork-message="handleForkMessage"
           @rollback-message="handleRollbackMessage"
           @edit-message="handleEditMessage"
+          @open-sub-agent="openSubAgentPane"
         />
         <div v-if="pendingPlaceholder" class="user-row">
           <div class="user-stack">
@@ -589,6 +593,14 @@
           aria-hidden="true"
         ></div>
         </section>
+        <CoreSubAgentPane
+          v-if="openSubAgentRun"
+          :key="openSubAgentRun.subSessionId || openSubAgentRun.id"
+          :run="openSubAgentRun"
+          :transport="transport"
+          :durable-record="subAgentDurableRecords[openSubAgentRun.name] ?? null"
+          @close="closeSubAgentPane"
+        />
       </template>
     </template>
 
@@ -728,7 +740,7 @@
         :active-plugin-id="activePluginMode?.pluginId || null"
         :active-mode-id="activePluginMode?.id || null"
         :plugin-contributions="activePluginSidebarContributions"
-        :locate-sub-agent="locateSubAgentRun"
+        @open-sub-agent="openSubAgentPane"
         @hover-change="rightSidebarHold = $event"
       />
     </template>
@@ -776,6 +788,7 @@ import {
   computed,
   defineAsyncComponent,
   nextTick,
+  onBeforeUnmount,
   onMounted,
   onUnmounted,
   ref,
@@ -809,7 +822,7 @@ import {
 import type {
   CoreAttachment,
   CoreSessionListItem,
-  CoreSubAgentRun,
+  CoreSubAgentDurableRecord,
 } from '../types'
 import { isInternalSession, isPluginOwnedSession } from '../sessions/visibility'
 import { createModeSessionState } from '../sessions/mode-state'
@@ -897,6 +910,8 @@ import RuntimeChecklistCard from '../components/RuntimeChecklistCard.vue'
 import SessionSidebar, { type SessionExportFormat } from '../components/SessionSidebar.vue'
 import WorkspaceShell from '../components/WorkspaceShell.vue'
 import RightSidebarHost from '../components/RightSidebarHost.vue'
+import CoreSubAgentPane from '../components/CoreSubAgentPane.vue'
+import { findCoreSubAgentRun, selectCoreSubAgentRuns, type CoreSubAgentRef } from '../agents/subAgentProjection'
 import TitleBar from '../components/TitleBar.vue'
 import PluginModeHost from '../components/PluginModeHost.vue'
 import { refreshPluginUIModes } from '../plugins/api'
@@ -2257,6 +2272,76 @@ watch([activeSessionId, isEmptySession], ([sessionId, empty], [previousSessionId
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
 
+// ── 子代理分屏 ──
+// 只记身份，不存运行快照：每次消息更新都从当前投影重新解析，所以子代理运行中
+// 这一屏会跟着流式更新；分屏关闭时不做任何投影计算。
+const openSubAgentRef = ref<CoreSubAgentRef | null>(null)
+const openSubAgentRun = computed(() => {
+  const ref = openSubAgentRef.value
+  if (!ref || (!ref.subSessionId && !ref.name)) return undefined
+  return findCoreSubAgentRun(selectCoreSubAgentRuns(messages.value), ref)
+})
+
+// 监督者的持久记录：续跑过的子代理，其运行边界（状态/耗时/完成时间）只在
+// 监督者库里，消息投影上看不出来。分屏开着时拉取并低频刷新。
+const subAgentDurableRecords = ref<Record<string, CoreSubAgentDurableRecord>>({})
+let subAgentRecordsTimer: ReturnType<typeof setInterval> | null = null
+
+async function refreshSubAgentRecords(): Promise<void> {
+  const threadId = String(activeSessionId.value || '').trim()
+  if (!threadId) return
+  try {
+    const result = await requestConfigOperation('sub_agent.list', { thread_id: threadId }) as {
+      items?: CoreSubAgentDurableRecord[]
+    }
+    const next: Record<string, CoreSubAgentDurableRecord> = {}
+    for (const item of result?.items ?? []) {
+      if (item && typeof item.name === 'string') next[item.name] = item
+    }
+    subAgentDurableRecords.value = next
+  } catch {
+    // 拉不到就保留投影自己的状态，不打扰用户。
+  }
+}
+
+function syncSubAgentRecordsPolling(): void {
+  if (subAgentRecordsTimer) {
+    clearInterval(subAgentRecordsTimer)
+    subAgentRecordsTimer = null
+  }
+  if (!openSubAgentRun.value) {
+    subAgentDurableRecords.value = {}
+    return
+  }
+  void refreshSubAgentRecords()
+  subAgentRecordsTimer = setInterval(() => { void refreshSubAgentRecords() }, 10_000)
+}
+
+watch(openSubAgentRun, () => syncSubAgentRecordsPolling(), { immediate: true })
+onBeforeUnmount(() => {
+  if (subAgentRecordsTimer) clearInterval(subAgentRecordsTimer)
+  subAgentRecordsTimer = null
+})
+
+function openSubAgentPane(target: CoreSubAgentRef | string): void {
+  const ref = typeof target === 'string' ? { subSessionId: target, name: '' } : target
+  if (!ref.subSessionId && !ref.name) return
+  openSubAgentRef.value = ref
+}
+
+function closeSubAgentPane(): void {
+  openSubAgentRef.value = null
+}
+
+// 解析不到就收起：换会话、历史分页把该子代理卸载、记录被清理时都会走到这里。
+watch(openSubAgentRun, (run) => {
+  if (!run && openSubAgentRef.value) openSubAgentRef.value = null
+})
+watch(activeSessionId, () => closeSubAgentPane())
+watch(fullAreaView, (view) => {
+  if (view) closeSubAgentPane()
+})
+
 // Messages the backend already replaced with a context summary: their original
 // text is gone, so edit/fork/rollback must not be offered.
 const lockedMessageIds = computed(() => lockedMessageIdsBeforeCompaction(messages.value))
@@ -2776,53 +2861,6 @@ async function locateMessage(messageId: string): Promise<void> {
     break
   }
   showToast('error', '未找到该消息（可能已被删除或属于子会话）', 5000)
-}
-
-/** Locate a Sub Agent's source part, expanding its parent process and child
- * timeline before centering and focusing the heading for keyboard users. */
-async function locateSubAgentRun(run: CoreSubAgentRun): Promise<void> {
-  const messageId = String(run.sourceMessageId || '').trim()
-  const sourcePartId = String(run.sourcePartId || '').trim()
-  // Remote durable snapshots may only have a source part/call id.  Search the
-  // currently mounted transcript first so these rows remain navigable even
-  // when the parent message id was generated by an older protocol version.
-  if (!messageId && sourcePartId) {
-    const directPart = document.querySelector<HTMLElement>(`[data-part-id="${CSS.escape(sourcePartId)}"]`)
-    if (directPart) {
-      await focusSubAgentSource(directPart)
-      return
-    }
-  }
-  if (!messageId) return
-  await locateMessage(messageId)
-  await nextTick()
-  if (!processExpandedIds.value.has(messageId)) toggleProcess(messageId)
-  await nextTick()
-  const message = document.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`)
-  if (!message) return
-  const part = sourcePartId
-    ? message.querySelector<HTMLElement>(`[data-part-id="${CSS.escape(sourcePartId)}"]`)
-      || document.querySelector<HTMLElement>(`[data-part-id="${CSS.escape(sourcePartId)}"]`)
-    : null
-  if (!part) {
-    message.scrollIntoView({ block: 'center', behavior: locateScrollBehavior() })
-    return
-  }
-  await focusSubAgentSource(part)
-}
-
-async function focusSubAgentSource(part: HTMLElement): Promise<void> {
-  const heading = part.querySelector<HTMLButtonElement>('.sub-line-heading')
-  if (heading && !part.querySelector('.sub-line-body')) {
-    heading.click()
-    await nextTick()
-  }
-  const target = (part.querySelector<HTMLElement>('.sub-line-heading') || part)
-  target.scrollIntoView({ block: 'center', behavior: locateScrollBehavior() })
-  target.classList.remove('sub-agent-source-highlight')
-  target.classList.add('sub-agent-source-highlight')
-  window.setTimeout(() => target.classList.remove('sub-agent-source-highlight'), 1200)
-  if (target instanceof HTMLButtonElement) target.focus({ preventScroll: true })
 }
 
 // Session-scoped model memory: each session remembers its own model choice,
@@ -4438,6 +4476,10 @@ onUnmounted(() => {
   ));
   pointer-events: none;
 }
+
+/* ── 子代理分屏 ──
+   几何全部由壳层的 --main-right 推导：主聊天卡与输入栏一起变窄，子代理卡
+   贴在让出来的右侧（见 workspace-shell.css 与 CoreSubAgentPane.vue）。 */
 @keyframes thread-history-cap-spin {
   to { transform: rotate(360deg); }
 }

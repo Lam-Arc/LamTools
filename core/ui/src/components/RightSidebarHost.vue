@@ -96,7 +96,6 @@ const props = defineProps<{
   runtimeModeLabel?: string
   runtimeDetail?: string
   processSignal?: unknown
-  locateSubAgent?: (run: CoreSubAgentRun) => void | Promise<void>
   activePluginId?: string | null
   activeModeId?: string | null
   pluginContributions?: RightSidebarPluginContribution[]
@@ -105,6 +104,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** 悬停卡是否正占用右侧栏区域（浮出中或指针在卡上）。壳层据此决定收不收竖栏。 */
   'hover-change': [occupied: boolean]
+  /** 面板里点了某个子代理：交给壳层打开右侧子代理分屏。 */
+  'open-sub-agent': [run: CoreSubAgentRun]
 }>()
 
 interface RailModule {
@@ -202,9 +203,9 @@ const subAgentRuns = computed(() => selectCoreSubAgentRuns(props.messages ?? [])
 
 function openSubAgent(subSessionId: string): void {
   const run = subAgentRuns.value.find(item => item.subSessionId === subSessionId)
-  if (run && (run.sourceMessageId || run.sourcePartId) && props.locateSubAgent) {
-    void props.locateSubAgent(run)
-  }
+  if (!run) return
+  // 右栏点开 = 打开右侧子代理分屏（与主线程里点委派工具条同一条路）。
+  emit('open-sub-agent', run)
 }
 
 const railModules = computed<RailModule[]>(() => [

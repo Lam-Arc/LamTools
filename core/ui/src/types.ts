@@ -276,6 +276,22 @@ export interface CoreMessage {
   metadata?: Record<string, unknown>;
 }
 
+/** Durable sub-agent record from the supervisor (`sub_agent.list`). The
+ * transcript projection cannot know run boundaries of resumed agents — this
+ * record is the source of truth for their status and timing. */
+export interface CoreSubAgentDurableRecord {
+  name: string;
+  type?: string;
+  model_id?: string;
+  reasoning_level?: string;
+  status?: string;
+  summary?: string;
+  started_at?: number | null;
+  completed_at?: number | null;
+  elapsed_ms?: number | null;
+  sub_session_id?: string;
+}
+
 export interface CoreSubAgentRun {
   /** Durable child thread identifier. Also used as the stable UI identity. */
   id: string;

@@ -640,15 +640,36 @@
                         :class="'sub-line--' + group.part.status"
                         :data-part-id="group.part.id"
                       >
-                        <button
-                          type="button"
-                          class="sub-line-heading"
-                          @click="togglePartExpand(group.part, isLiveMessage(msg))"
-                        >
-                          <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                          <span v-beam="group.part.status === 'running'" class="sub-line-title">{{ agentTitle(group.part) }}</span>
-                          <span class="sub-line-status">{{ agentStatusLabel(group.part) }}</span>
-                        </button>
+                        <div class="sub-line-head">
+                          <!-- 行本身打开右侧分屏：这一屏就是「看这个子代理在干什么」。
+                               就地展开收进右侧小箭头，两条路互不干扰。 -->
+                          <button
+                            type="button"
+                            class="sub-line-heading"
+                            :title="'打开 ' + agentTitle(group.part)"
+                            @click="openSubAgentPane(group.part)"
+                          >
+                            <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
+                            <span v-beam="group.part.status === 'running'" class="sub-line-title">{{ agentTitle(group.part) }}</span>
+                            <span class="sub-line-status">{{ agentStatusLabel(group.part) }}</span>
+                          </button>
+                          <button
+                            type="button"
+                            class="sub-line-toggle"
+                            :aria-expanded="isPartExpanded(group.part, isLiveMessage(msg))"
+                            :aria-label="isPartExpanded(group.part, isLiveMessage(msg)) ? '收起子代理过程' : '就地展开子代理过程'"
+                            :title="isPartExpanded(group.part, isLiveMessage(msg)) ? '收起过程' : '就地展开过程'"
+                            @click="togglePartExpand(group.part, isLiveMessage(msg))"
+                          >
+                            <ChevronDown
+                              class="sub-line-toggle-icon"
+                              :class="{ 'is-open': isPartExpanded(group.part, isLiveMessage(msg)) }"
+                              :size="14"
+                              :stroke-width="1.8"
+                              aria-hidden="true"
+                            />
+                          </button>
+                        </div>
                         <div v-if="agentDeliveryMeta(group.part).length > 0" class="sub-line-delivery-meta">
                           <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
                         </div>
@@ -889,13 +910,17 @@ import {
   // Decision presentation/selection semantics live in `pendingDecisions.ts` so
   // the in-thread card and the composer takeover panel cannot drift apart.
   coreDecisionDetail as decisionDetail,
+  coreDecisionKindLabel as decisionKindLabel,
   coreDecisionOptionResponse as decisionOptionResponse,
   coreDecisionOptions as decisionOptions,
   coreDecisionTitle as decisionTitle,
   projectAssistantMessageParts,
 } from '../appServer'
 import type { CoreDecisionOption as DecisionOption } from '../appServer'
+import { coreSubAgentRef, type CoreSubAgentRef } from '../agents/subAgentProjection'
+import { formatSubAgentElapsed, normalizeSubAgentType } from '../agents/subAgentDisplay'
 import { copyText } from '../helpers/clipboard'
+import { autoGrowTextarea } from '../helpers/autoGrowTextarea'
 import { workspaceRelativePath } from '../helpers/workspacePath'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 import { useNarrowViewport } from '../composables/useNarrowViewport'
@@ -1048,7 +1073,13 @@ const emit = defineEmits<{
   'fork-message': [payload: AssistantActionPayload]
   'rollback-message': [payload: AssistantActionPayload]
   'edit-message': [payload: EditMessagePayload]
+  /** 打开右侧子代理分屏：只带身份，由壳体从当前消息投影里解析出运行。 */
+  'open-sub-agent': [ref: CoreSubAgentRef]
 }>()
+
+function openSubAgentPane(part: MessagePart): void {
+  emit('open-sub-agent', coreSubAgentRef(part))
+}
 
 const assistantTimestamp = computed(() => formatAssistantTimestamp(props.msg.timestamp))
 
@@ -1825,6 +1856,22 @@ function isCompactionOnlyMessage(msg: CoreMessage): boolean {
 function isControlTool(part: MessagePart): boolean {
   const name = (part.toolName || part.label || '').toLowerCase()
   return /decision_point|write_checklist|update_checklist|verify_design|ask_clarification|chat_only|self_critique|question/.test(name)
+}
+
+/** Tools whose rows stay on their own line inside a message's process stream:
+ * sub-agent hand-offs (delegating, messaging, receiving) and skill loads. */
+const STANDALONE_PROCESS_TOOLS = new Set([
+  'sub_agent',
+  'subagent',
+  'sub_agent_message',
+  'sub_agent_receive',
+  'load_skill',
+])
+
+function isStandaloneProcessPart(part: MessagePart): boolean {
+  if (isSubLinePart(part)) return true
+  const name = (part.toolName || part.label || '').trim().toLowerCase()
+  return STANDALONE_PROCESS_TOOLS.has(name)
 }
 
 // ── Body/process projection: newest model text owns the body; replaced text becomes process ──
@@ -2877,7 +2924,7 @@ function agentTitle(part: MessagePart): string {
 function agentTypeLabel(part: MessagePart): 'consider' | 'execute' {
   const args = part.toolArgs || {}
   const meta = part.metadata || {}
-  const raw = String(
+  return normalizeSubAgentType(
     part.agentType
     || (part as MessagePart & { type?: unknown }).type
     || meta.type
@@ -2888,8 +2935,7 @@ function agentTypeLabel(part: MessagePart): 'consider' | 'execute' {
     || args.type
     || args.mode
     || '',
-  ).toLowerCase()
-  return raw.includes('consider') || raw.includes('think') || raw.includes('reason') ? 'consider' : 'execute'
+  )
 }
 
 function agentModelLabel(part: MessagePart): string {
@@ -2936,17 +2982,7 @@ function agentElapsedLabel(part: MessagePart): string {
       : subAgentTitleNow.value
     elapsed = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0
   }
-  return formatAgentElapsed(elapsed)
-}
-
-function formatAgentElapsed(value: number): string {
-  const ms = Math.max(0, Number.isFinite(value) ? value : 0)
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  const seconds = ms / 1000
-  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`
-  const minutes = Math.floor(seconds / 60)
-  const remainder = Math.floor(seconds % 60)
-  return `${minutes}m ${String(remainder).padStart(2, '0')}s`
+  return formatSubAgentElapsed(elapsed)
 }
 
 function numberValue(value: unknown): number | undefined {
@@ -3530,7 +3566,10 @@ function compactGroups(groups: PartGroup[]): PartGroup[] {
       if (pt === 'reasoning') {
         batch.push(g.part)
       } else if (pt === 'tool_call' || pt === 'tool_result') {
-        if (isControlTool(g.part)) {
+        // Control rows, delegation rows and skill loads keep their own row:
+        // folding them into "思考了一会，调用了 N 个工具" hides exactly the
+        // moments an operator reads the timeline for.
+        if (isControlTool(g.part) || isStandaloneProcessPart(g.part)) {
           flush()
           result.push(g)
         } else {

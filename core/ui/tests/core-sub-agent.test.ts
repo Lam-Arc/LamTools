@@ -217,6 +217,46 @@ describe('selectCoreSubAgentRuns', () => {
       reasoningLevel: 'high',
     })
   })
+
+  it('keeps a delegated run\'s own process on the mailbox row that carried it', () => {
+    // Real shape: the parent's `sub_agent_message` row owns the child's whole
+    // timeline (reasoning + tool calls) as nested parts. Treating that row as a
+    // bare "message sent" left every sub-agent view with the assignment only.
+    const messageRow = agentPart({
+      id: 'agent-msg-1',
+      sessionId: 'thread-1:sub:renderer_dev',
+      name: 'renderer_dev',
+      task: '',
+      status: 'completed',
+    })
+    messageRow.toolName = 'sub_agent_message'
+    messageRow.toolArgs = { type: 'execute', name: 'renderer_dev', prompt: '做渲染器，交付 render.js。' }
+    messageRow.metadata = {
+      ...messageRow.metadata,
+      subLineParts: [
+        { id: 'child-1', partType: 'reasoning', status: 'completed', content: '先看现有渲染管线。' },
+        {
+          id: 'child-2',
+          partType: 'tool_call',
+          status: 'completed',
+          label: 'run_command',
+          toolName: 'run_command',
+          toolArgs: { command: 'node render.js' },
+          toolResult: 'PASS 37 checks',
+        },
+        { id: 'child-3', partType: 'model_text', status: 'completed', content: '渲染器完成，验证全过。' },
+      ],
+    }
+
+    const [run] = selectCoreSubAgentRuns([assistantMessage('parent-1', [messageRow])])
+
+    expect(run.timeline.map(message => message.role)).toEqual(['user', 'assistant'])
+    expect(run.timeline[0].content).toContain('做渲染器')
+    const child = run.timeline[1]
+    expect(child.content).toBe('渲染器完成，验证全过。')
+    expect((child.parts ?? []).map(part => part.partType)).toEqual(['reasoning', 'tool_call', 'model_text'])
+    expect(child.metadata?.timeline).toBe(true)
+  })
 })
 
 describe('CoreSubAgentPanel', () => {
@@ -347,14 +387,32 @@ describe('CoreSubAgentPanel', () => {
     expect(dialogSource).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
-  it('keeps source navigation smooth only when motion is allowed and highlights the final child heading', () => {
+  it('wires the split sub-agent view from both the thread row and the right rail', () => {
     const appSource = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
-    const layoutSource = readFileSync(resolve(process.cwd(), 'src/styles/layout.css'), 'utf8')
+    const hostSource = readFileSync(resolve(process.cwd(), 'src/components/RightSidebarHost.vue'), 'utf8')
+    const threadSource = readFileSync(resolve(process.cwd(), 'src/components/ChatThread.vue'), 'utf8')
+    const shellCss = readFileSync(resolve(process.cwd(), 'src/styles/workspace-shell.css'), 'utf8')
+    const paneSource = readFileSync(resolve(process.cwd(), 'src/components/CoreSubAgentPane.vue'), 'utf8')
 
-    expect(appSource).toContain("window.matchMedia('(prefers-reduced-motion: reduce)').matches")
-    expect(appSource).toContain("target.classList.add('sub-agent-source-highlight')")
-    expect(layoutSource).toContain('@keyframes sub-agent-source-highlight')
-    expect(layoutSource).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.sub-agent-source-highlight/)
+    // 主线程与右栏都汇到同一条打开路径，壳体只按身份解析运行。
+    expect(appSource).toContain('@open-sub-agent="openSubAgentPane"')
+    expect(appSource).toContain("'workspace-shell--sub-agent-split': Boolean(openSubAgentRun)")
+    expect(appSource).toContain('<CoreSubAgentPane')
+    expect(appSource).toContain('findCoreSubAgentRun(selectCoreSubAgentRuns(messages.value), ref)')
+    // 续跑过的子代理以监督者记录为准（状态/耗时在消息投影里看不到）。
+    expect(appSource).toContain("'sub_agent.list'")
+    expect(appSource).toContain(':durable-record=')
+    expect(hostSource).toContain("emit('open-sub-agent', run)")
+    expect(threadSource).toContain('@open-sub-agent="onOpenSubAgent"')
+    // 旧的「定位到源消息并高亮」已由分屏取代。
+    expect(appSource).not.toContain('sub-agent-source-highlight')
+    // 分屏是整块聊天区的分裂：主区右内缩叠加卡宽，输入栏与正文跟着变窄；
+    // 子代理卡是同一层级的第二张卡（固定几何 + 自己的圆角描边）。
+    expect(shellCss).toContain('--main-right: calc(var(--main-right-base) + var(--sub-agent-split-extra, 0px))')
+    expect(shellCss).toContain('--sub-agent-split-extra: calc(var(--sub-agent-pane-width) + var(--sub-agent-split-gap))')
+    expect(paneSource).toContain('position: fixed')
+    expect(paneSource).toContain('var(--right-peek')
+    expect(paneSource).toContain('<Teleport defer :to="teleportTo">')
   })
 })
 

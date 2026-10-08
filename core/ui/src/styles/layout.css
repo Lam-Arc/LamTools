@@ -3292,22 +3292,6 @@
   }
 }
 
-.sub-agent-source-highlight {
-  animation: sub-agent-source-highlight calc(var(--dur-theme) * 2) var(--ease-out);
-  border-radius: var(--radius-sm);
-}
-
-@keyframes sub-agent-source-highlight {
-  0%, 24% {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 62%, transparent);
-    background: color-mix(in srgb, var(--green) var(--alpha-active), transparent);
-  }
-  100% {
-    box-shadow: 0 0 0 2px transparent;
-    background: transparent;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .rag-hit-highlight {
     animation: none;
