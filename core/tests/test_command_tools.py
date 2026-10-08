@@ -811,3 +811,66 @@ class _RegisteredFakeProcess:
 
     def poll(self) -> int | None:
         return self.returncode
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("placeholder", ["null", "NULL", "None", "undefined", " n/a "])
+async def test_run_command_treats_placeholder_readiness_args_as_unset(
+    monkeypatch, tmp_path: Path, placeholder: str
+):
+    """模型把用不上的可选参数填成占位串时，前台命令必须照常执行。"""
+    shell = command_runner.CommandShell(
+        name="Git Bash",
+        executable=r"C:\Program Files\Git\bin\bash.exe",
+        kind="git-bash",
+    )
+
+    async def fake_run(argv, **_kwargs):
+        return CommandExecution(exit_code=0, stdout="ok\n")
+
+    monkeypatch.setattr(command_tools_module.sys, "platform", "win32")
+    monkeypatch.setattr(command_tools_module, "resolve_command_shell", lambda: shell)
+    monkeypatch.setattr(command_tools_module, "_run_subprocess", fake_run)
+    handlers = CommandToolHandlers(
+        work_root=tmp_path,
+        command_timeout=10,
+        loaded_skill_roots=set(),
+    )
+
+    result = await handlers.run_command(
+        ToolCall(
+            id="placeholder-readiness",
+            name="run_command",
+            arguments={
+                "command": "ls -la",
+                "background": False,
+                "readiness_url": placeholder,
+                "readiness_text": placeholder,
+            },
+        )
+    )
+
+    assert result.status == "ok"
+    assert result.metadata["readiness_state"] == "not_requested"
+    assert "readiness_url" not in result.metadata
+
+
+@pytest.mark.asyncio
+async def test_run_command_real_readiness_url_still_requires_background(tmp_path: Path):
+    """真正的探活地址仍然只能配后台进程，不被占位串处理放过。"""
+    handlers = CommandToolHandlers(
+        work_root=tmp_path,
+        command_timeout=10,
+        loaded_skill_roots=set(),
+    )
+
+    result = await handlers.run_command(
+        ToolCall(
+            id="readiness-without-background",
+            name="run_command",
+            arguments={"command": "ls -la", "readiness_url": "http://127.0.0.1:8000"},
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.error == "'readiness_url' requires background=true"

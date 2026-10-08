@@ -1017,3 +1017,51 @@ async def test_same_path_concurrent_edits_are_serialized(tmp_path):
     assert [result.status for result in results].count("ok") == 1
     assert [result.status for result in results].count("failed") == 1
     assert target.read_bytes() in {b"one\n", b"two\n"}
+
+
+@pytest.mark.asyncio
+async def test_write_file_treats_placeholder_hash_as_no_version_guard(tmp_path):
+    """模型把 expected_file_hash 填成 "null" 时按"不校验版本"处理，使新建文件可以落盘。"""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+
+    created = await write_file_tool(
+        ToolCall(
+            id="write-placeholder-hash",
+            name="write_file",
+            arguments={
+                "path": "calendar/index.html",
+                "content": "<html></html>\n",
+                "expected_file_hash": "null",
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert created.status == "ok"
+    assert created.metadata["action"] == "create"
+    assert (work_root / "calendar" / "index.html").read_bytes() == b"<html></html>\n"
+
+
+@pytest.mark.asyncio
+async def test_write_file_still_honors_a_real_expected_hash(tmp_path):
+    """真正的哈希值依然照常校验，占位串处理不会削弱版本守卫。"""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+
+    missing = await write_file_tool(
+        ToolCall(
+            id="write-real-hash-missing",
+            name="write_file",
+            arguments={
+                "path": "absent.txt",
+                "content": "content\n",
+                "expected_file_hash": compute_sha256(b"other\n"),
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert missing.status == "failed"
+    assert missing.error_code == "file_not_found"
+    assert not (work_root / "absent.txt").exists()

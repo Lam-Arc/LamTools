@@ -520,8 +520,20 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                     "type": "boolean",
                     "description": "Register the background process as long-lived: it survives turn end, shows in the session process list, and keeps running until killed or the app exits",
                 },
-                "readiness_url": {"type": "string", "description": "HTTP URL to check when background=true"},
-                "readiness_text": {"type": "string", "description": "Optional text expected at readiness_url"},
+                "readiness_url": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "HTTP URL to check when background=true; omit it or pass JSON null (without quotes) "
+                        "for commands that are not servers"
+                    ),
+                },
+                "readiness_text": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Optional text expected at readiness_url; omit it or pass JSON null (without quotes) "
+                        "when unused"
+                    ),
+                },
             },
             ["command"],
         ),

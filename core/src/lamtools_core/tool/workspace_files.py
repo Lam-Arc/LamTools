@@ -18,6 +18,7 @@ from lamtools_core.tool.document_normalize import (
     DocumentNormalizationError,
     normalize_document,
 )
+from lamtools_core.tool.optional_arguments import optional_string
 from lamtools_core.tool.workspace import (
     format_file_size,
     is_within_path,
@@ -670,6 +671,9 @@ async def write_file_tool(
     expected_file_hash = args.get("expected_file_hash")
     if expected_file_hash is not None and not isinstance(expected_file_hash, str):
         return _failed_result(call, "invalid_argument", "'expected_file_hash' must be a string or null")
+    # Models fill the field with "null" when they mean no guard; keeping it as a
+    # hash would turn a create into a version-checked overwrite.
+    expected_file_hash = optional_string(expected_file_hash) or None
     must_not_exist = args.get("must_not_exist")
     if must_not_exist is not None and type(must_not_exist) is not bool:
         return _failed_result(call, "invalid_argument", "'must_not_exist' must be a boolean or null")
@@ -848,6 +852,9 @@ async def edit_file_tool(
     expected_file_hash = args.get("expected_file_hash")
     if expected_file_hash is not None and not isinstance(expected_file_hash, str):
         return _failed_result(call, "invalid_argument", "'expected_file_hash' must be a string or null")
+    # Models fill the field with "null" when they mean no guard; keeping it as a
+    # hash would turn a create into a version-checked overwrite.
+    expected_file_hash = optional_string(expected_file_hash) or None
     expected_content_hash = args.get("expected_content_hash")
     if expected_content_hash is not None and not isinstance(expected_content_hash, str):
         return _failed_result(call, "invalid_argument", "'expected_content_hash' must be a string or null")

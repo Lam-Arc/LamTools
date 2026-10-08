@@ -17,6 +17,7 @@ from lamtools_core.tool.command import format_command_output as _format_command_
 from lamtools_core.tool.command import format_running_command_output as _format_running_command_output
 from lamtools_core.tool.command import run_subprocess as _run_subprocess
 from lamtools_core.tool.command import validate_command_paths as _validate_command_paths
+from lamtools_core.tool.optional_arguments import optional_string
 from lamtools_core.tool.outside_access import outside_access_granted
 from lamtools_core.tool.command_runner import (
     _BackgroundHttpProbe,
@@ -206,13 +207,13 @@ class CommandToolHandlers:
                 call_id=call.id, name=call.name,
                 status="failed", error="'readiness_url' must be a string or null",
             )
-        readiness_url = (readiness_url or "").strip()
+        readiness_url = optional_string(readiness_url)
         if readiness_text is not None and not isinstance(readiness_text, str):
             return ToolResult(
                 call_id=call.id, name=call.name,
                 status="failed", error="'readiness_text' must be a string or null",
             )
-        readiness_text = readiness_text or ""
+        readiness_text = optional_string(readiness_text)
         background_inferred = not background and _looks_like_python_http_server(command)
         if readiness_url and not (background or background_inferred):
             return ToolResult(
