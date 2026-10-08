@@ -48,6 +48,17 @@ function onInput(e: Event) {
 
 onMounted(autoGrow)
 watch(() => props.modelValue, () => nextTick(autoGrow))
+
+/** 聚焦并把光标落到文本末尾（调用方打开编辑器时用） */
+function focus() {
+  const ta = el.value
+  if (!ta) return
+  ta.focus()
+  const end = ta.value.length
+  ta.setSelectionRange(end, end)
+}
+
+defineExpose({ focus })
 </script>
 
 <style scoped>
