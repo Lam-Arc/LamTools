@@ -1,0 +1,15 @@
+2026-09-28T10:25:31Z
+/var/tmp/Sunday-desktop-0.3.8-20260928.desktop-update.json: OK
+/var/www/lamtools/Sunday-latest-x64-setup.exe: OK
+/var/www/lamtools/desktop-update.json.tmp: OK
+/var/www/lamtools/desktop-update.json: OK
+{
+  "version": "0.3.8",
+  "download_url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.8_x64-setup.exe",
+  "release_url": "https://47.114.43.99.nip.io/#download",
+  "release_notes": "Sunday 0.3.8",
+  "published_at": "2026-09-28T10:14:54Z",
+  "sha256": "c76b67615955c870a8cdaab61fecf4e1c08e4d29b04bb1a123dd74b45b8c5e6e",
+  "size": 58235160
+}
+2026-09-28T10:25:32Z

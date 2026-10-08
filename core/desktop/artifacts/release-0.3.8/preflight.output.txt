@@ -1,0 +1,26 @@
+2026-09-28T10:21:51Z
+active
+active
+/var/www/lamtools/site-releases/0.3.7-mobile-0.1.45-20260928
+0.3.7-mobile-0.1.41-20260927
+0.3.7-mobile-0.1.42-20260927
+0.3.7-mobile-0.1.43-20260928
+0.3.7-mobile-0.1.45-20260928
+93338593d1cc06456fecc4bdff5d05fccbe7e5ca09a76c48c1b355e286eda2d1  /var/www/lamtools/Sunday-latest-x64-setup.exe
+{
+  "version": "0.3.7",
+  "download_url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.7_x64-setup.exe",
+  "release_url": "https://47.114.43.99.nip.io/#download",
+  "release_notes": "Sunday 0.3.7",
+  "published_at": "2026-09-26T09:14:34Z",
+  "sha256": "93338593d1cc06456fecc4bdff5d05fccbe7e5ca09a76c48c1b355e286eda2d1",
+  "size": 58166212
+}
+fcf64cb9cd695d24b82c43e7fc64aae6afbbbc0b59dce4d9eae2cd598a2f571f  /var/www/lamtools/Sunday-mobile-latest.apk
+/root/.ssh/authorized_keys 600 406
+1 /root/.ssh/authorized_keys
+absent /var/www/lamtools/Sunday_0.3.8_x64-setup.exe
+absent /var/www/lamtools/Sunday-latest-x64-setup-0.3.7-before-0.3.8-20260928.exe
+absent /var/tmp/Sunday-desktop-0.3.8-20260928.upload.exe
+absent /var/tmp/Sunday-desktop-0.3.8-20260928.desktop-update.json
+2026-09-28T10:21:52Z

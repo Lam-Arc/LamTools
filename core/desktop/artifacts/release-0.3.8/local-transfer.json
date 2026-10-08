@@ -1,0 +1,8 @@
+{
+  "installer": "E:\\LamTools\\release\\desktop\\Sunday_0.3.8_x64-setup.exe",
+  "bytes": 58235160,
+  "sha256": "c76b67615955c870a8cdaab61fecf4e1c08e4d29b04bb1a123dd74b45b8c5e6e",
+  "target": "root@47.114.43.99:/var/tmp/Sunday-desktop-0.3.8-20260928.upload.exe",
+  "staged": "/var/tmp/Sunday-desktop-0.3.8-20260928.upload.exe",
+  "returncode": 0
+}

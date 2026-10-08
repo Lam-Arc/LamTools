@@ -1,0 +1,9 @@
+2026-09-28T10:25:34Z
+1 /root/.ssh/authorized_keys
+no manifest stages
+c76b67615955c870a8cdaab61fecf4e1c08e4d29b04bb1a123dd74b45b8c5e6e  /var/www/lamtools/Sunday-latest-x64-setup.exe
+cdaa2daace3a2e192f7651bb07bfd4d976f1a1592e2be3c51831b963e16345da  /var/www/lamtools/desktop-update.json
+/var/www/lamtools/desktop-update.json: OK
+active
+active
+2026-09-28T10:25:35Z
