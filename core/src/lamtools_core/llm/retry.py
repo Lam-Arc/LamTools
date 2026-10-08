@@ -59,8 +59,13 @@ def classify_model_error(exc: Exception) -> str:
     # A key carrying non-ASCII characters makes the HTTP header unencodable, so
     # the request fails locally before any network round-trip. Retrying a
     # request that cannot be built is pure noise (it used to burn all 10
-    # attempts), and the wrapped forms below are the same defect.
-    if isinstance(exc, (UnicodeEncodeError, UnicodeDecodeError)):
+    # attempts). Only *encoding* failures are unambiguously local: the same
+    # UnicodeDecodeError type also covers an undecodable response body (a
+    # mis-encoded gateway reply), which is a transport-side payload problem and
+    # must stay retryable — it aborted a whole turn with zero retries on
+    # 2026-10-05. The local decode variants (non-ASCII key echoed back by a
+    # library) are caught by the message markers below.
+    if isinstance(exc, UnicodeEncodeError):
         return "fatal"
     if name == "TokenOverflowError":
         return "token_overflow"

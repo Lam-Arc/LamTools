@@ -2036,6 +2036,77 @@ class TestKernelEvents:
         assert llm.complete_calls == 1
 
     @pytest.mark.asyncio
+    async def test_non_streaming_fallback_retries_an_undecodable_response(self):
+        """A reply the client cannot decode is retried, not treated as local config.
+
+        The 2026-10-05 chain: a stalled stream falls back to a one-shot request,
+        the provider answers with a body the client cannot decode (compressed
+        bytes without their encoding header), and the turn died on the first
+        attempt because a decoding failure was classified as a fatal local
+        configuration error. It is a payload problem, so it must spend the
+        retry budget instead.
+        """
+
+        class ResponseEchoKit(MockRuntimeKit):
+            async def parse_model_output(self, state: RuntimeState, response: LLMResponse) -> KernelTurn:
+                return KernelTurn(reply=response.content)
+
+            async def decide_next(self, state, turn, verification, step):
+                return "done" if turn.reply else "failed"
+
+        class UndecodableOnceLLM:
+            def __init__(self) -> None:
+                self.complete_calls = 0
+
+            async def stream(self, request: LLMRequest):
+                self.stream_calls = getattr(self, "stream_calls", 0) + 1
+                await asyncio.sleep(0.05)
+                yield LLMStreamEvent(kind="content_delta", content="late stream text")
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                self.complete_calls += 1
+                if self.complete_calls == 1:
+                    raise UnicodeDecodeError(
+                        "utf-8", b"\x28\xb5\x2f\xfd", 1, 2, "invalid start byte"
+                    )
+                return LLMResponse(content="decoded on retry")
+
+        llm = UndecodableOnceLLM()
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            ResponseEchoKit(),
+            llm_client=llm,
+            event_sink=sink,
+            policy=LoopPolicy(
+                model_timeout_seconds=1,
+                model_retries=2,
+                model_stream_idle_timeout_seconds=0.01,
+            ),
+            retry_policy=RetryPolicy(delay_sequence_seconds=(0.0,), jitter=False),
+        )
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert result.message == "decoded on retry"
+        assert llm.stream_calls == 1
+        assert llm.complete_calls == 2
+        # The stall is still announced, and the retry is visible in the thread.
+        fallback_parts = [
+            event
+            for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("part_type") == "error"
+        ]
+        assert fallback_parts
+        assert "TimeoutError" in fallback_parts[0].payload.get("detail", "")
+        retry_parts = [
+            event
+            for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("status") == "retrying"
+        ]
+        assert [event.payload["attempt"] for event in retry_parts] == [1]
+
+    @pytest.mark.asyncio
     async def test_active_stream_is_not_cancelled_by_non_streaming_model_timeout(self):
         """A stream that keeps producing data is governed by idle timeout, not total wall time."""
 

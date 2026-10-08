@@ -187,6 +187,23 @@ class TestNonAsciiKeyIsNotRetried:
         # A generic transient error must still be retryable.
         assert classify_model_error(RuntimeError("connection reset by peer")) == "retryable"
 
+    def test_response_body_decoding_failure_is_retryable(self):
+        """An undecodable provider reply is a payload problem, not local config.
+
+        Both forms below are what a gateway answer in the wrong encoding (or a
+        body left compressed by a proxy) surfaces as. Classifying them fatal
+        ended a whole turn with zero attempts on 2026-10-05, so they must reach
+        the retry loop.
+        """
+        from lamtools_core.llm.retry import classify_model_error
+
+        assert classify_model_error(
+            UnicodeDecodeError("utf-8", b"\x28\xb5\x2f\xfd", 1, 2, "invalid start byte")
+        ) == "retryable"
+        assert classify_model_error(
+            RuntimeError("'utf-8' codec can't decode byte 0xb5 in position 1: invalid start byte")
+        ) == "retryable"
+
     def test_retry_loop_attempts_once_for_encoding_failures(self):
         from lamtools_core.llm.retry import run_with_model_retry
 
@@ -204,6 +221,32 @@ class TestNonAsciiKeyIsNotRetried:
                 run_with_model_retry(operation, max_attempts=10, sleep=sleep)
             )
         assert calls["n"] == 1
+
+    def test_retry_loop_retries_response_body_decoding_failures(self):
+        from lamtools_core.llm.retry import ModelRetryExhausted, run_with_model_retry
+
+        calls = {"n": 0}
+        attempts: list[int] = []
+
+        async def operation():
+            calls["n"] += 1
+            raise UnicodeDecodeError("utf-8", b"\x28\xb5\x2f\xfd", 1, 2, "invalid start byte")
+
+        async def sleep(_delay: float) -> None:
+            return None
+
+        async def on_retry(event) -> None:
+            attempts.append(event.attempt)
+
+        with pytest.raises(ModelRetryExhausted) as excinfo:
+            asyncio.run(
+                run_with_model_retry(
+                    operation, max_attempts=3, on_retry=on_retry, sleep=sleep
+                )
+            )
+        assert calls["n"] == 3
+        assert attempts == [1, 2]
+        assert "invalid start byte" in str(excinfo.value)
 
 
 class TestProviderErrorIdentity:
