@@ -7,7 +7,7 @@ Retry knobs that used to be hard-coded defaults live at
       "retry_delays_seconds": [1, 1, 2, 5, 5],
       "model_retries": 10,
       "model_timeout_seconds": 360,
-      "model_stream_idle_timeout_seconds": 120,
+      "model_stream_idle_timeout_seconds": 180,
       "empty_response_retries": 3,
       "jitter": true
     }
@@ -39,7 +39,7 @@ DEFAULT_MODEL_RETRY_CONFIG: dict[str, Any] = {
     "retry_delays_seconds": list(DEFAULT_DELAY_SEQUENCE_SECONDS),
     "model_retries": 10,
     "model_timeout_seconds": 360,
-    "model_stream_idle_timeout_seconds": 120,
+    "model_stream_idle_timeout_seconds": 180,
     "empty_response_retries": 3,
     "jitter": True,
 }
@@ -56,13 +56,15 @@ DEFAULT_MODEL_RETRY_JSONC = """\
 // model_retries：最大尝试次数（含首次）。
 // model_timeout_seconds：单次尝试超时（秒）。
 // model_stream_idle_timeout_seconds：流式空闲超时（秒），null 表示禁用。
+//   默认 180：部分网关在超大请求上首字延迟可超过两分钟，过小会把正常慢响应
+//   当成卡死（中断当前流并改发一次完整请求，用户可见）。
 // empty_response_retries：空响应重试次数。
 // jitter：每次等待加 0.5x~1.5x 随机抖动。
 {
   "retry_delays_seconds": [1, 1, 2, 5, 5],
   "model_retries": 10,
   "model_timeout_seconds": 360,
-  "model_stream_idle_timeout_seconds": 120,
+  "model_stream_idle_timeout_seconds": 180,
   "empty_response_retries": 3,
   "jitter": true
 }

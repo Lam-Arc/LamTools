@@ -882,7 +882,7 @@ const DEFAULT_MODEL_RETRY_CONFIG: Record<string, unknown> = {
   retry_delays_seconds: [1, 1, 2, 5, 5],
   model_retries: 10,
   model_timeout_seconds: 360,
-  model_stream_idle_timeout_seconds: 120,
+  model_stream_idle_timeout_seconds: 180,
   empty_response_retries: 3,
   jitter: true,
 }

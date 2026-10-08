@@ -26,7 +26,13 @@ class LoopPolicy:
     # retries, this is not an infra blip — too many retries just wastes
     # tokens, so the default is small.
     empty_response_retries: int = 3
-    model_stream_idle_timeout_seconds: float | None = 120.0
+    # Streaming idle timeout: abort a stream that produced nothing for this
+    # long. Gateways can legitimately take well over two minutes to emit the
+    # first token on a large prompt (measured 128-130s on a 4MB request), and
+    # aborting early costs a visible interruption plus a full re-issue, so the
+    # default leaves headroom above that. Lower it in config only when fast
+    # failure detection matters more than tolerating a slow first token.
+    model_stream_idle_timeout_seconds: float | None = 180.0
     tool_timeout_seconds: float | None = None
     emit_debug_events: bool = False
     # History compaction safety net (OpenAI-style pre-sampling compaction).

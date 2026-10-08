@@ -87,7 +87,7 @@ def test_invalid_values_fall_back_to_defaults(isolated_config_root: Path) -> Non
     assert config["retry_delays_seconds"] == [0.0]
     assert config["model_retries"] == 10
     assert config["model_timeout_seconds"] == 360
-    assert config["model_stream_idle_timeout_seconds"] == 120
+    assert config["model_stream_idle_timeout_seconds"] == 180
     assert config["empty_response_retries"] == 3
     assert config["jitter"] is True
 
@@ -249,7 +249,7 @@ def test_create_kernel_defaults_when_no_config_file(
     kernel = create_kernel(**kernel_args)
     assert kernel.policy.model_retries == 10
     assert kernel.policy.model_timeout_seconds == 360
-    assert kernel.policy.model_stream_idle_timeout_seconds == 120
+    assert kernel.policy.model_stream_idle_timeout_seconds == 180
     assert kernel.retry_policy.delay_sequence_seconds == (1.0, 1.0, 2.0, 5.0, 5.0)
     assert kernel.retry_policy.jitter is True
 
@@ -267,3 +267,18 @@ def test_ensure_default_config_files_seeds_model_retry_jsonc(
     target.write_text('{ "model_retries": 5 }\n', encoding="utf-8")
     ensure_default_config_files()
     assert target.read_text(encoding="utf-8") == '{ "model_retries": 5 }\n'
+
+
+def test_seeded_template_agrees_with_code_defaults(isolated_config_root: Path) -> None:
+    """The template users receive must parse to the code defaults.
+
+    The idle timeout lives in three places (LoopPolicy, DEFAULT_MODEL_RETRY_CONFIG,
+    the shipped jsonc text) and the file wins over the code, so a value changed in
+    one place only silently changes nothing for existing installs.
+    """
+    from lamtools_core.config.defaults import ensure_default_config_files
+
+    ensure_default_config_files()
+    seeded = load_model_retry_config(model_retry_path())
+    assert seeded == DEFAULT_MODEL_RETRY_CONFIG
+    assert seeded["model_stream_idle_timeout_seconds"] == 180
