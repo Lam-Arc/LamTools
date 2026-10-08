@@ -3512,6 +3512,12 @@ class CoreLoopKernel:
         Checklist tool results are emitted before writeback so the model can see
         them immediately. The second, replace-style part carries the canonical
         state after update actions and automatic deliverable advancement.
+
+        A round may batch several checklist updates into one response, and every
+        one of them would carry the same post-writeback plan — the UI then stacks
+        identical plan cards. Only the round's last update owns the card; the
+        earlier ones are marked merged so the timeline keeps a single card while
+        the round's final plan state stays the one on screen.
         """
         task_plan = state.metadata.get("task_plan")
         if not isinstance(task_plan, dict) or not task_plan.get("steps"):
@@ -3526,17 +3532,24 @@ class CoreLoopKernel:
         if not checklist_results:
             return
 
-        calls_by_id = {call.id: call for call in turn.tool_calls}
-        for call_id, result in checklist_results.items():
-            call = calls_by_id.get(call_id)
-            if call is None:
-                continue
+        ordered_calls = [
+            call for call in turn.tool_calls if call.id in checklist_results
+        ]
+        if not ordered_calls:
+            return
+        snapshot_call_id = ordered_calls[-1].id
+
+        for call in ordered_calls:
+            result = checklist_results[call.id]
             metadata = dict(result.metadata) if isinstance(result.metadata, dict) else {}
-            metadata.update({
-                "task_plan": copy.deepcopy(task_plan),
-                "active_plan": copy.deepcopy(active_plan),
-                "checklist_snapshot": True,
-            })
+            if call.id == snapshot_call_id:
+                metadata.update({
+                    "task_plan": copy.deepcopy(task_plan),
+                    "active_plan": copy.deepcopy(active_plan),
+                    "checklist_snapshot": True,
+                })
+            else:
+                metadata["checklist_merged"] = True
             await self.event_sink.emit(CoreEvent(
                 name="runtime.part",
                 category="tool",

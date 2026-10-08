@@ -1713,8 +1713,18 @@ function assistantPartsProjection(msg: CoreMessage): ReturnType<typeof projectAs
         answerText: msg.answerText,
       }
     : projectAssistantMessageParts(msg.parts || [], msg.content || '', { live: isLiveMessage(msg) })
-  const projection = raw.processParts.some(isAnsweredDecision)
-    ? { ...raw, processParts: raw.processParts.filter(part => !isAnsweredDecision(part)) }
+  // Short-circuit the filter: the projection runs per stream frame, and a
+  // message with nothing to drop must keep its original array identity.
+  const hasDroppedPart = raw.processParts.some(
+    part => isAnsweredDecision(part) || isMergedChecklistPart(part),
+  )
+  const projection = hasDroppedPart
+    ? {
+        ...raw,
+        processParts: raw.processParts.filter(
+          part => !isAnsweredDecision(part) && !isMergedChecklistPart(part),
+        ),
+      }
     : raw
   projectionCache.set(msg, {
     parts: msg.parts,
@@ -1733,6 +1743,16 @@ function assistantPartsProjection(msg: CoreMessage): ReturnType<typeof projectAs
  */
 function isAnsweredDecision(part: MessagePart): boolean {
   return part.partType === 'decision' && part.status === 'completed'
+}
+
+/**
+ * 同一轮里模型可以一次提交多条计划更新；每条更新都会拿到同一份「更新后」的计划，
+ * 于是同一份计划被连续画成多张一样的卡。被合并的更新整卡撤出时间线，本轮只留
+ * 最后那张卡（内容即更新后的计划）。
+ */
+function isMergedChecklistPart(part: MessagePart): boolean {
+  const metadata = (part.metadata || {}) as Record<string, unknown>
+  return metadata.checklist_merged === true
 }
 
 function processParts(msg: CoreMessage): MessagePart[] {
@@ -3267,6 +3287,7 @@ function controlTitle(part: MessagePart): string {
 }
 
 function isChecklistPart(part: MessagePart): boolean {
+  if (isMergedChecklistPart(part)) return false
   const name = (part.toolName || part.label || '').toLowerCase()
   if (!name.includes('write_checklist') && !name.includes('update_checklist')) return false
   return checklistItems(part).length > 0

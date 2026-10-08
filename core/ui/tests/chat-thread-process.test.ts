@@ -1299,6 +1299,50 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.checklist-item--completed').exists()).toBe(true);
   });
 
+  it('keeps one plan card when a round batches several checklist updates', () => {
+    // A round that submits s1 and s2 updates back-to-back: both parts would
+    // render the same post-update plan, so only the last one owns the card.
+    const planSteps = [
+      { id: 's1', description: 'Build the page shell', status: 'completed' },
+      { id: 's2', description: 'Add responsive styling', status: 'completed' },
+      { id: 's3', description: 'Wire the render loop', status: 'in_progress' },
+    ];
+    const updatePart = (id: string, reason: string, merged: boolean) => ({
+      id,
+      partType: 'tool_result' as const,
+      status: 'completed' as const,
+      label: 'Checklist updated',
+      toolName: 'update_checklist',
+      toolResult: `- [ ] update_step ${reason}\n\nReason: ${reason}`,
+      metadata: merged
+        ? { checklist_merged: true }
+        : { checklist_snapshot: true, task_plan: { steps: planSteps }, active_plan: {} },
+    });
+    const messages: CoreMessage[] = [{
+      id: 'm-checklist-batch',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [
+        updatePart('p-merged', 's1', true),
+        updatePart('p-snapshot', 's2', false),
+      ],
+    }];
+
+    const wrapper = mountChatThread({
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-checklist-batch']),
+      },
+    });
+
+    expect(wrapper.findAll('.checklist-card').length).toBe(1);
+    const card = wrapper.find('.checklist-card');
+    expect(card.text()).toContain('s3. Wire the render loop');
+    expect(card.text()).not.toContain('update_step s1');
+  });
+
   it('renders live reasoning as an expandable reasoning block', async () => {
     const messages: CoreMessage[] = [{
       id: 'm-live-reasoning',

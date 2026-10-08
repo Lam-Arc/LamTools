@@ -2214,6 +2214,76 @@ class TestKernelEvents:
         assert snapshot.payload["metadata"]["active_plan"]["plan_summary"] == "Plan"
         assert snapshot.payload["replace"] is True
 
+    @pytest.mark.asyncio
+    async def test_batched_checklist_updates_publish_one_plan_card(self):
+        """One round = one plan card, even when it batches several updates.
+
+        Every checklist update in a round is followed by the same post-writeback
+        plan, so a snapshot per call stacked identical cards in the UI.
+        """
+        first = ToolCall(
+            id="checklist-1",
+            name="update_checklist",
+            arguments={"action": "update_step", "step_id": "s1", "reason": "s1 done"},
+        )
+        second = ToolCall(
+            id="checklist-2",
+            name="update_checklist",
+            arguments={"action": "update_step", "step_id": "s2", "reason": "s2 done"},
+        )
+        results = [
+            ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="ok",
+                content=f"- [ ] update_step {call.arguments['step_id']}",
+                metadata={"checklist_update": dict(call.arguments)},
+            )
+            for call in (first, second)
+        ]
+
+        class PlanKit(MockRuntimeKit):
+            async def writeback(self, state, turn, tool_results, verification, decision):
+                state.metadata["task_plan"] = {
+                    "goal": "Plan",
+                    "status": "active",
+                    "steps": [
+                        {"id": "s1", "description": "First", "status": "completed"},
+                        {"id": "s2", "description": "Second", "status": "completed"},
+                    ],
+                }
+                state.metadata["active_plan"] = {"plan_steps": state.metadata["task_plan"]["steps"]}
+
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            PlanKit(steps=[
+                MockKitStep(
+                    reply="updating the plan",
+                    tool_calls=[first, second],
+                    tool_results=results,
+                    decision="continue",
+                ),
+                MockKitStep(reply="final answer", decision="done"),
+            ]),
+            event_sink=sink,
+        )
+
+        await kernel.run(_make_turn_input())
+
+        card_parts = [
+            event.payload for event in sink.events
+            if event.name == "runtime.part"
+            and event.payload.get("tool_name") == "update_checklist"
+            and event.payload.get("replace") is True
+        ]
+        snapshots = [p for p in card_parts if p["metadata"].get("checklist_snapshot") is True]
+        merged = [p for p in card_parts if p["metadata"].get("checklist_merged") is True]
+
+        assert [p["part_id"] for p in snapshots] == ["part-checklist-2"]
+        assert snapshots[0]["metadata"]["task_plan"]["steps"][1]["status"] == "completed"
+        assert [p["part_id"] for p in merged] == ["part-checklist-1"]
+        assert "task_plan" not in merged[0]["metadata"]
+
     async def test_verification_event_emitted(self):
         """Kernel emits verification result event."""
         kit = MockRuntimeKit(steps=[
