@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>endcard</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0a0a0c; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #f2f2f5; }
+
+  .ambient {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 50% 50%, rgba(255,255,255,0.085), rgba(255,255,255,0) 62%),
+      radial-gradient(1500px 780px at 50% 122%, rgba(101,84,217,0.16), rgba(0,0,0,0) 60%),
+      radial-gradient(2200px 1400px at 50% 50%, rgba(0,0,0,0), rgba(0,0,0,0.6) 78%),
+      #0b0b0e;
+  }
+  .grain { position: absolute; inset: 0; opacity: 0.05; mix-blend-mode: screen; }
+
+  .center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; }
+
+  /* Wordmark: settles its tracking as it arrives — calm, no bounce. */
+  .wordmark {
+    font-size: 132px; font-weight: 600; line-height: 1; color: #f7f7fa;
+    letter-spacing: 0.16em; opacity: 0; white-space: nowrap;
+  }
+  .rule-wrap { position: relative; width: 520px; margin: 42px auto 0; height: 1px; }
+  .rule { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.55), rgba(255,255,255,0)); transform: scaleX(0); }
+  .dot { position: absolute; left: 50%; top: -3px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: #6554d9; opacity: 0; }
+  .tagline { margin-top: 34px; font-size: 27px; font-weight: 400; color: rgba(242,242,245,0.62); letter-spacing: 0.22em; opacity: 0; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="grainFilter">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch" />
+      <feColorMatrix type="saturate" values="0" />
+    </filter>
+    <rect width="1920" height="1080" filter="url(#grainFilter)" />
+  </svg>
+
+  <div class="center" id="center">
+    <div class="wordmark" id="wordmark">Sunday</div>
+    <div class="rule-wrap">
+      <div class="rule" id="rule"></div>
+      <div class="dot" id="dot"></div>
+    </div>
+    <div class="tagline" id="tagline">本地优先的 Agent 工作台</div>
+  </div>
+
+<script>
+const { seg, ease, style } = window.MotionKit
+
+const nodes = {
+  center: document.getElementById('center'),
+  wordmark: document.getElementById('wordmark'),
+  rule: document.getElementById('rule'),
+  dot: document.getElementById('dot'),
+  tagline: document.getElementById('tagline'),
+}
+
+window.sceneMeta = { duration: 5.5, width: 1920, height: 1080 }
+
+/**
+ * Timeline (seconds)
+ *  0.20-1.60  wordmark arrives and its tracking settles
+ *  1.20-2.00  hairline rule draws out from the centre
+ *  1.85-2.35  accent dot lands on the rule
+ *  2.20-3.00  tagline fades up
+ *  3.00-5.50  calm hold with a slow push
+ */
+window.renderFrame = (t) => {
+  const e = ease
+
+  const markP = seg(t, 0.2, 1.6)
+  style(nodes.wordmark, {
+    opacity: e.quintOut(markP),
+    letterSpacing: `${(0.16 + (0.02 - 0.16) * e.expoOut(markP)).toFixed(4)}em`,
+    transform: `translateY(${((1 - e.expoOut(markP)) * 16).toFixed(2)}px)`,
+  })
+
+  const ruleP = seg(t, 1.2, 2.0)
+  style(nodes.rule, { transform: `scaleX(${e.expoOut(ruleP).toFixed(4)})` })
+
+  const dotP = seg(t, 1.85, 2.35)
+  style(nodes.dot, {
+    opacity: e.quintOut(dotP),
+    transform: `scale(${(0.4 + 0.6 * e.softBack(dotP)).toFixed(3)})`,
+  })
+
+  const tagP = seg(t, 2.2, 3.0)
+  style(nodes.tagline, {
+    opacity: e.sineInOut(tagP) * 0.95,
+    letterSpacing: `${(0.3 - 0.08 * e.expoOut(tagP)).toFixed(4)}em`,
+  })
+
+  const push = 1 + 0.01 * seg(t, 3.0, 5.5)
+  style(nodes.center, { transform: `translate(-50%, -50%) scale(${push.toFixed(5)})` })
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

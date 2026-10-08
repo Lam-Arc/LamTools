@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>merged</title>
+<script src="_kit.js"></script>
+<script src="_timing.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.05), rgba(255,255,255,0) 62%),
+      radial-gradient(1500px 780px at 50% 116%, rgba(101,84,217,0.12), rgba(0,0,0,0) 60%),
+      #0a0a0c; }
+  .grain { position: absolute; inset: 0; opacity: 0.04; mix-blend-mode: screen; }
+
+  .panel { position: absolute; left: 120px; top: 96px; width: 1680px; height: 888px;
+    border-radius: 20px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.16), 0 40px 90px rgba(0,0,0,0.45); }
+
+  /* ---- act A: three connected columns ---- */
+  .col { position: absolute; top: 0; height: 888px; overflow: hidden; }
+  .col-surface { position: absolute; inset: 0; opacity: 0;
+    background: linear-gradient(180deg, rgba(101,84,217,0.10), rgba(101,84,217,0.02)); }
+  .col-title { position: absolute; left: 44px; top: 300px; font-size: 40px; font-weight: 600; white-space: nowrap; }
+  .col-sub { position: absolute; left: 44px; top: 358px; font-size: 21px; color: rgba(238,240,244,0.45); white-space: nowrap; }
+  .col-line { position: absolute; height: 10px; border-radius: 5px; background: rgba(255,255,255,0.09); }
+  .col-meter { position: absolute; left: 44px; top: 596px; font-size: 20px; letter-spacing: 0.06em;
+    color: rgba(238,240,244,0.40); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .divider { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.16); }
+  .slot { position: absolute; top: 0; height: 888px; width: 1px; opacity: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.55), rgba(255,255,255,0)); }
+
+  /* ---- the game surface ---- */
+  #work { position: absolute; top: 0; height: 888px; overflow: hidden; opacity: 0; }
+  .tile { position: absolute; border-radius: 10px; background: rgba(255,255,255,0.06);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
+  .part { position: absolute; background: rgba(255,255,255,0.20); border-radius: 4px; }
+  .crown { position: absolute; border-radius: 50% 50% 46% 46%; background: rgba(255,255,255,0.20); }
+  .stem { position: absolute; width: 4px; background: rgba(255,255,255,0.24); border-radius: 2px; }
+
+  /* ---- sub-agents: connected translucent rectangles ---- */
+  #subLayer { position: absolute; inset: 0; }
+  .sub { position: absolute; top: 0; height: 888px; overflow: hidden;
+    background: rgba(255,255,255,0.055); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07); }
+  .sub-flash { position: absolute; inset: 0; background: #ffffff; opacity: 0; }
+  .sub-head { position: absolute; left: 24px; top: 22px; height: 12px; border-radius: 6px; background: rgba(255,255,255,0.22); }
+  .sub-head-dot { position: absolute; left: 24px; top: 48px; width: 10px; height: 10px; border-radius: 50%; background: rgba(101,84,217,0.85); }
+  .sub-line { position: absolute; height: 10px; border-radius: 5px; background: rgba(255,255,255,0.14); transform-origin: 0 50%; }
+  .sub-dot { position: absolute; width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,0.32); }
+  .sub-progress { position: absolute; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.08); overflow: hidden; }
+  .sub-progress-fill { position: absolute; inset: 0; border-radius: 3px; background: rgba(101,84,217,0.85); transform-origin: 0 50%; }
+
+  /* ---- main agent column ---- */
+  #chat { position: absolute; top: 0; height: 888px; overflow: hidden; opacity: 0; }
+  .row-body { position: absolute; height: 12px; border-radius: 6px; background: rgba(255,255,255,0.11); transform-origin: 0 50%; }
+  .row-dot { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: rgba(255,255,255,0.30); }
+
+  /* ---- travelling objects ---- */
+  .fly { position: absolute; border-radius: 14px; background: rgba(255,255,255,0.12);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.14); overflow: hidden; }
+  .fly-text { position: absolute; left: 18px; top: 13px; right: 16px; font-size: 19px; line-height: 1.45;
+    color: rgba(240,242,246,0.94); }
+  .first-line { position: absolute; border-radius: 14px; background: rgba(255,255,255,0.11);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.13); }
+  .cursor { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+    background: #f2f3f7; box-shadow: 0 0 0 6px rgba(255,255,255,0.10), 0 6px 18px rgba(0,0,0,0.5); }
+  .ripple { position: absolute; border-radius: 50%; border: 2px solid rgba(101,84,217,0.9); transform-origin: 50% 50%; }
+
+  .cap { position: absolute; left: 92px; bottom: 78px; background: rgba(8,8,10,0.78);
+    border-radius: 12px; padding: 16px 26px 18px; }
+  .cap-title { font-size: 28px; letter-spacing: 0.04em; color: rgba(238,240,244,0.9); }
+  .cap-hint { margin-top: 8px; font-size: 21px; letter-spacing: 0.05em; color: rgba(238,240,244,0.48); }
+  .hud-time { position: absolute; right: 120px; bottom: 60px; font-size: 21px; letter-spacing: 0.08em;
+    color: rgba(238,240,244,0.36); font-variant-numeric: tabular-nums; }
+  .track { position: absolute; left: 120px; right: 120px; bottom: 26px; height: 26px; }
+  .track-line { position: absolute; left: 0; right: 0; top: 12px; height: 1px; background: rgba(255,255,255,0.16); }
+  .track-block { position: absolute; top: 8px; height: 9px; border-radius: 3px; background: rgba(255,255,255,0.16); }
+  .track-block.active { background: rgba(101,84,217,0.85); }
+  .track-tick { position: absolute; top: 6px; width: 1px; height: 5px; background: rgba(255,255,255,0.28); }
+  .track-name { position: absolute; top: -16px; font-size: 17px; letter-spacing: 0.05em; color: rgba(238,240,244,0.45); }
+  .track-head { position: absolute; top: 2px; width: 1.5px; height: 22px; background: #6554d9; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch" /><feColorMatrix type="saturate" values="0" /></filter>
+    <rect width="1920" height="1080" filter="url(#g)" />
+  </svg>
+
+  <div class="panel" id="panel">
+    <div id="colLayer">
+      <div class="col" id="col0"><div class="col-surface" id="surf0"></div><div id="body0"></div></div>
+      <div class="col" id="col1"><div class="col-surface" id="surf1"></div><div id="body1"></div></div>
+      <div class="col" id="col2"><div class="col-surface" id="surf2"></div><div id="body2"></div></div>
+      <div class="divider" id="div0"></div>
+      <div class="divider" id="div1"></div>
+      <div class="slot" id="slot0"></div>
+      <div class="slot" id="slot1"></div>
+      <div class="slot" id="slot2"></div>
+    </div>
+
+    <div id="work"><div id="workInner"></div></div>
+    <div id="subLayer"></div>
+    <div id="chat"><div id="chatInner"></div></div>
+    <div class="divider" id="splitDivider" style="opacity:0"></div>
+    <div id="flyLayer"></div>
+    <div id="firstLineLayer"></div>
+  </div>
+
+  <div class="cap" id="cap"><div class="cap-title" id="capTitle"></div><div class="cap-hint" id="capHint"></div></div>
+  <div class="hud-time" id="hudTime"></div>
+  <div class="track"><div class="track-line"></div><div id="trackBlocks"></div><div class="track-head" id="trackHead"></div></div>
+
+<script>
+const { seg, lerp, ease, style, stagger } = window.MotionKit
+const T = window.MERGED_TIMING
+
+/* ---------------------------------------------------------------------------
+ * The whole first act, cut together:
+ *
+ *   A  three connected columns drop in alternately, then the widths move
+ *   B  click the third -> it takes the whole surface -> the agent speaks
+ *   C  the surface divides into chat + workspace; the game builds piece by piece
+ *   D  the process rows delegate: sub-agent rectangles slide in and catch their
+ *      bubbles, work behind a translucent surface, then flash, retract, and
+ *      leave matching rows behind
+ *   E  the closing line, everything else softens, and the game takes the frame
+ *
+ * Every cue time comes from _timing.js, which the score is written against too:
+ * 100 BPM, one beat = 0.6s, one bar = 2.4s.
+ * Panel-local coordinates throughout (0..1680, 0..888).
+ * ------------------------------------------------------------------------ */
+
+const PANEL = { w: 1680, h: 888 }
+const EQ = 560
+const WIDE = 1000
+const NARROW = (PANEL.w - WIDE) / 2
+const CHAT_W = 640
+const WORK_X = CHAT_W + 1
+const WORK_W = PANEL.w - WORK_X
+const SUB_W = WORK_W / 3
+const ROW_H = 62
+const ROW_TOP = 190
+const BUBBLE_W = 300
+const BUBBLE_H = 66
+
+const BEATS = T.BEATS
+const TOTAL = T.TOTAL
+const B = T.build
+
+const COLS = [
+  { title: '实现功能', sub: '一句话到能用的应用' },
+  { title: '办公', sub: '报表 · 文档 · 演示' },
+  { title: '做小游戏', sub: '能玩的那种' },
+]
+const DELEGATIONS = [
+  { text: '帮我把初始村落搭起来：几间木屋、几棵树', row: 0 },
+  { text: '你负责地面和道路，铺得自然一点就行', row: 1 },
+  { text: '做一下资源条和建造菜单，能点就行', row: 2 },
+]
+
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+
+const rowY = (i) => ROW_TOP + i * ROW_H
+const subRect = (i) => ({ x: WORK_X + i * SUB_W, w: SUB_W })
+const slotOf = (i) => ({ x: subRect(i).x + SUB_W - BUBBLE_W - 26, y: 84 })
+
+const clickRow = (i) => T.enter[i]
+const slideAt = (i) => T.enter[i] - 0.06
+const doneAt = (i) => T.done[i]
+const workAt = (i) => T.work[i]
+
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+/* ------------------------------------------------------------ static DOM */
+function buildDom() {
+  COLS.forEach((col, i) => {
+    let html = `<div class="col-title">${col.title}</div><div class="col-sub">${col.sub}</div>`
+    for (let r = 0; r < 3; r += 1) {
+      html += `<div class="col-line" style="left:44px;top:${420 + r * 30}px;width:${220 - r * 46}px"></div>`
+    }
+    html += `<div class="col-meter" id="meter${i}"></div>`
+    $(`body${i}`).innerHTML = html
+  })
+
+  // the game: a tile field with a house, a tree and a road — each piece keeps
+  // its own build cue so the whole thing lands in waves instead of at once
+  const G = { cols: 4, rows: 3, size: 116, gap: 20 }
+  const gw = G.cols * G.size + (G.cols - 1) * G.gap
+  const gh = G.rows * G.size + (G.rows - 1) * G.gap
+  const gx = (WORK_W - gw) / 2
+  const gy = 96
+  let game = ''
+  for (let r = 0; r < G.rows; r += 1) {
+    for (let c = 0; c < G.cols; c += 1) {
+      game += `<div class="tile" data-gtile="${r * G.cols + c}" data-grow="${r}" data-gcol="${c}" style="left:${gx + c * (G.size + G.gap)}px;top:${gy + r * (G.size + G.gap)}px;width:${G.size}px;height:${G.size}px;opacity:0"></div>`
+    }
+  }
+  const baseY = gy + gh
+  game += `<div class="part" data-gpart="ground" style="left:${gx + 40}px;top:${baseY - 24}px;width:220px;height:24px;opacity:0;transform-origin:0 100%"></div>`
+  game += `<div class="part" data-gpart="body" style="left:${gx + 70}px;top:${baseY - 146}px;width:160px;height:122px;opacity:0"></div>`
+  game += `<div class="part" data-gpart="roof" style="left:${gx + 40}px;top:${baseY - 216}px;width:220px;height:72px;border-radius:6px 6px 2px 2px;opacity:0"></div>`
+  game += `<div class="stem" data-gpart="stem" style="left:${gx + 422}px;top:${baseY - 98}px;height:72px;opacity:0;transform-origin:50% 100%"></div>`
+  game += `<div class="crown" data-gpart="crown" style="left:${gx + 398}px;top:${baseY - 150}px;width:52px;height:52px;opacity:0;transform-origin:50% 50%"></div>`
+  $('workInner').innerHTML = game
+
+  // three sub-agent rectangles with their own content
+  let subs = ''
+  for (let i = 0; i < 3; i += 1) {
+    const r = subRect(i)
+    let lines = ''
+    for (let p = 0; p < 6; p += 1) {
+      lines += `<div class="sub-dot" data-subdot="${i}-${p}" style="left:26px;top:${210 + p * 54}px;opacity:0"></div>`
+      lines += `<div class="sub-line" data-subline="${i}-${p}" style="left:52px;top:${216 + p * 54}px;width:${150 + ((p * 37 + i * 19) % 120)}px;opacity:0"></div>`
+    }
+    subs += `<div class="sub" id="sub${i}" style="left:${r.x}px;width:${r.w}px;opacity:0">
+      <div class="sub-flash" id="subflash${i}"></div>
+      ${i > 0 ? `<div class="divider" style="left:0"></div>` : ''}
+      <div class="sub-head" style="width:${150 + i * 24}px"></div>
+      <div class="sub-head-dot"></div>
+      <div class="sub-progress" id="subprog${i}" style="left:26px;top:150px;width:${SUB_W - 52}px;opacity:0">
+        <div class="sub-progress-fill" id="subfill${i}"></div>
+      </div>
+      ${lines}
+    </div>`
+  }
+  $('subLayer').innerHTML = subs
+
+  // the main agent's process rows
+  let chat = ''
+  for (let i = 0; i < 6; i += 1) {
+    chat += `<div class="row-dot" data-rowdot="${i}" style="left:44px;top:${rowY(i)}px;opacity:0"></div>`
+    chat += `<div class="row-body" data-rowbody="${i}" style="left:72px;top:${rowY(i) + 4}px;width:${280 - (i % 3) * 40}px;opacity:0"></div>`
+  }
+  $('chatInner').innerHTML = chat
+}
+buildDom()
+
+function buildTrack() {
+  let html = ''
+  // one tick per beat, so the grid itself is visible while reviewing
+  for (let b = 0; b <= Math.round(TOTAL / T.BEAT); b += 1) {
+    html += `<div class="track-tick" style="left:${(((b * T.BEAT) / TOTAL) * 100).toFixed(3)}%;height:${b % 4 === 0 ? 9 : 5}px;top:${b % 4 === 0 ? 4 : 6}px;opacity:${b % 4 === 0 ? 0.5 : 0.24}"></div>`
+  }
+  for (const beat of BEATS) {
+    html += `<div class="track-block" data-block="${beat.id}" style="left:${((beat.at / TOTAL) * 100).toFixed(2)}%;width:${((beat.dur / TOTAL) * 100).toFixed(2)}%"></div>`
+    html += `<div class="track-name" style="left:${((beat.at / TOTAL) * 100).toFixed(2)}%">${beat.id}</div>`
+  }
+  $('trackBlocks').innerHTML = html
+}
+buildTrack()
+
+/* ------------------------------------------------------------------ render */
+window.renderFrame = (t) => {
+  /* ================= A: three columns, then the widths move ================= */
+  let owner = -1
+  if (t >= T.shift[0]) owner = 0
+  if (t >= T.shift[1]) owner = 1
+  if (t >= T.shift[2]) owner = 2
+
+  let blend = 1
+  let fromOwner = owner
+  for (let s = 0; s < 3; s += 1) {
+    const at = T.shift[s]
+    if (t >= at && t < at + 0.6) {
+      blend = ease.expoOut(seg(t, at, at + 0.6))
+      fromOwner = s === 0 ? -1 : s - 1
+    }
+  }
+  const widthFor = (i) => {
+    if (t < T.shift[0]) return EQ
+    const w0 = fromOwner === -1 ? EQ : i === fromOwner ? WIDE : NARROW
+    const w1 = owner === -1 ? EQ : i === owner ? WIDE : NARROW
+    return lerp(w0, w1, blend)
+  }
+
+  /* B: the third claims the surface */
+  const claim = ease.cubicInOut(seg(t, T.claimAt, T.claimAt + BEATS[3].dur))
+  const claimFade = ease.quintOut(seg(t, T.claimAt + 0.3, T.claimAt + 1.0))
+  const splitFade = ease.quintOut(seg(t, T.splitAt - 0.2, T.splitAt + 0.8))
+  const widths = [widthFor(0), widthFor(1), widthFor(2)]
+  const sum = widths[0] + widths[1] + widths[2]
+  const k = PANEL.w / sum
+  let cursorX = 0
+  COLS.forEach((_, i) => {
+    const ownW = widths[i] * k
+    const ownX = i === 0 ? 0 : i === 1 ? widths[0] * k : (widths[0] + widths[1]) * k
+    const w = lerp(ownW, i === 2 ? PANEL.w : 0, claim)
+    const x = lerp(ownX, 0, claim)
+    style($(`col${i}`), {
+      left: `${x.toFixed(1)}px`,
+      width: `${Math.max(w, 0).toFixed(1)}px`,
+      opacity: (i === 2 ? 1 : 1 - claimFade) * (1 - splitFade),
+    })
+    style($(`surf${i}`), { opacity: i === 2 ? 0.85 * (1 - claim * 0.9) : 0 })
+    $(`meter${i}`).textContent = `${Math.round(w)} px${i === owner ? ' · 焦点' : ''}`
+    if (i === 2) cursorX = ownX
+  })
+  style($('div0'), { left: `${(widths[0] * k).toFixed(1)}px`, opacity: 1 - claim })
+  style($('div1'), { left: `${((widths[0] + widths[1]) * k).toFixed(1)}px`, opacity: 1 - claim })
+
+  // slot guides while the columns drop in
+  for (let i = 0; i < 3; i += 1) {
+    const at = T.drop[i]
+    const guide = seg(t, at - 1.05, at - 0.3)
+    style($(`slot${i}`), {
+      opacity: guide > 0 && guide < 1 ? Math.sin(Math.PI * guide) * 0.7 : 0,
+      left: `${(i === 0 ? 0 : i === 1 ? EQ : EQ * 2).toFixed(1)}px`,
+    })
+    const arriveP = stagger(t, i, { start: T.drop[0] - 0.6, each: 1.2, dur: 0.6 })
+    const travel = (1 - ease.softBack(arriveP)) * (i % 2 === 0 ? -(PANEL.h + 40) : PANEL.h + 40)
+    style($(`col${i}`), { transform: `translateY(${travel.toFixed(1)}px)` })
+  }
+
+  /* ================= B1: cursor + click ================= */
+  const curP = ease.sineInOut(seg(t, T.clickAt - 0.6, T.clickAt))
+  const target = { x: NARROW * 2 + 140, y: 430 }
+  const press = Math.sin(Math.PI * seg(t, T.clickAt + 0.02, T.clickAt + 0.35))
+  let fly = ''
+  if (t >= T.clickAt - 0.8 && t < T.claimAt + 0.5) {
+    const cx = lerp(PANEL.w - 140, target.x, curP)
+    const cy = lerp(PANEL.h - 140, target.y, curP)
+    const alpha = seg(t, T.clickAt - 0.6, T.clickAt - 0.35) * (1 - seg(t, T.claimAt, T.claimAt + 0.4))
+    fly += `<div class="cursor" style="left:${cx.toFixed(1)}px;top:${cy.toFixed(1)}px;opacity:${alpha.toFixed(3)};transform:scale(${(1 - press * 0.35).toFixed(3)})"></div>`
+    const rp = seg(t, T.clickAt + 0.05, T.clickAt + 0.9)
+    if (rp > 0 && rp < 1) {
+      fly += `<div class="ripple" style="left:${(target.x - 40).toFixed(1)}px;top:${(target.y - 40).toFixed(1)}px;width:80px;height:80px;opacity:${(Math.sin(Math.PI * rp) * 0.9).toFixed(3)};transform:scale(${lerp(0.3, 3.2, ease.expoOut(rp)).toFixed(3)})"></div>`
+    }
+  }
+
+  /* ================= B3 / the first line lives in the chat column ================= */
+  const firstP = seg(t, T.lineAt - 0.4, T.lineAt + 0.8)
+  $('firstLineLayer').innerHTML = firstP > 0
+    ? `<div class="first-line" style="left:44px;top:40px;width:560px;height:76px;opacity:${ease.quintOut(firstP).toFixed(3)};transform:translateY(${((1 - ease.expoOut(firstP)) * -14).toFixed(1)}px)">
+         <div class="fly-text" style="font-size:24px">好，现在我来实现这个经营建造游戏。</div>
+       </div>`
+    : ''
+
+  /* ================= C: split + build ================= */
+  const split = ease.cubicInOut(seg(t, T.splitAt, T.splitAt + BEATS[5].dur))
+  const chatW = lerp(PANEL.w, CHAT_W, split)
+  style($('chat'), { width: `${chatW.toFixed(1)}px`, opacity: split > 0 ? 1 : 0 })
+  style($('work'), { left: `${lerp(0, WORK_X, split).toFixed(1)}px`, width: `${lerp(PANEL.w, WORK_W, split).toFixed(1)}px`, opacity: split > 0 ? 1 : 0 })
+  style($('splitDivider'), { left: `${chatW.toFixed(1)}px`, opacity: split })
+
+  // the handover at the very end pushes everything the workspace holds to full
+  const handedOver = seg(t, T.withdrawAt + 0.3, T.withdrawAt + 1.4)
+
+  // the grid materialises as a diagonal wave, then each piece lands on its cue
+  document.querySelectorAll('[data-gtile]').forEach((node) => {
+    const start = B.tiles + (Number(node.dataset.grow) + Number(node.dataset.gcol)) * 0.12
+    style(node, { opacity: Math.max(Math.min(1, seg(t, start, start + 0.5) * 2.4), handedOver) })
+  })
+  const partStart = { ground: B.ground, body: B.body, roof: B.roof, stem: B.stem, crown: B.crown }
+  document.querySelectorAll('[data-gpart]').forEach((node) => {
+    const kind = node.dataset.gpart
+    const p = ease.quintOut(seg(t, partStart[kind], partStart[kind] + 0.6))
+    const props = { opacity: Math.max(Math.min(1, p * 1.6), handedOver) }
+    if (kind === 'ground') props.transform = `scaleX(${p.toFixed(4)})`
+    else if (kind === 'body') props.transform = `translateY(${((1 - p) * 26).toFixed(1)}px)`
+    else if (kind === 'roof') props.transform = `translateY(${((1 - p) * -22).toFixed(1)}px)`
+    else if (kind === 'stem') props.transform = `scaleY(${p.toFixed(4)})`
+    else if (kind === 'crown') props.transform = `scale(${(0.4 + 0.6 * p).toFixed(3)})`
+    style(node, props)
+  })
+  // a last pass of light across the finished thing
+  const sweepP = seg(t, B.sweep, B.sweep + 1.2)
+  if (sweepP > 0 && sweepP < 1) {
+    fly += `<div style="position:absolute;left:${(WORK_X + ease.sineInOut(sweepP) * WORK_W - 40).toFixed(1)}px;top:0;width:80px;height:${PANEL.h}px;background:linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.10), rgba(255,255,255,0));opacity:${(Math.sin(Math.PI * sweepP) * 0.9).toFixed(3)}"></div>`
+  }
+
+  // the main agent's own rows: three appear while building, three come back later
+  for (let i = 0; i < 6; i += 1) {
+    const dot = document.querySelector(`[data-rowdot="${i}"]`)
+    const body = document.querySelector(`[data-rowbody="${i}"]`)
+    let p = 0
+    if (i < 3) p = ease.quintOut(stagger(t, i, { start: B.tiles + 1.2, each: 1.2, dur: 0.5 }))
+    else p = seg(t, T.row[i - 3], T.row[i - 3] + 0.55)
+    style(dot, { opacity: p * 0.95, transform: `scale(${(0.6 + 0.4 * Math.min(1, p)).toFixed(3)})`, background: i < 3 ? 'rgba(255,255,255,0.30)' : 'rgba(101,84,217,0.95)' })
+    style(body, { opacity: p * 0.92, transform: `scaleX(${ease.expoOut(Math.min(1, p)).toFixed(4)})` })
+  }
+  // a highlight pass when a returned row lands
+  for (let i = 0; i < 3; i += 1) {
+    const glow = Math.sin(Math.PI * seg(t, T.row[i], T.row[i] + 1.0))
+    if (glow > 0.01) {
+      fly += `<div style="position:absolute;left:30px;top:${rowY(3 + i) - 14}px;width:360px;height:44px;border-radius:10px;background:radial-gradient(closest-side, rgba(101,84,217,0.55), rgba(101,84,217,0));opacity:${(glow * 0.9).toFixed(3)}"></div>`
+    }
+  }
+
+  /* ================= D: sub-agents ================= */
+  for (let i = 0; i < 3; i += 1) {
+    const node = $(`sub${i}`)
+    const r = subRect(i)
+    const slideP = ease.expoOut(seg(t, slideAt(i), slideAt(i) + 0.62))
+    const leaveP = ease.quintOut(seg(t, doneAt(i) + 0.45, doneAt(i) + 1.2))
+    const travel = (1 - slideP) * -(PANEL.h + 30) + leaveP * -(PANEL.h + 30)
+    style(node, {
+      left: `${r.x.toFixed(1)}px`,
+      width: `${r.w.toFixed(1)}px`,
+      opacity: Math.min(1, seg(t, slideAt(i), slideAt(i) + 0.2) * 1.6) * (1 - leaveP),
+      transform: `translateY(${travel.toFixed(1)}px)`,
+    })
+    style($(`subflash${i}`), { opacity: (Math.sin(Math.PI * seg(t, doneAt(i), doneAt(i) + 0.42)) * 0.16).toFixed(3) })
+
+    const workStart = workAt(i)
+    style($(`subprog${i}`), { opacity: seg(t, slideAt(i) + 0.3, slideAt(i) + 0.7) * 0.9 * (1 - leaveP) })
+    style($(`subfill${i}`), { transform: `scaleX(${ease.sineInOut(seg(t, workStart, doneAt(i) + 0.3)).toFixed(4)})` })
+    for (let p = 0; p < 6; p += 1) {
+      const pp = stagger(t, p, { start: workStart + i * 0.22, each: 0.55, dur: 0.5 })
+      style(document.querySelector(`[data-subdot="${i}-${p}"]`), { opacity: pp * 0.9 * (1 - leaveP) })
+      style(document.querySelector(`[data-subline="${i}-${p}"]`), { opacity: pp * 0.9 * (1 - leaveP), transform: `scaleX(${ease.expoOut(pp).toFixed(4)})` })
+    }
+
+    // the delegation bubble: leaves the row as the rectangle appears, lands in it
+    const from = { x: 44 + 118, y: rowY(DELEGATIONS[i].row) + 6 }
+    const to = slotOf(i)
+    const popP = seg(t, clickRow(i) + 0.25, clickRow(i) + 0.8)
+    const moveP = ease.cubicInOut(seg(t, slideAt(i), slideAt(i) + 0.85))
+    const alpha = Math.min(ease.quintOut(popP), 1 - leaveP)
+    if (alpha > 0.01) {
+      const x = lerp(from.x, to.x, moveP)
+      const y = lerp(from.y - 6, to.y, moveP)
+      const sc = (0.62 + 0.38 * ease.softBack(popP)) * lerp(1, 0.94, moveP)
+      fly += `<div class="fly" style="left:${x.toFixed(1)}px;top:${y.toFixed(1)}px;width:${(BUBBLE_W * sc).toFixed(1)}px;height:${(BUBBLE_H * sc).toFixed(1)}px;opacity:${alpha.toFixed(3)}">
+        <div class="fly-text" style="transform:scale(${sc.toFixed(3)});transform-origin:0 0">${DELEGATIONS[i].text}</div>
+      </div>`
+    }
+
+    // the click on that row
+    const at = clickRow(i)
+    if (t >= at - 0.6 && t <= at + 1.0) {
+      const p = ease.sineInOut(seg(t, at - 0.5, at + 0.3))
+      const pr = Math.sin(Math.PI * seg(t, at, at + 0.32))
+      fly += `<div class="cursor" style="left:${lerp(430, from.x, p).toFixed(1)}px;top:${lerp(720, from.y, p).toFixed(1)}px;transform:scale(${(1 - pr * 0.3).toFixed(3)})"></div>`
+    }
+  }
+
+  /* ================= E: the closing line, the soften, the handover ================= */
+  const bossP = seg(t, T.reportAt, T.reportAt + 1.0)
+  if (bossP > 0) {
+    fly += `<div class="fly" style="left:44px;top:140px;width:400px;height:70px;opacity:${ease.quintOut(bossP).toFixed(3)};transform:translateY(${((1 - ease.expoOut(bossP)) * -14).toFixed(1)}px)">
+      <div class="fly-text">老板，搞完了，你看一下。</div>
+    </div>`
+  }
+  // the list behind it goes soft, and slides down to make room
+  const softP = ease.sineInOut(seg(t, T.reportAt - 0.1, T.reportAt + 0.9))
+  style($('chatInner'), {
+    filter: softP > 0.01 ? `blur(${(softP * 3).toFixed(2)}px)` : 'none',
+    opacity: (1 - softP * 0.4).toFixed(3),
+    transform: `translateY(${(softP * 96).toFixed(1)}px)`,
+  })
+
+  const withdraw = ease.cubicInOut(seg(t, T.withdrawAt, T.withdrawAt + 1.4))
+  style($('chat'), { width: `${lerp(CHAT_W, 0, withdraw).toFixed(1)}px`, opacity: 1 - ease.quintOut(seg(t, T.withdrawAt, T.withdrawAt + 0.8)) })
+  style($('firstLineLayer'), { opacity: 1 - ease.quintOut(seg(t, T.withdrawAt, T.withdrawAt + 0.8)) })
+  style($('work'), { left: `${lerp(WORK_X, 0, withdraw).toFixed(1)}px`, width: `${lerp(WORK_W, PANEL.w, withdraw).toFixed(1)}px` })
+  style($('splitDivider'), { left: `${(lerp(CHAT_W, 0, withdraw)).toFixed(1)}px`, opacity: (1 - withdraw) * split })
+  style($('workInner'), {
+    transform: `translateX(${(-(WORK_W - PANEL.w) / 2 * withdraw).toFixed(1)}px) scale(${lerp(1, 1.16, ease.sineInOut(seg(t, T.withdrawAt + 0.3, TOTAL))).toFixed(4)})`,
+    transformOrigin: `${(WORK_W / 2).toFixed(1)}px ${(PANEL.h / 2).toFixed(1)}px`,
+  })
+
+  $('flyLayer').innerHTML = fly
+
+  /* ---- captions + hud ---- */
+  let current = BEATS[0]
+  for (const beat of BEATS) if (t >= beat.at) current = beat
+  $('capTitle').textContent = `${current.id} · ${current.note}`
+  $('capHint').textContent = t < T.clickAt
+    ? `三块相连矩形：交错落入 → 宽度依次重分配 · ${T.BPM} BPM 网格`
+    : t < T.lineAt
+      ? '点中的那一块接管整块表面'
+      : t < B.tiles
+        ? '分为对话区 + 工作区'
+        : t < BEATS[7].at
+          ? '右半边按拍子一点点长出来'
+          : t < BEATS[10].at
+            ? '子代理：进入间隔 3 拍 → 2 拍，完成间隔 1 拍 → 级联'
+            : '汇报 → 撤出 → 全屏让给成品'
+  $('hudTime').textContent = `${t.toFixed(1)}s / ${TOTAL.toFixed(1)}s · ${T.BPM} BPM`
+  document.querySelectorAll('[data-block]').forEach((node) => {
+    node.classList.toggle('active', node.dataset.block === current.id)
+  })
+  style($('trackHead'), { left: `${((t / TOTAL) * 100).toFixed(3)}%` })
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

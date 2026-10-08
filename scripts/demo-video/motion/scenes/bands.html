@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>bands</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.05), rgba(255,255,255,0) 62%),
+      radial-gradient(1500px 780px at 50% 116%, rgba(101,84,217,0.12), rgba(0,0,0,0) 60%),
+      #0a0a0c; }
+  .grain { position: absolute; inset: 0; opacity: 0.04; mix-blend-mode: screen; }
+
+  /* the window the whole act lives in */
+  .window { position: absolute; left: 120px; top: 96px; width: 1680px; height: 888px;
+    border: 1.5px solid rgba(255,255,255,0.22); border-radius: 26px; }
+
+  /* a slot guide shows where a band is about to land */
+  .slot { position: absolute; height: 1.5px; background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.35), rgba(255,255,255,0)); opacity: 0; }
+
+  .band { position: absolute; border-radius: 18px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.028));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12), 0 30px 70px rgba(0,0,0,0.45); }
+  .band-top { position: absolute; left: 0; right: 0; top: 0; height: 1.5px;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.5), rgba(255,255,255,0)); }
+  .band-title { position: absolute; left: 34px; top: 30px; font-size: 38px; font-weight: 600; letter-spacing: 0.01em; }
+  .band-sub { position: absolute; left: 34px; top: 88px; font-size: 21px; color: rgba(238,240,244,0.45); }
+  .band-row { position: absolute; height: 10px; border-radius: 5px; background: rgba(255,255,255,0.09); }
+  .band-meter { position: absolute; right: 34px; top: 34px; font-size: 20px; letter-spacing: 0.06em;
+    color: rgba(238,240,244,0.42); font-variant-numeric: tabular-nums; }
+
+  .cap { position: absolute; left: 92px; bottom: 78px; background: rgba(8,8,10,0.78);
+    border-radius: 12px; padding: 16px 26px 18px; }
+  .cap-title { font-size: 28px; letter-spacing: 0.04em; color: rgba(238,240,244,0.9); }
+  .cap-hint { margin-top: 8px; font-size: 21px; letter-spacing: 0.05em; color: rgba(238,240,244,0.48); }
+  .cap-hint em { font-style: normal; color: rgba(101,84,217,0.95); }
+
+  .track { position: absolute; left: 120px; right: 120px; bottom: 26px; height: 26px; }
+  .track-line { position: absolute; left: 0; right: 0; top: 12px; height: 1px; background: rgba(255,255,255,0.16); }
+  .track-block { position: absolute; top: 8px; height: 9px; border-radius: 3px; background: rgba(255,255,255,0.16); }
+  .track-block.active { background: rgba(101,84,217,0.85); }
+  .track-name { position: absolute; top: -16px; font-size: 18px; letter-spacing: 0.06em; color: rgba(238,240,244,0.45); }
+  .track-head { position: absolute; top: 2px; width: 1.5px; height: 22px; background: #6554d9; }
+  .hud-time { position: absolute; right: 120px; bottom: 60px; font-size: 21px; letter-spacing: 0.08em;
+    color: rgba(238,240,244,0.36); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch" /><feColorMatrix type="saturate" values="0" /></filter>
+    <rect width="1920" height="1080" filter="url(#g)" />
+  </svg>
+
+  <div class="window"></div>
+  <div class="slot" id="slotA"></div>
+  <div class="slot" id="slotB"></div>
+  <div class="slot" id="slotC"></div>
+  <div id="bandLayer"></div>
+
+  <div class="cap" id="cap"><div class="cap-title" id="capTitle"></div><div class="cap-hint" id="capHint"></div></div>
+  <div class="hud-time" id="hudTime"></div>
+  <div class="track"><div class="track-line"></div><div id="trackBlocks"></div><div class="track-head" id="trackHead"></div></div>
+
+<script>
+const { seg, lerp, ease, style, stagger } = window.MotionKit
+
+/* ---------------------------------------------------------------------------
+ * Three horizontal bands instead of cards.
+ *
+ *  1. they are inserted alternately — from above, from below, from above
+ *  2. then the widths redistribute: the first widens while the other two
+ *     narrow, and after that the middle one takes its turn
+ *
+ * Heights stay fixed; only widths (and the horizontal centring) move, so the
+ * layout reads as one stack being re-proportioned rather than re-laid out.
+ * ------------------------------------------------------------------------ */
+
+const WIN = { x: 120, y: 96, w: 1680, h: 888 }
+const ROW = { h: 276, gap: 20, y: 96 + (888 - (276 * 3 + 20 * 2)) / 2 }
+const rowY = (i) => ROW.y + i * (ROW.h + ROW.gap)
+const FULL_W = 1680
+const NARROW_W = 900
+const CENTER_X = WIN.x + WIN.w / 2
+
+const BANDS = [
+  { id: 'b0', title: '实现功能', sub: '一句话到能用的应用', from: 'top' },
+  { id: 'b1', title: '办公', sub: '报表 · 文档 · 演示', from: 'bottom' },
+  { id: 'b2', title: '做小游戏', sub: '能玩的那种', from: 'top' },
+]
+
+const STEPS = [
+  { id: 'T1', at: 0.30, dur: 0.62, note: '第一条从上方插入' },
+  { id: 'T2', at: 1.05, dur: 0.62, note: '第二条从下方插入（交错）' },
+  { id: 'T3', at: 1.80, dur: 0.62, note: '第三条从上方插入' },
+  { id: 'T4', at: 3.30, dur: 0.85, note: '第一条拓宽，另外两条收窄' },
+  { id: 'T5', at: 5.10, dur: 0.85, note: '中间一条拓宽，其余收窄' },
+  { id: 'T6', at: 6.90, dur: 0.85, note: '第三条拓宽，其余收窄' },
+]
+const TOTAL = 9.0
+
+/* which band owns the width at a given moment: -1 none, else 0..2 */
+function dominantAt(t) {
+  if (t < STEPS[3].at) return -1
+  if (t < STEPS[4].at) return 0
+  if (t < STEPS[5].at) return 1
+  return 2
+}
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+
+function buildBands() {
+  let html = ''
+  BANDS.forEach((band, i) => {
+    html += `<div class="band" id="${band.id}">
+      <div class="band-top"></div>
+      <div class="band-title">${band.title}</div>
+      <div class="band-sub">${band.sub}</div>
+      <div class="band-meter" id="meter-${band.id}"></div>`
+    for (let r = 0; r < 3; r += 1) {
+      html += `<div class="band-row" style="left:34px;top:${140 + r * 30}px;width:${220 - r * 40}px"></div>`
+    }
+    html += `</div>`
+  })
+  $('bandLayer').innerHTML = html
+}
+buildBands()
+
+function buildTrack() {
+  let html = ''
+  for (const step of STEPS) {
+    const left = (step.at / TOTAL) * 100
+    const width = (step.dur / TOTAL) * 100
+    html += `<div class="track-block" data-block="${step.id}" style="left:${left}%;width:${Math.max(width, 1)}%"></div>`
+    html += `<div class="track-name" style="left:${left}%">${step.id}</div>`
+  }
+  $('trackBlocks').innerHTML = html
+}
+buildTrack()
+
+const fmt = (t) => `${t.toFixed(1)}s`
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+window.renderFrame = (t) => {
+  /* ---- which width does each band want right now? ---- */
+  const owner = dominantAt(t)
+  // during a redistribution, blend between the previous and the new owner
+  let blend = 1
+  let fromOwner = owner
+  for (let i = 3; i < STEPS.length; i += 1) {
+    const step = STEPS[i]
+    if (t >= step.at && t < step.at + step.dur) {
+      blend = ease.expoOut(seg(t, step.at, step.at + step.dur))
+      fromOwner = i === 3 ? -1 : i - 4
+    }
+  }
+  const widthFor = (i) => {
+    const wasNarrow = fromOwner !== -1 && i !== fromOwner
+    const isNarrow = owner !== -1 && i !== owner
+    const w0 = fromOwner === -1 ? FULL_W : wasNarrow ? NARROW_W : FULL_W
+    const w1 = owner === -1 ? FULL_W : isNarrow ? NARROW_W : FULL_W
+    return lerp(w0, w1, blend)
+  }
+
+  /* ---- the active step for the caption ---- */
+  let current = STEPS[0]
+  for (const step of STEPS) if (t >= step.at) current = step
+
+  /* ---- render the bands ---- */
+  BANDS.forEach((band, i) => {
+    const node = $(band.id)
+    const step = STEPS[i]
+    const insert = ease.softBack(seg(t, step.at, step.at + step.dur))
+    const dir = band.from === 'top' ? -1 : 1
+    // while inserting, the band travels from outside the frame into its row
+    const travel = (1 - insert) * dir * 460
+    const y = rowY(i) + travel
+    const width = widthFor(i)
+    const x = CENTER_X - width / 2
+
+    style(node, {
+      left: `${x.toFixed(1)}px`,
+      top: `${y.toFixed(1)}px`,
+      width: `${width.toFixed(1)}px`,
+      height: `${ROW.h}px`,
+      opacity: Math.min(1, seg(t, step.at, step.at + 0.16) * 1.4),
+      filter: 'none',
+    })
+    // emphasis follows the owner of the width
+    const isOwner = owner === i
+    const emphasis = isOwner ? ease.quintOut(seg(t, STEPS[3].at + i * 1.8, STEPS[3].at + i * 1.8 + 0.6)) : 0
+    style(node, {
+      boxShadow: `inset 0 0 0 1px rgba(255,255,255,${(0.12 + emphasis * 0.22).toFixed(3)}), 0 30px 70px rgba(0,0,0,${(0.45 - emphasis * 0.1).toFixed(2)})`,
+    })
+    $(`meter-${band.id}`).textContent = `${Math.round(width)} px${isOwner ? ' · 焦点' : ''}`
+
+    // slot guide: a hairline that waits where the band will land
+    const slot = ['slotA', 'slotB', 'slotC'][i]
+    const guide = seg(t, step.at - 0.5, step.at + 0.1)
+    style($(slot), {
+      opacity: guide > 0 && guide < 1 ? Math.sin(Math.PI * guide) * 0.7 : 0,
+      left: `${x.toFixed(1)}px`,
+      top: `${(rowY(i) - 1).toFixed(1)}px`,
+      width: `${width.toFixed(1)}px`,
+    })
+  })
+
+  /* ---- captions + hud ---- */
+  $('capTitle').textContent = `${current.id} · ${current.note}`
+  $('capHint').innerHTML = owner === -1 ? '三个容器：高度不变，只有宽度与水平位置在变' : `当前焦点：第 ${owner + 1} 条（宽度 ${FULL_W}px，其余 ${NARROW_W}px）`
+  $('hudTime').textContent = `${fmt(t)} / ${fmt(TOTAL)}`
+  document.querySelectorAll('[data-block]').forEach((node) => {
+    node.classList.toggle('active', node.dataset.block === current.id)
+  })
+  style($('trackHead'), { left: `${((t / TOTAL) * 100).toFixed(3)}%` })
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

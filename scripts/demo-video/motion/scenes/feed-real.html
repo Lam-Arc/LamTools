@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>feed-real · 成果流（真实页面）</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background: radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.05), rgba(255,255,255,0) 62%), #0a0a0c; }
+  .panel { position: absolute; left: 120px; top: 96px; width: 1680px; height: 888px;
+    border-radius: 20px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.16), 0 40px 90px rgba(0,0,0,0.45); }
+
+  #view { position: absolute; left: 220px; top: 40px; width: 1240px; height: 808px; overflow: hidden;
+    --edge-fade: 46px;
+    /* 条带两端留一点点淡出：页面被画框切到的时候是"化开"，不是被刀切。
+       封面涨满画框时这层淡出收到 0（由 renderFrame 驱动），整屏就不会上下发灰。 */
+    -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,0) 0, rgba(0,0,0,1) var(--edge-fade),
+      rgba(0,0,0,1) calc(100% - var(--edge-fade)), rgba(0,0,0,0) 100%);
+    mask-image: linear-gradient(180deg, rgba(0,0,0,0) 0, rgba(0,0,0,1) var(--edge-fade),
+      rgba(0,0,0,1) calc(100% - var(--edge-fade)), rgba(0,0,0,0) 100%); }
+  #flow { position: absolute; inset: 0; }
+  #fly { position: absolute; inset: 0; pointer-events: none; }
+
+  .cell { position: absolute; border-radius: 12px; overflow: hidden; background: #101114;
+    box-shadow: 0 16px 34px rgba(0,0,0,0.42); }
+  .cell img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .edge { position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(180deg, rgba(8,9,12,0) 50%, rgba(8,9,12,0.46) 100%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); }
+  .tag { position: absolute; left: 36px; bottom: 30px;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+    font-size: 16px; letter-spacing: 0.02em;
+    color: rgba(246,248,246,0.88); text-shadow: 0 2px 10px rgba(0,0,0,0.55); }
+  .tag .dim { color: rgba(246,248,246,0.45); }
+
+  .icon { position: absolute; width: 44px; height: 64px; border-radius: 7px; overflow: hidden;
+    background: #f6f5f1; box-shadow: 0 10px 24px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.5); }
+  .icon img { display: block; width: 100%; height: 100%; object-fit: cover; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <div class="panel">
+    <div id="view">
+      <div id="flow"></div>
+      <div class="cell" id="cover"
+        style="left:0;top:0;width:608px;height:394px">
+        <img id="coverImg" alt="" />
+        <div class="edge"></div>
+        <div class="tag" id="tag" style="opacity:0">2026-09-经营复盘.pptx<span class="dim"> · 11 页</span></div>
+      </div>
+    </div>
+    <div id="fly"></div>
+  </div>
+
+<script>
+const { seg, lerp, ease, style } = window.MotionKit
+
+/* ---------------------------------------------------------------------------
+ * 成果流（成片版）：机制与 feed.html 完全一致，内容换成真实的月度经营复盘。
+ *
+ * 机制（一字未改）：两列错落（右列低半格）、连续缓速上滚、格子之间相对静止、
+ * 滚出顶部的从底部接回（无限循环）；第一件成果先独占全屏，再动画进入 3 号位，
+ * 同时布局就位；之后新成果按 3 → 6 → 5 → 8 → 7 → 10 → 9 的顺序落位（右下 → 左下
+ * 交替，每次往下半格，都停在同一条落位线上），后到的成果都以「文件图标从左侧飞入、
+ * 就地展开成卡片」的方式出现（从图标尺寸放大，带一点点回弹）。
+ *
+ * 内容：9 月复盘（本月的 11 页）正在流进来；流里已经躺着 8 月复盘的三页。
+ *   全屏第一件 = 09-01 封面 → 落到 3 号位（居中）。
+ *   6 → 09-02 月度总览（KPI 八宫格）   5 → 09-03 全月节奏（折线）
+ *   8 → 09-05 投放效率（柱状 + 结论）  7 → 09-07 质效分布（气泡 + 退货率）
+ *   10 → 09-09 结论二（结构对比）      9 → 09-11 下一步动作（四张抓手）
+ *   已在流里：08-02 / 08-05 / 08-07（上个月的同类页）
+ * 每张卡按 16:9 幻灯片做横向取景：卡片比幻灯片窄，object-position 偏向左侧，
+ * 保住宅标题条与图表主体，只让页面右侧的留白/图例出画。
+ *
+ * 循环：一圈 = 一列滚满 SLOT*5 = 2070px，正好 24.0s（100 BPM 的 10 小节）。
+ * 所有量都是相位 p = t mod 24 的函数，所以 frame(t) 与 frame(t+24) 是同一帧
+ * （实测静帧内容与几何逐字节一致）。一圈的末尾封面重新涨满整个画框——
+ * 循环接缝（格子写回 0 相位）就藏在它下面。
+ * ------------------------------------------------------------------------ */
+
+const VW = 1240
+const VH = 808
+const COL_W = 608
+const GAP_X = 24
+const GAP_Y = 20
+const CARD_H = (VH - GAP_Y) / 2
+const SLOT = CARD_H + GAP_Y
+const HALF = SLOT / 2
+const SETTLE = HALF                 // 就位时滚动的量：半格
+const PERIOD = 2.4                  // 每件成果之间的间隔
+const SPEED = HALF / PERIOD         // 86.25 px/s
+const PER_COL = 5
+const CYCLE = PER_COL * SLOT        // 一列滚满一圈
+const CYCLE_T = CYCLE / SPEED       // 24.0s = 循环周期
+// 相位：原来 3 号位在就位时停在画框上沿（露一半），这里让整条流多走一整格，
+// 3 号位就正好落在画面正中——正是 mechanics 里写的那句话。
+const PHASE = 4 * SLOT
+
+// 周期内的时间表（秒）
+const HOLD = 1.8                    // 第一件独占全屏
+const SETTLE_AT = 3.4               // 就位完成（HOLD + 1.6）
+const FIRST_AT = 4.2                // 第二件到达；之后每 PERIOD 一件，最后一件 16.2
+const EXPAND_AT = 21.2              // 封面重新涨满，盖住循环接缝
+const EXPAND_END = 23.4
+const TOTAL = CYCLE_T
+
+const VIEW = { x: 220, y: 40 }      // #view 在 panel 里的偏移（飞入图标在外层定位用）
+const asset = (month, n) =>
+  `file:///E:/LamDemo/assets/slides-${month}/slide_${String(n).padStart(2, '0')}.png`
+
+const mod = (v, n) => ((v % n) + n) % n
+const slotX = (col) => col * (COL_W + GAP_X)
+const slotY = (col, k, s) => mod(k * SLOT - (col === 1 ? HALF : 0) - s, CYCLE) - SLOT
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v)
+
+// 流里已经躺着的老成果（上个月的复盘）
+const OLD = [
+  { col: 0, k: 0, id: 1, src: asset('08', 2), pos: '25% 50%' },
+  { col: 1, k: 0, id: 2, src: asset('08', 5), pos: '32% 50%' },
+  { col: 1, k: 1, id: 4, src: asset('08', 7), pos: '30% 50%' },
+]
+// 这一圈里陆续到达的新成果：3 → 6 → 5 → 8 → 7 → 10 → 9
+const NEW = [
+  { col: 1, k: 2, id: 6, at: FIRST_AT + PERIOD * 0, src: asset('09', 2), pos: '25% 50%' },
+  { col: 0, k: 2, id: 5, at: FIRST_AT + PERIOD * 1, src: asset('09', 3), pos: '22% 50%' },
+  { col: 1, k: 3, id: 8, at: FIRST_AT + PERIOD * 2, src: asset('09', 5), pos: '32% 50%' },
+  { col: 0, k: 3, id: 7, at: FIRST_AT + PERIOD * 3, src: asset('09', 7), pos: '30% 50%' },
+  { col: 1, k: 4, id: 10, at: FIRST_AT + PERIOD * 4, src: asset('09', 9), pos: '26% 50%' },
+  { col: 0, k: 4, id: 9, at: FIRST_AT + PERIOD * 5, src: asset('09', 11), pos: '26% 50%' },
+]
+// 第一件：先独占全屏，再收进 3 号位
+const COVER = { col: 0, k: 1, id: 3, src: asset('09', 1), pos: '18% 50%' }
+
+const cardHtml = (cls, o) =>
+  `<div class="cell ${cls}" data-cell="${o.id}"
+     style="left:${slotX(o.col)}px;top:0;width:${COL_W}px;height:${CARD_H}px;opacity:0">
+    <img src="${o.src}" style="object-position:${o.pos}" alt="" />
+    <div class="edge"></div>
+  </div>`
+
+function buildDom() {
+  let flow = ''
+  for (const o of OLD) flow += cardHtml('old', o)
+  for (const o of NEW) flow += cardHtml('new', o)
+  document.getElementById('flow').innerHTML = flow
+
+  const coverImg = document.getElementById('coverImg')
+  coverImg.src = COVER.src
+  coverImg.style.objectPosition = COVER.pos
+
+  let fly = ''
+  for (const o of NEW) {
+    fly += `<div class="icon" data-icon="${o.id}" style="display:none;opacity:0">
+      <img src="${o.src}" style="object-position:${o.pos}" alt="" /></div>`
+  }
+  document.getElementById('fly').innerHTML = fly
+}
+
+const node = (selectors) => document.querySelector(selectors)
+const cells = {}
+const icons = {}
+
+function cacheNodes() {
+  for (const o of OLD) cells[o.id] = node(`[data-cell="${o.id}"]`)
+  for (const o of NEW) {
+    cells[o.id] = node(`[data-cell="${o.id}"]`)
+    icons[o.id] = node(`[data-icon="${o.id}"]`)
+  }
+}
+
+buildDom()
+cacheNodes()
+
+// 一圈之内的滚动量：就位前静止，就位时推半格，之后匀速（与 feed.html 同形，多一个相位）
+function scrollAt(p) {
+  const settle = ease.cubicInOut(seg(p, HOLD, SETTLE_AT)) * SETTLE
+  return PHASE + settle + SPEED * Math.max(0, p - SETTLE_AT)
+}
+
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+window.renderFrame = (t) => {
+  const p = mod(t, TOTAL)
+  const s = scrollAt(p)
+  const reveal = seg(p, 1.5, 2.6)          // 已经躺在流里的成果：随着封面收起来露出来
+
+  // 老成果
+  for (const o of OLD) {
+    style(cells[o.id], { top: slotY(o.col, o.k, s), opacity: reveal })
+  }
+
+  // 新成果：落到落位线上；图标从左边飞进来，就地展开成卡片
+  for (const o of NEW) {
+    const y = slotY(o.col, o.k, s)
+    const open = ease.softBack(clamp01(seg(p, o.at - 0.05, o.at + 0.5)))
+    style(cells[o.id], {
+      top: y,
+      opacity: clamp01(seg(p, o.at - 0.08, o.at + 0.06)),
+      transform: `scale(${lerp(0.072, 1, open).toFixed(4)})`,
+      transformOrigin: '50% 50%',
+    })
+
+    const icon = icons[o.id]
+    const flyP = ease.cubicInOut(seg(p, o.at - 0.8, o.at - 0.02))
+    if (flyP > 0 && flyP < 1) {
+      const from = { x: -170, y: y + 150 }
+      const to = { x: slotX(o.col) + COL_W / 2 - 22, y: y + CARD_H / 2 - 32 }
+      style(icon, {
+        display: 'block',
+        left: VIEW.x + lerp(from.x, to.x, flyP),
+        top: VIEW.y + lerp(from.y, to.y, flyP),
+        opacity: Math.min(1, flyP * 3.2),
+      })
+    } else {
+      style(icon, { display: 'none', opacity: 0 })
+    }
+  }
+
+  // 封面：全屏 ⇄ 3 号位。收进 3 号位时，它的中心正好是画框正中。
+  const fold = ease.cubicInOut(seg(p, HOLD, SETTLE_AT))
+  const grow = ease.cubicInOut(seg(p, EXPAND_AT, EXPAND_END))
+  const full = Math.max(1 - fold, grow)
+  const w = lerp(COL_W, VW, full)
+  style(node('#cover'), {
+    left: 0,
+    top: lerp(slotY(COVER.col, COVER.k, s), 0, full),
+    width: w,
+    height: lerp(CARD_H, VH, full),
+    borderRadius: lerp(12, 0, full),   // 铺满画框时收成直角，循环接缝才藏得住
+  })
+  style(node('#tag'), { opacity: seg(w, 940, 1120) })
+
+  // 条带两端的淡出：封面越长越满，淡出越小；铺满画框时整个关掉
+  const fade = 46 * (1 - full)
+  const view = node('#view')
+  if (fade < 0.7) {
+    view.style.maskImage = 'none'
+    view.style.webkitMaskImage = 'none'
+  } else {
+    view.style.setProperty('--edge-fade', `${fade.toFixed(1)}px`)
+    view.style.maskImage = ''
+    view.style.webkitMaskImage = ''
+  }
+}
+
+// 图片就位（解码完成）再宣布可以渲染，否则静帧会拍到空卡片
+const images = Array.from(document.querySelectorAll('img'))
+Promise.all(images.map((img) => (img.complete
+  ? Promise.resolve()
+  : new Promise((resolve) => {
+      img.addEventListener('load', resolve, { once: true })
+      img.addEventListener('error', resolve, { once: true })
+    }))))
+  .then(() => window.renderFrame(0))
+  .then(() => { window.__sceneReady = true })
+</script>
+</body>
+</html>

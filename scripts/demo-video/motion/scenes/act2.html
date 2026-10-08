@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>act2</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.05), rgba(255,255,255,0) 62%),
+      radial-gradient(1500px 780px at 50% 116%, rgba(101,84,217,0.12), rgba(0,0,0,0) 60%),
+      #0a0a0c; }
+  .grain { position: absolute; inset: 0; opacity: 0.04; mix-blend-mode: screen; }
+
+  #stage { position: absolute; inset: 0; transform-origin: 0 0; }
+
+  /* one surface; every division inside it is a hairline, never a gap */
+  .panel { position: absolute; left: 120px; top: 96px; width: 1680px; height: 888px;
+    border-radius: 20px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.022));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.16), 0 40px 90px rgba(0,0,0,0.45); }
+  .panel-top { position: absolute; left: 0; right: 0; top: 0; height: 1.5px; z-index: 3;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.45), rgba(255,255,255,0)); }
+
+  .col { position: absolute; top: 0; height: 888px; overflow: hidden; }
+  .col-surface { position: absolute; inset: 0; opacity: 0;
+    background: linear-gradient(180deg, rgba(101,84,217,0.10), rgba(101,84,217,0.02)); }
+  .divider { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.14); z-index: 4; }
+
+  .col-title { position: absolute; left: 44px; top: 300px; font-size: 40px; font-weight: 600; white-space: nowrap; }
+  .col-sub { position: absolute; left: 44px; top: 358px; font-size: 21px; color: rgba(238,240,244,0.45); white-space: nowrap; }
+  .line { position: absolute; height: 10px; border-radius: 5px; background: rgba(255,255,255,0.09); }
+  .meter { position: absolute; left: 44px; top: 596px; font-size: 20px; letter-spacing: 0.06em;
+    color: rgba(238,240,244,0.40); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* regions after the split */
+  .region { position: absolute; top: 0; height: 888px; opacity: 0; }
+  .bubble { position: absolute; border-radius: 14px; padding: 18px 22px; font-size: 26px; line-height: 1.5;
+    background: rgba(255,255,255,0.085); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); }
+  .step-dot { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: rgba(255,255,255,0.34); }
+  .step-row { position: absolute; height: 12px; border-radius: 6px; background: rgba(255,255,255,0.10); transform-origin: 0 50%; }
+  .caret { position: absolute; width: 3px; height: 26px; background: #6554d9; border-radius: 2px; }
+
+  .tile { position: absolute; border-radius: 8px; background: rgba(255,255,255,0.05);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07); transform-origin: 50% 100%; }
+  .part { position: absolute; background: rgba(255,255,255,0.17); border-radius: 4px; transform-origin: 50% 100%; }
+  .stem { position: absolute; width: 4px; background: rgba(255,255,255,0.22); border-radius: 2px; transform-origin: 50% 100%; }
+  .crown { position: absolute; border-radius: 50%; background: rgba(101,84,217,0.5); transform-origin: 50% 100%; }
+  .road { position: absolute; height: 10px; border-radius: 5px; background: rgba(255,255,255,0.10); transform-origin: 0 50%; }
+
+  .lane { position: absolute; top: 0; height: 888px; overflow: hidden; }
+  .lane-surface { position: absolute; inset: 0; opacity: 0; background: rgba(255,255,255,0.02); }
+  .lane-head { position: absolute; height: 12px; border-radius: 6px; background: rgba(255,255,255,0.20); transform-origin: 0 50%; }
+  .piece { position: absolute; background: rgba(255,255,255,0.15); border-radius: 3px; transform-origin: 50% 100%; }
+
+  .orb { position: absolute; width: 46px; height: 46px; border-radius: 50%;
+    background: radial-gradient(circle at 34% 30%, rgba(255,255,255,0.95), rgba(101,84,217,0.85));
+    box-shadow: 0 10px 26px rgba(0,0,0,0.45); }
+  .cursor { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+    background: #f2f3f7; box-shadow: 0 0 0 6px rgba(255,255,255,0.10), 0 6px 18px rgba(0,0,0,0.5); }
+  .ripple { position: absolute; border-radius: 50%; border: 2px solid rgba(101,84,217,0.9); transform-origin: 50% 50%; }
+  .ring { position: absolute; border-radius: 50%; border: 2px solid rgba(101,84,217,0.7); transform-origin: 50% 50%; }
+
+  .cap { position: absolute; left: 92px; bottom: 78px; background: rgba(8,8,10,0.78);
+    border-radius: 12px; padding: 16px 26px 18px; }
+  .cap-title { font-size: 28px; letter-spacing: 0.04em; color: rgba(238,240,244,0.9); }
+  .cap-hint { margin-top: 8px; font-size: 21px; letter-spacing: 0.05em; color: rgba(238,240,244,0.48); }
+  .hud-time { position: absolute; right: 120px; bottom: 60px; font-size: 21px; letter-spacing: 0.08em;
+    color: rgba(238,240,244,0.36); font-variant-numeric: tabular-nums; }
+  .track { position: absolute; left: 120px; right: 120px; bottom: 26px; height: 26px; }
+  .track-line { position: absolute; left: 0; right: 0; top: 12px; height: 1px; background: rgba(255,255,255,0.16); }
+  .track-block { position: absolute; top: 8px; height: 9px; border-radius: 3px; background: rgba(255,255,255,0.16); }
+  .track-block.active { background: rgba(101,84,217,0.85); }
+  .track-name { position: absolute; top: -16px; font-size: 18px; letter-spacing: 0.06em; color: rgba(238,240,244,0.45); }
+  .track-head { position: absolute; top: 2px; width: 1.5px; height: 22px; background: #6554d9; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch" /><feColorMatrix type="saturate" values="0" /></filter>
+    <rect width="1920" height="1080" filter="url(#g)" />
+  </svg>
+
+  <div id="stage">
+    <div class="panel" id="panel">
+      <div class="panel-top"></div>
+
+      <div class="col" id="col0"><div class="col-surface" id="surf0"></div><div id="body0"></div></div>
+      <div class="col" id="col1"><div class="col-surface" id="surf1"></div><div id="body1"></div></div>
+      <div class="col" id="col2"><div class="col-surface" id="surf2"></div><div id="body2"></div></div>
+      <div class="divider" id="div0"></div>
+      <div class="divider" id="div1"></div>
+
+      <div class="region" id="chatRegion"><div id="chatBody"></div></div>
+      <div class="divider" id="splitDivider" style="opacity:0"></div>
+      <div class="region" id="workRegion">
+        <div id="tileLayer"></div>
+        <div id="partLayer"></div>
+      </div>
+
+      <div id="laneLayer"></div>
+      <div id="orbLayer"></div>
+      <div id="fxLayer"></div>
+      <div class="ring" id="mergeRing"></div>
+    </div>
+  </div>
+
+  <div class="cap" id="cap"><div class="cap-title" id="capTitle"></div><div class="cap-hint" id="capHint"></div></div>
+  <div class="hud-time" id="hudTime"></div>
+  <div class="track"><div class="track-line"></div><div id="trackBlocks"></div><div class="track-head" id="trackHead"></div></div>
+
+<script>
+const { seg, lerp, ease, style, stagger } = window.MotionKit
+
+/* ---------------------------------------------------------------------------
+ * Act 1, built on the approved opening: three regions of ONE surface, joined
+ * edge to edge.  Then: click the third → it takes the whole surface → the
+ * agent speaks → the surface divides into chat + workspace → the work is built
+ * piece by piece → sub-agents arrive → it all folds back together.
+ *
+ * Coordinates inside .panel are panel-local (0..1680, 0..888).
+ * ------------------------------------------------------------------------ */
+
+const PANEL = { w: 1680, h: 888 }
+const EQ = PANEL.w / 3
+const WIDE = 1000
+const NARROW = (PANEL.w - WIDE) / 2
+const CHAT_W = 640
+
+const STEPS = [
+  { id: 'P1', at: 0.0,  dur: 0.0,  note: '三栏相连（上一段的结果）' },
+  { id: 'P2', at: 1.0,  dur: 1.0,  note: '光标点中第三块' },
+  { id: 'P3', at: 1.9,  dur: 1.5,  note: '第三块铺满整块表面' },
+  { id: 'P4', at: 3.6,  dur: 2.0,  note: 'Agent 说出第一句话' },
+  { id: 'P5', at: 5.8,  dur: 1.4,  note: '分为对话区 + 工作区（一条分隔线）' },
+  { id: 'P6', at: 7.4,  dur: 9.6,  note: '右半边一点点搭出来' },
+  { id: 'P7', at: 17.2, dur: 8.4,  note: '召唤子代理 · 三条作业线 · 推镜' },
+  { id: 'P8', at: 26.0, dur: 3.4,  note: '拉回 · 合拢成成品' },
+]
+const TOTAL = 29.6
+const LAST = STEPS[STEPS.length - 1]
+
+const COLS = [
+  { title: '实现功能', sub: '一句话到能用的应用' },
+  { title: '办公', sub: '报表 · 文档 · 演示' },
+  { title: '做小游戏', sub: '能玩的那种' },
+]
+
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+
+/* ------------------------------------------------------------------ build */
+function buildDom() {
+  COLS.forEach((col, i) => {
+    let html = `<div class="col-title">${col.title}</div><div class="col-sub">${col.sub}</div>`
+    for (let r = 0; r < 3; r += 1) {
+      html += `<div class="line" style="left:44px;top:${420 + r * 30}px;width:${220 - r * 46}px"></div>`
+    }
+    html += `<div class="meter" id="meter${i}"></div>`
+    $(`body${i}`).innerHTML = html
+  })
+
+  // chat region: the agent's line + the steps it reports as it works
+  let chat = `<div class="bubble" id="bubble" style="left:40px;top:120px;width:540px">好，现在我来实现这个经营建造游戏。</div>`
+  chat += `<div class="caret" id="caret" style="left:40px;top:210px"></div>`
+  for (let i = 0; i < 4; i += 1) {
+    chat += `<div class="step-dot" data-stepdot="${i}" style="left:44px;top:${270 + i * 56}px"></div>`
+    chat += `<div class="step-row" data-steprow="${i}" style="left:72px;top:${276 + i * 56}px;width:${260 - i * 28}px"></div>`
+  }
+  $('chatBody').innerHTML = chat
+
+  // work region: a tile grid the build sits on
+  const T = { cols: 3, rows: 3, size: 100, gap: 16 }
+  const gridW = T.cols * T.size + (T.cols - 1) * T.gap
+  const gridH = T.rows * T.size + (T.rows - 1) * T.gap
+  const workW = PANEL.w - CHAT_W - 1
+  const gx = (workW - gridW) / 2   // work-region local
+  const gy = 150
+  let tiles = ''
+  for (let r = 0; r < T.rows; r += 1) {
+    for (let c = 0; c < T.cols; c += 1) {
+      tiles += `<div class="tile" data-tile="${r * T.cols + c}" style="left:${gx + c * (T.size + T.gap)}px;top:${gy + r * (T.size + T.gap)}px;width:${T.size}px;height:${T.size}px;opacity:0"></div>`
+    }
+  }
+  $('tileLayer').innerHTML = tiles
+
+  // the build: foundation -> walls -> roof, then a tree and a road
+  const baseY = gy + T.size * 2 + T.gap * 2 + T.size
+  let parts = ''
+  parts += `<div class="part" data-part="foundation" style="left:${gx + 20}px;top:${baseY - 18}px;width:180px;height:18px;opacity:0"></div>`
+  parts += `<div class="part" data-part="walls" style="left:${gx + 40}px;top:${baseY - 108}px;width:140px;height:90px;opacity:0"></div>`
+  parts += `<div class="part" data-part="roof" style="left:${gx + 20}px;top:${baseY - 172}px;width:180px;height:64px;border-radius:6px 6px 2px 2px;opacity:0"></div>`
+  parts += `<div class="stem" data-part="stem" style="left:${gx + 300}px;top:${baseY - 70}px;height:70px;opacity:0"></div>`
+  parts += `<div class="crown" data-part="crown" style="left:${gx + 264}px;top:${baseY - 156}px;width:76px;height:76px;opacity:0"></div>`
+  parts += `<div class="road" data-part="road" style="left:${gx - 40}px;top:${baseY + 10}px;width:${gridW + 80}px;opacity:0"></div>`
+  $('partLayer').innerHTML = parts
+
+  // three workstreams, drawn as connected lanes across the work region
+  let lanes = ''
+  for (let i = 0; i < 3; i += 1) {
+    lanes += `<div class="lane" id="lane${i}"><div class="lane-surface" id="lanesurf${i}"></div><div id="lanebody${i}"></div></div>`
+    lanes += `<div class="divider" id="lanediv${i}"></div>`
+  }
+  $('laneLayer').innerHTML = lanes
+  let laneBody = ''
+  for (let i = 0; i < 3; i += 1) {
+    let html = `<div class="lane-head" data-lanehead="${i}" style="left:34px;top:120px;opacity:0"></div>`
+    for (let p = 0; p < 5; p += 1) {
+      html += `<div class="piece" data-piece="${i}-${p}" style="width:${90 + ((p * 37 + i * 23) % 80)}px;height:${34 + ((p * 17) % 30)}px;opacity:0"></div>`
+    }
+    laneBody += `<div id="lanebodyplaceholder${i}">${html}</div>`
+  }
+  const stash = document.createElement('div')
+  stash.style.display = 'none'
+  stash.innerHTML = laneBody
+  $('laneLayer').appendChild(stash)
+
+  let orbs = ''
+  for (let i = 0; i < 3; i += 1) orbs += `<div class="orb" data-orb="${i}" style="opacity:0"></div>`
+  $('orbLayer').innerHTML = orbs
+}
+buildDom()
+
+// move the lane bodies into their lanes, then drop the staging copies so each
+// element exists exactly once in the document
+for (let i = 0; i < 3; i += 1) {
+  const holder = document.getElementById(`lanebody${i}`)
+  const source = document.getElementById(`lanebodyplaceholder${i}`)
+  if (holder && source) holder.innerHTML = source.innerHTML
+}
+for (let i = 0; i < 3; i += 1) {
+  const source = document.getElementById(`lanebodyplaceholder${i}`)
+  if (source && source.parentElement) source.parentElement.remove()
+}
+
+function buildTrack() {
+  let html = ''
+  for (const step of STEPS) {
+    if (step.dur <= 0) continue
+    html += `<div class="track-block" data-block="${step.id}" style="left:${((step.at / TOTAL) * 100).toFixed(2)}%;width:${((step.dur / TOTAL) * 100).toFixed(2)}%"></div>`
+    html += `<div class="track-name" style="left:${((step.at / TOTAL) * 100).toFixed(2)}%">${step.id}</div>`
+  }
+  $('trackBlocks').innerHTML = html
+}
+buildTrack()
+
+/* --------------------------------------------------------------- geometry */
+const LANE_W = (PANEL.w - CHAT_W - 1) / 3
+const laneX = (i) => CHAT_W + 1 + i * LANE_W
+
+function place(node, x, y, w, h) {
+  style(node, { left: `${x.toFixed(1)}px`, top: `${y.toFixed(1)}px`, width: `${w.toFixed(1)}px`, height: `${h.toFixed(1)}px` })
+}
+
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+/* ------------------------------------------------------------------ render */
+window.renderFrame = (t) => {
+  /* ---- P1..P3: the third region claims the whole surface ---- */
+  const claim = ease.cubicInOut(seg(t, STEPS[2].at, STEPS[2].at + STEPS[2].dur))
+  // before the click: the approved three-column state (third already widened)
+  const colWidths = [NARROW, NARROW, WIDE]
+  COLS.forEach((col, i) => {
+    const w = lerp(colWidths[i], i === 2 ? PANEL.w : 0, claim)
+    const x = i === 0 ? 0 : i === 1 ? lerp(NARROW, 0, claim) : lerp(NARROW + NARROW, 0, claim)
+    place($(`col${i}`), x, 0, Math.max(w, 0), PANEL.h)
+    const handover = 1 - ease.quintOut(seg(t, STEPS[4].at - 0.2, STEPS[4].at + 0.8))
+    const ownFade = i === 2 ? 1 : 1 - ease.quintOut(seg(t, STEPS[2].at + 0.2, STEPS[2].at + 1.0))
+    style($(`col${i}`), { opacity: ownFade * handover })
+    $(`meter${i}`).textContent = `${Math.round(w)} px${i === 2 ? ' · 焦点' : ''}`
+    style($(`surf${i}`), { opacity: i === 2 ? 0.85 : 0 })
+  })
+  style($('div0'), { left: `${NARROW}px`, opacity: (1 - claim) })
+  style($('div1'), { left: `${NARROW * 2}px`, opacity: (1 - claim) })
+
+  /* ---- P2: cursor + click ---- */
+  const cursorP = ease.sineInOut(seg(t, STEPS[1].at, STEPS[1].at + 0.7))
+  const clickX = NARROW * 2 + 120
+  const clickY = 420
+  const cx = lerp(PANEL.w - 120, clickX, cursorP)
+  const cy = lerp(PANEL.h - 120, clickY, cursorP)
+  const press = Math.sin(Math.PI * seg(t, STEPS[1].at + 0.72, STEPS[1].at + 1.0))
+  $('fxLayer').innerHTML = `
+    <div class="cursor" style="left:${cx.toFixed(1)}px;top:${cy.toFixed(1)}px;opacity:${seg(t, STEPS[1].at, STEPS[1].at + 0.25) * (1 - seg(t, STEPS[2].at + 0.2, STEPS[2].at + 0.7))};transform:scale(${(1 - press * 0.35).toFixed(3)})"></div>
+    ${
+      seg(t, STEPS[1].at + 0.74, STEPS[1].at + 1.7) > 0 && seg(t, STEPS[1].at + 0.74, STEPS[1].at + 1.7) < 1
+        ? `<div class="ripple" style="left:${(cx - 40).toFixed(1)}px;top:${(cy - 40).toFixed(1)}px;width:80px;height:80px;opacity:${(Math.sin(Math.PI * seg(t, STEPS[1].at + 0.74, STEPS[1].at + 1.7)) * 0.9).toFixed(3)};transform:scale(${lerp(0.3, 3.4, ease.expoOut(seg(t, STEPS[1].at + 0.74, STEPS[1].at + 1.7))).toFixed(3)})"></div>`
+        : ''
+    }`
+
+  /* ---- P4: the agent's first line ---- */
+  const bubbleP = seg(t, STEPS[3].at + 0.2, STEPS[3].at + 1.5)
+  $('chatBody') && style($('bubble'), {
+    opacity: ease.quintOut(bubbleP),
+    transform: `translateY(${((1 - ease.expoOut(bubbleP)) * 20).toFixed(1)}px)`,
+  })
+  const caretOn = t > STEPS[3].at + 1.4 && t < STEPS[4].at + 1.6
+  style($('caret'), { opacity: caretOn ? (Math.sin((t - STEPS[3].at - 1.4) * 9) > 0 ? 0.9 : 0.12) : 0 })
+
+  /* ---- P5: the surface divides into chat + workspace ---- */
+  const split = ease.cubicInOut(seg(t, STEPS[4].at, STEPS[4].at + STEPS[4].dur))
+  const chatW = CHAT_W
+  style($('chatRegion'), { opacity: split > 0 ? 1 : 0 })
+  place($('chatRegion'), 0, 0, chatW, PANEL.h)
+  place($('workRegion'), chatW + 1, 0, PANEL.w - chatW - 1, PANEL.h)
+  style($('workRegion'), { opacity: ease.quintOut(seg(t, STEPS[4].at + 0.3, STEPS[4].at + 1.2)) })
+  style($('splitDivider'), {
+    opacity: split,
+    left: `${lerp(PANEL.w, chatW, split).toFixed(1)}px`,
+  })
+
+  /* ---- P6: the build ---- */
+  const T = { cols: 3, rows: 3, size: 100, gap: 16 }
+  const gridW = T.cols * T.size + (T.cols - 1) * T.gap
+  const workX = chatW + 1
+  const workW = PANEL.w - workX
+  const gx = workX + (workW - gridW) / 2
+  const gy = 150
+  const buildStart = STEPS[5].at + 0.3
+  // sub-agents take the stage: the base build recedes so the workstreams lead
+  const laneFocus = ease.sineInOut(seg(t, STEPS[6].at + 0.6, STEPS[6].at + 2.0))
+    * (1 - ease.sineInOut(seg(t, STEPS[7].at, LAST.at + LAST.dur - 1.0)))
+  const baseDim = 1 - 0.85 * laneFocus
+  document.querySelectorAll('[data-tile]').forEach((node) => {
+    const i = Number(node.dataset.tile)
+    const p = stagger(t, i, { start: buildStart, each: 0.08, dur: 0.45 })
+    style(node, {
+      opacity: Math.min(1, p * 2.3) * baseDim,
+      transform: `translateY(${((1 - ease.expoOut(p)) * -26).toFixed(1)}px) scale(${(0.9 + 0.1 * ease.softBack(p)).toFixed(4)})`,
+    })
+  })
+  const partAt = {
+    foundation: buildStart + 1.4,
+    walls: buildStart + 2.0,
+    roof: buildStart + 2.7,
+    stem: buildStart + 3.8,
+    crown: buildStart + 4.2,
+    road: buildStart + 4.9,
+  }
+  document.querySelectorAll('[data-part]').forEach((node) => {
+    const start = partAt[node.dataset.part]
+    const p = ease.softBack(seg(t, start, start + 0.6))
+    style(node, { opacity: Math.min(1, seg(t, start, start + 0.2) * 1.5) * baseDim, transform: `scaleY(${p.toFixed(4)})` })
+  })
+  document.querySelectorAll('[data-stepdot]').forEach((node) => {
+    const i = Number(node.dataset.stepdot)
+    const p = stagger(t, i, { start: STEPS[5].at + 1.0, each: 2.0, dur: 0.4 })
+    style(node, { opacity: p, transform: `scale(${(0.6 + 0.4 * ease.softBack(p)).toFixed(3)})` })
+  })
+  document.querySelectorAll('[data-steprow]').forEach((node) => {
+    const i = Number(node.dataset.steprow)
+    const p = stagger(t, i, { start: STEPS[5].at + 1.2, each: 2.0, dur: 0.5 })
+    style(node, { opacity: p * 0.9, transform: `scaleX(${ease.expoOut(p).toFixed(4)})` })
+  })
+
+  /* ---- P7: sub-agents take the work region ---- */
+  const ORB = STEPS[6].at + 0.3
+  const orbFrom = { x: 300, y: 170 }
+  for (let i = 0; i < 3; i += 1) {
+    const node = document.querySelector(`[data-orb="${i}"]`)
+    const p = seg(t, ORB + i * 0.24, ORB + i * 0.24 + 1.15)
+    const to = { x: laneX(i) + LANE_W / 2 - 23, y: 190 }
+    const arc = Math.sin(Math.PI * p) * 80
+    style(node, {
+      opacity: Math.min(1, p * 2.4) * (laneFocus > 0 ? 1 : 0),
+      left: `${lerp(orbFrom.x, to.x, ease.sineInOut(p)).toFixed(1)}px`,
+      top: `${(lerp(orbFrom.y, to.y, ease.sineInOut(p)) - arc).toFixed(1)}px`,
+      transform: `scale(${(0.7 + 0.3 * ease.softBack(p)).toFixed(3)})`,
+    })
+  }
+  for (let i = 0; i < 3; i += 1) {
+    const lane = $(`lane${i}`)
+    const p = seg(t, STEPS[6].at + 1.0 + i * 0.18, STEPS[6].at + 1.8 + i * 0.18)
+    place(lane, laneX(i), 0, LANE_W, PANEL.h)
+    style(lane, { opacity: ease.quintOut(p) * (1 - ease.sineInOut(seg(t, STEPS[7].at + 0.6, LAST.at + LAST.dur - 1.2))) })
+    style($(`lanesurf${i}`), { opacity: ease.quintOut(p) * 0.9 })
+    style($(`lanediv${i}`), { opacity: p, left: `${laneX(i)}px` })
+  }
+  document.querySelectorAll('[data-lanehead]').forEach((node) => {
+    const i = Number(node.dataset.lanehead)
+    const p = stagger(t, i, { start: STEPS[6].at + 2.0, each: 0.2, dur: 0.5 })
+    style(node, { opacity: ease.quintOut(p) * 0.95, transform: `scaleX(${ease.expoOut(p).toFixed(4)})` })
+  })
+  document.querySelectorAll('[data-piece]').forEach((node) => {
+    const [c, p] = node.dataset.piece.split('-').map(Number)
+    const start = STEPS[6].at + 2.4 + c * 0.5 + p * 0.36
+    const prog = ease.softBack(seg(t, start, start + 0.55))
+    style(node, {
+      left: `${(34 + (p % 2) * 116).toFixed(1)}px`,
+      top: `${(240 + p * 62).toFixed(1)}px`,
+      opacity: Math.min(1, seg(t, start, start + 0.2) * 1.5),
+      transform: `scaleY(${prog.toFixed(4)})`,
+    })
+  })
+
+  /* ---- camera: a push for the sub-agent beat ---- */
+  let camK = 1
+  if (t >= STEPS[6].at) {
+    const pushIn = ease.sineInOut(seg(t, STEPS[6].at + 1.2, STEPS[6].at + 3.2))
+    const pullOut = ease.sineInOut(seg(t, STEPS[7].at + 0.4, STEPS[7].at + 2.4))
+    camK = 1 + 0.22 * pushIn * (1 - pullOut)
+  }
+  const fx = 120 + chatW + (PANEL.w - chatW) / 2
+  const fy = 96 + PANEL.h / 2
+  style($('stage'), { transform: `translate(${(fx * (1 - camK)).toFixed(2)}px, ${(fy * (1 - camK)).toFixed(2)}px) scale(${camK.toFixed(5)})` })
+
+  /* ---- P8: the workstreams fold back into one surface ---- */
+  const pulse = seg(t, STEPS[7].at + 2.2, STEPS[7].at + 3.4)
+  style($('mergeRing'), {
+    opacity: pulse > 0 && pulse < 1 ? Math.sin(Math.PI * pulse) * 0.8 : 0,
+    left: `${(PANEL.w / 2 - 300).toFixed(1)}px`,
+    top: `${(PANEL.h / 2 - 300).toFixed(1)}px`,
+    width: '600px',
+    height: '600px',
+    transform: `scale(${lerp(0.5, 2.6, ease.expoOut(pulse)).toFixed(3)})`,
+  })
+
+  /* ---- captions + hud ---- */
+  let current = STEPS[0]
+  for (const step of STEPS) if (t >= step.at) current = step
+  $('capTitle').textContent = `${current.id} · ${current.note}`
+  $('capHint').textContent = t < STEPS[2].at
+    ? '三块相连，第三块是焦点'
+    : t < STEPS[4].at
+      ? '第三块正在接管整块表面'
+      : t < STEPS[6].at
+        ? `对话区 ${chatW} px ＋ 工作区 ${PANEL.w - chatW - 1} px（一条分隔线）`
+        : `工作区内再分三条作业线，各 ${Math.round(LANE_W)} px`
+  $('hudTime').textContent = `${t.toFixed(1)}s / ${TOTAL.toFixed(1)}s`
+  document.querySelectorAll('[data-block]').forEach((node) => {
+    node.classList.toggle('active', node.dataset.block === current.id)
+  })
+  style($('trackHead'), { left: `${((t / TOTAL) * 100).toFixed(3)}%` })
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

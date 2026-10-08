@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>grid · 容器拓宽</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background: radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.05), rgba(255,255,255,0) 62%), #0a0a0c; }
+  .panel { position: absolute; left: 120px; top: 96px; width: 1680px; height: 888px;
+    border-radius: 20px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.16), 0 40px 90px rgba(0,0,0,0.45); }
+
+  /* 容器：唯一的“窗口”。它拓宽，露出来的格子就多一个。 */
+  #win { position: absolute; overflow: hidden; border-radius: 12px; }
+  #lattice { position: absolute; }
+
+  .cell { position: absolute; overflow: hidden; border-radius: 10px;
+    background: rgba(255,255,255,0.045); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.09); }
+  .t { position: absolute; left: 16px; top: 14px; height: 11px; border-radius: 6px; background: rgba(255,255,255,0.26); }
+  .l { position: absolute; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.13); transform-origin: 0 50%; }
+  .b { position: absolute; border-radius: 3px 3px 0 0; background: rgba(101,84,217,0.42); transform-origin: 50% 100%; }
+  .glyph { position: absolute; border-radius: 5px; background: rgba(255,255,255,0.16);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.22); }
+  .edge { position: absolute; }
+
+  .cap { position: absolute; left: 120px; bottom: 22px; }
+  .cap-title { font-size: 24px; letter-spacing: 0.04em; color: rgba(238,240,244,0.82); }
+  .cap-hint { margin-top: 5px; font-size: 18px; letter-spacing: 0.05em; color: rgba(238,240,244,0.42); }
+  .hud-time { position: absolute; right: 120px; bottom: 26px; font-size: 19px; letter-spacing: 0.08em;
+    color: rgba(238,240,244,0.36); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <div class="panel" id="panel">
+    <div id="win"><div id="lattice"></div></div>
+    <div id="fly"></div>
+  </div>
+  <div class="cap"><div class="cap-title" id="capTitle"></div><div class="cap-hint" id="capHint"></div></div>
+  <div class="hud-time" id="hudTime"></div>
+
+<script>
+const { seg, lerp, ease, style } = window.MotionKit
+
+/* ---------------------------------------------------------------------------
+ * 容器拓宽，格子不动。
+ *
+ * 九个格子从一开始就钉在固定位置上，谁也不移动、不改变大小。
+ * 变的只有外面那个容器：它的哪条边往外走，就把那一侧的格子露出来。
+ *
+ *   1 格 → 向下拓宽 → 2 格 → 向右拓宽 → 4 格 → 向下拓宽 → 6 格 → 向左拓宽 → 9 格
+ *
+ * 100 BPM：一拍 0.6s。9.9s = 16.5 拍。
+ * ------------------------------------------------------------------------ */
+
+const PANEL = { w: 1680, h: 888 }
+const GAP = 10
+const COLS = 3
+const ROWS = 3
+const BOX = { x: 220, y: 40, w: 1240, h: 808 }
+const CW = (BOX.w - GAP * (COLS - 1)) / COLS
+const CH = (BOX.h - GAP * (ROWS - 1)) / ROWS
+
+// 容器每一档覆盖的格子范围 [col0, col1, row0, row1]
+const WINDOWS = [[1, 1, 0, 0], [1, 1, 0, 1], [1, 2, 0, 1], [1, 2, 0, 2], [0, 2, 0, 2]]
+// 每一档新露出来的那一格，先给新的这份成果
+const CELLS = [[0, 1], [1, 1], [0, 2], [2, 1], [0, 0]]
+const LAND = [0.7, 2.2, 3.7, 5.2, 6.7]     // 成果落定的时刻
+const SWEEP = [0.6, 2.1, 3.6, 5.1, 6.6]    // 容器那条边开始外扩的时刻
+const KIND = ['doc', 'chart', 'table', 'doc', 'slide']
+
+const BEATS = [
+  { id: 'H1', at: 0.0, dur: 1.5, note: '第一件落进容器（此时容器只有一格大）' },
+  { id: 'H2', at: 1.5, dur: 1.5, note: '容器向下拓宽：下面那一格露出来' },
+  { id: 'H3', at: 3.0, dur: 1.5, note: '容器向右拓宽：右侧两格露出来' },
+  { id: 'H4', at: 4.5, dur: 1.5, note: '容器再向下拓宽' },
+  { id: 'H5', at: 6.0, dur: 1.5, note: '容器向左拓宽：第三列露出来，满九格' },
+  { id: 'H6', at: 7.5, dur: 2.4, note: '容器停住，里面的东西落定' },
+]
+const TOTAL = 9.9
+const at = (id) => BEATS.find((b) => b.id === id).at
+
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+const cellX = (c) => BOX.x + c * (CW + GAP)
+const cellY = (r) => BOX.y + r * (CH + GAP)
+const windowRect = ([c0, c1, r0, r1]) => ({
+  x: cellX(c0), y: cellY(r0),
+  w: (c1 - c0 + 1) * CW + (c1 - c0) * GAP,
+  h: (r1 - r0 + 1) * CH + (r1 - r0) * GAP,
+})
+
+function buildDom() {
+  let html = ''
+  for (let i = 0; i < 5; i += 1) {
+    const [r, c] = CELLS[i]
+    const kind = KIND[i]
+    let inner = `<div class="t" data-t="${i}" style="width:${70 + i * 12}px;opacity:0"></div>`
+    if (kind === 'doc') {
+      for (let k = 0; k < 6; k += 1) inner += `<div class="l" data-l="${i}-${k}" style="left:16px;top:${46 + k * 22}px;width:${180 - (k % 3) * 30}px;opacity:0"></div>`
+    } else if (kind === 'chart') {
+      for (let k = 0; k < 2; k += 1) inner += `<div class="l" data-l="${i}-${k}" style="left:16px;top:${46 + k * 22}px;width:${140 - k * 36}px;opacity:0"></div>`
+      for (let b = 0; b < 5; b += 1) inner += `<div class="b" data-b="${i}-${b}" style="left:${20 + b * 40}px;top:170px;width:28px;height:${30 + ((b * 53) % 78)}px;opacity:0"></div>`
+    } else if (kind === 'table') {
+      for (let rr = 0; rr < 5; rr += 1) for (let cc = 0; cc < 3; cc += 1) {
+        inner += `<div class="l" data-l="${i}-${rr * 3 + cc}" style="left:${16 + cc * 80}px;top:${46 + rr * 26}px;width:66px;height:14px;opacity:0"></div>`
+      }
+    } else {
+      inner += `<div class="l" data-l="${i}-0" style="left:16px;top:46px;right:16px;width:auto;height:120px;border-radius:8px;background:rgba(255,255,255,0.10);opacity:0"></div>`
+      for (let k = 1; k < 4; k += 1) inner += `<div class="l" data-l="${i}-${k}" style="left:16px;top:${182 + k * 22}px;width:${160 - k * 28}px;opacity:0"></div>`
+    }
+    html += `<div class="cell" data-cell="${i}" style="left:${cellX(c)}px;top:${cellY(r)}px;width:${CW}px;height:${CH}px;opacity:0">${inner}</div>`
+  }
+  $('lattice').innerHTML = html
+  style($('lattice'), { left: '0px', top: '0px', width: `${PANEL.w}px`, height: `${PANEL.h}px` })
+}
+buildDom()
+
+window.renderFrame = (t) => {
+  let fly = ''
+
+  let step = 1
+  for (let i = 0; i < LAND.length; i += 1) if (t >= LAND[i] - 0.7) step = i + 1
+  const idx = Math.min(step, WINDOWS.length) - 1
+  const win = windowRect(WINDOWS[idx])
+  const prev = windowRect(WINDOWS[Math.max(0, idx - 1)])
+  const sweepAt = SWEEP[idx]
+  const grow = step === 1 ? 0 : ease.quintOut(clamp01(seg(t, sweepAt, sweepAt + 0.72)))
+  const over = step === 1 ? 0 : ease.softBack(clamp01(seg(t, sweepAt, sweepAt + 0.72)))
+  // 这一档是哪条边在往外走
+  const dLeft = prev.x - win.x
+  const dRight = (win.x + win.w) - (prev.x + prev.w)
+  const dTop = prev.y - win.y
+  const dBot = (win.y + win.h) - (prev.y + prev.h)
+  const rect = {
+    x: win.x - dLeft * (1 - over),
+    y: win.y - dTop * (1 - over),
+    w: win.w + dLeft * (1 - over) - dRight * (1 - grow),
+    h: win.h + dTop * (1 - over) - dBot * (1 - grow),
+  }
+  style($('win'), {
+    left: `${rect.x.toFixed(1)}px`, top: `${rect.y.toFixed(1)}px`,
+    width: `${Math.max(0, rect.w).toFixed(1)}px`, height: `${Math.max(0, rect.h).toFixed(1)}px`,
+  })
+  // 格子在容器里是钉住的：把容器的位移反补回去，画面上的位置绝对不动
+  style($('lattice'), { left: `${(-rect.x).toFixed(1)}px`, top: `${(-rect.y).toFixed(1)}px` })
+
+  // 正在走的那条边，跟着一道淡淡的光
+  if (grow < 1) {
+    const fade = (Math.sin(Math.PI * grow) * 0.85).toFixed(3)
+    if (dBot > 0.5) fly += `<div class="edge" style="left:${rect.x.toFixed(1)}px;top:${(rect.y + rect.h).toFixed(1)}px;width:${rect.w.toFixed(1)}px;height:2px;background:linear-gradient(90deg, rgba(101,84,217,0), rgba(150,135,245,0.75), rgba(101,84,217,0));opacity:${fade}"></div>`
+    if (dRight > 0.5) fly += `<div class="edge" style="left:${(rect.x + rect.w).toFixed(1)}px;top:${rect.y.toFixed(1)}px;width:2px;height:${rect.h.toFixed(1)}px;background:linear-gradient(180deg, rgba(101,84,217,0), rgba(150,135,245,0.75), rgba(101,84,217,0));opacity:${fade}"></div>`
+    if (dLeft > 0.5) fly += `<div class="edge" style="left:${rect.x.toFixed(1)}px;top:${rect.y.toFixed(1)}px;width:2px;height:${rect.h.toFixed(1)}px;background:linear-gradient(180deg, rgba(101,84,217,0), rgba(150,135,245,0.75), rgba(101,84,217,0));opacity:${fade}"></div>`
+  }
+
+  // 格子：位置、大小从头到尾不变；只有“在不在容器里”在变
+  for (let i = 0; i < 5; i += 1) {
+    const node = document.querySelector(`[data-cell="${i}"]`)
+    const land = LAND[i]
+    style(node, { opacity: t >= land - 0.7 ? 1 : 0 })
+    style(document.querySelector(`[data-t="${i}"]`), { opacity: Math.min(1, seg(t, land, land + 0.35) * 2.2) })
+    document.querySelectorAll(`[data-l^="${i}-"]`).forEach((line) => {
+      const k = Number(line.dataset.l.split('-')[1])
+      const p = ease.expoOut(seg(t, land + 0.06 + k * 0.07, land + 0.06 + k * 0.07 + 0.38))
+      style(line, { opacity: Math.min(1, p * 1.7), transform: `scaleX(${p.toFixed(4)})` })
+    })
+    document.querySelectorAll(`[data-b^="${i}-"]`).forEach((bar) => {
+      const k = Number(bar.dataset.b.split('-')[1])
+      const p = ease.quintOut(seg(t, land + 0.1 + k * 0.06, land + 0.1 + k * 0.06 + 0.4))
+      style(bar, { opacity: Math.min(1, p * 1.7), transform: `scaleY(${p.toFixed(4)})` })
+    })
+  }
+
+  // 预览图标飞向它那一格
+  for (let i = 0; i < 5; i += 1) {
+    const land = LAND[i]
+    const p = ease.cubicInOut(seg(t, land - 0.7, land - 0.02))
+    if (p <= 0 || p >= 1) continue
+    const [r, c] = CELLS[i]
+    const from = { x: BOX.x - 150, y: PANEL.h / 2 - 24 }
+    const to = { x: cellX(c) + CW / 2 - 18, y: cellY(r) + CH / 2 - 24 }
+    fly += `<div class="glyph" style="left:${lerp(from.x, to.x, p).toFixed(1)}px;top:${lerp(from.y, to.y, p).toFixed(1)}px;width:36px;height:48px;opacity:${(Math.sin(Math.PI * p) * 0.95).toFixed(3)}"></div>`
+  }
+
+  let current = BEATS[0]
+  for (const b of BEATS) if (t >= b.at) current = b
+  $('capTitle').textContent = `${current.id} · ${current.note}`
+  $('capHint').textContent = '格子从一开始就钉在那儿，谁也不动；动的是外面那个容器——哪条边往外走，就露出哪一侧的格子'
+  $('hudTime').textContent = `${t.toFixed(1)}s / ${TOTAL.toFixed(1)}s · 100 BPM`
+
+  $('fly').innerHTML = fly
+}
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v)
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

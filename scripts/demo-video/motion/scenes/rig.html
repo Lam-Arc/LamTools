@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>rig</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.05), rgba(255,255,255,0) 62%),
+      #0a0a0c; }
+  .grain { position: absolute; inset: 0; opacity: 0.04; mix-blend-mode: screen; }
+
+  /* stage = the 1920x1080 frame; the window inside it is what the real app
+     would be rendered into later */
+  .window { position: absolute; border: 1.5px solid rgba(255,255,255,0.28); border-radius: 26px; }
+
+  .box { position: absolute; border-radius: 16px; background: rgba(255,255,255,0.035);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.20); }
+  .box.primary { background: rgba(101,84,217,0.10); box-shadow: inset 0 0 0 1px rgba(101,84,217,0.55); }
+  .box.viewport { background: rgba(255,255,255,0.06); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.34); }
+
+  .label { position: absolute; left: 14px; top: 10px; font-size: 21px; letter-spacing: 0.06em; color: rgba(238,240,244,0.78); white-space: nowrap; }
+  .size { position: absolute; left: 14px; top: 38px; font-size: 19px; letter-spacing: 0.04em; color: rgba(238,240,244,0.42);
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .grid12 { position: absolute; inset: 0; opacity: 0.07;
+    background-image: linear-gradient(90deg, rgba(255,255,255,0.9) 1px, transparent 1px);
+    background-size: calc(100% / 12) 100%; }
+
+  .cap { position: absolute; left: 92px; bottom: 78px; background: rgba(8,8,10,0.78);
+    border-radius: 12px; padding: 16px 26px 18px; }
+  .cap-title { font-size: 28px; letter-spacing: 0.04em; color: rgba(238,240,244,0.9); }
+  .cap-hint { margin-top: 8px; font-size: 21px; letter-spacing: 0.05em; color: rgba(238,240,244,0.48); }
+  .cap-hint em { font-style: normal; color: rgba(101,84,217,0.95); }
+
+  /* timeline strip */
+  .track { position: absolute; left: 120px; right: 120px; bottom: 26px; height: 26px; }
+  .track-line { position: absolute; left: 0; right: 0; top: 12px; height: 1px; background: rgba(255,255,255,0.16); }
+  .track-block { position: absolute; top: 8px; height: 9px; border-radius: 3px; background: rgba(255,255,255,0.16); }
+  .track-block.active { background: rgba(101,84,217,0.85); }
+  .track-name { position: absolute; top: -16px; font-size: 18px; letter-spacing: 0.06em; color: rgba(238,240,244,0.45); white-space: nowrap; }
+  .track-head { position: absolute; top: 2px; width: 1.5px; height: 22px; background: #6554d9; }
+  .hud-time { position: absolute; right: 120px; bottom: 60px; font-size: 21px; letter-spacing: 0.08em; color: rgba(238,240,244,0.36); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch" /><feColorMatrix type="saturate" values="0" /></filter>
+    <rect width="1920" height="1080" filter="url(#g)" />
+  </svg>
+
+  <div id="boxes"></div>
+  <div class="grid12" id="grid12" style="left:120px;top:96px;right:120px;bottom:150px;position:absolute"></div>
+  <div class="window" id="window" style="left:120px;top:96px;width:1680px;height:888px"></div>
+
+  <div class="cap" id="cap"><div class="cap-title" id="capTitle"></div><div class="cap-hint" id="capHint"></div></div>
+  <div class="hud-time" id="hudTime"></div>
+  <div class="track" id="track"><div class="track-line"></div><div id="trackBlocks"></div><div class="track-head" id="trackHead"></div></div>
+
+<script>
+const { seg, lerp, ease, style, stagger } = window.MotionKit
+
+/* ---------------------------------------------------------------------------
+ * The rig: container geometry per state, and the rules that move them.
+ *
+ * Everything here is layout only — no content animation inside a container.
+ * Rects are in frame pixels (1920x1080).  A container tagged `viewport: true`
+ * is one the real frontend would be rendered into, so its rect is exactly the
+ * size the app's own responsive layout would have to cope with.
+ * ------------------------------------------------------------------------ */
+
+const FULL = { x: 120, y: 96, w: 1680, h: 888 }
+
+const STATES = {
+  /* three capability cards, side by side */
+  cards: {
+    c0: { x: 168,  y: 226, w: 470, h: 620 },
+    c1: { x: 680,  y: 226, w: 470, h: 620 },
+    c2: { x: 1192, y: 226, w: 470, h: 620 },
+  },
+  /* one card forward, the other two recede */
+  focus: {
+    c0: { x: 120,  y: 268, w: 440, h: 580 },
+    c1: { x: 592,  y: 252, w: 452, h: 600 },
+    c2: { x: 1080, y: 176, w: 700, h: 730 },
+  },
+  /* the focused card becomes the whole frame */
+  full: {
+    c2: { x: 120, y: 96, w: 1680, h: 888 },
+  },
+  /* conversation left, canvas right */
+  split: {
+    chat: { x: 120, y: 96, w: 640, h: 888, viewport: true },
+    work: { x: 800, y: 96, w: 1000, h: 888, viewport: true },
+  },
+  /* the same split, with the canvas carrying three workstreams */
+  lanes: {
+    chat: { x: 120, y: 96, w: 640, h: 888, viewport: true },
+    work: { x: 800, y: 96, w: 1000, h: 888, viewport: true },
+    l0: { x: 840, y: 236, w: 292, h: 620 },
+    l1: { x: 1154, y: 236, w: 292, h: 620 },
+    l2: { x: 1468, y: 236, w: 292, h: 620 },
+  },
+  /* everything folds back into one frame */
+  merged: {
+    all: { x: 120, y: 96, w: 1680, h: 888, viewport: true },
+  },
+}
+
+const LABELS = {
+  c0: '卡片 · 实现功能', c1: '卡片 · 办公', c2: '卡片 · 做小游戏',
+  chat: '对话区（真实界面视口）', work: '画布 / 预览区（真实界面视口）',
+  l0: '作业线 1', l1: '作业线 2', l2: '作业线 3', all: '成品（整屏视口）',
+}
+
+/* the choreography: state changes, durations and the feel of each move */
+const STEPS = [
+  { id: 'S1', at: 0.0,  to: 'cards',  dur: 2.4, ease: 'softBack', each: 0.75, note: '三张卡片依次落位（每张 0.75s）' },
+  { id: 'S2', at: 4.2,  to: 'focus',  dur: 1.1, ease: 'expoOut',  each: 0.10, note: '焦点移到第三张，其余两张后靠' },
+  { id: 'S3', at: 6.6,  to: 'full',   dur: 1.3, ease: 'cubicInOut', each: 0,   note: '点中的卡片变形占满整屏' },
+  { id: 'S4', at: 12.0, to: 'split',  dur: 1.2, ease: 'expoOut',  each: 0.12, note: '缩成左右分屏（视口交给真实界面）' },
+  { id: 'S5', at: 22.0, to: 'lanes',  dur: 1.2, ease: 'expoOut',  each: 0.10, note: '画布内出现三条作业线' },
+  { id: 'S6', at: 31.0, to: 'merged', dur: 1.5, ease: 'cubicInOut', each: 0,   note: '合拢成整屏成品' },
+]
+const TOTAL = 36.5
+
+/* ---------------------------------------------------------------- timeline */
+/** Which state we are interpolation from / to at time t, and how far. */
+function stateAt(t) {
+  let from = null
+  let to = STEPS[0]
+  for (const step of STEPS) {
+    if (t >= step.at) { from = to; to = step }
+  }
+  if (!from) return { from: to, to, p: 1, step: to }
+  const p = ease[to.ease] ? ease[to.ease](seg(t, to.at, to.at + to.dur)) : seg(t, to.at, to.at + to.dur)
+  return { from, to, p, step: to }
+}
+
+const rectOf = (stateName, key) => {
+  const state = STATES[stateName]
+  return state ? state[key] : undefined
+}
+
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+
+/* build one box per container that appears anywhere in the choreography */
+const KEYS = ['c0', 'c1', 'c2', 'chat', 'work', 'l0', 'l1', 'l2', 'all']
+function buildBoxes() {
+  let html = ''
+  for (const key of KEYS) {
+    html += `<div class="box" id="box-${key}">
+      <div class="label">${LABELS[key] || key}</div>
+      <div class="size" id="size-${key}"></div>
+    </div>`
+  }
+  $('boxes').innerHTML = html
+}
+buildBoxes()
+
+/* timeline strip */
+function buildTrack() {
+  let html = ''
+  for (const step of STEPS) {
+    const left = (step.at / TOTAL) * 100
+    const width = (step.dur / TOTAL) * 100
+    html += `<div class="track-block" data-block="${step.id}" style="left:${left}%;width:${Math.max(width, 0.6)}%"></div>`
+    html += `<div class="track-name" data-name="${step.id}" style="left:${left}%">${step.id}</div>`
+  }
+  $('trackBlocks').innerHTML = html
+}
+buildTrack()
+
+const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+window.renderFrame = (t) => {
+  const { from, to, p } = stateAt(t)
+  const active = new Set()
+  const t_ = t
+
+  for (const key of KEYS) {
+    const a = rectOf(from.to, key)
+    const b = rectOf(to.to, key)
+    const node = $(`box-${key}`)
+    const size = $(`size-${key}`)
+
+    // stagger applies to containers that are *arriving* in this step
+    const indexInStep = Object.keys(STATES[to.to] || {}).indexOf(key)
+    const delay = b && !a ? Math.max(0, indexInStep) * (to.each || 0) : 0
+    const local = (() => {
+      if (!b) return 0
+      const span = Math.max(0.2, to.dur - delay)
+      const raw = seg(t_, to.at + delay, to.at + delay + span)
+      return ease[to.ease] ? ease[to.ease](raw) : raw
+    })()
+
+    if (!a && !b) { style(node, { opacity: 0 }); continue }
+
+    // leaving containers keep their last geometry while fading out
+    const target = b || a
+    const startRect = a || b
+    const k = b ? local : 1
+    const rect = {
+      x: lerp(startRect.x, target.x, k),
+      y: lerp(startRect.y, target.y, k),
+      w: lerp(startRect.w, target.w, k),
+      h: lerp(startRect.h, target.h, k),
+    }
+    // a container that is on its way out fades; one arriving fades in
+    const fadeOut = a && !b ? 1 - ease.quintOut(seg(t_, to.at, to.at + Math.min(0.6, to.dur))) : 1
+    const fadeIn = b && !a ? ease.quintOut(local) : 1
+    // containers that exist in both states stay visible but dim when not the focus
+    const present = Boolean(b) || (Boolean(a) && t_ < to.at + Math.min(0.6, to.dur))
+
+    style(node, {
+      left: `${rect.x.toFixed(1)}px`,
+      top: `${rect.y.toFixed(1)}px`,
+      width: `${rect.w.toFixed(1)}px`,
+      height: `${rect.h.toFixed(1)}px`,
+      opacity: present ? Math.min(fadeIn, fadeOut) : 0,
+    })
+    node.classList.toggle('primary', key === 'c2' && (to.to === 'focus' || to.to === 'full'))
+    node.classList.toggle('viewport', Boolean((STATES[to.to] || {})[key] && (STATES[to.to][key].viewport)))
+    size.textContent = `${Math.round(rect.w)} × ${Math.round(rect.h)}`
+    if (present) active.add(key)
+  }
+
+  /* captions + hud */
+  $('capTitle').textContent = `编排 ${to.id} · ${to.to}`
+  $('capHint').innerHTML = to.note
+  $('hudTime').textContent = `${fmt(t)} / ${fmt(TOTAL)}`
+  document.querySelectorAll('[data-block]').forEach((node) => {
+    node.classList.toggle('active', node.dataset.block === to.id)
+  })
+  style($('trackHead'), { left: `${((t / TOTAL) * 100).toFixed(3)}%` })
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

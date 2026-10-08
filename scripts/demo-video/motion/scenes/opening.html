@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>opening</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0a0a0c; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+
+  /* Quiet depth: a cool pool of light behind the stage, a warm floor, and a
+     vignette that keeps the corners from going flat black. */
+  .ambient {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(1180px 660px at 50% 44%, rgba(255,255,255,0.085), rgba(255,255,255,0) 64%),
+      radial-gradient(1500px 760px at 50% 118%, rgba(101,84,217,0.14), rgba(0,0,0,0) 62%),
+      radial-gradient(2200px 1400px at 50% 50%, rgba(0,0,0,0), rgba(0,0,0,0.55) 78%),
+      #0b0b0e;
+  }
+  .grain { position: absolute; inset: 0; opacity: 0.05; mix-blend-mode: screen; }
+
+  .stage { position: absolute; left: 50%; top: 528px; width: 1600px; height: 900px;
+    transform: translate(-50%, -50%); transform-origin: 50% 50%; }
+  .stage svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+  .outline { fill: none; stroke: rgba(255,255,255,0.62); stroke-width: 1.25; }
+  .inner-line { fill: none; stroke: rgba(255,255,255,0.10); stroke-width: 1; }
+
+  .sweep { position: absolute; top: 0; left: 0; width: 420px; height: 1.5px; opacity: 0;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.9), rgba(255,255,255,0)); }
+  .dot { position: absolute; left: 50%; bottom: -3px; width: 6px; height: 6px; margin-left: -3px;
+    border-radius: 50%; background: #6554d9; opacity: 0; }
+
+  .bracket { position: absolute; width: 28px; height: 28px; opacity: 0; border-color: rgba(255,255,255,0.5); border-style: solid; border-width: 0; }
+  .bracket.tl { left: 58px;  top: 58px;    border-left-width: 1px; border-top-width: 1px; }
+  .bracket.tr { right: 58px; top: 58px;    border-right-width: 1px; border-top-width: 1px; }
+  .bracket.bl { left: 58px;  bottom: 58px; border-left-width: 1px; border-bottom-width: 1px; }
+  .bracket.br { right: 58px; bottom: 58px; border-right-width: 1px; border-bottom-width: 1px; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="grainFilter">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch" />
+      <feColorMatrix type="saturate" values="0" />
+    </filter>
+    <rect width="1920" height="1080" filter="url(#grainFilter)" />
+  </svg>
+
+  <div class="stage" id="stage">
+    <svg viewBox="0 0 1600 900" id="frameSvg">
+      <defs>
+        <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ffffff" stop-opacity="0.12" />
+          <stop offset="0.38" stop-color="#ffffff" stop-opacity="0.055" />
+          <stop offset="1" stop-color="#ffffff" stop-opacity="0.022" />
+        </linearGradient>
+        <linearGradient id="topEdge" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#ffffff" stop-opacity="0" />
+          <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.5" />
+          <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+        </linearGradient>
+      </defs>
+      <ellipse id="shadow" cx="800" cy="905" rx="720" ry="46" fill="#000000" opacity="0" />
+      <rect id="panel" x="0" y="0" width="1600" height="900" rx="26" fill="url(#glass)" opacity="0" />
+      <!-- Two halves drawn from the centre of the base, meeting at the top. -->
+      <path id="halfRight" class="outline" pathLength="1" d="M800 900 H1574 A26 26 0 0 0 1600 874 V26 A26 26 0 0 0 1574 0 H800" />
+      <path id="halfLeft"  class="outline" pathLength="1" d="M800 900 H26 A26 26 0 0 1 0 874 V26 A26 26 0 0 1 26 0 H800" />
+      <rect id="innerHair" class="inner-line" x="10" y="10" width="1580" height="880" rx="18" opacity="0" />
+      <rect id="topHighlight" x="26" y="0" width="1548" height="1.5" fill="url(#topEdge)" opacity="0" />
+    </svg>
+    <div class="sweep" id="sweep"></div>
+    <div class="dot" id="dot"></div>
+  </div>
+
+  <div class="bracket tl" id="bracketTl"></div>
+  <div class="bracket tr" id="bracketTr"></div>
+  <div class="bracket bl" id="bracketBl"></div>
+  <div class="bracket br" id="bracketBr"></div>
+
+<script>
+const { seg, ease, style } = window.MotionKit
+
+const nodes = {
+  stage: document.getElementById('stage'),
+  panel: document.getElementById('panel'),
+  shadow: document.getElementById('shadow'),
+  halfRight: document.getElementById('halfRight'),
+  halfLeft: document.getElementById('halfLeft'),
+  innerHair: document.getElementById('innerHair'),
+  topHighlight: document.getElementById('topHighlight'),
+  sweep: document.getElementById('sweep'),
+  dot: document.getElementById('dot'),
+  brackets: ['bracketTl', 'bracketTr', 'bracketBl', 'bracketBr'].map((id) => document.getElementById(id)),
+}
+
+window.sceneMeta = { duration: 6, width: 1920, height: 1080 }
+
+/**
+ * Timeline (seconds)
+ *  0.00-1.50  the frame draws itself from the centre of the base, both ways
+ *  1.45-1.80  the two halves meet at the top (a small beat of light)
+ *  1.30-2.30  glass panel fades up inside the frame
+ *  1.80-2.50  inner hairline settles
+ *  2.20-2.95  camera lands (slight settle), then a slow push to the end
+ *  2.60-3.30  viewfinder brackets fade in
+ *  2.90-3.80  light sweeps across the top edge
+ *  3.40-3.95  accent marker lands at the centre of the base
+ *  3.80-6.00  calm hold
+ */
+window.renderFrame = (t) => {
+  const e = ease
+
+  // --- outline draw, both halves at once -----------------------------------
+  const draw = e.quartOut(seg(t, 0.0, 1.5))
+  const dashOffset = (1 - draw).toFixed(5)
+  nodes.halfRight.style.strokeDasharray = '1 1'
+  nodes.halfLeft.style.strokeDasharray = '1 1'
+  nodes.halfRight.style.strokeDashoffset = dashOffset
+  nodes.halfLeft.style.strokeDashoffset = dashOffset
+  // A touch of extra brightness where the two halves meet at the top.
+  const meet = Math.sin(Math.PI * seg(t, 1.35, 1.95)) * 0.5
+  nodes.halfRight.style.stroke = `rgba(255,255,255,${(0.62 + meet).toFixed(3)})`
+  nodes.halfLeft.style.stroke = `rgba(255,255,255,${(0.62 + meet).toFixed(3)})`
+
+  // --- panel ---------------------------------------------------------------
+  style(nodes.panel, { opacity: e.sineInOut(seg(t, 1.3, 2.3)) * 0.95 })
+  // A soft contact shadow lifts the panel off the background without a glow.
+  style(nodes.shadow, { opacity: (e.sineInOut(seg(t, 1.6, 2.6)) * 0.5).toFixed(3) })
+  nodes.innerHair.style.opacity = (e.quintOut(seg(t, 1.8, 2.5)) * 0.9).toFixed(3)
+  nodes.topHighlight.style.opacity = (e.quintOut(seg(t, 1.9, 2.6)) * 0.7).toFixed(3)
+
+  // --- camera --------------------------------------------------------------
+  const settle = e.softBack(seg(t, 2.2, 2.95))
+  const push = 1 + 0.008 * seg(t, 3.8, 6.0)
+  const scale = (1.018 - 0.018 * settle) * push
+  style(nodes.stage, { transform: `translate(-50%, -50%) scale(${scale.toFixed(5)})` })
+
+  const bracketOpacity = 0.5 * e.quintOut(seg(t, 2.6, 3.3))
+  for (const bracket of nodes.brackets) style(bracket, { opacity: bracketOpacity })
+
+  // --- light sweep across the closed top edge ------------------------------
+  const sweepP = seg(t, 2.9, 3.8)
+  style(nodes.sweep, {
+    opacity: Math.sin(Math.PI * sweepP) * 0.8,
+    transform: `translateX(${(-420 + 2000 * e.sineInOut(sweepP)).toFixed(1)}px)`,
+  })
+
+  // --- accent marker -------------------------------------------------------
+  const dotP = seg(t, 3.4, 3.95)
+  style(nodes.dot, {
+    opacity: e.quintOut(dotP),
+    transform: `scale(${(0.4 + 0.6 * e.softBack(dotP)).toFixed(3)})`,
+  })
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

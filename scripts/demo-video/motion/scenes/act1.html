@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>act1</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.06), rgba(255,255,255,0) 62%),
+      radial-gradient(1500px 780px at 50% 116%, rgba(101,84,217,0.13), rgba(0,0,0,0) 60%),
+      radial-gradient(2200px 1400px at 50% 50%, rgba(0,0,0,0), rgba(0,0,0,0.62) 76%),
+      #0a0a0c; }
+  .grain { position: absolute; inset: 0; opacity: 0.05; mix-blend-mode: screen; }
+  .vignette { position: absolute; inset: 0; box-shadow: inset 0 0 240px 70px rgba(0,0,0,0.5); }
+
+  /* ---- act A: three capability cards ---- */
+  .card { position: absolute; border-radius: 22px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.025));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10), 0 40px 90px rgba(0,0,0,0.45);
+    transform-origin: 50% 50%; }
+  .card-top { position: absolute; left: 0; right: 0; top: 0; height: 1.5px;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.45), rgba(255,255,255,0)); }
+  .card-glyph { position: absolute; left: 34px; top: 34px; width: 54px; height: 54px; border-radius: 16px;
+    background: rgba(255,255,255,0.10); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.14); }
+  .card-glyph span { position: absolute; background: rgba(255,255,255,0.55); border-radius: 2px; }
+  .card-title { position: absolute; left: 34px; bottom: 76px; font-size: 40px; font-weight: 600; letter-spacing: 0.01em; }
+  .card-sub { position: absolute; left: 34px; bottom: 38px; font-size: 22px; color: rgba(238,240,244,0.45); }
+  .card-rows { position: absolute; left: 34px; right: 34px; top: 122px; }
+  .card-row { height: 10px; border-radius: 5px; background: rgba(255,255,255,0.08); margin-bottom: 12px; }
+
+  /* ---- cursor ---- */
+  #stage { position: absolute; inset: 0; transform-origin: 0 0; }
+  .cursor { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+    background: #f2f3f7; box-shadow: 0 0 0 6px rgba(255,255,255,0.10), 0 6px 18px rgba(0,0,0,0.5); opacity: 0; }
+  .ripple { position: absolute; border-radius: 50%; border: 2px solid rgba(101,84,217,0.9); opacity: 0; transform-origin: 50% 50%; }
+
+  /* ---- workbench: chat (left) + canvas (right) ---- */
+  .panel { position: absolute; border-radius: 22px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.02));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.09); }
+  .bubble { position: absolute; border-radius: 16px; padding: 18px 22px; font-size: 26px; line-height: 1.5;
+    background: rgba(255,255,255,0.09); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); opacity: 0; }
+  .step-row { position: absolute; height: 12px; border-radius: 6px; background: rgba(255,255,255,0.10);
+    transform-origin: 0 50%; opacity: 0; }
+  .step-dot { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: rgba(255,255,255,0.35); opacity: 0; }
+  .caret { position: absolute; width: 3px; height: 26px; background: #6554d9; border-radius: 2px; opacity: 0; }
+
+  /* canvas pieces */
+  .tile { position: absolute; border-radius: 8px; background: rgba(255,255,255,0.05);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07); opacity: 0; transform-origin: 50% 100%; }
+  .build { position: absolute; background: rgba(255,255,255,0.16); border-radius: 4px; opacity: 0; transform-origin: 50% 100%; }
+  .tree-stem { position: absolute; width: 4px; background: rgba(255,255,255,0.22); border-radius: 2px;
+    transform-origin: 50% 100%; opacity: 0; }
+  .tree-top { position: absolute; border-radius: 50%; background: rgba(101,84,217,0.5); opacity: 0; transform-origin: 50% 100%; }
+  .road { position: absolute; height: 10px; border-radius: 5px; background: rgba(255,255,255,0.10); transform-origin: 0 50%; opacity: 0; }
+  .ring { position: absolute; border-radius: 50%; border: 2px solid rgba(101,84,217,0.7); transform-origin: 50% 50%; opacity: 0; }
+
+  /* ---- sub-agents ---- */
+  .orb { position: absolute; width: 46px; height: 46px; border-radius: 50%;
+    background: radial-gradient(circle at 34% 30%, rgba(255,255,255,0.95), rgba(101,84,217,0.85));
+    box-shadow: 0 10px 26px rgba(0,0,0,0.45); opacity: 0; }
+  .lane { position: absolute; border-radius: 16px; background: rgba(255,255,255,0.035);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07); opacity: 0; }
+  .lane-head { position: absolute; height: 12px; border-radius: 6px; background: rgba(255,255,255,0.20); }
+  .lane-piece { position: absolute; background: rgba(255,255,255,0.14); border-radius: 3px;
+    transform-origin: 50% 100%; opacity: 0; }
+
+  .cap { position: absolute; left: 92px; bottom: 78px; background: rgba(8,8,10,0.74);
+    border-radius: 12px; padding: 16px 26px 18px; opacity: 0; }
+  .cap-title { font-size: 30px; letter-spacing: 0.04em; color: rgba(238,240,244,0.88); }
+  .cap-hint { margin-top: 8px; font-size: 22px; letter-spacing: 0.06em; color: rgba(238,240,244,0.45); }
+  .cap-hint em { font-style: normal; color: rgba(101,84,217,0.95); }
+  .hud-label { position: absolute; left: 120px; bottom: 40px; font-size: 21px; letter-spacing: 0.10em; color: rgba(238,240,244,0.42); }
+  .hud-time { position: absolute; right: 120px; bottom: 40px; font-size: 21px; letter-spacing: 0.10em; color: rgba(238,240,244,0.34); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch" /><feColorMatrix type="saturate" values="0" /></filter>
+    <rect width="1920" height="1080" filter="url(#g)" />
+  </svg>
+
+  <div id="stage">
+  <div id="cardLayer"></div>
+
+  <div class="panel" id="chatPanel"><div id="chatInner"></div></div>
+  <div class="panel" id="canvasPanel">
+    <div id="tileLayer"></div>
+    <div id="buildLayer"></div>
+    <div id="laneLayer"></div>
+    <div class="ring" id="mergeRing"></div>
+  </div>
+
+  <div id="orbLayer"></div>
+  <div class="cursor" id="cursor"></div>
+  <div id="rippleLayer"></div>
+  </div>
+
+  <div class="cap" id="cap"><div class="cap-title" id="capTitle"></div><div class="cap-hint" id="capHint"></div></div>
+  <div class="vignette"></div>
+  <div class="hud-label" id="hudLabel"></div>
+  <div class="hud-time" id="hudTime"></div>
+
+<script>
+const { seg, lerp, ease, style, stagger } = window.MotionKit
+
+/* ------------------------------------------------------------------ beats */
+const BEATS = [
+  { id: 'A1', t0: 0,    t1: 4.2,  cap: '三张能力卡依次落位（后靠者渐隐）' },
+  { id: 'A2', t0: 4.2,  t1: 6.2,  cap: '光标点中第三张' },
+  { id: 'A3', t0: 6.2,  t1: 8.2,  cap: '卡片变形占满全屏' },
+  { id: 'A4', t0: 8.2,  t1: 11.0, cap: 'Agent 说出第一句话' },
+  { id: 'A5', t0: 11.0, t1: 22.0, cap: '缩成左半屏 · 右半屏一点点搭出来' },
+  { id: 'A6', t0: 22.0, t1: 31.0, cap: '召唤子代理 · 专属镜头 · 三条并排作业' },
+  { id: 'A7', t0: 31.0, t1: 36.5, cap: '合拢成成品' },
+]
+const B = Object.fromEntries(BEATS.map((b) => [b.id, b]))
+const TOTAL = BEATS[BEATS.length - 1].t1
+const beatAt = (t) => BEATS.find((b) => t >= b.t0 && t < b.t1) || BEATS[BEATS.length - 1]
+
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+
+/* card geometry: three columns, active one forward, others recede */
+const CARD = { w: 470, h: 620, y: 226, gap: 42 }
+const cardX = (i) => 960 - (CARD.w * 3 + CARD.gap * 2) / 2 + i * (CARD.w + CARD.gap)
+
+const CARDS = [
+  { title: '实现功能', sub: '一句话到能用的应用' },
+  { title: '办公', sub: '报表 · 文档 · 演示' },
+  { title: '做小游戏', sub: '能玩的那种' },
+]
+
+function buildCards() {
+  let html = ''
+  CARDS.forEach((card, i) => {
+    html += `<div class="panel card" id="card${i}" style="left:${cardX(i)}px;top:${CARD.y}px;width:${CARD.w}px;height:${CARD.h}px;opacity:0">
+      <div class="card-top"></div>
+      <div class="card-glyph"><span style="left:12px;top:14px;width:12px;height:26px"></span>
+        <span style="left:30px;top:14px;width:12px;height:26px"></span></div>
+      <div class="card-rows">
+        <div class="card-row" style="width:82%"></div>
+        <div class="card-row" style="width:64%"></div>
+        <div class="card-row" style="width:74%"></div>
+        <div class="card-row" style="width:52%"></div>
+        <div class="card-row" style="width:68%"></div>
+      </div>
+      <div class="card-title">${card.title}</div>
+      <div class="card-sub">${card.sub}</div>
+    </div>`
+  })
+  $('cardLayer').outerHTML = `<div id="cardLayer">${html}</div>`
+}
+buildCards()
+
+/* canvas content: tiles, a building assembled in steps, trees, a road */
+function buildCanvas() {
+  let tiles = ''
+  for (let row = 0; row < 4; row += 1) {
+    for (let col = 0; col < 4; col += 1) {
+      tiles += `<div class="tile" data-tile="${row * 4 + col}" style="width:96px;height:96px"></div>`
+    }
+  }
+  $('tileLayer').innerHTML = tiles
+
+  let build = ''
+  // one house assembled from foundation -> walls -> roof
+  build += `<div class="build" data-part="foundation" style="width:150px;height:16px"></div>`
+  build += `<div class="build" data-part="walls" style="width:120px;height:74px"></div>`
+  build += `<div class="build" data-part="roof" style="width:150px;height:52px;border-radius:6px 6px 2px 2px"></div>`
+  build += `<div class="tree-stem" data-part="stem" style="height:56px"></div>`
+  build += `<div class="tree-top" data-part="crown" style="width:64px;height:64px"></div>`
+  build += `<div class="road" data-part="road" style="width:320px;height:12px"></div>`
+  $('buildLayer').innerHTML = build
+
+  let lanes = ''
+  for (let i = 0; i < 3; i += 1) {
+    lanes += `<div class="lane" data-lane="${i}" style="width:300px;height:340px">
+      <div class="lane-head" style="left:22px;top:22px;width:${150 + i * 26}px"></div>
+    </div>`
+    for (let p = 0; p < 5; p += 1) {
+      lanes += `<div class="lane-piece" data-piece="${i}-${p}" style="width:${70 + ((p * 37 + i * 21) % 70)}px;height:${28 + ((p * 13) % 26)}px"></div>`
+    }
+  }
+  $('laneLayer').innerHTML = lanes
+
+  let chat = ''
+  chat += `<div class="bubble" id="bubble1" style="left:34px;top:120px;width:520px">好，现在我来实现这个经营建造游戏。</div>`
+  for (let i = 0; i < 4; i += 1) {
+    chat += `<div class="step-dot" data-stepdot="${i}" style="left:40px;top:${250 + i * 54}px"></div>`
+    chat += `<div class="step-row" data-steprow="${i}" style="left:68px;top:${256 + i * 54}px;width:${240 - i * 26}px"></div>`
+  }
+  chat += `<div class="caret" id="caret" style="left:34px;top:214px"></div>`
+  $('chatInner').innerHTML = chat
+
+  let orbs = ''
+  for (let i = 0; i < 3; i += 1) orbs += `<div class="orb" data-orb="${i}"></div>`
+  $('orbLayer').innerHTML = orbs
+}
+buildCanvas()
+
+/* --------------------------------------------------------------- positions */
+const CHAT = { x: 120, y: 130, w: 720, h: 820 }
+const CANVAS = { x: 872, y: 130, w: 928, h: 820 }
+const FULL = { x: 120, y: 96, w: 1680, h: 888 }
+
+function place(node, rect, radius = 22) {
+  style(node, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.w}px`, height: `${rect.h}px`, borderRadius: `${radius}px` })
+}
+
+/* ------------------------------------------------------------------ render */
+const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+window.renderFrame = (t) => {
+  const beat = beatAt(t)
+
+  /* ---------- A1: three cards arrive one by one ---------- */
+  // The card that arrived last is the one being presented; the rest sit back.
+  const focusIndex = Math.max(0, Math.min(2, Math.floor((t - 0.6) / 0.75)))
+  CARDS.forEach((_, i) => {
+    const node = $(`card${i}`)
+    const arriveP = stagger(t, i, { start: 0.6, each: 0.75, dur: 0.55 })
+    const arrive = ease.softBack(arriveP)
+    const isFocus = t >= B.A2.t0 ? i === 2 : i === focusIndex
+    // the card in focus comes forward; the others recede and dim
+    const recede = isFocus ? 0 : 1
+    const depth = recede * (1 - ease.sineInOut(seg(t, B.A1.t0 + 2.2 + i * 0.14, B.A2.t0 + 0.8 + i * 0.14)))
+    const focus = ease.sineInOut(seg(t, B.A2.t0 - 0.2, B.A2.t0 + 1.4))
+    const active = i === 2 ? focus : 0
+    const y = CARD.y + depth * 34 - active * 12
+    const scale = 0.94 + 0.06 * arrive - depth * 0.04 + active * 0.035
+    const opacity = Math.min(1, arrive * 1.6) * (1 - depth * 0.62)
+    style(node, {
+      opacity,
+      left: `${(cardX(i) + (1 - ease.expoOut(arriveP)) * 300).toFixed(1)}px`,
+      top: `${y.toFixed(1)}px`,
+      transform: `scale(${scale.toFixed(4)})`,
+      filter: depth > 0.01 ? `blur(${(depth * 2.2).toFixed(2)}px)` : 'none',
+      boxShadow: `inset 0 0 0 1px rgba(255,255,255,${(0.10 + active * 0.22).toFixed(3)}), 0 40px 90px rgba(0,0,0,${(0.45 - active * 0.1).toFixed(2)})`,
+    })
+  })
+
+  /* ---------- A2: cursor arrives and clicks the third card ---------- */
+  const cursorIn = seg(t, B.A2.t0 + 0.1, B.A2.t0 + 1.3)
+  const clickT = B.A2.t0 + 1.35
+  const cx = lerp(1560, cardX(2) + CARD.w - 150, ease.sineInOut(cursorIn))
+  const cy = lerp(300, CARD.y + CARD.h - 200, ease.sineInOut(cursorIn))
+  const press = Math.sin(Math.PI * seg(t, clickT, clickT + 0.45))
+  style($('cursor'), {
+    opacity: cursorIn > 0 ? ease.quintOut(seg(t, B.A2.t0 + 0.1, B.A2.t0 + 0.8)) : 0,
+    left: `${cx.toFixed(1)}px`,
+    top: `${cy.toFixed(1)}px`,
+    transform: `scale(${(1 - press * 0.35).toFixed(3)})`,
+  })
+  const rippleP = seg(t, clickT, clickT + 0.85)
+  $('rippleLayer').innerHTML =
+    rippleP > 0 && rippleP < 1
+      ? `<div class="ripple" style="left:${(cx - 30).toFixed(1)}px;top:${(cy - 30).toFixed(1)}px;width:60px;height:60px;opacity:${(Math.sin(Math.PI * rippleP) * 0.9).toFixed(3)};transform:scale(${lerp(0.4, 3.2, ease.expoOut(rippleP)).toFixed(3)})"></div>`
+      : ''
+
+  /* ---------- A3: the card morphs to fill the frame ---------- */
+  const morph = ease.cubicInOut(seg(t, B.A3.t0 + 0.2, B.A3.t1 - 0.2))
+  const card2 = $('card2')
+  if (morph > 0) {
+    const from = { x: cardX(2), y: CARD.y - 12, w: CARD.w, h: CARD.h }
+    place(card2, {
+      x: lerp(from.x, FULL.x, morph),
+      y: lerp(from.y, FULL.y, morph),
+      w: lerp(from.w, FULL.w, morph),
+      h: lerp(from.h, FULL.h, morph),
+    }, lerp(22, 26, morph))
+    style(card2, { transform: 'scale(1)', filter: 'none', opacity: 1 })
+    // the other two cards slide away
+    for (const i of [0, 1]) {
+      const away = ease.cubicInOut(seg(t, B.A3.t0 + 0.2, B.A3.t1 - 0.6))
+      style($(`card${i}`), { opacity: (1 - away) * 0.5, left: `${(cardX(i) - away * 260).toFixed(1)}px` })
+    }
+    style($('cursor'), { opacity: Math.max(0, 1 - ease.quintOut(seg(t, B.A3.t0 + 0.2, B.A3.t0 + 1.0))) })
+  }
+  // the card's inner furniture fades out as it becomes the workbench
+  const innerFade = 1 - ease.quintOut(seg(t, B.A3.t0 + 0.4, B.A3.t0 + 1.4))
+  for (const cls of ['.card-glyph', '.card-rows', '.card-title', '.card-sub', '.card-top']) {
+    card2.querySelectorAll(cls).forEach((node) => style(node, { opacity: innerFade }))
+  }
+
+  /* ---------- A4: the agent's first line ---------- */
+  const bubbleP = seg(t, B.A4.t0 + 0.4, B.A4.t0 + 1.6)
+  const bubble = $('bubble1')
+  style(bubble, {
+    opacity: ease.quintOut(bubbleP),
+    transform: `translateY(${((1 - ease.expoOut(bubbleP)) * 22).toFixed(1)}px)`,
+  })
+  const caretOn = t > B.A4.t0 + 1.6 && t < B.A5.t0 + 1.4
+  style($('caret'), { opacity: caretOn ? (Math.sin((t - B.A4.t0 - 1.6) * 9) > 0 ? 0.9 : 0.15) : 0 })
+
+  /* ---------- A5: shrink to the left half, build on the right ---------- */
+  const split = ease.cubicInOut(seg(t, B.A5.t0 + 0.2, B.A5.t0 + 1.8))
+  if (split > 0) {
+    style(card2, { opacity: Math.max(0, 1 - ease.quintOut(seg(t, B.A5.t0 + 0.2, B.A5.t0 + 1.0))) })
+    place($('chatPanel'), {
+      x: lerp(FULL.x, CHAT.x, split),
+      y: lerp(FULL.y, CHAT.y, split),
+      w: lerp(FULL.w, CHAT.w, split),
+      h: lerp(FULL.h, CHAT.h, split),
+    }, 22)
+    style($('chatPanel'), { opacity: 1 })
+    place($('canvasPanel'), {
+      x: lerp(FULL.x + FULL.w - 40, CANVAS.x, split),
+      y: CANVAS.y, w: CANVAS.w, h: CANVAS.h,
+    }, 22)
+    style($('canvasPanel'), { opacity: ease.quintOut(seg(t, B.A5.t0 + 0.6, B.A5.t0 + 1.8)) })
+  } else {
+    style($('chatPanel'), { opacity: 0 })
+    style($('canvasPanel'), { opacity: 0 })
+  }
+
+  // tiles drop in
+  const TILES = { cols: 4, rows: 4, size: 96, gap: 18 }
+  const tilesW = TILES.cols * TILES.size + (TILES.cols - 1) * TILES.gap
+  const tilesH = TILES.rows * TILES.size + (TILES.rows - 1) * TILES.gap
+  const tilesX = (CANVAS.w - tilesW) / 2
+  const tilesY = CANVAS.h - tilesH - 96
+  // while the sub-agents work, the base construction recedes so the three
+  // workstreams are the only thing on screen
+  const laneFocus = ease.sineInOut(seg(t, B.A6.t0 + 1.0, B.A6.t0 + 2.4))
+    * (1 - ease.sineInOut(seg(t, B.A6.t1 - 2.2, B.A6.t1 - 0.6)))
+  const baseDim = 1 - 0.86 * laneFocus
+  document.querySelectorAll('[data-tile]').forEach((node) => {
+    const i = Number(node.dataset.tile)
+    const col = i % TILES.cols
+    const row = Math.floor(i / TILES.cols)
+    const p = stagger(t, i, { start: B.A5.t0 + 1.6, each: 0.055, dur: 0.42 })
+    style(node, {
+      left: `${(tilesX + col * (TILES.size + TILES.gap)).toFixed(1)}px`,
+      top: `${(tilesY + row * (TILES.size + TILES.gap)).toFixed(1)}px`,
+      opacity: Math.min(1, p * 2.4) * baseDim,
+      transform: `translateY(${((1 - ease.expoOut(p)) * -22).toFixed(1)}px) scale(${(0.92 + 0.08 * ease.softBack(p)).toFixed(4)})`,
+    })
+  })
+
+  // the house assembles: foundation -> walls -> roof, then tree and road
+  const parts = {
+    foundation: { x: tilesX + 60, y: tilesY + TILES.size * 2 + TILES.gap * 2 - 16 },
+    walls: { x: tilesX + 75, y: tilesY + TILES.size * 2 + TILES.gap * 2 - 90 },
+    roof: { x: tilesX + 60, y: tilesY + TILES.size * 2 + TILES.gap * 2 - 142 },
+    stem: { x: tilesX + TILES.size + TILES.gap * 2 + 58, y: tilesY + TILES.size * 2 + TILES.gap * 2 - 56 },
+    crown: { x: tilesX + TILES.size + TILES.gap * 2 + 28, y: tilesY + TILES.size * 2 + TILES.gap * 2 - 120 },
+    road: { x: tilesX - 10, y: tilesY + TILES.size * 3 + TILES.gap * 3 - 26 },
+  }
+  const partAt = { foundation: B.A5.t0 + 4.0, walls: B.A5.t0 + 4.6, roof: B.A5.t0 + 5.3, stem: B.A5.t0 + 6.4, crown: B.A5.t0 + 6.8, road: B.A5.t0 + 7.4 }
+  document.querySelectorAll('[data-part]').forEach((node) => {
+    const key = node.dataset.part
+    const start = partAt[key]
+    const p = ease.softBack(seg(t, start, start + 0.6))
+    const rect = parts[key]
+    const originY = key === 'crown' ? '50% 100%' : '50% 100%'
+    style(node, {
+      left: `${rect.x.toFixed(1)}px`,
+      top: `${rect.y.toFixed(1)}px`,
+      opacity: Math.min(1, seg(t, start, start + 0.2) * 1.4) * baseDim,
+      transformOrigin: originY,
+      transform: `scaleY(${p.toFixed(4)})`,
+    })
+  })
+
+  // chat: tool steps tick in as the canvas is built
+  document.querySelectorAll('[data-stepdot]').forEach((node) => {
+    const i = Number(node.dataset.stepdot)
+    const p = stagger(t, i, { start: B.A5.t0 + 2.4, each: 2.0, dur: 0.4 })
+    style(node, { opacity: p, transform: `scale(${(0.6 + 0.4 * ease.softBack(p)).toFixed(3)})` })
+  })
+  document.querySelectorAll('[data-steprow]').forEach((node) => {
+    const i = Number(node.dataset.steprow)
+    const p = stagger(t, i, { start: B.A5.t0 + 2.6, each: 2.0, dur: 0.5 })
+    style(node, { opacity: p * 0.9, transform: `scaleX(${ease.expoOut(p).toFixed(4)})` })
+  })
+
+  /* ---------- A6: sub-agents take the stage ---------- */
+  const ORB_START = B.A6.t0 + 0.2
+  const LANE_W_CONST = 300
+  const laneScreenX = [CANVAS.x + 40, CANVAS.x + CANVAS.w / 2 - LANE_W_CONST / 2, CANVAS.x + CANVAS.w - LANE_W_CONST - 40]
+  const orbTargets = [
+    { x: laneScreenX[0] + LANE_W_CONST / 2 - 23, y: CANVAS.y + 150 },
+    { x: laneScreenX[1] + LANE_W_CONST / 2 - 23, y: CANVAS.y + 118 },
+    { x: laneScreenX[2] + LANE_W_CONST / 2 - 23, y: CANVAS.y + 150 },
+  ]
+  document.querySelectorAll('[data-orb]').forEach((node) => {
+    const i = Number(node.dataset.orb)
+    const p = seg(t, ORB_START + i * 0.22, ORB_START + i * 0.22 + 1.1)
+    const from = { x: CHAT.x + 60, y: CHAT.y + 150 }
+    const to = orbTargets[i]
+    const arc = Math.sin(Math.PI * p) * 90
+    style(node, {
+      opacity: Math.min(1, p * 2.4),
+      left: `${lerp(from.x, to.x, ease.sineInOut(p)).toFixed(1)}px`,
+      top: `${(lerp(from.y, to.y, ease.sineInOut(p)) - arc).toFixed(1)}px`,
+      transform: `scale(${(0.7 + 0.3 * ease.softBack(p)).toFixed(3)})`,
+    })
+  })
+
+  // lanes appear once the orbs land, then build on their own beat
+  const LANE_W = 300
+  // drawn inside the canvas panel, so these are panel-local
+  const laneX = [40, CANVAS.w / 2 - LANE_W / 2, CANVAS.w - LANE_W - 40]
+  document.querySelectorAll('[data-lane]').forEach((node) => {
+    const i = Number(node.dataset.lane)
+    const p = seg(t, B.A6.t0 + 1.2 + i * 0.18, B.A6.t0 + 2.0 + i * 0.18)
+    style(node, {
+      left: `${laneX[i]}px`,
+      top: `${CANVAS.y + 130}px`,
+      opacity: ease.quintOut(p),
+      transform: `translateY(${((1 - ease.expoOut(p)) * 18).toFixed(1)}px)`,
+    })
+  })
+  document.querySelectorAll('[data-piece]').forEach((node) => {
+    const [c, p] = node.dataset.piece.split('-').map(Number)
+    const start = B.A6.t0 + 2.4 + c * 0.5 + p * 0.34
+    const prog = ease.softBack(seg(t, start, start + 0.55))
+    style(node, {
+      left: `${(laneX[c] + 26 + (p % 2) * 96).toFixed(1)}px`,
+      top: `${(CANVAS.y + 130 + 80 + p * 48).toFixed(1)}px`,
+      opacity: Math.min(1, seg(t, start, start + 0.2) * 1.5),
+      transform: `scaleY(${prog.toFixed(4)})`,
+    })
+  })
+
+  // the orbs drift along their lane while it works
+  document.querySelectorAll('[data-orb]').forEach((node) => {
+    const i = Number(node.dataset.orb)
+    const landed = seg(t, ORB_START + i * 0.22 + 1.0, ORB_START + i * 0.22 + 1.4)
+    const work = ease.sineInOut(seg(t, B.A6.t0 + 2.8 + i * 0.5, B.A6.t1 - 0.5 + i * 0.5))
+    if (landed > 0) {
+      const to = orbTargets[i]
+      style(node, {
+        left: `${lerp(to.x, laneScreenX[i] + LANE_W_CONST - 74, work).toFixed(1)}px`,
+        top: `${(orbTargets[i].y + Math.sin(t * 2.4 + i) * 6).toFixed(1)}px`,
+        opacity: 0.95,
+      })
+    }
+  })
+
+  /* ---------- A7: everything merges into the finished frame ---------- */
+  const merge = ease.cubicInOut(seg(t, B.A7.t0 + 0.3, B.A7.t0 + 2.1))
+  if (merge > 0) {
+    for (const id of ['chatPanel', 'canvasPanel']) {
+      const node = $(id)
+      const rect = id === 'chatPanel' ? CHAT : CANVAS
+      place(node, {
+        x: lerp(rect.x, FULL.x, merge),
+        y: lerp(rect.y, FULL.y, merge),
+        w: lerp(rect.w, FULL.w, merge),
+        h: lerp(rect.h, FULL.h, merge),
+      })
+      style(node, { opacity: 1 - merge * 0.12 })
+    }
+  }
+  const pulse = seg(t, B.A7.t0 + 2.1, B.A7.t0 + 3.5)
+  style($('mergeRing'), {
+    opacity: pulse > 0 && pulse < 1 ? Math.sin(Math.PI * pulse) * 0.85 : 0,
+    left: `${(FULL.x + FULL.w / 2 - 260).toFixed(1)}px`,
+    top: `${(FULL.y + FULL.h / 2 - 260).toFixed(1)}px`,
+    width: '520px',
+    height: '520px',
+    transform: `scale(${lerp(0.5, 3.4, ease.expoOut(pulse)).toFixed(3)})`,
+  })
+
+  /* ---------- camera: the sub-agents get their own shot ---------- */
+  let camK = 1
+  let camX = 0
+  let camY = 0
+  if (t >= B.A6.t0) {
+    const pushIn = ease.sineInOut(seg(t, B.A6.t0 + 1.2, B.A6.t0 + 3.2))
+    const pullOut = ease.sineInOut(seg(t, B.A6.t1 - 2.4, B.A6.t1 - 0.4))
+    const amount = pushIn * (1 - pullOut)
+    camK = 1 + 0.28 * amount
+    // keep the middle lane under the lens while zooming
+    const fx = laneScreenX[1] + LANE_W_CONST / 2
+    const fy = CANVAS.y + 330
+    camX = fx * (1 - camK)
+    camY = fy * (1 - camK)
+  } else if (t >= B.A7.t0) {
+    const relax = ease.sineInOut(seg(t, B.A7.t0, B.A7.t0 + 1.2))
+    camK = 1
+  }
+  style($('stage'), { transform: `translate(${camX.toFixed(2)}px, ${camY.toFixed(2)}px) scale(${camK.toFixed(5)})` })
+
+  /* captions + hud */
+  const cap = $('cap')
+  style(cap, { opacity: ease.quintOut(seg(t, beat.t0 + 0.25, beat.t0 + 0.85)) })
+  $('capTitle').textContent = `第一幕 · ${beat.id}`
+  $('capHint').innerHTML = beat.cap
+  $('hudLabel').textContent = `${beat.id} / ${BEATS.length}`
+  $('hudTime').textContent = `${fmt(t)} / ${fmt(TOTAL)}`
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

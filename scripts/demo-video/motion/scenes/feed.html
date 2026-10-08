@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>feed · 成果流</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background: radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.05), rgba(255,255,255,0) 62%), #0a0a0c; }
+  .panel { position: absolute; left: 120px; top: 96px; width: 1680px; height: 888px;
+    border-radius: 20px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.16), 0 40px 90px rgba(0,0,0,0.45); }
+
+  #fly { position: absolute; inset: 0; pointer-events: none; }
+  .icon { position: absolute; width: 44px; height: 64px; border-radius: 7px;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.45); }
+  #view { position: absolute; left: 220px; top: 40px; width: 1240px; height: 808px; overflow: hidden; }
+
+  .slot { position: absolute; width: 608px; border-radius: 12px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); background: rgba(255,255,255,0.014); }
+  .num { position: absolute; left: 0; right: 0; top: 40%; text-align: center;
+    font-size: 76px; font-weight: 600; color: rgba(238,240,244,0.22); font-variant-numeric: tabular-nums; }
+  .block { position: absolute; width: 608px; border-radius: 12px; }
+  .block .num { color: rgba(14,14,18,0.44); }
+
+  .cap { position: absolute; left: 120px; bottom: 22px; }
+  .cap-title { font-size: 24px; letter-spacing: 0.04em; color: rgba(238,240,244,0.82); }
+  .cap-hint { margin-top: 5px; font-size: 18px; letter-spacing: 0.05em; color: rgba(238,240,244,0.42); }
+  .hud-time { position: absolute; right: 120px; bottom: 26px; font-size: 19px; letter-spacing: 0.08em;
+    color: rgba(238,240,244,0.36); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <div class="panel" id="panel"><div id="view"></div><div id="fly"></div></div>
+  <div class="cap"><div class="cap-title" id="capTitle"></div><div class="cap-hint" id="capHint"></div></div>
+  <div class="hud-time" id="hudTime"></div>
+
+<script>
+const { seg, lerp, ease, style } = window.MotionKit
+
+/* ---------------------------------------------------------------------------
+ * 成果流：两列错落，连续缓慢地往上滚；新成果落在固定的那个位置上。
+ *
+ * 编号按阅读顺序：左列 1 / 3 / 5 / 7，右列 2 / 4 / 6 / 8。右列比左列低半格。
+ * 于是“下一格”这件事有了固定走法：从 3 出发 → 右下（6）→ 左下（5）→
+ * 右下（8）→ 左下（7）……每一步都往下半格、左右交替。
+ *
+ * 滚动速度正好是每 2.4 秒半格，所以每一件新成果都落在同一个位置上——
+ * 也就是第一个成果进入 3 号位之后停住的那个位置。
+ *
+ * 100 BPM：一拍 0.6s。11.4s = 19 拍。
+ * ------------------------------------------------------------------------ */
+
+const VW = 1240
+const VH = 808
+const COL_W = 608
+const GAP_X = 24
+const GAP_Y = 20
+const CARD_H = (VH - GAP_Y) / 2
+const SLOT = CARD_H + GAP_Y
+const HALF = SLOT / 2
+const SETTLE = HALF                 // 3 号居中时的滚动量
+const PERIOD = 2.4                  // 每件成果之间的间隔（一小节）
+const SPEED = HALF / PERIOD         // 86.25 px/s：连续，但很慢
+
+const COLOR = ['#4a7fd6', '#8b7bd8', '#d178a8', '#4f9c96']
+
+// 槽位：编号按阅读顺序（左奇右偶）
+const PER_COL = 5
+const CYCLE = PER_COL * SLOT     // 一列滚满这么多，就回到原处
+const SLOTS = []
+for (let k = 0; k < PER_COL; k += 1) {
+  SLOTS.push({ col: 0, k, id: 1 + 2 * k })   // 左列 1 / 3 / 5 / 7 / 9
+  SLOTS.push({ col: 1, k, id: 2 + 2 * k })   // 右列 2 / 4 / 6 / 8 / 10
+}
+// 填入顺序：3 → 右下 6 → 左下 5 → 右下 8 → 左下 7 ……
+const FILL = [[0, 1], [1, 2], [0, 2], [1, 3], [0, 3], [1, 4]]
+
+const BEATS = [
+  { id: 'N1', at: 0.0, dur: 1.8, note: '第一个成果：独占全屏（蓝）' },
+  { id: 'N2', at: 1.8, dur: 2.4, note: '它动画进入 3 号位；滚动就位，3 号停在正中间' },
+  { id: 'N3', at: 4.2, dur: 2.4, note: '第二个（紫）落在 3 的右下方：6 号' },
+  { id: 'N4', at: 6.6, dur: 2.4, note: '第三个（粉）落在 6 的左下方：5 号' },
+    { id: 'N5', at: 9.0, dur: 2.4, note: '第四个再往右下：8 号——右下、左下、右下、左下' },
+    { id: 'N6', at: 11.4, dur: 4.8, note: '流不停：上面滚出去的那张，从下面接回来' },
+  { id: 'N7', at: 16.2, dur: 4.8, note: '继续往上走' },
+  { id: 'N8', at: 21.0, dur: 4.8, note: '继续往上走' },
+  { id: 'N9', at: 25.8, dur: 4.2, note: '绕回原点：和开头一模一样，可以无止境地循环' },
+]
+const TOTAL = 30.0
+const at = (id) => BEATS.find((b) => b.id === id).at
+
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+const slotX = (col) => col * (COL_W + GAP_X)
+const mod = (v, n) => ((v % n) + n) % n
+const slotY = (col, k, s) => mod(k * SLOT - (col === 1 ? HALF : 0) - s, CYCLE) - SLOT
+
+function scrollAt(t) {
+  const align = ease.cubicInOut(seg(t, at('N2'), at('N2') + 1.6)) * SETTLE
+  return align + SPEED * Math.max(0, t - (at('N2') + 1.6))
+}
+
+function buildDom() {
+  let html = ''
+  for (const s of SLOTS) {
+    html += `<div class="slot" data-slot="${s.col}-${s.k}" style="left:${slotX(s.col)}px;height:${CARD_H}px;opacity:0">
+      <div class="num">${s.id}</div></div>`
+  }
+  // 第一件：独占全屏，然后收进 3 号位
+  html += `<div class="block" id="b0" style="left:0;top:0;width:${VW}px;height:${VH}px;background:${COLOR[0]};opacity:0">
+    <div class="num">3</div></div>`
+  for (let i = 1; i < 4; i += 1) {
+    const [col, k] = FILL[i]
+    const id = SLOTS.find((s) => s.col === col && s.k === k).id
+    html += `<div class="block" id="b${i}" data-col="${col}" data-k="${k}" style="left:${slotX(col)}px;background:${COLOR[i]};opacity:0">
+      <div class="num">${id}</div></div>`
+  }
+  $('view').innerHTML = html
+}
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v)
+buildDom()
+
+window.renderFrame = (t) => {
+  let fly = ''
+  const s = scrollAt(t)
+  const slotIn = seg(t, at('N1') + 0.3, at('N2') + 0.6)
+
+  for (const slot of SLOTS) {
+    const node = document.querySelector(`[data-slot="${slot.col}-${slot.k}"]`)
+    style(node, { top: `${slotY(slot.col, slot.k, s).toFixed(1)}px`, opacity: slotIn })
+  }
+
+  // 第一件：全屏 → 3 号位
+  const into = ease.cubicInOut(seg(t, at('N2'), at('N2') + 1.6))
+  const b0 = $('b0')
+  style(b0, {
+    left: `${lerp(0, slotX(0), into).toFixed(1)}px`,
+    top: `${lerp(0, slotY(0, 1, s), into).toFixed(1)}px`,
+    width: `${lerp(VW, COL_W, into).toFixed(1)}px`,
+    height: `${lerp(VH, CARD_H, into).toFixed(1)}px`,
+    opacity: seg(t, 0.2, 0.7),
+  })
+
+  // 后面三件：图标飞到位 → 就地展开成卡片 → 跟着流往上走
+  const VIEW = { x: 220, y: 40 }
+  for (let i = 1; i < 4; i += 1) {
+    const node = $(`b${i}`)
+    const when = at(['N3', 'N4', 'N5'][i - 1])
+    const col = Number(node.dataset.col)
+    const k = Number(node.dataset.k)
+    const y = slotY(col, k, s)
+    const x = slotX(col)
+    // 卡片：到位那一刻，从图标的尺寸展开（0.072 倍 ≈ 44px 宽）
+    const open = ease.softBack(clamp01(seg(t, when - 0.05, when + 0.5)))
+    style(node, {
+      top: `${y.toFixed(1)}px`, height: `${CARD_H}px`,
+      opacity: clamp01(seg(t, when - 0.08, when + 0.06)),
+      transform: `scale(${lerp(0.072, 1, open).toFixed(4)})`, transformOrigin: '50% 50%',
+    })
+    // 图标：从左边飞到位，越出容器边界也在画面上
+    const flyP = ease.cubicInOut(seg(t, when - 0.8, when - 0.02))
+    if (flyP > 0 && flyP < 1) {
+      const from = { x: -170, y: y + 150 }
+      const to = { x: x + COL_W / 2 - 22, y: y + CARD_H / 2 - 32 }
+      fly += `<div class="icon" style="left:${(VIEW.x + lerp(from.x, to.x, flyP)).toFixed(1)}px;top:${(VIEW.y + lerp(from.y, to.y, flyP)).toFixed(1)}px;background:${COLOR[i]};opacity:${Math.min(1, flyP * 3.2).toFixed(3)}"></div>`
+    }
+  }
+
+  let current = BEATS[0]
+  for (const b of BEATS) if (t >= b.at) current = b
+  $('fly').innerHTML = fly
+
+  $('capTitle').textContent = `${current.id} · ${current.note}`
+  $('capHint').textContent = '填入顺序：3 → 右下 6 → 左下 5 → 右下 8…（左列 1/3/5/7，右列 2/4/6/8）'
+  $('hudTime').textContent = `${t.toFixed(1)}s / ${TOTAL.toFixed(1)}s · 100 BPM`
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

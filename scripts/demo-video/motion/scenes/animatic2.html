@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>animatic2</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 680px at 50% 42%, rgba(255,255,255,0.065), rgba(255,255,255,0) 62%),
+      radial-gradient(1500px 760px at 50% 118%, rgba(101,84,217,0.14), rgba(0,0,0,0) 60%),
+      radial-gradient(2200px 1400px at 50% 50%, rgba(0,0,0,0), rgba(0,0,0,0.6) 76%),
+      #0a0a0c; }
+  .grain { position: absolute; inset: 0; opacity: 0.045; mix-blend-mode: screen; }
+  .vignette { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 260px 60px rgba(0,0,0,0.5); }
+
+  .world { position: absolute; left: 0; top: 0; width: 1600px; height: 900px; transform-origin: 0 0; }
+  .shell { position: absolute; inset: 0; }
+  .shell svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  #shellBottom, #shellTop { transform-origin: 50% 50%; }
+  #shellLeft, #shellRight { transform-origin: 50% 100%; }
+
+  .layer { position: absolute; inset: 0; opacity: 0; }
+  .el { position: absolute; }
+  .hair { position: absolute; background: rgba(255,255,255,0.22); }
+  .accent-dot { position: absolute; border-radius: 50%; background: #6554d9; }
+  .cell { position: absolute; border-radius: 10px; background: rgba(255,255,255,0.055);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.075); }
+  .day { position: absolute; border-radius: 5px; background: rgba(255,255,255,0.13); transform-origin: 50% 50%; }
+  .chip { position: absolute; border-radius: 4px; background: rgba(101,84,217,0.55); transform-origin: 0 50%; }
+  .row { position: absolute; height: 1px; background: rgba(255,255,255,0.18); transform-origin: 0 50%; }
+  .bar { position: absolute; border-radius: 6px; background: rgba(255,255,255,0.13); transform-origin: 0 50%; }
+
+  .iris { position: absolute; border-radius: 50%; background: #08080a; opacity: 0; }
+  .flip-cell { position: absolute; background: #0b0b0e; }
+  .band { position: absolute; top: 0; height: 1080px; background: #0b0b0e; }
+  .line-wipe { position: absolute; left: 0; width: 1920px; height: 3px; background: rgba(255,255,255,0.8); opacity: 0; }
+
+  .slot-cap { position: absolute; left: 92px; bottom: 78px; opacity: 0;
+    background: rgba(8,8,10,0.74); border-radius: 12px; padding: 16px 26px 18px; }
+  .cap-title { font-size: 30px; letter-spacing: 0.04em; color: rgba(238,240,244,0.88); }
+  .cap-hint { margin-top: 8px; font-size: 22px; letter-spacing: 0.06em; color: rgba(238,240,244,0.45); }
+  .cap-hint em { font-style: normal; color: rgba(101,84,217,0.95); }
+
+  .hud-label { position: absolute; left: 120px; bottom: 40px; font-size: 21px; letter-spacing: 0.10em; color: rgba(238,240,244,0.42); }
+  .hud-time { position: absolute; right: 120px; bottom: 40px; font-size: 21px; letter-spacing: 0.10em; color: rgba(238,240,244,0.34); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch" /><feColorMatrix type="saturate" values="0" /></filter>
+    <rect width="1920" height="1080" filter="url(#g)" />
+  </svg>
+
+  <div class="world" id="world">
+    <div class="shell" id="shell">
+      <svg viewBox="0 0 1600 900">
+        <defs>
+          <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#ffffff" stop-opacity="0.05" />
+            <stop offset="0.42" stop-color="#ffffff" stop-opacity="0.02" />
+            <stop offset="1" stop-color="#ffffff" stop-opacity="0.012" />
+          </linearGradient>
+        </defs>
+        <rect id="panel" x="0" y="0" width="1600" height="900" rx="26" fill="url(#glass)" opacity="0" />
+        <rect id="shellInner" x="10" y="10" width="1580" height="880" rx="18" fill="none" stroke="rgba(255,255,255,0.075)" stroke-width="1" opacity="0" />
+      </svg>
+      <div class="hair" id="shellBottom" style="left:0;bottom:0;width:1600px;height:1.5px;opacity:0"></div>
+      <div class="hair" id="shellTop" style="left:0;top:0;width:1600px;height:1.5px;opacity:0"></div>
+      <div class="hair" id="shellLeft" style="left:0;top:0;width:1.5px;height:900px;opacity:0"></div>
+      <div class="hair" id="shellRight" style="right:0;top:0;width:1.5px;height:900px;opacity:0"></div>
+    </div>
+
+    <div class="layer" id="layerUi">
+      <div class="el" id="uiFrame" style="left:0;top:0;width:1600px;height:900px;border-radius:26px;background:rgba(255,255,255,0.028)"></div>
+      <div class="hair" id="uiDivider" style="left:300px;top:60px;width:1px;height:780px;opacity:0;transform-origin:50% 0%"></div>
+      <div class="bar" id="uiSidebar1" style="left:56px;top:120px;width:200px;height:14px;opacity:0"></div>
+      <div class="bar" id="uiSidebar2" style="left:56px;top:164px;width:150px;height:14px;opacity:0"></div>
+      <div class="bar" id="uiSidebar3" style="left:56px;top:208px;width:176px;height:14px;opacity:0"></div>
+      <div class="el" id="uiComposer" style="left:380px;top:700px;width:1120px;height:150px;border-radius:22px;background:rgba(255,255,255,0.05);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.09);opacity:0"></div>
+      <div class="el" id="uiComposerText" style="left:420px;top:735px;font-size:30px;color:#f4f5f8;opacity:0">帮我做个日历应用</div>
+      <div class="accent-dot" id="uiSend" style="left:1418px;top:765px;width:46px;height:46px;opacity:0"></div>
+    </div>
+
+    <div class="layer" id="layerBuild">
+      <div class="el" id="buildStrip" style="left:250px;top:150px;width:1100px;height:26px;border-radius:8px;background:rgba(255,255,255,0.05);overflow:hidden">
+        <div class="el" id="buildStripFill" style="left:0;top:0;height:26px;width:1100px;background:linear-gradient(90deg,rgba(101,84,217,0.75),rgba(101,84,217,0.22));transform-origin:0 50%"></div>
+      </div>
+      <div id="buildGrid" style="position:absolute;inset:0"></div>
+    </div>
+
+    <div class="layer" id="layerSplit">
+      <div class="hair" id="splitDivider" style="left:800px;top:110px;width:1px;height:680px;opacity:0.3"></div>
+      <div id="splitTree" style="position:absolute;inset:0"></div>
+      <div id="splitCode" style="position:absolute;inset:0"></div>
+    </div>
+
+    <div class="layer" id="layerParallel"><div id="parallelCols" style="position:absolute;inset:0"></div></div>
+
+    <div class="layer" id="layerInteract">
+      <div id="interactGrid" style="position:absolute;inset:0"></div>
+      <div class="el" id="interactRipple" style="left:520px;top:320px;width:80px;height:80px;border-radius:50%;border:2px solid rgba(101,84,217,0.85);opacity:0;transform-origin:50% 50%"></div>
+      <div class="el" id="interactPanel" style="left:980px;top:250px;width:460px;height:300px;border-radius:18px;background:rgba(255,255,255,0.055);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.10);opacity:0"></div>
+      <div id="interactPanelRows" style="position:absolute;inset:0"></div>
+    </div>
+
+    <div class="layer" id="layerMemory">
+      <div class="el" id="memTrunk" style="left:798px;top:190px;width:3px;height:0px;border-radius:2px;background:rgba(255,255,255,0.35);transform-origin:50% 100%"></div>
+      <div id="memoryBranches" style="position:absolute;inset:0"></div>
+    </div>
+
+    <div class="layer" id="layerSchedule">
+      <div class="el" id="schedRibbon" style="left:-560px;top:470px;width:2720px;height:1.5px;background:rgba(255,255,255,0.20)"></div>
+      <div id="schedTicks" style="position:absolute;inset:0"></div>
+      <div class="accent-dot" id="schedMark" style="left:796px;top:462px;width:18px;height:18px;opacity:0"></div>
+      <div class="el" id="schedCard" style="left:660px;top:300px;width:280px;height:124px;border-radius:16px;background:rgba(255,255,255,0.06);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.12);opacity:0"></div>
+      <div class="el" id="schedLine1" style="left:692px;top:342px;width:180px;height:12px;border-radius:6px;background:rgba(255,255,255,0.18);opacity:0"></div>
+      <div class="el" id="schedLine2" style="left:692px;top:370px;width:130px;height:12px;border-radius:6px;background:rgba(101,84,217,0.55);opacity:0"></div>
+    </div>
+  </div>
+
+  <div class="el" id="bigType" style="left:0;top:420px;width:1920px;text-align:center;font-size:132px;font-weight:600;color:#f7f8fb;opacity:0;white-space:nowrap">帮我做个日历应用</div>
+  <div class="line-wipe" id="lineWipe" style="top:980px"></div>
+  <div class="iris" id="iris"></div>
+  <div id="flipLayer" style="position:absolute;inset:0"></div>
+  <div id="bandLayer" style="position:absolute;inset:0"></div>
+
+  <div class="layer" id="layerEnd">
+    <div class="el" id="endMark" style="left:0;top:392px;width:1920px;text-align:center;font-size:128px;font-weight:600;color:#f7f7fa">Sunday</div>
+    <div class="hair" id="endRule" style="left:700px;top:580px;width:520px;height:1.5px;transform-origin:50% 50%"></div>
+    <div class="accent-dot" id="endDot" style="left:957px;top:577px;width:6px;height:6px;opacity:0"></div>
+    <div class="el" id="endTag" style="left:0;top:624px;width:1920px;text-align:center;font-size:26px;letter-spacing:0.22em;color:rgba(242,242,245,0.6)">本地优先的 Agent 工作台</div>
+  </div>
+
+  <div class="slot-cap" id="slotCap"><div class="cap-title" id="capTitle"></div><div class="cap-hint" id="capHint"></div></div>
+  <div class="vignette"></div>
+  <div class="hud-label" id="hudLabel"></div>
+  <div class="hud-time" id="hudTime"></div>
+
+<script>
+const { seg, lerp, ease, style, stagger } = window.MotionKit
+
+const SHOTS = [
+  { id: '01', t0: 0,   t1: 4.5, slot: null, title: '冷开场' },
+  { id: '02', t0: 4.5, t1: 11,  slot: null, title: '一句需求 · 巨字落进输入框' },
+  { id: '03', t0: 11,  t1: 16,  slot: 'Sunday 界面 · 新建会话 → 输入', title: '界面 · 中景推近' },
+  { id: '04', t0: 16,  t1: 28,  slot: '日历施工动画（成品自身驱动）', title: '施工 · 微距推入后拉远' },
+  { id: '05', t0: 28,  t1: 36,  slot: '文件树生长 / 命令执行', title: '背后 · 分屏' },
+  { id: '06', t0: 36,  t1: 44,  slot: '三条并行施工线（子代理）', title: '并行 · 三分屏横移' },
+  { id: '07', t0: 44,  t1: 52,  slot: '日历交互特写：翻月 / 选日 / 新建日程', title: '成品 · 推入格子再拉回' },
+  { id: '08', t0: 52,  t1: 59,  slot: '记忆结构生长动画', title: '记忆 · 生长' },
+  { id: '09', t0: 59,  t1: 68,  slot: '时间带拉长 / 定时任务触发并交付', title: '时间 · 快摇 + 拉远' },
+  { id: '10', t0: 68,  t1: 73,  slot: null, title: '落版' },
+]
+const TOTAL = SHOTS[SHOTS.length - 1].t1
+const LAST = SHOTS[SHOTS.length - 1].t0
+const shotAt = (t) => SHOTS.find((s) => t >= s.t0 && t < s.t1) || SHOTS[SHOTS.length - 1]
+
+/* The camera frames the window: cam(rx, ry, k) puts world point (rx, ry) at
+   the centre of the 1920x1080 frame at zoom k.  Shots interpolate between
+   framings, which is where the dolly / push / pull-back language comes from. */
+const cam = (rx, ry, k) => ({ x: 960 - rx * k, y: 540 - ry * k, k })
+const FIT = cam(800, 450, 1)
+
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+
+/* --------------------------------------------------------------- build DOM */
+function buildDom() {
+  const grid = $('buildGrid')
+  let html = ''
+  for (let row = 0; row < 5; row += 1) {
+    for (let col = 0; col < 7; col += 1) {
+      const i = row * 7 + col
+      const x = 250 + col * 158
+      const y = 210 + row * 128
+      html += `<div class="cell" data-cell="${i}" style="left:${x}px;top:${y}px;width:146px;height:116px;opacity:0"></div>`
+      html += `<div class="day" data-day="${i}" style="left:${x + 16}px;top:${y + 16}px;width:34px;height:10px;opacity:0"></div>`
+      if (i % 5 === 2) html += `<div class="chip" data-chip="${i}" style="left:${x + 16}px;top:${y + 46}px;width:${72 + (i % 3) * 26}px;height:14px;opacity:0"></div>`
+    }
+  }
+  grid.innerHTML = html
+
+  let tree = ''
+  for (let i = 0; i < 11; i += 1) {
+    const indent = i % 4 === 0 ? 0 : 34
+    const top = 150 + i * 46
+    tree += `<div class="row" data-tree="${i}" style="left:${130 + indent}px;top:${top}px;width:${120 + ((i * 37) % 180)}px;opacity:0"></div>`
+    tree += `<div class="accent-dot" data-treedot="${i}" style="left:108px;top:${top - 4}px;width:9px;height:9px;opacity:0"></div>`
+  }
+  $('splitTree').innerHTML = tree
+
+  let code = ''
+  for (let i = 0; i < 14; i += 1) {
+    code += `<div class="row" data-code="${i}" style="left:${880 + (i % 3 === 0 ? 0 : 26)}px;top:${150 + i * 40}px;width:${180 + ((i * 53) % 420)}px;opacity:0"></div>`
+  }
+  $('splitCode').innerHTML = code
+
+  let cols = ''
+  for (let c = 0; c < 3; c += 1) {
+    const baseX = 130 + c * 470
+    cols += `<div class="bar" data-colhead="${c}" style="left:${baseX}px;top:190px;width:${300 + c * 40}px;height:18px;opacity:0"></div>`
+    cols += `<div style="position:absolute;left:${baseX}px;top:246px;width:380px;height:8px;border-radius:4px;background:rgba(255,255,255,0.07);overflow:hidden" data-coltrack="${c}">
+               <div style="position:absolute;left:0;top:0;width:380px;height:8px;border-radius:4px;background:rgba(101,84,217,0.8);transform-origin:0 50%" data-colfill="${c}"></div>
+             </div>`
+    for (let r = 0; r < 6; r += 1) {
+      cols += `<div class="bar" data-colrow="${c}-${r}" style="left:${baseX}px;top:${300 + r * 52}px;width:${180 + ((r * 61 + c * 29) % 190)}px;height:12px;opacity:0"></div>`
+    }
+    cols += `<div class="accent-dot" data-coldone="${c}" style="left:${baseX + 344}px;top:240px;width:14px;height:14px;opacity:0"></div>`
+  }
+  $('parallelCols').innerHTML = cols
+
+  let ig = ''
+  for (let row = 0; row < 4; row += 1) {
+    for (let col = 0; col < 6; col += 1) {
+      const i = row * 6 + col
+      const x = 320 + col * 176
+      const y = 250 + row * 140
+      ig += `<div class="cell" data-icell="${i}" style="left:${x}px;top:${y}px;width:160px;height:126px;opacity:0"></div>`
+      ig += `<div class="day" data-iday="${i}" style="left:${x + 18}px;top:${y + 18}px;width:30px;height:9px;opacity:0"></div>`
+      if (i % 4 === 1) ig += `<div class="chip" data-ichip="${i}" style="left:${x + 18}px;top:${y + 52}px;width:84px;height:13px;opacity:0"></div>`
+    }
+  }
+  $('interactGrid').innerHTML = ig
+
+  let prows = ''
+  for (let i = 0; i < 4; i += 1) {
+    prows += `<div class="bar" data-prow="${i}" style="left:1012px;top:${300 + i * 56}px;width:${180 + i * 34}px;height:14px;opacity:0"></div>`
+  }
+  $('interactPanelRows').innerHTML = prows
+
+  let branches = ''
+  for (let i = 0; i < 7; i += 1) {
+    const y = 620 - i * 62
+    const right = i % 2 === 0
+    branches += `<div class="row" data-branch="${i}" style="left:${right ? 800 : 620}px;top:${y}px;width:180px;height:2px;background:rgba(255,255,255,0.30);transform-origin:${right ? '0' : '100'}% 50%;opacity:0"></div>`
+    branches += `<div class="accent-dot" data-branchdot="${i}" style="left:${right ? 986 : 604}px;top:${y - 5}px;width:12px;height:12px;opacity:0"></div>`
+  }
+  $('memoryBranches').innerHTML = branches
+
+  let ticks = ''
+  for (let i = 0; i < 46; i += 1) {
+    const x = -560 + i * 60
+    const tall = i % 5 === 0
+    ticks += `<div class="hair" data-tick="${i}" style="left:${x}px;top:${tall ? 462 : 468}px;width:1px;height:${tall ? 18 : 10}px;opacity:0"></div>`
+  }
+  $('schedTicks').innerHTML = ticks
+}
+buildDom()
+
+const all = (name) => Array.from(document.querySelectorAll(`[data-${name}]`))
+
+/* -------------------------------------------------------------- transitions */
+function renderFlip(t, cut) {
+  const layer = $('flipLayer')
+  const p = seg(t, cut - 0.15, cut + 0.95)
+  if (p <= 0 || p >= 1) { if (layer.innerHTML) layer.innerHTML = ''; return }
+  const cols = 8
+  const rows = 5
+  let html = ''
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      const local = stagger(t, r * cols + c, { start: cut - 0.15, each: 0.026, dur: 0.32 })
+      if (local <= 0 || local >= 1) continue
+      const k = Math.abs(Math.cos(local * Math.PI))
+      const w = 1920 / cols
+      const h = 1080 / rows
+      html += `<div class="flip-cell" style="left:${c * w}px;top:${r * h}px;width:${w + 1}px;height:${h + 1}px;transform:scaleY(${k.toFixed(4)})"></div>`
+    }
+  }
+  layer.innerHTML = html
+}
+
+function renderBands(t, cut) {
+  const layer = $('bandLayer')
+  const end = cut + 0.9
+  if (t < cut - 0.3 || t > end) { if (layer.innerHTML) layer.innerHTML = ''; return }
+  let html = ''
+  for (let i = 0; i < 3; i += 1) {
+    const local = stagger(t, i, { start: cut - 0.3, each: 0.1, dur: 0.55 })
+    if (local <= 0) continue
+    const offset = (1 - ease.quintOut(local)) * 1120
+    html += `<div class="band" style="left:${i * 640}px;width:641px;transform:translateY(${i % 2 === 0 ? offset : -offset}px)"></div>`
+  }
+  layer.innerHTML = html
+}
+
+function renderIris(t, cut) {
+  const node = $('iris')
+  const p = seg(t, cut - 0.34, cut + 0.34)
+  if (p <= 0 || p >= 1) { style(node, { opacity: 0 }); return }
+  const size = lerp(46, 2760, ease.cubicInOut(p))
+  // grows out of the send button: world (1418,765) -> screen (~1578, 855)
+  style(node, {
+    opacity: 1,
+    left: `${(1578 - size / 2).toFixed(1)}px`,
+    top: `${(855 - size / 2).toFixed(1)}px`,
+    width: `${size.toFixed(1)}px`,
+    height: `${size.toFixed(1)}px`,
+  })
+}
+
+function renderLineWipe(t, cut) {
+  const node = $('lineWipe')
+  const p = seg(t, cut - 1.0, cut + 0.6)
+  if (p <= 0 || p >= 1) { style(node, { opacity: 0 }); return }
+  const y = lerp(1010, 286, ease.expoOut(seg(t, cut - 1.0, cut + 0.25)))
+  style(node, { opacity: Math.sin(Math.PI * p) * 0.85, top: `${y.toFixed(1)}px` })
+}
+
+/* ---------------------------------------------------------------- the shell */
+function renderShell(t) {
+  const dissolve = 1 - ease.sineInOut(seg(t, LAST, LAST + 1.3))
+  style($('shellBottom'), { opacity: seg(t, 0.2, 0.7) * 0.7 * dissolve, transform: `scaleX(${ease.expoOut(seg(t, 0.3, 1.6)).toFixed(4)})` })
+  style($('shellLeft'), { opacity: ease.quintOut(seg(t, 0.9, 1.6)) * 0.55 * dissolve, transform: `scaleY(${ease.expoOut(seg(t, 0.9, 1.9)).toFixed(4)})` })
+  style($('shellRight'), { opacity: ease.quintOut(seg(t, 1.0, 1.7)) * 0.55 * dissolve, transform: `scaleY(${ease.expoOut(seg(t, 1.0, 2.0)).toFixed(4)})` })
+  style($('shellTop'), { opacity: ease.quintOut(seg(t, 1.4, 2.1)) * 0.65 * dissolve, transform: `scaleX(${ease.expoOut(seg(t, 1.5, 2.4)).toFixed(4)})` })
+  style($('panel'), { opacity: ease.sineInOut(seg(t, 1.6, 2.9)) * 0.9 * dissolve })
+  style($('shellInner'), { opacity: ease.quintOut(seg(t, 2.1, 3.0)) * 0.8 * dissolve })
+}
+
+/* ------------------------------------------------------------ per-shot art */
+function renderRequest(t) {
+  const base = SHOTS[1].t0
+  const node = $('bigType')
+  const rise = seg(t, base + 0.25, base + 1.3)
+  const land = ease.cubicInOut(seg(t, base + 3.5, base + 5.2))
+  style(node, {
+    opacity: ease.quintOut(rise) * (1 - land * 0),
+    fontSize: `${lerp(132, 30, land).toFixed(1)}px`,
+    letterSpacing: `${(0.10 - 0.095 * ease.expoOut(rise)).toFixed(4)}em`,
+    left: `${lerp(0, 580, land).toFixed(1)}px`,
+    top: `${lerp(420, 825, land).toFixed(1)}px`,
+    width: land > 0.35 ? '1120px' : '1920px',
+    textAlign: land > 0.35 ? 'left' : 'center',
+  })
+}
+
+function renderUi(t) {
+  const base = SHOTS[2].t0
+  const uiIn = ease.quintOut(seg(t, base - 0.35, base + 0.6))
+  style($('uiFrame'), { opacity: uiIn * 0.9 })
+  style($('uiDivider'), { opacity: uiIn * 0.5, transform: `scaleY(${ease.expoOut(seg(t, base - 0.1, base + 0.9)).toFixed(4)})` })
+  ;['uiSidebar1', 'uiSidebar2', 'uiSidebar3'].forEach((id, i) => {
+    const p = stagger(t, i, { start: base + 0.15, each: 0.12, dur: 0.5 })
+    style($(id), { opacity: p * 0.95, transform: `scaleX(${ease.expoOut(p).toFixed(4)})` })
+  })
+  style($('uiComposer'), { opacity: ease.quintOut(seg(t, base + 0.45, base + 1.3)) })
+  style($('uiComposerText'), { opacity: ease.quintOut(seg(t, base + 3.5, base + 4.3)) })
+  const sendP = seg(t, base + 3.9, base + 4.6)
+  style($('uiSend'), { opacity: ease.quintOut(sendP), transform: `scale(${(0.4 + 0.6 * ease.softBack(sendP)).toFixed(3)})` })
+}
+
+function renderBuild(t) {
+  const base = SHOTS[3].t0
+  all('cell').forEach((node) => {
+    const p = stagger(t, Number(node.dataset.cell), { start: base + 0.15, each: 0.02, dur: 0.42 })
+    style(node, { opacity: Math.min(1, p * 2.2), transform: `translateY(${((1 - ease.expoOut(p)) * 26).toFixed(1)}px) scale(${(0.9 + 0.1 * ease.softBack(p)).toFixed(4)})` })
+  })
+  all('day').forEach((node) => {
+    const p = stagger(t, Number(node.dataset.day), { start: base + 1.0, each: 0.012, dur: 0.3 })
+    style(node, { opacity: p * 0.85, transform: `scale(${(0.6 + 0.4 * ease.softBack(p)).toFixed(3)})` })
+  })
+  all('chip').forEach((node) => {
+    const p = stagger(t, Number(node.dataset.chip), { start: base + 1.7, each: 0.07, dur: 0.4 })
+    style(node, { opacity: p * 0.9, transform: `scaleX(${ease.expoOut(p).toFixed(4)})` })
+  })
+  style($('buildStripFill'), { transform: `scaleX(${ease.sineInOut(seg(t, base + 2.6, base + 6.0)).toFixed(4)})` })
+}
+
+function renderSplit(t) {
+  const base = SHOTS[4].t0
+  all('tree').forEach((node) => {
+    const p = stagger(t, Number(node.dataset.tree), { start: base - 0.1, each: 0.09, dur: 0.5 })
+    style(node, { opacity: p * 0.9, transform: `scaleX(${ease.expoOut(p).toFixed(4)})` })
+  })
+  all('treedot').forEach((node) => {
+    const p = stagger(t, Number(node.dataset.treedot), { start: base + 0.05, each: 0.09, dur: 0.35 })
+    style(node, { opacity: p, transform: `scale(${(0.3 + 0.7 * ease.softBack(p)).toFixed(3)})` })
+  })
+  all('code').forEach((node) => {
+    const p = stagger(t, Number(node.dataset.code), { start: base - 0.2, each: 0.12, dur: 0.55 })
+    style(node, { opacity: p * 0.8, transform: `scaleX(${ease.expoOut(p).toFixed(4)})` })
+  })
+}
+
+function renderParallel(t) {
+  const base = SHOTS[5].t0
+  for (let c = 0; c < 3; c += 1) {
+    const head = document.querySelector(`[data-colhead="${c}"]`)
+    const track = document.querySelector(`[data-coltrack="${c}"]`)
+    const fill = document.querySelector(`[data-colfill="${c}"]`)
+    const done = document.querySelector(`[data-coldone="${c}"]`)
+    const p = stagger(t, c, { start: base - 0.15, each: 0.12, dur: 0.5 })
+    style(head, { opacity: ease.quintOut(p), transform: `scaleX(${ease.expoOut(p).toFixed(4)})` })
+    style(track, { opacity: ease.quintOut(p) * 0.95 })
+    style(fill, { transform: `scaleX(${ease.sineInOut(seg(t, base + 0.5 + c * 0.45, base + 4.4 + c * 0.5)).toFixed(4)})` })
+    for (let r = 0; r < 6; r += 1) {
+      const row = document.querySelector(`[data-colrow="${c}-${r}"]`)
+      const rp = stagger(t, r, { start: base + 0.6 + c * 0.4, each: 0.16, dur: 0.4 })
+      style(row, { opacity: rp * 0.9, transform: `scaleX(${ease.expoOut(rp).toFixed(4)})` })
+    }
+    const dp = seg(t, base + 3.7 + c * 0.5, base + 4.3 + c * 0.5)
+    style(done, { opacity: ease.quintOut(dp), transform: `scale(${(0.4 + 0.6 * ease.softBack(dp)).toFixed(3)})` })
+  }
+}
+
+function renderInteract(t) {
+  const base = SHOTS[6].t0
+  all('icell').forEach((node) => {
+    const p = stagger(t, Number(node.dataset.icell), { start: base - 0.2, each: 0.02, dur: 0.4 })
+    style(node, { opacity: Math.min(1, p * 2.2), transform: `scale(${(0.94 + 0.06 * ease.expoOut(p)).toFixed(4)})` })
+  })
+  all('iday').forEach((node) => {
+    const p = stagger(t, Number(node.dataset.iday), { start: base + 0.3, each: 0.014, dur: 0.3 })
+    style(node, { opacity: p * 0.85 })
+  })
+  all('ichip').forEach((node) => {
+    const p = stagger(t, Number(node.dataset.ichip), { start: base + 1.0, each: 0.05, dur: 0.4 })
+    style(node, { opacity: p * 0.85, transform: `scaleX(${ease.expoOut(p).toFixed(4)})` })
+  })
+  const ripple = seg(t, base + 2.2, base + 3.3)
+  style($('interactRipple'), {
+    opacity: ripple > 0 && ripple < 1 ? Math.sin(Math.PI * ripple) * 0.9 : 0,
+    transform: `scale(${lerp(0.5, 3.6, ease.expoOut(ripple)).toFixed(3)})`,
+  })
+  const panelP = seg(t, base + 2.7, base + 3.7)
+  style($('interactPanel'), { opacity: ease.quintOut(panelP), transform: `translateX(${((1 - ease.expoOut(panelP)) * 44).toFixed(1)}px)` })
+  all('prow').forEach((node) => {
+    const p = stagger(t, Number(node.dataset.prow), { start: base + 3.1, each: 0.14, dur: 0.45 })
+    style(node, { opacity: p * 0.92, transform: `translateX(${((1 - ease.expoOut(p)) * 24).toFixed(1)}px)` })
+  })
+}
+
+function renderMemory(t) {
+  const base = SHOTS[7].t0
+  style($('memTrunk'), { height: `${(ease.expoOut(seg(t, base + 0.2, base + 2.1)) * 430).toFixed(1)}px` })
+  all('branch').forEach((node) => {
+    const i = Number(node.dataset.branch)
+    const grow = ease.expoOut(stagger(t, i, { start: base + 1.3, each: 0.16, dur: 0.75 }))
+    const straighten = ease.sineInOut(seg(t, base + 2.6 + i * 0.14, base + 3.8 + i * 0.14))
+    style(node, {
+      opacity: Math.min(1, grow * 3) * 0.95,
+      transform: `scaleX(${grow.toFixed(4)}) rotate(${((1 - straighten) * (i % 2 === 0 ? -30 : 30)).toFixed(2)}deg)`,
+    })
+  })
+  all('branchdot').forEach((node) => {
+    const i = Number(node.dataset.branchdot)
+    const p = seg(t, base + 3.1 + i * 0.14, base + 3.6 + i * 0.14)
+    style(node, { opacity: ease.quintOut(p), transform: `scale(${(0.4 + 0.6 * ease.softBack(p)).toFixed(3)})` })
+  })
+}
+
+function renderSchedule(t) {
+  const base = SHOTS[8].t0
+  all('tick').forEach((node) => {
+    const i = Number(node.dataset.tick)
+    style(node, { opacity: seg(t, base - 0.25 + i * 0.01, base + 0.45 + i * 0.01) * 0.6 })
+  })
+  const markP = seg(t, base + 2.3, base + 3.0)
+  style($('schedMark'), { opacity: ease.quintOut(markP), transform: `scale(${(0.4 + 0.6 * ease.softBack(markP)).toFixed(3)})` })
+  const cardP = seg(t, base + 3.3, base + 4.3)
+  style($('schedCard'), { opacity: ease.quintOut(cardP), transform: `translateY(${((1 - ease.expoOut(cardP)) * 28).toFixed(1)}px)` })
+  style($('schedLine1'), { opacity: ease.quintOut(seg(t, base + 3.7, base + 4.5)) * 0.9 })
+  style($('schedLine2'), { opacity: ease.quintOut(seg(t, base + 4.0, base + 4.8)) })
+}
+
+function renderEnd(t) {
+  const base = LAST
+  const p = seg(t, base + 0.25, base + 1.6)
+  style($('endMark'), {
+    opacity: ease.quintOut(p),
+    letterSpacing: `${(0.16 - 0.14 * ease.expoOut(p)).toFixed(4)}em`,
+    transform: `translateY(${((1 - ease.expoOut(p)) * 18).toFixed(2)}px)`,
+  })
+  style($('endRule'), { transform: `scaleX(${ease.expoOut(seg(t, base + 1.15, base + 1.95)).toFixed(4)})` })
+  const dotP = seg(t, base + 1.7, base + 2.25)
+  style($('endDot'), { opacity: ease.quintOut(dotP), transform: `scale(${(0.4 + 0.6 * ease.softBack(dotP)).toFixed(3)})` })
+  style($('endTag'), { opacity: ease.sineInOut(seg(t, base + 2.05, base + 2.9)) * 0.95 })
+}
+
+/* -------------------------------------------------------- camera per shot  */
+function cameraFor(shot, t) {
+  const p = ease.sineInOut(seg(t, shot.t0, shot.t1))
+  switch (shot.id) {
+    case '02': return cam(800, 470, lerp(1.0, 1.03, p))
+    case '03': return cam(880, lerp(560, 600, p), lerp(1.0, 1.2, p))
+    case '04': {
+      const q = ease.sineInOut(seg(t, shot.t0 + 0.4, shot.t0 + 7.6))
+      return cam(lerp(430, 800, q), lerp(330, 450, q), lerp(2.4, 1.02, q))
+    }
+    case '05': return cam(lerp(760, 850, p), 450, lerp(1.16, 1.04, p))
+    case '06': return cam(lerp(330, 1280, p), 430, 1.14)
+    case '07': {
+      const inP = ease.sineInOut(seg(t, shot.t0, shot.t0 + 2.6))
+      const outP = ease.sineInOut(seg(t, shot.t0 + 4.6, shot.t1))
+      const k = Math.min(lerp(1.02, 1.95, inP), lerp(1.95, 1.06, outP))
+      return cam(lerp(560, 700, outP), lerp(360, 420, outP), k)
+    }
+    case '08': return cam(800, lerp(520, 400, p), lerp(1.02, 1.16, p))
+    case '09': {
+      const rush = ease.cubicInOut(seg(t, shot.t0, shot.t0 + 3.0))
+      const back = ease.expoOut(seg(t, shot.t0 + 3.6, shot.t1))
+      return cam(lerp(340, 800, rush) + 160 * back, lerp(430, 470, back), lerp(1.55, 0.88, back))
+    }
+    default: return FIT
+  }
+}
+
+/* ---------------------------------------------------------------- playback */
+$('hudLabel').textContent = ''
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
+
+window.renderFrame = (t) => {
+  const shot = shotAt(t)
+
+  const c = cameraFor(shot, t)
+  style($('world'), { transform: `translate(${c.x.toFixed(2)}px, ${c.y.toFixed(2)}px) scale(${c.k.toFixed(5)})` })
+
+  const on = (id, value) => style($(id), { opacity: value })
+  on('layerUi', t >= SHOTS[2].t0 - 0.4 && t < SHOTS[3].t0 + 0.2 ? 1 : 0)
+  on('layerBuild', t >= SHOTS[3].t0 - 0.4 && t < SHOTS[4].t0 + 0.2 ? 1 : 0)
+  on('layerSplit', t >= SHOTS[4].t0 - 0.4 && t < SHOTS[5].t0 + 0.2 ? 1 : 0)
+  on('layerParallel', t >= SHOTS[5].t0 - 0.4 && t < SHOTS[6].t0 + 0.2 ? 1 : 0)
+  on('layerInteract', t >= SHOTS[6].t0 - 0.4 && t < SHOTS[7].t0 + 0.2 ? 1 : 0)
+  on('layerMemory', t >= SHOTS[7].t0 - 0.4 && t < SHOTS[8].t0 + 0.2 ? 1 : 0)
+  on('layerSchedule', t >= SHOTS[8].t0 - 0.4 && t < LAST ? 1 : 0)
+  on('layerEnd', t >= LAST ? 1 : 0)
+
+  renderShell(t)
+  if (t >= SHOTS[1].t0 - 0.4 && t < SHOTS[2].t0 + 0.3) renderRequest(t)
+  else style($('bigType'), { opacity: 0 })
+  if (t >= SHOTS[2].t0 - 0.4 && t < SHOTS[3].t0 + 0.2) renderUi(t)
+  if (t >= SHOTS[3].t0 - 0.4 && t < SHOTS[4].t0 + 0.2) renderBuild(t)
+  if (t >= SHOTS[4].t0 - 0.4 && t < SHOTS[5].t0 + 0.2) renderSplit(t)
+  if (t >= SHOTS[5].t0 - 0.4 && t < SHOTS[6].t0 + 0.2) renderParallel(t)
+  if (t >= SHOTS[6].t0 - 0.4 && t < SHOTS[7].t0 + 0.2) renderInteract(t)
+  if (t >= SHOTS[7].t0 - 0.4 && t < SHOTS[8].t0 + 0.2) renderMemory(t)
+  if (t >= SHOTS[8].t0 - 0.4) renderSchedule(t)
+  if (t >= LAST) renderEnd(t)
+
+  renderLineWipe(t, SHOTS[1].t0 + 0.35)
+  renderIris(t, SHOTS[2].t0)
+  renderFlip(t, SHOTS[4].t0 + 0.25)
+  renderBands(t, SHOTS[5].t0 + 0.3)
+  renderFlip(t, SHOTS[6].t0 - 0.35)
+
+  const cap = $('slotCap')
+  if (shot.slot) {
+    $('capTitle').textContent = `镜头 ${shot.id} · ${shot.title}`
+    $('capHint').innerHTML = `此处放：<em>${shot.slot}</em> 视频`
+    style(cap, { opacity: ease.quintOut(seg(t, shot.t0 + 0.1, shot.t0 + 0.7)) })
+  } else {
+    style(cap, { opacity: 0 })
+  }
+
+  $('hudLabel').textContent = `镜头 ${shot.id} / ${SHOTS.length}`
+  $('hudTime').textContent = `${fmt(t)} / ${fmt(TOTAL)}`
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

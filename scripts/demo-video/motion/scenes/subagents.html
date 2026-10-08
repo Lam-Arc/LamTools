@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>subagents</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.05), rgba(255,255,255,0) 62%),
+      radial-gradient(1500px 780px at 50% 116%, rgba(101,84,217,0.12), rgba(0,0,0,0) 60%),
+      #0a0a0c; }
+  .grain { position: absolute; inset: 0; opacity: 0.04; mix-blend-mode: screen; }
+
+  #stage { position: absolute; inset: 0; transform-origin: 0 0; }
+  .panel { position: absolute; left: 120px; top: 96px; width: 1680px; height: 888px;
+    border-radius: 20px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.022));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.16), 0 40px 90px rgba(0,0,0,0.45); }
+  .divider { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.14); }
+
+  /* ---- main agent side ---- */
+  #chat { position: absolute; top: 0; height: 888px; overflow: hidden; }
+  .row { position: absolute; border-radius: 8px; }
+  .row-body { position: absolute; height: 12px; border-radius: 6px; background: rgba(255,255,255,0.11); }
+  .row-dot { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: rgba(255,255,255,0.30); }
+  .row-check { position: absolute; width: 16px; height: 16px; border-radius: 50%; background: rgba(101,84,217,0.9); }
+  .bubble { position: absolute; border-radius: 14px; background: rgba(255,255,255,0.10);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12); }
+  .bubble-text { position: absolute; left: 62px; top: 16px; right: 18px; font-size: 21px; line-height: 1.45; color: rgba(238,240,244,0.92); }
+  .bubble-tail { position: absolute; width: 12px; height: 12px; background: rgba(255,255,255,0.10);
+    transform: rotate(45deg); }
+
+  /* the Sunday mark: an abstract rounded tile */
+  .mark { position: absolute; left: 16px; top: 14px; width: 32px; height: 32px; border-radius: 10px;
+    background: linear-gradient(140deg, rgba(255,255,255,0.95), rgba(101,84,217,0.95)); }
+  .mark i { position: absolute; background: rgba(12,12,16,0.85); border-radius: 2px; }
+  .mark i:nth-child(1) { left: 9px; top: 8px; width: 5px; height: 16px; }
+  .mark i:nth-child(2) { left: 18px; top: 8px; width: 5px; height: 16px; }
+
+  /* ---- travelling objects ---- */
+  .fly { position: absolute; }
+  .fly .bubble, .fly .drop { position: absolute; inset: 0; }
+  .drop { width: 100%; height: 100%; }
+  .drop svg { width: 100%; height: 100%; }
+
+  /* ---- sub-agent panels on the right ---- */
+  .sub { position: absolute; border-radius: 14px; background: rgba(255,255,255,0.055);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); overflow: hidden; }
+  .sub-head { position: absolute; }
+  .sub-piece { position: absolute; background: rgba(255,255,255,0.15); border-radius: 3px; transform-origin: 50% 100%; }
+  .sub-progress { position: absolute; height: 6px; border-radius: 3px; background: rgba(101,84,217,0.8); transform-origin: 0 50%; }
+
+  /* ---- work surface (the game) ---- */
+  #work { position: absolute; top: 0; height: 888px; overflow: hidden; }
+  .tile { position: absolute; border-radius: 10px; background: rgba(255,255,255,0.05);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07); }
+  .part { position: absolute; background: rgba(255,255,255,0.18); border-radius: 4px; }
+  .crown { position: absolute; border-radius: 50%; background: rgba(101,84,217,0.5); }
+  .stem { position: absolute; width: 4px; background: rgba(255,255,255,0.22); border-radius: 2px; }
+
+  .cursor { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+    background: #f2f3f7; box-shadow: 0 0 0 6px rgba(255,255,255,0.10), 0 6px 18px rgba(0,0,0,0.5); }
+  .ripple { position: absolute; border-radius: 50%; border: 2px solid rgba(101,84,217,0.9); transform-origin: 50% 50%; }
+
+  .cap { position: absolute; left: 92px; bottom: 78px; background: rgba(8,8,10,0.78);
+    border-radius: 12px; padding: 16px 26px 18px; }
+  .cap-title { font-size: 28px; letter-spacing: 0.04em; color: rgba(238,240,244,0.9); }
+  .cap-hint { margin-top: 8px; font-size: 21px; letter-spacing: 0.05em; color: rgba(238,240,244,0.48); }
+  .hud-time { position: absolute; right: 120px; bottom: 60px; font-size: 21px; letter-spacing: 0.08em;
+    color: rgba(238,240,244,0.36); font-variant-numeric: tabular-nums; }
+  .track { position: absolute; left: 120px; right: 120px; bottom: 26px; height: 26px; }
+  .track-line { position: absolute; left: 0; right: 0; top: 12px; height: 1px; background: rgba(255,255,255,0.16); }
+  .track-block { position: absolute; top: 8px; height: 9px; border-radius: 3px; background: rgba(255,255,255,0.16); }
+  .track-block.active { background: rgba(101,84,217,0.85); }
+  .track-name { position: absolute; top: -16px; font-size: 18px; letter-spacing: 0.06em; color: rgba(238,240,244,0.45); }
+  .track-head { position: absolute; top: 2px; width: 1.5px; height: 22px; background: #6554d9; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch" /><feColorMatrix type="saturate" values="0" /></filter>
+    <rect width="1920" height="1080" filter="url(#g)" />
+  </svg>
+
+  <div id="stage">
+    <div class="panel" id="panel">
+      <div id="work"><div id="workInner"></div></div>
+      <div id="chat"><div id="chatInner"></div></div>
+      <div class="divider" id="divider"></div>
+      <div id="flyLayer"></div>
+      <div id="fxLayer"></div>
+    </div>
+  </div>
+
+  <div class="cap" id="cap"><div class="cap-title" id="capTitle"></div><div class="cap-hint" id="capHint"></div></div>
+  <div class="hud-time" id="hudTime"></div>
+  <div class="track"><div class="track-line"></div><div id="trackBlocks"></div><div class="track-head" id="trackHead"></div></div>
+
+<script>
+const { seg, lerp, ease, style, stagger } = window.MotionKit
+
+/* ---------------------------------------------------------------------------
+ * The sub-agent beat, following how the product actually works:
+ *
+ *   click a process row  ->  a bubble pops out carrying the delegation, shown
+ *   as a short colloquial line with the Sunday mark  ->  the bubble is thrown
+ *   to the right and becomes sub-agent #1 (and #2, #3)  ->  when a sub-agent
+ *   finishes it becomes a bubble again, then a drop, and is thrown back to the
+ *   main agent as a new process row  ->  when all are done the main agent says
+ *   "老板，搞完了，你看一下"  ->  it withdraws and the game takes the full
+ *   surface.
+ *
+ * The delegation text here is a stand-in: real delegation prompts run to
+ * hundreds of characters, so the film shows a ~50 character summary.
+ * ------------------------------------------------------------------------ */
+
+const PANEL = { w: 1680, h: 888 }
+const CHAT_W = 640
+
+const BEATS = [
+  { id: 'R1', at: 0.0,  dur: 1.4,  note: '主代理在工作，过程行逐条出现' },
+  { id: 'R2', at: 1.4,  dur: 1.2,  note: '点一下过程行' },
+  { id: 'R3', at: 2.6,  dur: 1.4,  note: '浮出气泡：图标 + 口语化摘要' },
+  { id: 'R4', at: 4.0,  dur: 1.5,  note: '气泡被扔到右边，成为子代理一号' },
+  { id: 'R5', at: 5.6,  dur: 2.8,  note: '二号、三号同样派出' },
+  { id: 'R6', at: 8.6,  dur: 5.6,  note: '子代理各自干活；完成 → 气泡 → 水滴 → 扔回主代理' },
+  { id: 'R7', at: 14.6, dur: 1.8,  note: '主代理：「老板，搞完了，你看一下」' },
+  { id: 'R8', at: 16.6, dur: 2.4,  note: '撤出：对话区收起，全屏让给游戏' },
+]
+const TOTAL = 19.6
+
+const ROWS = [
+  { text: '读了项目结构', done: 0.4 },
+  { text: '定下村落的规模', done: 1.0 },
+  { text: '派出三个子代理', done: 2.2 },
+]
+const DELEGATIONS = [
+  { text: '帮我把初始村落搭起来：几间木屋、几棵树，别太大', row: 1 },
+  { text: '你负责地面和道路，铺得自然一点就行', row: 2 },
+  { text: '做一下资源条和建造菜单，能点就行', row: 3 },
+]
+
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+
+const DROP_PATH =
+  'M12 0C12 0 23 11 23 15.5A11 11 0 1 1 1 15.5C1 11 12 0 12 0Z'
+
+function markHtml() {
+  return `<div class="mark"><i></i><i></i></div>`
+}
+function bubbleHtml(text, width) {
+  return `<div class="bubble" style="width:${width}px"><div class="bubble-tail" style="left:26px;bottom:-6px"></div>${markHtml()}<div class="bubble-text">${text}</div></div>`
+}
+function dropHtml() {
+  return `<div class="drop"><svg viewBox="0 0 24 28"><path d="${DROP_PATH}" fill="rgba(101,84,217,0.9)"/></svg></div>`
+}
+
+/* ---------------------------------------------------------------- scaffold */
+function buildDom() {
+  // chat rows: each is a dot + a bar, revealed one by one
+  let chat = ''
+  for (let i = 0; i < 6; i += 1) {
+    const y = 150 + i * 62
+    chat += `<div class="row-dot" data-rowdot="${i}" style="left:44px;top:${y}px;opacity:0"></div>`
+    chat += `<div class="row-body" data-rowbody="${i}" style="left:72px;top:${y + 4}px;width:${280 - (i % 3) * 40}px;opacity:0"></div>`
+  }
+  $('chatInner').innerHTML = chat
+
+  // three sub-agents occupy three connected columns of the work area
+  const workX = CHAT_W + 1
+  const workW = PANEL.w - workX
+  const SUB_W = workW / 3
+  let work = ''
+  for (let i = 0; i < 3; i += 1) {
+    work += `<div class="sub" id="sub${i}" style="left:0;top:150px;width:${SUB_W - 40}px;height:420px;opacity:0">
+      <div class="sub-head" id="subhead${i}" style="left:22px;top:20px;height:12px;border-radius:6px;background:rgba(255,255,255,0.20);width:${120 + i * 20}px"></div>
+      <div class="sub-progress" id="subprog${i}" style="left:22px;top:48px;width:${SUB_W - 84}px;opacity:0"></div>`
+    for (let p = 0; p < 4; p += 1) {
+      work += `<div class="sub-piece" data-piece="${i}-${p}" style="left:${22 + (p % 2) * 96}px;top:${86 + p * 74}px;width:${74 + ((p * 23 + i * 17) % 60)}px;height:${38 + ((p * 13) % 26)}px;opacity:0"></div>`
+    }
+    work += `</div>`
+  }
+  // the game surface that takes over at the end sits underneath
+  let game = ''
+  const G = { cols: 3, rows: 3, size: 110, gap: 18 }
+  const gw = G.cols * G.size + (G.cols - 1) * G.gap
+  const gh = G.rows * G.size + (G.rows - 1) * G.gap
+  const gx = (workW - gw) / 2
+  const gy = 120
+  for (let r = 0; r < G.rows; r += 1) {
+    for (let c = 0; c < G.cols; c += 1) {
+      game += `<div class="tile" style="left:${gx + c * (G.size + G.gap)}px;top:${gy + r * (G.size + G.gap)}px;width:${G.size}px;height:${G.size}px;opacity:0"></div>`
+    }
+  }
+  const baseY = gy + gh
+  game += `<div class="part" style="left:${gx + 30}px;top:${baseY - 22}px;width:200px;height:22px;opacity:0" data-gamepart="1"></div>`
+  game += `<div class="part" style="left:${gx + 56}px;top:${baseY - 130}px;width:148px;height:108px;opacity:0" data-gamepart="1"></div>`
+  game += `<div class="part" style="left:${gx + 30}px;top:${baseY - 196}px;width:200px;height:68px;border-radius:6px 6px 2px 2px;opacity:0" data-gamepart="1"></div>`
+  game += `<div class="stem" style="left:${gx + 330}px;top:${baseY - 80}px;height:80px;opacity:0" data-gamepart="1"></div>`
+  game += `<div class="crown" style="left:${gx + 290}px;top:${baseY - 176}px;width:84px;height:84px;opacity:0" data-gamepart="1"></div>`
+  // the game surface sits underneath; the sub-agent panels layer on top of it
+  $('workInner').innerHTML = game + work
+
+  // travelling bubbles / drops are added per frame
+  $('flyLayer').innerHTML = ''
+}
+buildDom()
+
+const workX = CHAT_W + 1
+const workW = PANEL.w - workX
+const SUB_W = workW / 3
+
+function buildTrack() {
+  let html = ''
+  for (const beat of BEATS) {
+    html += `<div class="track-block" data-block="${beat.id}" style="left:${((beat.at / TOTAL) * 100).toFixed(2)}%;width:${((beat.dur / TOTAL) * 100).toFixed(2)}%"></div>`
+    html += `<div class="track-name" style="left:${((beat.at / TOTAL) * 100).toFixed(2)}%">${beat.id}</div>`
+  }
+  $('trackBlocks').innerHTML = html
+}
+buildTrack()
+
+/* --------------------------------------------------------------- geometry */
+const rowPos = (i) => ({ x: 44, y: 150 + i * 62 })
+
+/** where sub-agent i lives, in panel-local coordinates */
+const subRect = (i) => ({ x: workX + i * SUB_W + 20, y: 150, w: SUB_W - 40, h: 420 })
+
+/** the arc a thrown object follows from A to B, with a little tumble */
+function thrown(from, to, p, height = 120) {
+  const k = ease.sineInOut(p)
+  const arc = Math.sin(Math.PI * p) * height
+  return {
+    x: lerp(from.x, to.x, k),
+    y: lerp(from.y, to.y, k) - arc,
+    rot: Math.sin(Math.PI * p) * 18 * (to.x > from.x ? 1 : -1),
+  }
+}
+
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+/* ------------------------------------------------------------------ render */
+window.renderFrame = (t) => {
+  /* ---- rows appear while the main agent works ---- */
+  const rowReveal = (i) => ease.quintOut(stagger(t, i, { start: BEATS[0].at + 0.2, each: 0.28, dur: 0.5 }))
+  document.querySelectorAll('[data-rowdot]').forEach((node) => {
+    const i = Number(node.dataset.rowdot)
+    style(node, { opacity: rowReveal(i) * 0.9, transform: `scale(${(0.6 + 0.4 * rowReveal(i)).toFixed(3)})` })
+  })
+  document.querySelectorAll('[data-rowbody]').forEach((node) => {
+    const i = Number(node.dataset.rowbody)
+    style(node, { opacity: rowReveal(i) * 0.9, transform: `scaleX(${rowReveal(i).toFixed(4)})` })
+  })
+
+  /* ---- the click that starts a delegation ---- */
+  const clickAt = (index) => BEATS[1].at + 0.1 + index * 1.6
+  let cursor = null
+  for (let i = 0; i < DELEGATIONS.length; i += 1) {
+    const at = clickAt(i)
+    if (t >= at - 0.6 && t < at + 0.9) {
+      const pos = rowPos(DELEGATIONS[i].row)
+      const p = ease.sineInOut(seg(t, at - 0.5, at + 0.35))
+      const press = Math.sin(Math.PI * seg(t, at + 0.1, at + 0.4))
+      cursor = { x: lerp(420, pos.x + 120, p), y: lerp(700, pos.y + 6, p), press: 1 - press * 0.3, at }
+    }
+  }
+
+  /* ---- the sequence: bubble out -> thrown -> lands as a sub-agent ---- */
+  let flyHtml = ''
+  let rippleHtml = ''
+  for (let i = 0; i < DELEGATIONS.length; i += 1) {
+    const at = clickAt(i)
+    const rowP = rowPos(DELEGATIONS[i].row)
+    const from = { x: rowP.x + 120, y: rowP.y + 6 }
+    const land = { x: subRect(i).x + (SUB_W - 40) / 2 - 60, y: 150 - 76 }
+
+    // R3: the bubble pops out of the process row
+    const outP = seg(t, at + 0.35, at + 0.95)
+    // R4: thrown to the right
+    const flyP = seg(t, at + 1.0, at + 2.1)
+    // R6: finished -> bubble -> drop -> thrown back
+    const backAt = BEATS[5].at + 0.9 + i * 1.4
+    const shrinkP = seg(t, backAt, backAt + 0.55)
+    const backP = seg(t, backAt + 0.7, backAt + 1.8)
+
+    if (outP > 0 && backP < 1) {
+      const pos = flyP > 0 ? thrown(from, land, flyP, 130) : { x: from.x, y: from.y, rot: 0 }
+      // shape: bubble -> drop, right before it is thrown home
+      const asDrop = shrinkP > 0.45
+      const scale = (0.55 + 0.45 * ease.softBack(seg(t, at + 0.35, at + 0.9)))
+        * (flyP > 0 ? lerp(1, 0.82, ease.sineInOut(flyP)) : 1)
+        * (asDrop ? lerp(1, 0.72, shrinkP) : 1)
+        * (backP > 0 ? lerp(0.72, 0.5, ease.sineInOut(backP)) : 1)
+      const alpha = Math.min(ease.quintOut(outP), 1 - seg(t, backAt + 1.7, backAt + 1.95))
+      const w = 300
+      flyHtml += `<div class="fly" style="left:${(pos.x).toFixed(1)}px;top:${(pos.y).toFixed(1)}px;width:${w}px;height:64px;opacity:${alpha.toFixed(3)};transform:rotate(${(pos.rot * 0.35).toFixed(2)}deg) scale(${scale.toFixed(3)});transform-origin:50% 50%">
+        <div style="position:absolute;inset:0;opacity:${asDrop ? 0 : 1}">${bubbleHtml(DELEGATIONS[i].text, w)}</div>
+        <div style="position:absolute;left:${(w / 2 - 22).toFixed(1)}px;top:6px;width:44px;height:52px;opacity:${asDrop ? 1 : 0};transform:rotate(${asDrop ? 180 : 0}deg)">${dropHtml()}</div>
+      </div>`
+    }
+
+    // the drop arrives home: it becomes a new process row
+    const homeP = seg(t, backAt + 1.8, backAt + 2.3)
+    if (homeP > 0) {
+      const y = 150 + (3 + i) * 62
+      const w = 280 - (i % 3) * 40
+      flyHtml += `<div style="position:absolute;left:72px;top:${y + 4}px;width:${w}px;height:12px;border-radius:6px;background:rgba(255,255,255,0.11);opacity:${(homeP * 0.9).toFixed(3)};transform:scaleX(${ease.expoOut(homeP).toFixed(4)});transform-origin:0 50%"></div>`
+      flyHtml += `<div style="position:absolute;left:44px;top:${y}px;width:16px;height:16px;border-radius:50%;background:rgba(101,84,217,0.9);opacity:${ease.quintOut(homeP).toFixed(3)};transform:scale(${(0.5 + 0.5 * ease.softBack(homeP)).toFixed(3)})"></div>`
+    }
+
+    if (cursor && cursor.at === at) {
+      const rp = seg(t, at + 0.12, at + 0.9)
+      if (rp > 0 && rp < 1) {
+        rippleHtml += `<div class="ripple" style="left:${(rowP.x + 120 - 30).toFixed(1)}px;top:${(rowP.y + 6 - 30).toFixed(1)}px;width:60px;height:60px;opacity:${(Math.sin(Math.PI * rp) * 0.85).toFixed(3)};transform:scale(${lerp(0.35, 2.6, ease.expoOut(rp)).toFixed(3)})"></div>`
+      }
+    }
+  }
+
+  /* ---- the final line from the main agent ---- */
+  const bossP = seg(t, BEATS[6].at + 0.2, BEATS[6].at + 1.2)
+  if (bossP > 0) {
+    const y = 500
+    flyHtml += `<div class="fly" style="left:44px;top:${y}px;width:420px;height:78px;opacity:${ease.quintOut(bossP).toFixed(3)};transform:translateY(${((1 - ease.expoOut(bossP)) * 18).toFixed(1)}px)">
+      ${bubbleHtml('老板，搞完了，你看一下。', 420)}
+    </div>`
+  }
+
+  if (cursor) {
+    flyHtml += `<div class="cursor" style="left:${cursor.x.toFixed(1)}px;top:${cursor.y.toFixed(1)}px;transform:scale(${cursor.press.toFixed(3)})"></div>`
+  }
+  $('flyLayer').innerHTML = flyHtml + rippleHtml
+
+  /* ---- sub-agents: land, work, then leave as drops ---- */
+  for (let i = 0; i < 3; i += 1) {
+    const node = $(`sub${i}`)
+    const rect = subRect(i)
+    const at = clickAt(i)
+    const landP = seg(t, at + 1.9, at + 2.4)
+    const backAt = BEATS[5].at + 0.9 + i * 1.4
+    const leaveP = seg(t, backAt + 0.5, backAt + 0.9)
+    style(node, {
+      left: `${rect.x.toFixed(1)}px`,
+      top: `${rect.y.toFixed(1)}px`,
+      width: `${rect.w.toFixed(1)}px`,
+      height: `${rect.h.toFixed(1)}px`,
+      opacity: Math.min(ease.quintOut(landP), 1 - ease.quintOut(leaveP)),
+      transform: `scale(${lerp(0.92, 1, ease.softBack(landP)).toFixed(4)})`,
+    })
+    // its own work: pieces build up, a progress bar fills
+    const focused = landP > 0 && leaveP < 1 && t >= BEATS[5].at - 0.4
+    const workSpan = { start: BEATS[5].at + 0.2 + i * 0.5, end: backAt - 0.2 }
+    style($(`subprog${i}`), { opacity: focused ? 0.9 : 0, transform: `scaleX(${ease.sineInOut(seg(t, workSpan.start, workSpan.end)).toFixed(4)})` })
+    for (let p = 0; p < 4; p += 1) {
+      const piece = document.querySelector(`[data-piece="${i}-${p}"]`)
+      const start = workSpan.start + p * 0.45
+      const pp = ease.softBack(seg(t, start, start + 0.5))
+      style(piece, {
+        opacity: focused ? Math.min(1, seg(t, start, start + 0.2) * 1.5) * (1 - leaveP) : 0,
+        transform: `scaleY(${pp.toFixed(4)})`,
+      })
+    }
+    style($(`subhead${i}`), { opacity: Math.min(ease.quintOut(landP), 1 - leaveP) })
+  }
+
+  /* ---- the game takes the whole surface ---- */
+  const withdraw = ease.cubicInOut(seg(t, BEATS[7].at, BEATS[7].at + 1.4))
+  if (withdraw > 0) {
+    style($('chat'), { opacity: 1 - ease.quintOut(seg(t, BEATS[7].at, BEATS[7].at + 0.9)) })
+  }
+  const chatWidth = lerp(CHAT_W, 0, withdraw)
+  const workLeft = lerp(workX, 0, withdraw)
+  const workWidth = lerp(workW, PANEL.w, withdraw)
+  style($('chat'), { left: '0px', width: `${chatWidth.toFixed(1)}px` })
+  style($('work'), { left: `${workLeft.toFixed(1)}px`, width: `${workWidth.toFixed(1)}px` })
+  style($('divider'), { left: `${(workLeft - 1).toFixed(1)}px`, opacity: 1 - withdraw })
+  // the game fades in as the surface opens up, and settles centred
+  const gameP = seg(t, BEATS[7].at + 0.4, BEATS[7].at + 1.8)
+  const gameScale = lerp(1, 1.22, ease.sineInOut(seg(t, BEATS[7].at + 0.4, TOTAL)))
+  document.querySelectorAll('#workInner > *').forEach((node) => {
+    style(node, { opacity: Math.min(1, gameP * 1.1) })
+  })
+  style($('workInner'), {
+    transform: `translateX(${(-(workW - PANEL.w) / 2 * withdraw).toFixed(1)}px) scale(${gameScale.toFixed(4)})`,
+    transformOrigin: `${(workW / 2).toFixed(1)}px ${(PANEL.h / 2).toFixed(1)}px`,
+  })
+  // the game's own parts (house, tree) only exist once it owns the screen
+  document.querySelectorAll('[data-gamepart]').forEach((node) => style(node, { opacity: Math.min(1, gameP * 1.2) }))
+
+  /* ---- captions + hud ---- */
+  let current = BEATS[0]
+  for (const beat of BEATS) if (t >= beat.at) current = beat
+  $('capTitle').textContent = `${current.id} · ${current.note}`
+  $('capHint').textContent = t < BEATS[4].at
+    ? '点过程行 → 气泡（图标 + 口语化摘要）→ 扔到右边成为子代理'
+    : t < BEATS[6].at
+      ? '子代理完成后：变气泡 → 变水滴 → 扔回主代理成为过程行'
+      : '主代理汇报 → 撤出 → 全屏让给成品'
+  $('hudTime').textContent = `${t.toFixed(1)}s / ${TOTAL.toFixed(1)}s`
+  document.querySelectorAll('[data-block]').forEach((node) => {
+    node.classList.toggle('active', node.dataset.block === current.id)
+  })
+  style($('trackHead'), { left: `${((t / TOTAL) * 100).toFixed(3)}%` })
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

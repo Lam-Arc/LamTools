@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>code · 代码聚焦段</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.05), rgba(255,255,255,0) 62%),
+      radial-gradient(1500px 780px at 50% 116%, rgba(101,84,217,0.12), rgba(0,0,0,0) 60%),
+      #0a0a0c; }
+  .grain { position: absolute; inset: 0; opacity: 0.04; mix-blend-mode: screen; }
+
+  .panel { position: absolute; left: 120px; top: 96px; width: 1680px; height: 888px;
+    border-radius: 20px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.16), 0 40px 90px rgba(0,0,0,0.45); }
+
+  .col { position: absolute; top: 0; height: 888px; overflow: hidden; }
+  .divider { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.16); }
+
+  /* ---- 代码区（聚焦，宽） ---- */
+  .code-band { position: absolute; left: 0; right: 0; overflow: hidden; }
+  .cline { position: absolute; height: 12px; border-radius: 3px; background: rgba(255,255,255,0.13); transform-origin: 0 50%; }
+  .cline.add { background: rgba(120,200,150,0.34); }
+  .cline.dim { background: rgba(255,255,255,0.07); }
+  .band-tag { position: absolute; left: 40px; top: 22px; font-size: 18px; letter-spacing: 0.08em;
+    color: rgba(238,240,244,0.40); white-space: nowrap; }
+  .band-hair { position: absolute; left: 0; right: 0; height: 1px; background: rgba(255,255,255,0.16); opacity: 0; }
+
+  /* ---- 右侧两条窄栏：虚化，放辅助内容 ---- */
+  .aux { position: absolute; top: 0; height: 888px; overflow: hidden; }
+  .aux-head { position: absolute; left: 24px; top: 24px; font-size: 18px; letter-spacing: 0.06em;
+    color: rgba(238,240,244,0.55); white-space: nowrap; }
+
+  /* 定时任务卡片 */
+  .job { position: absolute; left: 22px; right: 20px; top: 70px; border-radius: 12px;
+    background: rgba(255,255,255,0.055); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.09);
+    padding: 16px 16px 18px; }
+  .job-title { font-size: 21px; font-weight: 600; color: rgba(238,240,244,0.92); white-space: nowrap; }
+  .job-when { margin-top: 8px; font-size: 17px; letter-spacing: 0.05em; color: rgba(190,180,250,0.9);
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .job-sub { margin-top: 12px; font-size: 16px; color: rgba(238,240,244,0.45); white-space: nowrap; }
+  .job-dot { position: absolute; right: 16px; top: 20px; width: 10px; height: 10px; border-radius: 50%;
+    background: rgba(150,135,245,0.85); }
+  .job-flash { position: absolute; inset: 0; border-radius: 12px; background: #ffffff; opacity: 0; }
+
+  /* 时间流逝：一列时刻往上走，中间一条"现在"线 */
+  .now-line { position: absolute; left: 20px; right: 20px; height: 1px;
+    background: linear-gradient(90deg, rgba(101,84,217,0), rgba(150,135,245,0.85), rgba(101,84,217,0)); }
+  .now-dot { position: absolute; width: 7px; height: 7px; border-radius: 50%; background: #a99cf7;
+    box-shadow: 0 0 12px rgba(150,135,245,0.9); }
+  .tick { position: absolute; left: 24px; font-size: 17px; letter-spacing: 0.06em;
+    color: rgba(238,240,244,0.38); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tick.hot { color: rgba(196,187,252,0.95); }
+
+  .cursor { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+    background: #f2f3f7; box-shadow: 0 0 0 6px rgba(255,255,255,0.10), 0 6px 18px rgba(0,0,0,0.5); }
+
+  .cap { position: absolute; left: 120px; bottom: 22px; }
+  .cap-title { font-size: 24px; letter-spacing: 0.04em; color: rgba(238,240,244,0.82); }
+  .cap-hint { margin-top: 5px; font-size: 18px; letter-spacing: 0.05em; color: rgba(238,240,244,0.42); }
+  .hud-time { position: absolute; right: 120px; bottom: 26px; font-size: 19px; letter-spacing: 0.08em;
+    color: rgba(238,240,244,0.36); font-variant-numeric: tabular-nums; }
+  .track { position: absolute; left: 120px; right: 120px; bottom: 84px; height: 26px; }
+  .track-line { position: absolute; left: 0; right: 0; top: 12px; height: 1px; background: rgba(255,255,255,0.16); }
+  .track-block { position: absolute; top: 8px; height: 9px; border-radius: 3px; background: rgba(255,255,255,0.16); }
+  .track-block.active { background: rgba(101,84,217,0.85); }
+  .track-name { position: absolute; top: -16px; font-size: 16px; letter-spacing: 0.05em; color: rgba(238,240,244,0.45); }
+  .track-head { position: absolute; top: 2px; width: 1.5px; height: 22px; background: #6554d9; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch" /><feColorMatrix type="saturate" values="0" /></filter>
+    <rect width="1920" height="1080" filter="url(#g)" />
+  </svg>
+
+  <div class="panel" id="panel">
+    <div class="col" id="codeCol">
+      <div class="code-band" id="topBand"></div>
+      <div class="band-hair" id="bandHair"></div>
+      <div class="code-band" id="botBand"></div>
+    </div>
+    <div class="divider" id="div0"></div>
+    <div class="aux" id="aux0">
+      <div class="aux-head">定时任务</div>
+      <div class="job" id="job">
+        <div class="job-title">看一遍代码改动</div>
+        <div class="job-when">每天 09:00</div>
+        <div class="job-sub">上次 09:00 · 无阻塞</div>
+        <div class="job-dot"></div>
+        <div class="job-flash" id="jobFlash"></div>
+      </div>
+    </div>
+    <div class="divider" id="div1"></div>
+    <div class="aux" id="aux1">
+      <div class="aux-head">时间</div>
+      <div id="ticks"></div>
+      <div class="now-line" id="nowLine"></div>
+      <div class="now-dot" id="nowDot"></div>
+    </div>
+    <div id="flyLayer"></div>
+  </div>
+
+  <div class="cap"><div class="cap-title" id="capTitle"></div><div class="cap-hint" id="capHint"></div></div>
+  <div class="hud-time" id="hudTime"></div>
+  <div class="track"><div class="track-line"></div><div id="trackBlocks"></div><div class="track-head" id="trackHead"></div></div>
+
+<script>
+const { seg, lerp, ease, style, stagger } = window.MotionKit
+
+/* ---------------------------------------------------------------------------
+ * 代码聚焦段（一段，不 длин）。
+ *
+ *   代码拓宽聚焦，右侧两条窄栏虚化——一条放定时任务卡片，一条放时间流逝。
+ *   代码稳定推进；时间在走；滴答一声到点了；
+ *   左边代码上下分屏，一个新任务开始、跑完、收起。
+ *   节奏收紧：不拖，每一步都干脆。
+ *
+ * 100 BPM：一拍 0.6s。14.4s = 24 拍 = 6 小节。
+ * ------------------------------------------------------------------------ */
+
+const PANEL = { w: 1680, h: 888 }
+const CODE_W = 1120
+const AUX_W = 280
+const NOW_Y = 444
+
+const BEATS = [
+  { id: 'C1', at: 0.0, dur: 1.8, note: '代码聚焦拓宽；右侧两条窄栏虚化：定时卡片 + 时间流逝' },
+  { id: 'C2', at: 1.8, dur: 2.4, note: '代码稳定推进：几行干脆落下，不拖' },
+  { id: 'C3', at: 4.2, dur: 1.8, note: '时间在走：时刻往上过，09:00 逼近"现在"' },
+  { id: 'C4', at: 6.0, dur: 0.6, note: '滴答——到点了，卡片亮一下' },
+  { id: 'C5', at: 6.6, dur: 2.4, note: '左边代码上下分屏：新任务开始' },
+  { id: 'C6', at: 9.0, dur: 1.8, note: '那个任务跑（干脆）' },
+  { id: 'C7', at: 10.8, dur: 1.2, note: '做完，分屏收起' },
+  { id: 'C8', at: 12.0, dur: 2.4, note: '隐去右侧辅助内容，回到三栏，聚焦仍是代码' },
+]
+const TOTAL = 14.4
+const at = (id) => BEATS.find((b) => b.id === id).at
+
+const TIMES = ['07:00', '07:20', '07:40', '08:00', '08:20', '08:40', '09:00', '09:20', '09:40']
+const TICK_GAP = 64
+const TICK_AT = TIMES.indexOf('09:00') // 这一枚到点
+
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+/* ------------------------------------------------------------ static DOM */
+function buildDom() {
+  style($('codeCol'), { left: '0px', width: `${CODE_W}px` })
+  style($('aux0'), { left: `${CODE_W + 1}px`, width: `${AUX_W - 1}px` })
+  style($('aux1'), { left: `${CODE_W + AUX_W + 1}px`, width: `${PANEL.w - CODE_W - AUX_W - 1}px` })
+  style($('div0'), { left: `${CODE_W}px` })
+  style($('div1'), { left: `${CODE_W + AUX_W}px` })
+
+  // 上半屏：一段稳定的代码
+  const top = [[0, 300], [1, 240], [2, 380], [1, 200], [3, 340], [2, 260], [0, 420], [1, 180], [2, 300], [4, 220], [1, 360], [2, 240]]
+  let html = `<div class="band-tag">core / scheduler / run.ts</div>`
+  top.forEach(([indent, w], i) => {
+    html += `<div class="cline" data-tline="${i}" style="left:${40 + indent * 26}px;top:${64 + i * 30}px;width:${w}px;opacity:0"></div>`
+  })
+  $('topBand').innerHTML = html
+
+  // 下半屏：到点之后那个新任务
+  const bot = [[0, 260], [1, 200], [1, 320], [2, 180], [0, 300]]
+  let bhtml = `<div class="band-tag" id="botTag" style="opacity:0">09:00 · 例行检查</div>`
+  bot.forEach(([indent, w], i) => {
+    bhtml += `<div class="cline add" data-bline="${i}" style="left:${40 + indent * 26}px;top:${64 + i * 30}px;width:${w}px;opacity:0"></div>`
+  })
+  $('botBand').innerHTML = bhtml
+
+  // 时间刻度
+  let ticks = ''
+  TIMES.forEach((label, i) => {
+    ticks += `<div class="tick" id="tick${i}" style="top:${NOW_Y + (i - TICK_AT + 1) * TICK_GAP}px">${label}</div>`
+  })
+  $('ticks').innerHTML = ticks
+
+  let track = ''
+  for (const b of BEATS) {
+    track += `<div class="track-block" data-block="${b.id}" style="left:${((b.at / TOTAL) * 100).toFixed(2)}%;width:${((b.dur / TOTAL) * 100).toFixed(2)}%"></div>`
+    track += `<div class="track-name" style="left:${((b.at / TOTAL) * 100).toFixed(2)}%">${b.id}</div>`
+  }
+  $('trackBlocks').innerHTML = track
+}
+buildDom()
+
+/* ------------------------------------------------------------------ render */
+window.renderFrame = (t) => {
+  let fly = ''
+
+  /* ---- 右侧两条窄栏：虚化进来，最后隐去 ---- */
+  const auxIn = ease.quintOut(seg(t, 0.2, 1.4))
+  const auxOut = ease.quintOut(seg(t, at('C8'), at('C8') + 1.0))
+  const auxAlpha = auxIn * (1 - auxOut)
+  const blur = auxIn > 0 ? (1 - auxIn) * 4 + 1.5 : 4
+  ;[0, 1].forEach((i) => {
+    style($(`aux${i}`), { opacity: auxAlpha * 0.9, filter: `blur(${blur.toFixed(2)}px)` })
+  })
+  style($('job'), { opacity: auxIn, transform: `translateY(${((1 - auxIn) * 14).toFixed(1)}px)` })
+  style($('ticks'), { opacity: auxIn * 0.9 })
+  style($('nowLine'), { top: `${NOW_Y}px`, opacity: auxIn * 0.8 })
+  style($('nowDot'), { left: `${CODE_W + AUX_W + 14}px`, top: `${NOW_Y - 3}px`, opacity: auxIn })
+
+  /* ---- 代码稳定推进 ---- */
+  document.querySelectorAll('[data-tline]').forEach((node) => {
+    const i = Number(node.dataset.tline)
+    const p = ease.expoOut(stagger(t, i, { start: at('C2') + i * 0.12, each: 0.14, dur: 0.45 }))
+    style(node, { opacity: Math.min(1, p * 1.4), transform: `scaleX(${p.toFixed(4)})` })
+  })
+
+  /* ---- 时间在走：整列时刻往上移，09:00 逼近"现在" ---- */
+  const flow = ease.sineInOut(seg(t, at('C3') - 0.6, at('C4') + 0.1))
+  const drift = flow * TICK_GAP // 正好走一格
+  TIMES.forEach((_, i) => {
+    const node = $(`tick${i}`)
+    const y = NOW_Y + (i - TICK_AT + 1) * TICK_GAP - drift
+    style(node, { top: `${y.toFixed(1)}px`, opacity: (auxIn * Math.max(0, Math.min(1, (y - 76) / 56)) * Math.max(0, Math.min(1, (826 - y) / 56))).toFixed(3) })
+    node.classList.toggle('hot', i === TICK_AT && flow > 0.6)
+  })
+
+  /* ---- 滴答：到点了 ---- */
+  const tickP = Math.sin(Math.PI * seg(t, at('C4') - 0.1, at('C4') + 0.5))
+  style($('jobFlash'), { opacity: (tickP * 0.20).toFixed(3) })
+  style($('nowDot'), {
+    boxShadow: tickP > 0.05 ? `0 0 ${(12 + tickP * 18).toFixed(0)}px rgba(150,135,245,${(0.9).toFixed(2)})` : '0 0 12px rgba(150,135,245,0.9)',
+    transform: `scale(${(1 + tickP * 0.5).toFixed(3)})`,
+  })
+
+  /* ---- 上下分屏：新任务开始 → 跑 → 收起 ---- */
+  const open = ease.cubicInOut(seg(t, at('C5'), at('C5') + 1.2))
+  const close = ease.cubicInOut(seg(t, at('C7'), at('C7') + 1.2))
+  const split = open * (1 - close)
+  const bandTop = lerp(0, NOW_Y, split)
+  style($('topBand'), { height: `${lerp(PANEL.h, NOW_Y, split).toFixed(1)}px` })
+  style($('botBand'), { top: `${(bandTop + 1).toFixed(1)}px`, height: `${Math.max(0, PANEL.h - bandTop - 1).toFixed(1)}px` })
+  style($('bandHair'), { top: `${bandTop.toFixed(1)}px`, opacity: split > 0.02 ? split : 0 })
+  style($('botTag'), { opacity: split })
+  document.querySelectorAll('[data-bline]').forEach((node) => {
+    const i = Number(node.dataset.bline)
+    const p = ease.expoOut(stagger(t, i, { start: at('C5') + 0.9 + i * 0.22, each: 0.24, dur: 0.4 }))
+    style(node, { opacity: Math.min(1, p * 1.5) * split, transform: `scaleX(${p.toFixed(4)})` })
+  })
+  // 上半屏的代码在分屏时往下让一让，不显得被裁掉
+  style($('topBand').querySelector('.band-tag'), { opacity: 1 - split * 0.5 })
+
+  /* ---- 光标（示意：聚焦已在代码上） ---- */
+
+  /* ---- 字幕 + 时间轴 ---- */
+  let current = BEATS[0]
+  for (const b of BEATS) if (t >= b.at) current = b
+  $('capTitle').textContent = `${current.id} · ${current.note}`
+  $('capHint').textContent = t < at('C4')
+    ? '定时与时间流逝不住在流程里，住在右边的窄栏里，虚化着'
+    : t < at('C7')
+      ? '到点自己动：左边上下分屏，一个新任务开始、跑完、收起——不换场景'
+      : '隐去辅助内容，回到三栏；聚焦仍是代码'
+  $('hudTime').textContent = `${t.toFixed(1)}s / ${TOTAL.toFixed(1)}s · 100 BPM`
+  document.querySelectorAll('[data-block]').forEach((node) => {
+    node.classList.toggle('active', node.dataset.block === current.id)
+  })
+  style($('trackHead'), { left: `${((t / TOTAL) * 100).toFixed(3)}%` })
+
+  $('flyLayer').innerHTML = fly
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>animatic</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0a0a0c; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background:
+      radial-gradient(1180px 660px at 50% 44%, rgba(255,255,255,0.070), rgba(255,255,255,0) 64%),
+      radial-gradient(1500px 760px at 50% 120%, rgba(101,84,217,0.13), rgba(0,0,0,0) 62%),
+      radial-gradient(2200px 1400px at 50% 50%, rgba(0,0,0,0), rgba(0,0,0,0.55) 78%),
+      #0b0b0e; }
+  .grain { position: absolute; inset: 0; opacity: 0.045; mix-blend-mode: screen; }
+
+  /* The film happens inside one window: the frame persists while its content
+     changes from shot to shot. */
+  .stage { position: absolute; left: 50%; top: 508px; width: 1600px; height: 900px;
+    transform: translate(-50%, -50%); transform-origin: 50% 50%; }
+  .stage svg.frame { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+  .content { position: absolute; inset: 0; opacity: 0; }
+
+  .slot-title { position: absolute; left: 0; right: 0; top: 336px; text-align: center;
+    font-size: 46px; font-weight: 500; letter-spacing: 0.02em; color: rgba(238,240,244,0.90); }
+  .slot-hint { position: absolute; left: 0; right: 0; top: 410px; text-align: center;
+    font-size: 28px; font-weight: 400; letter-spacing: 0.06em; color: rgba(238,240,244,0.42); }
+  .slot-hint em { font-style: normal; color: rgba(101,84,217,0.95); }
+  .slot-index { position: absolute; left: 54px; top: 44px; font-size: 24px; letter-spacing: 0.16em;
+    color: rgba(238,240,244,0.35); }
+  .slot-dur { position: absolute; right: 54px; top: 44px; font-size: 24px; letter-spacing: 0.12em;
+    color: rgba(238,240,244,0.30); }
+  .scan { position: absolute; left: 0; right: 0; height: 1.5px; opacity: 0;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.5), rgba(255,255,255,0)); }
+  .grid-hint { position: absolute; inset: 0; opacity: 0.05;
+    background-image: linear-gradient(rgba(255,255,255,0.5) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,0.5) 1px, transparent 1px);
+    background-size: 100px 100px; }
+
+  /* shot 02 — the request */
+  .req-line { position: absolute; left: 0; right: 0; top: 400px; text-align: center;
+    font-size: 62px; font-weight: 500; color: #f6f7fa; }
+  .req-rule { position: absolute; left: 50%; top: 500px; width: 760px; height: 1px; margin-left: -380px;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.5), rgba(255,255,255,0)); }
+  .req-send { position: absolute; left: 50%; top: 540px; width: 46px; height: 46px; margin-left: -23px;
+    border-radius: 50%; background: #6554d9; }
+
+  /* shot 10 — end card */
+  .end-layer { position: absolute; inset: 0; }
+  .end-mark { position: absolute; left: 0; right: 0; top: 356px; text-align: center;
+    font-size: 132px; font-weight: 600; line-height: 1; color: #f7f7fa; }
+  .end-rule { position: absolute; left: 50%; top: 546px; width: 520px; height: 1px; margin-left: -260px;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.55), rgba(255,255,255,0)); }
+  .end-dot { position: absolute; left: 50%; top: 543px; width: 6px; height: 6px; margin-left: -3px;
+    border-radius: 50%; background: #6554d9; }
+  .end-tag { position: absolute; left: 0; right: 0; top: 590px; text-align: center;
+    font-size: 27px; letter-spacing: 0.22em; color: rgba(242,242,245,0.62); }
+
+  /* transitions */
+  .wipe-layer { position: absolute; inset: 0; pointer-events: none; }
+  /* Soft-edged wipe: opaque in the middle so it truly covers, feathered at the
+     edges so a cut reads as a sweep of shadow rather than a hard bar. */
+  .wipe-bar { position: absolute; top: -10%; height: 120%;
+    background: linear-gradient(90deg, rgba(8,8,10,0) 0%, #08080a 10%, #08080a 90%, rgba(8,8,10,0) 100%); }
+
+  /* review HUD */
+  .hud { position: absolute; left: 120px; right: 120px; bottom: 46px; height: 46px; }
+  .hud-track { position: absolute; left: 0; right: 0; top: 22px; height: 1px; background: rgba(255,255,255,0.14); }
+  .hud-seg { position: absolute; top: 20px; height: 3px; background: rgba(255,255,255,0.22); }
+  .hud-fill { position: absolute; top: 22px; height: 1px; background: rgba(255,255,255,0.55); }
+  .hud-head { position: absolute; top: 15px; width: 1px; height: 15px; background: #6554d9; }
+  .hud-label { position: absolute; left: 0; top: -14px; font-size: 22px; letter-spacing: 0.10em; color: rgba(238,240,244,0.5); }
+  .hud-time { position: absolute; right: 0; top: -14px; font-size: 22px; letter-spacing: 0.10em; color: rgba(238,240,244,0.4); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+  <svg class="grain" width="1920" height="1080" aria-hidden="true">
+    <filter id="grainFilter">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch" />
+      <feColorMatrix type="saturate" values="0" />
+    </filter>
+    <rect width="1920" height="1080" filter="url(#grainFilter)" />
+  </svg>
+
+  <div class="stage" id="stage">
+    <div class="content" id="contentBase">
+      <div class="grid-hint" id="gridHint"></div>
+    </div>
+
+    <div class="content" id="contentOpen"></div>
+
+    <div class="content" id="contentRequest">
+      <div class="req-line" id="reqLine">帮我做个日历应用</div>
+      <div class="req-rule" id="reqRule"></div>
+      <div class="req-send" id="reqSend"></div>
+    </div>
+
+    <div class="content" id="contentSlot03">
+      <div class="slot-index" id="idx03"></div><div class="slot-dur" id="dur03"></div>
+      <div class="slot-title" id="title03"></div><div class="slot-hint" id="hint03"></div>
+      <div class="scan" id="scan03"></div>
+    </div>
+    <div class="content" id="contentSlot04">
+      <div class="slot-index" id="idx04"></div><div class="slot-dur" id="dur04"></div>
+      <div class="slot-title" id="title04"></div><div class="slot-hint" id="hint04"></div>
+      <div class="scan" id="scan04"></div>
+    </div>
+    <div class="content" id="contentSlot05">
+      <div class="slot-index" id="idx05"></div><div class="slot-dur" id="dur05"></div>
+      <div class="slot-title" id="title05"></div><div class="slot-hint" id="hint05"></div>
+      <div class="scan" id="scan05"></div>
+    </div>
+    <div class="content" id="contentSlot06">
+      <div class="slot-index" id="idx06"></div><div class="slot-dur" id="dur06"></div>
+      <div class="slot-title" id="title06"></div><div class="slot-hint" id="hint06"></div>
+      <div class="scan" id="scan06"></div>
+    </div>
+    <div class="content" id="contentSlot07">
+      <div class="slot-index" id="idx07"></div><div class="slot-dur" id="dur07"></div>
+      <div class="slot-title" id="title07"></div><div class="slot-hint" id="hint07"></div>
+      <div class="scan" id="scan07"></div>
+    </div>
+    <div class="content" id="contentSlot08">
+      <div class="slot-index" id="idx08"></div><div class="slot-dur" id="dur08"></div>
+      <div class="slot-title" id="title08"></div><div class="slot-hint" id="hint08"></div>
+      <div class="scan" id="scan08"></div>
+    </div>
+    <div class="content" id="contentSlot09">
+      <div class="slot-index" id="idx09"></div><div class="slot-dur" id="dur09"></div>
+      <div class="slot-title" id="title09"></div><div class="slot-hint" id="hint09"></div>
+      <div class="scan" id="scan09"></div>
+    </div>
+
+    <div class="content" id="contentEnd">
+      <div class="end-mark" id="endMark">Sunday</div>
+      <div class="end-rule" id="endRule"></div>
+      <div class="end-dot" id="endDot"></div>
+      <div class="end-tag" id="endTag">本地优先的 Agent 工作台</div>
+    </div>
+
+    <svg class="frame" viewBox="0 0 1600 900" id="frameSvg">
+      <defs>
+        <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ffffff" stop-opacity="0.055" />
+          <stop offset="0.4" stop-color="#ffffff" stop-opacity="0.022" />
+          <stop offset="1" stop-color="#ffffff" stop-opacity="0.012" />
+        </linearGradient>
+        <linearGradient id="topEdge" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#ffffff" stop-opacity="0" />
+          <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.45" />
+          <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+        </linearGradient>
+      </defs>
+      <ellipse id="shadow" cx="800" cy="906" rx="740" ry="44" fill="#000" opacity="0" />
+      <rect id="panel" x="0" y="0" width="1600" height="900" rx="26" fill="url(#glass)" opacity="0" />
+      <path id="halfRight" class="outline" pathLength="1" d="M800 900 H1574 A26 26 0 0 0 1600 874 V26 A26 26 0 0 0 1574 0 H800"
+            fill="none" stroke="rgba(255,255,255,0.60)" stroke-width="1.25" stroke-dasharray="1 1" stroke-dashoffset="1" />
+      <path id="halfLeft" pathLength="1" d="M800 900 H26 A26 26 0 0 1 0 874 V26 A26 26 0 0 1 26 0 H800"
+            fill="none" stroke="rgba(255,255,255,0.60)" stroke-width="1.25" stroke-dasharray="1 1" stroke-dashoffset="1" />
+      <rect id="innerHair" x="10" y="10" width="1580" height="880" rx="18" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="1" opacity="0" />
+      <rect id="topHighlight" x="26" y="0" width="1548" height="1.5" fill="url(#topEdge)" opacity="0" />
+    </svg>
+
+    <div class="wipe-layer" id="wipeLayer"></div>
+  </div>
+
+  <div class="bracket tl" style="position:absolute;left:58px;top:58px;width:28px;height:28px;border-left:1px solid rgba(255,255,255,0.45);border-top:1px solid rgba(255,255,255,0.45);opacity:0" id="bracketTl"></div>
+  <div class="bracket tr" style="position:absolute;right:58px;top:58px;width:28px;height:28px;border-right:1px solid rgba(255,255,255,0.45);border-top:1px solid rgba(255,255,255,0.45);opacity:0" id="bracketTr"></div>
+  <div class="bracket bl" style="position:absolute;left:58px;bottom:120px;width:28px;height:28px;border-left:1px solid rgba(255,255,255,0.45);border-bottom:1px solid rgba(255,255,255,0.45);opacity:0" id="bracketBl"></div>
+  <div class="bracket br" style="position:absolute;right:58px;bottom:120px;width:28px;height:28px;border-right:1px solid rgba(255,255,255,0.45);border-bottom:1px solid rgba(255,255,255,0.45);opacity:0" id="bracketBr"></div>
+
+  <div class="hud" id="hud">
+    <div class="hud-track"></div>
+    <div class="hud-label" id="hudLabel"></div>
+    <div class="hud-time" id="hudTime"></div>
+    <div class="hud-head" id="hudHead"></div>
+    <div class="hud-fill" id="hudFill"></div>
+  </div>
+
+<script>
+const { seg, ease, style, lerp } = window.MotionKit
+
+/* ------------------------------------------------------------------ shots */
+const SHOTS = [
+  { id: '01', t0: 0,  t1: 5,  kind: 'open',    title: '冷开场 · 窗口自己画出来' },
+  { id: '02', t0: 5,  t1: 11, kind: 'request', title: '一句需求' },
+  { id: '03', t0: 11, t1: 16, kind: 'slot',    title: '新建会话与输入', hint: 'Sunday 界面：新建会话 → 输入', move: 'in' },
+  { id: '04', t0: 16, t1: 28, kind: 'slot',    title: '施工：日历自己长出来', hint: '日历施工动画（由成品自身驱动）', move: 'in' },
+  { id: '05', t0: 28, t1: 38, kind: 'slot',    title: '背后在干活', hint: '文件树生长 / 命令执行', move: 'lateral' },
+  { id: '06', t0: 38, t1: 48, kind: 'slot',    title: '并行推进', hint: '三条施工线（子代理）', move: 'out', wipe: 'bars' },
+  { id: '07', t0: 48, t1: 58, kind: 'slot',    title: '成品交互', hint: '日历交互特写：翻月 / 选日 / 新建日程', move: 'in' },
+  { id: '08', t0: 58, t1: 66, kind: 'slot',    title: '它记得你', hint: '记忆结构生长动画', move: 'lateral' },
+  { id: '09', t0: 66, t1: 76, kind: 'slot',    title: '你离开之后', hint: '时间带拉长 / 定时任务触发并交付', move: 'out' },
+  { id: '10', t0: 76, t1: 82, kind: 'end',     title: '落版' },
+]
+const TOTAL = SHOTS[SHOTS.length - 1].t1
+
+/* -------------------------------------------------------------- playback */
+const nodes = {
+  stage: document.getElementById('stage'),
+  gridHint: document.getElementById('gridHint'),
+  panel: document.getElementById('panel'),
+  shadow: document.getElementById('shadow'),
+  halfRight: document.getElementById('halfRight'),
+  halfLeft: document.getElementById('halfLeft'),
+  innerHair: document.getElementById('innerHair'),
+  topHighlight: document.getElementById('topHighlight'),
+  wipeLayer: document.getElementById('wipeLayer'),
+  hudHead: document.getElementById('hudHead'),
+  hudFill: document.getElementById('hudFill'),
+  hudLabel: document.getElementById('hudLabel'),
+  hudTime: document.getElementById('hudTime'),
+  brackets: ['bracketTl', 'bracketTr', 'bracketBl', 'bracketBr'].map((id) => document.getElementById(id)),
+  contentOpen: document.getElementById('contentOpen'),
+  contentRequest: document.getElementById('contentRequest'),
+  contentEnd: document.getElementById('contentEnd'),
+  reqLine: document.getElementById('reqLine'),
+  reqRule: document.getElementById('reqRule'),
+  reqSend: document.getElementById('reqSend'),
+  endMark: document.getElementById('endMark'),
+  endRule: document.getElementById('endRule'),
+  endDot: document.getElementById('endDot'),
+  endTag: document.getElementById('endTag'),
+  contentBase: document.getElementById('contentBase'),
+}
+const slotNodes = {}
+for (const shot of SHOTS.filter((s) => s.kind === 'slot')) {
+  const key = shot.id
+  slotNodes[key] = {
+    layer: document.getElementById(`contentSlot${key}`),
+    index: document.getElementById(`idx${key}`),
+    dur: document.getElementById(`dur${key}`),
+    title: document.getElementById(`title${key}`),
+    hint: document.getElementById(`hint${key}`),
+    scan: document.getElementById(`scan${key}`),
+  }
+  slotNodes[key].index.textContent = `镜头 ${key} / ${SHOTS.length}`
+  slotNodes[key].title.textContent = shot.title
+  slotNodes[key].hint.innerHTML = `此处放：<em>${shot.hint}</em> 视频`
+  const seconds = Math.round(shot.t1 - shot.t0)
+  const mm = Math.floor(shot.t0 / 60), ss = String(Math.round(shot.t0 % 60)).padStart(2, '0')
+  slotNodes[key].dur.textContent = `${mm}:${ss} · ${seconds}s`
+}
+
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+const shotAt = (t) => SHOTS.find((s) => t >= s.t0 && t < s.t1) || SHOTS[SHOTS.length - 1]
+const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
+
+/** Camera per shot: a slow, deliberate move — never a static frame. */
+function cameraFor(shot, t) {
+  const p = ease.sineInOut(seg(t, shot.t0, shot.t1))
+  switch (shot.move) {
+    case 'in': return { scale: lerp(1.0, 1.055, p), x: 0, y: lerp(4, -6, p) }
+    case 'out': return { scale: lerp(1.06, 1.0, p), x: 0, y: lerp(-4, 4, p) }
+    case 'lateral': return { scale: 1.03, x: lerp(-14, 14, p), y: 0 }
+    default: return { scale: lerp(1.014, 1.0, ease.expoOut(seg(t, shot.t0, shot.t0 + 1.2))), x: 0, y: 0 }
+  }
+}
+
+/** A wipe hides each cut: a bar sweep (or three bars for the parallel shot). */
+function renderWipe(t) {
+  const bars = []
+  for (const shot of SHOTS) {
+    if (shot.t0 === 0) continue
+    const cut = shot.t0 + 0.06
+    const p = seg(t, cut - 0.34, cut + 0.34)
+    if (p <= 0 || p >= 1) continue
+    const eased = ease.cubicInOut(p)
+    if (shot.wipe === 'bars') {
+      bars.push(`<div class="wipe-bar" style="left:${(-560 + 1120 * eased).toFixed(1)}px;width:533px"></div>`)
+      bars.push(`<div class="wipe-bar" style="left:${(-560 + 1120 * eased + 533).toFixed(1)}px;width:533px"></div>`)
+      bars.push(`<div class="wipe-bar" style="left:${(-560 + 1120 * eased + 1066).toFixed(1)}px;width:534px"></div>`)
+    } else {
+      bars.push(`<div class="wipe-bar" style="left:${(-1700 + 3400 * eased).toFixed(1)}px;width:1700px"></div>`)
+    }
+  }
+  nodes.wipeLayer.innerHTML = bars.join('')
+}
+
+window.renderFrame = (t) => {
+  const shot = shotAt(t)
+  const camera = cameraFor(shot, t)
+  style(nodes.stage, {
+    transform: `translate(-50%, -50%) translate(${camera.x.toFixed(2)}px, ${camera.y.toFixed(2)}px) scale(${camera.scale.toFixed(5)})`,
+  })
+
+  /* --- the frame itself: drawn in shot 01, then it stays ------------------ */
+  const draw = ease.quartOut(seg(t, 0.0, 1.6))
+  const dash = (1 - draw).toFixed(5)
+  nodes.halfRight.style.strokeDashoffset = dash
+  nodes.halfLeft.style.strokeDashoffset = dash
+  const meet = Math.sin(Math.PI * seg(t, 1.45, 2.05)) * 0.45
+  nodes.halfRight.style.stroke = `rgba(255,255,255,${(0.60 + meet).toFixed(3)})`
+  nodes.halfLeft.style.stroke = `rgba(255,255,255,${(0.60 + meet).toFixed(3)})`
+  // The window dissolves for the closing card: the brand mark stays, the
+  // container goes — the film ends lighter than it began.
+  const endBase = SHOTS[SHOTS.length - 1].t0
+  const dissolve = 1 - ease.sineInOut(seg(t, endBase, endBase + 1.4))
+  style(nodes.panel, { opacity: ease.sineInOut(seg(t, 1.4, 2.4)) * 0.95 * dissolve })
+  style(nodes.shadow, { opacity: ease.sineInOut(seg(t, 1.7, 2.7)) * 0.5 * dissolve })
+  nodes.innerHair.style.opacity = (ease.quintOut(seg(t, 1.9, 2.6)) * 0.9 * dissolve).toFixed(3)
+  nodes.topHighlight.style.opacity = (ease.quintOut(seg(t, 2.0, 2.7)) * 0.6 * dissolve).toFixed(3)
+  const bracketOpacity = 0.45 * ease.quintOut(seg(t, 2.7, 3.4)) * dissolve
+  for (const bracket of nodes.brackets) style(bracket, { opacity: bracketOpacity })
+  nodes.halfRight.style.opacity = dissolve.toFixed(3)
+  nodes.halfLeft.style.opacity = dissolve.toFixed(3)
+
+  /* --- content per shot -------------------------------------------------- */
+  const show = (node, value) => style(node, { opacity: value })
+
+  // 01 open
+  show(nodes.contentOpen, t < SHOTS[1].t0 - 0.3 ? 1 : 0)
+
+  // 02 request
+  const inReq = t >= SHOTS[1].t0 - 0.3 && t < SHOTS[2].t0 - 0.3 ? 1 : 0
+  show(nodes.contentRequest, inReq)
+  if (inReq) {
+    const p = seg(t, 5.5, 7.1)
+    style(nodes.reqLine, {
+      opacity: ease.quintOut(p),
+      letterSpacing: `${(0.10 - 0.08 * ease.expoOut(p)).toFixed(4)}em`,
+    })
+    style(nodes.reqRule, { transform: `scaleX(${ease.expoOut(seg(t, 6.8, 7.7)).toFixed(4)})` })
+    const sendP = seg(t, 7.6, 8.3)
+    style(nodes.reqSend, { opacity: ease.quintOut(sendP), transform: `scale(${(0.5 + 0.5 * ease.softBack(sendP)).toFixed(3)})` })
+  }
+  show(nodes.contentBase, t >= SHOTS[1].t0 && t < SHOTS[SHOTS.length - 1].t0 ? 0.55 : 0)
+
+  // slot shots
+  for (const key of Object.keys(slotNodes)) {
+    const node = slotNodes[key]
+    const shotDef = SHOTS.find((s) => s.id === key)
+    const active = shot === shotDef
+    show(node.layer, active ? 1 : 0)
+    if (!active) continue
+    const appear = ease.quintOut(seg(t, shotDef.t0 + 0.15, shotDef.t0 + 0.9))
+    style(node.index, { opacity: appear })
+    style(node.dur, { opacity: appear })
+    style(node.title, { opacity: appear, transform: `translateY(${((1 - appear) * 14).toFixed(2)}px)` })
+    style(node.hint, { opacity: ease.quintOut(seg(t, shotDef.t0 + 0.45, shotDef.t0 + 1.2)) * 0.95 })
+    const scanP = seg(t, shotDef.t0 + 0.4, shotDef.t1 - 0.2)
+    style(node.scan, { opacity: Math.sin(Math.PI * scanP) * 0.5, top: `${(60 + 780 * scanP).toFixed(1)}px` })
+  }
+
+  // 10 end card
+  const inEnd = t >= SHOTS[SHOTS.length - 1].t0
+  show(nodes.contentEnd, inEnd ? 1 : 0)
+  if (inEnd) {
+    const base = SHOTS[SHOTS.length - 1].t0
+    const markP = seg(t, base + 0.25, base + 1.5)
+    style(nodes.endMark, {
+      opacity: ease.quintOut(markP),
+      letterSpacing: `${(0.16 - 0.14 * ease.expoOut(markP)).toFixed(4)}em`,
+      transform: `translateY(${((1 - ease.expoOut(markP)) * 16).toFixed(2)}px)`,
+    })
+    style(nodes.endRule, { transform: `scaleX(${ease.expoOut(seg(t, base + 1.2, base + 2.0)).toFixed(4)})` })
+    const dotP = seg(t, base + 1.75, base + 2.25)
+    style(nodes.endDot, { opacity: ease.quintOut(dotP), transform: `scale(${(0.4 + 0.6 * ease.softBack(dotP)).toFixed(3)})` })
+    const tagP = seg(t, base + 2.1, base + 2.9)
+    style(nodes.endTag, { opacity: ease.sineInOut(tagP) * 0.95, letterSpacing: `${(0.3 - 0.08 * ease.expoOut(tagP)).toFixed(4)}em` })
+  }
+
+  renderWipe(t)
+
+  /* --- review HUD -------------------------------------------------------- */
+  const progress = t / TOTAL
+  style(nodes.hudFill, { transform: `scaleX(${progress.toFixed(5)})` })
+  style(nodes.hudHead, { left: `${(progress * 100).toFixed(3)}%` })
+  nodes.hudLabel.textContent = `镜头 ${shot.id} / ${SHOTS.length} · ${shot.title}`
+  nodes.hudTime.textContent = `${fmt(t)} / ${fmt(TOTAL)}`
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>

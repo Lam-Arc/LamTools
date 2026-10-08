@@ -1,0 +1,1052 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>plan · 三段式整体排布</title>
+<script src="_kit.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #08080a; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; color: #eef0f4; }
+
+  .ambient { position: absolute; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 50% 44%, rgba(255,255,255,0.05), rgba(255,255,255,0) 62%),
+      radial-gradient(1500px 780px at 50% 116%, rgba(101,84,217,0.12), rgba(0,0,0,0) 60%),
+      #0a0a0c; }
+  .grain { position: absolute; inset: 0; opacity: 0.04; mix-blend-mode: screen; }
+
+  .panel { position: absolute; left: 120px; top: 96px; width: 1680px; height: 888px;
+    border-radius: 20px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.16), 0 40px 90px rgba(0,0,0,0.45); }
+
+  .col { position: absolute; top: 0; height: 888px; overflow: hidden; }
+  .uiwin-clip { position: absolute; left: 0; top: 60px; right: 0; overflow: hidden; opacity: 0; z-index: 3; }
+  .uiwin { position: absolute; left: 0; top: 0; width: 1120px; height: 888px; object-fit: cover; opacity: 0; }
+  #treePanel { position: absolute; inset: 0; padding-top: 24px; z-index: 3; }
+  .tree-head { margin: 0 0 10px 16px; font-size: 15px; letter-spacing: 0.08em; color: rgba(238,240,244,0.5); }
+  .tree-row { display: flex; justify-content: space-between; align-items: baseline; padding-right: 14px;
+    font-size: 14.5px; line-height: 34px; color: rgba(238,240,244,0.76); }
+  .tree-name.is-new { color: rgba(150,220,175,0.95); }
+  .tree-size { font-size: 12px; color: rgba(238,240,244,0.32); font-variant-numeric: tabular-nums; }
+  /* 右栏那张比栏位宽一点：成片只取右侧，把应用自带的窄侧栏挡在画面外 */
+  #uiLibFiles { object-position: right top; }
+  .col-surface { position: absolute; inset: 0; opacity: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.008)); }
+  .col-title { position: absolute; left: 40px; top: 636px; font-size: 42px; font-weight: 600; white-space: nowrap;
+    text-shadow: 0 2px 24px rgba(4,4,6,0.85); }
+  .col-sub { position: absolute; left: 40px; top: 698px; font-size: 20px; color: rgba(238,240,244,0.55); white-space: nowrap;
+    text-shadow: 0 2px 18px rgba(4,4,6,0.85); }
+  .col-scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 300px; opacity: 0; z-index: 4;
+    background: linear-gradient(0deg, rgba(6,6,9,0.97) 0%, rgba(6,6,9,0.93) 30%, rgba(6,6,9,0.5) 64%, rgba(6,6,9,0) 100%); }
+  .mini-head { position: absolute; left: 20px; top: 22px; font-size: 18px; letter-spacing: 0.06em;
+    color: rgba(238,240,244,0.60); white-space: nowrap; }
+  /* 开场三块里的真实预览：挡在标题下方，一开场就交代这三块各自是什么 */
+  .poster { position: absolute; left: 0; right: 0; top: 0; height: 888px; overflow: hidden; z-index: 1;
+    border-radius: 0; opacity: 0;
+    box-shadow: inset 0 -520px 300px -120px rgba(6,6,9,0.96), inset 0 0 220px 40px rgba(6,6,9,0.5);
+    -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.34) 68%, rgba(0,0,0,0) 100%);
+    mask-image: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.34) 68%, rgba(0,0,0,0) 100%); }
+  .poster-img { position: absolute; left: 0; top: 0; display: block; width: 100%; height: 100%;
+    object-fit: cover; object-position: top center;
+    opacity: 0.9; filter: saturate(0.96) brightness(0.92); }
+  /* 中栏是竖的：整页整页往下滚，页脚与图表都在，画面一直在走 */
+  .poster--slides { overflow: hidden; }
+  .poster--slides .poster-scroll { display: flex; flex-direction: column; gap: 22px; padding: 26px 0; }
+  .poster--slides .poster-img { position: static; width: 100%; height: 409px; object-fit: contain; object-position: center top; }
+  /* 还原回三块那一刻，三块是要被看清的：遮罩与压暗都收掉 */
+  .poster.is-bright { box-shadow: inset 0 -320px 220px -140px rgba(6,6,9,0.8);
+    -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0,0,0,0.94) 74%, rgba(0,0,0,0.6) 100%);
+    mask-image: linear-gradient(180deg, #000 0%, rgba(0,0,0,0.94) 74%, rgba(0,0,0,0.6) 100%); }
+  .poster.is-bright .poster-img { opacity: 1; filter: none; }
+  /* 开场左块：真实源码铺满（产品的产物之一，就是这几行） */
+  .code-page { position: absolute; inset: 0; padding: 26px 30px; background: rgba(8, 10, 14, 0.72);
+    font-family: Consolas, "Cascadia Mono", "Courier New", monospace; font-size: 16px; line-height: 25.5px;
+    white-space: pre; overflow: hidden; }
+  .code-page-head { position: relative; z-index: 2; display: flex; justify-content: space-between; margin-bottom: 16px; padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.10); background: linear-gradient(180deg, rgba(8,10,14,0.97), rgba(8,10,14,0.9));
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 14px; letter-spacing: 0.06em; color: rgba(238,240,244,0.42); }
+  .code-page-head span:first-child { color: rgba(238,240,244,0.74); }
+
+  .poster-code { padding: 14px 16px; background: rgba(8,10,14,0.6); border-radius: 10px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
+    font-family: Consolas, "Cascadia Mono", "Courier New", monospace; font-size: 14px; line-height: 22px; white-space: pre; }
+
+  .divider { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.16); }
+  .thumb { position: absolute; border-radius: 8px; background: rgba(255,255,255,0.08);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.09); }
+  .doc { position: absolute; left: 18px; right: 14px; height: 40px; border-radius: 8px;
+    background: rgba(255,255,255,0.055); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07); }
+  .doc-sq { position: absolute; left: 10px; top: 11px; width: 18px; height: 18px; border-radius: 5px;
+    background: rgba(101,84,217,0.45); }
+  .doc-line { position: absolute; left: 38px; top: 16px; height: 9px; border-radius: 4px; background: rgba(255,255,255,0.18); }
+  .doc-hi { position: absolute; inset: 0; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(150,135,245,0.8);
+    background: rgba(101,84,217,0.16); opacity: 0; }
+
+  /* 聚焦栏内部 */
+  .bubble { position: absolute; border-radius: 13px; background: rgba(255,255,255,0.11);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.13); }
+  .bubble.me { background: rgba(101,84,217,0.18); box-shadow: inset 0 0 0 1px rgba(101,84,217,0.32); }
+  .bubble-text { position: absolute; left: 18px; top: 13px; right: 16px; font-size: 18px; line-height: 1.4;
+    color: rgba(240,242,246,0.94); }
+  .prow { position: absolute; left: 34px; height: 24px; }
+  .prow-dot { position: absolute; left: 0; top: 6px; width: 10px; height: 10px; border-radius: 50%;
+    background: rgba(150,135,245,0.95); }
+  .prow-text { position: absolute; left: 22px; top: 2px; font-size: 17px; white-space: nowrap;
+    color: rgba(238,240,244,0.62); }
+  .tile { position: absolute; border-radius: 9px; background: rgba(255,255,255,0.06);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
+  .sub { position: absolute; top: 0; height: 888px; overflow: hidden;
+    background: rgba(255,255,255,0.055); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07); }
+  .sub-flash { position: absolute; inset: 0; background: #ffffff; opacity: 0; }
+
+  /* 代码段 */
+  .cline { position: absolute; height: 12px; border-radius: 3px; transform-origin: 0 50%; }
+  .cline-num { position: absolute; left: 16px; width: 22px; text-align: right; font-size: 12px;
+    color: rgba(238,240,244,0.20); font-variant-numeric: tabular-nums; }
+  .cline.add { background: rgba(120,200,150,0.34); }
+  .band-tag { position: absolute; left: 40px; top: 22px; font-size: 18px; letter-spacing: 0.08em;
+    color: rgba(238,240,244,0.40); white-space: nowrap; }
+  .band-hair { position: absolute; left: 0; right: 0; height: 1px; background: rgba(255,255,255,0.16); opacity: 0; }
+
+  /* 定时卡片 + 时间流逝 */
+  .job { position: absolute; left: 22px; right: 20px; top: 70px; border-radius: 12px;
+    background: rgba(255,255,255,0.055); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.09); padding: 16px 16px 18px; }
+  .job-title { font-size: 20px; font-weight: 600; color: rgba(238,240,244,0.92); white-space: nowrap; }
+  .job-when { margin-top: 8px; font-size: 16px; letter-spacing: 0.05em; color: rgba(190,180,250,0.9);
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .job-sub { margin-top: 12px; font-size: 15px; color: rgba(238,240,244,0.45); white-space: nowrap; }
+  .job-dot { position: absolute; right: 16px; top: 20px; width: 10px; height: 10px; border-radius: 50%;
+    background: rgba(150,135,245,0.85); }
+  .job-flash { position: absolute; inset: 0; border-radius: 12px; background: #ffffff; opacity: 0; }
+  .now-line { position: absolute; left: 18px; right: 18px; height: 1px;
+    background: linear-gradient(90deg, rgba(101,84,217,0), rgba(150,135,245,0.85), rgba(101,84,217,0)); }
+  .now-dot { position: absolute; width: 7px; height: 7px; border-radius: 50%; background: #a99cf7;
+    box-shadow: 0 0 12px rgba(150,135,245,0.9); }
+  .tick { position: absolute; left: 20px; font-size: 16px; letter-spacing: 0.06em;
+    color: rgba(238,240,244,0.38); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tick.hot { color: rgba(196,187,252,0.95); }
+
+  /* 资料库卡片（压在虚化代码区上方）：底下先垫一层暗场，卡片才读得清 */
+  #libLayer { background: rgba(9, 10, 13, 0.88); backdrop-filter: blur(3px); z-index: 6; }
+  .lib-card { position: absolute; left: 16px; right: 16px; top: 20px; border-radius: 12px;
+    background: rgba(255,255,255,0.07); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.11); padding: 14px 14px 10px; }
+  .lib-title { font-size: 18px; letter-spacing: 0.06em; color: rgba(238,240,244,0.72); white-space: nowrap; }
+  .lib-doc { position: absolute; left: 14px; right: 14px; height: 34px; border-radius: 8px;
+    background: rgba(255,255,255,0.05); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07); }
+  .lib-name { position: absolute; left: 12px; top: 8px; font-size: 15px; color: rgba(238,240,244,0.80); white-space: nowrap; }
+  .lib-count { position: absolute; right: 12px; top: 9px; font-size: 13.5px; color: rgba(238,240,244,0.34); font-variant-numeric: tabular-nums; }
+  #libFiles { position: absolute; left: 0; right: 0; top: 226px; }
+  .lib-file { margin: 0 0 0 16px; font-size: 12.5px; line-height: 27px; color: rgba(238,240,244,0.44); white-space: nowrap; }
+
+  /* 成果区 */
+  .page { position: absolute; border-radius: 10px; background: rgba(255,255,255,0.07);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); overflow: hidden; }
+  .page-line { position: absolute; height: 10px; border-radius: 4px; background: rgba(255,255,255,0.14); transform-origin: 0 50%; }
+  .page-bar { position: absolute; border-radius: 3px 3px 0 0; background: rgba(101,84,217,0.5); transform-origin: 50% 100%; }
+
+  .cursor { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+    background: #f2f3f7; box-shadow: 0 0 0 6px rgba(255,255,255,0.10), 0 6px 18px rgba(0,0,0,0.5); }
+  .ripple { position: absolute; border-radius: 50%; border: 2px solid rgba(101,84,217,0.9); transform-origin: 50% 50%; }
+
+  /* 代码段主画面：真实源码正文 */
+  #codePanel { position: absolute; left: 24px; top: 56px; right: 24px; height: 604px; border-radius: 12px;
+    background: rgba(8, 10, 14, 0.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); overflow: hidden; }
+  .code-head { position: absolute; left: 20px; top: 16px; right: 20px; display: flex; justify-content: space-between;
+    font-size: 14px; letter-spacing: 0.04em; color: rgba(238,240,244,0.34); }
+  .code-file { color: rgba(238,240,244,0.70); }
+  #codeBody { position: absolute; left: 22px; right: 22px; top: 50px; bottom: 16px; white-space: pre; overflow: hidden;
+    font-family: Consolas, "Cascadia Mono", "Courier New", monospace; font-size: 15.5px; line-height: 23px; }
+  .cl { color: rgba(232,236,244,0.84); }
+  .cl-com { color: rgba(138,168,148,0.78); }
+  .cl-key { color: rgba(182,170,250,0.96); }
+  .cl-num { color: rgba(226,190,140,0.9); }
+  .cl-caret { display: inline-block; width: 8px; height: 15px; vertical-align: -2px; background: rgba(150,135,245,0.9); }
+
+  /* 成果流：真实幻灯片 */
+  #feedHead { position: absolute; left: 22px; right: 22px; top: 8px; display: flex; justify-content: space-between;
+    font-size: 14px; letter-spacing: 0.06em; color: rgba(238,240,244,0.46); }
+  #feedHead b { font-weight: 600; color: rgba(238,240,244,0.74); }
+  #feedView { position: absolute; left: 20px; right: 20px; top: 36px; bottom: 24px; overflow: hidden; border-radius: 12px;
+    background: #232630; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); }
+  #feedTrackL, #feedTrackR { position: absolute; top: 0; bottom: 0; width: calc(50% - 12px); }
+  .feed-fade { will-change: opacity; }
+  #feedTrackL { left: 0; }
+  #feedTrackR { right: 0; }
+  .fcard { position: absolute; width: 100%; height: 201px; border-radius: 10px; overflow: hidden;
+    background: #14161c; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12), 0 14px 30px rgba(0,0,0,0.3); }
+  /* contain + 底部让出题注条：整页复盘都在卡里，脚注不会被切，胶囊也不压字 */
+  .fcard img { display: block; width: 100%; height: calc(100% - 20px); object-fit: contain; object-position: center top; opacity: 0; }
+  .fcard-ghost { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 7px;
+    align-items: center; justify-content: center; font-size: 12.5px; letter-spacing: 0.1em; color: rgba(238,240,244,0.34); }
+  .fcard-ghost .ghost-chip { padding: 2px 8px; border-radius: 999px; font-size: 10.5px; letter-spacing: 0.12em;
+    background: rgba(255,255,255,0.07); color: rgba(238,240,244,0.4); }
+  .fcard-ghost::after { content: ''; position: absolute; inset: 8px 8px 26px; border-radius: 7px;
+    border: 1px dashed rgba(255,255,255,0.14); }
+  .fcard-tag { position: absolute; left: 9px; bottom: 7px; padding: 2px 8px; border-radius: 999px;
+    background: rgba(0,0,0,0.46); font-size: 11px; letter-spacing: 0.04em; color: rgba(255,255,255,0.74); }
+  .feed-fade { position: absolute; left: 0; right: 0; height: 120px; pointer-events: none; }
+  .feed-fade--top { top: 0; background: linear-gradient(180deg, rgba(27,29,37,0.98) 12%, rgba(27,29,37,0.72) 52%, rgba(27,29,37,0)); }
+  .feed-fade--bottom { bottom: 0; background: linear-gradient(0deg, rgba(27,29,37,0.98) 12%, rgba(27,29,37,0.72) 52%, rgba(27,29,37,0)); }
+
+  /* 游戏段左半：三段子代理并行 */
+  #subLayer { opacity: 0; z-index: 6; }   /* 盖在真实游戏上方 */
+  /* 子代理：连续的一整条半透表面，压在真实游戏上方，游戏的颜色透过来 */
+  .subcol { position: absolute; top: 60px; bottom: 58px; width: 322px; padding: 20px 20px 0;
+    background: rgba(16,18,24,0.52); backdrop-filter: blur(1.2px) saturate(1.05);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); }
+  .subcol[data-sub="0"] { left: 22px; border-radius: 12px 0 0 12px; }
+  .subcol[data-sub="1"] { left: 344px; border-radius: 0; }
+  .subcol[data-sub="2"] { left: 666px; border-radius: 0 12px 12px 0; }
+  #subHead { position: absolute; left: 26px; top: 30px; font-size: 15px; letter-spacing: 0.07em; color: rgba(238,240,244,0.5); }
+  .subcard { position: absolute; left: 26px; right: 26px; height: 238px; padding: 18px 20px 0; border-radius: 12px;
+    background: rgba(255,255,255,0.045); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
+  .subcard[data-sub="0"] { top: 72px; }
+  .subcard[data-sub="1"] { top: 326px; }
+  .subcard[data-sub="2"] { top: 580px; }
+  .subcard-title { font-size: 17px; color: rgba(238,240,244,0.9); white-space: nowrap; }
+  .subcard-state { position: absolute; right: 20px; top: 19px; font-size: 13px; letter-spacing: 0.06em; color: rgba(238,240,244,0.4); }
+  .subcard.is-done .subcard-state { color: rgba(150,220,175,0.95); }
+  .subcard-row { display: flex; align-items: center; margin-top: 12px; font-size: 13px; line-height: 1.3;
+    color: rgba(238,240,244,0.56); white-space: nowrap; }
+  .subcard-row i { width: 7px; height: 7px; border-radius: 50%; margin-right: 9px; background: rgba(150,135,245,0.85); }
+  .subcard.is-done .subcard-row i { background: rgba(120,200,150,0.9); }
+  .subcard-foot { position: absolute; left: 20px; right: 20px; bottom: 18px; height: 3px; border-radius: 2px;
+    background: rgba(255,255,255,0.10); overflow: hidden; }
+  .subcard-foot i { display: block; height: 100%; width: 0%; border-radius: 2px; background: rgba(150,135,245,0.9); }
+  .subcard-flash { position: absolute; inset: 0; border-radius: 12px; background: #ffffff; opacity: 0; pointer-events: none; }
+  .subcard.is-done .subcard-foot i { background: rgba(120,200,150,0.95); }
+
+  /* 游戏段的真实镜头 */
+  #shots { position: absolute; inset: 0; }
+  #gameFrame { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; object-position: center center;
+    opacity: 0; will-change: opacity; }
+
+  #endcard { position: absolute; inset: 0; background: #08080a; opacity: 0; }
+
+  .endcard-name { position: absolute; left: 0; right: 0; top: 430px; text-align: center; font-size: 96px; font-weight: 600; }
+  #endRule { position: absolute; left: 50%; top: 566px; width: 0; height: 1px; background: rgba(238,240,244,0.3); }
+  .endcard-claim { position: absolute; left: 0; right: 0; top: 596px; text-align: center;
+    font-size: 28px; letter-spacing: 0.06em; color: rgba(238,240,244,0.86); }
+  .endcard-sub { position: absolute; left: 0; right: 0; top: 656px; text-align: center;
+    font-size: 24px; letter-spacing: 0.26em; color: rgba(238,240,244,0.42); }
+  .endcard-site { position: absolute; left: 0; right: 0; top: 712px; text-align: center; opacity: 0;
+    font-size: 27px; letter-spacing: 0.14em; color: rgba(238,240,244,0.9); font-variant-numeric: tabular-nums; }
+  .endcard-site .caret { display: inline-block; width: 2px; height: 25px; margin-left: 5px;
+    vertical-align: -4px; background: rgba(150,135,245,0.95); }
+
+  #ringCenter { position: absolute; left: 0; right: 0; top: 58px; text-align: center; }
+  #ringTime { font-size: 30px; font-weight: 600; letter-spacing: 0.04em; color: rgba(238,240,244,0.92);
+    font-variant-numeric: tabular-nums; }
+  #ringCap { margin-top: 6px; font-size: 15px; letter-spacing: 0.08em; color: rgba(238,240,244,0.40); }
+
+  .cap { position: absolute; left: 120px; bottom: 22px; }
+  .cap-title { font-size: 24px; letter-spacing: 0.04em; color: rgba(238,240,244,0.82); }
+  .cap-hint { margin-top: 5px; font-size: 18px; letter-spacing: 0.05em; color: rgba(238,240,244,0.42); }
+  .hud-time { position: absolute; right: 120px; bottom: 26px; font-size: 19px; letter-spacing: 0.08em;
+    color: rgba(238,240,244,0.36); font-variant-numeric: tabular-nums; }
+  .track { position: absolute; left: 120px; right: 120px; bottom: 84px; height: 26px; }
+  .track-line { position: absolute; left: 0; right: 0; top: 12px; height: 1px; background: rgba(255,255,255,0.16); }
+  .track-block { position: absolute; top: 8px; height: 9px; border-radius: 3px; background: rgba(255,255,255,0.16); }
+  .track-block.active { background: rgba(101,84,217,0.85); }
+  .track-name { position: absolute; top: -16px; font-size: 16px; letter-spacing: 0.05em; color: rgba(238,240,244,0.45); }
+  .track-head { position: absolute; top: 2px; width: 1.5px; height: 22px; background: #6554d9; }
+</style>
+</head>
+<body>
+  <div class="ambient"></div>
+
+  <div class="panel" id="panel">
+    <div id="colLayer"></div>
+    <div id="stageLayer"></div>
+    <div id="flyLayer"></div>
+  </div>
+
+  <div id="endcard"><div class="endcard-name" id="endName">Sunday</div>
+    <div id="endRule"></div>
+    <div class="endcard-claim" id="endClaim">一句话，到能用的东西</div>
+    <div class="endcard-sub">LAMTOOLS</div>
+    <div class="endcard-site" id="endSite"><span id="endSiteText"></span><span class="caret" id="endCaret"></span></div></div>
+
+<script>
+const { seg, lerp, ease, style, stagger } = window.MotionKit
+/* 切换的脾气：出得快、收得住，末端带一点回弹（惯性和灵动感），不要粘滞 */
+const snap = (u) => ease.softBack(clamp01(u * 1.18))
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v)
+
+/* 游戏段用的是真实游戏渲染出来的帧序列（30fps，见 scripts/demo-video/game） */
+const GAME_FPS = 30
+const GAME_RATE = 0.47        // 450 帧真实画面正好铺满游戏段，收尾不空
+const GAME_DIR = 'file:///E:/LamDemo/assets/game/frames'
+let gameIdx = 0
+function setGameFrame(i) {
+  const n = Math.max(1, Math.min(450, Math.round(i) + 1))
+  if (n === gameIdx) return
+  gameIdx = n
+  const node = document.getElementById('gameFrame')
+  if (node) node.src = `${GAME_DIR}/f${String(n).padStart(4, '0')}.png`
+}
+
+/* ---------------------------------------------------------------------------
+ * 三段式整体排布：小游戏 → 代码 → 办公，一条连续的片子。
+ *
+ *   三栏从头到尾都在台上，谁聚焦谁变宽。
+ *   小游戏（最长，奇观）→ 代码（定时与时间流逝住在右边两条窄栏里，
+ *   滴答到点自己动）→ 办公（左虚化代码 + 资料库卡片，中聊天，右成果）。
+ *
+ * 100 BPM：一拍 0.6s。64.8s = 108 拍 = 27 小节。
+ * ------------------------------------------------------------------------ */
+
+const PANEL = { w: 1680, h: 888 }
+const EQ = 560
+const CHAT_W = 440
+
+const BEATS = [
+  { id: 'O1', at: 0.0, dur: 1.8, note: '三块等宽交错落入' },
+  { id: 'O2', at: 2.4, dur: 2.2, note: '宽度给第一块：代码拓宽聚焦——直接进代码段，不点第二遍' },
+  { id: 'C1', at: 4.2, dur: 1.8, note: '右侧两条窄栏虚化：定时卡片 + 时间流逝' },
+  { id: 'C2', at: 6.0, dur: 2.0, note: '代码稳定推进' },
+  { id: 'C3', at: 7.8, dur: 1.8, note: '时间在走：09:00 逼近"现在"' },
+  { id: 'C4', at: 9.6, dur: 0.6, note: '滴答——到点了' },
+  { id: 'C5', at: 10.2, dur: 2.4, note: '代码上下分屏：新任务开始' },
+  { id: 'C6', at: 12.6, dur: 1.8, note: '那个任务跑（干脆）' },
+  { id: 'C7', at: 14.4, dur: 1.2, note: '做完，分屏收起' },
+  { id: 'C8', at: 15.6, dur: 1.8, note: '隐去辅助内容，回到三栏（聚焦仍是代码）' },
+  { id: 'D1', at: 17.4, dur: 3.0, note: '点第二块：左虚化代码+资料库卡片，中聊天，右成果' },
+  { id: 'D2', at: 19.2, dur: 1.2, note: '你说一句话' },
+  { id: 'D3', at: 20.4, dur: 1.2, note: 'Agent：用户想要 xxx，我看看资料库' },
+  { id: 'D4', at: 21.6, dur: 1.8, note: '从左侧资料库提取 → 过程行①' },
+  { id: 'D5', at: 23.4, dur: 1.8, note: '写入内容 → 过程行②' },
+  { id: 'D6', at: 24.6, dur: 1.8, note: '把过程行扔到右边的成果区' },
+  { id: 'D7', at: 26.4, dur: 1.8, note: '变成实际渲染出来的文件' },
+  { id: 'D8', at: 28.8, dur: 1.8, note: '一页页落下来' },
+  { id: 'E1', at: 36.0, dur: 1.8, note: '点第三块：游戏接管整块表面，另外两块退场' },
+  { id: 'E2', at: 37.8, dur: 2.4, note: 'Agent 说第一句话' },
+  { id: 'E3', at: 40.2, dur: 7.2, note: '作品一点点长出来' },
+  { id: 'E4', at: 47.4, dur: 7.2, note: '子代理三段：递增加速' },
+  { id: 'E5', at: 54.6, dur: 3.0, note: '闪一下、收起、过程行回填' },
+  { id: 'E6', at: 57.6, dur: 2.4, note: '汇报：老板，搞完了' },
+  { id: 'E7', at: 60.0, dur: 1.8, note: '成品定格：全屏让给成品' },
+  { id: 'F1', at: 61.8, dur: 4.2, note: '暗场，名字落定' },
+]
+const TOTAL = 67.2
+const at = (id) => BEATS.find((b) => b.id === id).at
+
+const COLS = [
+  { title: '实现功能', sub: '一句话到能用的应用', keeps: '作品' },
+  { title: '办公', sub: '报表 · 文档 · 演示', keeps: '资料库' },
+  { title: '做小游戏', sub: '能玩的那种', keeps: '作品' },
+]
+const DOCS = ['上周周报', '上上周周报', '季度汇总']
+const LIB_DOCS = ['上周的周报', '汇报模板', '数据口径']
+const ROWS = [
+    { at: 37.8, top: 40,  kind: 'bubble', text: '好，现在来实现这个经营建造游戏。' },
+    { at: 40.2, top: 132, kind: 'prow', text: '三路并行：先搭初始村落' },
+    { at: 42.6, top: 182, kind: 'prow', text: '你负责地面和道路' },
+    { at: 45.0, top: 232, kind: 'prow', text: '做一下资源条和建造菜单' },
+    { at: 47.4, top: 300, kind: 'prow', text: '村落搭好了' },
+    { at: 49.8, top: 350, kind: 'prow', text: '道路铺完了' },
+    { at: 52.2, top: 400, kind: 'prow', text: '资源条和菜单好了' },
+    { at: 57.6, top: 470, kind: 'bubble', text: '老板，搞完了，你点开就能玩。' },
+    { at: 19.2, top: 34,  kind: 'bubble', h: 100, text: '资料库里有 8 月的经营复盘，照那个格式把 9 月的也做一份，9 月的明细在项目里，做完存回资料库。' },
+    { at: 20.4, top: 168, kind: 'prow', text: '读 8 月的复盘，取它的结构与口径' },
+    { at: 21.6, top: 218, kind: 'prow', text: '核算 9 月明细：渠道、品类、退款' },
+    { at: 23.4, top: 268, kind: 'prow', text: '出 11 页复盘，外加一份月度汇总表' },
+    { at: 25.2, top: 318, kind: 'prow', text: '登记进资料库：经营复盘层' },
+    { at: 4.8,  top: 40,  kind: 'prow', text: '先看一遍项目目录，确认工具链' },
+    { at: 7.2,  top: 96,  kind: 'prow', text: '写 js/sim.js：资源循环与昼夜相位' },
+    { at: 10.2, top: 152, kind: 'prow', text: '补 js/render.js：等距地块绘制' },
+    { at: 14.4, top: 208, kind: 'prow', text: '出两张截图，直接看图验证' },
+  ]
+
+const ENTER = [40.2, 42.6, 45.0]
+const DONE = [47.4, 49.8, 52.2]
+// 真实产物：小游戏工程的文件树（体积取自磁盘上的真实文件）
+const TREE = [
+  { d: 0, name: 'game/', kind: 'dir', at: 0.0, size: '' },
+  { d: 1, name: 'index.html', kind: 'file', at: 0.5, size: '3.3 KB' },
+  { d: 1, name: 'js/', kind: 'dir', at: 0.9, size: '' },
+  { d: 2, name: 'config.js', kind: 'file', at: 1.3, size: '16 KB' },
+  { d: 2, name: 'world.js', kind: 'file', at: 1.7, size: '31 KB' },
+  { d: 2, name: 'sim.js', kind: 'new', at: 2.1, size: '13 KB' },
+  { d: 2, name: 'render.js', kind: 'new', at: 2.5, size: '64 KB' },
+  { d: 2, name: 'ui.js', kind: 'new', at: 2.9, size: '35 KB' },
+  { d: 2, name: 'main.js', kind: 'new', at: 3.3, size: '23 KB' },
+  { d: 1, name: 'css/style.css', kind: 'new', at: 3.7, size: '22 KB' },
+]
+
+// 真实源码：game/js/sim.js（模拟推进：生产 / 消费 / 人口 / 昼夜 / 资源再生）
+const CODE = [
+  '/**',
+  ' * 林溪小镇 · 模拟推进（生产 / 消费 / 人口 / 昼夜 / 资源再生）',
+  ' * 每帧由 main.js 调用 step(world, dt)；dt 为「游戏内秒数」。',
+  ' * 只改 world 状态，不做渲染与 DOM。',
+  ' */',
+  "  function hash01(n) { const x = Math.sin(n * 12.9898) * 43758.5453; return x - Math.floor(x); }",
+  '',
+  '  function step(world, dt) {',
+  '    if (dt > 0) world.time += dt;',
+  '    updatePhase(world);',
+  '    computeConnectivity(world);',
+  '    world.pop.cap = World.popCapNow(world);',
+  '    if (dt <= 0) return;',
+  '',
+  '    // ---- 收集光环（连上道路的学堂/市政厅）与路灯 ----',
+  '    let aura = 1, taxMult = 1;',
+  '    const lamps = [];',
+  '    for (const t of world.tiles) {',
+  '      const b = t.bld;',
+  '      if (!b || !b.connected) continue;',
+  '      const e = CONFIG.buildings[b.type].effect;',
+  '      if (!e) continue;',
+  '      const m = World.levelMult(b.level);',
+  '      if (e.auraProd) aura += e.auraProd * m;',
+  '      if (e.light) lamps.push({ x: t.x, y: t.y, radius: e.light.radius });',
+  '    }',
+  '',
+  '    function lampAt(x, y) {',
+  '      let found = null;',
+  '      for (const L of lamps) { /* 取最近的一盏 */ }',
+  '      return found;',
+  '    }',
+]
+const MINI = [[0, 150, 1], [1, 110, 0], [1, 170, 2], [2, 90, 0], [0, 190, 1], [1, 140, 0], [2, 100, 2], [0, 160, 1], [1, 120, 0], [2, 150, 2]]
+const CODE_LINES = [[0, 300, 1], [1, 240, 0], [2, 380, 2], [1, 200, 1], [3, 340, 0], [2, 260, 2], [0, 420, 1], [1, 180, 0], [2, 300, 2], [4, 220, 1], [1, 360, 0], [2, 240, 2]]
+const FEED_SLOT = 219   // 成果格：卡高 201 + 间距 18
+const HALF = FEED_SLOT / 2
+const TONE = ['rgba(255,255,255,0.07)', 'rgba(255,255,255,0.13)', 'rgba(255,255,255,0.24)']
+const TONE_ADD = ['rgba(120,200,150,0.18)', 'rgba(120,200,150,0.28)', 'rgba(120,200,150,0.4)']
+
+const els = {}
+const $ = (id) => (els[id] = els[id] || document.getElementById(id))
+window.sceneMeta = { duration: TOTAL, width: 1920, height: 1080 }
+
+/* ------------------------------------------------------------ static DOM */
+function buildDom() {
+  let cols = ''
+  // 开场三块铺满真实产物：左边是真实源码，中间是真实的复盘页，右边是真实游戏
+  // 开场：左块是源码在写、中块是复盘页在翻、右块是游戏在跑——三块都是"正在生成"
+  const POSTER_SLIDES = [
+    'file:///E:/LamDemo/assets/slides-09/slide_02.png',
+    'file:///E:/LamDemo/assets/slides-09/slide_05.png',
+    'file:///E:/LamDemo/assets/slides-09/slide_08.png',
+    'file:///E:/LamDemo/assets/slides-09/slide_10.png',
+  ]
+  COLS.forEach((col, i) => {
+    let poster
+    if (i === 0) {
+      poster = `<div class="code-page"><div class="code-page-head"><span>game/js/sim.js</span><span>模拟推进 · 320 行</span></div><div id="posterCode">${CODE.map((l) => `<div>${hlLine(l)}</div>`).join('')}</div></div>`
+    } else if (i === 1) {
+      poster = `<div class="poster-scroll" id="posterScroll">${POSTER_SLIDES.map((src) => `<img class="poster-img" src="${src}" alt="">`).join('')}</div>`
+    } else {
+      poster = `<img class="poster-img" id="posterGame" src="file:///E:/LamDemo/assets/game/frames/f0210.png" alt="">`
+    }
+    cols += `<div class="col" id="col${i}" style="z-index:${i === 2 ? 3 : 1}">
+      <div class="col-surface" id="surf${i}"></div>
+      <div class="poster${i === 1 ? ' poster--slides' : ''}" id="poster${i}">${poster}</div>
+      <div class="col-scrim" id="scrim${i}"></div>
+      <div class="col-title" id="title${i}">${col.title}</div>
+      <div class="col-sub" id="colSub${i}">${col.sub}</div>
+      <div class="mini-head" id="mini${i}" style="opacity:0">${col.keeps}</div>
+      <div id="keep${i}"></div>
+      <div id="aux${i}" style="position:absolute;inset:0"></div>
+    </div>`
+  })
+  cols += `<div class="divider" id="div0"></div><div class="divider" id="div1"></div>`
+  $('colLayer').innerHTML = cols
+
+  // 代码段的辅助栏内容（挂在 col1 / col2 上，代码聚焦时才显示）
+  // 代码段的右两条窄栏：一条是实时小编辑器（看得见代码出来），
+  // 另一条上下叠着定时卡片与时间环——两样都不占地方，紧凑一些
+  // 右栏之一：工作目录的文件树——Agent 干活的时候，文件一层一层出来
+  $('aux1').innerHTML = `<div class="aux-head" id="auxHead1" style="position:absolute;left:14px;top:22px;font-size:15px;letter-spacing:0.06em;color:rgba(238,240,244,0.55);opacity:0">工作目录</div>
+    <div id="tree" style="position:absolute;inset:0;opacity:0">
+      ${TREE.map((row, i) => `<div data-tree="${i}" style="position:absolute;left:${12 + row.d * 14}px;top:${58 + i * 30}px;opacity:0">
+        <div style="position:absolute;left:0;top:3px;width:11px;height:9px;border-radius:2px;background:${row.kind === 'new' ? 'rgba(120,200,150,0.75)' : row.kind === 'dir' ? 'rgba(150,135,245,0.45)' : 'rgba(255,255,255,0.22)'}"></div>
+        <div style="position:absolute;left:18px;top:0;font-size:14px;white-space:nowrap;color:${row.kind === 'new' ? 'rgba(150,220,175,0.95)' : 'rgba(238,240,244,0.55)'}">${row.name}<span style="color:rgba(238,240,244,0.24);font-size:12.5px;margin-left:8px">${row.size}</span></div>
+      </div>`).join('')}
+    </div>`
+  $('aux2').innerHTML = `<div class="aux-head" id="auxHead2" style="position:absolute;left:16px;top:22px;font-size:15px;letter-spacing:0.06em;color:rgba(238,240,244,0.55);opacity:0">定时</div>
+    <div class="job" id="job" style="left:16px;right:14px;top:52px;padding:12px 12px 12px;opacity:0">
+      <div class="job-title" style="font-size:17px">看一遍代码改动</div>
+      <div class="job-when" style="margin-top:6px;font-size:15px">每天 09:00</div>
+      <div class="job-sub" id="jobSub" style="margin-top:8px;font-size:14px">上次 09:00 · 无阻塞</div>
+      <div class="job-dot" style="right:12px;top:16px"></div>
+      <div class="job-flash" id="jobFlash"></div></div>
+    <div id="ringWrap" style="position:absolute;left:0;right:0;top:260px;height:200px;opacity:0">
+      <svg width="140" height="140" viewBox="0 0 140 140" style="position:absolute;left:50%;top:10px;margin-left:-70px">
+        <circle cx="70" cy="70" r="62" fill="none" stroke="rgba(255,255,255,0.10)" stroke-width="1.5"/>
+        <line x1="70" y1="12" x2="70" y2="18" stroke="rgba(255,255,255,0.28)" stroke-width="1.5" transform="rotate(0 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="15" stroke="rgba(255,255,255,0.14)" stroke-width="1.5" transform="rotate(30 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="15" stroke="rgba(255,255,255,0.14)" stroke-width="1.5" transform="rotate(60 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="18" stroke="rgba(255,255,255,0.28)" stroke-width="1.5" transform="rotate(90 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="15" stroke="rgba(255,255,255,0.14)" stroke-width="1.5" transform="rotate(120 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="15" stroke="rgba(255,255,255,0.14)" stroke-width="1.5" transform="rotate(150 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="18" stroke="rgba(255,255,255,0.28)" stroke-width="1.5" transform="rotate(180 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="15" stroke="rgba(255,255,255,0.14)" stroke-width="1.5" transform="rotate(210 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="15" stroke="rgba(255,255,255,0.14)" stroke-width="1.5" transform="rotate(240 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="18" stroke="rgba(255,255,255,0.28)" stroke-width="1.5" transform="rotate(270 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="15" stroke="rgba(255,255,255,0.14)" stroke-width="1.5" transform="rotate(300 70 70)"/>
+        <line x1="70" y1="12" x2="70" y2="15" stroke="rgba(255,255,255,0.14)" stroke-width="1.5" transform="rotate(330 70 70)"/>
+        <line id="clockHand" x1="70" y1="70" x2="70" y2="22" stroke="rgba(150,135,245,0.95)" stroke-width="3"
+          stroke-linecap="round" transform="rotate(-90 70 70)"/>
+        <circle cx="70" cy="70" r="3.5" fill="rgba(150,135,245,0.95)"/>
+      </svg>
+      <div id="ringCenter" style="top:156px"><div id="ringTime" style="font-size:20px">09:00</div></div>
+    </div>`
+
+  // 办公段的资料库卡片（压在 col0 上，办公聚焦时才显示）：真实的分层与文件
+  const LIB_LAYERS = [
+    { name: '经营复盘', count: 4 },
+    { name: '经营数据', count: 3 },
+    { name: '林溪小镇', count: 23 },
+  ]
+  const LIB_FILES = ['2026-08-经营复盘.pptx', '2026-08-月度汇总表.xlsx', '2026-09-经营复盘.pptx', '2026-09-月度汇总表.xlsx']
+  let lib = `<div class="lib-card"><div class="lib-title">资料库</div></div>`
+  LIB_LAYERS.forEach((layer, k) => {
+    lib += `<div class="lib-doc" id="libDoc${k}" style="top:${96 + k * 40}px;opacity:0">
+      <div class="lib-name">${layer.name}</div><div class="lib-count">${layer.count}</div>
+      <div class="doc-hi" id="libHi${k}"></div></div>`
+  })
+  lib += `<div id="libFiles">${LIB_FILES.map((n, i) => `<div class="lib-file" data-libfile="${i}">${n}</div>`).join('')}</div>`
+  $('aux0').insertAdjacentHTML('beforeend', `<div id="libLayer" style="position:absolute;inset:0;opacity:0">${lib}</div>`)
+
+  // 成果区（col2 内，办公聚焦时才显示）：真实幻灯片一张张落进来
+  // 落格顺序按用户定的：3 → 6（3 的右下） → 5（左下） → 8 → 7 → 10 …
+  const FEED_ORDER = [2, 5, 4, 7, 6, 9, 8, 11]     // 0-based 槽位：左列 1/3/5/7、右列 2/4/6/8
+  let feedL = ''
+  let feedR = ''
+  FEED_ORDER.forEach((slot, order) => {
+    const page = String(order + 1).padStart(2, '0')
+    const col = slot % 2 === 0 ? 'L' : 'R'
+    // 每张两份：一份在循环区里，一份垫在上一个循环，滚出去的那张已经在下面等着了
+    const copies = [0, 1].map((copy) => `<div class="fcard" data-fcard="${order}" data-copy="${copy}" style="top:0">
+      <img src="file:///E:/LamDemo/assets/slides-09/slide_${page}.png" alt="">
+      <div class="fcard-ghost"><span class="ghost-chip">PPTX</span><span>第 ${Number(page)} 页 · 生成中</span></div>
+      <div class="fcard-tag">2026-09 经营复盘 · ${Number(page)} / 11</div></div>`).join('')
+    if (col === 'L') feedL += copies
+    else feedR += copies
+  })
+  $('col2').insertAdjacentHTML('beforeend', `<div id="resultLayer" style="position:absolute;inset:0;opacity:0">
+    <div id="feedHead"><span><b>成果</b> · 9 月经营复盘</span><span>11 页 · PPTX</span></div>
+    <div id="feedView"><div id="feedTrackL">${feedL}</div><div id="feedTrackR">${feedR}</div>
+      <div class="feed-fade feed-fade--top"></div><div class="feed-fade feed-fade--bottom"></div></div></div>`)
+
+  // 聊天层（跟着聚焦栏走）
+  let chat = ''
+
+  ROWS.forEach((row, i) => {
+    chat += row.kind === 'bubble'
+      ? `<div class="bubble me" data-row="${i}" style="left:24px;top:${row.top}px;width:360px;height:${row.h || 52}px;opacity:0"><div class="bubble-text">${row.text}</div></div>`
+      : `<div class="prow" data-row="${i}" style="top:${row.top}px;opacity:0"><div class="prow-dot"></div><div class="prow-text">${row.text}</div></div>`
+  })
+  // 游戏段：左半是三段子代理并行，右半是真实游戏画面
+  const SUBS = [
+    { title: '搭初始村落', rows: ['读 config.js 与 world.js', '铺网格与地形', '放第一批民居与树', '接上生产与消费'] },
+    { title: '地面与道路', rows: ['读 world.js 的地块表', '标出水域与砂岸', '铺道路与连通判定', '城郊再铺一圈草地'] },
+    { title: '资源条与建造菜单', rows: ['读 ui.js 的绘制层', '顶部资源条：木 石 粮', '底部建造菜单与分类', '悬停高亮与费用校验'] },
+  ]
+  const subsHtml = SUBS.map((sub, i) => `<div class="subcol" data-sub="${i}" style="opacity:0">
+    <div class="subcard-title">${sub.title}</div>
+    <div class="subcard-state" data-substate="${i}">准备中</div>
+    ${sub.rows.map((row, k) => `<div class="subcard-row" data-subrow="${i}-${k}" style="opacity:0"><i></i>${row}</div>`).join('')}
+    <div class="subcard-foot"><i data-subfoot="${i}"></i></div>
+    <div class="subcard-flash"></div>
+  </div>`).join('')
+  $('stageLayer').innerHTML = `<div id="chatLayer" style="position:absolute;top:0;height:888px;overflow:hidden">${chat}</div>
+    <div id="subLayer" style="position:absolute;top:0;left:0;height:888px;overflow:hidden">${subsHtml}</div>
+    <div id="workLayer" style="position:absolute;top:0;height:888px;overflow:hidden">
+      <img id="gameFrame" alt=""
+        src="file:///E:/LamDemo/assets/game/frames/f0001.png"></div>`
+
+  let tiles = ''
+  const G = { cols: 4, rows: 3, size: 96, gap: 16 }
+  for (let r = 0; r < G.rows; r += 1) {
+    for (let c = 0; c < G.cols; c += 1) {
+      tiles += `<div class="tile" data-tile="${r * G.cols + c}" style="left:${300 + c * (G.size + G.gap)}px;top:${110 + r * (G.size + G.gap)}px;width:${G.size}px;height:${G.size}px;opacity:0"></div>`
+    }
+  }
+  let subs = ''
+  for (let i = 0; i < 3; i += 1) {
+    let inner = `<div class="sub-flash" id="subRflash${i}"></div>
+      <div style="position:absolute;left:18px;top:20px;width:${90 + i * 20}px;height:10px;border-radius:5px;background:rgba(255,255,255,0.22)"></div>
+      <div style="position:absolute;left:18px;top:44px;width:9px;height:9px;border-radius:50%;background:rgba(101,84,217,0.9)"></div>`
+    for (let k = 0; k < 5; k += 1) {
+      inner += `<div style="position:absolute;left:18px;top:${76 + k * 34}px;width:${120 + ((k * 37 + i * 19) % 90)}px;height:9px;border-radius:4px;background:rgba(255,255,255,0.13)"></div>`
+    }
+    subs += `<div class="sub" id="subR${i}" style="opacity:0">${inner}</div>`
+  }
+  // 游戏段的占位网格/子代理块已由真实截图取代，这里不再生成
+
+  // 真实前端渲染出来的两段画面（产品自己画的界面，见 scripts/demo-video/stage）
+  // 每个栏位放的是产品自己渲染出来的那一屏：宽窄由界面自己适配
+  const UI_IMGS = [
+    { col: 1, id: 'uiCode', w: 1120, src: 'file:///E:/LamDemo/assets/ui-code/film-code/frames/f00000.png' },
+    { col: 1, id: 'uiChat', w: 520, src: 'file:///E:/LamDemo/assets/ui-chat/film-chat/frames/f00000.png' },
+    { col: 0, id: 'uiLibFold', w: 380, src: 'file:///E:/LamDemo/assets/ui-lib-folders/film-lib-folders/stills/2s.png' },
+    // 右窄栏：定时那一屏的一角（真实渲染的裁切，不是画的）
+    { col: 2, id: 'uiJob', w: 1120, offsetX: -196, offsetY: -60, h: 800, src: 'file:///E:/LamDemo/assets/ui-code/film-code/frames/f00435.png' },
+    // 游戏段左半：同一段真实界面（做这个小游戏的那一窗），1:1 取对话那一片
+    { col: 2, id: 'uiGame', w: 1120, offsetX: -300, offsetY: 0, h: 888, src: 'file:///E:/LamDemo/assets/ui-code/film-code/frames/f00000.png' },
+  ]
+  UI_IMGS.forEach(({ col, id, w, src, offsetX = 0, offsetY = 0, h = 888 }) => {
+    $(`col${col}`).insertAdjacentHTML('afterbegin',
+      `<div class="uiwin-clip" id="${id}-clip" style="height:${h}px"><img id="${id}" class="uiwin"
+        style="width:${w}px;left:${offsetX}px;top:${offsetY}px;opacity:1" alt="" src="${src}"></div>`)
+  })
+  // 左窄栏：工作目录的真实文件（名字与体积都来自磁盘）
+  $(`col0`).insertAdjacentHTML('beforeend', `<div id="treePanel" style="opacity:0">
+    <div class="tree-head">工作目录</div>
+    ${TREE.map((row) => `<div class="tree-row" style="padding-left:${10 + row.d * 14}px">
+      <span class="tree-name ${row.kind === 'new' ? 'is-new' : ''}">${row.name}</span>
+      <span class="tree-size">${row.size}</span></div>`).join('')}
+  </div>`)
+
+  // 代码段的主画面：真实源码正文，一行行写出来
+  $('col0').insertAdjacentHTML('beforeend', `<div id="codeLayer" style="position:absolute;inset:0;opacity:0">
+    <div id="codePanel">
+      <div class="code-head"><span class="code-file">game/js/sim.js</span><span>模拟推进 · 320 行</span></div>
+      <div id="codeBody"><div id="codeTrack"></div></div>
+    </div></div>`)
+
+  // 成片不带评审用的字幕与时间轴：这一版只留画面本身
+}
+buildDom()
+
+/* ------------------------------------------------------------------ render */
+// 几何：三栏位置固定，只有宽度变
+const KEYS = [
+  { at: at('O2'), dur: 1.25, w: [280, 1120, 280], o: 1, fo: -1, from: [560, 560, 560] },
+  { at: at('D1'), dur: 1.6, w: [380, 520, 780], o: 1, fo: 1, from: [280, 1120, 280] },
+  { at: at('E1') - 3.6, dur: 0.95, w: [0, 0, 1680], o: 1, fo: 1, from: [380, 520, 780] },
+  { at: at('E1'), dur: 1.05, w: [0, 0, 1680], o: 2, fo: 1, from: [0, 0, 1680] },
+]
+
+function geometry(t) {
+  if (t < at('O2')) {
+    const step = t < at('O2') ? -1 : t < at('O2') + 1.0 ? 0 : t < at('O2') + 2.0 ? 1 : 2
+    const blend = step < 0 ? 1 : ease.expoOut(seg(t, at('O2') + step * 1.0, at('O2') + step * 1.0 + 0.6))
+    const target = step < 0 ? [EQ, EQ, EQ] : [340, 340, 1000].map((w, i) => (i === step ? 1000 : w))
+    return { w: [EQ, EQ, EQ].map((v, i) => lerp(v, target[i], blend)), o: step, p: blend, fo: -1, grab: 0, give: 0 }
+  }
+  let key = KEYS[1]
+  let u = 0
+  for (const k of KEYS) {
+    if (t >= k.at) { key = k; u = seg(t, k.at, k.at + k.dur) }
+  }
+  // 聚焦的那块先动（向右展开），远端那块先让位，中间那块被夹着走——
+  // 三块之和恒等于台面宽，所以是一个方向性的推挤波，不是三块同时缩放
+  const e = snap(u)
+  const others = [0, 1, 2].filter((i) => i !== key.o)
+  const far = others[1]
+  const w = [0, 0, 0]
+  w[key.o] = lerp(key.from[key.o], key.w[key.o], e)
+  w[far] = lerp(key.from[far], key.w[far], Math.min(1, u * 1.3))
+  w[others[0]] = PANEL.w - w[key.o] - w[far]
+  // 办公段之前：先还原回开场那个三块并排的样子，再由三块变成办公
+  const back = ease.cubicInOut(clamp01(seg(t, at('D1') - 4.0, at('D1') - 2.0)))
+    * (1 - ease.cubicInOut(clamp01(seg(t, at('D1') + 0.1, at('D1') + 0.9))))
+  if (back > 0) {
+    const eq = PANEL.w / 3
+    return { w: w.map((v) => lerp(v, eq, back)), o: key.o, p: e, fo: key.fo, grab: 1, give: 1, back }
+  }
+  return { w, o: key.o, p: e, fo: key.fo, grab: 1, give: 1, back: 0 }
+}
+
+/* 就着真实源码做最轻的着色：注释、关键字、数字各一色，不喧宾夺主 */
+let codeBodyCache = ''
+function hlLine(line) {
+  const esc = String(line).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  if (/^\s*(\/\*|\*|\/\/)/.test(line)) return `<span class="cl-com">${esc || '&nbsp;'}</span>`
+  const cut = esc.indexOf('//')
+  const head = cut >= 0 ? esc.slice(0, cut) : esc
+  const tail = cut >= 0 ? `<span class="cl-com">${esc.slice(cut)}</span>` : ''
+  const marked = head
+    .replace(/\b(function|const|let|for|of|if|return|new)\b/g, '<span class="cl-key">$1</span>')
+    .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="cl-num">$1</span>')
+  return `<span class="cl">${marked || '&nbsp;'}</span>${tail}`
+}
+
+const uiFrameCache = {}
+function setUiFrame(id, frame, from, count, dirOverride) {
+  const n = Math.max(from, Math.min(count - 1, Math.round(frame)))
+  if (uiFrameCache[id] === n) return
+  uiFrameCache[id] = n
+  const dir = dirOverride || (id === 'uiCode' ? 'ui-code/film-code' : 'ui-chat/film-chat')
+  const node = document.getElementById(id)
+  if (node) node.src = `file:///E:/LamDemo/assets/${dir}/frames/f${String(n).padStart(5, '0')}.png`
+}
+
+window.renderFrame = async (t) => {
+  let fly = ''
+  const { w, o, p: transP, fo: fromOwner, back = 0 } = geometry(t)
+  const claim = ease.cubicInOut(seg(t, at('E1'), at('E1') + 1.8))
+  const give = claim
+  const titleFade = 1 - ease.quintOut(seg(t, at('O2') + 0.6, at('O2') + 2.2))
+  const codeIn = seg(t, at('O2') + 0.25, at('O2') + 1.0)
+  const codeOut = seg(t, at('C8'), at('C8') + 0.9)
+  const officeIn = seg(t, at('D1') + 0.2, at('D1') + 1.1)
+  const officeA = officeIn * (1 - seg(t, at('E1'), at('E1') + 0.6))
+  const auxHold = seg(t, at('C1') + 1.4, at('C1') + 2.6) * (1 - seg(t, at('C8'), at('C8') + 0.9))
+
+  // O1：三块交错落入——开场唯一的一次入场
+  COLS.forEach((_, i) => {
+    const arrive = ease.softBack(stagger(t, i, { start: 0.0, each: 0.5, dur: 0.5 }))
+    const travel = (1 - arrive) * (i % 2 === 0 ? -(PANEL.h + 40) : PANEL.h + 40)
+    style($(`col${i}`), { transform: `translateY(${travel.toFixed(1)}px)` })
+  })
+
+  // 三栏
+  const xs = [0]
+  COLS.forEach((_, i) => {
+    const x = i === 0 ? 0 : xs[i] // placeholder, recomputed below
+  })
+  let acc = 0
+  const lefts = []
+  COLS.forEach((_, i) => { lefts.push(acc); acc += Math.max(0, w[i]) })
+  COLS.forEach((_, i) => {
+    style($(`col${i}`), { left: `${lefts[i].toFixed(1)}px`, width: `${Math.max(0, w[i]).toFixed(1)}px` })
+    const dim = i === o ? 1 : lerp(1, 0.5, give)
+    // 聚焦不靠紫色标出来：那一栏留给真实 UI，宽度和内容自己会说话
+    style($(`surf${i}`), { opacity: 0 })
+    style($(`title${i}`), { opacity: dim * (1 - give) * titleFade })
+    style($(`scrim${i}`), { opacity: titleFade })
+    style($(`colSub${i}`), { opacity: dim * 0.9 * (1 - give) * titleFade })
+    // 开场的预览：三块一落定就交代各自是什么（画面在动），拓宽开始时退场；
+    // 代码段的左窄栏继续用这张真实源码页，办公段开始前它自己退掉
+    const auxPoster = i === 0 ? codeIn * (1 - codeOut) : 0
+    style($(`poster${i}`), {
+      opacity: Math.max(
+        seg(t, 0.35 + i * 0.1, 0.85 + i * 0.1) * (1 - seg(t, at('O2') + 0.5, at('O2') + 1.5)),
+        back * 1,
+        auxPoster,
+      ),
+    })
+    if (i === 0) style($('posterCode'), { transform: `translateY(${(-(t - 0.6) * 26).toFixed(1)}px)` })
+    if (i === 1) {
+      // 一整页接着一整页往下走：开头这几秒里它自己一直在动
+      const sc = $('posterScroll')
+      if (sc) style(sc, { transform: `translateY(${(-ease.sineInOut(clamp01(seg(t, 0.4, at('D1')))) * 700).toFixed(1)}px)` })
+    }
+    $(`poster${i}`).classList.toggle('is-bright', back > 0.35)
+  })
+  // 聚焦某一栏时，把整条台面平移，让那一栏落在台面正中（两侧留暗，构图才稳）
+  const focusShift = (o === 0 ? 280 : 0) * transP
+  style($('colLayer'), { transform: `translateX(${focusShift.toFixed(1)}px)` })
+  style($('stageLayer'), { transform: `translateX(${focusShift.toFixed(1)}px)` })
+
+  style($('div0'), { left: `${lefts[1].toFixed(1)}px`, opacity: (w[0] > 4 && w[1] > 4 ? 1 : 0) * seg(t, 0.9, 1.8) })
+  style($('div1'), { left: `${lefts[2].toFixed(1)}px`, opacity: (w[1] > 4 && w[2] > 4 ? 1 : 0) * seg(t, 0.9, 1.8) })
+
+  // 镜头：整块台面非常缓慢地推近（0 → 5.5%），段落里就不会出现“完全静止”的空拍
+  // 段落里也有一次可见的慢推：每一段画面都在动，不会出现静止的空拍
+  const sectPush = 0.05 * ease.sineInOut(clamp01(seg(t, at('O2') + 0.8, at('C8') + 1.0)))
+    + 0.03 * ease.sineInOut(clamp01(seg(t, at('D1') + 1.4, at('E1') - 1.0)))
+  const dolly = (1 + 0.055 * ease.sineInOut(clamp01(t / TOTAL))) * (1 + sectPush)
+  style($('panel'), { transform: `scale(${dolly.toFixed(5)})` })
+
+  const codeOn = codeIn * (1 - codeOut) > 0.02
+  const officeOn = officeA > 0.02
+  const colX = (i) => lefts[i]
+  const colW = (i) => Math.max(0, w[i])
+
+  const codeA = codeIn * (1 - codeOut)
+  // 隐去辅助内容之后代码留在台上，直到办公段把它接过去虚化
+  const codeHold = Math.max(codeA, seg(t, at('C8'), at('D1') + 1.2) * (1 - officeA))
+  const codeVis = Math.max(codeHold, officeA * 0.5)
+  // 主区是 Sunday 的工作台：聊天 + 代码编辑器；办公段它退成左边的虚化背景
+  style($('codeLayer'), {
+    left: `${lerp(417, 0, officeA).toFixed(1)}px`,
+    width: `${lerp(Math.max(0, colW(0) - 441), colW(0), officeA).toFixed(1)}px`,
+    opacity: codeVis,
+  })
+  const vis = codeVis
+  /* ---- 聊天层：游戏段挂在 col2，办公段挂在 col1 ---- */
+  const gameChat = (o === 2 ? 1 : 0) * (1 - seg(t, at('E7'), at('E7') + 0.8))
+  const codeChat = codeA
+  const chatA = o === 2 ? gameChat : o === 1 ? officeA : codeChat
+  style($('chatLayer'), {
+    left: o === 1 ? `${(colX(1) + 24).toFixed(1)}px` : '24px',
+    width: `${(o === 1 ? Math.max(0, colW(1) - 48) : o === 0 ? 392 : 616).toFixed(1)}px`,
+    opacity: chatA,
+  })
+  const withdraw = snap(seg(t, at('E7'), at('E7') + 0.85))
+  const workW = lerp(Math.max(0, colW(2) - 641), PANEL.w, withdraw)
+  style($('workLayer'), {
+    left: `${lerp(colX(2) + 641, 0, withdraw).toFixed(1)}px`,
+    width: `${workW.toFixed(1)}px`,
+    opacity: (o === 2 ? seg(t, at('E1') + 0.5, at('E1') + 1.4) : 0),
+    background: '#171921', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.07)',
+  })
+  // 游戏画面本身在 workLayer 里，随容器一起让位
+
+  // 气泡与过程行
+  ROWS.forEach((row, i) => {
+    const node = document.querySelector(`[data-row="${i}"]`)
+    if (!node) return
+    const p = ease.quintOut(seg(t, row.at, row.at + 0.5))
+    const visible = i <= 7 ? gameChat : i <= 12 ? officeA : codeChat
+    style(node, { opacity: p * 0.95 * visible })
+  })
+
+  /* ---- 游戏段：左半是产品自己的那一窗（做这个小游戏的真实界面） ---- */
+  const gameUiA = (o === 2 ? snap(clamp01(seg(t, at('E1') + 0.3, at('E1') + 0.8))) : 0) * (1 - withdraw)
+  style($('uiGame-clip'), { opacity: gameUiA })
+  const subOn = (o === 2 ? snap(clamp01(seg(t, at('E1') + 0.4, at('E1') + 0.9))) : 0) * (1 - withdraw)
+  style($('subLayer'), {
+    left: `${(colX(2) + 641).toFixed(1)}px`,
+    width: `${Math.max(0, colW(2) - 641).toFixed(1)}px`,
+    opacity: subOn,
+  })
+  const SUB_ROW0 = [37.8, 39.0, 40.2]         // 三块各自开始干活（与曲子的三记起同拍）
+  const SUB_EACH = 0.85                       // 一条一条往下走
+  document.querySelectorAll('[data-sub]').forEach((node) => {
+    const i = Number(node.dataset.sub)
+    const enter = ease.softBack(clamp01(seg(t, at('E1') + 0.35 + i * 0.16, at('E1') + 1.05 + i * 0.16)))
+    style(node, { opacity: enter, transform: `translateY(${((1 - enter) * 14).toFixed(1)}px)` })
+    node.classList.toggle('is-done', t >= DONE[i])
+  })
+  document.querySelectorAll('[data-substate]').forEach((node) => {
+    const i = Number(node.dataset.substate)
+    const next = t >= DONE[i] ? '完成' : t >= SUB_ROW0[i] - 0.4 ? '进行中' : '准备中'
+    if (node.textContent !== next) node.textContent = next
+  })
+  document.querySelectorAll('[data-subrow]').forEach((node) => {
+    const [i, k] = node.dataset.subrow.split('-').map(Number)
+    const start = SUB_ROW0[i] + k * SUB_EACH
+    style(node, { opacity: ease.quintOut(clamp01(seg(t, start, start + 0.34))) })
+  })
+  document.querySelectorAll('[data-subfoot]').forEach((node) => {
+    const i = Number(node.dataset.subfoot)
+    style(node, { width: `${(ease.sineInOut(clamp01(seg(t, SUB_ROW0[i] - 0.4, DONE[i]))) * 100).toFixed(1)}%` })
+  })
+  document.querySelectorAll('.subcard-flash').forEach((node, i) => {
+    style(node, { opacity: (Math.sin(Math.PI * clamp01(seg(t, DONE[i], DONE[i] + 0.42))) * 0.13).toFixed(3) })
+  })
+
+  /* ---- 游戏段：真实游戏画面在走，镜头再轻轻推一点 ---- */
+  // 真实画面里有一段是建筑提示卡压在岛上（约 5.5–8.2s）：那一段按 1.8 倍走过；
+  // 其余放慢到 0.45 倍，正好把 450 帧真实画面铺到片尾，收尾不会有空帧
+  const GAME_START = at('E1') + 0.9
+  const gameOn = o === 2 ? seg(t, at('E1') + 0.4, at('E1') + 1.3) : 0
+  if (gameOn > 0.01) {
+    const gu = Math.max(0, t - GAME_START)
+    const gameWarp = gu <= 12.2 ? gu * 0.45
+      : gu <= 13.7 ? 5.5 + (gu - 12.2) * 1.8
+        : 5.5 + 1.5 * 1.8 + (gu - 13.7) * 0.44
+    setGameFrame(gameWarp * GAME_FPS)
+  }
+  // 真实画面整幅可见，靠"长大"来推近：长到刚好贴住画框为止（boxW 变宽时自动收敛）
+  const containH = Math.min(workW / (16 / 9), PANEL.h)
+  const maxZoom = PANEL.h / containH
+  const zoom = lerp(1, maxZoom, ease.sineInOut(clamp01((t - GAME_START) / 21)))
+  style($('gameFrame'), { opacity: gameOn.toFixed(3), transform: `scale(${zoom.toFixed(4)})` })
+
+  /* ---- 代码段：代码在左，定时与时间在右两条窄栏；办公段它退成虚化的背景 ---- */
+
+
+  const auxA = codeA
+  // 小编辑器：Agent 跑的时候，代码在这里一行行出来
+  style($('tree'), { opacity: auxA })
+  TREE.forEach((row, i) => {
+    const p = ease.quintOut(seg(t, at('C2') + row.at, at('C2') + row.at + 0.45))
+    style(document.querySelector(`[data-tree="${i}"]`), {
+      opacity: p * auxA,
+      transform: `translateX(${((1 - ease.expoOut(p)) * -8).toFixed(1)}px)`,
+    })
+  })
+  style($('job'), { opacity: auxA, transform: `translateY(${((1 - seg(t, at('O2') + 0.7, at('O2') + 2.0)) * 14).toFixed(1)}px)` })
+  style($('auxHead1'), { opacity: auxA })
+  style($('auxHead2'), { opacity: auxA })
+
+  // 时间流动：指针转一圈，转满即到点
+  const fill = seg(t, at('C2') + 0.4, at('C4'))
+  const deg = -90 + 360 * ease.sineInOut(fill)
+  style($('clockHand'), { transform: `rotate(${deg.toFixed(2)} 70 70)` })
+  style($('ringWrap'), {
+    opacity: auxA,
+    transform: `scale(${(1 + Math.sin(Math.PI * seg(t, at('C4'), at('C4') + 0.6)) * 0.045).toFixed(3)})`,
+  })
+  const tickP = Math.sin(Math.PI * seg(t, at('C4') - 0.1, at('C4') + 0.5)) * auxA
+  style($('jobFlash'), { opacity: (tickP * 0.2).toFixed(3) })
+  // 到点：一圈从钟心荡开，卡片的状态行换成“刚刚”
+  const ringP = seg(t, at('C4'), at('C4') + 0.7)
+  if (ringP > 0 && ringP < 1 && auxA > 0.3) {
+    const r = lerp(52, 104, ease.expoOut(ringP))
+    fly += `<div style="position:absolute;left:${(colX(2) + 140 - r).toFixed(1)}px;top:${(360 - r).toFixed(1)}px;width:${r * 2}px;height:${r * 2}px;border-radius:50%;border:1.5px solid rgba(150,135,245,${(Math.sin(Math.PI * ringP) * 0.7).toFixed(3)})"></div>`
+  }
+  const jobSubText = t > at('C4') + 0.35 ? '刚刚 · 运行完成' : '上次 09:00 · 无阻塞'
+  if ($('jobSub').textContent !== jobSubText) $('jobSub').textContent = jobSubText
+  style($('jobSub'), { color: t > at('C4') + 0.35 ? 'rgba(190,180,250,0.9)' : 'rgba(238,240,244,0.45)' })
+
+  // 例行检查跑起来：它在工作目录里落下一个新文件，聊天里同时出现过程行
+  // 代码段主画面：真实源码一行行写出来，末尾留一个光标
+  const OPEN_LINES = 12   // 打开时文件里已经有的行：面板一开始就是满的
+  const written = Math.min(CODE.length - OPEN_LINES, Math.max(0, Math.floor((t - (at('C1') + 0.2)) / 0.26)))
+  const shown = OPEN_LINES + written
+  const codeHtml = CODE.slice(0, shown).map((line, i) => `<div>${hlLine(line)}${i === shown - 1 && shown < CODE.length ? `<span class="cl-caret" style="opacity:${(t * 2) % 1 < 0.55 ? 1 : 0.15}"></span>` : ''}</div>`).join('')
+  if (codeBodyCache !== codeHtml) { $('codeTrack').innerHTML = codeHtml; codeBodyCache = codeHtml }
+  // 写满一屏就跟着光标往上滚：这是这一段里最实在的一个动作
+  style($('codeTrack'), { transform: `translateY(${(-Math.max(0, shown * 23 - 536)).toFixed(1)}px)` })
+
+  /* ---- 办公段：左虚化代码 + 资料库卡片，中聊天，右成果 ---- */
+  style($('libLayer'), { opacity: officeA })
+  document.querySelectorAll('[id^="libDoc"]').forEach((node) => {
+    style(node, { opacity: officeA })
+  })
+  style($('resultLayer'), { opacity: officeA })
+  const readP = seg(t, at('D4'), at('D4') + 0.4) * (1 - seg(t, at('D5') + 0.6, at('D5') + 1.4)) * officeA
+  style($('libHi0'), { opacity: readP.toFixed(3) })
+  // 读到的那一层底下摊开它的文件；读的瞬间有一张卡片从左栏飘向中栏
+  document.querySelectorAll('[data-libfile]').forEach((node) => {
+    const k = Number(node.dataset.libfile)
+    const p0 = seg(t, at('D4') + 0.2 + k * 0.11, at('D4') + 0.52 + k * 0.11)
+    style(node, { opacity: (ease.quintOut(p0) * officeA).toFixed(3) })
+  })
+  if (readP > 0.05) {
+    fly += `<div class="doc" style="left:${(colX(0) + 30 + (1 - ease.cubicInOut(readP)) * 40).toFixed(1)}px;top:${(104 - readP * 10).toFixed(1)}px;width:${lerp(140, 110, readP).toFixed(1)}px;height:34px;opacity:${(officeA * Math.sin(Math.PI * readP) * 0.9).toFixed(3)}"></div>`
+  }
+  // 成果流：两列错落（左列下沉半格），每落一张整列推进一格，从上方消失的会从下方回来
+  // Agent 离场后成果接管整块表面：两列张开、卡片按同一比例长大（整页仍然完整）
+  const boardW = Math.max(0, colW(2))
+  const boardWide = snap(clamp01(seg(t, at('E1') - 3.4, at('E1') - 2.5)))
+  const trackW = lerp(Math.max(160, (boardW - 40) / 2 - 12), 640, boardWide)
+  const gutter = Math.max(0, (boardW - 40 - trackW * 2) / 3)
+  style($('feedTrackL'), { width: `${trackW.toFixed(1)}px`, left: `${gutter.toFixed(1)}px`, right: 'auto' })
+  style($('feedTrackR'), { width: `${trackW.toFixed(1)}px`, right: `${gutter.toFixed(1)}px`, left: 'auto' })
+  const cardH = trackW / 1.778
+  const slot = cardH + 18
+  const CYCLE = 4 * slot                            // 每列 4 格一循环，滚出去的那张在下面等着
+  const ARRIVE = [22.8, 24.6, 26.4, 28.2, 30.0, 31.8, 33.6, 35.4]
+  const advance = ARRIVE.reduce((acc, a) => acc + ease.cubicInOut(clamp01(seg(t, a, a + 0.9))), 0)
+  // 落卡之外也一直在缓慢滚动：展板从办公段一开始就是活的
+  const creep = ease.sineInOut(clamp01(seg(t, at('D1') + 0.8, at('E1') - 0.8))) * 2.1
+  const drift = (advance + creep) * slot
+  const driftL = ((drift % CYCLE) + CYCLE) % CYCLE
+  const driftR = (((drift + HALF) % CYCLE) + CYCLE) % CYCLE
+  document.querySelectorAll('[data-fcard]').forEach((node) => {
+    const i = Number(node.dataset.fcard)
+    const copy = Number(node.dataset.copy)
+    const k = Math.floor(i / 2)                   // 第几格（每列各一格轮一次）
+    const own = i % 2 === 1 ? driftR : driftL
+    const y = (((k * slot - own) % CYCLE) + CYCLE) % CYCLE - copy * CYCLE
+    const arrive = ease.softBack(clamp01(seg(t, ARRIVE[i], ARRIVE[i] + 0.5)))
+    const op = clamp01(seg(t, ARRIVE[i] - 0.12, ARRIVE[i] + 0.14))
+    style(node, {
+      top: `${y.toFixed(1)}px`,
+      height: `${cardH.toFixed(1)}px`,
+      opacity: officeA.toFixed(3),
+      transform: `translateY(${((1 - arrive) * 26).toFixed(1)}px) scale(${lerp(0.97, 1, arrive).toFixed(4)})`,
+    })
+    style(node.querySelector('img'), { opacity: op.toFixed(3) })
+    style(node.querySelector('.fcard-ghost'), { opacity: (1 - op).toFixed(3) })
+    style(node.querySelector('.fcard-tag'), { opacity: op.toFixed(3) })
+  })
+
+  /* ---- 光标：三段都由“点中它所在的那一块”进场，同一个动作 ---- */
+  const clickShot = (when, from, to) => {
+    if (t < when - 1.0 || t > when + 1.0) return ''
+    const travel = ease.sineInOut(seg(t, when - 0.8, when + 0.1))
+    const press = Math.sin(Math.PI * seg(t, when + 0.1, when + 0.45))
+    const alpha = seg(t, when - 1.0, when - 0.7) * (1 - seg(t, when + 0.6, when + 1.0))
+    let out = `<div class="cursor" style="left:${lerp(from.x, to.x, travel).toFixed(1)}px;top:${lerp(from.y, to.y, travel).toFixed(1)}px;opacity:${alpha.toFixed(3)};transform:scale(${(1 - press * 0.3).toFixed(3)})"></div>`
+    const rp = seg(t, when + 0.15, when + 1.0)
+    if (rp > 0 && rp < 1) {
+      out += `<div class="ripple" style="left:${to.x - 40}px;top:${to.y - 40}px;width:80px;height:80px;opacity:${(Math.sin(Math.PI * rp) * 0.34).toFixed(3)};transform:scale(${lerp(0.18, 1.6, ease.expoOut(rp)).toFixed(3)})"></div>`
+    }
+    return out
+  }
+  fly += clickShot(at('D1'), { x: lefts[0] + 620, y: 690 }, { x: lefts[1] + 140, y: 430 })
+  fly += clickShot(at('E1'), { x: lefts[1] + 420, y: 430 }, { x: lefts[2] + 340, y: 430 })
+
+  /* ---- 收尾 ---- */
+  const dark = ease.sineInOut(seg(t, at('F1') + 0.6, at('F1') + 1.8))
+  style($('endcard'), { opacity: dark })
+  style($('colLayer'), { opacity: 1 - dark * 0.9 })
+  style($('stageLayer'), { opacity: 1 - dark })
+  // 收尾自己也在动：名字缓缓落定、一道细线拉开、主张随后出现
+  const e1 = ease.quintOut(clamp01(seg(t, at('F1') + 1.0, at('F1') + 2.1)))
+  const e2 = ease.expoOut(clamp01(seg(t, at('F1') + 1.6, at('F1') + 2.7)))
+  const e3 = ease.quintOut(clamp01(seg(t, at('F1') + 2.2, at('F1') + 3.1)))
+  const tailP = clamp01(seg(t, at('F1') + 3.2, TOTAL))
+  style($('endName'), { opacity: e1, transform: `translateY(${((1 - e1) * 16).toFixed(1)}px) scale(${lerp(0.985, 1.02, e3) * lerp(1, 1.03, tailP).toFixed(4)})` })
+  style($('endRule'), { width: `${(e2 * 260).toFixed(1)}px`, marginLeft: `${(-e2 * 130).toFixed(1)}px`, opacity: e2.toFixed(3) })
+  style($('endClaim'), { opacity: e3.toFixed(3), transform: `translateY(${((1 - e3) * 10 - tailP * 5).toFixed(1)}px)` })
+  // 官网：打字机一个字一个字敲出来（收尾这几秒也在动）
+  const SITE = 'AINARIT.com'
+  const siteP = ease.quintOut(clamp01(seg(t, at('F1') + 2.5, at('F1') + 3.6)))
+  const siteText = SITE.slice(0, Math.round(siteP * SITE.length))
+  if ($('endSiteText').textContent !== siteText) $('endSiteText').textContent = siteText
+  style($('endSite'), { opacity: seg(t, at('F1') + 2.4, at('F1') + 2.7).toFixed(3), transform: `translateY(${(-tailP * 5).toFixed(1)}px)` })
+  style($('endCaret'), { opacity: (t * 2) % 1 < 0.55 ? 1 : 0 })
+
+  /* ---- 真实前端：代码段与办公段各自放产品自己画的那一窗 ---- */
+  const UI_FPS = 30
+  // 代码段：素材里有一段是模型在思考（几乎不动），这段按 1.9 倍走掉；
+  // 后面那一段（切到定时任务屏）放慢到 0.44 倍，让"滴答到点"看得清
+  const codeU = Math.max(0, t - at('O2'))
+  const codeWarp = codeU <= 2.5 ? codeU
+    : codeU <= 5.5 ? 2.5 + (codeU - 2.5) * 1.6
+      : 2.5 + 3 * 1.6 + (codeU - 5.5) * 0.81
+  setUiFrame('uiCode', codeWarp * UI_FPS, 0, 450)   // 代码段：从拓宽那一刻开始放
+  // 右窄栏：同一段素材的尾段（产品切到「定时任务」那一屏之后），慢镜看它自己走
+  setUiFrame('uiJob', (342 + (codeU / 15) * 106), 342, 450, 'ui-code/film-code')
+  // 左半真实界面：把"做这个小游戏"那一段按原速放完（capture 0–10s 铺在段落前半），
+  // 之后停在这一屏上，只留一点极慢的推移，不要出现突然的换屏
+  const gameUiP = clamp01((t - (at('E1') + 0.4)) / 11.0)
+  setUiFrame('uiGame', gameUiP * 10.0 * UI_FPS, 0, 450, 'ui-code/film-code')
+  setUiFrame('uiChat', (t - at('D1')) * UI_FPS, 0, 480)
+  if (t < at('O2') + 1.6) setGameFrame(Math.round((t + 3.5) * GAME_FPS))   // 办公段：中栏的聊天
+  const inCode = o === 1 && t < at('D1') && back < 0.5
+  const inOffice = o === 1 && t >= at('D1') && back < 0.5
+  const codeReveal = codeIn * (1 - codeOut)
+  // 窗口按栏位宽度整幅缩放：过渡期里产品界面是完整的，只是变窄，不会被裁掉字
+  const fit = (id, capW, colIdx, extra = 1) => style($(id), {
+    transform: `scale(${(Math.min(1, colW(colIdx) / capW) * extra).toFixed(4)})`,
+    transformOrigin: 'left top',
+  })
+  fit('uiCode', 1120, 1)
+  // 游戏段左半：真实界面按 1:1 取对话那一片，栏位多宽就露多宽（不缩放、不糊）
+  style($('uiGame'), { left: `${(-258 - 24 * clamp01(seg(t, at('E5'), at('E7') - 1.0))).toFixed(1)}px`, top: '0px', width: '1120px', transform: 'none' })
+  fit('uiChat', 520, 1)
+  // 资料库在办公段里也在缓慢推近（它是真实界面，但仍要一直在动）
+  const libPush = 1 + 0.06 * ease.sineInOut(clamp01(seg(t, at('D1') + 1.0, at('E1') - 0.4)))
+  fit('uiLibFold', 380, 0, libPush)
+  const officeReveal = officeIn * (1 - seg(t, at('E1') - 0.5, at('E1') + 0.25))
+  style($('uiCode-clip'), { opacity: inCode ? codeReveal : 0 })
+  style($('treePanel'), {
+    opacity: inCode ? codeReveal : 0,
+    top: '420px', height: '468px', paddingTop: '18px',
+    background: '#171921', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.07)',
+  })
+  style($('uiJob-clip'), { opacity: inCode ? codeReveal : 0 })
+  // 海报只在开场与"还原回三块"那一刻出现，其余时间一律关掉
+  if (t > at('O2') + 1.6 && back < 0.02) {
+    for (let i = 0; i < 3; i += 1) if (i !== 0) style($(`poster${i}`), { opacity: 0 })
+    if (codeA < 0.02) style($('poster0'), { opacity: 0 })
+  }
+  // 成果一张张落下来之后，聊天与资料库一起退场：Agent 离场，舞台交给成果
+  const agentLeaves = 1 - snap(clamp01(seg(t, 30.5, 31.1)))
+  style($('uiChat-clip'), { opacity: inOffice ? officeReveal * agentLeaves : 0 })
+  style($('uiLibFold-clip'), { opacity: inOffice ? officeReveal * agentLeaves : 0 })
+
+  // 成片里不再画任何仿造的产品界面：聊天、编辑器、文件树、定时卡、资料库卡、成果流全部下线
+  for (const id of ['aux0', 'aux1', 'aux2']) style($(id), { opacity: 0 })
+  style($('chatLayer'), { opacity: 0 })
+  style($('codeLayer'), { opacity: 0 })
+
+  $('flyLayer').innerHTML = fly
+
+  // 画面里所有图片都解码完再交帧：否则截图会拍到上一帧或空白
+  const pending = [...document.images].filter((img) => !img.complete)
+  if (pending.length) {
+    await Promise.all(pending.map((img) => img.decode().catch(() => {})))
+  }
+}
+
+window.__sceneReady = true
+</script>
+</body>
+</html>
