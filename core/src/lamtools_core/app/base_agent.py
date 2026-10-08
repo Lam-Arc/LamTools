@@ -722,7 +722,11 @@ class CoreBaseAgentKit:
         session_metadata = state.metadata.get("session_metadata") if isinstance(state.metadata, dict) else None
         if isinstance(session_metadata, dict):
             call.metadata["_runtime_session_metadata"] = dict(session_metadata)
-        if call.name == "sub_agent":
+        if call.name in ("sub_agent", "sub_agent_message"):
+            # Both parent-side delegation tools bind child events to the
+            # *current* run: without the stamp a later-turn message reuses the
+            # record's stale source run, filing the child timeline under a
+            # phantom parent item that no transcript row owns.
             call.metadata["parent_run_id"] = state.run_id
             call.metadata["parent_turn_id"] = str(state.metadata.get("turn_id") or state.run_id)
         result = await self.toolbox.execute(
