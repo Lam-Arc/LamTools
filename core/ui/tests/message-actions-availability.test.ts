@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { describe, expect, it } from 'vitest'
 
 import ChatThread from '../src/components/ChatThread.vue'
@@ -79,5 +80,42 @@ describe('message action availability', () => {
 
     expect(wrapper.find('[data-message-fork]').exists()).toBe(true)
     expect(wrapper.find('[data-message-rollback]').exists()).toBe(true)
+  })
+})
+
+describe('inline message editing', () => {
+  it('opens the editor on the message it belongs to and lands the caret at the end', async () => {
+    const wrapper = mount(ChatThread, {
+      props: { transport: testTransport, messages: [userMessage], messageActions: true },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('[data-user-edit]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    // The stack carries the editing state, which is what widens the bubble to
+    // the message column instead of the textarea's intrinsic `cols` width.
+    expect(wrapper.get('.user-stack').classes()).toContain('user-stack--editing')
+    const el = wrapper.get('textarea.user-edit-input').element as HTMLTextAreaElement
+    expect(el.value).toBe('帮我写一份季度报告')
+    expect(document.activeElement).toBe(el)
+    expect([el.selectionStart, el.selectionEnd]).toEqual([el.value.length, el.value.length])
+
+    wrapper.unmount()
+  })
+
+  it('drops the editing state when the edit is cancelled', async () => {
+    const wrapper = mountChatThread({ messages: [userMessage], messageActions: true })
+
+    await wrapper.get('[data-user-edit]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.user-stack--editing').exists()).toBe(true)
+
+    await wrapper.get('[data-user-edit-cancel]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.user-stack--editing').exists()).toBe(false)
+    expect(wrapper.find('textarea.user-edit-input').exists()).toBe(false)
+    expect(wrapper.get('.user-bubble').text()).toBe('帮我写一份季度报告')
   })
 })

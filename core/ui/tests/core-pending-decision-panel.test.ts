@@ -2,12 +2,13 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { mount } from '@vue/test-utils'
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { describe, expect, it } from 'vitest'
 
 import CorePendingDecisionPanel from '../src/components/CorePendingDecisionPanel.vue'
 import { selectPendingCoreDecisions, type CorePendingDecision } from '../src/appServer'
 import { useCoreApprovalController } from '../src/composables'
+import { TEXTAREA_MAX_ROWS } from '../src/helpers/autoGrowTextarea'
 import type { CoreMessage, MessagePart } from '../src/types'
 
 const appSource = readFileSync(resolve(import.meta.dirname, '../src/app/LamToolsApp.vue'), 'utf8')
@@ -138,6 +139,31 @@ describe('CorePendingDecisionPanel', () => {
     expect(calls).toEqual(['req-1:deny:deny'])
   })
 
+  it('rests at one row and follows the length of the answer', async () => {
+    const wrapper = mountPanel(decisionsFor([approvalPart('approval-1', 'req-1')]))
+    const guide = wrapper.find<HTMLTextAreaElement>('[data-pending-decision-guide]')
+    const field = guide.element
+
+    // One row is the resting height; there is nothing to scroll until the
+    // answer needs a second line.
+    expect(guide.attributes('rows')).toBe('1')
+    expect(field.style.height).toBe('')
+
+    // jsdom has no stylesheet, so the helper measures with its fallbacks: 20px
+    // line height and no padding.
+    Object.defineProperty(field, 'scrollHeight', { configurable: true, value: 700 })
+    await guide.setValue('第一行\n第二行\n第三行\n第四行\n第五行\n第六行')
+    expect(field.style.height).toBe(`${20 * TEXTAREA_MAX_ROWS}px`)
+    expect(field.style.overflowY).toBe('auto')
+
+    // Escape clears the draft, and the field returns to its one row.
+    Object.defineProperty(field, 'scrollHeight', { configurable: true, value: 20 })
+    await guide.trigger('keydown', { key: 'Escape' })
+    await nextTick()
+    expect(field.style.height).toBe('20px')
+    expect(field.style.overflowY).toBe('hidden')
+  })
+
   it('submits free-form guidance from inside the panel', async () => {
     const items = decisionsFor([approvalPart('approval-1', 'req-1')])
     const wrapper = mountPanel(items)
@@ -249,15 +275,30 @@ describe('CorePendingDecisionPanel', () => {
     expect(wrapper.find('[data-pending-decision-guide-submit]').attributes('disabled')).toBeDefined()
   })
 
+  it('numbers every choice and leaves the answer field as the last row', () => {
+    const wrapper = mountPanel(decisionsFor([approvalPart('approval-1', 'req-1')]))
+    const indexes = wrapper.findAll('.pending-decision__option-index')
+
+    // 1 and 2 are the offered choices; 3 is the free-form answer row.
+    expect(indexes.map(index => index.text())).toEqual(['1', '2', '3'])
+    expect(indexes.every(index => !index.element.closest('button'))).toBe(true)
+    const answerRow = indexes[2].element.nextElementSibling
+    expect(answerRow?.classList.contains('pending-decision__guide-row')).toBe(true)
+    expect(answerRow?.querySelector('[data-pending-decision-guide]')).not.toBeNull()
+    // The panel says once how it is operated instead of leaving the user to guess.
+    expect(wrapper.find('.pending-decision__hint').text()).toContain('点击选项直接提交')
+  })
+
   it('stays operable on a phone-width composer', () => {
     const mobile = panelSource.slice(panelSource.indexOf('@media (max-width: 640px)'))
     expect(mobile).not.toBe('')
 
-    // Stacked, full-width choices and guide row: nothing is clipped or made
-    // unreachable at ≤640px.
-    expect(mobile).toMatch(/\.pending-decision__actions\s*\{\s*flex-direction:\s*column;/)
-    expect(mobile).toMatch(/\.pending-decision__action\s*\{[^}]*max-width:\s*100%;/)
+    // Every choice starts its own row and the consequence drops under its label:
+    // nothing is clipped or made unreachable at ≤640px.
+    expect(mobile).toMatch(/\.pending-decision__action\s*\{\s*grid-template-columns:\s*auto minmax\(0, 1fr\);/)
+    expect(mobile).toMatch(/\.pending-decision__option-desc\s*\{\s*grid-column:\s*2;/)
     expect(mobile).toMatch(/\.pending-decision__guide-row\s*\{\s*flex-direction:\s*column;/)
+    expect(mobile).toMatch(/\.pending-decision__guide-submit\s*\{\s*width:\s*100%;/)
     // Long subjects and paths wrap instead of widening the composer column.
     expect(panelSource).toMatch(/\.pending-decision__subject\s*\{[^}]*overflow-wrap:\s*anywhere;/)
     expect(panelSource).toMatch(/\.pending-decision\s*\{[^}]*min-width:\s*0;/)
@@ -275,9 +316,14 @@ describe('CorePendingDecisionPanel', () => {
     expect(panelSource).toContain('var(--alpha-active)')
     expect(panelSource).toContain('var(--radius-sm)')
     expect(panelSource).toContain('var(--space-2)')
-    // Options are buttons and the guide input carries no focus decoration.
+    // The answer field is a field, the send is the panel's one filled action.
     expect(panelSource).toMatch(/\.pending-decision__guide-input:focus-visible\s*\{\s*outline:\s*none;/)
+    expect(panelSource).toMatch(/\.pending-decision__guide-submit\s*\{[^}]*background:\s*var\(--theme-control-background\);/)
+    expect(panelSource).toMatch(/\.pending-decision__guide-submit:hover:not\(:disabled\)\s*\{\s*filter:\s*brightness\(\.94\);/)
+    // Off-scale values and bespoke z-index are not allowed in on a panel that
+    // sits inside the composer card.
     expect(panelSource).not.toMatch(/z-index:\s*\d/)
+    expect(panelSource).not.toMatch(/border-radius:\s*\d+px/)
   })
 })
 

@@ -829,16 +829,18 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
 }
 
+/* The waiting card is a card, not a rail: the ask sentence leads, the numbered
+   rows follow, and the pending state rides the icon plus a tinted hairline
+   instead of a loud fill. */
 .decision-card {
   --decision-attention: color-mix(in srgb, #b49a60 72%, var(--theme-main-text, #fff) 28%);
   min-width: 0;
   display: grid;
-  gap: 9px;
-  padding: 7px 0 9px 14px;
-  border-left: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 18%, transparent);
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  border-radius: var(--radius);
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent));
 }
 
 .decision-card-head,
@@ -846,17 +848,30 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   min-width: 0;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
 }
 
+.decision-card-icon {
+  color: var(--decision-attention);
+}
+
+.decision-card-kind {
+  min-width: 0;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 58%, transparent);
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .decision-card-title {
+  margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--theme-main-text, var(--text));
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.35;
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.45;
 }
 
 .decision-card-status {
@@ -868,12 +883,12 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
 }
 
 .decision-card--pending {
-  border-left-color: var(--decision-attention);
+  border-color: color-mix(in srgb, var(--decision-attention) 36%, transparent);
 }
 
 .decision-card-detail {
   margin: 0;
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 58%, transparent);
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -883,53 +898,53 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
 .decision-options {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 0;
-  padding-top: 4px;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) 0 0;
   border-top: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 9%, transparent);
+  list-style: none;
 }
 
+/* Numbered rows: the marker sits outside the button, the label is the click
+   target, and the consequence stays plain copy the pointer cannot act on.
+   `fit-content` keeps a long label from starving the consequence column. */
 .decision-option-group {
   width: 100%;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(76px, max-content) minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent);
+  grid-template-columns: auto fit-content(50%) minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: var(--space-2);
 }
 
-.decision-option-group:last-child {
-  border-bottom: 0;
+.decision-option-index {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 42%, transparent);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
 }
 
 .decision-option {
-  min-width: 76px;
-  min-height: 34px;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--theme-main-text, var(--text));
-  padding: 7px 2px;
+  padding: 2px 6px;
   cursor: pointer;
   text-align: left;
-  transition: color 160ms ease;
-  position: relative;
-}
-.decision-option::before {
-  content: ""; position: absolute; inset: 0;
-  border-radius: 0; background: transparent; pointer-events: none;
-  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
-  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  transition: color 160ms ease, background-color 160ms ease;
 }
 
-.decision-option:hover::before {
+.decision-option:hover {
   background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
 }
-.decision-option:hover {
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 78%, var(--decision-attention) 22%);
+
+.decision-option:active {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-active), transparent);
 }
 
 .decision-option:focus-visible,
@@ -943,11 +958,13 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   color: color-mix(in srgb, var(--green) 82%, var(--theme-main-text, #fff) 18%);
 }
 
-.decision-option--approve:hover::before {
-  background: color-mix(in srgb, var(--green) var(--alpha-hover), transparent);
-}
 .decision-option--approve:hover {
+  background: color-mix(in srgb, var(--green) var(--alpha-hover), transparent);
   color: color-mix(in srgb, var(--green) 94%, var(--theme-main-text, #fff) 6%);
+}
+
+.decision-option--approve:active {
+  background: color-mix(in srgb, var(--green) var(--alpha-active), transparent);
 }
 
 .decision-option--deny {
@@ -955,25 +972,27 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   color: color-mix(in srgb, var(--red) 82%, var(--theme-main-text, #fff) 18%);
 }
 
-.decision-option--deny:hover::before {
-  background: color-mix(in srgb, var(--red) var(--alpha-hover), transparent);
-}
 .decision-option--deny:hover {
+  background: color-mix(in srgb, var(--red) var(--alpha-hover), transparent);
   color: color-mix(in srgb, var(--red) 94%, var(--theme-main-text, #fff) 6%);
 }
 
+.decision-option--deny:active {
+  background: color-mix(in srgb, var(--red) var(--alpha-active), transparent);
+}
+
 .decision-option-label {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 12.5px;
+  font-weight: 650;
   line-height: 1.35;
 }
 
 .decision-option-desc {
   min-width: 0;
   max-width: none;
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
-  font-size: 11px;
-  line-height: 1.45;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 58%, transparent);
+  font-size: 11.5px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
@@ -997,46 +1016,81 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
 .decision-guide-fields {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 7px;
+  gap: var(--space-2);
   align-items: end;
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
+/* Nested answer field: the card owns the main area, so the input sinks into the
+   card surface instead of faking a second composer. One row at rest, grown by
+   `autoGrowTextarea` as the answer is typed, then scrolling at the five-line
+   cap — the same field the composer-side confirmation panel shows. */
 .decision-guide-input {
   min-width: 0;
   width: 100%;
   resize: none;
-  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
-  color: var(--theme-composer-text);
-  caret-color: var(--theme-composer-text);
-  padding: var(--space-2);
+  background: var(--theme-main-sunken-background, color-mix(in srgb, var(--theme-main-text, #fff) 6%, transparent));
+  color: var(--theme-main-text, var(--text));
+  caret-color: var(--theme-main-text, var(--text));
+  padding: 8px var(--space-2);
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.45;
+  max-height: calc(5 * 1.45em + 16px);
+  overflow-y: auto;
 }
 
 .decision-guide-input:focus {
   outline: none;
 }
 
+.decision-guide-input::placeholder {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 45%, transparent);
+}
+
 .decision-guide-submit {
-  border: 1px solid color-mix(in srgb, var(--blue) 38%, transparent);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--blue) 12%, transparent);
-  color: var(--theme-main-text, var(--text));
-  padding: 7px 9px;
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
+  padding: 7px var(--space-3);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 650;
   line-height: 1.45;
   white-space: nowrap;
   cursor: pointer;
+  transition: filter 160ms ease-out;
+}
+
+.decision-guide-submit:hover:not(:disabled) {
+  filter: brightness(.94);
 }
 
 .decision-guide-submit:disabled {
   cursor: not-allowed;
   opacity: .45;
+}
+
+@media (max-width: 640px) {
+  /* Narrow: the consequence drops below its label instead of squeezing the row,
+     and the answer field stacks over its submit. */
+  .decision-option-group {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .decision-option-desc {
+    grid-column: 2;
+  }
+
+  .decision-guide-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .decision-guide-submit {
+    width: 100%;
+  }
 }
 
 .sub-line-block {
@@ -2069,33 +2123,49 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   opacity: 1;
   pointer-events: auto;
 }
+/* Editing takes the message column's full width. A textarea's intrinsic width
+   is its `cols` (20 by default), which otherwise collapses the bubble into a
+   narrow strip and forces the text into a scroll box. */
+.user-stack--editing {
+  width: 100%;
+}
 .user-bubble.user-bubble--editing {
   display: grid;
   width: 100%;
   max-width: 100%;
-  gap: 6px;
-  padding: 8px;
+  gap: var(--space-2);
 }
+/* Seamless: the editor borrows the bubble's surface and type metrics, so the
+   message keeps its position, size and color when editing starts. */
 .user-bubble.user-bubble--editing .user-edit-input {
-  font-size: 13px;
-  line-height: 1.5;
+  padding: var(--space-1) 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  caret-color: currentColor;
   font-family: var(--font-sans, inherit);
+  font-size: inherit;
+  line-height: inherit;
 }
 .user-edit-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  gap: 2px;
+  gap: var(--space-1);
 }
 .user-edit-button {
+  height: 28px;
   border: 0;
   border-radius: var(--radius-sm);
-  padding: 2px 10px;
+  padding: 0 var(--space-3);
   background: transparent;
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 46%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 65%, transparent);
   font-size: 12px;
+  font-weight: 650;
   font-family: var(--font-sans, inherit);
   cursor: pointer;
-  transition: background-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+  transition: background-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
 }
 .user-edit-button:hover,
 .user-edit-button:focus-visible {
@@ -2104,14 +2174,22 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
 }
 .user-edit-button:active {
   background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-active), transparent);
-  transform: scale(.98);
 }
-.user-edit-button--primary {
-  color: var(--theme-main-text, #fff);
+/* Send is the control-area primary recipe; its paired tokens keep the fill and
+   label readable in every theme, unlike a control text on a main-area bubble. */
+.user-edit-button--primary,
+.user-edit-button--primary:hover,
+.user-edit-button--primary:focus-visible,
+.user-edit-button--primary:active {
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
 }
-.user-edit-button:focus-visible {
-  outline: 2px solid var(--blue, #79bcff);
-  outline-offset: 1px;
+.user-edit-button--primary:hover,
+.user-edit-button--primary:focus-visible {
+  filter: brightness(.94);
+}
+.user-edit-button--primary:active {
+  filter: brightness(.88);
 }
 @media (prefers-reduced-motion: reduce) {
   .user-actions,

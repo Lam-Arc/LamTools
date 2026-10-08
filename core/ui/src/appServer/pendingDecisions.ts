@@ -104,14 +104,12 @@ export function selectPendingCoreDecisions(
       if (seenPartIds.has(part.id)) continue
       seenPartIds.add(part.id)
       const requestId = coreDecisionRequestId(part)
-      const toolName = coreDecisionToolName(part)
-      const isQuestion = isQuestionToolName(toolName)
       const subject = coreDecisionSubject(part, subjectLimit)
       decisions.push({
         partId: part.id,
         requestId,
-        isQuestion,
-        kindLabel: isQuestion ? '提问' : '审批',
+        isQuestion: coreDecisionIsQuestion(part),
+        kindLabel: coreDecisionKindLabel(part),
         subject,
         title: coreDecisionTitle(part),
         detail: supplementalDetail(part, subject),
@@ -203,6 +201,19 @@ export function coreDecisionToolName(part: MessagePart): string {
   const meta = (part.metadata || {}) as Record<string, unknown>
   const candidate = part.toolName || meta.tool_name || meta.name || ''
   return typeof candidate === 'string' ? candidate : String(candidate || '')
+}
+
+/** True for `question` / `ask_clarification` style asks. */
+export function coreDecisionIsQuestion(part: MessagePart): boolean {
+  return isQuestionToolName(coreDecisionToolName(part))
+}
+
+/**
+ * `审批` / `提问` — the ask's category tag. Shared by both surfaces so the
+ * thread card and the answering panel label the same request the same way.
+ */
+export function coreDecisionKindLabel(part: MessagePart): string {
+  return coreDecisionIsQuestion(part) ? '提问' : '审批'
 }
 
 export function coreDecisionIsUnanswered(part: MessagePart): boolean {

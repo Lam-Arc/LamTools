@@ -48,6 +48,7 @@ const sessionSidebarPath = resolve(packageRoot, 'src/styles/session-sidebar.css'
 const themeEditorPath = resolve(packageRoot, 'src/styles/theme-editor.css')
 const subAgentEditorPath = resolve(packageRoot, 'src/components/CoreSubAgentEditor.vue')
 const uiSelectPath = resolve(packageRoot, 'src/components/UiSelect.vue')
+const chatThreadPath = resolve(packageRoot, 'src/components/ChatThread.vue')
 
 const componentPaths = [
   ...filesUnder(resolve(packageRoot, 'src/app')).filter((path) => path.endsWith('.vue')),
@@ -241,5 +242,17 @@ describe('transparent title input exceptions', () => {
       expect(rule.body, `${path} ${rule.selector}`).toMatch(/border:\s*0/)
       expect(rule.body, `${path} ${rule.selector}`).toMatch(/background:\s*transparent/)
     }
+  })
+
+  it('keeps the inline message editor seamless inside the message bubble', () => {
+    const rule = findRule(chatThreadPath, /\.user-bubble\.user-bubble--editing \.user-edit-input/)
+    expect(rule.body).toMatch(/border:\s*0/)
+    expect(rule.body).toMatch(/border-radius:\s*0/)
+    expect(rule.body).toMatch(/background:\s*transparent/)
+    expect(rule.body).toMatch(/color:\s*inherit/)
+    expect(rule.body).toMatch(/caret-color:\s*currentColor/)
+    // The bubble sits in the main area: the editor must inherit its text/caret
+    // rather than re-scope to the composer or control token pairs.
+    expect(rule.body).not.toMatch(/--(?:theme|settings)-(?:composer|control)/)
   })
 })

@@ -1786,29 +1786,39 @@ describe('ChatThread process cards', () => {
     }];
 
     const wrapper = mountChatThread( { props: { messages } });
-    const descriptions = wrapper.findAll('.decision-option-desc');
-    const groups = wrapper.findAll('.decision-option-group');
-    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
-    const cardRule = source.match(/\.decision-card\s*\{[^}]+\}/)?.[0] || '';
-    const optionsRule = source.match(/\.decision-options\s*\{[^}]+\}/)?.[0] || '';
-    const optionRule = source.match(/\.decision-option\s*\{[^}]+\}/)?.[0] || '';
-    const approveRule = source.match(/\.decision-option--approve\s*\{[^}]+\}/)?.[0] || '';
-    const denyRule = source.match(/\.decision-option--deny\s*\{[^}]+\}/)?.[0] || '';
+    const descriptions = wrapper.findAll('.decision-option-desc')
+    const indexes = wrapper.findAll('.decision-option-index')
+    const groups = wrapper.findAll('.decision-option-group')
+    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8')
+    const cardRule = source.match(/\.decision-card\s*\{[^}]+\}/)?.[0] || ''
+    const pendingRule = source.match(/\.decision-card--pending\s*\{[^}]+\}/)?.[0] || ''
+    const optionsRule = source.match(/\.decision-options\s*\{[^}]+\}/)?.[0] || ''
+    const optionRule = source.match(/\.decision-option\s*\{[^}]+\}/)?.[0] || ''
+    const indexRule = source.match(/\.decision-option-index\s*\{[^}]+\}/)?.[0] || ''
+    const approveRule = source.match(/\.decision-option--approve\s*\{[^}]+\}/)?.[0] || ''
+    const denyRule = source.match(/\.decision-option--deny\s*\{[^}]+\}/)?.[0] || ''
 
-    expect(descriptions).toHaveLength(2);
-    expect(groups).toHaveLength(2);
-    expect(descriptions.every(description => !description.element.closest('button'))).toBe(true);
-    expect(cardRule).toContain('background: transparent');
-    expect(cardRule).toContain('box-shadow: none');
-    expect(cardRule).toContain('#b49a60');
-    expect(source).not.toContain('.decision-card--pending {\n  border-left-color: color-mix(in srgb, var(--blue)');
-    expect(optionsRule).toContain('display: grid');
-    expect(optionsRule).toContain('grid-template-columns: minmax(0, 1fr)');
-    expect(optionRule).toContain('border: 0');
-    expect(optionRule).toContain('background: transparent');
-    expect(optionRule).toContain('justify-content: flex-start');
-    expect(approveRule).toContain('var(--green)');
-    expect(denyRule).toContain('var(--red)');
+    expect(descriptions).toHaveLength(2)
+    expect(groups).toHaveLength(2)
+    expect(descriptions.every(description => !description.element.closest('button'))).toBe(true)
+    // The numbered marker is copy too: it labels the row, clicking it decides nothing.
+    expect(indexes.map(index => index.text())).toEqual(['1', '2'])
+    expect(indexes.every(index => !index.element.closest('button'))).toBe(true)
+    // The waiting card is a card — bordered, rounded, on a raised surface — and
+    // keeps its own attention tone for the pending state.
+    expect(cardRule).toContain('border-radius: var(--radius)')
+    expect(cardRule).toContain('var(--theme-main-soft-background')
+    expect(cardRule).toContain('#b49a60')
+    expect(pendingRule).toContain('var(--decision-attention)')
+    expect(indexRule).toContain('font-variant-numeric: tabular-nums')
+    expect(source).not.toContain('.decision-card--pending {\n  border-left-color: color-mix(in srgb, var(--blue)')
+    expect(optionsRule).toContain('display: grid')
+    expect(optionsRule).toContain('grid-template-columns: minmax(0, 1fr)')
+    expect(optionRule).toContain('border: 0')
+    expect(optionRule).toContain('background: transparent')
+    expect(optionRule).toContain('justify-content: flex-start')
+    expect(approveRule).toContain('var(--green)')
+    expect(denyRule).toContain('var(--red)')
 
     await wrapper.find('.decision-card-title').trigger('click');
     await wrapper.find('.decision-card-detail').trigger('click');

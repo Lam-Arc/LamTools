@@ -11,9 +11,10 @@
 
       <!-- User message -->
       <div v-else-if="msg.role === 'user'" class="user-row">
-        <div class="user-stack">
+        <div class="user-stack" :class="{ 'user-stack--editing': editingMessageId === msg.id }">
           <div v-if="editingMessageId === msg.id" class="user-bubble user-bubble--editing">
             <AutoTextarea
+              ref="editInputRef"
               v-model="editDraft"
               class="user-edit-input"
               :min-rows="2"
@@ -592,12 +593,15 @@
                   >
                     <div class="decision-card-head">
                       <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                      <span class="decision-card-title">{{ decisionTitle(group.part) }}</span>
+                      <CircleHelp v-else class="decision-card-icon" :size="15" :stroke-width="2" aria-hidden="true" />
+                      <span class="decision-card-kind">{{ decisionKindLabel(group.part) }}</span>
                       <span v-if="decisionStatusLabel(group.part)" class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
                     </div>
+                    <p class="decision-card-title">{{ decisionTitle(group.part) }}</p>
                     <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
-                    <div v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
-                      <div v-for="option in decisionOptions(group.part)" :key="option.id" class="decision-option-group">
+                    <ol v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
+                      <li v-for="(option, index) in decisionOptions(group.part)" :key="option.id" class="decision-option-group">
+                        <span class="decision-option-index" aria-hidden="true">{{ index + 1 }}</span>
                         <button
                           type="button"
                           class="decision-option"
@@ -610,16 +614,17 @@
                           <span class="decision-option-label">{{ option.label }}</span>
                         </button>
                         <span v-if="option.description" class="decision-option-desc">{{ option.description }}</span>
-                      </div>
-                    </div>
+                      </li>
+                    </ol>
                     <details v-if="canGuideDecision(group.part)" class="decision-guide">
                       <summary class="decision-guide-toggle">其他处理方式</summary>
                       <div class="decision-guide-fields">
                         <textarea
                           class="decision-guide-input"
+                          :data-decision-guide="group.part.id"
                           :value="decisionGuideDraft(group.part)"
                           placeholder="说明希望如何处理…"
-                          rows="2"
+                          rows="1"
                           @input="updateDecisionGuideDraft(group.part, $event)"
                         />
                         <button
@@ -875,11 +880,12 @@
 <script setup lang="ts">
 import type { CoreAttachment, CoreMessage, MessagePart, ToolArtifact } from '../types'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type DirectiveBinding } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type DirectiveBinding } from 'vue'
 import { gsap } from 'gsap'
 import {
   Brain,
   Check,
+  ChevronDown,
   CircleHelp,
   Copy,
   FilePenLine,
@@ -1925,6 +1931,7 @@ function answerContent(msg: CoreMessage): string {
 
 const editingMessageId = ref('')
 const editDraft = ref('')
+const editInputRef = ref<{ focus: () => void } | null>(null)
 
 /** Extract the turn id from a `{turn_id}:user` message id (queue guide
  *  messages `…:user:guide:…` don't match and are not editable). */
@@ -1953,6 +1960,8 @@ function userActionPayload(msg: CoreMessage): AssistantActionPayload {
 function startEditMessage(msg: CoreMessage) {
   editDraft.value = String(msg.content || '')
   editingMessageId.value = msg.id
+  // 打开编辑即落好光标，不必再点一次输入框
+  void nextTick(() => editInputRef.value?.focus())
 }
 
 function cancelEditMessage() {
@@ -3403,6 +3412,7 @@ function updateDecisionGuideDraft(part: MessagePart, event: Event): void {
     ...decisionGuideDrafts.value,
     [part.id]: target?.value || '',
   }
+  autoGrowTextarea(target)
 }
 
 function submitDecisionGuide(part: MessagePart): void {
@@ -3421,6 +3431,13 @@ function submitDecisionGuide(part: MessagePart): void {
     ...decisionGuideDrafts.value,
     [part.id]: '',
   }
+  // The cleared field shrinks back to its resting row.
+  void nextTick(() => {
+    const inputs = rootEl.value?.querySelectorAll<HTMLTextAreaElement>('.decision-guide-input') || []
+    for (const input of inputs) {
+      if (input.dataset.decisionGuide === part.id) autoGrowTextarea(input)
+    }
+  })
 }
 
 function processTarget(part: MessagePart): string {

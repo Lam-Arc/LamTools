@@ -73,7 +73,9 @@ export {
 export {
   coreDecisionDetail,
   coreDecisionFacts,
+  coreDecisionIsQuestion,
   coreDecisionIsUnanswered,
+  coreDecisionKindLabel,
   coreDecisionOptionResponse,
   coreDecisionOptions,
   coreDecisionRequestId,

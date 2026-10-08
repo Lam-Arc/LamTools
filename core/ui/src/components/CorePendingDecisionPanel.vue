@@ -46,7 +46,8 @@
       </ul>
 
       <div v-if="active.options.length > 0" class="pending-decision__actions" role="group" aria-label="处理方式">
-        <div v-for="option in active.options" :key="option.id" class="pending-decision__action">
+        <div v-for="(option, index) in active.options" :key="option.id" class="pending-decision__action">
+          <span class="pending-decision__option-index" aria-hidden="true">{{ index + 1 }}</span>
           <button
             type="button"
             class="pending-decision__option"
@@ -62,7 +63,7 @@
       </div>
 
       <div class="pending-decision__guide">
-        <label class="pending-decision__guide-label" :for="guideInputId">用一句话说明要怎么处理</label>
+        <span class="pending-decision__option-index" aria-hidden="true">{{ active.options.length + 1 }}</span>
         <div class="pending-decision__guide-row">
           <textarea
             :id="guideInputId"
@@ -70,9 +71,10 @@
             class="pending-decision__guide-input"
             data-pending-decision-guide
             :value="guideDraft"
-            rows="2"
+            rows="1"
             :disabled="active.submitting"
-            placeholder="例如：换个只读的方式，不要动这个目录"
+            aria-label="用一句话说明要怎么处理"
+            placeholder="输入你的回答…"
             @input="updateGuideDraft"
             @keydown="onGuideKeydown"
           />
@@ -83,10 +85,15 @@
             :disabled="active.submitting || !guideDraft.trim()"
             @click="submitGuide"
           >
-            发送引导
+            发送
           </button>
         </div>
       </div>
+
+      <p class="pending-decision__hint">
+        <Info class="pending-decision__hint-icon" :size="13" :stroke-width="2" aria-hidden="true" />
+        <span>点击选项直接提交；也可以写下你的处理方式，回车或点「发送」。</span>
+      </p>
 
       <p v-if="!channelReady" class="pending-decision__notice" role="alert">
         与运行时的确认通道已断开，恢复连接后才能提交选择。
@@ -110,8 +117,9 @@
  * in-thread card emits, so `coreDecisionSelectionPlan` and the approval
  * controller stay the only decision path — no new protocol.
  */
-import { computed, ref, watch } from 'vue'
-import { CircleHelp } from 'lucide-vue-next'
+import { computed, nextTick, ref, watch } from 'vue'
+import { CircleHelp, Info } from 'lucide-vue-next'
+import { autoGrowTextarea } from '../helpers/autoGrowTextarea'
 import type { CoreDecisionChoice, CorePendingDecision } from '../appServer/pendingDecisions'
 
 const props = withDefaults(defineProps<{
@@ -162,6 +170,18 @@ watch(
   },
 )
 
+// One row is the resting height; each request keeps its own answer, so the
+// field has to re-measure whenever the panel switches to another request.
+watch(
+  () => active.value?.partId,
+  () => void nextTick(resizeGuideInput),
+  { immediate: true },
+)
+
+function resizeGuideInput() {
+  autoGrowTextarea(guideInputEl.value)
+}
+
 function activate(index: number) {
   if (index < 0 || index >= props.items.length) return
   activeIndex.value = index
@@ -178,6 +198,7 @@ function updateGuideDraft(event: Event) {
   const item = active.value
   if (!item) return
   guideDrafts.value = { ...guideDrafts.value, [item.partId]: target?.value || '' }
+  autoGrowTextarea(target)
 }
 
 function onGuideKeydown(event: KeyboardEvent) {
@@ -204,6 +225,7 @@ function clearGuideDraft() {
   const next = { ...guideDrafts.value }
   delete next[item.partId]
   guideDrafts.value = next
+  void nextTick(resizeGuideInput)
 }
 
 function decide(item: CorePendingDecision, option: CoreDecisionChoice) {
@@ -233,7 +255,7 @@ function submitGuide() {
   display: grid;
   gap: var(--space-2);
   min-width: 0;
-  padding: var(--space-3) var(--space-4) var(--space-1);
+  padding: var(--space-2) var(--space-4) var(--space-1);
 }
 
 .pending-decision__head {
@@ -265,6 +287,8 @@ function submitGuide() {
   white-space: nowrap;
 }
 
+/* Several waiting requests read as a pager strip: numbered entries, the active
+   one stated in words, so the panel never hides which request it is answering. */
 .pending-decision__queue {
   display: flex;
   gap: var(--space-1);
@@ -339,8 +363,8 @@ function submitGuide() {
   margin: 0;
   color: var(--text);
   font-size: 14px;
-  font-weight: 600;
-  line-height: 1.4;
+  font-weight: 650;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
@@ -391,36 +415,45 @@ function submitGuide() {
   font-weight: 600;
 }
 
+/* Numbered choice rows — the same shape as the in-thread card: the marker and
+   the consequence stay outside the click target, so a misread costs nothing. */
 .pending-decision__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
   min-width: 0;
 }
 
 .pending-decision__action {
   display: grid;
-  gap: 2px;
-  flex: 1 1 auto;
+  grid-template-columns: auto fit-content(50%) minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: var(--space-2);
   min-width: 0;
-  max-width: 100%;
 }
 
-/* One recipe for the panel's option buttons: transparent surface, tone in the
-   border/text, hover and active from the shared alpha scale. */
+.pending-decision__option-index {
+  color: color-mix(in srgb, var(--text) 42%, transparent);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+/* One recipe for the panel's choice rows: transparent surface, tone in the
+   text, hover and active from the shared alpha scale. */
 .pending-decision__option {
-  min-height: 34px;
-  padding: 7px var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  min-height: 32px;
+  padding: 4px 7px;
+  border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   font: inherit;
   font-size: 12.5px;
-  font-weight: 600;
+  font-weight: 650;
   text-align: left;
   cursor: pointer;
-  transition: background-color 140ms ease-out, border-color 140ms ease-out;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
 }
 
 .pending-decision__option:hover:not(:disabled) {
@@ -437,7 +470,6 @@ function submitGuide() {
 }
 
 .pending-decision__option.is-approve {
-  border-color: color-mix(in srgb, var(--green) 40%, transparent);
   color: color-mix(in srgb, var(--green) 78%, var(--text));
 }
 
@@ -450,7 +482,6 @@ function submitGuide() {
 }
 
 .pending-decision__option.is-deny {
-  border-color: color-mix(in srgb, var(--red) 40%, transparent);
   color: color-mix(in srgb, var(--red) 78%, var(--text));
 }
 
@@ -470,21 +501,20 @@ function submitGuide() {
 }
 
 .pending-decision__option-desc {
+  min-width: 0;
   color: color-mix(in srgb, var(--text) 55%, transparent);
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
+/* Free-form answer: numbered as the row after the offered choices. */
 .pending-decision__guide {
   display: grid;
-  gap: var(--space-1);
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: var(--space-2);
   min-width: 0;
-}
-
-.pending-decision__guide-label {
-  color: color-mix(in srgb, var(--text) 55%, transparent);
-  font-size: 11.5px;
 }
 
 .pending-decision__guide-row {
@@ -494,6 +524,9 @@ function submitGuide() {
   min-width: 0;
 }
 
+/* One row at rest, grown by `autoGrowTextarea` as the answer is typed, then
+   scrolling at the five-line cap (the global composer textarea hides that
+   overflow, which would silently cut a long explanation). */
 .pending-decision__guide-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -506,8 +539,6 @@ function submitGuide() {
   font-size: 13px;
   line-height: 1.45;
   resize: none;
-  /* Five lines then scroll (the global composer textarea caps height and hides
-     the overflow, which would silently cut a long explanation). */
   max-height: calc(5 * 1.45em + 16px);
   overflow-y: auto;
 }
@@ -523,30 +554,46 @@ function submitGuide() {
 
 .pending-decision__guide-submit {
   flex: 0 0 auto;
-  min-height: 32px;
+  min-height: 30px;
   padding: 6px var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text);
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
   font: inherit;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 650;
   cursor: pointer;
-  transition: background-color 140ms ease-out;
+  transition: filter 140ms ease-out;
 }
 
 .pending-decision__guide-submit:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  filter: brightness(.94);
 }
 
 .pending-decision__guide-submit:active:not(:disabled) {
-  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  filter: brightness(.9);
 }
 
 .pending-decision__guide-submit:disabled {
   opacity: .45;
   cursor: default;
+}
+
+/* What each surface answers: the field is the free-form choice, the hint says
+   so once instead of leaving the user to guess. */
+.pending-decision__hint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  color: color-mix(in srgb, var(--text) 50%, transparent);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.pending-decision__hint-icon {
+  flex: 0 0 auto;
 }
 
 .pending-decision__notice {
@@ -558,17 +605,18 @@ function submitGuide() {
 
 @media (max-width: 640px) {
   .pending-decision {
-    padding: var(--space-3) var(--space-3) var(--space-1);
+    padding: var(--space-2) var(--space-3) var(--space-1);
   }
 
-  /* Full-width, stacked options and guide: a phone must not clip a decision. */
-  .pending-decision__actions {
-    flex-direction: column;
-  }
-
+  /* A phone must not clip a decision: every choice starts a new row, the
+     consequence drops under its label, and the answer field sits above a
+     full-width send button. */
   .pending-decision__action {
-    flex: 1 1 100%;
-    max-width: 100%;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .pending-decision__option-desc {
+    grid-column: 2;
   }
 
   .pending-decision__queue-item {

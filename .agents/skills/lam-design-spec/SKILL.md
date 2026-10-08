@@ -64,6 +64,15 @@ version: 0.1.0
 ### 卡片 / 面板（main area）
 `--radius` · `--space-3` 内边距 · `1px solid var(--theme-main-border)` · `--shadow-md` · 背景 `--theme-main-background`。内部层级用派生 `--theme-main-soft-background` / `-subtle-background` 表达，**禁止嵌套实色卡**；凹陷面（终端/过程详情等下沉面板）用 `--theme-main-sunken-background`（暗色 rgba(0,0,0,.32) / 浅色 rgba(31,31,31,.06)）。
 
+### 询问 / 审批（决策面）
+**一份决策，两个面，同一条配方**：会话内的决策卡（main area，`MessageView.vue` 渲染 + `ChatThread.vue` 样式）与输入区接管的确认面板（composer area，`CorePendingDecisionPanel.vue`）。改一侧必须同步另一侧。
+- **面**：圆角卡片（`--radius`）。会话内用 `--theme-main-soft-background` + `main-text 10%` 边，等待态边框再混 `--decision-attention`（`#b49a60` 派生，等待语义）；确认面板本身在 composer 卡内，**不再叠一层卡**。
+- **头**：`CircleHelp`（等待态 `--decision-attention`；composer 侧 `--orange 70%`）+ 类别（审批 / 提问，`text 58%`），右侧放状态或队列页码。
+- **选项 = 编号行**：`[序号 auto] [标签 fit-content(50%)] [后果 minmax(0,1fr)]`，`align-items: baseline`。序号与后果都在按钮之外——点击只有标签生效，误读不产生动作；标签按钮 `--radius-sm`、无边框，hover/active 走 `--alpha-*`（恒 +4pp）；批准 / 拒绝只染文字（`--green` / `--red`），不做彩色描边。
+- **自由回答行**紧接选项之后并延续同一编号，提交按钮是该面唯一的填充按钮（primary 配方）。该字段**一行起高**（`rows="1"`，`autoGrowTextarea` 随输入增高到 5 行后内部滚动）——它是应答位而非多行编辑器，两个面同此，不套「小字输入 2 行起步」。
+- **≤640px**：后果落到标签下一行（`grid-column: 2`），提交按钮占满整行。
+- 多请求队列用编号条：当前项写明「待你选择」，其余「待处理」。
+
 ### 输入框 — 三类
 1. **标题输入**（main area）：无边框纯文字。`border:0` / `outline:0` / `background:transparent`，focus 也保持无边框（光标闪动即聚焦指示）。重字重（760）、极小内边距（`2px 0`）。取自 `CoreSessionTitleEditor.vue`。
 2. **小字输入**（composer area）：2 行行高起步，随输入增高到最高 5 行，超出 5 行后 `overflow:auto` 滚动；`resize:none`（不可拖拽）；`width:100%`（不横向拓宽）；`white-space:pre-wrap` 自动换行。背景 `color-mix(--theme-composer-background 70%)`，文字 `--theme-composer-text`，边框 `composer-text 12%`。
