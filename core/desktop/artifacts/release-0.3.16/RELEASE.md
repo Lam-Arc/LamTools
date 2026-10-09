@@ -20,10 +20,20 @@ the desktop lifecycle check.
 
 `Sunday_0.3.16_x64-setup.exe` — 58,231,193 bytes,
 `sha256:16bc6aaeb34d77002c9db8880b9b60d2ccd918af03e00d2e7342794e6e964c9a`.
-Release is not draft and not prerelease. The Linux job was still running when
-this record was written, so the Linux assets appear on the release shortly
-after; the product page's Linux links are version-pinned and resolve as soon as
-that job finishes.
+Release is not draft and not prerelease.
+
+CI run `37935145738` finished **completed / success** with all three assets:
+
+| asset | bytes |
+|-------|-------|
+| `Sunday_0.3.16_x64-setup.exe` | 58,231,193 |
+| `Sunday_0.3.16_amd64.AppImage` | 188,885,496 |
+| `Sunday_0.3.16_amd64.deb` | 122,656,912 |
+
+The Linux job finished after the installer was already published, so for a few
+minutes the release carried the installer alone and the product page's
+version-pinned Linux links had nothing to resolve to. That window is closed; the
+links now resolve to the assets above.
 
 ## How the bytes were verified
 
