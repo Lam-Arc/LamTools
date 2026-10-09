@@ -1,0 +1,42 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06zidcin2h91c",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "",
+          "ErrorInfo": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-10-09T10:09:09Z",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Success",
+          "InvokeId": "t-hz06zidcin9yy2o",
+          "InvokeRecordStatus": "Finished",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "MjAyNi0xMC0wOVQxMDowOTowN1oKYWN0aXZlCmFjdGl2ZQovdmFyL3d3dy9sYW10b29scy9TdW5kYXktbGF0ZXN0LXg2NC1zZXR1cC5leGU6IE9LCi92YXIvd3d3L2xhbXRvb2xzL1N1bmRheV8wLjMuMTNfeDY0LXNldHVwLmV4ZTogT0sKL3Zhci93d3cvbGFtdG9vbHMvZGVza3RvcC11cGRhdGUuanNvbjogT0sKewogICJ2ZXJzaW9uIjogIjAuMy4xMyIsCiAgImRvd25sb2FkX3VybCI6ICJodHRwczovLzQ3LjExNC40My45OS5uaXAuaW8vZG93bmxvYWRzL1N1bmRheV8wLjMuMTNfeDY0LXNldHVwLmV4ZSIsCiAgInJlbGVhc2VfdXJsIjogImh0dHBzOi8vNDcuMTE0LjQzLjk5Lm5pcC5pby8jZG93bmxvYWQiLAogICJyZWxlYXNlX25vdGVzIjogIlN1bmRheSAwLjMuMTMiLAogICJwdWJsaXNoZWRfYXQiOiAiMjAyNi0xMC0wOVQwODo1ODo0NFoiLAogICJzaGEyNTYiOiAiNjllNjM5OTQ4NTFiYjAxNTI4MzhiM2QzN2Y0NjEyYzlhMDYxMTU3ZjEwNTk0YzZhNjA1MjdhNzgyZWI1MjQwOSIsCiAgInNpemUiOiA1ODE5MTU0OAp9CjEgL3Jvb3QvLnNzaC9hdXRob3JpemVkX2tleXMKYWJzZW50IC92YXIvd3d3L2xhbXRvb2xzL1N1bmRheS1sYXRlc3QteDY0LXNldHVwLTAuMy4xMy1idWlsZDEtYmVmb3JlLXJlcHVibGlzaC0yMDI2MTAwOS5leGUKYWJzZW50IC92YXIvdG1wL1N1bmRheS1kZXNrdG9wLTAuMy4xMy0yMDI2MTAwOS1yZXB1Ymxpc2gudXBsb2FkLmV4ZQphYnNlbnQgL3Zhci90bXAvU3VuZGF5LWRlc2t0b3AtMC4zLjEzLTIwMjYxMDA5LXJlcHVibGlzaC5kZXNrdG9wLXVwZGF0ZS5qc29uCjIwMjYtMTAtMDlUMTA6MDk6MDhaCg==",
+          "Repeats": 1,
+          "StartTime": "2026-10-09T10:09:08Z",
+          "StopTime": "",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A12023-562A-557A-807A-B0E8BD8AF84D"
+}

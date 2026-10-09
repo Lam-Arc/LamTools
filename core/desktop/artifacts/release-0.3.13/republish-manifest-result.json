@@ -1,0 +1,42 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06zide9wwvk74",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "",
+          "ErrorInfo": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-10-09T10:09:41Z",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Success",
+          "InvokeId": "t-hz06zide9x6v5kw",
+          "InvokeRecordStatus": "Finished",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "MjAyNi0xMC0wOVQxMDowOTo0MFoKL3Zhci90bXAvU3VuZGF5LWRlc2t0b3AtMC4zLjEzLTIwMjYxMDA5LXJlcHVibGlzaC5kZXNrdG9wLXVwZGF0ZS5qc29uOiBPSwovdmFyL3d3dy9sYW10b29scy9TdW5kYXktbGF0ZXN0LXg2NC1zZXR1cC5leGU6IE9LCi92YXIvd3d3L2xhbXRvb2xzL2Rlc2t0b3AtdXBkYXRlLmpzb24udG1wOiBPSwovdmFyL3d3dy9sYW10b29scy9kZXNrdG9wLXVwZGF0ZS5qc29uOiBPSwp7CiAgInZlcnNpb24iOiAiMC4zLjEzIiwKICAiZG93bmxvYWRfdXJsIjogImh0dHBzOi8vNDcuMTE0LjQzLjk5Lm5pcC5pby9kb3dubG9hZHMvU3VuZGF5XzAuMy4xM194NjQtc2V0dXAuZXhlIiwKICAicmVsZWFzZV91cmwiOiAiaHR0cHM6Ly80Ny4xMTQuNDMuOTkubmlwLmlvLyNkb3dubG9hZCIsCiAgInJlbGVhc2Vfbm90ZXMiOiAiU3VuZGF5IDAuMy4xMyIsCiAgInB1Ymxpc2hlZF9hdCI6ICIyMDI2LTEwLTA5VDEwOjA5OjA0WiIsCiAgInNoYTI1NiI6ICI4MWE5ZGMwMDI4NDI2NGZkN2RmNDM5MzAyMTJiZTFjOTVlMzNjOWQwNTJiYTJlNzU1MmY0MGE2MjVkNmViMzgzIiwKICAic2l6ZSI6IDU3OTI4OTM2Cn0KMjAyNi0xMC0wOVQxMDowOTo0MFoK",
+          "Repeats": 1,
+          "StartTime": "2026-10-09T10:09:40Z",
+          "StopTime": "",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A12023-D6F6-52C4-827E-C60892222EAD"
+}

@@ -1,0 +1,9 @@
+{
+  "installer": "E:\\LamTools\\release\\desktop\\Sunday_0.3.13_x64-setup.exe",
+  "bytes": 57928936,
+  "sha256": "81a9dc00284264fd7df43930212be1c95e33c9d052ba2e7552f40a625d6eb383",
+  "build": "second build of 0.3.13 (local package.ps1, guidance fix, version unchanged)",
+  "target": "root@47.114.43.99:/var/tmp/Sunday-desktop-0.3.13-20261009-republish.upload.exe",
+  "staged": "/var/tmp/Sunday-desktop-0.3.13-20261009-republish.upload.exe",
+  "returncode": 0
+}
