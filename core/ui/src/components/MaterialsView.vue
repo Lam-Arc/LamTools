@@ -143,9 +143,20 @@
           @keydown.enter.prevent="open(item)"
           @contextmenu="openMenu($event, item)"
         >
-          <div class="material-thumb" :data-kind="inferredKind(item.kind, item.name)">
-            <img v-if="thumbs.get(item.artifact_id)" :src="thumbs.get(item.artifact_id)" :alt="item.name" loading="lazy" />
-            <component v-else :is="kindIcon(item.kind, item.name)" :size="30" :stroke-width="1.5" aria-hidden="true" />
+          <div
+            class="material-thumb"
+            :class="{ 'material-thumb--cover': !thumbFor(item) }"
+            :data-kind="inferredKind(item.kind, item.name)"
+            :data-cover="coverStyle(item.kind, item.name)"
+          >
+            <img v-if="thumbFor(item)" :src="thumbFor(item)" :alt="item.name" loading="lazy" />
+            <template v-else>
+              <component :is="kindIcon(item.kind, item.name)" class="material-cover-icon" :size="28" :stroke-width="1.5" aria-hidden="true" />
+              <span class="material-cover-ext">{{ coverLabel(item) }}</span>
+            </template>
+            <span v-if="thumbFor(item) && isVideoArtifact(item)" class="material-thumb-play" aria-hidden="true">
+              <Play :size="11" :stroke-width="2.2" />
+            </span>
             <span class="library-status material-status" :data-artifact-status="artifactStatus(item)">{{ statusLabel(item) }}</span>
             <button
               class="material-check"
@@ -247,7 +258,9 @@
  * MaterialsView — 资料库的「资料」分区：项目里进出的文件（用户 / 中间产物 / 产物）。
  *
  * 版式对标 ChatGPT 的资料库：大标题 + 右侧一整条工具、药丸筛选页签、卡片墙
- * （真实缩略图或类型图标、文件名、修改时间、⋯ 菜单、悬停勾选）、一句占用实话。
+ * （预览图、文件名、修改时间、⋯ 菜单、悬停勾选）、一句占用实话。预览图有字节
+ * 就取字节——图片直接当图，视频解出首帧当图；取不到就自绘一张带类型色的封面
+ * （见 material-cover），不再一律是一枚灰图标。
  * 取数与推导全部来自 artifacts/model.ts 与右栏成果库同一份判断，不另立一套。
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -258,6 +271,7 @@ import {
   LayoutGrid,
   List,
   MoreHorizontal,
+  Play,
   Plus,
   Search,
   Star,
@@ -268,17 +282,21 @@ import type { LamToolsTransport } from '../transport'
 import { copyText } from '../helpers/clipboard'
 import { useLibraryZoom } from '../composables/useLibraryZoom'
 import { openContextMenu, type ContextMenuEntry } from './context-menu'
+import { extractVideoPoster } from '../artifacts/poster'
 import {
   absoluteArtifactPath,
   artifactHttpPath,
   artifactStatus,
+  coverStyle,
   extractArtifactRows,
+  fileExtension,
   folderName,
   folderOf,
   folderParent,
   inferredKind,
   isArtifactSignal,
   isThumbnailable,
+  isVideoArtifact,
   kindIcon,
   kindLabel,
   mediaGroup,
@@ -325,6 +343,10 @@ const uploading = ref(false)
 const thumbs = ref<Map<string, string>>(new Map())
 const actionError = ref('')
 let fetchRevision = 0
+/** 缩略图代次：换项目或卸载时 +1，让还在路上的取图结果作废，不落进新一面墙。 */
+let thumbRevision = 0
+/** 视频首帧要先把整段字节解出来，太大的视频不值得为一枚封面占住内存。 */
+const MAX_POSTER_BYTES = 48 * 1024 * 1024
 
 /* ---- 卡片墙缩放：Ctrl+滚轮增减，资料与方案共用一档 ---- */
 const { zoom, onZoomWheel } = useLibraryZoom()
@@ -367,35 +389,73 @@ async function reload(): Promise<void> {
   }
 }
 
-/* ---- 缩略图：只在有实体字节的图片上取一次，卸载时全部释放 ---- */
+/* ---- 缩略图：图片直接取字节，视频解出首帧；都只在实体存在时取一次，卸载时全部释放 ---- */
 async function loadThumbs(): Promise<void> {
   const projectId = props.projectId
   const transport = props.transport
   if (!projectId || !transport) return
+  const revision = thumbRevision
   for (const item of items.value) {
-    if (!isThumbnailable(item) || thumbs.value.has(item.artifact_id)) continue
+    if (revision !== thumbRevision) return
+    if (thumbs.value.has(item.artifact_id)) continue
+    const video = isVideoArtifact(item)
+    if (!video && !isThumbnailable(item)) continue
     const path = artifactHttpPath(projectId, item)
     if (!path) continue
     try {
       const response = await transport.request<{ status: number; headers: Record<string, string>; body: Uint8Array }>({
         kind: 'http', method: 'GET', path,
+        // 视频要整段取回来才能解出首帧，给它比默认 30 秒宽裕一点的时间。
+        timeoutMs: video ? 60_000 : undefined,
       })
+      if (revision !== thumbRevision) return
       if (response.status < 200 || response.status >= 300) continue
-      const url = URL.createObjectURL(new Blob([Uint8Array.from(response.body)], {
+      const bytes = Uint8Array.from(response.body)
+      if (video && bytes.byteLength > MAX_POSTER_BYTES) continue
+      const blobUrl = URL.createObjectURL(new Blob([bytes], {
         type: response.headers['content-type'] || item.mime_type || 'application/octet-stream',
       }))
-      const next = new Map(thumbs.value)
-      next.set(item.artifact_id, url)
-      thumbs.value = next
+      try {
+        if (!video) {
+          commitThumb(item.artifact_id, blobUrl)
+          continue
+        }
+        const poster = await extractVideoPoster(blobUrl)
+        if (revision !== thumbRevision) return
+        if (poster) commitThumb(item.artifact_id, poster)
+      } finally {
+        // 首帧已经是一张独立的数据图，视频字节本身随取随放。
+        if (video) URL.revokeObjectURL(blobUrl)
+      }
     } catch {
-      // 取不到缩略图就退回类型图标，不让它挡住整面墙。
+      // 取不到缩略图就退回自绘封面，不让它挡住整面墙。
     }
   }
 }
 
+function commitThumb(artifactId: string, url: string): void {
+  const next = new Map(thumbs.value)
+  next.set(artifactId, url)
+  thumbs.value = next
+}
+
 function releaseThumbs(): void {
-  for (const url of thumbs.value.values()) URL.revokeObjectURL(url)
+  thumbRevision += 1
+  for (const url of thumbs.value.values()) {
+    // 视频首帧是 data URL，没有可释放的句柄。
+    if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+  }
   thumbs.value = new Map()
+}
+
+/** 这张卡片此刻的预览图；没有就自绘封面（见 library-surface.css 的 material-cover）。 */
+function thumbFor(item: ProjectArtifact): string | undefined {
+  return thumbs.value.get(item.artifact_id)
+}
+
+/** 封面下缘那条色带上的字：优先扩展名，没有扩展名就用类型名。 */
+function coverLabel(item: ProjectArtifact): string {
+  return fileExtension(item.name) || kindLabel(item.kind, item.name)
 }
 
 onMounted(() => { void reload() })

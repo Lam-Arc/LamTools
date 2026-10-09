@@ -64,6 +64,45 @@ function mountView(rows: unknown[], extra: Record<string, unknown> = {}) {
 const names = (wrapper: ReturnType<typeof mount>) =>
   wrapper.findAll('[data-material]').map(node => node.attributes('data-material'))
 
+/**
+ * jsdom 里没有解码器也没有画布：换一个能按剧本发事件的 <video> 与一张假 canvas，
+ * 让"取首帧"这条路在测试里能真的走完。
+ */
+function stubMedia() {
+  const listeners: Record<string, Array<() => void>> = {}
+  const video = {
+    duration: 12,
+    videoWidth: 1280,
+    videoHeight: 720,
+    currentTime: 0,
+    muted: false,
+    playsInline: false,
+    preload: '',
+    src: '',
+    created: false,
+    addEventListener: (type: string, handler: () => void) => { (listeners[type] ||= []).push(handler) },
+    removeAttribute: () => undefined,
+    load: () => undefined,
+    fire: (type: string) => { for (const handler of listeners[type] || []) handler() },
+  }
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: () => ({ drawImage: () => undefined }),
+    toDataURL: () => 'data:image/jpeg;base64,frame',
+  }
+  const original = document.createElement.bind(document)
+  const spy = vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+    if (tag === 'video') {
+      video.created = true
+      return video as unknown as HTMLElement
+    }
+    if (tag === 'canvas') return canvas as unknown as HTMLElement
+    return original(tag)
+  })
+  return { video, restore: () => spy.mockRestore() }
+}
+
 describe('MaterialsView', () => {
   it('shows the usage line, every pill tab and the cards', async () => {
     const { wrapper } = mountView([
@@ -282,6 +321,76 @@ describe('MaterialsView', () => {
     expect(wrapper.find('[data-material="a1"] svg').exists()).toBe(true)
     expect(transport.request).toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  it('draws a typed cover instead of a flat grey icon when there is no preview', async () => {
+    const { wrapper } = mountView([
+      artifact({ artifact_id: 'a1', name: '季度报告.pdf', kind: 'pdf', mime_type: 'application/pdf' }),
+      artifact({ artifact_id: 'a2', name: '片头.mp4', kind: 'video', mime_type: 'video/mp4' }),
+    ])
+    await settle()
+
+    // 文档类画一页纸：下缘色带写着扩展名。
+    const pdf = wrapper.get('[data-material="a1"] .material-thumb')
+    expect(pdf.attributes('data-cover')).toBe('page')
+    expect(pdf.classes()).toContain('material-thumb--cover')
+    expect(pdf.get('.material-cover-ext').text()).toBe('PDF')
+
+    // 音视频类画圆底图标：扩展名是图标下的小徽标。
+    const video = wrapper.get('[data-material="a2"] .material-thumb')
+    expect(video.attributes('data-cover')).toBe('media')
+    expect(video.get('.material-cover-ext').text()).toBe('MP4')
+    wrapper.unmount()
+  })
+
+  it('reads the type from the extension when the record only says "file"', async () => {
+    const { wrapper } = mountView([
+      artifact({ artifact_id: 'a1', name: '路演.pptx', kind: 'file', mime_type: 'application/octet-stream' }),
+      artifact({ artifact_id: 'a2', name: '宣传片.mp4', kind: 'file', mime_type: 'application/octet-stream' }),
+    ])
+    await settle()
+
+    expect(wrapper.get('[data-material="a1"] .material-thumb').attributes('data-kind')).toBe('presentation')
+    expect(wrapper.get('[data-material="a1"] .material-cover-ext').text()).toBe('PPTX')
+    // 认得出是视频，才轮得到首帧那条路。
+    expect(wrapper.get('[data-material="a2"] .material-thumb').attributes('data-kind')).toBe('video')
+    wrapper.unmount()
+  })
+
+  it('paints a video with its first frame and marks it as playable', async () => {
+    const media = stubMedia()
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:clip') })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const videoTransport = {
+      request: vi.fn(async () => ({
+        status: 200, headers: { 'content-type': 'video/mp4' }, body: new Uint8Array([1, 2, 3]),
+      })),
+    } as unknown as LamToolsTransport
+
+    const { wrapper } = mountView(
+      [artifact({ artifact_id: 'v1', name: '片头.mp4', kind: 'video', mime_type: 'video/mp4' })],
+      { transport: videoTransport },
+    )
+    try {
+      await vi.waitFor(() => expect(media.video.created).toBe(true))
+      media.video.fire('loadeddata')
+      media.video.fire('seeked')
+      await vi.waitFor(() => expect(wrapper.find('.material-thumb img').exists()).toBe(true))
+
+      expect(wrapper.get('.material-thumb img').attributes('src')).toBe('data:image/jpeg;base64,frame')
+      expect(wrapper.find('.material-thumb-play').exists()).toBe(true)
+      expect(wrapper.find('.material-cover-icon').exists()).toBe(false)
+      // 视频字节只借来解一帧，解完立刻放掉，不留着一整段视频的内存。
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:clip')
+    } finally {
+      media.restore()
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreate })
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevoke })
+      wrapper.unmount()
+    }
   })
 
   it('explains an empty library and offers the upload', async () => {

@@ -8,6 +8,7 @@ import hashlib
 import os
 import tempfile
 import threading
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -30,6 +31,28 @@ from lamtools_core.tool.workspace import (
 DEFAULT_MAX_LIST_ITEMS = 100
 DEFAULT_MAX_TEXT_LENGTH = 50_000
 DEFAULT_MAX_SEARCH_RESULTS = 50
+# Search scans used to run inline on the backend event loop, so one unbounded
+# walk of a multi-GB workspace froze every RPC — Stop included — and no timeout
+# could fire because the loop itself was blocked.  Scans now run in a worker
+# thread under a hard entry + wall-clock budget, and content matching reads each
+# file with a byte cap instead of loading it whole.
+DEFAULT_MAX_SEARCH_SCAN_ENTRIES = 100_000
+DEFAULT_SEARCH_TIME_BUDGET_SECONDS = 20.0
+DEFAULT_MAX_SEARCH_FILE_BYTES = 2_000_000
+# Slack above the in-thread budget before the awaiting side gives up on a worker
+# stuck inside an uninterruptible filesystem call (dead network share, slow
+# device).  The worker thread is abandoned; it cannot be preempted.
+SEARCH_TIMEOUT_SLACK_SECONDS = 5.0
+
+SCAN_BUDGET_NOTE = (
+    "[... scan stopped early after visiting {visited} entries within the {budget:g}s budget; "
+    "results are incomplete — narrow 'path' or 'pattern' and retry]"
+)
+SCANNED_NOTHING_FOUND = (
+    "No matches found within the scan budget after visiting {visited} entries; "
+    "the workspace was not fully searched — narrow 'path' or 'pattern' and retry"
+)
+SKIPPED_FILES_NOTE = "[... {count} files skipped (binary or larger than {limit} bytes)]"
 
 AccessOutsideWorkdir = bool | Callable[[], bool]
 
@@ -68,6 +91,31 @@ _FILE_LOCKS_GUARD = threading.Lock()
 #: Upper bound on the lock table so a long-lived process touching many distinct
 #: paths cannot grow it without limit (2026-09-25 审计 P3).
 _MAX_FILE_LOCKS = 512
+
+
+class ScanBudget:
+    """Bound a filesystem walk by visited entries and wall-clock time.
+
+    A workspace is not a trusted size.  Without a budget, a pattern that matches
+    nothing (or a tree far larger than the result cap) walks every entry there
+    is; the caller cannot tell a slow scan from a hung one.  Workers consult the
+    budget between entries so an exhausted scan returns what it has instead of
+    running to completion.
+    """
+
+    def __init__(self, max_entries: int, time_budget_seconds: float) -> None:
+        self._max_entries = max(1, int(max_entries))
+        self._deadline = time.monotonic() + max(0.1, float(time_budget_seconds))
+        self.visited = 0
+        self.exhausted = False
+
+    def visit(self) -> bool:
+        """Count one visited entry; ``False`` once the budget is spent."""
+        self.visited += 1
+        if self.visited > self._max_entries or time.monotonic() > self._deadline:
+            self.exhausted = True
+            return False
+        return True
 
 
 def read_file_bytes(path: str | Path) -> bytes:
@@ -306,14 +354,38 @@ class WorkspaceReadOnlyTools:
         max_list_items: int = DEFAULT_MAX_LIST_ITEMS,
         max_text_length: int = DEFAULT_MAX_TEXT_LENGTH,
         max_search_results: int = DEFAULT_MAX_SEARCH_RESULTS,
+        max_search_scan_entries: int = DEFAULT_MAX_SEARCH_SCAN_ENTRIES,
+        search_time_budget_seconds: float = DEFAULT_SEARCH_TIME_BUDGET_SECONDS,
+        max_search_file_bytes: int = DEFAULT_MAX_SEARCH_FILE_BYTES,
         allow_access_outside_workdir: AccessOutsideWorkdir = False,
     ) -> None:
         self._work_root = Path(work_root).resolve()
         self._max_list_items = max_list_items
         self._max_text_length = max_text_length
         self._max_search_results = max_search_results
+        self._max_search_scan_entries = max(1, int(max_search_scan_entries))
+        self._search_time_budget_seconds = max(0.1, float(search_time_budget_seconds))
+        self._max_search_file_bytes = max(1, int(max_search_file_bytes))
         self._allow_access_outside_workdir = allow_access_outside_workdir
         self._resource_roots: set[Path] = set()
+
+    def _scan_budget(self) -> ScanBudget:
+        return ScanBudget(self._max_search_scan_entries, self._search_time_budget_seconds)
+
+    def _search_timeout_seconds(self) -> float:
+        return self._search_time_budget_seconds + SEARCH_TIMEOUT_SLACK_SECONDS
+
+    def _scan_budget_note(self, budget: ScanBudget) -> str:
+        return SCAN_BUDGET_NOTE.format(visited=budget.visited, budget=self._search_time_budget_seconds)
+
+    def _search_timeout_result(self, call: ToolCall, path_str: str) -> ToolResult:
+        seconds = self._search_timeout_seconds()
+        return _failed_result(
+            call,
+            "search_timeout",
+            f"Search aborted after {seconds:g}s without finishing the scan of {path_str}. "
+            "The workspace is too large for an unbounded scan; narrow 'path' or 'pattern' and retry.",
+        )
 
     def add_resource_root(self, path: str | Path) -> None:
         self._resource_roots.add(Path(path).resolve())
@@ -352,7 +424,10 @@ class WorkspaceReadOnlyTools:
 
         try:
             async with file_lock(resolved):
-                raw_bytes = read_file_bytes(resolved)
+                # Disk reads of an arbitrarily large file belong off the event
+                # loop; the read itself is unbounded by design (tools report the
+                # full-file hash), so blocking here would freeze every RPC.
+                raw_bytes = await asyncio.to_thread(read_file_bytes, resolved)
         except FileNotFoundError:
             return _failed_result(call, "file_not_found", f"File not found: {path_str}")
         except OSError as exc:
@@ -362,7 +437,8 @@ class WorkspaceReadOnlyTools:
         document_metadata: dict[str, Any] = {}
         image_data_url: str | None = None
         try:
-            normalized = normalize_document(
+            normalized = await asyncio.to_thread(
+                normalize_document,
                 resolved,
                 workspace_root=self._work_root,
                 max_text_length=self._max_text_length,
@@ -482,28 +558,32 @@ class WorkspaceReadOnlyTools:
         if not resolved.is_dir():
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Not a directory: {path_str}")
 
-        try:
+        # Listing plus a stat per entry is synchronous disk work; a directory
+        # with a very large number of entries must not occupy the event loop.
+        def collect() -> list[str]:
             entries = sorted(resolved.iterdir())
+            total = len(entries)
+            limited = entries[: self._max_list_items]
+            collected: list[str] = []
+            for entry in limited:
+                if entry.is_dir():
+                    collected.append(f"{entry.name}/")
+                else:
+                    try:
+                        stat = entry.stat()
+                        size = format_file_size(stat.st_size)
+                        mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+                        collected.append(f"{entry.name}\t{size}\t{mtime}")
+                    except OSError:
+                        collected.append(f"{entry.name}")
+            if total > self._max_list_items:
+                collected.append(f"[... {total - self._max_list_items} more entries]")
+            return collected
+
+        try:
+            lines = await asyncio.to_thread(collect)
         except OSError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"List error: {exc}")
-
-        total = len(entries)
-        limited = entries[: self._max_list_items]
-        lines: list[str] = []
-        for entry in limited:
-            if entry.is_dir():
-                lines.append(f"{entry.name}/")
-            else:
-                try:
-                    stat = entry.stat()
-                    size = format_file_size(stat.st_size)
-                    mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
-                    lines.append(f"{entry.name}\t{size}\t{mtime}")
-                except OSError:
-                    lines.append(f"{entry.name}")
-
-        if total > self._max_list_items:
-            lines.append(f"[... {total - self._max_list_items} more entries]")
 
         return ToolResult(call_id=call.id, name=call.name, status="ok", content="\n".join(lines))
 
@@ -523,37 +603,82 @@ class WorkspaceReadOnlyTools:
         if not search_root.is_dir():
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Not a directory: {path_str}")
 
+        budget = self._scan_budget()
         try:
-            matches = []
-            total_seen = 0
-            for root, dirs, files in os.walk(search_root):
-                dirs[:] = [d for d in dirs if d not in SKIP_SEARCH_DIRS]
-                for fname in files:
-                    fpath = Path(root) / fname
-                    try:
-                        rel_to_search = fpath.relative_to(search_root).as_posix()
-                    except ValueError:
-                        continue
-                    if Path(rel_to_search).match(pattern) or Path(fname).match(pattern):
-                        total_seen += 1
-                        if len(matches) < self._max_search_results:
-                            try:
-                                matches.append(fpath.relative_to(access_root).as_posix())
-                            except ValueError:
-                                continue
-                if len(matches) >= self._max_search_results and total_seen > self._max_search_results:
-                    break
+            matches, total_seen = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._scan_files_sync, search_root, access_root, pattern, budget
+                ),
+                timeout=self._search_timeout_seconds(),
+            )
+        except TimeoutError:
+            return self._search_timeout_result(call, path_str)
         except OSError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Search error: {exc}")
 
-        lines = sorted(matches)
+        lines = list(matches)
         if total_seen > self._max_search_results:
             lines.append(f"[... at least {total_seen - self._max_search_results} more matches]")
+        if budget.exhausted:
+            lines.append(self._scan_budget_note(budget))
+        metadata = {
+            "scanned_entries": budget.visited,
+            "scan_exhausted": budget.exhausted,
+            "match_count": len(matches),
+        }
 
         if not lines:
-            return ToolResult(call_id=call.id, name=call.name, status="ok", content="No files found")
+            content = (
+                SCANNED_NOTHING_FOUND.format(visited=budget.visited)
+                if budget.exhausted
+                else "No files found"
+            )
+            return ToolResult(
+                call_id=call.id, name=call.name, status="ok", content=content, metadata=metadata
+            )
 
-        return ToolResult(call_id=call.id, name=call.name, status="ok", content="\n".join(lines))
+        return ToolResult(
+            call_id=call.id, name=call.name, status="ok", content="\n".join(lines), metadata=metadata
+        )
+
+    def _scan_files_sync(
+        self,
+        search_root: Path,
+        access_root: Path,
+        pattern: str,
+        budget: ScanBudget,
+    ) -> tuple[list[str], int]:
+        """Walk ``search_root`` for matching names until the result or scan cap.
+
+        Runs in a worker thread: the walk is synchronous and must never occupy
+        the event loop.
+        """
+        matches: list[str] = []
+        total_seen = 0
+        for root, dirs, files in os.walk(search_root):
+            dirs[:] = [d for d in dirs if d not in SKIP_SEARCH_DIRS]
+            if not budget.visit():
+                break
+            for fname in files:
+                if not budget.visit():
+                    break
+                fpath = Path(root) / fname
+                try:
+                    rel_to_search = fpath.relative_to(search_root).as_posix()
+                except ValueError:
+                    continue
+                if Path(rel_to_search).match(pattern) or Path(fname).match(pattern):
+                    total_seen += 1
+                    if len(matches) < self._max_search_results:
+                        try:
+                            matches.append(fpath.relative_to(access_root).as_posix())
+                        except ValueError:
+                            continue
+            if budget.exhausted:
+                break
+            if len(matches) >= self._max_search_results and total_seen > self._max_search_results:
+                break
+        return sorted(matches), total_seen
 
     async def search_content(self, call: ToolCall) -> ToolResult:
         pattern = call.arguments.get("pattern", "") if isinstance(call.arguments, dict) else ""
@@ -571,51 +696,105 @@ class WorkspaceReadOnlyTools:
         if not search_root.is_file() and not search_root.is_dir():
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Not a directory: {path_str}")
 
-        def iter_search_files() -> Any:
-            if search_root.is_file():
-                yield search_root
-                return
-            for root, dirs, files in os.walk(search_root):
-                dirs[:] = [d for d in dirs if d not in SKIP_SEARCH_DIRS]
-                for fname in files:
-                    yield Path(root) / fname
-
-        results: list[str] = []
-        count = 0
+        budget = self._scan_budget()
         try:
-            for fpath in iter_search_files():
-                if count >= self._max_search_results:
-                    break
-                try:
-                    resolved = fpath.resolve()
-                    if not is_within_path(resolved, access_root):
-                        continue
-                    text = fpath.read_text(encoding="utf-8", errors="ignore")
-                    for line_no, line in enumerate(text.splitlines(), 1):
-                        if pattern in line:
-                            try:
-                                rel = fpath.relative_to(access_root)
-                            except ValueError:
-                                continue
-                            results.append(f"{rel.as_posix()}:{line_no}: {line.strip()}")
-                            count += 1
-                            if count >= self._max_search_results:
-                                break
-                except (OSError, UnicodeDecodeError):
-                    continue
-                if count >= self._max_search_results:
-                    break
+            results, skipped_files = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._scan_content_sync, search_root, access_root, pattern, budget
+                ),
+                timeout=self._search_timeout_seconds(),
+            )
+        except TimeoutError:
+            return self._search_timeout_result(call, path_str)
         except OSError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Search error: {exc}")
 
+        metadata = {
+            "scanned_entries": budget.visited,
+            "scan_exhausted": budget.exhausted,
+            "match_count": len(results),
+            "skipped_files": skipped_files,
+        }
         if not results:
-            return ToolResult(call_id=call.id, name=call.name, status="ok", content="No matches found")
+            content = (
+                SCANNED_NOTHING_FOUND.format(visited=budget.visited)
+                if budget.exhausted
+                else "No matches found"
+            )
+            if skipped_files:
+                content += "\n" + self._skipped_files_note(skipped_files)
+            return ToolResult(
+                call_id=call.id, name=call.name, status="ok", content=content, metadata=metadata
+            )
 
         content = "\n".join(results)
         if len(content) > self._max_text_length:
             content = content[: self._max_text_length] + "\n[... truncated]"
+        if budget.exhausted:
+            content += "\n" + self._scan_budget_note(budget)
+        if skipped_files:
+            content += "\n" + self._skipped_files_note(skipped_files)
 
-        return ToolResult(call_id=call.id, name=call.name, status="ok", content=content)
+        return ToolResult(
+            call_id=call.id, name=call.name, status="ok", content=content, metadata=metadata
+        )
+
+    def _iter_search_files(self, search_root: Path) -> Any:
+        if search_root.is_file():
+            yield search_root
+            return
+        for root, dirs, files in os.walk(search_root):
+            dirs[:] = [d for d in dirs if d not in SKIP_SEARCH_DIRS]
+            for fname in files:
+                yield Path(root) / fname
+
+    def _skipped_files_note(self, skipped_files: int) -> str:
+        return SKIPPED_FILES_NOTE.format(count=skipped_files, limit=self._max_search_file_bytes)
+
+    def _scan_content_sync(
+        self,
+        search_root: Path,
+        access_root: Path,
+        pattern: str,
+        budget: ScanBudget,
+    ) -> tuple[list[str], int]:
+        """Match ``pattern`` line by line until the result or scan cap.
+
+        Runs in a worker thread.  Each file is read with a byte cap so a single
+        multi-GB file can neither exhaust memory nor stall the scan; binary
+        files are skipped rather than decoded into garbage matches.
+        """
+        results: list[str] = []
+        count = 0
+        skipped_files = 0
+        for fpath in self._iter_search_files(search_root):
+            if not budget.visit():
+                break
+            try:
+                resolved = fpath.resolve()
+                if not is_within_path(resolved, access_root):
+                    continue
+                with fpath.open("rb") as stream:
+                    data = stream.read(self._max_search_file_bytes + 1)
+                if len(data) > self._max_search_file_bytes or b"\0" in data:
+                    skipped_files += 1
+                    continue
+                text = data.decode("utf-8", errors="ignore")
+                for line_no, line in enumerate(text.splitlines(), 1):
+                    if pattern in line:
+                        try:
+                            rel = fpath.relative_to(access_root)
+                        except ValueError:
+                            continue
+                        results.append(f"{rel.as_posix()}:{line_no}: {line.strip()}")
+                        count += 1
+                        if count >= self._max_search_results:
+                            break
+            except (OSError, UnicodeDecodeError):
+                continue
+            if count >= self._max_search_results:
+                break
+        return results, skipped_files
 
 
 def make_write_file_handler(
@@ -1054,9 +1233,17 @@ async def edit_file_tool(
 
 __all__ = [
     "DEFAULT_MAX_LIST_ITEMS",
+    "DEFAULT_MAX_SEARCH_FILE_BYTES",
     "DEFAULT_MAX_SEARCH_RESULTS",
+    "DEFAULT_MAX_SEARCH_SCAN_ENTRIES",
     "DEFAULT_MAX_TEXT_LENGTH",
+    "DEFAULT_SEARCH_TIME_BUDGET_SECONDS",
+    "SCAN_BUDGET_NOTE",
+    "SCANNED_NOTHING_FOUND",
+    "SEARCH_TIMEOUT_SLACK_SECONDS",
+    "SKIPPED_FILES_NOTE",
     "SKIP_SEARCH_DIRS",
+    "ScanBudget",
     "WorkspaceReadOnlyTools",
     "atomic_write_bytes",
     "compute_sha256",

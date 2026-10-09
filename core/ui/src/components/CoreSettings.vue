@@ -1000,16 +1000,18 @@
             </form>
           </div>
         </div>
-      </div>
-
-    <CoreConfirmDialog
-      :open="pendingCloseSettings"
-      title="关闭设置？"
-      detail="有未保存的修改"
-      @cancel="pendingCloseSettings = false"
-      @confirm="confirmCloseSettings"
-    />
-</template>
+      <!-- 必须留在根节点内部：整版界面把 full-area-view / full-area-wide 挂在
+           这个组件的根元素上，多出一个并列根节点 Vue 会静默丢弃这些属性，
+           设置页就再也铺不满主卡、也滚不动（0.3.11 起的回归）。 -->
+      <CoreConfirmDialog
+        :open="pendingCloseSettings"
+        title="关闭设置？"
+        detail="有未保存的修改"
+        @cancel="pendingCloseSettings = false"
+        @confirm="confirmCloseSettings"
+      />
+  </div>
+  </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'

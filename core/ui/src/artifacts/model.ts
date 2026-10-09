@@ -37,6 +37,11 @@ export const KIND_ICONS: Record<string, LucideIcon> = {
 const EXTENSION_KINDS: Array<[string[], string]> = [
   [['xlsx', 'xls', 'ods', 'csv', 'tsv'], 'spreadsheet'],
   [['pptx', 'ppt', 'odp'], 'presentation'],
+  [['pdf'], 'pdf'],
+  [['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'heic'], 'image'],
+  [['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v'], 'video'],
+  [['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac'], 'audio'],
+  [['md', 'markdown', 'txt', 'log', 'rtf', 'doc', 'docx', 'odt'], 'document'],
   [[
     'ts', 'tsx', 'js', 'jsx', 'vue', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'hpp', 'cs',
     'rb', 'php', 'sh', 'ps1', 'sql', 'html', 'css', 'scss', 'json', 'jsonc', 'yaml', 'yml', 'toml', 'xml',
@@ -229,6 +234,34 @@ export function isThumbnailable(item: ProjectArtifact): boolean {
   const mime = (item.mime_type || '').toLowerCase()
   if (mime.startsWith('image/') && !mime.includes('svg')) return true
   return inferredKind(item.kind, item.name) === 'image'
+}
+
+/**
+ * 视频：字节不能直接当缩略图，要先解出首帧再画成图，所以它和图片分开判断，
+ * 也不占 `isThumbnailable` 这个名字（那个名字说的是"字节即图"）。
+ */
+export function isVideoArtifact(item: ProjectArtifact): boolean {
+  if (item.missing || item.deleted) return false
+  const mime = (item.mime_type || '').toLowerCase()
+  if (mime.startsWith('video/')) return true
+  return inferredKind(item.kind, item.name) === 'video'
+}
+
+/** 文件名的扩展名（大写，最多 5 位；再长就不是能塞进徽标的信息了）。 */
+export function fileExtension(name: string): string {
+  const match = /\.([A-Za-z0-9]{1,5})$/.exec(name || '')
+  return match ? match[1].toUpperCase() : ''
+}
+
+export type MaterialCoverStyle = 'page' | 'media'
+
+/**
+ * 没有真实预览时自绘封面的画法：文档类画一页纸（下缘一条类型色带），
+ * 音视频与图片类画一枚圆底图标。两者共用同一份 kind 推导，不另立判断。
+ */
+export function coverStyle(kind: string, name = ''): MaterialCoverStyle {
+  const resolved = inferredKind(kind, name)
+  return resolved === 'image' || resolved === 'video' || resolved === 'audio' ? 'media' : 'page'
 }
 
 /**

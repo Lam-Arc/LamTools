@@ -104,7 +104,9 @@
 .library-surface .material-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .library-surface .material-card--selected { border-color: color-mix(in srgb, var(--blue) 60%, transparent); }
 
-/* 内容区：有缩略图就看图，没有就一枚类型图标落在这个凹面上。 */
+/* 内容区：有缩略图就看图；没有就自绘一张封面——文档类是一页纸（下缘一条类型
+   色带写着扩展名），音视频与图片类是一枚圆底图标。类型色由下面的 data-kind
+   映射给出，普通文件保持中性，不再一律是清一色的灰图标。 */
 .library-surface .material-thumb {
   position: relative;
   display: flex;
@@ -115,9 +117,67 @@
   border-radius: calc(var(--radius) - 2px);
   background: var(--theme-main-sunken-background, color-mix(in srgb, var(--text) 6%, transparent));
   color: color-mix(in srgb, var(--text) 52%, transparent);
+  --cover-accent: color-mix(in srgb, var(--text) 58%, transparent);
 }
 .library-surface .material-thumb img { display: block; width: 100%; height: auto; }
 .library-surface .material-status { position: absolute; top: var(--space-1); right: var(--space-1); }
+
+/* 类型色：语义色固定、不随主题走；没列到的类型（普通文件）保持中性。 */
+.library-surface .material-thumb[data-kind='pdf'] { --cover-accent: var(--red); }
+.library-surface .material-thumb[data-kind='presentation'] { --cover-accent: var(--orange); }
+.library-surface .material-thumb[data-kind='spreadsheet'] { --cover-accent: var(--green); }
+.library-surface .material-thumb[data-kind='document'] { --cover-accent: var(--blue); }
+.library-surface .material-thumb[data-kind='code'] { --cover-accent: var(--purple); }
+.library-surface .material-thumb[data-kind='image'] { --cover-accent: var(--green); }
+.library-surface .material-thumb[data-kind='video'] { --cover-accent: var(--purple); }
+.library-surface .material-thumb[data-kind='audio'] { --cover-accent: var(--orange); }
+
+.library-surface .material-thumb--cover { min-height: 92px; }
+.library-surface .material-cover-icon { color: var(--cover-accent); }
+.library-surface .material-cover-ext {
+  color: var(--cover-accent);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+/* 音视频与图片：圆底图标居中，扩展名当小徽标缀在下面。 */
+.library-surface .material-thumb[data-cover='media'] { flex-direction: column; gap: var(--space-1); }
+.library-surface .material-thumb[data-cover='media'] .material-cover-icon {
+  box-sizing: content-box;
+  padding: var(--space-2);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--cover-accent) 14%, transparent);
+}
+.library-surface .material-thumb[data-cover='media'] .material-cover-ext {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--cover-accent) 16%, transparent);
+}
+/* 文档类：图标落在纸上，纸的下缘整条类型色带就是这本书的封面题签。 */
+.library-surface .material-thumb[data-cover='page'] { padding-bottom: 22px; }
+.library-surface .material-thumb[data-cover='page'] .material-cover-ext {
+  position: absolute;
+  inset: auto 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  background: color-mix(in srgb, var(--cover-accent) 20%, transparent);
+}
+/* 视频封面上的播放标记：和状态签同一配方的小圆片，压在缩略图左下角。 */
+.library-surface .material-thumb-play {
+  position: absolute;
+  left: var(--space-1);
+  bottom: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  color: color-mix(in srgb, var(--text) 82%, transparent);
+}
 
 /* 悬停出现的勾选圈：多选批量操作入口，选中后常驻。 */
 .library-surface .material-check {

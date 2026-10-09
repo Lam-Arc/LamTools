@@ -848,6 +848,22 @@ logs.
 - An agent loop without a step budget needs an evidence-based stop. Removing a round cap without the desktop's repeated-result guard trades a truncation bug for an unbounded one.
 - Anything the client fetches at runtime belongs in the release steps and in public verification, not only in the repository: the update manifest was bumped locally for ten releases and never published, because no step generated, uploaded or checked it.
 
+## 无界同步扫描会冻结整个后端（2026-10-09）
+
+- `search_files` / `search_content` 直接在事件循环上跑同步 `os.walk` / `read_text`，且没有任何预算：模式
+  匹配不到任何文件时它会走完整棵树，内容搜索还会把每个文件整份读进内存。在用户报告的 40 GB 工程里，
+  表现不是"某个工具慢"而是**后端整体失去响应**：UI 先弹出 30 s RPC 超时，Stop 送不进去（`turn.cancel`
+  是 async，排在同一个被占住的循环上），`_execute_tool` 的 `asyncio.wait_for` 也永远不会到期——Agent
+  既拿不到结果也拿不到错误。**同步代码一旦落在事件循环上，超时、取消、进度会同时失效；"卡住还是慢慢
+  在跑"必须按这个前提判断，只盯工具自身超时是查不出来的。**
+- 文件系统工具一律在工作线程里跑（`asyncio.to_thread`），并自带预算与明示：访问条目数 + 墙钟时间上限、
+  单文件读取带上限、二进制跳过；扫不完时回报"结果不完整，收窄 path/pattern"而不是假装 `No files found`；
+  外面再套一层 `wait_for` 兜住卡在不可中断系统调用（网络盘/慢设备）里的线程。`read_file` / `list_dir`
+  同样移出事件循环——大文件读取本来就没有上限，被卡住的是整个后端而不是这一次调用。
+- 实测（5 000 个文件 + 400 MB 单文件，默认预算）：`search_content` 4.1 s 返回，期间循环照常调度 261 次
+  10 ms tick，Python 峰值内存 4.5 MB，超大文件按 skipped 上报。
+
+
 ## Policy numbers are a parity layer too (2026-09-24)
 
 - Comparing the two engines' *defaults* is not comparing their behaviour: both retry policies carried identical defaults (10 attempts, delays 1,1,2,5,5, jitter, 360 s, 120 s idle), while the mobile call site clamped pre-header connection failures to two attempts — so a few seconds of mobile-network trouble ended a turn the desktop would have retried ten times. A values-to-values diff would have declared parity; the miss is only visible when the decision table ("which error class gets which budget") is laid out per class on both sides.

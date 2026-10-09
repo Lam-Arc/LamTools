@@ -354,7 +354,6 @@
         <CoreSettings
           v-else-if="showSettings"
             class="full-area-view full-area-wide"
-            :band-actions="appRuntime.platform !== 'mobile'"
           :models="availableModels"
           :providers="availableProviders"
           :model-groups="modelGroups"

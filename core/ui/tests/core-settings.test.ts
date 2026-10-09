@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import CoreSettings from '../src/components/CoreSettings.vue'
+import CoreConfirmDialog from '../src/components/CoreConfirmDialog.vue'
 import { DEFAULT_THEME } from '../src/helpers/theme'
 
 const models = [{
@@ -31,6 +32,7 @@ function mountSettings(
     catalogView?: 'group' | 'provider'
     commandShellPlatform?: 'windows' | 'linux' | 'mobile' | 'web' | 'other'
   } = {},
+  attrs: Record<string, unknown> = {},
 ) {
   return mount(CoreSettings, {
     props: {
@@ -43,6 +45,7 @@ function mountSettings(
       theme: structuredClone(DEFAULT_THEME),
       requestRpc,
     },
+    attrs,
     // CoreSettings teleports its whole content to body; stub Teleport so
     // wrapper queries hit the rendered tree (see core-project-components.test.ts)
     global: { stubs: { Teleport: true } },
@@ -542,5 +545,22 @@ describe('Shared Core App settings entry', () => {
     expect(source).toContain("if (appRuntime.platform === 'mobile') return 'mobile'")
     expect(source).toContain("return 'windows' as const")
     expect(source).toContain("return 'linux' as const")
+  })
+
+  /**
+   * 整版界面（LamToolsApp）把 full-area-view / full-area-wide 挂在设置页组件上：
+   * 模板一旦出现第二个并列根节点，Vue 会静默丢弃这些属性，设置页就再也铺不满
+   * 主卡、也滚不动——0.3.11 起就是这么丢掉整版布局的（设置页只剩内容栏宽度、
+   * 内容高度，弹层被挤在小框里）。
+   */
+  it('lets the host full-area layout classes reach the settings root', () => {
+    const wrapper = mountSettings(undefined, {}, { class: 'full-area-view full-area-wide' })
+
+    const root = wrapper.element as HTMLElement
+    expect(root.className).toContain('full-area-column')
+    expect(root.className).toContain('full-area-view')
+    expect(root.className).toContain('full-area-wide')
+    // 关闭确认框留在设置页内部才不影响根节点唯一性。
+    expect(wrapper.findComponent(CoreConfirmDialog).exists()).toBe(true)
   })
 })

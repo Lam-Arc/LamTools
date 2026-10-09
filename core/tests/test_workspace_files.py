@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -419,6 +421,130 @@ async def test_search_tools_treat_null_optional_path_as_workspace_root(tmp_path)
     assert files.content == "note.md"
     assert content.status == "ok"
     assert "note.md:1: searchable text" in content.content
+
+
+@pytest.mark.asyncio
+async def test_search_files_stops_at_the_scan_budget_and_says_incomplete(tmp_path):
+    """A pattern matching nothing must not walk an arbitrarily large tree."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    for index in range(30):
+        (work_root / f"file{index}.txt").write_text("payload\n", encoding="utf-8")
+    tools = WorkspaceReadOnlyTools(work_root, max_search_scan_entries=5)
+
+    result = await tools.search_files(
+        ToolCall(id="budget-files", name="search_files", arguments={"pattern": "*.nomatch"})
+    )
+
+    assert result.status == "ok"
+    assert "scan stopped early" in result.content
+    assert "narrow 'path' or 'pattern'" in result.content
+    assert "No files found" not in result.content
+    assert result.metadata["scan_exhausted"] is True
+    assert result.metadata["scanned_entries"] <= 6
+
+
+@pytest.mark.asyncio
+async def test_search_content_stops_at_the_scan_budget_and_says_incomplete(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    for index in range(30):
+        (work_root / f"file{index}.txt").write_text("payload\n", encoding="utf-8")
+    tools = WorkspaceReadOnlyTools(work_root, max_search_scan_entries=5)
+
+    result = await tools.search_content(
+        ToolCall(id="budget-content", name="search_content", arguments={"pattern": "absent-text"})
+    )
+
+    assert result.status == "ok"
+    assert "was not fully searched" in result.content
+    assert "No matches found within the scan budget" in result.content
+    assert result.metadata["scan_exhausted"] is True
+
+
+@pytest.mark.asyncio
+async def test_search_content_skips_oversized_and_binary_files(tmp_path):
+    """One multi-GB file must not be read whole, and binary matches are noise."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    (work_root / "small.txt").write_text("needle here\n", encoding="utf-8")
+    (work_root / "huge.log").write_text("needle" * 200, encoding="utf-8")
+    (work_root / "blob.bin").write_bytes(b"\x00\x01needle\x00\x02")
+    tools = WorkspaceReadOnlyTools(work_root, max_search_file_bytes=64)
+
+    result = await tools.search_content(
+        ToolCall(id="skip-content", name="search_content", arguments={"pattern": "needle"})
+    )
+
+    assert result.status == "ok"
+    assert "small.txt:1: needle here" in result.content
+    assert "huge.log" not in result.content
+    assert "blob.bin" not in result.content
+    assert "2 files skipped" in result.content
+    assert result.metadata["skipped_files"] == 2
+
+
+@pytest.mark.asyncio
+async def test_search_scan_does_not_block_the_event_loop(tmp_path, monkeypatch):
+    """The regression that froze the backend: a slow walk must run off-loop.
+
+    While the tool scans, unrelated async work has to keep making progress;
+    otherwise every RPC — Stop included — stops being serviced.
+    """
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    (work_root / "a.txt").write_text("x\n", encoding="utf-8")
+    tools = WorkspaceReadOnlyTools(work_root)
+
+    def slow_scan(self, search_root, access_root, pattern, budget):
+        time.sleep(0.3)
+        return [], 0
+
+    monkeypatch.setattr(WorkspaceReadOnlyTools, "_scan_files_sync", slow_scan)
+
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    ticker_task = asyncio.create_task(ticker())
+    try:
+        result = await tools.search_files(
+            ToolCall(id="off-loop", name="search_files", arguments={"pattern": "*.py"})
+        )
+    finally:
+        ticker_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await ticker_task
+
+    assert result.status == "ok"
+    assert ticks >= 5, f"event loop stalled during the scan (ticks={ticks})"
+
+
+@pytest.mark.asyncio
+async def test_search_reports_a_timeout_when_a_worker_cannot_finish(tmp_path, monkeypatch):
+    """A worker stuck in an uninterruptible call still returns an agent-visible error."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    tools = WorkspaceReadOnlyTools(work_root, search_time_budget_seconds=0.1)
+
+    def stuck_scan(self, search_root, access_root, pattern, budget):
+        time.sleep(0.6)
+        return [], 0
+
+    monkeypatch.setattr(WorkspaceReadOnlyTools, "_scan_files_sync", stuck_scan)
+    monkeypatch.setattr(workspace_files_module, "SEARCH_TIMEOUT_SLACK_SECONDS", 0.05)
+
+    result = await tools.search_files(
+        ToolCall(id="timeout", name="search_files", arguments={"pattern": "*.py"})
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "search_timeout"
+    assert "narrow 'path' or 'pattern'" in result.error
 
 
 @pytest.mark.asyncio
