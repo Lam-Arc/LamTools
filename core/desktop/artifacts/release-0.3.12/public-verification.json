@@ -1,0 +1,55 @@
+{
+  "checked_at": "2026-10-09T02:28:03Z",
+  "version": "0.3.12",
+  "expected_bytes": 58187338,
+  "expected_sha256": "285e0b2f3e38b320dd342313d33f6949d48f6d975f74f447b8eaee2e0b1429d6",
+  "results": [
+    {
+      "url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.12_x64-setup.exe",
+      "status": 200,
+      "content_length": 58187338,
+      "length_ok": true
+    },
+    {
+      "url": "https://47.114.43.99.nip.io/downloads/Sunday-latest-x64-setup.exe",
+      "status": 200,
+      "content_length": 58187338,
+      "length_ok": true
+    },
+    {
+      "url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.12_x64-setup.exe",
+      "get_bytes": 58187338,
+      "get_sha256": "285e0b2f3e38b320dd342313d33f6949d48f6d975f74f447b8eaee2e0b1429d6",
+      "complete": true,
+      "matches_local": true
+    },
+    {
+      "url": "https://47.114.43.99.nip.io/downloads/desktop-update.json",
+      "status": 200,
+      "content_type": "application/json",
+      "bytes": 349,
+      "sha256": "1ac866a41dab56e8092219249b150388df16487ce3578ebab24f8b899213dbd8",
+      "body": {
+        "version": "0.3.12",
+        "download_url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.12_x64-setup.exe",
+        "release_url": "https://47.114.43.99.nip.io/#download",
+        "release_notes": "Sunday 0.3.12",
+        "published_at": "2026-10-09T02:27:30Z",
+        "sha256": "285e0b2f3e38b320dd342313d33f6949d48f6d975f74f447b8eaee2e0b1429d6",
+        "size": 58187338
+      },
+      "version_matches": true,
+      "sha_matches": true,
+      "size_matches": true,
+      "published_sha_matches": true,
+      "download_url_status": 200,
+      "download_url_length": 58187338,
+      "download_url_ok": true
+    },
+    {
+      "url": "https://47.114.43.99.nip.io/",
+      "status": 200,
+      "site_len": 1012
+    }
+  ]
+}

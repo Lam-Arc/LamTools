@@ -1,0 +1,9 @@
+{
+  "installer": "E:\\LamTools\\release\\desktop\\Sunday_0.3.12_x64-setup.exe",
+  "bytes": 58187338,
+  "sha256": "285e0b2f3e38b320dd342313d33f6949d48f6d975f74f447b8eaee2e0b1429d6",
+  "source": "GitHub Release asset for tag v0.3.12 (CI build) fetched on the official server; size and digest checked against the asset's own metadata, then the file is installed and verified locally before it is uploaded from that copy",
+  "target": "root@47.114.43.99:/var/tmp/Sunday-desktop-0.3.12-20261009.upload.exe",
+  "staged": "/var/tmp/Sunday-desktop-0.3.12-20261009.upload.exe",
+  "returncode": 0
+}
