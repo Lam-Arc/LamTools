@@ -1,0 +1,17 @@
+2026-10-09T11:13:40Z
+/var/tmp/Sunday-desktop-0.3.15-20261009.upload.exe: OK
+{"version": "0.3.15", "download_url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.15_x64-setup.exe", "release_url": "https://47.114.43.99.nip.io/#download", "release_notes": "Sunday 0.3.15", "published_at": "2026-10-09T11:13:41Z", "sha256": "4267eac33b34698f85875f1c9e464194748d8e30ec0e381d3f10bbddac0efbed", "size": 58232805}
+768dd4032beeabcfc2a445a323d89e9b5e6eacb8b40b3bab3889f30a3c38b5b5  /var/www/lamtools/desktop-update.json
+{
+  "version": "0.3.15",
+  "download_url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.15_x64-setup.exe",
+  "release_url": "https://47.114.43.99.nip.io/#download",
+  "release_notes": "Sunday 0.3.15",
+  "published_at": "2026-10-09T11:13:41Z",
+  "sha256": "4267eac33b34698f85875f1c9e464194748d8e30ec0e381d3f10bbddac0efbed",
+  "size": 58232805
+}
+HTTP/2 200 
+content-length: 349
+no stages
+2026-10-09T11:13:41Z

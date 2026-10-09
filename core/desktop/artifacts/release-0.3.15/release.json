@@ -1,0 +1,19 @@
+{
+  "version": "0.3.15",
+  "tag": "v0.3.15",
+  "installer_path": "E:/LamTools/release/desktop/Sunday_0.3.15_x64-setup.exe",
+  "installer_sha256": "4267eac33b34698f85875f1c9e464194748d8e30ec0e381d3f10bbddac0efbed",
+  "installer_size": 58232805,
+  "installer_source": "GitHub Release asset for tag v0.3.15 (CI build) fetched on the official server; size and digest checked against the asset's own metadata, then installed and verified on the public channel before it is published",
+  "old_version": "0.3.14",
+  "old_latest_sha256": "c421d41eb452ae80c7d79a6a5fb06e4ab36c2ea1750c46774bd6c4ff4f3c1dc8",
+  "old_latest_size": 58216595,
+  "date_tag": "20261009",
+  "authorized_keys_lines": 1,
+  "authorized_keys_note": "Owner's Aliyun key pair (skp-bp19aylqsh2502ocgm9c) is pre-existing; this release restores the count to this baseline.",
+  "github_release": "https://github.com/Lam-Arc/LamTools/releases/tag/v0.3.15",
+  "site_name": "0.3.15-mobile-0.1.48-20261009",
+  "previous_site": "0.3.14-mobile-0.1.48-20261009",
+  "tarball_sha256": "f84b53ebf330dd5e37b354288597279d7deaf439c182777127373b096be49b35",
+  "note": "second round of the update-loop experiment: the same build as 0.3.14 plus the version bump, published so an installed 0.3.14 has something to update to and the rail entry, the card and the silent install can be exercised end to end"
+}

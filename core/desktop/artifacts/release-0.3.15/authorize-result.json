@@ -1,0 +1,42 @@
+{
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "CommandId": "c-hz06zij2z8f9reo",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Dropped": 0,
+          "ErrorCode": "ExitCodeNonzero",
+          "ErrorInfo": "The command execution exit code is not zero.",
+          "ExitCode": 1,
+          "FinishedTime": "2026-10-09T11:13:26Z",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "InvocationStatus": "Failed",
+          "InvokeId": "t-hz06zij2z8rr94w",
+          "InvokeRecordStatus": "Finished",
+          "Launcher": "",
+          "OssOutputDelivery": "",
+          "OssOutputErrorCode": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputStatus": "",
+          "OssOutputUri": "",
+          "Output": "MjAyNi0xMC0wOVQxMToxMzoyNVoKYWN0aXZlCmFjdGl2ZQo=",
+          "Repeats": 1,
+          "StartTime": "2026-10-09T11:13:25Z",
+          "StopTime": "",
+          "Tags": {
+            "Tag": []
+          },
+          "TerminationMode": "Process",
+          "Username": "root"
+        }
+      ]
+    },
+    "NextToken": "",
+    "PageNumber": 1,
+    "PageSize": 10,
+    "TotalCount": 1
+  },
+  "RequestId": "01A1205E-3240-53B4-B859-B9D6596FA1D2"
+}
