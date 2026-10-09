@@ -1,0 +1,19 @@
+2026-10-09T13:28:04Z
+{"download_url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.16_x64-setup.exe", "published_at": "2026-10-09T13:28:06Z", "release_notes": "Sunday 0.3.16", "release_url": "https://47.114.43.99.nip.io/#download", "sha256": "16bc6aaeb34d77002c9db8880b9b60d2ccd918af03e00d2e7342794e6e964c9a", "size": 58231193, "version": "0.3.16"}
+--- read back over the public origin ---
+{
+  "version": "0.3.16",
+  "download_url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.16_x64-setup.exe",
+  "release_url": "https://47.114.43.99.nip.io/#download",
+  "release_notes": "Sunday 0.3.16",
+  "published_at": "2026-10-09T13:28:06Z",
+  "sha256": "16bc6aaeb34d77002c9db8880b9b60d2ccd918af03e00d2e7342794e6e964c9a",
+  "size": 58231193
+}
+
+installer http=200 bytes=58231193
+latest    http=200 bytes=58231193
+-rw-r--r-- 2 root root 58231193 Oct  9 21:27 /var/www/lamtools/Sunday_0.3.16_x64-setup.exe
+-rwxr-xr-x 2 root root 58232805 Oct  9 19:12 /var/www/lamtools/Sunday-latest-x64-setup-0.3.15-before-0.3.16-20261009.exe
+-rw-r--r-- 2 root root 58231193 Oct  9 21:27 /var/www/lamtools/Sunday-latest-x64-setup.exe
+2026-10-09T13:28:15Z
