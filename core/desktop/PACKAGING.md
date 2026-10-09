@@ -111,10 +111,16 @@ CI 固定使用 Inno Setup 6.6.1，避免编译器版本漂移导致产物或
   关不掉无窗口的后端，却仍报告已处理），所以安装步骤开始时会自行结束安装目录内的
   Sunday 进程：只匹配可执行文件路径位于 `{app}` 下的进程，不会误伤同名但装在别处的
   程序。
-- 应用内「立即安装」（`update.install`）同样先让旧程序退出：安装程序以脱离后端作业
-  对象的方式启动（`JOB_OBJECT_LIMIT_BREAKAWAY_OK` + `CREATE_BREAKAWAY_FROM_JOB`，
-  否则它会随应用退出被作业对象一起结束），随后应用经 `quit_app` 走一次真正的退出，
-  而不是只收进托盘。安装程序确认启动之后应用才退出；启动失败保留应用并报错。
+- 应用内更新（`update.install`）连两点一起做：安装程序以脱离后端作业对象的方式启动
+  （`JOB_OBJECT_LIMIT_BREAKAWAY_OK` + `CREATE_BREAKAWAY_FROM_JOB`，否则它会随应用退出
+  被作业对象一起结束），随后应用经 `quit_app` 走一次真正的退出，而不是只收进托盘。
+  安装程序确认启动之后应用才退出；启动失败保留应用并报错。
+- 应用内更新用的是**静默档**：`/SILENT /NORESTART /AUTORESTART=1 /LOG=<更新目录>`。
+  `[Run]` 里那条「启动 Sunday」带 `skipifsilent`（用户双击安装包时才有意义），所以
+  静默那趟由 `CurStepChanged(ssDone)` 里读 `/AUTORESTART=1` 补一次自启动——更新到最后
+  剩一个关着的窗口，等于没装完。CI 与本地验收用 `scripts/verify-desktop-lifecycle.ps1`
+  的这一用例守着（静默安装后应用必须自己回来），公网通道另由
+  `scripts/verify-update-install.ps1` 走一遍。
 - 应用收到系统级关闭请求（注销、关机）时走完整退出流程，不再只收进托盘，随后由
   后端作业对象保证不留孤儿进程（`windows_close_request`）。普通关闭窗口仍只收进
   托盘。

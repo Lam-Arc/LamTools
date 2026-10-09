@@ -20,6 +20,7 @@ from lamtools_core.app.operation_catalog import (
 from lamtools_core.update.checker import check_update
 from lamtools_core.update.installer import (
     UpdateInstallError,
+    cancel_download,
     progress_snapshot,
     run_installer,
     start_download,
@@ -80,6 +81,16 @@ def build_update_operation_catalog() -> OperationCatalog:
             payload={"ok": True, **snapshot, "message": _download_message(snapshot)},
         )
 
+    async def update_cancel(request: OperationRequest) -> OperationResult:
+        # Cancelling is a normal end to a download, not an error: the card asks,
+        # the worker stops between chunks, and the state becomes 'cancelled'.
+        del request
+        snapshot = await asyncio.to_thread(cancel_download)
+        return OperationResult(
+            name="update.cancel",
+            payload={"ok": True, **snapshot, "message": _download_message(snapshot)},
+        )
+
     async def update_install(request: OperationRequest) -> OperationResult:
         del request  # no payload: the verified file is host-held state
         try:
@@ -91,6 +102,7 @@ def build_update_operation_catalog() -> OperationCatalog:
     catalog.register("update.check", update_check)
     catalog.register("update.download", update_download)
     catalog.register("update.status", update_status)
+    catalog.register("update.cancel", update_cancel)
     catalog.register("update.install", update_install)
     return catalog
 
@@ -108,6 +120,8 @@ def _download_message(snapshot: dict[str, Any]) -> str:
         return f"正在下载（{megabytes:.1f} MB）"
     if state == "verified":
         return f"已下载并校验 {snapshot.get('name') or '安装包'}"
+    if state == "cancelled":
+        return "已取消下载"
     if state == "failed":
         return ""
     return ""

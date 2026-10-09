@@ -162,8 +162,7 @@ var
 
 function StripOuterQuotes(Value: String): String;
 begin
-  Result := Trim(Value);
-  if (Length(Result) >= 2) and (Result[1] = '"') and
+  Result := Trim(Value);  if (Length(Result) >= 2) and (Result[1] = '"') and
      (Result[Length(Result)] = '"') then
   begin
     Result := Copy(Result, 2, Length(Result) - 2);
@@ -367,12 +366,33 @@ begin
     IntToStr(ResultCode));
 end;
 
+// 应用内更新走静默安装，而 [Run] 里的「启动 Sunday」带 skipifsilent——那条路
+// 只在用户自己双击安装包时生效。所以应用内更新用 /AUTORESTART=1 明确要求：
+// 装完把 Sunday 重新拉起来。更新到最后剩一个关着的窗口，等于没装完。
+function WantsRestartAfterInstall: Boolean;
+begin
+  Result := ExpandConstant('{param:AUTORESTART|0}') = '1';
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Attempt: Integer;
   Locked: Integer;
   Sample: String;
+  ErrorCode: Integer;
 begin
+  if CurStep = ssDone then
+  begin
+    // 只在静默安装里补这一步：非静默那趟由 [Run] 的 postinstall 负责，
+    // 两条路同时跑会让应用被启动两次。
+    if WantsRestartAfterInstall and WizardSilent then
+    begin
+      Log('Starting Sunday again after the update (/AUTORESTART=1)');
+      ShellExecAsOriginalUser('', ExpandConstant('{app}\{#AppExeName}'), '',
+        ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, ErrorCode);
+    end;
+    Exit;
+  end;
   if CurStep <> ssInstall then
     Exit;
   Locked := 0;

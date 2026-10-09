@@ -75,12 +75,21 @@ function Stop-InstallProcesses {
 }
 
 function Invoke-Installer {
-    param([string]$Label)
+    param(
+        [string]$Label,
+        # 静默档位与附加开关：应用内更新那趟不是 /VERYSILENT，而是 /SILENT
+        # （有进度、无提问）加 /AUTORESTART=1（装完自己把应用拉起来）。
+        [string[]]$Extras = @()
+    )
     New-Item -ItemType Directory -Path $script:setupLogDir -Force | Out-Null
     $log = Join-Path $script:setupLogDir "$Label.log"
     Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue
-    $process = Start-Process -FilePath $script:installer `
-        -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$script:installDir", "/LOG=$log" -PassThru
+    $arguments = if ($Extras.Count -gt 0) {
+        @($Extras) + @("/DIR=$script:installDir", "/LOG=$log")
+    } else {
+        @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$script:installDir", "/LOG=$log")
+    }
+    $process = Start-Process -FilePath $script:installer -ArgumentList $arguments -PassThru
     # A silent run must never wait for input: the log-and-exit behaviour of the
     # locked-file guard is only trustworthy if this call always returns.
     $finished = $process.WaitForExit(300000)
@@ -275,8 +284,27 @@ try {
     Stop-InstallProcesses
     Start-Sleep -Seconds 2
 
-    # ------------------------------------------------------------- 7. uninstall
-    Write-Host "7. uninstall"
+    # -------------------------------- 7. in-app update installs and restarts
+    Write-Host "7. in-app update install (silent + /AUTORESTART=1)"
+    # 应用内更新走的就是这一趟：/SILENT（有进度、没有提问）加 /AUTORESTART=1。
+    # 它是更新流程里唯一没有用户按键兜底的一段——装完必须自己把应用拉回来，
+    # 所以它有资格留在常规验收里，而不是发布时临时试一下。
+    $code = Invoke-Installer 'in-app-update' -Extras @('/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/AUTORESTART=1')
+    Assert-True ($code -eq 0) "the in-app update install succeeded"
+    $restarted = $null
+    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+        Start-Sleep -Seconds 1
+        $restarted = Get-InstallProcesses | Where-Object { $_.Name -eq 'lamcore.exe' } | Select-Object -First 1
+        if ($restarted) { break }
+    }
+    Assert-True ($null -ne $restarted) "the setup started Sunday again by itself (/AUTORESTART=1)"
+    Assert-True ($null -ne (Wait-BackendHealth)) "the restarted application comes up with its backend"
+    Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir '.lam\upgrade-marker.txt')) "the in-app update kept local configuration"
+    Stop-InstallProcesses
+    Start-Sleep -Seconds 2
+
+    # ------------------------------------------------------------- 8. uninstall
+    Write-Host "8. uninstall"
     $uninstaller = Get-ChildItem -LiteralPath $script:installDir -Filter 'unins*.exe' -File | Select-Object -First 1
     Assert-True ($null -ne $uninstaller) "uninstaller is registered"
     $process = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru

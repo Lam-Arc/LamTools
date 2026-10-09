@@ -34,6 +34,13 @@ CHUNK_BYTES = 1 << 20
 #: Generous overall budget: a slow but healthy download must not be aborted.
 DOWNLOAD_TIMEOUT_SECONDS = 1800.0
 
+#: How the in-app install runs the installer: no questions (progress still shows),
+#: no reboot prompt, and the app is started again once the files are in place —
+#: an update that ends with the user staring at a closed window is not finished.
+#: The log lands next to the verified download so a failed install leaves
+#: something to read (the app itself is gone by then).
+INSTALLER_ARGUMENTS = ("/SILENT", "/NORESTART", "/AUTORESTART=1")
+
 #: How the installer is started on Windows. It must outlive this process: the
 #: desktop shell runs the backend inside a job object that kills every member
 #: when the app exits (``create_backend_job``), and the app exits as part of this
@@ -63,6 +70,14 @@ _PROGRESS: dict[str, Any] = {
 
 class UpdateInstallError(RuntimeError):
     """A download or install step that cannot proceed."""
+
+
+class UpdateCancelled(UpdateInstallError):
+    """The running download was cancelled by the caller (not a failure)."""
+
+
+#: Set while a cancel is pending; the download worker checks it between chunks.
+_CANCEL = threading.Event()
 
 
 def download_dir() -> Path:
@@ -100,6 +115,7 @@ def start_download(url: str, sha256: str, file_name: str = "") -> dict[str, Any]
     current = progress_snapshot()
     if current["state"] == "downloading":
         return current
+    _CANCEL.clear()
     _set_progress(state="downloading", received=0, total=0, name="", sha256="", path="", error="")
     threading.Thread(
         target=_download_worker, args=(url, sha256, file_name), daemon=True, name="sunday-update-download"
@@ -107,9 +123,25 @@ def start_download(url: str, sha256: str, file_name: str = "") -> dict[str, Any]
     return progress_snapshot()
 
 
+def cancel_download() -> dict[str, Any]:
+    """Ask the running download to stop and report the state right away.
+
+    The worker checks the flag between chunks, so the transfer stops within one
+    chunk (1 MB) and then removes the partial file through its own cleanup; the
+    state it leaves behind is ``cancelled``, never ``failed``. Cancelling when
+    nothing runs is a no-op rather than an error — the card can be clicked twice.
+    """
+    if progress_snapshot()["state"] != "downloading":
+        return progress_snapshot()
+    _CANCEL.set()
+    return progress_snapshot()
+
+
 def _download_worker(url: str, sha256: str, file_name: str) -> None:
     try:
         result = download_update(url, sha256, file_name)
+    except UpdateCancelled:
+        _set_progress(state="cancelled", error="")
     except UpdateInstallError as exc:
         _set_progress(state="failed", error=str(exc))
     except Exception as exc:  # noqa: BLE001 — the worker must never take the process down
@@ -164,6 +196,8 @@ def download_update(url: str, sha256: str, file_name: str = "") -> dict[str, Any
             _set_progress(received=0, total=declared)
             with open(partial, "wb") as handle:
                 for chunk in response.iter_bytes(CHUNK_BYTES):
+                    if _CANCEL.is_set():
+                        raise UpdateCancelled("下载已取消")
                     if not chunk:
                         continue
                     received += len(chunk)
@@ -172,6 +206,8 @@ def download_update(url: str, sha256: str, file_name: str = "") -> dict[str, Any
                     digest.update(chunk)
                     handle.write(chunk)
                     _set_progress(received=received)
+        if _CANCEL.is_set():
+            raise UpdateCancelled("下载已取消")
         if digest.hexdigest() != expected:
             raise UpdateInstallError("下载的安装包与清单摘要不一致，已丢弃")
         os.replace(partial, target)
@@ -215,8 +251,20 @@ def run_installer(path: str = "") -> dict[str, Any]:
     return {
         "path": str(candidate),
         "quit": True,
-        "message": "已启动安装程序；Sunday 即将退出，安装完成后请重新打开。",
+        "message": "正在安装；Sunday 即将退出，装好后会自动打开。",
     }
+
+
+def installer_arguments(log_path: Path | None = None) -> list[str]:
+    """The switches the in-app install hands the setup.
+
+    ``/LOG`` goes next to the verified download: the app is gone while the
+    installer works, so that file is the only record a failed install leaves.
+    """
+    arguments = list(INSTALLER_ARGUMENTS)
+    if log_path is not None:
+        arguments.append(f"/LOG={log_path}")
+    return arguments
 
 
 def _launch_installer(candidate: Path) -> None:
@@ -229,16 +277,23 @@ def _launch_installer(candidate: Path) -> None:
     run, a test) refuses the breakaway flag, and there the shell hand-off is the
     right answer — so the failure falls back to it instead of losing the update.
     """
+    arguments = installer_arguments(download_dir() / "install-last.log")
     try:
         subprocess.Popen(  # noqa: S603 — the digest was verified before publishing the file
-            [str(candidate)],
+            [str(candidate), *arguments],
             cwd=str(candidate.parent),
             creationflags=INSTALLER_SPAWN_FLAGS,
             close_fds=True,
         )
     except OSError:
         _log.info("Update: detached spawn refused, falling back to the shell hand-off")
-        os.startfile(str(candidate))  # noqa: S606 — digest verified before publishing the file
+        # The shell hand-off takes one command line, so the switches travel as
+        # text; quoting keeps a path with spaces (a temp dir under a user name
+        # often has one) a single argument.
+        os.startfile(  # noqa: S606 — digest verified before publishing the file
+            str(candidate),
+            arguments=" ".join(f'"{item}"' if " " in item else item for item in arguments),
+        )
 
 
 def _reveal(directory: Path) -> None:
@@ -258,9 +313,12 @@ def _user_agent() -> str:
 
 __all__ = [
     "MAX_ARTIFACT_BYTES",
+    "UpdateCancelled",
     "UpdateInstallError",
+    "cancel_download",
     "download_dir",
     "download_update",
+    "installer_arguments",
     "progress_snapshot",
     "run_installer",
     "start_download",

@@ -26,11 +26,14 @@ DIGEST = hashlib.sha256(BODY).hexdigest()
 
 @pytest.fixture(autouse=True)
 def clean_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    """Isolate the verified-path registry and the download directory."""
+    """Isolate the verified-path registry, the progress state and the download dir."""
     installer._VERIFIED.clear()
+    installer._CANCEL.clear()
+    installer._set_progress(state="idle", received=0, total=0, name="", sha256="", path="", error="")
     monkeypatch.setenv("LAMTOOLS_UPDATE_DIR", str(tmp_path / "updates"))
     yield
     installer._VERIFIED.clear()
+    installer._CANCEL.clear()
 
 
 @pytest.fixture()
@@ -132,7 +135,7 @@ def test_run_installer_launches_the_verified_file(
     outcome = run_installer()
 
     assert spawned == [{
-        "argv": [result["path"]],
+        "argv": [result["path"], *installer.installer_arguments(installer.download_dir() / "install-last.log")],
         "cwd": str(Path(result["path"]).parent),
         "creationflags": installer.INSTALLER_SPAWN_FLAGS,
         "close_fds": True,
@@ -140,6 +143,57 @@ def test_run_installer_launches_the_verified_file(
     # The app must exit: the installer replaces the files this process owns.
     assert outcome["quit"] is True
     assert "退出" in outcome["message"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
+def test_the_in_app_install_runs_quietly_and_brings_the_app_back() -> None:
+    """What the in-app update promises: no questions, no reboot prompt, app back.
+
+    A silent install skips the [Run] entry that launches Sunday, so the setup is
+    told explicitly to start it again — otherwise the update ends with the user
+    staring at a closed window. The log travels with it because the app is gone
+    while the installer works.
+    """
+    arguments = installer.installer_arguments(Path("C:/tmp/sunday-update/install-last.log"))
+
+    assert "/SILENT" in arguments
+    assert "/NORESTART" in arguments
+    assert "/AUTORESTART=1" in arguments
+    assert "/LOG=C:\\tmp\\sunday-update\\install-last.log" in arguments or \
+        "/LOG=C:/tmp/sunday-update/install-last.log" in arguments
+
+
+def test_a_cancelled_download_stops_and_leaves_nothing_behind(artifact_server: str) -> None:
+    installer._CANCEL.set()
+    try:
+        with pytest.raises(installer.UpdateCancelled):
+            download_update(artifact_server, DIGEST)
+    finally:
+        installer._CANCEL.clear()
+
+    leftovers = list(installer.download_dir().iterdir())
+    assert leftovers == [], f"a cancelled download left {leftovers} behind"
+    assert str(installer.download_dir() / "sunday-installer.bin") not in installer._VERIFIED
+
+
+def test_the_worker_reports_a_cancel_as_cancelled_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    def cancelled(*_args: object, **_kwargs: object) -> None:
+        raise installer.UpdateCancelled("下载已取消")
+
+    monkeypatch.setattr(installer, "download_update", cancelled)
+
+    installer._download_worker("https://example.com/x.exe", "a" * 64, "x.exe")
+
+    assert installer.progress_snapshot()["state"] == "cancelled"
+
+
+def test_cancelling_when_nothing_runs_is_a_no_op() -> None:
+    """A card can be asked to cancel twice; the second ask must not become an error."""
+    before = installer.progress_snapshot()
+
+    assert installer.cancel_download() == before
+    assert installer._CANCEL.is_set() is False
+    assert installer.progress_snapshot()["state"] == "idle"
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
