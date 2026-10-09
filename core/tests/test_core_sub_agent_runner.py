@@ -1140,3 +1140,70 @@ async def test_kernel_sub_agent_runner_honors_allowed_tools(tmp_path):
     runner2 = KernelSubAgentRunner(work_root=tmp_path, llm_client=llm2, model_id="fake-model")
     await runner2.run(task="inspect the project", agent="worker", allowed_tools=[])
     assert "read_file" in {tool["function"]["name"] for tool in llm2.requests[0].tools or []}
+
+
+# --- 成员＝主代理的受限变体：运行策略必须继承，不得单独拼默认值 ---------------
+
+
+def test_member_loop_policy_inherits_parent_template(tmp_path):
+    """传入父内核已解析的策略对象时，成员内核整份继承（差异只在工具/提示词）。"""
+    from dataclasses import replace
+
+    from lamtools_core.kernel import LoopPolicy
+    from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
+
+    parent_policy = LoopPolicy(
+        context_window_tokens=1_000_000,
+        compact_trigger_tokens=20_000,
+        compact_limit_tokens=12_000,
+        compact_retained_steps=7,
+        compact_limit_ratio=0.55,
+        model_timeout_seconds=123.0,
+        model_retries=4,
+    )
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=None,
+        loop_policy=parent_policy,
+    )
+    assert replace(parent_policy) == runner._member_loop_policy()
+
+
+def test_member_loop_policy_uses_explicit_compaction_knobs(tmp_path):
+    """没有策略对象时，也必须用与主代理相同的显式旋钮，而不是回落到默认比例。"""
+    from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
+
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=None,
+        context_window_tokens=1_000_000,
+        compact_trigger_tokens=20_000,
+        compact_limit_tokens=12_000,
+        compact_retained_steps=7,
+        compact_limit_ratio=0.55,
+    )
+    policy = runner._member_loop_policy()
+    assert policy.compact_trigger_tokens == 20_000
+    assert policy.compact_limit_tokens == 12_000
+    assert policy.compact_retained_steps == 7
+    assert policy.compact_limit_ratio == 0.55
+    assert policy.context_window_tokens == 1_000_000
+    # 超时不再被硬编码为 360：应来自 model_retry.jsonc（或省略由数据类默认值兜底）。
+    from lamtools_core.config.retry_store import load_model_retry_config, loop_policy_overrides
+
+    config_timeout = loop_policy_overrides(load_model_retry_config()).get("model_timeout_seconds")
+    assert policy.model_timeout_seconds == (config_timeout if config_timeout is not None else 360)
+
+
+def test_supervisor_runner_clone_keeps_policy_template(tmp_path):
+    """监督器克隆（成员实际使用的那份 runner）必须保留策略模板与压缩旋钮。"""
+    import asyncio
+
+    from lamtools_core.kernel import LoopPolicy
+    from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
+
+    parent_policy = LoopPolicy(compact_trigger_tokens=9_000, compact_limit_tokens=5_000)
+    runner = KernelSubAgentRunner(work_root=tmp_path, llm_client=None, loop_policy=parent_policy)
+    clone = asyncio.run(runner.create_supervisor_runner())
+    assert clone._loop_policy_template is parent_policy
+    assert clone._member_loop_policy().compact_trigger_tokens == 9_000

@@ -12,8 +12,12 @@ import pytest
 
 from lamtools_core.context_compaction import (
     COMPACTION_PROMPT,
+    USAGE_ANCHOR_METADATA_KEY,
+    USAGE_ANCHOR_SOURCE,
     CompactionExecution,
     ContextCompactionResult,
+    build_usage_anchor,
+    describe_request,
 )
 from lamtools_core.event import CollectingEventSink, CoreEvent, EventSink
 from lamtools_core.app.base_agent import core_events_to_run_items
@@ -4459,6 +4463,183 @@ class TestKernelContextCompaction:
         text = "\n".join(str(message.content) for message in llm.last_request.messages)
         assert "message 1" in text
         assert text.count("[Compacted Context]") == 1
+
+    @pytest.mark.asyncio
+    async def test_provider_usage_anchor_drives_trigger_over_local_estimate(self):
+        """Real provider usage compacts context the local estimate calls small.
+
+        The estimator cannot see what the provider actually counted, so a
+        prompt near the window may still measure as a few hundred tokens.  The
+        anchor from the previous response is the only signal that can catch it.
+        """
+
+        def build_request() -> LLMRequest:
+            return LLMRequest(
+                messages=[
+                    ChatMessage(role="system", content="stable prefix"),
+                    *[
+                        ChatMessage(role="user", content=f"old user {index} " + ("x" * 500))
+                        for index in range(5)
+                    ],
+                    ChatMessage(role="user", content="current task"),
+                ],
+                model="mock-model",
+            )
+
+        async def run_decision(*, anchor: dict | None) -> tuple[RuntimeState, CollectingEventSink]:
+            request = build_request()
+            state = RuntimeState(session_id="usage-anchor-session")
+            if anchor is not None:
+                state.metadata[USAGE_ANCHOR_METADATA_KEY] = anchor
+            sink = CollectingEventSink()
+            kernel = _make_kernel(
+                MockRuntimeKit(steps=[MockKitStep(decision="done")]),
+                llm_client=CapturingLLMClient(),
+                state_store=InMemoryStateStore(),
+                event_sink=sink,
+                policy=LoopPolicy(
+                    context_window_tokens=1_000_000,
+                    compact_trigger_ratio=0.8,
+                    compact_limit_ratio=0.6,
+                ),
+            )
+            await kernel._compact_request_if_needed(state, request, history=None)
+            return state, sink
+
+        anchor = build_usage_anchor(
+            describe_request(build_request()),
+            prompt_tokens=900_000,
+            model_id="mock-model",
+        )
+        assert anchor is not None
+
+        anchored_state, anchored_sink = await run_decision(anchor=anchor)
+        assert [
+            event.name for event in anchored_sink.events if event.name == "runtime.context_compacted"
+        ] == ["runtime.context_compacted"]
+        anchored_metrics = anchored_state.metadata["runtime_context_metrics"]
+        assert anchored_metrics["context_measurement_source"] == USAGE_ANCHOR_SOURCE
+        assert anchored_metrics["context_usage_prompt_tokens"] == 900_000
+        assert anchored_metrics["context_compacted"] is True
+
+        # Same messages, same policy, no provider usage: the local estimate sees
+        # a small prompt and leaves the context alone.
+        unanchored_state, unanchored_sink = await run_decision(anchor=None)
+        assert not [
+            event for event in unanchored_sink.events if event.name == "runtime.context_compacted"
+        ]
+        unanchored_metrics = unanchored_state.metadata["runtime_context_metrics"]
+        assert unanchored_metrics["context_measurement_source"] != USAGE_ANCHOR_SOURCE
+        assert "context_usage_prompt_tokens" not in unanchored_metrics
+        assert unanchored_metrics["context_compacted"] is False
+
+    @pytest.mark.asyncio
+    async def test_recorded_provider_usage_anchors_the_next_run(self):
+        """Usage from one run measures the next run's request before it is sent."""
+        session_id = "usage-anchor-two-runs"
+
+        class HistoryRequestKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                return LLMRequest(
+                    messages=[
+                        ChatMessage(role="system", content="stable prefix"),
+                        *context.history,
+                    ],
+                    model="mock-model",
+                )
+
+        class UsageReportingLLMClient(CapturingLLMClient):
+            """Reports a near-window prompt count for non-compaction requests."""
+
+            def __init__(self, *, prompt_tokens: int) -> None:
+                super().__init__()
+                self.prompt_tokens = prompt_tokens
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                response = await super().complete(request)
+                if not _is_compaction_request(request):
+                    response.usage = normalize_usage({"prompt_tokens": self.prompt_tokens})
+                return response
+
+        store = InMemoryRuntimeStateStore()
+        await store.save_checkpoint(
+            RuntimeState(session_id=session_id),
+            [
+                {"role": "user", "content": "old user 0", "metadata": {"history_seq": 1}},
+            ],
+        )
+        sink = CollectingEventSink()
+        llm = UsageReportingLLMClient(prompt_tokens=900_000)
+        kernel = _make_kernel(
+            HistoryRequestKit(steps=[MockKitStep(reply="first reply", decision="done")]),
+            llm_client=llm,
+            state_store=store,  # type: ignore[arg-type]
+            event_sink=sink,
+            policy=LoopPolicy(
+                context_window_tokens=1_000_000,
+                compact_trigger_ratio=0.8,
+                compact_limit_ratio=0.6,
+            ),
+        )
+
+        first = await kernel.run(_make_turn_input(user_message="first turn", session_id=session_id))
+
+        assert first.decision == "done"
+        first_state = await store.get(session_id)
+        assert first_state is not None
+        anchor = first_state.metadata[USAGE_ANCHOR_METADATA_KEY]
+        assert anchor["prompt_tokens"] == 900_000
+        # The near-window count did not retroactively compact the first request:
+        # compaction is a pre-sampling decision and run one was already small.
+        assert not [
+            event for event in sink.events if event.name == "runtime.context_compacted"
+        ]
+
+        second = await kernel.run(_make_turn_input(user_message="second turn", session_id=session_id))
+
+        assert second.decision == "done"
+        # Nothing about the messages changed except that real usage is now
+        # known, yet the next request is compacted before it is sent.
+        assert len([
+            event for event in sink.events if event.name == "runtime.context_compacted"
+        ]) == 1
+        second_state = await store.get(session_id)
+        assert second_state is not None
+        metrics = second_state.metadata["runtime_context_metrics"]
+        assert metrics["context_measurement_source"] == USAGE_ANCHOR_SOURCE
+        assert metrics["context_compacted"] is True
+
+    @pytest.mark.asyncio
+    async def test_usage_anchor_is_dropped_when_compaction_rewrites_the_context(self):
+        """A provider count for the pre-compaction request must not survive it."""
+        messages = [
+            ChatMessage(role="system", content="stable prefix"),
+            ChatMessage(role="user", content="old user " + ("x" * 500)),
+            ChatMessage(role="user", content="current task"),
+        ]
+        request = LLMRequest(messages=messages, model="mock-model")
+        state = RuntimeState(session_id="anchor-reset-session")
+        state.metadata[USAGE_ANCHOR_METADATA_KEY] = build_usage_anchor(
+            describe_request(request),
+            prompt_tokens=900_000,
+            model_id="mock-model",
+        )
+        kernel = _make_kernel(
+            MockRuntimeKit(steps=[MockKitStep(decision="done")]),
+            llm_client=CapturingLLMClient(),
+            state_store=InMemoryStateStore(),
+            event_sink=CollectingEventSink(),
+            policy=LoopPolicy(
+                context_window_tokens=1_000_000,
+                compact_trigger_ratio=0.8,
+                compact_limit_ratio=0.6,
+            ),
+        )
+
+        await kernel._compact_request_if_needed(state, request, history=None)
+
+        assert state.metadata["runtime_context_metrics"]["context_compacted"] is True
+        assert USAGE_ANCHOR_METADATA_KEY not in state.metadata
 
 
 # ---------------------------------------------------------------------------

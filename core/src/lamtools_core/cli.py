@@ -830,6 +830,8 @@ async def run_core_cli_task(
         mcp_caller=mcp_registry if mcp_tool_specs else None,
         mcp_tool_specs=mcp_tool_specs,
         context_window_tokens=context_window_tokens,
+        compact_trigger_tokens=options.compact_trigger_tokens,
+        compact_limit_tokens=options.compact_limit_tokens,
         state_store=core_db.runtime_state_store,
         session_prefix=thread_id,
         parent_event_sink=sink,

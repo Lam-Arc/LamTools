@@ -111,6 +111,7 @@ def test_small_ascii_context_uses_fast_path():
     )
 
     assert measurement.exact is False
+    assert measurement.resolved_source == "fast_estimate"
 
 
 def test_custom_request_estimator_is_used_for_exact_measurement():
@@ -131,5 +132,9 @@ def test_custom_request_estimator_is_used_for_exact_measurement():
         exact_estimate=exact,
     )
 
-    assert measurement == TokenMeasurement(tokens=101, exact=True)
+    assert measurement == TokenMeasurement(
+        tokens=101,
+        exact=True,
+        source="exact_estimate",
+    )
     assert calls == ["fast", "exact"]

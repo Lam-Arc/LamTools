@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -487,3 +489,129 @@ async def test_supervisor_closes_every_sqlite_connection(tmp_path, monkeypatch):
         with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
             connection.execute("SELECT 1")
 
+
+
+# --- 成员状态事件（会话级唤醒） -------------------------------------------
+
+
+def test_chinese_member_names_are_accepted():
+    """用户可用稳定中文称呼（张前端/苏测试），拉丁名规则保持兼容。"""
+    from lamtools_core.sub_agent_supervisor import validate_name
+
+    assert validate_name("张前端") == "张前端"
+    assert validate_name("苏测试") == "苏测试"
+    assert validate_name("ui_zhang") == "ui_zhang"
+    for bad in ("Bad-Name", "9start", "_leading", ""):
+        with pytest.raises(ValueError, match="name must match"):
+            validate_name(bad)
+
+
+@pytest.mark.asyncio
+async def test_member_completion_writes_session_scoped_event_and_wakes_waiter(tmp_path):
+    """成员跑完后：事件落进父邮箱（幂等）、活动信号点亮、等待方被唤醒。"""
+    seed_model(tmp_path)
+    runner = FakeRunner(tmp_path)
+    supervisor = SubAgentSupervisor(
+        parent_thread_id="parent", runner=runner, database_path=tmp_path / "state.sqlite3"
+    )
+    await supervisor.create(
+        type="execute", name="张前端", model="test-model", reasoning_level="medium"
+    )
+    await supervisor.message(
+        type="execute", name="张前端",
+        prompt="build the ui", source_ids={"call_id": "call-1", "run_id": "run-1"},
+    )
+    assert await supervisor.has_active_members() is True
+
+    # 等待发生在成员完成之前 → 完成时被唤醒（而不是靠 sleep 轮询）。
+    waiter = asyncio.create_task(supervisor.wait_for_activity(5.0))
+    await asyncio.sleep(0.05)
+    runner.release.set()
+    assert await waiter == "activity"
+
+    for _ in range(50):
+        if not await supervisor.has_active_members():
+            break
+        await asyncio.sleep(0.02)
+    assert await supervisor.has_active_members() is False
+
+    events = await supervisor.drain_member_events()
+    finished = [item for item in events if item.get("event") == "member_finished"]
+    assert finished, f"expected a member_finished event, got {events!r}"
+    assert finished[0]["name"] == "张前端"
+    assert finished[0]["status"] == "idle"
+
+    # 事件已投递，不会重复出现（幂等）。
+    assert await supervisor.drain_member_events() == []
+
+
+@pytest.mark.asyncio
+async def test_close_and_shutdown_report_interrupted_events(tmp_path):
+    """关闭运行中的成员 / 进程收尾：都要如实上报事件，而不是静默消失。"""
+    seed_model(tmp_path)
+    runner = FakeRunner(tmp_path)
+    supervisor = SubAgentSupervisor(
+        parent_thread_id="parent", runner=runner, database_path=tmp_path / "state.sqlite3"
+    )
+    await supervisor.create(
+        type="execute", name="李数据", model="test-model", reasoning_level="medium"
+    )
+    await supervisor.message(
+        type="execute", name="李数据",
+        prompt="build the store", source_ids={"call_id": "call-2", "run_id": "run-1"},
+    )
+    await supervisor.close(
+        type="execute", name="李数据", model="test-model", reasoning_level="medium"
+    )
+    events = await supervisor.drain_member_events()
+    assert any(item.get("event") == "member_closed" for item in events), events
+
+
+@pytest.mark.asyncio
+async def test_wait_for_activity_times_out_without_events(tmp_path):
+    supervisor = SubAgentSupervisor(
+        parent_thread_id="parent", runner=FakeRunner(tmp_path), database_path=tmp_path / "state.sqlite3"
+    )
+    assert await supervisor.wait_for_activity(0.05) == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_recover_reports_orphaned_running_member(tmp_path):
+    """上次进程留下的 running 记录：转 interrupted 并留下事件，供父会话处置。"""
+    database = tmp_path / "state.sqlite3"
+    first = SubAgentSupervisor(
+        parent_thread_id="parent", runner=FakeRunner(tmp_path), database_path=database
+    )
+    first._save(
+        SubAgentRecord(
+            parent_thread_id="parent", type="execute", name="王构建",
+            model_id="test-model", reasoning_level="medium", status="running",
+            started_at=time.time() - 30,
+        )
+    )
+    second = SubAgentSupervisor(
+        parent_thread_id="parent", runner=FakeRunner(tmp_path), database_path=database
+    )
+    await second.recover()
+    assert second._load("王构建").status == "interrupted"
+    payloads = await second.drain_member_events()
+    assert any(item.get("event") == "member_interrupted" for item in payloads), payloads
+
+
+def test_find_sub_agent_supervisor_resolves_by_thread_id(tmp_path):
+    from lamtools_core.sub_agent_supervisor import (
+        _SUPERVISORS,
+        find_sub_agent_supervisor,
+    )
+
+    supervisor = SubAgentSupervisor(
+        parent_thread_id="thread-lookup", runner=FakeRunner(tmp_path),
+        database_path=tmp_path / "state.sqlite3",
+    )
+    _SUPERVISORS[(str(tmp_path.resolve()), "thread-lookup")] = supervisor
+    try:
+        assert find_sub_agent_supervisor("thread-lookup") is supervisor
+        assert find_sub_agent_supervisor("missing-thread") is None
+        assert find_sub_agent_supervisor("") is None
+    finally:
+        _SUPERVISORS.pop((str(tmp_path.resolve()), "thread-lookup"), None)

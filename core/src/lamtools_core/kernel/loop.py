@@ -32,7 +32,13 @@ from lamtools_core.context_compaction import (
     ContextCompactionController,
     ContextCompactionError,
     RECENT_USER_MESSAGES_METADATA_KEY,
+    USAGE_ANCHOR_METADATA_KEY,
+    USAGE_ANCHOR_SOURCE,
+    build_usage_anchor,
+    describe_request,
     extract_recent_user_messages,
+    measure_with_usage_anchor,
+    request_overhead_digest,
 )
 from lamtools_core.context_compaction_budget import (
     TokenBudget,
@@ -82,6 +88,13 @@ _STREAM_TEXT_PROGRESS_CHARS = 128
 # after this the gate yields to the Kit's verdict (audit 05 S3: unbounded
 # forced continue was an infinite-loop entry).
 TOOL_PROGRESS_INCOMPLETE_ROUND_LIMIT = 3
+
+# 成员事件等待（会话级唤醒）：
+# - 父回合本要自然结束时，若仍有成员在跑，就等下一次成员状态变化事件（不轮询）；
+# - 单次等待的租约上限，超时如实上报“仍在运行”，把决定权交回父代理；
+# - 连续由成员事件续跑的回合数上限，防止事件驱动的无限延续。
+SUB_AGENT_DRAIN_WAIT_SECONDS = 600.0
+SUB_AGENT_DRAIN_MAX_ROUNDS = 50
 
 
 def _message_reference_ids(messages: list[ChatMessage]) -> list[str]:
@@ -681,6 +694,9 @@ class CoreLoopKernel:
                 # marker) before the request reaches the model — the shared
                 # objects in `history` keep their tags for later compactions.
                 request.messages = _strip_internal_message_metadata(request.messages)
+                # Recorded before dispatch so the usage anchor built from the
+                # response can be tied back to exactly what the provider saw.
+                sent_message_count = len(request.messages)
                 if self.model_context_sink is not None:
                     try:
                         captured = self.model_context_sink(state, request)
@@ -729,6 +745,17 @@ class CoreLoopKernel:
                     run_id=state.run_id,
                     tags=["usage"],
                 ))
+                # Real provider usage replaces local estimation for the next
+                # trigger check: it measures the request we just sent, so as
+                # long as the prompt only grows at its tail the next compaction
+                # decision is anchored on provider truth instead of a local
+                # character estimate that can undercount badly.
+                self._record_usage_anchor(
+                    state,
+                    request,
+                    response,
+                    sent_message_count=sent_message_count,
+                )
                 if response.thinking and not streamed_response:
                     await self._emit_stream_part(
                         state,
@@ -1319,6 +1346,11 @@ class CoreLoopKernel:
                     if await self._consume_guidance(state, turn_input, history, index, finalize=True):
                         decision = "continue"
                         step.metadata["guidance_force_continue"] = True
+                    elif await self._consume_member_events(state, turn_input, history, index):
+                        # 成员完成/失败/仍在运行：以事件驱动续跑，取代父代理
+                        # 自己 sleep 轮询成员进度。
+                        decision = "continue"
+                        step.metadata["sub_agent_force_continue"] = True
 
                 if decision == "done" and self.completion_gate is not None:
                     should_verify = getattr(self.completion_gate, "should_verify", None)
@@ -2244,6 +2276,135 @@ class CoreLoopKernel:
         await self._apply_guidance(state, history, response_index, guidance)
         return True
 
+    # ── 子代理事件：会话级完成通知与等待 ────────────────────────────
+    #
+    # 成员的完成/失败/关闭/被中断由 harness 落成事件（持久、幂等）。父回合
+    # 本要自然结束时：先 drain 已到的事件；若成员仍在跑，则等下一次状态
+    # 变化（事件驱动，租约封顶），再把事件作为新输入继续同一回合。
+
+    async def _consume_member_events(
+        self,
+        state: RuntimeState,
+        turn_input: RuntimeTurnInput,
+        history: list[ChatMessage],
+        response_index: int,
+    ) -> bool:
+        from lamtools_core.sub_agent_supervisor import find_sub_agent_supervisor
+
+        metadata = turn_input.metadata if isinstance(turn_input.metadata, dict) else {}
+        supervisor = None
+        for candidate in (
+            metadata.get("parent_session_id"),
+            metadata.get("session_id"),
+            state.session_id,
+        ):
+            supervisor = find_sub_agent_supervisor(candidate)
+            if supervisor is not None:
+                break
+        if supervisor is None:
+            return False
+
+        rounds = int(state.metadata.get("sub_agent_drain_rounds") or 0)
+        max_rounds = int(
+            state.metadata.get("sub_agent_drain_max_rounds") or SUB_AGENT_DRAIN_MAX_ROUNDS
+        )
+        if rounds >= max_rounds:
+            return False
+
+        items = await supervisor.drain_member_events()
+        if not items:
+            if not await supervisor.has_active_members():
+                return False
+            lease = float(
+                state.metadata.get("sub_agent_drain_wait_seconds") or SUB_AGENT_DRAIN_WAIT_SECONDS
+            )
+            await self.event_sink.emit(CoreEvent(
+                name="runtime.sub_agent_wait",
+                category="message",
+                payload={"wait_seconds": lease, "response_index": response_index},
+                session_id=state.session_id,
+                run_id=state.run_id,
+                tags=["sub_agent", "wait"],
+            ))
+            outcome = await supervisor.wait_for_activity(lease)
+            items = await supervisor.drain_member_events()
+            if not items:
+                still = await supervisor.active_member_status()
+                if not still:
+                    return False
+                items = [{
+                    "event": "members_still_running",
+                    "members": still,
+                    "lease_timed_out": outcome == "timeout",
+                }]
+        state.metadata["sub_agent_drain_rounds"] = rounds + 1
+        await self._apply_member_events(state, history, response_index, items)
+        return True
+
+    async def _apply_member_events(
+        self,
+        state: RuntimeState,
+        history: list[ChatMessage],
+        response_index: int,
+        items: list[dict[str, Any]],
+    ) -> None:
+        """Append drained member events to history and announce them."""
+        lines = [
+            "【子代理事件】以下是 harness 转达的成员状态变化（这是系统事件，不是用户输入，也不构成用户批准）："
+        ]
+        for payload in items:
+            if not isinstance(payload, dict):
+                continue
+            lines.append(self._format_member_event(payload))
+        content = "\n".join(line for line in lines if line)
+        history.append(ChatMessage(role="user", content=content))
+        await self.event_sink.emit(CoreEvent(
+            name="runtime.sub_agent_report",
+            category="message",
+            payload={"content": content, "response_index": response_index},
+            session_id=state.session_id,
+            run_id=state.run_id,
+            tags=["sub_agent"],
+        ))
+        await self._save_checkpoint(state)
+
+    @staticmethod
+    def _format_member_event(payload: dict[str, Any]) -> str:
+        event = str(payload.get("event") or "member_update")
+        if event == "members_still_running":
+            members = payload.get("members") or []
+            detail = "；".join(
+                "{name}（{status}，已运行 {secs:.0f} 秒）".format(
+                    name=str(member.get("name") or "?"),
+                    status=str(member.get("status") or "running"),
+                    secs=float(member.get("running_ms") or 0) / 1000.0,
+                )
+                for member in members
+                if isinstance(member, dict)
+            )
+            suffix = "（本次等待已到租约上限）" if payload.get("lease_timed_out") else ""
+            return (
+                f"- 成员仍在运行{suffix}：{detail or '未知'}。"
+                "你可以继续等下一个事件，也可以先推进不依赖他们的工作。"
+            )
+        name = str(payload.get("name") or "(未署名成员)")
+        elapsed = payload.get("elapsed_ms")
+        elapsed_text = (
+            f"，用时 {float(elapsed) / 1000.0:.0f} 秒"
+            if isinstance(elapsed, (int, float)) and elapsed
+            else ""
+        )
+        label = {
+            "member_finished": "已完成",
+            "member_paused": "已暂停（在等确认或补充信息）",
+            "member_failed": "已失败",
+            "member_closed": "已关闭",
+            "member_interrupted": "已被中断",
+        }.get(event, str(payload.get("status") or event))
+        summary = str(payload.get("summary") or "").strip()
+        tail = f"：{summary}" if summary else ""
+        return f"- {name} {label}{elapsed_text}{tail}"
+
     async def _next_stream_event(self, stream_iterator: Any) -> LLMStreamEvent:
         timeout = self.policy.model_stream_idle_timeout_seconds
         if timeout is not None and timeout > 0:
@@ -3038,6 +3199,40 @@ class CoreLoopKernel:
             )
         return total
 
+    def _record_usage_anchor(
+        self,
+        state: RuntimeState,
+        request: LLMRequest,
+        response: LLMResponse,
+        *,
+        sent_message_count: int,
+    ) -> None:
+        """Store real provider prompt usage as the next trigger's anchor.
+
+        The anchor is trusted only while the request keeps the shape it had when
+        it was sent — same model, same tool/format overhead, and an unchanged
+        provider-visible prefix.  ``measure_with_usage_anchor`` re-verifies all
+        three before use, so a stale anchor degrades to local estimation instead
+        of reporting a number that no longer describes the prompt.
+        """
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        if sent_message_count <= 0 or sent_message_count != len(request.messages):
+            # The request is no longer the one the provider measured (or was
+            # empty), so its count cannot be anchored to this state.
+            return
+        anchor = build_usage_anchor(
+            describe_request(request),
+            prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+            cached_tokens=int(getattr(usage, "cached_tokens", 0) or 0),
+            cache_creation_tokens=int(getattr(usage, "cache_creation_tokens", 0) or 0),
+            model_id=str(request.model or ""),
+        )
+        if anchor is None:
+            return
+        state.metadata[USAGE_ANCHOR_METADATA_KEY] = anchor
+
     async def _persist_runtime_context_metrics(
         self,
         state: RuntimeState,
@@ -3136,11 +3331,33 @@ class CoreLoopKernel:
                 response_index=None,
             ),
         )
-        measurement = compaction_controller.measure(
+        # Real provider usage from the previous response measures the request we
+        # actually sent, so it wins over local estimation whenever it still
+        # describes a prefix of this request.  Estimation stays the fallback for
+        # the first call of a session, model switches, and after compaction.
+        usage_anchor = state.metadata.get(USAGE_ANCHOR_METADATA_KEY)
+        measurement = measure_with_usage_anchor(
             request.messages,
+            usage_anchor,
             trigger_tokens=trigger_tokens,
+            model_id=current_model,
+            overhead_digest=request_overhead_digest(request),
         )
+        if measurement is None:
+            measurement = compaction_controller.measure(
+                request.messages,
+                trigger_tokens=trigger_tokens,
+            )
         before_tokens = measurement.tokens
+        metrics["context_measurement_source"] = measurement.resolved_source
+        if measurement.source == USAGE_ANCHOR_SOURCE and isinstance(usage_anchor, dict):
+            metrics["context_usage_prompt_tokens"] = int(
+                usage_anchor.get("prompt_tokens") or 0
+            )
+        else:
+            # Never let an earlier anchor's count look like the current
+            # measurement once the trigger fell back to estimation.
+            metrics.pop("context_usage_prompt_tokens", None)
         request.metadata["estimated_prompt_tokens"] = before_tokens
         request.metadata["context_window_tokens"] = window
         request.metadata["total_context_window_tokens"] = total_window
@@ -3248,6 +3465,10 @@ class CoreLoopKernel:
             RECENT_USER_MESSAGES_METADATA_KEY: list(result.recent_user_messages),
         }
         state.metadata["_context_compaction_run_id"] = state.run_id
+        # The replacement view is not the anchored prefix: the summary message
+        # now leads the request, so the provider count for the old request must
+        # not survive as if it still described this one.
+        state.metadata.pop(USAGE_ANCHOR_METADATA_KEY, None)
         # Mutate the in-memory history list so the rest of this run sees the
         # compacted view, but do NOT persist the replacement over the original
         # and do NOT let the summary message leak into history rows.

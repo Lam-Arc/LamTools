@@ -20,7 +20,8 @@ from lamtools_core.config.model_store import ModelStore
 from lamtools_core.llm import REASONING_LEVELS
 
 SUB_AGENT_TYPES = ("consider", "execute")
-SUB_AGENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+# 允许中文名字（例如「张前端」这类稳定称呼），仍须以小写拉丁字母或汉字开头。
+SUB_AGENT_NAME_PATTERN = re.compile(r"^[a-z\u4e00-\u9fff][a-z0-9_\u4e00-\u9fff]{0,63}$")
 _REASONING_ALIASES = {"xh": "xhigh"}
 _child_identity: contextvars.ContextVar[tuple["SubAgentSupervisor", str, str] | None] = (
     contextvars.ContextVar("lamtools_sub_agent_identity", default=None)
@@ -136,6 +137,9 @@ class SubAgentSupervisor:
         self._provider_messages_by_invocation: dict[str, set[str]] = {}
         self._closed = False
         self._owned_runner: Any | None = None
+        # Session-scoped activity signal: set on every member state change that a
+        # parent run may be waiting for (completion, failure, close, orphan).
+        self._activity = asyncio.Event()
         self._init_db()
 
     def update_runner(self, runner: Any) -> None:
@@ -198,9 +202,22 @@ class SubAgentSupervisor:
                     """
                 )
                 db.execute("DROP TABLE sub_agent_mailbox_legacy")
+            # 成员状态变化事件：与「成员来信」邮箱分开存放，避免改变既有
+            # 邮箱语义；事件按 event_key 幂等，投递状态由 delivered_at 记录。
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sub_agent_events (
+                  id TEXT PRIMARY KEY, parent_thread_id TEXT NOT NULL, name TEXT NOT NULL,
+                  payload TEXT NOT NULL, event_key TEXT NOT NULL, created_at REAL NOT NULL,
+                  delivered_at REAL,
+                  UNIQUE(parent_thread_id, event_key)
+                )
+                """
+            )
 
     async def recover(self) -> None:
         """Converge orphaned process-owned work after application restart."""
+        interrupted: list[SubAgentRecord] = []
         async with self._lock:
             with self._connection() as db:
                 rows = db.execute(
@@ -218,6 +235,10 @@ class SubAgentSupervisor:
                             "UPDATE sub_agents SET payload=? WHERE parent_thread_id=? AND name=?",
                             (json.dumps(payload), self.parent_thread_id, row["name"]),
                         )
+                        interrupted.append(SubAgentRecord(**payload))
+        # 事件写入放在连接释放之后：独立连接不会与外层写事务互相锁住。
+        for record in interrupted:
+            self._write_member_event(record, "member_interrupted", detail="进程重启时该成员仍在运行")
 
     async def create(self, *, type: object, name: object, model: object,
                      reasoning_level: object, source_ids: dict[str, str] | None = None) -> SubAgentRecord:
@@ -372,6 +393,7 @@ class SubAgentSupervisor:
             task = self._tasks.pop(child_name, None)
             if task and not task.done():
                 task.cancel()
+            self._write_member_event(record, "member_closed")
         if task:
             await asyncio.gather(task, return_exceptions=True)
         return SubAgentOperationResult(record, "closed")
@@ -486,6 +508,10 @@ class SubAgentSupervisor:
                     leftover = self.consume_guidance(name)
                     if leftover and current.status not in {"paused", "failed", "closed"}:
                         self._pending_prompts[name] = "\n\n".join(leftover)
+                    self._write_member_event(
+                        current,
+                        "member_finished" if current.status == "idle" else f"member_{current.status}",
+                    )
                     if current.status in {"paused", "failed", "closed"}:
                         return
         except asyncio.CancelledError:
@@ -498,6 +524,7 @@ class SubAgentSupervisor:
                     record.summary = str(exc)[:1000]
                     record.completed_at = time.time()
                     self._save(record)
+                    self._write_member_event(record, "member_failed", detail=str(exc))
 
     @staticmethod
     def _late_context(record: SubAgentRecord) -> str:
@@ -612,6 +639,115 @@ class SubAgentSupervisor:
                 db.executemany("UPDATE sub_agent_mailbox SET delivered_at=? WHERE id=?", [(now, row["id"]) for row in rows])
             return [dict(row) for row in rows]
 
+    # ── 成员状态变化：会话级事件（供父回合唤醒） ──────────────────────
+    #
+    # 成员的完成/失败/关闭/被中断会以结构化事件写入父邮箱（持久、按
+    # message_key 幂等），并点亮活动信号。父回合结束前可以 drain 这些事件；
+    # 若成员仍在跑，则等待下一次活动信号（有租约上限，超时如实上报）。
+
+    def _notify_activity(self) -> None:
+        self._activity.set()
+
+    def _pending_mail_count(self) -> int:
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT COUNT(*) AS n FROM sub_agent_events WHERE parent_thread_id=? AND delivered_at IS NULL",
+                (self.parent_thread_id,),
+            ).fetchone()
+        return int((row["n"] if row else 0) or 0)
+
+    def _write_member_event(self, record: SubAgentRecord, event: str, *, detail: str = "") -> None:
+        """Persist one member state change as a durable, session-scoped event."""
+        payload = json.dumps(
+            {
+                "event": event,
+                "name": record.name,
+                "type": record.type,
+                "status": record.status,
+                "summary": (record.summary or detail or "")[:500],
+                "elapsed_ms": record.elapsed_ms,
+                "occurred_at": record.completed_at or time.time(),
+            },
+            ensure_ascii=False,
+        )
+        key = f"{event}:{record.name}:{record.completed_at or record.started_at or 0}"
+        try:
+            with self._connection() as db:
+                db.execute(
+                    "INSERT OR IGNORE INTO sub_agent_events(id,parent_thread_id,name,payload,event_key,created_at) VALUES(?,?,?,?,?,?)",
+                    (uuid.uuid4().hex, self.parent_thread_id, record.name, payload, key, time.time()),
+                )
+        except Exception:
+            # A failed event write must never break the member's lifecycle.
+            pass
+        self._notify_activity()
+
+    async def drain_member_events(self) -> list[dict[str, Any]]:
+        """Deliver (once) every pending member state-change event."""
+        async with self._lock:
+            with self._connection() as db:
+                rows = db.execute(
+                    "SELECT id,payload,created_at FROM sub_agent_events WHERE parent_thread_id=? AND delivered_at IS NULL ORDER BY created_at,id",
+                    (self.parent_thread_id,),
+                ).fetchall()
+                now = time.time()
+                db.executemany(
+                    "UPDATE sub_agent_events SET delivered_at=? WHERE id=?",
+                    [(now, row["id"]) for row in rows],
+                )
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(payload, dict):
+                events.append(payload)
+        return events
+
+    async def has_active_members(self) -> bool:
+        """True while any member has queued work or a run in flight."""
+        async with self._lock:
+            if self._pending_prompts:
+                return True
+            return any(not task.done() for task in self._tasks.values())
+
+    async def active_member_status(self) -> list[dict[str, Any]]:
+        """Snapshot of members still running (for lease-timeout reporting)."""
+        async with self._lock:
+            names = [name for name, task in self._tasks.items() if not task.done()]
+        out: list[dict[str, Any]] = []
+        now = time.time()
+        for name in names:
+            record = self._load(name)
+            if record is None:
+                continue
+            out.append(
+                {
+                    "name": record.name,
+                    "type": record.type,
+                    "status": record.status,
+                    "running_ms": int((now - (record.started_at or now)) * 1000),
+                    "summary": (record.summary or "")[:200],
+                }
+            )
+        return out
+
+    async def wait_for_activity(self, timeout: float) -> str:
+        """Wait for the next member state change.
+
+        Returns ``"activity"`` when something changed (or undelivered mail is
+        already waiting) and ``"timeout"`` when the lease expired first.
+        """
+        self._activity.clear()
+        if self._pending_mail_count() > 0:
+            return "activity"
+        try:
+            await asyncio.wait_for(self._activity.wait(), timeout=max(float(timeout), 0.0))
+            return "activity"
+        except (TimeoutError, asyncio.TimeoutError):
+            return "timeout"
+
     async def shutdown(self) -> None:
         self._closed = True
         tasks = [task for task in self._tasks.values() if not task.done()]
@@ -629,6 +765,9 @@ class SubAgentSupervisor:
                     record.status = "interrupted"
                     record.completed_at = time.time()
                     self._save(record)
+                    self._write_member_event(
+                        record, "member_interrupted", detail="进程关闭时该成员仍在运行"
+                    )
             self._tasks.clear()
 
     def _required(self, name: str) -> SubAgentRecord:
@@ -669,6 +808,21 @@ class SubAgentSupervisor:
 
 
 _SUPERVISORS: dict[tuple[str, str], SubAgentSupervisor] = {}
+
+
+def find_sub_agent_supervisor(parent_thread_id: object) -> SubAgentSupervisor | None:
+    """Return the live supervisor for one parent session, if this process owns it.
+
+    Used by the kernel loop to drain member events at the end of a turn without
+    needing to know the supervisor's data directory.
+    """
+    thread_id = str(parent_thread_id or "")
+    if not thread_id:
+        return None
+    for (_, supervisor_thread_id), supervisor in _SUPERVISORS.items():
+        if supervisor_thread_id == thread_id:
+            return supervisor
+    return None
 
 
 async def get_sub_agent_supervisor(

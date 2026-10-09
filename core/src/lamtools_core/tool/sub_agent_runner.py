@@ -173,6 +173,14 @@ class KernelSubAgentRunner:
         mcp_tool_specs: list[ToolSpec] | None = None,
         context_window_tokens: int | None = None,
         compact_trigger_ratio: float = 0.8,
+        # 成员＝主代理的受限变体：除工具与提示词外不应有差异。父内核已解析的
+        # LoopPolicy 可直接传入（推荐），成员内核据此原样继承；无法传策略对象
+        # 的调用方也应传入与主代理相同的显式压缩旋钮，避免成员静默回落到默认值。
+        loop_policy: Any | None = None,
+        compact_trigger_tokens: int | None = None,
+        compact_limit_tokens: int | None = None,
+        compact_retained_steps: int | None = None,
+        compact_limit_ratio: float | None = None,
         state_store: RuntimeStateStore | None = None,
         session_prefix: str = "core-sub-agent",
         parent_event_sink: EventSink | None = None,
@@ -235,6 +243,11 @@ class KernelSubAgentRunner:
         self.mcp_tool_specs = list(mcp_tool_specs or [])
         self.context_window_tokens = context_window_tokens
         self.compact_trigger_ratio = compact_trigger_ratio
+        self._loop_policy_template = loop_policy
+        self.compact_trigger_tokens = compact_trigger_tokens
+        self.compact_limit_tokens = compact_limit_tokens
+        self.compact_retained_steps = compact_retained_steps
+        self.compact_limit_ratio = compact_limit_ratio
         self.state_store = state_store or InMemoryRuntimeStateStore()
         self.session_prefix = str(session_prefix or "core-sub-agent")
         self.parent_event_sink = parent_event_sink
@@ -285,7 +298,13 @@ class KernelSubAgentRunner:
             loaded_skill_roots=self.loaded_skill_roots, skill_registry=self.skill_registry,
             mcp_caller=independent_mcp, mcp_tool_specs=independent_specs,
             context_window_tokens=self.context_window_tokens,
-            compact_trigger_ratio=self.compact_trigger_ratio, state_store=self.state_store,
+            compact_trigger_ratio=self.compact_trigger_ratio,
+            loop_policy=self._loop_policy_template,
+            compact_trigger_tokens=self.compact_trigger_tokens,
+            compact_limit_tokens=self.compact_limit_tokens,
+            compact_retained_steps=self.compact_retained_steps,
+            compact_limit_ratio=self.compact_limit_ratio,
+            state_store=self.state_store,
             session_prefix=self.session_prefix, parent_event_sink=self.parent_event_sink,
             checkpoint_coordinator=self.checkpoint_coordinator,
             activated_mcp_servers=set(self.activated_mcp_servers), active_mode=self.active_mode,
@@ -685,17 +704,35 @@ class KernelSubAgentRunner:
             state_store=self.state_store,
             event_sink=event_sink,
             checkpoint_coordinator=self.checkpoint_coordinator,
-            policy=LoopPolicy(
-                **{
-                    **self._retry_policy_overrides(),
-                    "model_timeout_seconds": 360,
-                    "context_window_tokens": self.context_window_tokens,
-                    "compact_trigger_ratio": self.compact_trigger_ratio,
-                }
-            ),
+            policy=self._member_loop_policy(),
             retry_policy=self._retry_policy(),
             model_context_sink=self.model_context_sink,
         )
+
+    def _member_loop_policy(self) -> LoopPolicy:
+        """成员内核的运行策略。
+
+        成员是主代理的受限变体，差异只允许出现在工具与提示词层；压缩、重试、
+        超时等运行策略必须与主代理一致。因此这里优先整份继承父内核已解析的
+        ``LoopPolicy``；只有在调用方无法提供策略对象时，才用与主代理相同的显式
+        旋钮拼装（不再单方面硬编码默认值）。
+        """
+        template = self._loop_policy_template
+        if isinstance(template, LoopPolicy):
+            return replace(template)
+        policy_kwargs: dict[str, Any] = {**self._retry_policy_overrides()}
+        if self.context_window_tokens is not None:
+            policy_kwargs["context_window_tokens"] = self.context_window_tokens
+        policy_kwargs.setdefault("compact_trigger_ratio", self.compact_trigger_ratio)
+        for key, value in (
+            ("compact_trigger_tokens", self.compact_trigger_tokens),
+            ("compact_limit_tokens", self.compact_limit_tokens),
+            ("compact_retained_steps", self.compact_retained_steps),
+            ("compact_limit_ratio", self.compact_limit_ratio),
+        ):
+            if value is not None:
+                policy_kwargs[key] = value
+        return LoopPolicy(**policy_kwargs)
 
     def _retry_policy_overrides(self) -> dict[str, Any]:
         """LoopPolicy retry knobs from model_retry.jsonc (config-file defaults)."""

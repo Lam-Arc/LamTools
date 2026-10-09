@@ -210,10 +210,22 @@ class SummaryTokenBudget:
 
 @dataclass(frozen=True, slots=True)
 class TokenMeasurement:
-    """A token estimate and whether it used the exact estimator."""
+    """A token estimate, how exact it is, and where it came from.
+
+    ``source`` names the measurement route for diagnostics: ``fast_estimate``
+    and ``exact_estimate`` are local estimators, ``provider_anchor`` means the
+    bulk of the prompt came from real provider usage with only the appended
+    tail estimated (see ``context_compaction.usage_anchor``).
+    """
 
     tokens: int
     exact: bool
+    source: str = ""
+
+    @property
+    def resolved_source(self) -> str:
+        """Return ``source``, deriving it from ``exact`` for legacy callers."""
+        return self.source or ("exact_estimate" if self.exact else "fast_estimate")
 
 
 MessageTokenEstimator = Callable[[list[ChatMessage]], int]
@@ -250,8 +262,12 @@ def measure_for_compaction_trigger(
     )
     fast_tokens = max(0, int(fast_fn(values)))
     if fast_tokens * fast_safety_factor < trigger_tokens:
-        return TokenMeasurement(tokens=fast_tokens, exact=False)
-    return TokenMeasurement(tokens=max(0, int(exact_fn(values))), exact=True)
+        return TokenMeasurement(tokens=fast_tokens, exact=False, source="fast_estimate")
+    return TokenMeasurement(
+        tokens=max(0, int(exact_fn(values))),
+        exact=True,
+        source="exact_estimate",
+    )
 
 
 __all__ = [

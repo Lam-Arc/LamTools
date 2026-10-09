@@ -14,6 +14,7 @@ from lamtools_core.config.retry_store import (
 from lamtools_core.context_compaction import (
     ContextCompactionController,
     RECENT_USER_MESSAGES_METADATA_KEY,
+    USAGE_ANCHOR_METADATA_KEY,
     extract_recent_user_messages,
 )
 from lamtools_core.context_compaction_budget import (
@@ -506,6 +507,9 @@ async def _persist_manual_compaction_metadata(
         RECENT_USER_MESSAGES_METADATA_KEY: list(result.recent_user_messages),
         "compacted_history_seqs": compacted_history_seqs,
     }
+    # The manual compaction replaced the message view, so the provider count
+    # from the pre-compaction request no longer describes the live context.
+    state.metadata.pop(USAGE_ANCHOR_METADATA_KEY, None)
     previous_metrics = state.metadata.get("runtime_context_metrics")
     metrics = dict(previous_metrics) if isinstance(previous_metrics, dict) else {}
     state.metadata["runtime_context_metrics"] = {

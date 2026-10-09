@@ -59,6 +59,17 @@ from .controller import (
     ContextCompactor,
     compact_context,
 )
+from .usage_anchor import (
+    RequestPrefix,
+    USAGE_ANCHOR_METADATA_KEY,
+    USAGE_ANCHOR_SOURCE,
+    build_usage_anchor,
+    describe_request,
+    effective_prompt_tokens,
+    measure_with_usage_anchor,
+    message_prefix_digest,
+    request_overhead_digest,
+)
 
 
 __all__ = [
@@ -69,6 +80,15 @@ __all__ = [
     "NON_TEXT_USER_MESSAGE_PLACEHOLDER",
     "CONTEXT_COMPACTION_NAMESPACE",
     "DEFAULT_RETAINED_STEPS",
+    "RequestPrefix",
+    "USAGE_ANCHOR_METADATA_KEY",
+    "USAGE_ANCHOR_SOURCE",
+    "build_usage_anchor",
+    "describe_request",
+    "effective_prompt_tokens",
+    "measure_with_usage_anchor",
+    "message_prefix_digest",
+    "request_overhead_digest",
     "CompactionBudgetExceeded",
     "CompactionExecution",
     "CompactionFitInput",
