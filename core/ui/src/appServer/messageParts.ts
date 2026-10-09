@@ -110,7 +110,9 @@ function isExplicitNonFinalAnswerPart(part: MessagePart): boolean {
 
 function hasMeaningfulTrailingProcess(parts: MessagePart[], index: number): boolean {
   return parts.slice(index + 1).some((part) => {
-    if (part.partType === 'status' || part.partType === 'attachment') return false
+    // 引导行是用户插进来的指令，不是模型后续输出：它落在答案之后不代表这段
+    // 回答还没说完（否则引导一到，上方那段答案会被降级进过程区）。
+    if (part.partType === 'status' || part.partType === 'attachment' || part.partType === 'guidance') return false
     return part.partType !== 'text' || Boolean(normalizeAnswerText(part.content || ''))
   })
 }
@@ -157,6 +159,7 @@ export function coreAppItemPartType(type: string): MessagePart['partType'] {
   if (type === 'imageView') return 'tool_result'
   if (type === 'compaction' || type === 'contextCompaction') return 'compaction'
   if (type === 'status') return 'status'
+  if (type === 'guidance') return 'guidance'
   if (type === 'agentMessage') return 'model_text'
   return 'model_text'
 }

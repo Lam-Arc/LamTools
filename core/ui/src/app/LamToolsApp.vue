@@ -2232,6 +2232,8 @@ workbench.setComposerCallbacks({
   onSubmitStart: () => {
     pendingPlaceholder.value = { id: `placeholder-${Date.now()}`, content: '…' }
   },
+  // 提交一有结果就收掉占位：引导与排队不会立刻产生用户消息，只等消息出现会一直挂着
+  onSubmitSettled: () => { pendingPlaceholder.value = null },
   onCommandResult: applyCommandEffects,
 })
 watch(shallowThinkingEnabled, (value) => workbench.setShallowThinking(value))

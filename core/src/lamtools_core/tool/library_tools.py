@@ -25,11 +25,14 @@ LIBRARY_TOOL_DESCRIPTION = (
     "Curate the project library (资料库): the catalog of files that matter for "
     "this project — user uploads and the deliverables you deliberately file into "
     "it. Nothing you produce enters the catalog automatically: registering is "
-    "your call. The catalog is bookkeeping only — entries point at workspace "
-    "files and no action here reads, moves or deletes the file itself. Folders "
-    "are catalog layers (the library's archive tabs), not disk directories; "
-    "layer names are free-form and may nest with '/', empty string = "
-    "unarchived. Actions: list (entry ids, names, roles, layers, favorites), "
+    "your call. The catalog is bookkeeping only — entries point at files and no "
+    "action here reads, moves or deletes those files. Folders are catalog "
+    "layers (the library's archive tabs), not disk directories; layer names are "
+    "free-form and may nest with '/', empty string = unarchived. Every entry "
+    "lists the file it points at (file=…): workspace uploads live under the "
+    "project's 资料/ folder, chat uploads live in the app's attachment store, "
+    "and either way the listed path is a real file you can read_file. "
+    "Actions: list (entry ids, names, roles, layers, favorites, file locations), "
     "register (file a workspace file into the catalog; optionally assign its "
     "layer in the same call), favorite (set favorite true/false), folder "
     "(re-layer one or more entries), remove (soft-remove; restorable, file "
@@ -91,7 +94,12 @@ def _failed(call: ToolCall, message: str, code: str) -> ToolResult:
     )
 
 
-def _format_records(records: list[Any]) -> str:
+async def _format_records(records: list[Any], artifact_store: Any) -> str:
+    """一条一行；每条带上它在磁盘上的当前位置，助手据此可以直接读文件。
+
+    「用户」上传有两种落点：资料库上传在项目「资料/」里，聊天附件在应用
+    的附件库里——都由 store 解析成真实文件的绝对路径，读起来一视同仁。
+    """
     if not records:
         return "(empty)"
     lines: list[str] = []
@@ -99,14 +107,22 @@ def _format_records(records: list[Any]) -> str:
         flags: list[str] = []
         if getattr(record, "deleted", False):
             flags.append("removed")
-        if str(getattr(record, "availability", "") or "") == "missing":
+        try:
+            resolved = await artifact_store.current_content_path(record)
+        except OSError:
+            resolved = None
+        if resolved is not None:
+            location = f"file={resolved}"
+        else:
             flags.append("missing")
+            location = "file=(missing)"
         parts = [
             str(getattr(record, "artifact_id", "") or ""),
             str(getattr(record, "name", "") or ""),
             f"role={getattr(record, 'role', '') or '-'}",
             f"folder={getattr(record, 'folder', '') or '-'}",
             "favorite" if getattr(record, "favorite", False) else "",
+            location,
             *(flags),
         ]
         lines.append("- " + "  ".join(part for part in parts if part))
@@ -158,7 +174,7 @@ def make_library_handler(artifact_store: Any, work_root: str | Path | None):
                     call_id=call.id,
                     name=call.name,
                     status="ok",
-                    content=_format_records(records),
+                    content=await _format_records(records, artifact_store),
                     metadata={"count": len(records), "project_id": project_id},
                 )
 

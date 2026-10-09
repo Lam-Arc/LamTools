@@ -1242,6 +1242,7 @@ def assemble_core_agent_plugins(
     # 清单解析失败不阻断其他插件，错误随装配结果返回（plugin.list 报状态）。
     plugin_tool_groups: list[dict[str, Any]] = []
     plugin_tool_errors: list[dict[str, Any]] = []
+    declared_names_by_plugin: dict[str, set[str]] = {}
     from lamtools_core.plugins.tools import load_plugin_tools
 
     for plugin in enabled_plugins:
@@ -1265,6 +1266,9 @@ def assemble_core_agent_plugins(
                     {"plugin": plugin.name, "path": str(tool_file), "error": str(exc)}
                 )
         if declared:
+            declared_names_by_plugin[plugin.name] = {
+                str(getattr(decl, "name", "") or "") for decl in declared
+            }
             plugin_tool_groups.append(
                 {
                     "name": plugin.name,
@@ -1273,6 +1277,26 @@ def assemble_core_agent_plugins(
                     "dependencies": list(plugin.dependencies),
                 }
             )
+    # 模式独占工具：声明了 exclusiveTools 的模式，其 tools 列表里属于本插件
+    # 自己的工具只在该模式激活时可用（generic 工具如 read_file 不受影响）。
+    plugin_mode_exclusive_tools: dict[str, set[str]] = {}
+    for plugin in enabled_plugins:
+        contribution = plugin.ui
+        if contribution is None:
+            continue
+        owned = declared_names_by_plugin.get(plugin.name, set())
+        if not owned:
+            continue
+        for mode in contribution.modes:
+            if not getattr(mode, "exclusive_tools", False):
+                continue
+            exclusive = set(mode.tools) & owned
+            if not exclusive:
+                continue
+            plugin_mode_exclusive_tools.setdefault(f"{plugin.name}:{mode.id}", set()).update(exclusive)
+            # 短别名与 plugin_mode_tool_sets 同规则：唯一归属时才暴露。
+            if len(plugin_mode_ids.get(mode.id, [])) == 1:
+                plugin_mode_exclusive_tools.setdefault(mode.id, set()).update(exclusive)
     hook_registry = HookRegistry(
         project_root=work_root,
         plugins=enabled_plugins,
@@ -1293,6 +1317,7 @@ def assemble_core_agent_plugins(
         "plugin_tool_providers": plugin_tool_providers,
         "plugin_runtime_specs": plugin_runtime_specs,
         "plugin_mode_tool_sets": plugin_mode_tool_sets,
+        "plugin_mode_exclusive_tools": plugin_mode_exclusive_tools,
         "mcp_files": [
             path
             for plugin in enabled_plugins

@@ -273,4 +273,49 @@ describe('useCoreWorkbenchProjectionController', () => {
     expect(fixture.finished).toEqual(['thread-a:completed'])
     expect(fixture.controller.processExpandedIds.value).toEqual(new Set())
   })
+
+  /** 停止 / 正常跑完对"过程是否自动收起"的分叉，需要 activeTurnId 认出这一轮。 */
+  function createTurnController() {
+    const currentSnapshot = ref<CoreAppSnapshot | null>(snapshot('thread-a', 'running', { includeTool: true }))
+    const status = ref('running')
+    const controller = useCoreWorkbenchProjectionController({
+      snapshot: currentSnapshot,
+      activeThreadId: ref<string | null>('thread-a'),
+      status,
+      activeTurnId: ref('turn-1'),
+      submittingApprovalRequestIds: ref(new Set<string>()),
+      shallowThinkingPending: ref(false),
+    })
+    return { controller, currentSnapshot, status }
+  }
+
+  it('keeps a stopped turn process open until the summary collapses it', async () => {
+    const fixture = createTurnController()
+    await nextTick()
+    expect(fixture.controller.messages.value.map(message => message.id)).toEqual(['assistant:turn-1'])
+
+    // 用户点了停止：这一轮的过程保持当时的样子，不自动收起
+    fixture.status.value = 'cancelled'
+    await nextTick()
+    expect([...fixture.controller.processExpandedIds.value]).toEqual(['assistant:turn-1'])
+
+    // 收起由用户点过程摘要决定，之后的投影刷新不会把它重新展开
+    fixture.controller.toggleProcess('assistant:turn-1')
+    fixture.currentSnapshot.value = snapshot('thread-a', 'cancelled', { includeTool: true, snapshotSeq: 2 })
+    await nextTick()
+    expect([...fixture.controller.processExpandedIds.value]).toEqual([])
+  })
+
+  it('returns a normally finished turn process to the completed summary', async () => {
+    const fixture = createTurnController()
+    await nextTick()
+
+    fixture.status.value = 'completed'
+    await nextTick()
+    expect([...fixture.controller.processExpandedIds.value]).toEqual([])
+
+    fixture.currentSnapshot.value = snapshot('thread-a', 'completed', { includeTool: true, snapshotSeq: 2 })
+    await nextTick()
+    expect([...fixture.controller.processExpandedIds.value]).toEqual([])
+  })
 })

@@ -379,6 +379,122 @@ describe('useCoreLiveComposerController', () => {
     expect(controller.actionMode.value).toBe('send')
   })
 
+  it('settles every submission outcome so the host can retire its placeholder', async () => {
+    const settled: string[] = []
+    const text = ref('')
+    const status = ref('running')
+    let queueFails = false
+    const controller = useCoreLiveComposerController({
+      activeThreadId: ref<string | null>('thread-1'),
+      activeTurnId: ref('turn-1'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(0),
+      status,
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async () => undefined,
+      interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
+      steerTurn: async () => {
+        settled.push('guided')
+      },
+      queueInput: async () => {
+        if (queueFails) throw new Error('queue unavailable')
+        settled.push('queued')
+      },
+      listCommands: async () => [],
+      getWorkRoot: () => '',
+      executeCommand: async () => true,
+      clearComposer: () => {
+        text.value = ''
+      },
+      setStatusText: () => undefined,
+      onError: () => undefined,
+      onSubmitSettled: () => {
+        settled.push('settled')
+      },
+    })
+
+    // 引导：不产生用户消息，也必须结算，否则宿主的“待发送”占位永远挂着
+    text.value = '改成蓝色'
+    await controller.submit({ clearComposer: true, forceGuide: true })
+
+    // 排队：同样不产生用户消息
+    text.value = '顺便把页脚也换掉'
+    await controller.submit({ clearComposer: true })
+
+    // 提交失败也要结算（错误提示走 onError，占位不能留）
+    queueFails = true
+    text.value = '这次会失败'
+    await controller.submit({ clearComposer: true })
+
+    // 正常发送：新用户消息随后出现，占位同样在结算时收掉
+    status.value = 'idle'
+    text.value = '写一个文档'
+    await controller.submit({ clearComposer: true })
+
+    expect(settled).toEqual([
+      'guided', 'settled',
+      'queued', 'settled',
+      'settled',
+      'settled',
+    ])
+  })
+
+  it('never stops the running turn from the keyboard', async () => {
+    const calls: string[] = []
+    const text = ref('')
+    const status = ref('running')
+    const controller = useCoreLiveComposerController({
+      activeThreadId: ref<string | null>('thread-1'),
+      activeTurnId: ref('turn-1'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(0),
+      status,
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async () => {
+        calls.push('start')
+      },
+      interruptTurn: async () => {
+        calls.push('stop')
+      },
+      forceResetTurn: async () => undefined,
+      queueInput: async () => {
+        calls.push('queue')
+      },
+      listCommands: async () => [],
+      getWorkRoot: () => '',
+      executeCommand: async () => true,
+      clearComposer: () => {
+        text.value = ''
+      },
+      setStatusText: () => undefined,
+    })
+
+    // 空 composer + 运行中：按钮是停止形态，但回车只发送——无内容可发就什么都不做
+    expect(controller.actionMode.value).toBe('stop')
+    await controller.handleKeydown(new KeyboardEvent('keydown', { key: 'Enter' }))
+    expect(calls).toEqual([])
+    await controller.handleKeyup(new KeyboardEvent('keyup', { key: 'Enter' }), 0)
+    expect(calls).toEqual([])
+
+    // 第一次回车发送并清空 composer，按钮随即翻成停止形态；
+    // 第二次回车（习惯性重复发送 / IME 确认）同样不能停掉整轮
+    text.value = '改成蓝色'
+    await controller.handleKeydown(new KeyboardEvent('keydown', { key: 'Enter' }))
+    expect(calls).toEqual(['queue'])
+    expect(text.value).toBe('')
+    expect(controller.actionMode.value).toBe('stop')
+    await controller.handleKeydown(new KeyboardEvent('keydown', { key: 'Enter' }))
+    await controller.handleKeyup(new KeyboardEvent('keyup', { key: 'Enter' }), 0)
+    expect(calls).toEqual(['queue'])
+  })
+
   it('owns command loading, palette selection, and live submission effects', async () => {
     const calls: string[] = []
     const activeThreadId = ref<string | null>('thread-1')

@@ -65,6 +65,11 @@ export {
 } from './useCoreWorkbenchProjectionController'
 
 export {
+  useCorePendingGuidance,
+  type CorePendingGuidanceOptions,
+} from './useCorePendingGuidance'
+
+export {
   useCoreQueuedInputController,
   type CoreQueuedInputControllerItem,
   type UseCoreQueuedInputControllerOptions,

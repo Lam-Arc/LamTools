@@ -914,6 +914,7 @@ async def run_core_cli_task(
         data_dir=run_dir,
         allow_access_outside_workdir=allow_outside_workdir,
         artifact_store=getattr(core_db, "artifact_store", None),
+        plugin_mode_exclusive_tools=plugin_assembly.get("plugin_mode_exclusive_tools") or {},
     )
     kit = CoreBaseAgentKit(
         work_root=work_root,

@@ -127,7 +127,9 @@ export type MessagePartType =
   | 'decision'
   | 'sub_line'
   | 'agent_summary'
-  | 'compaction';
+  | 'compaction'
+  /** 运行中插进去的引导指令：属于这一轮的过程，随过程区一起展开/折叠。 */
+  | 'guidance';
 
 export type MessagePartStatus = 'pending' | 'running' | 'completed' | 'error';
 

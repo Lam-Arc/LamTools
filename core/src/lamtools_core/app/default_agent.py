@@ -2642,6 +2642,7 @@ def _plugin_toolbox_contributions(plugin_assembly: Mapping[str, Any]) -> dict[st
         "handlers": dict(plugin_assembly.get("plugin_tool_handlers") or {}),
         "providers": list(plugin_assembly.get("plugin_tool_providers") or []),
         "mode_tool_sets": dict(plugin_assembly.get("plugin_mode_tool_sets") or {}),
+        "mode_exclusive_tools": dict(plugin_assembly.get("plugin_mode_exclusive_tools") or {}),
         "availability": availability,
     }
 
@@ -2802,6 +2803,7 @@ async def _build_core_runtime_toolbox(
         sub_agent_runner.plugin_tool_handlers = dict(plugin_tool_handlers)
         sub_agent_runner.plugin_tool_providers = list(plugin_tool_providers)
         sub_agent_runner.plugin_mode_tool_sets = dict(plugin_tooling["mode_tool_sets"])
+        sub_agent_runner.plugin_mode_exclusive_tools = dict(plugin_tooling["mode_exclusive_tools"])
         sub_agent_runner.plugin_availability = plugin_availability
 
     # 插件 skill 禁用状态（缺口 #1）：load_skill 查 SkillStateStore
@@ -2856,6 +2858,7 @@ async def _build_core_runtime_toolbox(
         activated_mcp_servers=activated_mcp_servers,
         plugin_tool_providers=plugin_tool_providers,
         plugin_mode_tool_sets=plugin_tooling["mode_tool_sets"],
+        plugin_mode_exclusive_tools=plugin_tooling["mode_exclusive_tools"],
         plugin_availability=plugin_availability,
         allow_access_outside_workdir=allow_access_outside_workdir,
         runtime_permissions_provider=runtime_permissions_provider,

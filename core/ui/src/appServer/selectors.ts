@@ -68,6 +68,16 @@ export function selectApprovalCards(state: CoreAppSnapshot): CoreAppRequestState
   return [...requests.values()].sort((a, b) => Number(a.seq ?? 0) - Number(b.seq ?? 0))
 }
 
+/**
+ * Mid-turn guidance reaches the transcript as its own user message, projected
+ * when the kernel drains the instruction (`<turn>:user:guide:<event>`). It
+ * belongs to the running turn rather than opening a new one, so it carries no
+ * editable source message — the id is the only durable marker.
+ */
+function isGuidanceMessageId(messageId: string): boolean {
+  return messageId.includes(':user:guide:')
+}
+
 export function selectChatMessages(
   state: CoreAppSnapshot,
   itemCache?: Map<CoreRuntimeItem, CoreAppItem>,
@@ -86,6 +96,55 @@ export function selectChatMessages(
   // (ChatThread keys on msg.id). The first segment keeps the legacy
   // `assistant:<turn>` id, later ones append `:<n>`.
   const assistantSegments = new Map<string, number>()
+  /** Open (or reuse) this turn's assistant segment. A mid-turn guidance part
+   *  is rendered inside it — the instruction belongs to the turn's process and
+   *  must not open a second assistant block, which is what made one turn look
+   *  severed into two replies. */
+  const ensureAssistantSegment = (item: CoreAppItem, turnId: string): CoreAppServerChatMessage => {
+    const last = messages[messages.length - 1]
+    if (last && last.role === 'assistant' && assistantSegmentTurnId(last.id) === turnId) return last
+    const segment = (assistantSegments.get(turnId) ?? 0) + 1
+    assistantSegments.set(turnId, segment)
+    const appTurn = typeof item.turn_id === 'string' ? state.turns?.[item.turn_id] : undefined
+    const coreTurn = typeof item.turn_id === 'string' ? state.core?.turns?.[item.turn_id] : undefined
+    // New snapshots keep context pressure and provider billing data in
+    // separate fields. Older snapshots only have `usage`; expose it in
+    // both compatibility slots so historical turns remain readable while
+    // new data cannot accidentally mix the two categories.
+    const providerUsage = coreTurn && isRecord(coreTurn.usage) ? coreTurn.usage : null
+    const contextMetrics = coreTurn && isRecord(coreTurn.context_metrics)
+      ? coreTurn.context_metrics
+      : providerUsage
+    const runtimeModelId = runtimeModelIdForTurn(appTurn, coreTurn)
+    const timestamp = runtimeTimestampForTurn(appTurn, coreTurn)
+    const durationMs = runtimeDurationMsForTurn(appTurn, coreTurn)
+    messages.push({
+      // Real turn ids contain colons (`<session>:turn:<run>`), so segments
+      // are separated with `#` — never a colon.
+      id: segment === 1 ? `assistant:${turnId}` : `assistant:${turnId}#${segment}`,
+      turnId,
+      role: 'assistant',
+      content: '',
+      ...(timestamp ? { timestamp } : {}),
+      parts: [],
+      // Carry the item metadata through (audit 15 S1: the source item's
+      // ``metadata.live`` flag was dropped here, so the projection could
+      // never see it for main-line messages).
+      metadata: {
+        ...(isRecord(item.metadata) ? item.metadata : {}),
+        ...(contextMetrics ? {
+          // `processMetrics` is the historical name consumed by members;
+          // it now intentionally means context metrics only.
+          processMetrics: contextMetrics,
+          contextMetrics,
+        } : {}),
+        ...(providerUsage ? { usageMetrics: providerUsage } : {}),
+        ...(runtimeModelId ? { runtime_model_id: runtimeModelId } : {}),
+        ...(durationMs !== null ? { duration_ms: durationMs } : {}),
+      },
+    })
+    return messages[messages.length - 1]
+  }
   for (const itemId of itemOrder) {
     if (suppressedItemIds.has(itemId) || nestedChildItemIds.has(itemId)) continue
     const rawItem = canonicalItemForId(state, itemId, itemCache) ?? outerProductItemForId(state, itemId)
@@ -97,6 +156,14 @@ export function selectChatMessages(
     if (!isRenderableItem(item)) continue
     const resolvedTurnId = itemTurnId(state, item)
     if (item.type === 'userMessage') {
+      if (isGuidanceMessageId(item.item_id)) {
+        // Guidance is part of the running turn, not a new turn's opening
+        // message: it rides the segment's process timeline at its own point in
+        // time, so collapsing the process hides it with everything else.
+        const assistant = ensureAssistantSegment(item, resolvedTurnId || 'none')
+        assistant.parts.push({ ...item, type: 'guidance', content: inputToText(item.content) })
+        continue
+      }
       messages.push({
         id: item.item_id,
         ...(resolvedTurnId ? { turnId: resolvedTurnId } : {}),
@@ -108,50 +175,7 @@ export function selectChatMessages(
       continue
     }
     const turnId = resolvedTurnId || 'none'
-    const last = messages[messages.length - 1]
-    if (!last || last.role !== 'assistant' || assistantSegmentTurnId(last.id) !== turnId) {
-      const segment = (assistantSegments.get(turnId) ?? 0) + 1
-      assistantSegments.set(turnId, segment)
-      const appTurn = typeof item.turn_id === 'string' ? state.turns?.[item.turn_id] : undefined
-      const coreTurn = typeof item.turn_id === 'string' ? state.core?.turns?.[item.turn_id] : undefined
-      // New snapshots keep context pressure and provider billing data in
-      // separate fields. Older snapshots only have `usage`; expose it in
-      // both compatibility slots so historical turns remain readable while
-      // new data cannot accidentally mix the two categories.
-      const providerUsage = coreTurn && isRecord(coreTurn.usage) ? coreTurn.usage : null
-      const contextMetrics = coreTurn && isRecord(coreTurn.context_metrics)
-        ? coreTurn.context_metrics
-        : providerUsage
-      const runtimeModelId = runtimeModelIdForTurn(appTurn, coreTurn)
-      const timestamp = runtimeTimestampForTurn(appTurn, coreTurn)
-      const durationMs = runtimeDurationMsForTurn(appTurn, coreTurn)
-      messages.push({
-        // Real turn ids contain colons (`<session>:turn:<run>`), so segments
-        // are separated with `#` — never a colon.
-        id: segment === 1 ? `assistant:${turnId}` : `assistant:${turnId}#${segment}`,
-        turnId,
-        role: 'assistant',
-        content: '',
-        ...(timestamp ? { timestamp } : {}),
-        parts: [],
-        // Carry the item metadata through (audit 15 S1: the source item's
-        // ``metadata.live`` flag was dropped here, so the projection could
-        // never see it for main-line messages).
-        metadata: {
-          ...(isRecord(item.metadata) ? item.metadata : {}),
-          ...(contextMetrics ? {
-            // `processMetrics` is the historical name consumed by members;
-            // it now intentionally means context metrics only.
-            processMetrics: contextMetrics,
-            contextMetrics,
-          } : {}),
-          ...(providerUsage ? { usageMetrics: providerUsage } : {}),
-          ...(runtimeModelId ? { runtime_model_id: runtimeModelId } : {}),
-          ...(durationMs !== null ? { duration_ms: durationMs } : {}),
-        },
-      })
-    }
-    const assistant = messages[messages.length - 1]
+    const assistant = ensureAssistantSegment(item, turnId)
     if (item.type === 'agentMessage') {
       const content = String(item.content ?? '')
       // Always accumulate the last agentMessage text as content for backward compat
@@ -617,7 +641,11 @@ function coreItemToAppItem(item: CoreRuntimeItem): CoreAppItem {
     status: item.status,
     // userMessage content is an array of typed input parts.  Keeping only
     // strings made locally-created mobile user messages render as empty.
-    content: item.content ?? payload.content,
+    // The same trap bites a run-item user message (mid-turn guidance): it
+    // carries its parts in payload.content while the record's own ``content``
+    // stays empty — an empty string is not nullish, so ``??`` never fell
+    // through and the bubble rendered without its text.
+    content: item.content || payload.content,
     deltas: item.deltas,
     artifacts: item.artifacts,
     usage: item.usage,

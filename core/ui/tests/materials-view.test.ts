@@ -167,6 +167,27 @@ describe('MaterialsView', () => {
     wrapper.unmount()
   })
 
+  it('a layer that holds only sub-layers reads as content, not as empty', async () => {
+    // 复现：站在「素材」里，下面明明有 Pelican 这一层，却还弹「这一层还没有文件」。
+    const { wrapper } = mountView([
+      artifact({ artifact_id: 'a3', name: '鹈鹕.svg', folder: '素材/Pelican' }),
+    ])
+    await settle()
+    await wrapper.get('[data-materials-tab="folders"]').trigger('click')
+    await settle()
+    await wrapper.get('[data-materials-folder="素材"]').trigger('click')
+    await settle()
+
+    expect(wrapper.find('[data-materials-empty]').exists()).toBe(false)
+    const chip = wrapper.get('[data-materials-subfolder="素材/Pelican"]')
+    expect(chip.text()).toContain('1')
+
+    await chip.trigger('click')
+    await settle()
+    expect(names(wrapper)).toEqual(['a3'])
+    wrapper.unmount()
+  })
+
   it('toggles the favourite through the batch bar and confirms before removing', async () => {
     const { wrapper, calls } = mountView([artifact({ artifact_id: 'a1', name: '提纲.md' })])
     await settle()

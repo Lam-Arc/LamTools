@@ -105,6 +105,73 @@ def test_study_skills_are_scoped_by_the_real_plugin_assembly(tmp_path):
     assert "load_skill" in exposed
 
 
+def test_study_tools_are_scoped_to_the_study_mode(tmp_path):
+    """study 的工具只属于学习模式：主 Agent 模式既看不见也不能执行。
+
+    notes 是 study 的受限工具；资料库的完整能力归主 Agent 的 library 工具。
+    对照组：workflow 模式未声明独占，它的工具在普通对话里照旧可用。
+    """
+    from lamtools_core.app.base_agent import assemble_core_agent_plugins
+    from lamtools_core.plugins.tools import complete_plugin_tool_specs
+    from lamtools_core.tool.default_toolbox import bundled_core_tool_specs, default_core_tool_specs
+
+    assembly = assemble_core_agent_plugins(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[],
+    )
+    exclusive = assembly["plugin_mode_exclusive_tools"]
+    study_tools = {"get_knowledge_net", "build_knowledge_net", "sign", "exam", "notes"}
+    assert exclusive["study:study"] == study_tools
+    assert exclusive["study"] == study_tools
+    # 通用工具（read_file 等）出现在 study 模式的 tools 里，但不该被独占。
+    assert "read_file" not in exclusive["study:study"]
+    assert "workflow:workflow" not in exclusive
+
+    base_specs = {spec.name: spec for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]}
+    plugin_specs: list = []
+    for group in assembly["plugin_tool_groups"]:
+        plugin_specs.extend(
+            complete_plugin_tool_specs(
+                group["tools"],
+                plugin_name=group["name"],
+                plugin_root=group["root"],
+                base_specs_by_name=base_specs,
+            )
+        )
+
+    def build(active_mode=None):
+        return build_core_toolbox(
+            work_root=tmp_path,
+            active_mode=active_mode,
+            plugin_tool_specs=plugin_specs,
+            plugin_mode_tool_sets=assembly["plugin_mode_tool_sets"],
+            plugin_mode_exclusive_tools=assembly["plugin_mode_exclusive_tools"],
+        )
+
+    # 注册表完整（配置面可见），但模型可见面按模式收紧。
+    assert study_tools <= {spec.name for spec in build().tool_specs()}
+    for mode in ("execute", None):
+        exposed = {tool["function"]["name"] for tool in build(mode).model_tools(active_mode=mode)}
+        assert not (study_tools & exposed), f"study 工具泄漏进 {mode} 模式: {study_tools & exposed}"
+    study_exposed = {
+        tool["function"]["name"] for tool in build("study:study").model_tools(active_mode="study:study")
+    }
+    assert study_tools <= study_exposed
+
+    # 执行拦截：主 Agent 模式下即使模型手里有陈旧上下文也不能执行。
+    blocked = build("execute").prepare_call(
+        ToolCall(id="mode-notes", name="notes", arguments={"action": "list"})
+    )
+    assert blocked.metadata["approval"]["blocked"] is True
+    assert "study:study" in blocked.metadata["approval"]["reason"]
+
+    allowed = build("study:study").prepare_call(
+        ToolCall(id="mode-notes", name="notes", arguments={"action": "list"})
+    )
+    assert allowed.metadata["approval"]["blocked"] is False
+
+
 def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
     """默认装配包含基础工具和所有已启用 bundled plugin 工具。
 

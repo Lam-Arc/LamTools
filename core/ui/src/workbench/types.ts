@@ -50,6 +50,9 @@ export interface WorkbenchRuntimeOptions {
   shallowThinking?: Readonly<Ref<boolean>>
   /** Called when the live composer accepts a submission. */
   onSubmitStart?: () => void
+  /** Called once a submission reaches any outcome (sent / queued / guided /
+   *  failed). Hosts use it to retire the "sending" placeholder. */
+  onSubmitSettled?: () => void
   /** Optional host capability hook for command side effects. */
   onCommandResult?: (result: Record<string, unknown>) => void | Promise<void>
   /**
@@ -63,6 +66,7 @@ export interface WorkbenchComposerCallbacks {
   onError?: (message: string) => void
   onStatusText?: (message: string) => void
   onSubmitStart?: () => void
+  onSubmitSettled?: () => void
   onTurnStarted?: () => void | Promise<void>
   onCommandResult?: (result: Record<string, unknown>) => void | Promise<void>
 }

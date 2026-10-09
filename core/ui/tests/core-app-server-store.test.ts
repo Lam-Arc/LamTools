@@ -111,6 +111,23 @@ describe('core appServer runtime store', () => {
     expect(runtime.state?.core?.status).toBe('completed')
   })
 
+  it('reports a rejected guide instead of pretending it was accepted', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method) => {
+        if (method === 'thread/resume') return { snapshot: snapshot(1, 'running') }
+        if (method === 'turn/steer') return { applied: false, reason: 'run_not_active' }
+        return {}
+      }),
+      scheduleFrame: () => undefined,
+    })
+    await controller.connect('thread-1')
+
+    // 后端明确拒绝（这一轮已经结束）：不能静默当成成功，否则界面会声称"引导已发送"
+    await expect(controller.steerTurn('thread-1', 'turn-1', '改成蓝色'))
+      .rejects.toThrow('这一轮已经结束，引导没有生效')
+  })
+
   it('does not let an older snapshot or event roll a terminal turn back to running', async () => {
     const runtime = createCoreAppServerRuntimeState()
     const frames: Array<() => void> = []

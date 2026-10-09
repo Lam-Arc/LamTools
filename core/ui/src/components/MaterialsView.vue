@@ -120,11 +120,11 @@
         还没有归档 — 在文件卡片的菜单里「归到文件夹」就会出现在这里。
       </p>
 
-      <!-- 空态 -->
-      <div v-else-if="!visible.length" class="full-area-empty" data-materials-empty>
+      <!-- 空态：只有这一层既没有直属文件、也没有子层时才算空 -->
+      <div v-else-if="!visible.length && !childFolders.length" class="full-area-empty" data-materials-empty>
         <span class="full-area-empty-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.8" /></span>
         <h2 class="full-area-empty-title">{{ openFolder ? '这一层还没有文件' : '资料库还是空的' }}</h2>
-        <p class="full-area-empty-hint">助手产出的文件会自动出现在这里；你也可以直接上传文件进来。</p>
+        <p class="full-area-empty-hint">上传文件，或让助手把要留存的产出归入资料库。</p>
         <button class="library-button library-button--primary" type="button" data-materials-empty-upload @click="uploadHere">上传文件</button>
       </div>
 

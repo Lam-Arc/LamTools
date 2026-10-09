@@ -245,6 +245,19 @@ describe('WorkspaceShell rendering', () => {
     expect(wrapper.emitted('composer-submit')).toHaveLength(1);
   });
 
+  it('keeps Enter in the fallback composer to send-only', async () => {
+    const wrapper = mountShell();
+    const textarea = wrapper.get('.floating-composer textarea');
+
+    // 空输入的回车不能转发给宿主：宿主把它当成停止指令（按钮此刻就是停止形态）
+    await textarea.trigger('keydown', { key: 'Enter' });
+    expect(wrapper.emitted('composer-submit')).toBeUndefined();
+
+    (textarea.element as HTMLTextAreaElement).value = '继续';
+    await textarea.trigger('keydown', { key: 'Enter' });
+    expect(wrapper.emitted('composer-submit')).toHaveLength(1);
+  });
+
   it('renders default composer action as stop while running', () => {
     const wrapper = mountShell({
       props: {

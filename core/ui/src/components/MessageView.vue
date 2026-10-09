@@ -525,6 +525,20 @@
                     />
                   </div>
 
+                  <!-- 运行中插进去的引导指令：形状仍是右侧气泡（一眼认出是自己的
+                       话），但住在过程区里，随过程一起展开/收起。还没被模型接手的
+                       那一条用虚线 + 呼吸标明"待生效"。 -->
+                  <div
+                    v-else-if="group.part.partType === 'guidance'"
+                    class="process-guidance"
+                  >
+                    <div class="user-guide-label" data-user-guide-label>引导</div>
+                    <div
+                      class="user-bubble"
+                      :class="{ 'user-bubble--pending': isPendingGuidancePart(group.part) }"
+                    >{{ group.part.content }}</div>
+                  </div>
+
                   <div v-else-if="group.part.partType === 'error'" class="process-step process-step--error">
                     <button
                       type="button"
@@ -1570,6 +1584,12 @@ function toolArgChips(args: Record<string, unknown>): string[] {
   const file = args.path || args.file || args.file_path
   if (file) chips.push(`文件 ${compactPath(String(file))}`)
 
+  // 记忆工具分「项目档 / 全局档」：不标档位时，同一条路径在两档各读一次
+  // 会显示成两张一模一样的卡片，看起来像重复调用。
+  const scope = String(args.scope || '')
+  if (scope === 'project') chips.push('档位 项目档')
+  else if (scope === 'global') chips.push('档位 全局档')
+
   const start = args.start_line || args.startLine || args.line_start
   const end = args.end_line || args.endLine || args.line_end
   if (start && end) chips.push(`范围 ${start}-${end} 行`)
@@ -1845,6 +1865,10 @@ function systemIcon(msg: CoreMessage): LucideIcon {
 function isProcessExpanded(msg: CoreMessage): boolean {
   // During live streaming: auto-expand so user sees process unfolding (like GPT)
   if (isLiveMessage(msg)) return true
+  // 运行中的回合里，被引导切开的前一段不再是"最后一条回复"（live 落到后一段），
+  // 若按完成态折叠，用户正看着的那段过程文字会当场收进卡里——回合还在跑就保持
+  // 展开，回合结束后仍旧回落到完成态折叠。
+  if (isActiveTurnMessage(msg)) return true
   // Compaction is already a concise status row. Keep it visible so native
   // summary deltas and the terminal result are never hidden by a second,
   // redundant process disclosure.
@@ -1938,6 +1962,11 @@ const editInputRef = ref<{ focus: () => void } | null>(null)
 function userTurnId(msg: CoreMessage): string {
   const id = String(msg.id || '')
   return id.endsWith(':user') ? id.slice(0, id.length - ':user'.length) : ''
+}
+
+/** 待生效的引导：已经发出、还没被模型接手（真实条目落库后会换成实色气泡）。 */
+function isPendingGuidancePart(part: MessagePart): boolean {
+  return (part.metadata as Record<string, unknown> | undefined)?.guidancePending === true
 }
 
 function userActionable(msg: CoreMessage): boolean {

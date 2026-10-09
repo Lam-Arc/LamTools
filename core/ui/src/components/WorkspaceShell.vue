@@ -322,10 +322,14 @@ const emit = defineEmits<{
 }>()
 
 // IME guard for the fallback textarea: composition-confirm Enter must not
-// submit the message (audit 19 S3).
+// submit the message (audit 19 S3). Enter only sends — with nothing typed it
+// must not reach the host, whose submit handler treats an empty composer as
+// the stop action.
 function onComposerEnter(event: KeyboardEvent) {
   if (event.isComposing) return
   event.preventDefault()
+  const value = (event.target as HTMLTextAreaElement | null)?.value || ''
+  if (!value.trim()) return
   emit('composer-submit')
 }
 

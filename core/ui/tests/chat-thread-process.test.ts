@@ -2699,3 +2699,170 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.message-artifacts').exists()).toBe(true);
   });
 });
+
+/** 记忆工具在项目档与全局档各读一次同名文件：两张卡片必须能区分。 */
+function memoryReadMessages(): CoreMessage[] {
+  return [{
+    id: 'm-memory',
+    role: 'assistant',
+    content: 'Let me read the preference.',
+    timestamp: '2026-10-08T00:00:00.000Z',
+    metadata: { timeline: true },
+    parts: [
+      {
+        id: 'p-m1',
+        partType: 'tool_call',
+        status: 'completed',
+        label: 'memory',
+        toolName: 'memory',
+        toolArgs: { action: 'read', scope: 'project', path: 'preferences/english-practice-mode.md' },
+        toolResult: '# English Practice Mode',
+      },
+      {
+        id: 'p-m2',
+        partType: 'tool_call',
+        status: 'completed',
+        label: 'memory',
+        toolName: 'memory',
+        toolArgs: { action: 'read', scope: 'global', path: 'preferences/english-practice-mode.md' },
+        toolResult: '# English Practice Mode',
+      },
+    ],
+  }];
+}
+
+it('marks the memory tier on the card, so two identical paths do not read as one duplicate', async () => {
+  const wrapper = mountChatThread({
+    props: { messages: memoryReadMessages(), processExpandedIds: new Set(['m-memory']) },
+  });
+  await nextTick();
+
+  // 工具卡默认收起（同类工具先折成一个分组）：逐层展开后，各自的档位
+  // 必须写在卡上——否则两次同名读取看起来就是一次重复调用。
+  const group = wrapper.find('.process-group-summary');
+  if (group.exists()) await group.trigger('click');
+  await nextTick();
+  const rows = wrapper.findAll('.process-tool-row');
+  expect(rows.length).toBe(2);
+  for (const row of rows) {
+    await row.trigger('click');
+  }
+  await nextTick();
+
+  const text = wrapper.text();
+  expect(text).toContain('档位 项目档');
+  expect(text).toContain('档位 全局档');
+  wrapper.unmount();
+});
+
+describe('Mid-turn guidance inside the process', () => {
+  /** 一轮里收到过渡引导：引导是过程里的一行，和这一轮共用同一个助手块。 */
+  function guidanceMessages(): CoreMessage[] {
+    return [
+      {
+        id: 'turn-guide:user',
+        role: 'user',
+        content: '把首页改成蓝色',
+        timestamp: '2026-09-15T00:00:00.000Z',
+        parts: [],
+      },
+      {
+        id: 'assistant:turn-guide',
+        role: 'assistant',
+        content: '已经改成蓝色了。',
+        timestamp: '2026-09-15T00:00:01.000Z',
+        parts: [
+          {
+            id: 'p-narration',
+            partType: 'model_text',
+            status: 'completed',
+            content: '好的，我先看一下首页。',
+            metadata: { has_tool_calls: true },
+          },
+          {
+            id: 'turn-guide:user:guide:evt-1',
+            partType: 'guidance',
+            status: 'completed',
+            content: '改成蓝色',
+          },
+          {
+            id: 'p-answer',
+            partType: 'model_text',
+            status: 'completed',
+            content: '已经改成蓝色了。',
+            metadata: { final_response: true },
+          },
+        ],
+      },
+    ]
+  }
+
+  it('renders the guide inside the process, not as a second turn block', async () => {
+    const wrapper = mountChatThread({
+      props: { messages: guidanceMessages(), turnActive: true, activeTurnId: 'turn-guide' },
+    })
+
+    // 引导不再单独占一行用户消息：整轮只有开场那一条用户消息，也只有一个助手块
+    expect(wrapper.findAll('.user-row')).toHaveLength(1)
+    expect(wrapper.findAll('.assistant-meta')).toHaveLength(1)
+    // 引导住在过程区里：形状仍是气泡，带“引导”标记
+    const guide = wrapper.find('.process-stream .process-guidance')
+    expect(guide.find('.user-guide-label').text()).toBe('引导')
+    expect(guide.find('.user-bubble').text()).toBe('改成蓝色')
+    // 这一轮的文字与最终回答照常
+    const text = wrapper.text()
+    expect(text).toContain('好的，我先看一下首页。')
+    expect(text).toContain('已经改成蓝色了。')
+
+    const guideNode = guide.element
+    const answerNode = wrapper.find('.assistant-answer').element
+    expect(Boolean(guideNode.compareDocumentPosition(answerNode) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('marks a guide that has not landed yet with the pending style', async () => {
+    const messages = guidanceMessages()
+    const assistant = messages[1]
+    assistant?.parts?.push({
+      id: 'pending-guide:1',
+      partType: 'guidance',
+      status: 'pending',
+      content: '顺便把页脚也换掉',
+      metadata: { guidancePending: true },
+    })
+    const wrapper = mountChatThread({
+      props: { messages, turnActive: true, activeTurnId: 'turn-guide' },
+    })
+
+    const bubbles = wrapper.findAll('.process-guidance .user-bubble')
+    expect(bubbles).toHaveLength(2)
+    // 已落位的那条：实色；待生效的那条：虚线 + 呼吸
+    expect(bubbles[0]?.classes()).not.toContain('user-bubble--pending')
+    expect(bubbles[1]?.classes()).toContain('user-bubble--pending')
+    expect(bubbles[1]?.text()).toBe('顺便把页脚也换掉')
+    wrapper.unmount()
+  })
+
+  it('folds the guide away with the process and brings it back on expand', async () => {
+    const messages = guidanceMessages()
+
+    const running = mountChatThread({
+      props: { messages, turnActive: true, activeTurnId: 'turn-guide' },
+    })
+    expect(running.find('.process-guidance').exists()).toBe(true)
+    running.unmount()
+
+    // 回合结束：过程按完成态折叠，引导跟着一起收起（不再有单独的常驻行）
+    const completed = mountChatThread({ props: { messages } })
+    expect(completed.find('.process-stream').exists()).toBe(false)
+    expect(completed.find('.process-guidance').exists()).toBe(false)
+    completed.unmount()
+
+    // 手动展开过程：引导回到它到达的时点上
+    const expanded = mountChatThread({
+      props: { messages, processExpandedIds: new Set(['assistant:turn-guide']) },
+    })
+    expect(expanded.find('.process-guidance .user-bubble').text()).toBe('改成蓝色')
+    expanded.unmount()
+  })
+})

@@ -528,6 +528,14 @@ export function createCoreAppServerRuntimeController<
       input: inputItems,
     }, threadId)
     applyResponse(response)
+    // 后端明确拒绝（这一轮已经结束 / 已不是当前轮）时不能当成已接受：调用方据此
+    // 决定是否显示"已发送引导"与待生效气泡，否则用户会以为指令进去了。
+    if (response.applied !== true) {
+      const reason = String(response.reason || '')
+      if (reason === 'run_not_active') throw new Error('这一轮已经结束，引导没有生效')
+      if (reason === 'active_turn_mismatch') throw new Error('当前轮次已经变化，引导没有生效')
+      throw new Error('引导没有生效')
+    }
   }
 
   async function interruptTurn(threadId: string, turnId?: string) {

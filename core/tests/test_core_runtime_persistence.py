@@ -1175,3 +1175,63 @@ def test_persistence_path_no_longer_touches_the_artifact_store() -> None:
     ):
         assert "artifact_store" not in inspect.signature(func).parameters
     assert not hasattr(default_agent, "_ingest_run_items_quietly")
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_session_keeps_attachments_the_library_references(tmp_path) -> None:
+    """删会话不该带走已入册的附件：资料库还引用着它，它就得留下来。
+
+    被引用（用户把这件上传归入了资料库）→ 行与文件都留；没被引用 → 照旧
+    随会话清掉。
+    """
+    from sqlalchemy import select
+
+    from lamtools_core.app.core_db import CoreAttachment
+    from lamtools_core.app.core_session_store import delete_session_records
+
+    db = await open_core_app_db(tmp_path / "core.db")
+    work_root = tmp_path / "work"
+    project, _ = await db.project_store.create(work_root)
+    sessions = await db.project_store.list_sessions(project.id)
+    assert sessions, "新建项目应带一个初始会话"
+    session_id = sessions[0].id
+
+    att_dir = tmp_path / "attachments"
+    att_dir.mkdir()
+    kept_blob = att_dir / "kept.png"
+    gone_blob = att_dir / "gone.png"
+    kept_blob.write_bytes(b"kept-bytes")
+    gone_blob.write_bytes(b"gone-bytes")
+    async with db.session_factory() as session:
+        session.add(CoreAttachment(
+            id="att-kept", session_id=session_id, filename="kept.png",
+            mime_type="image/png", size=kept_blob.stat().st_size,
+            storage_path=str(kept_blob), preview_type="image", metadata_json={},
+        ))
+        session.add(CoreAttachment(
+            id="att-gone", session_id=session_id, filename="gone.png",
+            mime_type="image/png", size=gone_blob.stat().st_size,
+            storage_path=str(gone_blob), preview_type="image", metadata_json={},
+        ))
+        await session.commit()
+    kept_record = await db.artifact_store.register(
+        project_id=project.id, work_root=work_root, path="attachment://att-kept",
+        kind="image", mime_type="image/png", name="kept.png",
+        source="user_upload", role="input",
+    )
+
+    async with db.session_factory() as session:
+        await delete_session_records(session, [session_id])
+        await session.commit()
+
+    async with db.session_factory() as session:
+        remaining = {
+            row[0]
+            for row in (await session.execute(select(CoreAttachment.id))).all()
+        }
+    assert "att-kept" in remaining, "被资料库引用的附件不随会话删除"
+    assert "att-gone" not in remaining, "未被引用的附件照旧随会话清掉"
+    assert kept_blob.is_file(), "被引用的附件文件必须留在盘上"
+    assert not gone_blob.exists(), "未被引用的附件文件随会话清掉"
+    assert await db.artifact_store.current_content_path(kept_record) == kept_blob.resolve()
+    await db.close()

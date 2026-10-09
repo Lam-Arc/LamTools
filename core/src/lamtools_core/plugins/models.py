@@ -76,6 +76,10 @@ class PluginUIMode:
     entry: Path
     icon: str = ""
     tools: list[str] = field(default_factory=list)
+    # 声明本模式独占 tools 里属于本插件自己的那些工具：只有该模式激活时，
+    # 这些工具才会出现在模型的工具集里，也不可被其他模式执行
+    # （generic 工具如 read_file 不受影响）。默认 False = 工具在各模式下通用。
+    exclusive_tools: bool = False
     # None means the manifest makes no claim and the host keeps every surface;
     # an empty list claims the mode supports none of them.
     capabilities: list[str] | None = None

@@ -260,6 +260,24 @@ def _is_terminal_error_event(event: RunItemEvent) -> bool:
     return not event.item_id
 
 
+def typed_input_parts_text(parts: list[Any]) -> str:
+    """Flatten typed input parts (``[{"type": "text", "text": ...}]``) to text.
+
+    Mirrors the client's concatenation, so a message body reads the same on the
+    wire and in the durable record.  Only ``text`` members contribute; every
+    part stays intact in the payload for readers that need the structure
+    (attachments, typed inputs).
+    """
+    pieces: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text")
+        if isinstance(text, str):
+            pieces.append(text)
+    return "".join(pieces).strip()
+
+
 def _upsert_item(state: dict[str, Any], event: RunItemEvent) -> dict[str, Any]:
     item_id = event.item_id or f"{event.turn_id or event.thread_id}:{event.kind}:{event.event_id}"
     item = state.setdefault("items", {}).setdefault(
@@ -299,6 +317,15 @@ def _upsert_item(state: dict[str, Any], event: RunItemEvent) -> dict[str, Any]:
             item["content"] = f"{item.get('content', '')}{delta}"
     elif isinstance(content, str):
         item["content"] = content
+    elif isinstance(content, list):
+        # userMessage items carry typed input parts; the mid-turn guidance
+        # bubble is projected that way (`runtime.guidance_received`).  Keeping
+        # the flat body in ``content`` as well means the durable record — and
+        # every consumer that reads ``content`` instead of the payload — still
+        # has the message text.
+        text = typed_input_parts_text(content)
+        if text:
+            item["content"] = text
 
     item_seq = int(event.seq or 0)
     if item_id not in state.setdefault("item_order", []):

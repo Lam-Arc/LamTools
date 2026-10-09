@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   hydrateSnapshot,
   coreMessageHasProcessParts,
+  createCoreWorkbenchProjectionCache,
   normalizeCoreSessionStatus,
   nextCoreProcessExpandedIds,
   selectCoreQueuedInputs,
@@ -926,5 +927,143 @@ describe('core appServer workbench approval recovery', () => {
 
     expect(tool).toBeDefined()
     expect(tool?.toolName).toBe('read_file')
+  })
+})
+
+describe('pending guidance projection', () => {
+  function turnSnapshot(): CoreAppSnapshot {
+    return hydrateSnapshot({
+      thread_id: 'thread-guide',
+      snapshot_seq: 5,
+      status: 'running',
+      core: {
+        thread_id: 'thread-guide',
+        snapshot_seq: 5,
+        status: 'running',
+        item_order: ['answer-1'],
+        turns: {
+          'turn-guide': { turn_id: 'turn-guide', status: 'running', items: ['answer-1'] },
+          'turn-other': { turn_id: 'turn-other', status: 'running', items: [] },
+        },
+        items: {
+          'answer-1': {
+            item_id: 'answer-1',
+            turn_id: 'turn-guide',
+            kind: 'message',
+            status: 'completed',
+            content: '好的，我先看一下首页。',
+            payload: { type: 'agentMessage', content: '好的，我先看一下首页。' },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+  }
+
+  const pendingPart = {
+    id: 'pending-guide:1',
+    partType: 'guidance' as const,
+    status: 'pending' as const,
+    content: '改成蓝色',
+    label: '引导',
+    metadata: { guidancePending: true },
+  }
+
+  it('appends the pending guide at the tail of its own turn only', () => {
+    const messages = selectCoreWorkbenchMessages(turnSnapshot(), {
+      active: true,
+      pendingGuidance: [
+        { turnId: 'turn-guide', part: pendingPart },
+        { turnId: 'turn-other', part: { ...pendingPart, id: 'pending-guide:2' } },
+      ],
+    })
+
+    const guideParts = messages.find(message => message.id === 'assistant:turn-guide')?.parts || []
+    // 尾部追加：先有的过程行不动，待生效的引导落在最后
+    expect(guideParts.map(part => part.id)).toEqual(['answer-1', 'pending-guide:1'])
+    expect(guideParts[1]?.partType).toBe('guidance')
+    expect(guideParts[1]?.metadata).toMatchObject({ guidancePending: true })
+    // 另一轮的引导不会跑到这一轮里
+    expect(messages.some(message => message.parts?.some(part => part.id === 'pending-guide:2'))).toBe(false)
+  })
+
+  it('attaches the pending guide to the last segment of a multi-segment turn only', () => {
+    // 一轮里出现别的中途用户消息（非引导）时，助手侧会被切成多段：待生效的引导
+    // 属于正在跑的那一段，不能每段都摆一个同样的气泡。
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-guide',
+      snapshot_seq: 6,
+      status: 'running',
+      items: {
+        'turn-guide:user': {
+          item_id: 'turn-guide:user',
+          turn_id: 'turn-guide',
+          type: 'userMessage',
+          status: 'completed',
+          seq: 1,
+          content: [{ type: 'text', text: '把首页改成蓝色' }],
+        },
+        'turn-guide:user:mid': {
+          item_id: 'turn-guide:user:mid',
+          turn_id: 'turn-guide',
+          type: 'userMessage',
+          status: 'completed',
+          seq: 3,
+          content: [{ type: 'text', text: '补充一句' }],
+        },
+      },
+      item_order: ['turn-guide:user', 'turn-guide:user:mid'],
+      turns: {
+        'turn-guide': { turn_id: 'turn-guide', status: 'running', items: ['turn-guide:user', 'turn-guide:user:mid', 'answer-1', 'answer-2'] },
+      },
+      core: {
+        thread_id: 'thread-guide',
+        snapshot_seq: 6,
+        status: 'running',
+        item_order: ['answer-1', 'answer-2'],
+        turns: {
+          'turn-guide': { turn_id: 'turn-guide', status: 'running', items: ['answer-1', 'answer-2'] },
+        },
+        items: {
+          'answer-1': {
+            item_id: 'answer-1',
+            turn_id: 'turn-guide',
+            kind: 'message',
+            status: 'completed',
+            seq: 2,
+            content: '先看看',
+            payload: { type: 'agentMessage', content: '先看看' },
+          },
+          'answer-2': {
+            item_id: 'answer-2',
+            turn_id: 'turn-guide',
+            kind: 'message',
+            status: 'completed',
+            seq: 4,
+            content: '已经改好',
+            payload: { type: 'agentMessage', content: '已经改好' },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectCoreWorkbenchMessages(snapshot, {
+      active: true,
+      pendingGuidance: [{ turnId: 'turn-guide', part: pendingPart }],
+    })
+
+    const withPending = messages.filter(message => message.parts?.some(part => part.id === pendingPart.id))
+    expect(withPending).toHaveLength(1)
+    expect(withPending[0]?.id).toBe('assistant:turn-guide#2')
+  })
+
+  it('keeps the projected message identity stable while the pending guide is unchanged', () => {
+    const snapshot = turnSnapshot()
+    const cache = createCoreWorkbenchProjectionCache()
+    const options = { active: true, pendingGuidance: [{ turnId: 'turn-guide', part: pendingPart }] }
+    const first = selectCoreWorkbenchMessages(snapshot, options, cache)
+    const second = selectCoreWorkbenchMessages(snapshot, options, cache)
+    expect(second.find(message => message.id === 'assistant:turn-guide')).toBe(
+      first.find(message => message.id === 'assistant:turn-guide'),
+    )
   })
 })

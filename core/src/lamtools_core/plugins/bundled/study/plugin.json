@@ -38,6 +38,7 @@
         "capabilities": [
           "notes"
         ],
+        "exclusiveTools": true,
         "tools": [
           "get_knowledge_net",
           "build_knowledge_net",

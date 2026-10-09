@@ -716,7 +716,7 @@ window.renderFrame = async (t) => {
     style($(`colSub${i}`), { opacity: dim * 0.9 * (1 - give) * titleFade })
     // 开场的预览：三块一落定就交代各自是什么（画面在动），拓宽开始时退场；
     // 代码段的左窄栏继续用这张真实源码页，办公段开始前它自己退掉
-    const auxPoster = i === 0 ? codeIn * (1 - codeOut) : 0
+    const auxPoster = i === 0 ? codeIn * (1 - codeOut) * (1 - clamp01(back)) : 0
     style($(`poster${i}`), {
       opacity: Math.max(
         seg(t, 0.35 + i * 0.1, 0.85 + i * 0.1) * (1 - seg(t, at('O2') + 0.5, at('O2') + 1.5)),
@@ -990,7 +990,7 @@ window.renderFrame = async (t) => {
   const codeWarp = codeU <= 2.5 ? codeU
     : codeU <= 5.5 ? 2.5 + (codeU - 2.5) * 1.6
       : 2.5 + 3 * 1.6 + (codeU - 5.5) * 0.81
-  setUiFrame('uiCode', codeWarp * UI_FPS, 0, 450)   // 代码段：从拓宽那一刻开始放
+  setUiFrame('uiCode', Math.min(11.1, codeWarp) * UI_FPS, 0, 450)   // 代码段：从拓宽那一刻开始放，止于答案之后
   // 右窄栏：同一段素材的尾段（产品切到「定时任务」那一屏之后），慢镜看它自己走
   setUiFrame('uiJob', (342 + (codeU / 15) * 106), 342, 450, 'ui-code/film-code')
   // 左半真实界面：把"做这个小游戏"那一段按原速放完（capture 0–10s 铺在段落前半），
@@ -999,9 +999,10 @@ window.renderFrame = async (t) => {
   setUiFrame('uiGame', gameUiP * 10.0 * UI_FPS, 0, 450, 'ui-code/film-code')
   setUiFrame('uiChat', (t - at('D1')) * UI_FPS, 0, 480)
   if (t < at('O2') + 1.6) setGameFrame(Math.round((t + 3.5) * GAME_FPS))   // 办公段：中栏的聊天
-  const inCode = o === 1 && t < at('D1') && back < 0.5
-  const inOffice = o === 1 && t >= at('D1') && back < 0.5
-  const codeReveal = codeIn * (1 - codeOut)
+  const retractFade = 1 - clamp01(back)
+  const inCode = o === 1 && t < at('D1')
+  const inOffice = o === 1 && t >= at('D1') && back < 0.98
+  const codeReveal = codeIn * (1 - codeOut) * retractFade
   // 窗口按栏位宽度整幅缩放：过渡期里产品界面是完整的，只是变窄，不会被裁掉字
   const fit = (id, capW, colIdx, extra = 1) => style($(id), {
     transform: `scale(${(Math.min(1, colW(colIdx) / capW) * extra).toFixed(4)})`,

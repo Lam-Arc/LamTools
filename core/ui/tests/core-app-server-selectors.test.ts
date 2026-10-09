@@ -435,10 +435,10 @@ describe('core appServer selectors', () => {
     expect(messages[3]?.parts.map((part) => part.tool_name)).toEqual(['read_file', 'edit_file'])
   })
 
-  it('interleaves a mid-turn guide user message at its chronological position', () => {
+  it('interleaves a mid-turn guide part at its chronological position', () => {
     // A queue guide (`turn:user:guide:*`) lands mid-turn: its seq sits between
-    // the turn's runtime items, so it must render between the two assistant
-    // segments instead of above the whole assistant block.
+    // the turn's runtime items, so it must appear between them inside the same
+    // assistant block instead of splitting the turn into two replies.
     const snapshot = hydrateSnapshot({
       thread_id: 'thread-1',
       snapshot_seq: 10,
@@ -485,13 +485,15 @@ describe('core appServer selectors', () => {
     expect(messages.map(({ id, role }) => ({ id, role }))).toEqual([
       { id: 'user-1', role: 'user' },
       { id: 'assistant:turn-1', role: 'assistant' },
-      { id: 'turn-1:user:guide:q1', role: 'user' },
-      { id: 'assistant:turn-1#2', role: 'assistant' },
     ])
-    expect(messages[1]?.parts.map((part) => part.tool_name ?? part.type)).toEqual(['agentMessage', 'search'])
-    expect(messages[1]?.content).toBe('开始处理')
-    expect(messages[3]?.parts.map((part) => part.tool_name ?? part.type)).toEqual(['agentMessage'])
-    expect(messages[3]?.content).toBe('完成')
+    // 引导按到达时点插进过程时间线：说明文字 → 工具 → 引导 → 完成
+    expect(messages[1]?.parts.map((part) => part.tool_name ?? part.type)).toEqual([
+      'agentMessage',
+      'search',
+      'guidance',
+      'agentMessage',
+    ])
+    expect(messages[1]?.content).toBe('完成')
   })
 
   it('keeps one assistant segment per turn when turn ids contain colons', () => {
@@ -751,5 +753,105 @@ describe('core appServer approval snapshot recovery', () => {
 
     expect(decision).toBeDefined()
     expect(decision?.status).toBe('waiting')
+  })
+})
+
+describe('mid-turn guidance projection', () => {
+  /** 一轮：开场用户消息 + 一段说明文字 + 引导 + 引导后的回答。 */
+  function guidanceSnapshot(guideItem: Record<string, unknown>): CoreAppSnapshot {
+    return hydrateSnapshot({
+      thread_id: 'thread-guide',
+      snapshot_seq: 42,
+      status: 'running',
+      items: {
+        'turn-guide:user': {
+          item_id: 'turn-guide:user',
+          turn_id: 'turn-guide',
+          type: 'userMessage',
+          status: 'completed',
+          seq: 2,
+          content: [{ type: 'text', text: '把首页改成蓝色' }],
+        },
+      },
+      item_order: ['turn-guide:user'],
+      turns: {
+        'turn-guide': { turn_id: 'turn-guide', status: 'running', items: ['turn-guide:user', 'narration', 'turn-guide:user:guide:evt-1', 'answer'] },
+      },
+      core: {
+        thread_id: 'thread-guide',
+        snapshot_seq: 42,
+        status: 'running',
+        item_order: ['narration', 'turn-guide:user:guide:evt-1', 'answer'],
+        turns: {
+          'turn-guide': { turn_id: 'turn-guide', status: 'running', items: ['narration', 'turn-guide:user:guide:evt-1', 'answer'] },
+        },
+        items: {
+          narration: {
+            item_id: 'narration',
+            turn_id: 'turn-guide',
+            kind: 'message',
+            status: 'completed',
+            seq: 5,
+            content: '好的，我先看一下首页。',
+            payload: { type: 'agentMessage', content: '好的，我先看一下首页。', has_tool_calls: true },
+          },
+          answer: {
+            item_id: 'answer',
+            turn_id: 'turn-guide',
+            kind: 'message',
+            status: 'completed',
+            seq: 60,
+            content: '已经改成蓝色了。',
+            payload: { type: 'agentMessage', content: '已经改成蓝色了。', final_response: true },
+          },
+          'turn-guide:user:guide:evt-1': {
+            item_id: 'turn-guide:user:guide:evt-1',
+            turn_id: 'turn-guide',
+            kind: 'message',
+            status: 'completed',
+            seq: 42,
+            ...guideItem,
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+  }
+
+  function guidePartOf(messages: ReturnType<typeof selectChatMessages>) {
+    const assistant = messages.find(message => message.role === 'assistant')
+    return assistant?.parts.find(part => part.item_id === 'turn-guide:user:guide:evt-1')
+  }
+
+  it('rides the turn process instead of opening a second turn block', () => {
+    const messages = selectChatMessages(guidanceSnapshot({
+      content: '',
+      payload: {
+        type: 'userMessage',
+        status: 'completed',
+        content: [{ type: 'text', text: '改成蓝色' }],
+      },
+    }))
+
+    // 引导不再单独占一条消息：整轮只有开场用户消息 + 一条助手消息
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant'])
+    const parts = messages[1]?.parts.map(part => ({ id: part.item_id, type: part.type, content: part.content }))
+    expect(parts).toEqual([
+      { id: 'narration', type: 'agentMessage', content: '好的，我先看一下首页。' },
+      { id: 'turn-guide:user:guide:evt-1', type: 'guidance', content: '改成蓝色' },
+      { id: 'answer', type: 'agentMessage', content: '已经改成蓝色了。' },
+    ])
+  })
+
+  it('reads the guide body out of the record once the reducer stores it', () => {
+    const messages = selectChatMessages(guidanceSnapshot({
+      content: '改成蓝色',
+      payload: {
+        type: 'userMessage',
+        status: 'completed',
+        content: [{ type: 'text', text: '改成蓝色' }],
+      },
+    }))
+
+    expect(guidePartOf(messages)?.content).toBe('改成蓝色')
   })
 })

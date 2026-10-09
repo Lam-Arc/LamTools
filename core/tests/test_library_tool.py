@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from lamtools_core.app.core_db import open_core_app_db
+from lamtools_core.app.core_db import CoreAttachment, open_core_app_db
 from lamtools_core.tool import ToolCall
 from lamtools_core.tool.default_toolbox import (
     DEFAULT_TOOL_PERMISSIONS,
@@ -162,6 +162,57 @@ async def test_library_tool_registers_a_file_deliberately(tmp_path):
     bad_role = await handler(_call(action="register", path="报告/总结.md", role="evidence"))
     assert bad_role.status == "failed"
     assert bad_role.error_code == "invalid_argument"
+
+
+@pytest.mark.asyncio
+async def test_library_list_carries_the_real_file_of_every_entry(tmp_path):
+    """清单每条都给文件的真实位置：工作区件给项目内路径，聊天附件给附件库路径。
+
+    这是「助手读不到上传图片」的修复：它看得见册子上的名字，也必须看得见
+    文件在哪，才能用 read_file 翻它。
+    """
+    db, store, project, work_root, uploaded, generated = await _library_fixture(tmp_path)
+
+    attachment_dir = tmp_path / "attachments"
+    attachment_dir.mkdir()
+    blob = attachment_dir / "image.png"
+    blob.write_bytes(b"fakepng-bytes")
+    async with db.session_factory() as session:
+        session.add(CoreAttachment(
+            id="att-1",
+            session_id="sess-1",
+            filename="image.png",
+            mime_type="image/png",
+            size=blob.stat().st_size,
+            storage_path=str(blob),
+            preview_type="image",
+            metadata_json={},
+        ))
+        await session.commit()
+    pasted = await store.register(
+        project_id=project.id,
+        work_root=work_root,
+        path="attachment://att-1",
+        kind="image",
+        mime_type="image/png",
+        name="image.png",
+        source="user_upload",
+        role="input",
+    )
+
+    handler = make_library_handler(store, work_root)
+    listed = await handler(_call(action="list"))
+
+    assert listed.status == "ok"
+    assert f"file={work_root / 'result.txt'}" in listed.content
+    assert f"file={blob}" in listed.content
+    assert generated.artifact_id in listed.content and pasted.artifact_id in listed.content
+
+    # 附件文件不在了：这一条如实报 missing，而不是无声空着。
+    blob.unlink()
+    listed = await handler(_call(action="list"))
+    assert f"file=(missing)" in listed.content
+    await db.close()
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,7 @@ from lamtools_core.session import MessageRecord, SessionRecord
 
 from .core_db import (
     CoreAppDb, CoreAppEvent, CoreAttachment, CoreArrangeJob, CoreArrangeOccurrence,
-    CoreArtifactRevision,
+    CoreArtifact, CoreArtifactRevision,
     CoreCheckpoint, CoreCheckpointAttachmentRef, CoreCheckpointBlobRef, CoreCheckpointV2,
     CoreCheckpointV2Materialized,
     CoreCheckpointV2SessionMessages,
@@ -617,9 +617,27 @@ async def delete_session_records(connection, session_ids: list[str]) -> None:
             if value is not None
             and any(str(value) == root or str(value).startswith(root + ":sub:") for root in root_ids)
         )
-    attachment_rows = list((await connection.execute(
-        select(CoreAttachment.storage_path).where(CoreAttachment.session_id.in_(owned_ids))
-    )).all())
+    # 资料库可能还引用着某些附件（用户把这些上传归入了资料库）：删会话是删
+    # 对话，不该带走已经入册的东西——被在册条目引用的附件行与文件都留下。
+    referenced_attachment_ids = {
+        str(value)[len("attachment://"):]
+        for (value,) in (await connection.execute(
+            select(CoreArtifact.path).where(
+                CoreArtifact.deleted.is_(False),
+                CoreArtifact.path.like("attachment://%"),
+            )
+        )).all()
+        if value
+    }
+    attachment_rows = [
+        (str(row[0]), row[1])
+        for row in (await connection.execute(
+            select(CoreAttachment.id, CoreAttachment.storage_path).where(
+                CoreAttachment.session_id.in_(owned_ids)
+            )
+        )).all()
+        if str(row[0]) not in referenced_attachment_ids
+    ]
     await connection.execute(delete(CoreAppEvent).where(CoreAppEvent.thread_id.in_(owned_ids)))
     await connection.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id.in_(owned_ids)))
     await connection.execute(delete(CoreHandoffContext).where(CoreHandoffContext.thread_id.in_(owned_ids)))
@@ -641,11 +659,13 @@ async def delete_session_records(connection, session_ids: list[str]) -> None:
     await connection.execute(delete(CoreCheckpointV2).where(CoreCheckpointV2.root_session_id.in_(owned_ids)))
     await connection.execute(delete(CoreCheckpoint).where(CoreCheckpoint.root_session_id.in_(owned_ids)))
     await connection.execute(delete(CoreRestoreOperation).where(CoreRestoreOperation.root_session_id.in_(owned_ids)))
-    await connection.execute(delete(CoreAttachment).where(CoreAttachment.session_id.in_(owned_ids)))
+    attachment_ids = [row[0] for row in attachment_rows]
+    if attachment_ids:
+        await connection.execute(delete(CoreAttachment).where(CoreAttachment.id.in_(attachment_ids)))
     await connection.execute(delete(CoreGoal).where(CoreGoal.thread_id.in_(owned_ids)))
     await connection.execute(delete(CoreArrangeOccurrence).where(CoreArrangeOccurrence.job_id.in_(select(CoreArrangeJob.id).where(CoreArrangeJob.thread_id.in_(owned_ids)))))
     await connection.execute(delete(CoreArrangeJob).where(CoreArrangeJob.thread_id.in_(owned_ids)))
-    for (storage_path,) in attachment_rows:
+    for (_attachment_id, storage_path) in attachment_rows:
         if not storage_path:
             continue
         try:

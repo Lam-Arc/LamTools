@@ -166,7 +166,7 @@
               <section v-for="group in filteredCatalogGroups" :key="group.category" class="tool-group">
                 <header class="tool-group-head">
                   <span class="tool-group-icon" aria-hidden="true">
-                    <component :is="categoryIcon(group.category)" :size="15" :stroke-width="1.8" />
+                    <component :is="categoryIcon(group.category)" :size="15" :stroke-width="categoryStrokeWidth(group.category)" />
                   </span>
                   <strong>{{ group.label }}</strong>
                   <span>{{ selectedToolCount(group.tools) }} / {{ group.tools.length }}</span>
@@ -205,15 +205,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch, type Component } from 'vue'
+import { BookOne, Receive } from '@icon-park/vue-next'
 import {
+  BookOpen,
   Bot,
   FileCode2,
   FileText,
   GitBranch,
   Globe2,
   Image as ImageIcon,
-  Library,
   Plus,
   RefreshCw,
   Save,
@@ -225,7 +226,6 @@ import {
   SquareTerminal,
   Trash2,
   Wrench,
-  type LucideIcon,
 } from 'lucide-vue-next'
 
 interface CatalogTool {
@@ -256,28 +256,41 @@ const CATEGORY_LABELS: Record<string, string> = {
   mcp: 'MCP',
   agent: '子代理',
   library: '资料库',
+  memory: '记忆',
+  rag: 'RAG',
+  plugin: '插件工具',
   control: '控制',
   other: '其他',
 }
 
 const CATEGORY_ORDER = [
   'file_read', 'file_write', 'command', 'git', 'web', 'image',
-  'skill', 'library', 'mcp', 'agent', 'control', 'other',
+  'skill', 'library', 'memory', 'rag', 'plugin', 'mcp', 'agent', 'control', 'other',
 ]
 
-const CATEGORY_ICONS: Record<string, LucideIcon> = {
-  file_read: FileText,
-  file_write: FileCode2,
-  command: SquareTerminal,
-  git: GitBranch,
-  web: Globe2,
-  image: ImageIcon,
-  skill: Sparkles,
-  library: Library,
-  mcp: Server,
-  agent: Bot,
-  control: SlidersHorizontal,
-  other: Wrench,
+interface CategoryIcon {
+  icon: Component
+  /** IconPark 笔画偏细：与左侧竖栏同宽时用 3.6，lucide 沿用 1.8。 */
+  strokeWidth: number
+}
+
+const CATEGORY_ICONS: Record<string, CategoryIcon> = {
+  file_read: { icon: FileText, strokeWidth: 1.8 },
+  file_write: { icon: FileCode2, strokeWidth: 1.8 },
+  command: { icon: SquareTerminal, strokeWidth: 1.8 },
+  git: { icon: GitBranch, strokeWidth: 1.8 },
+  web: { icon: Globe2, strokeWidth: 1.8 },
+  image: { icon: ImageIcon, strokeWidth: 1.8 },
+  skill: { icon: Sparkles, strokeWidth: 1.8 },
+  // 资料库与记忆同属「资料库」这一族，用它在应用里的那枚图标。
+  library: { icon: BookOne, strokeWidth: 3.6 },
+  memory: { icon: BookOne, strokeWidth: 3.6 },
+  rag: { icon: BookOpen, strokeWidth: 1.8 },
+  plugin: { icon: Receive, strokeWidth: 3.6 },
+  mcp: { icon: Server, strokeWidth: 1.8 },
+  agent: { icon: Bot, strokeWidth: 1.8 },
+  control: { icon: SlidersHorizontal, strokeWidth: 1.8 },
+  other: { icon: Wrench, strokeWidth: 1.8 },
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -345,8 +358,12 @@ function toolLabel(name: string): string {
   return TOOL_LABELS[name] || name
 }
 
-function categoryIcon(category: string): LucideIcon {
-  return CATEGORY_ICONS[category] || Wrench
+function categoryIcon(category: string): Component {
+  return (CATEGORY_ICONS[category] || CATEGORY_ICONS.other).icon
+}
+
+function categoryStrokeWidth(category: string): number {
+  return (CATEGORY_ICONS[category] || CATEGORY_ICONS.other).strokeWidth
 }
 
 const orderedModes = computed(() => [...modes].sort((a, b) => a.name.localeCompare(b.name, 'zh')))

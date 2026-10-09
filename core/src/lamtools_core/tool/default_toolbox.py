@@ -1112,6 +1112,7 @@ class CoreToolbox:
         plugin_tool_specs: list[ToolSpec] | None = None,
         plugin_tool_handlers: dict[str, ToolHandler] | None = None,
         plugin_mode_tool_sets: dict[str, set[str]] | None = None,
+        plugin_mode_exclusive_tools: dict[str, set[str]] | None = None,
         plugin_availability: Callable[[str], bool] | None = None,
         skill_state_store: Any | None = None,
         permission_overrides: dict[str, str] | None = None,
@@ -1162,6 +1163,11 @@ class CoreToolbox:
             str(mode): {str(name) for name in names}
             for mode, names in (plugin_mode_tool_sets or {}).items()
         }
+        # 模式独占工具的反向索引：tool -> 允许使用它的模式集合。
+        self._exclusive_tool_modes: dict[str, set[str]] = {}
+        for mode, names in (plugin_mode_exclusive_tools or {}).items():
+            for name in names:
+                self._exclusive_tool_modes.setdefault(str(name), set()).add(str(mode))
         self.allow_access_outside_workdir = allow_access_outside_workdir
         self.runtime_permissions_provider = runtime_permissions_provider
         # B8 共识：工具名全局唯一——与已注入工具（基础/MCP/durable）同名
@@ -1445,6 +1451,11 @@ class CoreToolbox:
                 allowed = set(allowed) | self._plugin_mode_tool_names(active_mode, all_specs)
                 # Build exclude set = all tool names NOT in allowed set
                 effective_exclude |= (all_names - allowed)
+        # 模式独占工具：只在该模式激活时出现（与 load_tools 配置无关）。
+        effective_mode = active_mode if active_mode is not None else self.active_mode
+        for name, allowed_modes in self._exclusive_tool_modes.items():
+            if effective_mode not in allowed_modes:
+                effective_exclude.add(name)
         # Filter out MCP tools from non-activated servers
         # Activated servers have their full mcp__{server}__* tools exposed;
         # unactivated servers only expose the mcp_activate gateway tool.
@@ -1486,6 +1497,12 @@ class CoreToolbox:
         mode or a full-access mode (empty whitelist) never blocks; the
         plugin modes additionally allow their dynamic plugin-contributed tools.
         """
+        allowed_modes = self._exclusive_tool_modes.get(name)
+        if allowed_modes is not None and self.active_mode not in allowed_modes:
+            return (
+                f"{name} belongs to the {' / '.join(sorted(allowed_modes))} mode and is not "
+                "available here. Ask the user to switch mode if this is really needed."
+            )
         if not self.active_mode or not self.load_tools:
             return None
         allowed = self._mode_tool_set(self.active_mode)

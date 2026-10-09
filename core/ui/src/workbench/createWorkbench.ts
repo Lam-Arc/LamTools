@@ -27,6 +27,7 @@ import {
   useCoreApprovalController,
   useCoreLiveComposerController,
   useCoreQueuedInputController,
+  useCorePendingGuidance,
   useCoreWorkbenchProjectionController,
 } from '../composables'
 import type { CoreInputItem, CoreSessionListItem } from '../types'
@@ -102,6 +103,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     onError: options.onError,
     onStatusText: options.onStatusText,
     onSubmitStart: options.onSubmitStart,
+    onSubmitSettled: options.onSubmitSettled,
     onCommandResult: options.onCommandResult,
   }
 
@@ -267,10 +269,20 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   })
 
   const approvalControllerRef = shallowRef<ReturnType<typeof useCoreApprovalController>>()
+  // 待生效的引导：发出即显示（虚线 + 呼吸），模型接手后撤下；这一轮提前结束则交回用户
+  const pendingGuidance = useCorePendingGuidance({
+    snapshot,
+    activeThreadId: activeSessionId,
+    composerText,
+    queueInput: (threadId, input) => runtimeController.queueInput(threadId, input),
+    onError: options.onError,
+  })
   const projectionController = useCoreWorkbenchProjectionController({
     snapshot,
     activeThreadId: activeSessionId,
     status: turnState,
+    activeTurnId,
+    pendingGuidance: pendingGuidance.guidanceParts,
     submittingApprovalRequestIds: computed(() => (
       approvalControllerRef.value?.submittingRequestIds.value ?? new Set<string>()
     )),
@@ -357,7 +369,10 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     ),
     interruptTurn: (threadId, turnId) => runtimeController.interruptTurn(threadId, turnId),
     forceResetTurn: (threadId, turnId) => runtimeController.forceResetTurn(threadId, turnId),
-    steerTurn: (threadId, turnId, input) => runtimeController.steerTurn(threadId, turnId, input),
+    steerTurn: async (threadId, turnId, input) => {
+      await runtimeController.steerTurn(threadId, turnId, input)
+      pendingGuidance.track(threadId, turnId, input)
+    },
     queueInput: (threadId, input, turnOptions) => runtimeController.queueInput(threadId, input, turnOptions),
     listCommands: (workRoot) => runtimeController.listCommands(workRoot),
     getWorkRoot: () => sessionWorkRoot() || '',
@@ -368,6 +383,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     },
     turnOptions: () => turnOptionsProvider(),
     onSubmitStart: () => composerCallbacks.onSubmitStart?.(),
+    onSubmitSettled: () => composerCallbacks.onSubmitSettled?.(),
     clearComposer: () => { composerText.value = '' },
     clearAttachments: () => { attachments.value = [] },
     setStatusText: (text) => composerCallbacks.onStatusText?.(text),
@@ -416,7 +432,16 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     },
     updateQueueInput: (threadId, itemId, text) => runtimeController.updateQueueInput(threadId, itemId, text),
     deleteQueueInput: (threadId, itemId) => runtimeController.deleteQueueInput(threadId, itemId),
-    guideQueueInput: (threadId, turnId, itemId, text) => runtimeController.guideQueueInput(threadId, turnId, itemId, text),
+    guideQueueInput: async (threadId, turnId, itemId, text) => {
+      const result = await runtimeController.guideQueueInput(threadId, turnId, itemId, text)
+      if (result.applied) {
+        const itemText = text?.trim()
+          || queuedInputs.value.find(candidate => candidate.id === itemId)?.text
+          || ''
+        pendingGuidance.track(threadId, turnId, itemText)
+      }
+      return result
+    },
     onError: options.onError,
   })
 

@@ -1,0 +1,226 @@
+# Build outputs
+node_modules/
+dist/
+build/
+release/
+.pytest_cache/
+test/
+archive/members/writer/frontend/.vite/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+ENV/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data_backup*/
+
+# Default project workspaces
+lam_projects/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+Microsoft/Windows/PowerShell/
+
+# Logs
+*.log
+
+# Local / debug
+.obsidian/
+.omo/
+.reasonix/
+reasonix.toml
+.codegraph/
+.codex-screenshots/
+.opencode-source/
+.opencode-tmp-data/
+opencode*.log
+.archives/
+.codex-runtime/
+.writer-artifacts/
+tmp/
+_experiments/
+
+# Desktop build outputs
+LamWriter-*.zip
+archive/members/writer/frontend/src-tauri/target/
+archive/members/writer/frontend/src-tauri/gen/
+archive/members/writer/frontend/.electron-app-stage/
+.acceptance/
+core/desktop/src-tauri/target/
+core/mobile/src-tauri/target/
+core/runtime-rs/target/
+core/remote/relay/target/
+core/desktop/src-tauri/lamcore-backend/
+
+data/
+.codex-tmp/
+.tmp/
+.playwright-mcp/
+.zcode/
+
+# Agent / automation working state (never project code)
+.agents/
+.superpowers/
+
+# Core UI app build artifacts (vite output, not source)
+core/ui/dist-core-app/
+
+# Workflow runtime output (generated scripts, hash files, runners)
+**/.lam/workflow_scripts/
+
+# Unified user config directory (seeded defaults, user-editable; never committed)
+**/.lam/core/
+
+# Root-level runtime/debug artifacts (not project code)
+/test-blog-project/
+/test-mod-site/
+/test-website-demo/
+/test-website-demo2/
+/test-tool-result-demo/
+/check-port.ps1
+/kill-lamcore.ps1
+/kill-port.ps1
+/start-core.bat
+/playwright-verify.js
+/playwright-verify-*.png
+/test-arrange-*.png
+/verify-*.png
+/writer-*.png
+/xfyun-*.png
+/小说.txt
+/睡前故事_月亮摇篮曲.md
+
+# LamCore runtime data (artifacts, generated images) — never commit or package
+/.lam/
+
+# 本地 API key / 模型探测文件（含真实密钥，禁止提交）
+.free_key.txt
+.go_key.txt
+.go_models.json
+.openrouter_models.json
+.zen_models.json
+
+# UI / animation demos (experiments, not product code)
+core/ui/demo-*.html
+core/desktop/public/
+
+# Dev-injection / debug script (local-only tooling)
+core/scripts/
+
+# Root-level verify scripts & screenshots (one-off artifacts)
+/probe-api.mjs
+/verify-beam*.mjs
+/dev-verify-*.png
+/frame-*.png
+/hero*.png
+/shimmer-*.png
+/workflow-canvas-state.png
+
+# Website build and local visual-verification artifacts
+/website/node_modules/
+/website/dist/
+/website/.vite/
+/website/artifacts/
+/website/shots/
+/website/test-results/
+/website/playwright-report/
+
+# Legacy playwright test workspace (archived test fixtures, not e2e/)
+.playwright-test/
+
+# Scratch / debugging artifacts (local only)
+core/_swap_checkboxes.py
+*.png
+!core/ui/src/assets/sunday-app-icon-*.png
+!core/desktop/src-tauri/icons/32x32.png
+!core/desktop/src-tauri/icons/128x128.png
+!core/desktop/src-tauri/icons/128x128@2x.png
+!core/desktop/src-tauri/icons/icon.png
+!core/mobile/src-tauri/icons/icon.png
+!core/mobile/src-tauri/icons/android/**/ic_launcher*.png
+!core/mobile/src-tauri/gen/android/app/src/main/res/**/ic_launcher*.png
+!core/mobile/android/app/src/main/res/**/ic_launcher*.png
+!core/mobile/android/app/src/main/res/**/splash.png
+!core/mobile/ios/App/App/Assets.xcassets/**/*.png
+dist-plugins/
+
+# Local E2E workspaces and packaged release artifacts
+/.e2e/
+/e2e-test/
+/playwright-test/
+/output/
+/0.1.0/
+/0.1.1/
+/0.3.0/
+/0.3.1/
+/0.3.2/
+
+# 未跟踪但未忽略的产物目录（2026-09-25 审计：曾包含发布私钥/APK/大体积二进制）
+/core/mobile/artifacts/
+/core/experiments/
+/MyProject/
+/artifacts/
+core/mobile/src-tauri/gen/schemas/
+# 由 scripts/build-desktop-update.py 生成的更新清单（上传用副本随构建产出）
+core/desktop/update-manifest.json
+
+# 运行/实验输出：日期化的产物目录不入库（生成脚本按需重建）
+core/tests/fixtures/context_compaction/real_api_runs/
+/e2e/real-task-runs/
+
+# 临时文件与归档
+*.7z
+.tmp_*
+
+# codex-workflow-managed-start
+.codex_workflow_hidden_resources/
+AGENTS.md
+# codex-workflow-managed-end
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

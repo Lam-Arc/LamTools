@@ -57,6 +57,9 @@ export interface UseCoreLiveComposerControllerOptions {
   onTurnStarted?(): void | Promise<void>
   onTurnStartedError?(error: unknown): void
   onSubmitStart?: () => void
+  /** 一次提交走到终点（发送/排队/引导/失败）都会回调一次：宿主用它收掉"待发送"占位。
+   *  引导与排队不会立刻产生用户消息，只等消息出现会永远等不到。 */
+  onSubmitSettled?: () => void
   messages?: CoreLiveComposerMessages
 }
 
@@ -334,6 +337,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       return null
     } finally {
       submitting.value = false
+      options.onSubmitSettled?.()
     }
   }
 
@@ -362,7 +366,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       const forceGuide = event.ctrlKey || event.metaKey
       const selected = paletteVisible.value ? commandPalette.selected() : null
       if (selected) await selectCommand(selected)
-      else await submit({ clearComposer: true, forceGuide })
+      else if (canEnterSubmit()) await submit({ clearComposer: true, forceGuide })
       return true
     }
     return false
@@ -377,8 +381,17 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       if (selected) await selectCommand(selected)
       return true
     }
-    await submit({ clearComposer: true })
+    if (canEnterSubmit()) await submit({ clearComposer: true })
     return true
+  }
+
+  /**
+   * 回车只发送，不停止：按钮处于停止形态（没有可发送的内容，或命令仍在执行）时，
+   * 回车不下发任何请求——把正在跑的这一轮停掉是发送/停止按钮的职责，不是键盘的
+   * （用户按第二次回车只是习惯性重复发送，不该杀掉整轮）。
+   */
+  function canEnterSubmit(): boolean {
+    return actionMode.value !== 'stop'
   }
 
   function applySubmissionEffects(

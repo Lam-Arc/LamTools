@@ -723,3 +723,54 @@ def test_empty_snapshot_shape_is_member_neutral():
         "artifacts": {},
         "status": "idle",
     }
+
+
+def test_guidance_user_item_keeps_its_text_body():
+    """Mid-turn guidance arrives as a userMessage run item carrying typed input
+    parts.  The durable record must keep the flat body on ``content`` — that is
+    what the transcript projection reads — while the payload keeps the parts."""
+    event = RunItemEvent(
+        kind="message",
+        thread_id="thread-1",
+        event_id="event-guide",
+        turn_id="turn-1",
+        item_id="turn-1:user:guide:event-guide",
+        seq=42,
+        status="completed",
+        payload={
+            "type": "userMessage",
+            "status": "completed",
+            "content": [{"type": "text", "text": "改成蓝色"}],
+        },
+    )
+
+    snapshot = apply_run_item_event(None, event)
+    item = snapshot["items"]["turn-1:user:guide:event-guide"]
+
+    assert item["content"] == "改成蓝色"
+    assert item["payload"]["content"] == [{"type": "text", "text": "改成蓝色"}]
+
+
+def test_guidance_user_item_without_text_leaves_content_empty():
+    """A parts array with no text contributes no body; the parts stay in the
+    payload so readers that need the structure (attachments) still see them."""
+    event = RunItemEvent(
+        kind="message",
+        thread_id="thread-1",
+        event_id="event-guide-attachment",
+        turn_id="turn-1",
+        item_id="turn-1:user:guide:event-guide-attachment",
+        seq=43,
+        status="completed",
+        payload={
+            "type": "userMessage",
+            "status": "completed",
+            "content": [{"type": "attachment", "attachment_id": "a-1"}],
+        },
+    )
+
+    snapshot = apply_run_item_event(None, event)
+    item = snapshot["items"]["turn-1:user:guide:event-guide-attachment"]
+
+    assert item["content"] == ""
+    assert item["payload"]["content"] == [{"type": "attachment", "attachment_id": "a-1"}]

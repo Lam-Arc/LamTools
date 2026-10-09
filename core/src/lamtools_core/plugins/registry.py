@@ -673,6 +673,12 @@ class PluginRegistry:
                 }
                 if cls is PluginUIMode:
                     values["tools"] = tools
+                    raw_exclusive = raw_item.get("exclusiveTools", False)
+                    if not isinstance(raw_exclusive, bool):
+                        raise ValueError(
+                            f"plugin ui.{key}[{index}].exclusiveTools must be a boolean: {manifest_path}"
+                        )
+                    values["exclusive_tools"] = raw_exclusive
                     raw_capabilities = raw_item.get("capabilities")
                     if raw_capabilities is not None:
                         if not isinstance(raw_capabilities, list) or any(

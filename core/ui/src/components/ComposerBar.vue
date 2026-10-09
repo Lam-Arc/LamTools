@@ -88,10 +88,13 @@ const emit = defineEmits<{
 const dragOver = ref(false)
 // IME guard: the composition-confirm Enter must not submit the message
 // (audit 19 S3 — the default textarea previously emitted submit on any
-// plain Enter, which misfired for CJK users).
+// plain Enter, which misfired for CJK users). Enter only sends: an empty
+// composer must not reach the host, whose submit handler reads it as stop.
 function onEnterKey(event: KeyboardEvent) {
   if (event.isComposing) return
   event.preventDefault()
+  const value = (event.target as HTMLTextAreaElement | null)?.value || ''
+  if (!value.trim()) return
   emit('submit')
 }
 </script>

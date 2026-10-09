@@ -1,5 +1,6 @@
 import { ref, watch, type Ref } from 'vue'
 import {
+  assistantSegmentTurnId,
   createCoreWorkbenchProjectionCache,
   isCoreActiveTurnStatus,
   isCoreGuidableTurnStatus,
@@ -8,7 +9,7 @@ import {
   nextCoreProcessExpandedIds,
   normalizeCoreSessionStatus,
 } from '../appServer'
-import type { CoreMessage } from '../types'
+import type { CoreMessage, MessagePart } from '../types'
 
 export interface CoreWorkbenchProjectionStatusChange {
   threadId: string
@@ -21,8 +22,13 @@ export interface UseCoreWorkbenchProjectionControllerOptions {
   snapshot: Readonly<Ref<CoreAppSnapshot | null | undefined>>
   activeThreadId: Readonly<Ref<string | null>>
   status: Readonly<Ref<string>>
+  /** 当前活动 turn id。停止后要把这一轮的过程留在展开态，需要它来认出这一轮
+   *  的消息（消息 id 里带 turn id）。 */
+  activeTurnId?: Readonly<Ref<string>>
   submittingApprovalRequestIds: Readonly<Ref<Set<string>>>
   shallowThinkingPending: Readonly<Ref<boolean>>
+  /** 待生效的引导（按 turn 归属），挂在过程末尾先显示。 */
+  pendingGuidance?: Readonly<Ref<ReadonlyArray<{ turnId: string; part: MessagePart }>>>
   source?: string
   systemMessages?: Readonly<Ref<CoreMessage[]>>
   onStatusChange?(change: CoreWorkbenchProjectionStatusChange): void
@@ -36,7 +42,10 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
   let observedThreadId: string | null = null
   let previousStatus: string | null = null
   let previousTurnWasActive = false
-  let previousLiveProcessMessageIds = new Set<string>()
+  /** 本轮 turn id：停止后要认出"被停的那一条"是哪条消息。 */
+  let currentTurnId = ''
+  /** 兜底信号：本轮里出现过的实时消息 id（宿主没有给 activeTurnId 时用）。 */
+  let liveProcessMessageIds = new Set<string>()
 
   // History windowing: only the most recent N complete turns are projected/rendered
   // initially; `loadMoreHistory` widens the window by another complete turn page. This
@@ -71,7 +80,8 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
         observedThreadId = threadId
         previousStatus = null
         previousTurnWasActive = false
-        previousLiveProcessMessageIds = new Set()
+        currentTurnId = ''
+        liveProcessMessageIds = new Set()
         processExpandedIds.value = new Set()
         projectionCache.clear()
         resetHistoryWindow()
@@ -95,7 +105,7 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
 
       if (!snapshotMatchesActiveThread || !snapshot) {
         messages.value = systemMessages
-        previousLiveProcessMessageIds = new Set()
+        liveProcessMessageIds = new Set()
         return
       }
 
@@ -104,6 +114,7 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
         active: isCoreGuidableTurnStatus(rawStatus),
         shallowThinkingPending: options.shallowThinkingPending.value,
         submittingApprovalRequestIds: options.submittingApprovalRequestIds.value,
+        pendingGuidance: options.pendingGuidance?.value,
         tailTurns: historyTurnTail.value,
       }, projectionCache)
       messages.value = [
@@ -114,24 +125,42 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
       totalMessages.value = projected.total
 
       if (finished) {
-        // A process summary opened while its turn was live returns to the
-        // normal completed-message summary. Unrelated historical expansions
-        // remain untouched.
+        // 这一轮结束时怎么处置"实时展开"的过程：
+        //  · 正常跑完 → 回到完成态摘要（此前为实时展开的状态收回去）；
+        //  · 被停止 / 失败 → 保持当时的样子。用户刚点了一次停止，不该顺手把他
+        //    正在看的过程一起收走；要收起由他自己点过程摘要（2026-10-09）。
         const next = new Set(processExpandedIds.value)
-        for (const id of previousLiveProcessMessageIds) next.delete(id)
+        for (const id of turnProcessMessageIds()) {
+          if (rawStatus === 'completed') next.delete(id)
+          else next.add(id)
+        }
         processExpandedIds.value = next
+        currentTurnId = ''
+        liveProcessMessageIds = new Set()
       } else {
+        if (active && options.activeTurnId?.value) currentTurnId = options.activeTurnId.value
+        liveProcessMessageIds = new Set(
+          messages.value
+            .filter(message => message.role === 'assistant' && message.metadata?.live === true)
+            .map(message => message.id),
+        )
         processExpandedIds.value = nextCoreProcessExpandedIds(
           messages.value,
           processExpandedIds.value,
           isCoreGuidableTurnStatus(rawStatus),
         )
       }
-      previousLiveProcessMessageIds = new Set(
-        messages.value
-          .filter(message => message.role === 'assistant' && message.metadata?.live === true)
-          .map(message => message.id),
-      )
+    }
+
+    /** 这一轮自己产生的助手消息（消息 id 里带着 turn id）。 */
+    function turnProcessMessageIds(): string[] {
+      if (currentTurnId) {
+        return messages.value
+          .filter(message => message.role === 'assistant'
+            && assistantSegmentTurnId(String(message.id)) === currentTurnId)
+          .map(message => message.id)
+      }
+      return [...liveProcessMessageIds]
     }
 
   watch(

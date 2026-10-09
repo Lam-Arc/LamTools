@@ -22,6 +22,10 @@ export interface CoreWorkbenchMessageOptions {
   tailWindow?: number
   /** Project only the most recent N complete turns. Takes precedence over tailWindow. */
   tailTurns?: number
+  /** 已发出、还没被模型接手的引导：挂在对应轮次的过程末尾先显示出来（虚线+呼吸），
+   *  模型真正接手（真实引导条目落库）后由宿主撤下。part 由调用方一次性构建，
+   *  引用保持稳定，投影缓存与 v-memo 才不会逐帧失效。 */
+  pendingGuidance?: ReadonlyArray<{ turnId: string; part: MessagePart }>
 }
 
 export interface CoreQueuedInput {
@@ -125,12 +129,30 @@ export function selectCoreWorkbenchMessagesWindow(
   const startIndex = coreHistoryWindowStartIndex(sourceMessages, options)
   const windowLength = sourceMessages.length - startIndex
   const lastAssistantIndex = sourceMessages.findLastIndex(message => message.role === 'assistant')
+  // 待生效的引导只挂在它自己那一轮的最后一条助手消息上：一轮被切成多段（旧记录
+  // 里出现过渡中的用户消息）时，不能每段都摆一个同样的气泡。这一轮还没有助手消息
+  // 时先不挂——等模型开始输出时自然出现。
+  const pendingGuidance = groupPendingGuidanceByTurn(options.pendingGuidance)
+  const lastMessageIdByTurn = new Map<string, string>()
+  for (const message of sourceMessages) {
+    if (message.role === 'assistant' && message.turnId) lastMessageIdByTurn.set(message.turnId, message.id)
+  }
   const messages: CoreMessage[] = new Array(windowLength)
   for (let index = startIndex; index < sourceMessages.length; index += 1) {
     const message = sourceMessages[index]
     const activeAssistant = Boolean(options.active && message.role === 'assistant' && index === lastAssistantIndex)
     const content = splitShallowCached(message.content, cache)
-    const parts = buildMessageParts(snapshot, message, content, options, activeAssistant, cache)
+    const parts = buildMessageParts(
+      snapshot,
+      message,
+      content,
+      options,
+      activeAssistant,
+      cache,
+      message.role === 'assistant' && message.turnId && lastMessageIdByTurn.get(message.turnId) === message.id
+        ? pendingGuidance.get(message.turnId)
+        : undefined,
+    )
     if (cache) {
       const fingerprint = messageFingerprint(message, parts, content, activeAssistant, options.shallowThinkingPending)
       const entry = cache.messagesById.get(message.id)
@@ -202,6 +224,7 @@ function buildMessageParts(
   options: CoreWorkbenchMessageOptions,
   activeAssistant: boolean,
   cache?: CoreWorkbenchProjectionCache | null,
+  pendingGuidance?: MessagePart[],
 ): MessagePart[] {
   return [
     ...(shallow.thinking ? [{
@@ -221,7 +244,22 @@ function buildMessageParts(
       label: attachment.label || attachment.filename,
       metadata: { attachment },
     })),
+    ...(pendingGuidance || []),
   ]
+}
+
+/** 待生效的引导按轮次分组，保持发出顺序（同一次多个引导按发送先后排列）。 */
+function groupPendingGuidanceByTurn(
+  pending?: ReadonlyArray<{ turnId: string; part: MessagePart }>,
+): Map<string, MessagePart[]> {
+  const grouped = new Map<string, MessagePart[]>()
+  for (const entry of pending || []) {
+    if (!entry.turnId) continue
+    const list = grouped.get(entry.turnId)
+    if (list) list.push(entry.part)
+    else grouped.set(entry.turnId, [entry.part])
+  }
+  return grouped
 }
 
 function buildWorkbenchMessage(

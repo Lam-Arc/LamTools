@@ -2664,6 +2664,40 @@
 .user-stack .user-bubble {
   max-width: 100%;
 }
+/* 运行中插入的引导指令：沿用回复标签的元信息配方，标出它不是新的一轮对话 */
+.user-guide-label {
+  padding-right: 2px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, transparent);
+  font-size: 11px;
+  font-weight: 720;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+/* 引导住在过程区里：形状是用户气泡，位置随过程一起展开/收起 */
+.process-guidance {
+  display: grid;
+  justify-items: end;
+  padding: var(--space-1) 0 var(--space-2);
+}
+/* 待生效的引导（已发出、模型还没接手）：虚线边 + 呼吸，与落位后的实色气泡区分 */
+.user-bubble--pending {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--theme-main-text, #fff) 28%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent);
+  animation: guidance-pending-breath 1.6s ease-in-out infinite;
+}
+
+@keyframes guidance-pending-breath {
+  0%, 100% { opacity: .6; }
+  50% { opacity: .92; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-bubble--pending {
+    animation: none;
+    opacity: .78;
+  }
+}
 .assistant-row {
   display: flex;
   justify-content: flex-start;
