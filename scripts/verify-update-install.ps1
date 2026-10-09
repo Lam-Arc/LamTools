@@ -69,12 +69,21 @@ function Stop-InstallProcesses {
 function Get-BackendPort {
     $log = Join-Path $InstallDir '.lam\backend.log'
     if (-not (Test-Path -LiteralPath $log)) { return $null }
-    # Snapshot the file: the backend appends to it forever, so a streaming read
-    # never reaches the end and the wait would hang.
-    $content = [System.IO.File]::ReadAllText($log)
-    $match = [regex]::Matches($content, '127\.0\.0\.1:(\d{4,5})')
-    if ($match.Count -eq 0) { return $null }
-    return [int]$match[$match.Count - 1].Groups[1].Value
+    # The running backend holds this file open while it appends; opening it for
+    # shared read is the only way in (a plain ReadAllText throws), and the read
+    # is bounded so a growing file cannot hang the wait.
+    $snapshot = ''
+    try {
+        $stream = [System.IO.File]::Open($log, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $buffer = New-Object byte[] 262144
+            $read = $stream.Read($buffer, 0, $buffer.Length)
+            if ($read -gt 0) { $snapshot = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read) }
+        } finally { $stream.Dispose() }
+    } catch { return $null }
+    $found = [regex]::Matches($snapshot, 'Starting LamCore backend on 127\.0\.0\.1:(\d+)')
+    if ($found.Count -eq 0) { return $null }
+    return [int]$found[$found.Count - 1].Groups[1].Value
 }
 
 function Wait-BackendHealth {

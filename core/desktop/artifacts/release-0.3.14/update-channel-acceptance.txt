@@ -1,0 +1,18 @@
+Update-channel acceptance against https://47.114.43.99.nip.io
+Scratch install: C:\Users\Administrator\AppData\Local\Temp\sunday-update-verify
+1. read the published manifest
+  ok: manifest names a version (0.3.14)
+  ok: manifest points at an https download (https://47.114.43.99.nip.io/downloads/Sunday_0.3.14_x64-setup.exe)
+  ok: manifest carries a sha256
+  ok: manifest carries a size (58216595 bytes)
+2. download the installer and verify it like the app does
+  downloaded 58216595 bytes, sha256 c421d41eb452ae80c7d79a6a5fb06e4ab36c2ea1750c46774bd6c4ff4f3c1dc8
+  ok: downloaded size matches the manifest
+  ok: downloaded bytes match the manifest digest
+3. install it the way the in-app update does (silent + auto restart)
+  ok: the installer exited 0 (got 0)
+  ok: the installed application is in place
+4. the setup must have started the application again
+  ok: the application was started again by the setup (pid 23496)
+  ok: the restarted application reports a healthy backend (port 55240)
+Update-channel acceptance passed for 0.3.14
