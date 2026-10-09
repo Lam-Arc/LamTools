@@ -19,6 +19,7 @@ interface PendingGuidanceEntry {
 }
 
 const TERMINAL_TURN_STATUSES = new Set(['completed', 'failed', 'cancelled', 'skipped'])
+const ACTIVE_TURN_STATUSES = new Set(['running', 'waiting', 'interrupting'])
 
 /**
  * 已发出、还没被模型接手的引导。
@@ -90,6 +91,51 @@ export function useCorePendingGuidance(options: CorePendingGuidanceOptions) {
     )
   }
 
+  function turnEntry(turnId: string): { status: string; seq: number } {
+    const snapshot = options.snapshot.value
+    const turn = snapshot?.core?.turns?.[turnId] || snapshot?.turns?.[turnId]
+    if (!turn) return { status: '', seq: -1 }
+    return {
+      status: String(turn.status || ''),
+      seq: Number(turn.last_seq ?? turn.seq ?? -1),
+    }
+  }
+
+  /**
+   * 会话里最新活跃轮 + 活跃轮数量 + 会话自身状态。只有当快照确实属于这条引导所在的
+   * 会话时才拿来做判断——快照还停在别的会话时什么都判不了（切走不代表它没生效）。
+   */
+  function activeTurns(threadId: string): {
+    ids: Set<string>
+    newestId: string
+    newestSeq: number
+    count: number
+    threadStatus: string
+  } | null {
+    const snapshot = options.snapshot.value
+    if (!snapshot || String(snapshot.thread_id || '') !== threadId) return null
+    const ids = new Set<string>()
+    let newestId = ''
+    let newestSeq = Number.NEGATIVE_INFINITY
+    let count = 0
+    const turns = {
+      ...(snapshot.turns || {}),
+      ...(snapshot.core?.turns || {}),
+    }
+    for (const [turnId, turn] of Object.entries(turns)) {
+      if (!ACTIVE_TURN_STATUSES.has(String(turn?.status || ''))) continue
+      count += 1
+      const id = String(turn?.turn_id || turnId)
+      ids.add(id)
+      const seq = Number(turn?.last_seq ?? turn?.seq ?? -1)
+      if (seq > newestSeq) {
+        newestSeq = seq
+        newestId = id
+      }
+    }
+    return { ids, newestId, newestSeq, count, threadStatus: String(snapshot.core?.status || snapshot.status || '') }
+  }
+
   /**
    * 评估一次：哪些待生效条目该显示、哪些已经生效、哪些随这一轮结束而作废。
    * 同文本的引导可能有多条，按计数一一对应，不靠猜测。
@@ -106,6 +152,7 @@ export function useCorePendingGuidance(options: CorePendingGuidanceOptions) {
     const countsByTurn = new Map<string, Map<string, number>>()
     // 本次评估内的配对增量（不落库；由 watcher 在撤下条目时提交）
     const passConsumed = new Map<string, number>()
+    const active = activeTurns(threadId)
     for (const entry of entries.value) {
       // 别的会话的待生效引导：等切回那个会话再判（切走不代表它没生效）
       if (entry.threadId !== threadId) continue
@@ -121,7 +168,7 @@ export function useCorePendingGuidance(options: CorePendingGuidanceOptions) {
         landed.push({ key: entry.key, pairKey })
         continue
       }
-      if (TERMINAL_TURN_STATUSES.has(turnStatus(entry.turnId))) {
+      if (isDeadPendingTurn(entry.turnId, active)) {
         ended.push(entry)
         continue
       }
@@ -129,6 +176,35 @@ export function useCorePendingGuidance(options: CorePendingGuidanceOptions) {
       if (part) visible.push({ turnId: entry.turnId, part })
     }
     return { visible, landed, ended }
+  }
+
+  /**
+   * 这条引导还能不能等到生效。内核只在"被引导的那一轮"的步骤边界上把它吃进去，而且
+   * 只有最新活跃轮才可能接受引导，所以只要：
+   *   · 那一轮已经是终态，或
+   *   · 有比它更新的活跃轮（新的一轮已经起来；此时它自己的状态可能还没跟上，仍写着
+   *     running），或
+   *   · 会话已经停下、它那一轮也不在快照里
+   * 它就不可能再生效——必须撤下气泡、把内容交回用户，不能一直挂着。
+   */
+  function isDeadPendingTurn(
+    turnId: string,
+    active: {
+      ids: Set<string>
+      newestId: string
+      newestSeq: number
+      count: number
+      threadStatus: string
+    } | null,
+  ): boolean {
+    const turn = turnEntry(turnId)
+    if (TERMINAL_TURN_STATUSES.has(turn.status)) return true
+    if (!active) return false
+    if (active.count === 0) return TERMINAL_TURN_STATUSES.has(active.threadStatus)
+    // 已经不是活跃轮了（新的一轮起来后，它自己的状态可能还停在 running）
+    if (!active.ids.has(turnId)) return true
+    // 它还是活跃轮之一：只有"后面还压着更新的活跃轮"才算这一轮已经过去
+    return active.newestId !== turnId && active.newestSeq > turn.seq
   }
 
   /** 这一轮结束后，把没生效的引导交回用户：输入框空就回去，否则进待发送队列。 */

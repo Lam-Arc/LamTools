@@ -11,6 +11,7 @@ function snapshot(options: {
   turnId?: string
   guides?: Array<{ id: string; text: string; turnId?: string }>
   threadId?: string
+  threadStatus?: string
 } = {}): CoreAppSnapshot {
   const threadId = options.threadId || 'thread-1'
   const turnId = options.turnId || TURN
@@ -31,14 +32,15 @@ function snapshot(options: {
     status: options.turnStatus || 'running',
     items: guides.map(guide => guide.id),
   }
+  const threadStatus = options.threadStatus || 'running'
   return {
     thread_id: threadId,
     snapshot_seq: 1,
-    status: 'running',
+    status: threadStatus as CoreAppSnapshot['status'],
     core: {
       thread_id: threadId,
       snapshot_seq: 1,
-      status: 'running',
+      status: threadStatus as CoreAppSnapshot['status'],
       items,
       item_order: guides.map(guide => guide.id),
       turns: { [turnId]: turn },
@@ -205,20 +207,60 @@ describe('useCorePendingGuidance', () => {
     expect(visible[0]?.turnId).toBe('thread-2:turn:run-9')
   })
 
-  it('does not treat a still running turn as ended', async () => {
+  it('retracts a guide once another turn becomes the active one', async () => {
+    // 真实故障：引导发进的那一轮（状态没跟上，快照里还写着 running）之后，新的一轮
+    // 已经跑起来——内核只会把引导喂给「被引导的那一轮」，所以这条永远不会生效了。
+    const fixture = createFixture()
+    fixture.guidance.track('thread-1', TURN, '改成蓝色')
+    await nextTick()
+    expect(fixture.guidance.guidanceParts.value).toHaveLength(1)
+
+    const base = snapshot({ turnStatus: 'running' })
+    fixture.snapshotRef.value = {
+      ...base,
+      core: {
+        ...(base.core as CoreAppSnapshot['core']),
+        turns: {
+          // 它那一轮状态还停在 running，但后面已经压了更新的一轮
+          [TURN]: { turn_id: TURN, status: 'running', last_seq: 100, items: [] },
+          'thread-1:turn:next': { turn_id: 'thread-1:turn:next', status: 'running', last_seq: 200, items: [] },
+        },
+      },
+    } as CoreAppSnapshot
+    await nextTick()
+    await nextTick()
+
+    expect(fixture.guidance.guidanceParts.value).toEqual([])
+    expect(fixture.composerText.value).toBe('改成蓝色')
+  })
+
+  it('retracts a guide when the session has stopped', async () => {
     const fixture = createFixture()
     fixture.guidance.track('thread-1', TURN, '改成蓝色')
     await nextTick()
 
-    // 快照暂时拿不到这一轮（状态未知）时不能误判作废
-    fixture.snapshotRef.value = snapshot({ turnId: 'thread-1:turn:other' })
+    // 快照里已经没有它那一轮，会话也停了：同样等不到生效
+    fixture.snapshotRef.value = snapshot({
+      turnId: 'thread-1:turn:other',
+      turnStatus: 'completed',
+      threadStatus: 'completed',
+    })
     await nextTick()
-    expect(fixture.guidance.guidanceParts.value).toHaveLength(1)
-    expect(fixture.composerText.value).toBe('')
+    await nextTick()
+
+    expect(fixture.guidance.guidanceParts.value).toEqual([])
+    expect(fixture.composerText.value).toBe('改成蓝色')
+  })
+
+  it('keeps waiting while its own turn is the active one', async () => {
+    const fixture = createFixture()
+    fixture.guidance.track('thread-1', TURN, '改成蓝色')
+    await nextTick()
 
     fixture.snapshotRef.value = snapshot({ turnStatus: 'running' })
     await nextTick()
     expect(fixture.guidance.guidanceParts.value).toHaveLength(1)
+    expect(fixture.composerText.value).toBe('')
   })
 
   it('ignores blank text', async () => {

@@ -96,7 +96,11 @@ export function useCoreQueuedInputController(options: UseCoreQueuedInputControll
       await options.ensureConnected(item.thread_id)
       const result = await options.guideQueueInput(item.thread_id, turnId, item.id, text)
       if (!result.applied) {
-        lastError.value = result.reason || 'Queue guidance was not applied'
+        // 本机（手机原生宿主）不支持运行中引导：这条已被降级成"本轮结束后发送"，
+        // 内容留着，但这一轮看不到它——照实说，不要报成已生效。
+        lastError.value = result.reason === 'native_turn_cannot_steer_live'
+          ? '本机不支持运行中引导，已改为这一轮结束后发送'
+          : (result.reason || 'Queue guidance was not applied')
         return false
       }
       cancelEdit()

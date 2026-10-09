@@ -26,7 +26,12 @@ from lamtools_core.composer_commands import (
     default_core_resource_roots,
     normalize_command_name,
 )
-from lamtools_core.runtime import RuntimeStateConflictError, RuntimeStateStore, default_runtime_task_registry
+from lamtools_core.runtime import (
+    RuntimeStateConflictError,
+    RuntimeStateStore,
+    default_runtime_task_registry,
+    normalize_run_id,
+)
 from lamtools_core.runtime.background_processes import (
     default_background_process_registry,
     status_to_dict,
@@ -1943,7 +1948,9 @@ async def handle_turn_steer_operation(
         await context.persistence.assert_revision(db, thread_id, expected_revision)
         snapshot = await context.persistence.load(db, thread_id)
         registry_run_id = context.host.runtime_task_registry.active_run_id(thread_id)
-        if not _is_active_turn(snapshot, turn_id) and registry_run_id != turn_id:
+        # run id 有两种写法（`<thread>:turn:<run>` 与 `<run>`）：这里必须归一后比较，
+        # 否则写法不同就会被判成"轮次不匹配"而把一条合法引导挡在门外（2026-10-09）。
+        if not _is_active_turn(snapshot, turn_id) and normalize_run_id(thread_id, registry_run_id) != normalize_run_id(thread_id, turn_id):
             return CoreLiveOperationOutcome(
                 response=rpc_result(request_id, {"applied": False, "reason": "active_turn_mismatch", "events": [], "snapshot": snapshot})
             )

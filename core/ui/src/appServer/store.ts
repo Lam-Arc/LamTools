@@ -528,10 +528,15 @@ export function createCoreAppServerRuntimeController<
       input: inputItems,
     }, threadId)
     applyResponse(response)
-    // 后端明确拒绝（这一轮已经结束 / 已不是当前轮）时不能当成已接受：调用方据此
-    // 决定是否显示"已发送引导"与待生效气泡，否则用户会以为指令进去了。
+    // 后端明确拒绝时不能当成已接受：调用方据此决定是否显示"已发送引导"与待生效
+    // 气泡，否则用户会以为指令进去了。
     if (response.applied !== true) {
       const reason = String(response.reason || '')
+      // 本机（手机原生宿主）不支持运行中引导：它把这条降级成"本轮结束后发送"，
+      // 内容没有丢，但这一轮确实看不到它——要如实说，不能报成功。
+      if (response.queued === true || reason === 'native_turn_cannot_steer_live') {
+        throw new Error('本机不支持运行中引导，已改为这一轮结束后发送')
+      }
       if (reason === 'run_not_active') throw new Error('这一轮已经结束，引导没有生效')
       if (reason === 'active_turn_mismatch') throw new Error('当前轮次已经变化，引导没有生效')
       throw new Error('引导没有生效')

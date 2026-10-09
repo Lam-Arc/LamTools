@@ -228,6 +228,22 @@ class InMemoryRuntimeStateStore:
         self._history.clear()
 
 
+def normalize_run_id(thread_id: str, run_id: str | None) -> str:
+    """把同一个 round 的两种写法归一到短 run id。
+
+    同一个 round 在系统里有两种写法：`<thread>:turn:<run>`（对外事件与 turn/steer
+    携带的形式）和 `<run>`（内核运行输入里的形式）。注册方与消费方各用一种写法时，
+    按原文比较就会对不上——引导正是这样丢的：turn/steer 按 `<thread>:turn:<run>`
+    存进登记表，内核按 `<run>` 去取，永远取到空（2026-10-09）。统一在比较处归一，
+    两种写法都能命中同一个 round。
+    """
+    value = str(run_id or "").strip()
+    prefix = f"{str(thread_id or '').strip()}:turn:"
+    if prefix != ":turn:" and value.startswith(prefix):
+        return value[len(prefix):]
+    return value
+
+
 @dataclass
 class _RuntimeTaskEntry:
     run_id: str
@@ -286,7 +302,7 @@ class RuntimeTaskRegistry:
             if not self.accept_run(thread_id, run_id):
                 return False
             entry = self._entries[thread_id]
-        if entry.run_id != run_id:
+        if normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
             return False
         if entry.task is not None and entry.task is not task and not entry.task.done():
             return False
@@ -309,7 +325,7 @@ class RuntimeTaskRegistry:
         task = entry.task
         if task is None:
             return None
-        if run_id is not None and entry.run_id != run_id:
+        if run_id is not None and normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
             return None
         return task
 
@@ -323,7 +339,7 @@ class RuntimeTaskRegistry:
         """
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
-        if entry is None or (run_id is not None and entry.run_id != run_id):
+        if entry is None or (run_id is not None and normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id)):
             return False
         task = entry.task
         self.get_cancel_event(thread_id).set()
@@ -341,7 +357,7 @@ class RuntimeTaskRegistry:
             self.get_cancel_event(thread_id).set()
             self._background_process_registry.cleanup_session(thread_id)
             return
-        if run_id is not None and entry.run_id != run_id:
+        if run_id is not None and normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
             return
         task = entry.task
         self.get_cancel_event(thread_id).set()
@@ -370,7 +386,7 @@ class RuntimeTaskRegistry:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
         guidance = str(text or "").strip()
-        if entry is None or entry.run_id != run_id or entry.task is None or not guidance:
+        if entry is None or normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id) or entry.task is None or not guidance:
             return "not_active"
         if not entry.guidance_open:
             return "closed"
@@ -409,7 +425,7 @@ class RuntimeTaskRegistry:
     ) -> list[Any]:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
-        if entry is None or entry.run_id != run_id or entry.task is None:
+        if entry is None or normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id) or entry.task is None:
             return []
         guidance = [
             ({"content": text, "metadata": deepcopy(metadata)} if include_metadata else text)
@@ -428,7 +444,7 @@ class RuntimeTaskRegistry:
         """Atomically consume pending guidance or seal an empty run."""
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
-        if entry is None or entry.run_id != run_id or entry.task is None:
+        if entry is None or normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id) or entry.task is None:
             return None
         if not entry.guidance_open:
             return []
@@ -470,7 +486,7 @@ class RuntimeTaskRegistry:
 
     def retract_guidance(self, thread_id: str, *, run_id: str, guidance_id: str) -> None:
         entry = self._entries.get(thread_id)
-        if entry is None or entry.run_id != run_id or not guidance_id:
+        if entry is None or normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id) or not guidance_id:
             return
         pending = [item for item in entry.guidance if item[0] == guidance_id]
         if not pending:
