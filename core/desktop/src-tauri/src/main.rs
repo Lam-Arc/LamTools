@@ -27,7 +27,7 @@ use windows_sys::Win32::{
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
             SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         },
         Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE},
     },
@@ -1810,7 +1810,13 @@ fn create_backend_job(process_id: u32) -> Result<usize, Box<dyn std::error::Erro
             return Err(std::io::Error::last_os_error().into());
         }
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // Kill-on-close keeps every tool process the backend started from
+        // outliving the app, and BREAKAWAY_OK is what lets the one process that
+        // must outlive it — the update installer, started before this app exits
+        // to let it replace files — leave the job on purpose. Tools stay in the
+        // job: they never ask to break away.
+        info.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
         if SetInformationJobObject(
             job,
             JobObjectExtendedLimitInformation,

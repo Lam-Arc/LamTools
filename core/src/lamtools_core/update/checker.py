@@ -377,7 +377,7 @@ def check_update() -> dict[str, Any]:
             base["size"] = chosen["size"]
         if os.name == "nt":
             base["install_supported"] = True
-            base["install_hint"] = "点「立即安装」会运行安装包；安装向导会要求先退出 Sunday。"
+            base["install_hint"] = "点「立即安装」会启动安装包并退出 Sunday；装完重新打开即可。"
     return base
 
 

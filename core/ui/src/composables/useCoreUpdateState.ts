@@ -14,7 +14,7 @@
  */
 
 import { computed, ref } from 'vue'
-import { getAppVersion, openUpdatePage } from '../helpers/update'
+import { getAppVersion, openUpdatePage, quitApp } from '../helpers/update'
 
 export type CoreUpdateStatus = 'idle' | 'checking' | 'update_available' | 'up_to_date' | 'check_failed'
 
@@ -202,6 +202,13 @@ export function useCoreUpdateState(requestRpc: CoreUpdateRequestRpc) {
       const payload = (raw ?? {}) as Record<string, unknown>
       if (payload.ok !== true) throw new Error(String(payload.error || '无法启动安装'))
       installMessage.value = String(payload.message || '已交给系统安装程序')
+      // The host says whether this platform's hand-off ends the app. On Windows
+      // the installer is already running on its own and needs this process out
+      // of the way to replace its files — quitting to the tray is not enough,
+      // so the host performs a real exit. If there is no quit bridge (browser)
+      // or the exit fails, the app is still here: keep the step retryable
+      // instead of showing an install that is waiting for nothing.
+      if (payload.quit === true && !(await quitApp())) installState.value = 'downloaded'
       return true
     } catch (err) {
       installState.value = 'downloaded'

@@ -122,13 +122,85 @@ def test_run_installer_launches_the_verified_file(
     artifact_server: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = download_update(artifact_server, DIGEST)
+    spawned: list[dict] = []
+    monkeypatch.setattr(
+        installer.subprocess,
+        "Popen",
+        lambda argv, **kwargs: spawned.append({"argv": argv, **kwargs}),
+    )
+
+    outcome = run_installer()
+
+    assert spawned == [{
+        "argv": [result["path"]],
+        "cwd": str(Path(result["path"]).parent),
+        "creationflags": installer.INSTALLER_SPAWN_FLAGS,
+        "close_fds": True,
+    }]
+    # The app must exit: the installer replaces the files this process owns.
+    assert outcome["quit"] is True
+    assert "退出" in outcome["message"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
+def test_run_installer_leaves_the_backend_job_so_the_installer_survives(
+    artifact_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The desktop shell's job object kills its members when the app exits.
+
+    Without the breakaway flag the installer would die at exactly the moment the
+    app quits to let it work, so the flags are part of the contract, not a detail.
+    """
+    download_update(artifact_server, DIGEST)
+    monkeypatch.setattr(installer.subprocess, "Popen", lambda *a, **k: None)
+
+    run_installer()
+
+    assert installer.INSTALLER_SPAWN_FLAGS & installer.CREATE_BREAKAWAY_FROM_JOB
+    assert installer.INSTALLER_SPAWN_FLAGS & installer.DETACHED_PROCESS
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
+def test_run_installer_falls_back_to_the_shell_hand_off(
+    artifact_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host without a job object (a plain CLI run) refuses the breakaway flag.
+
+    Losing the update there would be worse than a hand-off the shell can still
+    complete, so the fallback runs the same verified file.
+    """
+    result = download_update(artifact_server, DIGEST)
     launched: list[str] = []
+
+    def refuse(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise OSError(13, "permission denied")
+
+    monkeypatch.setattr(installer.subprocess, "Popen", refuse)
     monkeypatch.setattr(installer.os, "startfile", lambda path, *a, **k: launched.append(path), raising=False)
 
     outcome = run_installer()
 
     assert launched == [result["path"]]
-    assert "安装程序" in outcome["message"]
+    assert outcome["quit"] is True
+
+
+def test_run_installer_reveals_without_quitting_elsewhere(
+    artifact_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only Windows hands the update to something that replaces the running app.
+
+    Elsewhere the verified file is revealed and the app stays up; `quit: False`
+    is what keeps the UI from closing a window that has nothing to wait for.
+    """
+    result = download_update(artifact_server, DIGEST)
+    revealed: list[Path] = []
+    monkeypatch.setattr(installer.sys, "platform", "linux")
+    monkeypatch.setattr(installer, "_reveal", lambda directory: revealed.append(directory))
+
+    outcome = run_installer()
+
+    assert revealed == [Path(result["path"]).parent]
+    assert outcome["quit"] is False
 
 
 def test_the_operations_are_registered() -> None:

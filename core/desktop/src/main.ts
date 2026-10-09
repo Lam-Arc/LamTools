@@ -106,7 +106,7 @@ async function init() {
   }
 
   // Open an external URL in the OS default browser. Returns true on success.
-  // Frontend link click handlers call this instead of letting the webview
+  // Frontend link handlers call this instead of letting the webview
   // navigate, which would turn the app window into a browser.
   ;(window as any).__LAMTOOLS_OPEN_URL__ = async (url: string): Promise<boolean> => {
     try {
@@ -116,6 +116,13 @@ async function init() {
       console.error('[Main] open_external_url failed:', e)
       return false
     }
+  }
+
+  // Shut the app down for real (the tray close request only hides the window).
+  // The install hand-off needs this: the installer is already running and
+  // cannot replace this app's files while it is up.
+  ;(window as any).__LAMTOOLS_QUIT__ = async (): Promise<void> => {
+    await invoke('quit_app')
   }
 
   ;(window as any).__LAMTOOLS_SHOW_DESKTOP_PLUGIN__ = async (pluginId: string): Promise<void> => {

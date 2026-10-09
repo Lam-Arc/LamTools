@@ -7,6 +7,9 @@ so it cannot point the installer at something the release did not publish.
 
 Installing stays a user decision — the caller sees the message from
 :func:`run_installer` and the platform's own installer takes over from there.
+On Windows that hand-off ends this process: the returned ``quit`` flag tells the
+desktop host to exit, so the old app is gone while the installer replaces its
+files.
 """
 
 from __future__ import annotations
@@ -30,6 +33,17 @@ MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 CHUNK_BYTES = 1 << 20
 #: Generous overall budget: a slow but healthy download must not be aborted.
 DOWNLOAD_TIMEOUT_SECONDS = 1800.0
+
+#: How the installer is started on Windows. It must outlive this process: the
+#: desktop shell runs the backend inside a job object that kills every member
+#: when the app exits (``create_backend_job``), and the app exits as part of this
+#: hand-off. ``CREATE_BREAKAWAY_FROM_JOB`` leaves that job — allowed because the
+#: shell sets ``JOB_OBJECT_LIMIT_BREAKAWAY_OK`` — while the other two flags
+#: detach the installer from this process's console and process group.
+DETACHED_PROCESS = 0x00000008
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+INSTALLER_SPAWN_FLAGS = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB
 
 #: Paths this process downloaded and verified, and the digest each matched.
 _VERIFIED: dict[str, str] = {}
@@ -173,7 +187,12 @@ def download_update(url: str, sha256: str, file_name: str = "") -> dict[str, Any
 
 
 def run_installer(path: str = "") -> dict[str, Any]:
-    """Run the installer this process verified, or reveal it where that is unsupported."""
+    """Run the installer this process verified, or reveal it where that is unsupported.
+
+    ``quit`` in the result is the caller's instruction: on Windows the installer
+    is already running on its own and the app must exit for it to replace files,
+    while on the other platforms nothing was started and the app stays up.
+    """
     candidate = Path(path) if path else next(
         (Path(known) for known in reversed(list(_VERIFIED))), None
     )
@@ -186,9 +205,40 @@ def run_installer(path: str = "") -> dict[str, Any]:
         # AppImage needs its own permissions and a .deb belongs to the package
         # manager. Reveal the verified file and say so.
         _reveal(candidate.parent)
-        return {"path": str(candidate), "message": "已打开安装包所在文件夹；自动安装目前仅支持 Windows。"}
-    os.startfile(str(candidate))  # noqa: S606 — the digest was verified before publishing the file
-    return {"path": str(candidate), "message": "已启动安装程序；安装向导会要求先退出 Sunday。"}
+        return {
+            "path": str(candidate),
+            "quit": False,
+            "message": "已打开安装包所在文件夹；自动安装目前仅支持 Windows。",
+        }
+    _launch_installer(candidate)
+    _log.info("Update: started installer %s", candidate.name)
+    return {
+        "path": str(candidate),
+        "quit": True,
+        "message": "已启动安装程序；Sunday 即将退出，安装完成后请重新打开。",
+    }
+
+
+def _launch_installer(candidate: Path) -> None:
+    """Start the verified installer so it survives this process's exit.
+
+    ``os.startfile`` would make the installer a member of whatever job object
+    this process belongs to, and the desktop shell's job is kill-on-close: the
+    installer would die exactly when the app exits to let it work. The explicit
+    spawn asks to leave that job. A host with no job object at all (a plain CLI
+    run, a test) refuses the breakaway flag, and there the shell hand-off is the
+    right answer — so the failure falls back to it instead of losing the update.
+    """
+    try:
+        subprocess.Popen(  # noqa: S603 — the digest was verified before publishing the file
+            [str(candidate)],
+            cwd=str(candidate.parent),
+            creationflags=INSTALLER_SPAWN_FLAGS,
+            close_fds=True,
+        )
+    except OSError:
+        _log.info("Update: detached spawn refused, falling back to the shell hand-off")
+        os.startfile(str(candidate))  # noqa: S606 — digest verified before publishing the file
 
 
 def _reveal(directory: Path) -> None:

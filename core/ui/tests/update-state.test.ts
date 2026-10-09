@@ -64,7 +64,7 @@ describe('useCoreUpdateState', () => {
       sha256: 'a'.repeat(64),
       size: 94_081_829,
       install_supported: true,
-      install_hint: '点「立即安装」会运行安装包；安装向导会要求先退出 Sunday。',
+      install_hint: '点「立即安装」会启动安装包并退出 Sunday；装完重新打开即可。',
     })) as never)
     const withoutDigest = useCoreUpdateState((async () => ({
       status: 'update_available',
@@ -204,6 +204,70 @@ describe('getAppVersion bridge', () => {
   it('reads the version injected by the desktop shell', () => {
     ;(window as any).__LAMTOOLS_APP_VERSION__ = '0.2.2'
     expect(getAppVersion()).toBe('0.2.2')
+  })
+})
+
+describe('install hand-off and app exit', () => {
+  afterEach(() => {
+    delete (window as any).__LAMTOOLS_QUIT__
+  })
+
+  /** A state whose host answers the three update RPCs, ready to install. */
+  function readyState(installPayload: Record<string, unknown>) {
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'update.check') {
+        return {
+          status: 'update_available',
+          current_version: '0.2.2',
+          latest_version: '9.9.9',
+          download_url: 'https://example.com/Sunday_9.9.9_x64-setup.exe',
+          sha256: 'b'.repeat(64),
+          install_supported: true,
+        }
+      }
+      if (method === 'update.download') return { ok: true, state: 'downloading' }
+      if (method === 'update.status') {
+        return { ok: true, state: 'verified', received: 10, total: 10, message: '已下载并校验 v9.9.9' }
+      }
+      if (method === 'update.install') return installPayload
+      throw new Error(`unexpected ${method}`)
+    })
+    return useCoreUpdateState(rpc as never)
+  }
+
+  it('shuts the app down when the host says the installer replaces it', async () => {
+    const quit = vi.fn(async () => {})
+    ;(window as any).__LAMTOOLS_QUIT__ = quit
+    const state = readyState({ ok: true, quit: true, message: '已启动安装程序；Sunday 即将退出' })
+
+    await state.downloadInstaller()
+    await expect(state.runInstaller()).resolves.toBe(true)
+
+    // The running app holds the files the installer has to replace: it must go.
+    expect(quit).toHaveBeenCalledTimes(1)
+    expect(state.installState.value).toBe('installing')
+  })
+
+  it('stays open when the hand-off does not replace the running app', async () => {
+    const quit = vi.fn(async () => {})
+    ;(window as any).__LAMTOOLS_QUIT__ = quit
+    const state = readyState({ ok: true, quit: false, message: '已交给系统安装器' })
+
+    await state.downloadInstaller()
+    await expect(state.runInstaller()).resolves.toBe(true)
+
+    expect(quit).not.toHaveBeenCalled()
+  })
+
+  it('installs without a quit bridge (browser dev, website showcase)', async () => {
+    const state = readyState({ ok: true, quit: true, message: '已启动安装程序' })
+
+    await state.downloadInstaller()
+
+    await expect(state.runInstaller()).resolves.toBe(true)
+    // Nothing quit, so the state stays retryable instead of claiming an install
+    // that is still waiting for this process to end.
+    expect(state.installState.value).toBe('downloaded')
   })
 })
 
