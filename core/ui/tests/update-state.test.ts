@@ -269,6 +269,44 @@ describe('install hand-off and app exit', () => {
     // that is still waiting for this process to end.
     expect(state.installState.value).toBe('downloaded')
   })
+
+  it('cancels a running download and treats it as a normal ending', async () => {
+    let cancelled = false
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'update.download') return { ok: true, state: 'downloading' }
+      if (method === 'update.cancel') {
+        cancelled = true
+        return { ok: true, state: 'downloading', message: '' }
+      }
+      if (method === 'update.status') {
+        // 取消之后主机的下一次回报就是 cancelled——没有错误，也没有失败。
+        return cancelled
+          ? { ok: true, state: 'cancelled', received: 10, total: 100, message: '已取消下载' }
+          : { ok: true, state: 'downloading', received: 10, total: 100, message: '正在下载 10%' }
+      }
+      throw new Error(`unexpected ${method}`)
+    })
+    const state = useCoreUpdateState(rpc as never)
+
+    const running = state.downloadInstaller()
+    // downloadInstaller 先把状态置为 downloading 再发第一个请求，所以这里点取消是稳的。
+    await expect(state.cancelDownload()).resolves.toBe(true)
+    await expect(running).resolves.toBe(false)
+
+    expect(rpc).toHaveBeenCalledWith('update.cancel', {})
+    expect(state.installState.value).toBe('idle')
+    expect(state.installError.value).toBe('')
+    expect(state.installMessage.value).toBe('')
+  })
+
+  it('ignores a cancel when nothing is downloading', async () => {
+    const rpc = vi.fn()
+    const state = useCoreUpdateState(rpc as never)
+
+    await expect(state.cancelDownload()).resolves.toBe(false)
+
+    expect(rpc).not.toHaveBeenCalled()
+  })
 })
 
 describe('CoreSettings 关于与更新 section (source contract)', () => {
@@ -302,11 +340,28 @@ describe('CoreSettings 关于与更新 section (source contract)', () => {
     expect(source).toContain('info: Info,')
   })
 
-  it('wires the shared update state and startup banner in the Shared Core App', () => {
-const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
+  it('wires the shared update state and the rail entry in the Shared Core App', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
     expect(source).toContain('useCoreUpdateState(requestConfigOperation)')
     expect(source).toContain(':update-state="updateState"')
-    expect(source).toContain('data-update-banner')
     expect(source).toContain('readUpdateAutoCheck()')
+
+    // 新版本只有一个入口：左侧竖栏里、账号上方那一枚（AppRail 自己渲染），
+    // 横幅已经下线——横跨窗口的提示条只留给后端崩溃。
+    expect(source).not.toContain('data-update-banner')
+    expect(source).toContain(':update-available="updateStatus === \'update_available\'"')
+    expect(source).toContain('@update="onRailUpdate"')
+    expect(source).toContain('onRailUpdate')
+
+    const rail = readFileSync(resolve(process.cwd(), 'src/components/AppRail.vue'), 'utf8')
+    expect(rail).toContain('data-rail-update')
+    expect(rail).toContain("emit('update')")
+
+    // 点图标只开门；下载完自动安装；取消真的停掉传输。
+    expect(source).toContain('<CoreUpdateCard')
+    expect(source).toContain('@confirm="onUpdateConfirm"')
+    expect(source).toContain('@cancel="onUpdateCardCancel"')
+    expect(source).toContain("if (state === 'downloaded' && updateAutoInstall.value) installUpdateNow()")
+    expect(source).toContain('updateState.cancelDownload()')
   })
 })

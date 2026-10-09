@@ -343,6 +343,46 @@
   outline-offset: 1px;
 }
 
+/* 更新入口（账号上方，只在新版本出现时渲染）：竖栏里唯一「有事可做」的一枚，
+   所以复用竖栏按钮的配方，只改两件事——圆角放大到 --radius-lg（18px 压在 34px 上，
+   接近圆角方块），以及默认就带一层底色（状态色仍走同一套 --alpha-*，hover 恰好是
+   +4pp 的那一步）。它是入口，不是「当前分区」，所以不参与 aria-pressed 的选中底色。 */
+.app-rail__update {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+}
+
+.app-rail__update:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent);
+}
+
+/* 下载进行中：底色停在与 hover 同一档，外沿再透出一圈很淡的呼吸，
+   代替横幅里那行进度文字；进度本身写在 title 里。 */
+.app-rail__update[data-rail-update-state='busy'] {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent);
+}
+
+.app-rail__update[data-rail-update-state='busy']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 50%, transparent);
+  animation: app-rail-update-breathe calc(var(--dur-theme) * 3) var(--ease-out) infinite;
+  pointer-events: none;
+}
+
+@keyframes app-rail-update-breathe {
+  0%, 100% { opacity: .3; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-rail__update[data-rail-update-state='busy']::after { animation: none; opacity: .8; }
+}
+
 .drawer-right {
   /* 右侧栏 = 贴右缘的图标竖栏：高度只包住图标（竖直居中），不再通到窗口上下缘。
    悬停浮出的卡片已下线，容器自身就是这张贴边小玻璃条。 */

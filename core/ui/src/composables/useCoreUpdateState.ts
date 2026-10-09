@@ -180,6 +180,16 @@ export function useCoreUpdateState(requestRpc: CoreUpdateRequestRpc) {
           if (!installMessage.value) installMessage.value = '安装包已下载并校验通过'
           return true
         }
+        if (state === 'cancelled') {
+          // 取消是这条下载的正常结局之一：清干净进度，回到可以重新开始的状态，
+          // 不当成错误（否则卡片会显示一句假的失败）。
+          installState.value = 'idle'
+          installProgress.value = null
+          installReceived.value = 0
+          installTotal.value = 0
+          installMessage.value = ''
+          return false
+        }
         if (state === 'failed') throw new Error(String(status.error || '下载安装包失败'))
         if (Date.now() > deadline) throw new Error('下载超时，请重试')
         await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_POLL_MS))
@@ -192,9 +202,25 @@ export function useCoreUpdateState(requestRpc: CoreUpdateRequestRpc) {
     }
   }
 
+  /**
+   * Cancel a running download.
+   *
+   * The host stops the transfer between chunks and reports 'cancelled', which the
+   * polling loop above turns into a clean idle state. Cancelling when nothing is
+   * running is a no-op, so a card can ask twice without an error.
+   */
+  async function cancelDownload(): Promise<boolean> {
+    if (installState.value !== 'downloading') return false
+    try {
+      await requestRpc('update.cancel', {})
+    } catch (err) {
+      console.error('[update] cancel failed:', err)
+    }
+    return true
+  }
+
   /** Hand the verified artifact to the platform's installer. */
-  async function runInstaller(): Promise<boolean> {
-    if (installState.value !== 'downloaded') return false
+  async function runInstaller(): Promise<boolean> {    if (installState.value !== 'downloaded') return false
     installState.value = 'installing'
     installError.value = ''
     try {
@@ -259,11 +285,14 @@ export function useCoreUpdateState(requestRpc: CoreUpdateRequestRpc) {
     installMessage,
     installError,
     installProgress,
+    installReceived,
+    installTotal,
     installProgressLabel,
     packageSizeLabel,
     check,
     download,
     downloadInstaller,
+    cancelDownload,
     runInstaller,
   }
 }

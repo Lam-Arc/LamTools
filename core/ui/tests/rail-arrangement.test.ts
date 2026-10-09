@@ -48,7 +48,7 @@ describe('left rail entry arrangement', () => {
     expect(appSource).toMatch(/data-sidebar-search-entry[\s\S]*?@click="openSearch"/)
     expect(appSource).not.toContain('#toolbar-actions')
     // 竖栏：聊天 + 四个整版分区（图标 only），底部账号。
-    expect(appSource).toMatch(/#app-rail[\s\S]*?<AppRail :active="railActiveView" @open="onRailOpen" \/>/)
+    expect(appSource).toMatch(/#app-rail[\s\S]*?<AppRail[\s\S]*?@open="onRailOpen"/)
     const railSource = read('src/components/AppRail.vue')
     expect(railSource).toMatch(/\{ id: 'chat'[\s\S]*?\{ id: 'arrange'[\s\S]*?\{ id: 'library'[\s\S]*?\{ id: 'plugins'[\s\S]*?\{ id: 'settings'/)
     expect(railSource).toMatch(/data-rail-entry="account"/)

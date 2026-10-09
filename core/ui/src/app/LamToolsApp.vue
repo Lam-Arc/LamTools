@@ -17,27 +17,8 @@
     @cycle-mode="cycleAppMode"
     @mobile-pairing-create="createRemotePairing"
   />
-  <div v-if="backendCrashed" class="core-update-banner" role="alert" data-backend-crashed-banner>
-    <span class="core-update-banner-text">后端进程已停止响应（可能已崩溃）。请重启应用以恢复。</span>
-  </div>
-  <div v-if="updateBannerVisible" class="core-update-banner" data-update-banner>
-    <span class="core-update-banner-text">{{ updateBannerText }}</span>
-    <button
-      v-if="updateBannerAction === 'install'"
-      class="core-update-banner-action"
-      type="button"
-      data-update-banner-install
-      @click="installUpdateNow()"
-    >立即安装</button>
-    <button
-      v-else
-      class="core-update-banner-action"
-      type="button"
-      :disabled="updateInstallState === 'downloading'"
-      data-update-banner-download
-      @click="startUpdateDownload()"
-    >{{ updateInstallState === 'downloading' ? '下载中…' : '下载更新' }}</button>
-    <button class="core-update-banner-close" type="button" aria-label="关闭提示" @click="dismissUpdateBanner">✕</button>
+  <div v-if="backendCrashed" class="core-status-banner" role="alert" data-backend-crashed-banner>
+    <span class="core-status-banner-text">后端进程已停止响应（可能已崩溃）。请重启应用以恢复。</span>
   </div>
 
 
@@ -95,7 +76,32 @@
     @composer-drop="handleComposerDrop"
   >
     <template v-if="appRuntime.platform !== 'mobile'" #app-rail>
-      <AppRail :active="railActiveView" @open="onRailOpen" />
+      <AppRail
+        ref="appRailRef"
+        :active="railActiveView"
+        :update-available="updateStatus === 'update_available'"
+        :update-action="updateRailAction"
+        :update-busy="updateInstallState === 'downloading'"
+        :update-label="updateRailLabel"
+        @open="onRailOpen"
+        @update="onRailUpdate"
+      />
+      <!-- 更新卡片：点竖栏那枚图标后从它身上长出来（动效在组件内部，走 GSAP）。 -->
+      <CoreUpdateCard
+        v-if="updateCardOpen"
+        :origin="updateRailOrigin"
+        :current-version="updateCurrentVersion"
+        :latest-version="updateLatestVersion"
+        :notes="updateReleaseNotes"
+        :state="updateCardState"
+        :received="updateInstallReceived"
+        :total="updateInstallTotal"
+        :progress-label="updateInstallProgressLabel"
+        :error="updateInstallError"
+        @confirm="onUpdateConfirm"
+        @cancel="onUpdateCardCancel"
+        @closed="updateCardOpen = false"
+      />
     </template>
 
     <template #primary>
@@ -865,6 +871,7 @@ import ChatThread from '../components/ChatThread.vue'
 import ChatOutlineNavigator from '../components/ChatOutlineNavigator.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import AppRail, { type AppRailView } from '../components/AppRail.vue'
+import CoreUpdateCard from '../components/CoreUpdateCard.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreWorkspaceMenu from '../components/CoreWorkspaceMenu.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
@@ -3651,30 +3658,39 @@ const updateState = useCoreUpdateState(requestConfigOperation)
 // 解构到 setup 顶层供模板使用（嵌套 ref 在模板中不会自动解包）
 const {
   status: updateStatus,
+  currentVersion: updateCurrentVersion,
   latestVersion: updateLatestVersion,
+  releaseNotes: updateReleaseNotes,
   download: downloadUpdate,
   installSupported: updateInstallSupported,
   installState: updateInstallState,
+  installReceived: updateInstallReceived,
+  installTotal: updateInstallTotal,
   installProgressLabel: updateInstallProgressLabel,
+  installError: updateInstallError,
 } = updateState
 
 /**
- * The banner is the first place a new version shows up, so it offers the same
- * action as the settings card: download and verify in place when the manifest
- * carries a digest, otherwise the download page.
+ * 更新入口住在左侧竖栏（账号上方那一枚圆角图标），所以这里只准备它的
+ * 说明文字与动作：同一个状态在竖栏里没有多余的地方写句子，全部收进 title；
+ * 具体流程仍旧是设置里那张卡片的同一套下载/安装调用。
  */
-const updateBannerText = computed(() => {
-  if (updateInstallState.value === 'downloading') {
-    return updateInstallProgressLabel.value || `正在下载 v${updateLatestVersion.value}…`
-  }
-  if (updateInstallState.value === 'downloaded') {
-    return `更新 v${updateLatestVersion.value} 已下载并校验，可以安装了`
-  }
-  return `发现新版本 v${updateLatestVersion.value}，是否立即下载？`
-})
-const updateBannerAction = computed<'download' | 'install'>(
+const updateRailAction = computed<'download' | 'install'>(
   () => (updateInstallState.value === 'downloaded' ? 'install' : 'download'),
 )
+const updateRailLabel = computed(() => {
+  const version = updateLatestVersion.value
+  if (updateInstallState.value === 'downloading') {
+    return updateInstallProgressLabel.value || `正在下载 v${version}…`
+  }
+  if (updateInstallState.value === 'downloaded') {
+    return `更新 v${version} 已下载并校验，点击安装`
+  }
+  if (!updateInstallSupported.value) {
+    return `发现新版本 v${version}，点击打开下载页`
+  }
+  return `发现新版本 v${version}，点击下载`
+})
 function startUpdateDownload() {
   if (updateInstallSupported.value) {
     void updateState.downloadInstaller()
@@ -3685,13 +3701,49 @@ function startUpdateDownload() {
 function installUpdateNow() {
   void updateState.runInstaller()
 }
-const updateBannerDismissed = ref(false)
-const updateBannerVisible = computed(
-  () => updateStatus.value === 'update_available' && !updateBannerDismissed.value,
-)
-function dismissUpdateBanner() {
-  updateBannerDismissed.value = true
+
+// ── 更新卡片 ──
+// 竖栏那枚图标只负责开门：点它打开卡片，真正的动作（下载 → 自动安装 → 自动重启）
+// 在卡片里走完。卡片从这里长出来，所以宿主把它按住的按钮元素交给它。
+const appRailRef = ref<{ updateButton?: HTMLElement | null } | null>(null)
+const updateCardOpen = ref(false)
+/** 本轮的下载是否来自卡片：只有它才在下载完成后自动安装。 */
+const updateAutoInstall = ref(false)
+const updateRailOrigin = computed(() => appRailRef.value?.updateButton ?? null)
+const updateCardState = computed<'idle' | 'downloading' | 'downloaded' | 'installing' | 'failed'>(() => {
+  if (updateInstallState.value === 'downloading') return 'downloading'
+  if (updateInstallState.value === 'downloaded') return 'downloaded'
+  if (updateInstallState.value === 'installing') return 'installing'
+  if (updateInstallError.value) return 'failed'
+  return 'idle'
+})
+
+/** 竖栏那一枚图标被点击：开门，不再当场开始下载。 */
+function onRailUpdate(): void {
+  updateCardOpen.value = true
 }
+
+/** 卡片上的「更新 / 重试」：开始下载；已下载则直接进入安装。 */
+function onUpdateConfirm(): void {
+  if (updateInstallState.value === 'downloaded') {
+    installUpdateNow()
+    return
+  }
+  if (updateInstallState.value === 'downloading' || updateInstallState.value === 'installing') return
+  updateAutoInstall.value = true
+  startUpdateDownload()
+}
+
+/** 卡片上的「取消下载」：真的停掉传输；取消完卡片自己收回竖栏。 */
+function onUpdateCardCancel(): void {
+  updateAutoInstall.value = false
+  void updateState.cancelDownload()
+}
+
+// 下载并校验完成即自动安装：用户点过一次「更新」，不该再点第二次。
+watch(updateInstallState, (state) => {
+  if (state === 'downloaded' && updateAutoInstall.value) installUpdateNow()
+})
 
 function currentWorkRoot(): string {
   const session = sessions.value.find((item) => item.id === activeSessionId.value)
@@ -4284,8 +4336,10 @@ onUnmounted(() => {
   }
 }
 
-/* ── 新版本提示条（fixed 在标题栏下方，36px = --titlebar-offset） ── */
-.core-update-banner {
+/* ── 运行状态提示条（fixed 在标题栏下方，36px = --titlebar-offset）──
+   新版本不再走这里：它只在左侧竖栏的账号上方出现（见 AppRail）。这条只留给
+   后端崩溃这类必须横跨整个窗口说的状态。 */
+.core-status-banner {
   position: fixed;
   top: 36px;
   left: 0;
@@ -4299,25 +4353,9 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--line, rgba(128, 128, 128, 0.25));
   font-size: 13px;
 }
-.core-update-banner-text {
+.core-status-banner-text {
   flex: 1;
   color: var(--text);
-}
-.core-update-banner-action {
-  border: 1px solid var(--line, rgba(128, 128, 128, 0.25));
-  border-radius: 6px;
-  padding: 4px 12px;
-  background: var(--accent, rgba(255, 255, 255, 0.08));
-  color: var(--text);
-  cursor: pointer;
-}
-.core-update-banner-close {
-  border: none;
-  background: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 13px;
-  padding: 2px 6px;
 }
 
 /* ── 全窗口拖拽上传遮罩 ── */

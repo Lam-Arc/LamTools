@@ -40,7 +40,7 @@ describe('full-area views (搜索 / 资料库 / 定时任务)', () => {
 
   it('routes the app rail and the mobile entries to the three openers', () => {
     // 最左竖栏：主页回聊天，四个分区走同一族整版界面，账号进账号页。
-    expect(appSource).toMatch(/#app-rail[\s\S]*?<AppRail :active="railActiveView" @open="onRailOpen" \/>/)
+    expect(appSource).toMatch(/#app-rail[\s\S]*?<AppRail[\s\S]*?@open="onRailOpen"/)
     expect(appSource).toMatch(/function onRailOpen\(view: AppRailView\): void \{[\s\S]*?closeFullArea\(\)[\s\S]*?openAccount\(\)[\s\S]*?openFullArea\(view\)/)
     expect(appSource).toMatch(/const railActiveView = computed<AppRailView>\(\(\) => \{/)
 

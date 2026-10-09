@@ -35,4 +35,51 @@ describe('AppRail', () => {
     await wrapper.get('[data-rail-entry="account"]').trigger('click')
     expect(wrapper.emitted('open')?.[0]).toEqual(['account'])
   })
+
+  it('shows no update entry while the app is current', () => {
+    const wrapper = mount(AppRail, { props: { active: 'chat' } })
+
+    expect(wrapper.find('[data-rail-update]').exists()).toBe(false)
+  })
+
+  it('puts the update entry above the account entry, icon-only and explained', async () => {
+    const wrapper = mount(AppRail, {
+      props: {
+        active: 'chat',
+        updateAvailable: true,
+        updateAction: 'download',
+        updateLabel: '发现新版本 v9.9.9，点击下载',
+      },
+    })
+
+    const button = wrapper.get('[data-rail-update]')
+    expect(button.attributes('aria-label')).toBe('发现新版本 v9.9.9，点击下载')
+    expect(button.attributes('title')).toBe('发现新版本 v9.9.9，点击下载')
+    expect(button.text()).toBe('')
+    expect(button.attributes('data-rail-update-action')).toBe('download')
+    expect(button.attributes('data-rail-update-state')).toBe('ready')
+
+    // 位置：夹在占位块与账号之间——就是「账号图标上面」。
+    const children = Array.from(wrapper.get('[data-app-rail]').element.children)
+    const spacerIndex = children.findIndex(child => child.classList.contains('app-rail__spacer'))
+    const updateIndex = children.findIndex(child => child.hasAttribute('data-rail-update'))
+    const accountIndex = children.findIndex(child => child.getAttribute('data-rail-entry') === 'account')
+    expect(updateIndex).toBeGreaterThan(spacerIndex)
+    expect(accountIndex).toBeGreaterThan(updateIndex)
+
+    await button.trigger('click')
+    expect(wrapper.emitted('update')).toHaveLength(1)
+  })
+
+  it('switches the update entry to install and marks a running download', () => {
+    const installing = mount(AppRail, {
+      props: { active: 'chat', updateAvailable: true, updateAction: 'install' },
+    })
+    expect(installing.get('[data-rail-update]').attributes('data-rail-update-action')).toBe('install')
+
+    const downloading = mount(AppRail, {
+      props: { active: 'chat', updateAvailable: true, updateBusy: true },
+    })
+    expect(downloading.get('[data-rail-update]').attributes('data-rail-update-state')).toBe('busy')
+  })
 })
