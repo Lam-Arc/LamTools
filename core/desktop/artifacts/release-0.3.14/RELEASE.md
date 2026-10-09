@@ -35,11 +35,11 @@ position; host wiring).
 
 ## Build facts (GitHub Release, tag v0.3.14)
 
-CI run `37918719012` for tag v0.3.14: the Windows job produced
-`Sunday_0.3.14_x64-setup.exe` (58,216,595 bytes,
+CI run `37918719012` for tag v0.3.14 **succeeded** (Windows and Linux jobs). The
+Windows job produced `Sunday_0.3.14_x64-setup.exe` (58,216,595 bytes,
 `sha256:c421d41eb452ae80c7d79a6a5fb06e4ab36c2ea1750c46774bd6c4ff4f3c1dc8`); the
-Linux bundles were still building when this record was written. Release v0.3.14 is
-not draft and not prerelease.
+Linux bundles were still uploading when this record was first written and the run
+completed successfully afterwards. Release v0.3.14 is not draft and not prerelease.
 
 The installer came to the site the same way as 0.3.11–0.3.13: fetched on the server
 (the canonical asset host is throttled here; the mirror's bytes are accepted only
