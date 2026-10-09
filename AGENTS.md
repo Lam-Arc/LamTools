@@ -130,6 +130,7 @@ current operating system and shell.
 - 开发：`cd website && npm run dev`（5199，不碰 5172/5173）；构建 `npm run build`（纯 vite build，因 core/ui 跨项目类型检查噪音大未挂 vue-tsc）；产物 `website/dist/`。
 - 版本引用：`Download.vue` 的 `VITE_SUNDAY_VERSION`（桌面）与 `VITE_SUNDAY_MOBILE_VERSION`（移动端）默认值随发布更新，`.env.example` 与 `src/mock/runtime.ts` 里的预览版本同步跟着走。
 - 文案不再使用 `TODO(文案)` 占位标记；下载区安装包路径指向站点 `downloads/`（`Sunday-latest-x64-setup.exe` 与版本化文件都在站点上）。
+- **公网 `ainarit.com` 用的是另外两份副本，发布必须同步**：站点发布只重指 `/var/www/lamtools/site`（`47.114.43.99.nip.io`），而注册域名另有 `/var/www/ainarit/sunday.html`（下载区版本标签与 Linux 链接写死在页面里）与 `/var/www/ainarit-preview`（`/preview/` 内嵌的产品界面）。发布后执行 `scripts/sync-public-site.sh`（服务器上已装到 `/usr/local/bin/`）：它按刚发布的两个 manifest 打版本标签、用已发布的站点包重建 `/preview/`、并回访公网确认；`--check` 只读，脱节时退出码 1，可作验收关卡。历史上漏掉这一步导致页面停在 0.3.10 且两条 Linux 链接 404，详见 `core/desktop/artifacts/release-0.3.15/public-site-sync.md`。
 
 ## 开发启动
 
