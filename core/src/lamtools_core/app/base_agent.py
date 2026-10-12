@@ -452,6 +452,10 @@ class CoreBaseAgentKit:
     async def build_model_request(self, state: RuntimeState, context: PromptContext) -> LLMRequest:
         study_mode = self.config.active_mode == "study:study"
         effective_instructions = self.config.instructions
+        # Background-process status is session state, not instructions: it lives
+        # in the trailing runtime message so the leading system prompt stays
+        # byte-stable for the provider's prompt cache.
+        persistent_processes = ""
         if study_mode:
             effective_instructions = _bundled_study_system_prompt() or effective_instructions
         if study_mode:
@@ -473,17 +477,15 @@ class CoreBaseAgentKit:
                 effective_instructions,
                 f"Current project: {state.metadata.get('work_root', '')}, current session: {state.session_id}, current model: {self.config.model_display_name or self.config.model_id}",
                 command_shell_prompt(),
-                *([persistent_processes] if persistent_processes else []),
                 "Do not damage the structure or tidiness of the project directory while working.",
                 *_COMMON_TOOL_PROTOCOL,
                 "When the task is complete, reply with a short summary covering completed work, scope, output locations, and any matters requiring user confirmation. The final reply must list each deliverable file created or updated in this turn, with each real path wrapped in backticks or a Markdown file link; do not claim a nonexistent path was delivered.",
             ]
         # Model capability line: tells the agent its input modalities so it
-        # does not assume image support that the model lacks.
+        # does not assume image support that the model lacks.  It changes when
+        # attachments arrive, so it belongs to the trailing runtime message.
         deferred = list(state.metadata.get("deferred_attachments") or [])
         cap_line = self._capability_prompt_line(deferred)
-        if cap_line:
-            system_lines.insert(1, cap_line)  # right after the instructions
         # Sub-agent delegation guide (project > global > built-in). Cached on the
         # kit so the markdown file is read at most once per kit lifetime.
         guide = "" if study_mode else self._cached_subagent_guide()
@@ -497,8 +499,6 @@ class CoreBaseAgentKit:
             # the same leading system prompt so their ordering is deterministic.
             system_lines.insert(2, subagent_instructions)
         mode_line = mode_prompt_line(self.toolbox.load_tools, self.config.active_mode)
-        if mode_line:
-            system_lines.insert(2, mode_line)  # inject after the project/session metadata
         skill_index = self.toolbox.skill_index()
         if skill_index:
             system_lines.extend(["", skill_index])
@@ -515,10 +515,19 @@ class CoreBaseAgentKit:
         context_parts = [] if study_mode else self._build_project_context_parts()
         for part in context_parts:
             system_lines.extend(["", part.content])
-        # Keep the mutable checklist out of the leading system message. Provider
-        # prompt caches are prefix-based, so changing the plan there would
-        # invalidate the otherwise-stable system prompt and complete history.
+        # Everything session-state shaped lives in the trailing runtime message,
+        # never in the leading system message.  Provider prompt caches are
+        # prefix based: the system message is the first bytes of every request,
+        # so a single changed character there invalidates the complete history
+        # and forces a full re-read of hundreds of thousands of tokens.  The
+        # trailing message is rebuilt every step anyway, so it costs nothing.
         runtime_context_lines: list[str] = []
+        if cap_line:
+            runtime_context_lines.append(cap_line)
+        if mode_line:
+            runtime_context_lines.append(mode_line)
+        if persistent_processes:
+            runtime_context_lines.append(persistent_processes)
         if "active_plan" in (state.metadata or {}):
             ap = state.metadata["active_plan"]
             plan_lines = []
@@ -536,29 +545,33 @@ class CoreBaseAgentKit:
                 runtime_context_lines.extend(["[Current plan]", "\n".join(plan_lines)])
         if self.verification_policy.required:
             verification_state = self._verification_state(state)
-            system_lines.extend([
+            runtime_context_lines.extend([
                 "",
                 "This member requires tool-generated verification evidence before the final reply. Use tools that can produce evidence and answer based on observed results.",
             ])
             repair_prompt = str(verification_state.get("repair_prompt") or "").strip()
             if repair_prompt:
-                system_lines.append(f"Verification repair requirement: {repair_prompt}")
+                runtime_context_lines.append(f"Verification repair requirement: {repair_prompt}")
             evidence_call_ids = known_evidence_call_ids(state)
             if evidence_call_ids:
-                system_lines.append(
+                runtime_context_lines.append(
                     "Known successful evidence call IDs are opaque references. When a tool requires an evidence tool_call_id, "
                     "copy one of the following values exactly; do not add, remove, or normalize prefixes: "
                     + json.dumps(evidence_call_ids, ensure_ascii=False)
                 )
         empty_stop_retry = (state.metadata or {}).get("empty_stop_retry_instruction")
         if empty_stop_retry and isinstance(empty_stop_retry, str):
-            system_lines.extend(["", str(empty_stop_retry)])
+            runtime_context_lines.extend(["", str(empty_stop_retry)])
+        system_lines.extend(["", _IMAGE_FIDELITY_GUIDANCE])
         messages = [
             ChatMessage(
                 role="system",
                 content="\n".join(system_lines),
             ),
-            *context.history,
+            *_messages_with_degraded_stale_images(
+                list(context.history),
+                current_step=int(getattr(state, "turn_count", 0) or 0),
+            ),
         ]
         if runtime_context_lines:
             messages.append(

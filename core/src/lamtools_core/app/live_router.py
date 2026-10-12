@@ -5,7 +5,7 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,6 +62,17 @@ SNAPSHOT_TRIGGER_EVENTS = frozenset({
 # connection per interval — the next trigger (or thread/resume) delivers the
 # latest state anyway.
 SNAPSHOT_MIN_INTERVAL_SECONDS = 1.0
+
+# A snapshot page is delimited by complete turns, so a page on a long thread can
+# be tens of MB in one WebSocket message. Common client libraries cap a single
+# message at 4 MiB — aiohttp's ``max_msg_size`` default, and Node/undici's
+# permessage-deflate decompressed-message limit (which closes with 1009
+# "Max decompressed message size exceeded"; that limit is not configurable).
+# The local send still succeeds, so without a warning an oversized response
+# looks like an unexplained disconnect on the client (2026-10-12: three probes
+# died exactly this way right after ``core.rpc.response_sent``). Log anything at
+# or above the cap with its size and thread/turn identity.
+LARGE_OUTBOUND_MESSAGE_BYTES = 4 * 1024 * 1024
 
 CoreLiveContextFactory = Callable[[], CoreLiveContext | Awaitable[CoreLiveContext]]
 CoreLiveClientResponseHandler = Callable[["CoreLiveConnection", dict[str, Any]], bool | Awaitable[bool]]
@@ -236,7 +247,21 @@ class CoreLiveConnection:
     async def _sender(self) -> None:
         while True:
             message = await self.outbound.get()
-            await self.websocket.send_json(message)
+            # Serialize once here so the size is known exactly; starlette's
+            # send_json produces this same text, so sending it ourselves is
+            # byte-identical and avoids serializing a huge page a second time.
+            payload = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+            size = len(payload.encode("utf-8"))
+            if size >= LARGE_OUTBOUND_MESSAGE_BYTES:
+                logger.warning(
+                    "%s",
+                    _describe_large_outbound(message, size, self._request_methods),
+                )
+            send_text = getattr(self.websocket, "send_text", None)
+            if callable(send_text):
+                await send_text(payload)
+            else:
+                await self.websocket.send_json(message)
             if "id" in message:
                 request_id = message.get("id")
                 method = self._request_methods.pop(str(request_id), "")
@@ -766,6 +791,42 @@ def _thread_id_from_params(params: dict[str, Any]) -> str:
 
 def _turn_id_from_params(params: dict[str, Any]) -> str:
     return str(params.get("turn_id") or params.get("turnId") or "")
+
+
+def _describe_large_outbound(
+    message: dict[str, Any],
+    size: int,
+    request_methods: Mapping[str, str],
+) -> str:
+    """One diagnostic line for an outbound message at/over the client cap.
+
+    Carries the size plus the best-effort method / thread / turn identity so an
+    oversized response can be tied to the thread that produced it without
+    logging any body content.
+    """
+    method = str(message.get("method") or "")
+    if not method and "id" in message:
+        method = str(request_methods.get(str(message.get("id"))) or "")
+    params = message.get("params") if isinstance(message.get("params"), dict) else {}
+    thread_id = str(params.get("thread_id") or params.get("threadId") or "")
+    turn_id = str(params.get("turn_id") or params.get("turnId") or "")
+    page_turns: Any = None
+    if not thread_id:
+        # RPC responses carry the page under result.snapshot.
+        result = message.get("result")
+        snapshot = result.get("snapshot") if isinstance(result, dict) else None
+        if isinstance(snapshot, dict):
+            thread_id = str(snapshot.get("thread_id") or "")
+            page = snapshot.get("history_page")
+            if isinstance(page, dict):
+                page_turns = page.get("turn_count")
+    return (
+        f"Core app-server outbound message is {size} bytes "
+        f"(>= the {LARGE_OUTBOUND_MESSAGE_BYTES}-byte single-message cap most "
+        f"clients enforce); the local send can still succeed while the peer "
+        f"aborts with 1009. method={method or '-'} thread={thread_id or '-'} "
+        f"turn={turn_id or '-'} page_turns={page_turns if page_turns is not None else '-'}"
+    )
 
 
 def _trace_outbound_notification(message: dict[str, Any]) -> None:

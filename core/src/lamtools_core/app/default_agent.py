@@ -830,6 +830,7 @@ def create_core_agent_operations(
             from lamtools_core.tool.approval_continuation import (
                 ApprovedToolExecution,
                 approved_tool_continuation_prompt,
+                approved_tool_failure_continuation_prompt,
                 guidance_continuation_prompt,
                 question_answer_continuation_prompt,
                 resolve_waiting_decision,
@@ -1549,7 +1550,32 @@ def create_core_agent_operations(
                         tags=["tool"],
                     )
                 ]
-                if not approved_tool.completed:
+                if tool_result.status == "failed":
+                    # The approved tool *ran* and reported a failure (bad edit
+                    # context, missing file, non-zero exit).  That is a
+                    # correctable tool failure, not a run-level one: hand the
+                    # real result back to the model and continue, exactly as
+                    # the main loop does for a failure it executed itself.
+                    # Ending the turn here left the user with a dead round and
+                    # no way to correct the call.  Only a refused call
+                    # (``blocked``) or an exception from execution itself stays
+                    # terminal below.
+                    try:
+                        await lifecycle.persist_tool_history(
+                            ChatMessage(
+                                role="tool",
+                                name=call.name,
+                                tool_call_id=call.id,
+                                content=tool_result.content or tool_result.error,
+                            )
+                        )
+                        continuation = approved_tool_failure_continuation_prompt(
+                            original_task=original_task,
+                            approved_tool=approved_tool,
+                        )
+                    except BaseException as exc:
+                        return await lifecycle.finalize_failure(exc)
+                elif not approved_tool.completed:
                     return await lifecycle.finalize_failure(
                         approved_tool.tool_content,
                         tool_event=approval_events[-1],
@@ -1559,22 +1585,24 @@ def create_core_agent_operations(
                             tool_call_id=call.id,
                             content=tool_result.content or tool_result.error,
                         ),
+                        failure_origin="tool_execution",
                     )
-                try:
-                    await lifecycle.persist_tool_history(
-                        ChatMessage(
-                            role="tool",
-                            name=call.name,
-                            tool_call_id=call.id,
-                            content=tool_result.content or tool_result.error,
+                else:
+                    try:
+                        await lifecycle.persist_tool_history(
+                            ChatMessage(
+                                role="tool",
+                                name=call.name,
+                                tool_call_id=call.id,
+                                content=tool_result.content or tool_result.error,
+                            )
                         )
-                    )
-                    continuation = approved_tool_continuation_prompt(
-                        original_task=original_task,
-                        approved_tool=approved_tool,
-                    )
-                except BaseException as exc:
-                    return await lifecycle.finalize_failure(exc)
+                        continuation = approved_tool_continuation_prompt(
+                            original_task=original_task,
+                            approved_tool=approved_tool,
+                        )
+                    except BaseException as exc:
+                        return await lifecycle.finalize_failure(exc)
 
             async def approval_live_callback(event: Any) -> None:
                 await _persist_core_event_live(
@@ -2524,10 +2552,45 @@ async def _persist_run_items(
     )
 
     async def write(db):
-        envelopes = await persistence.append_batch(db, run_item_events=run_items)
-        return await persistence.load(db, run_items[-1].thread_id), envelopes
+        return await persistence.append_batch(db, run_item_events=run_items)
 
-    snapshot, envelopes = await persistence.write(write)
+    # Append and snapshot-load are deliberately two separate steps. Loading the
+    # whole thread back is by far the most allocation-heavy part of this call,
+    # and while it lived inside the same transaction a memory failure there
+    # rolled the just-committed events back: the turn's terminal record
+    # vanished, the session stayed "running" forever, and nothing explained why
+    # (2026-10-10 host-memory crash). The events are the record that must
+    # survive; the snapshot is a convenience the caller can recompute locally
+    # when this returns None.
+    try:
+        envelopes = await persistence.write(write)
+    except BaseException:
+        minimal = _terminal_status_run_items(run_items)
+        if not minimal:
+            raise
+        # The full batch could not be written. The terminal status is the one
+        # record that must never be lost — without it the session keeps
+        # claiming to be running — so retry with only that, which is a couple
+        # of rows instead of a whole turn.
+        _logger.exception(
+            "[default:persist_run_items] batch append failed; retrying with %d terminal item(s)",
+            len(minimal),
+        )
+        async def write_terminal(db):
+            return await persistence.append_batch(db, run_item_events=minimal)
+
+        envelopes = await persistence.write(write_terminal)
+    thread_id = run_items[-1].thread_id
+    try:
+        async with db_session_factory() as db:
+            snapshot = await persistence.load(db, thread_id)
+    except BaseException:
+        _logger.exception(
+            "[default:persist_run_items] snapshot load failed after append thread_id=%s items=%d",
+            thread_id,
+            len(run_items),
+        )
+        snapshot = None
     if app_event_hub is not None:
         publish = getattr(app_event_hub, "publish", None)
         if callable(publish):
@@ -2536,6 +2599,25 @@ async def _persist_run_items(
                 if inspect.isawaitable(published):
                     await published
     return snapshot
+
+
+def _terminal_status_run_items(run_items: list[Any]) -> list[Any]:
+    """The turn-level terminal status items inside a batch (failed / cancelled).
+
+    Used as the last-resort payload when the full batch cannot be persisted:
+    these few rows are what make the session stop claiming it is running.
+    """
+    minimal: list[Any] = []
+    for item in run_items:
+        if getattr(item, "kind", "") != "status":
+            continue
+        if getattr(item, "status", "") not in {"failed", "cancelled"}:
+            continue
+        payload = getattr(item, "payload", None)
+        if not isinstance(payload, dict) or str(payload.get("type") or "") != "turn":
+            continue
+        minimal.append(item)
+    return minimal
 
 
 def _should_collect_core_event(event: Any) -> bool:

@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
+  CoreSessionStateStore,
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
   hydrateSnapshot,
@@ -456,14 +457,73 @@ describe('core appServer runtime store', () => {
       createClient: () => fakeClient(),
     })
 
+    // The event is newer than the hydrating snapshot (seq 4 > 3): it carries a
+    // fact the snapshot cannot contain yet, so it must still be applied.
     controller.applyResponse({
       snapshot: snapshot(3, 'running'),
-      events: [runStatusEvent('terminal-1', 'completed')],
+      events: [{ ...runStatusEvent('terminal-1', 'completed'), seq: 4 }],
     })
 
-    expect(runtime.state?.snapshot_seq).toBe(3)
+    expect(runtime.state?.snapshot_seq).toBe(4)
     expect(runtime.state?.core?.status).toBe('completed')
     expect(runtime.state?.core?.seen_event_ids).toContain('terminal-1')
+  })
+
+  it('never re-applies journal catch-up events the resume snapshot already covers', () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+    // Resume pages the conversation down to the newest turn (snapshot_seq 100)
+    // while last_seen_seq 0 re-delivers the journal from the beginning. The
+    // paged-out turn below lives at seq 1-3 — the snapshot already reflects
+    // it; re-applying it used to materialize the turn as an orphan assistant
+    // card appended to the bottom of the thread on every restart.
+    const paged = snapshot(100, 'cancelled')
+    const core = paged.core!
+    core.turns!['turn-new'] = {
+      turn_id: 'turn-new',
+      status: 'cancelled',
+      items: ['turn-new:terminal'],
+    }
+    core.items!['turn-new:terminal'] = {
+      item_id: 'turn-new:terminal',
+      turn_id: 'turn-new',
+      kind: 'status',
+      status: 'cancelled',
+      seq: 100,
+      payload: { type: 'turn', status: 'cancelled', raw_end_reason: 'user_interrupt', message: '已中断。' },
+    }
+    core.item_order = ['turn-new:terminal']
+
+    const catchUpEvent = (eventId: string, seq: number, kind: string, status: string, payload: Record<string, unknown>): CoreAppEvent => ({
+      event_id: eventId,
+      thread_id: 'thread-1',
+      seq,
+      method: 'core/runItem',
+      created_at: '2026-10-11T00:00:00Z',
+      turn_id: 'turn-old',
+      payload: {
+        event_id: eventId,
+        thread_id: 'thread-1',
+        turn_id: 'turn-old',
+        kind,
+        status,
+        payload,
+      },
+    })
+    controller.applyResponse({
+      snapshot: paged,
+      events: [
+        catchUpEvent('old-1', 1, 'status', 'running', { type: 'turn', status: 'running' }),
+        catchUpEvent('old-2', 2, 'tool_call', 'running', { type: 'dynamicToolCall', tool_name: 'run_command' }),
+        catchUpEvent('old-3', 3, 'status', 'cancelled', { type: 'turn', status: 'cancelled', raw_end_reason: 'unexpected_shutdown', message: '已中断。' }),
+      ],
+    })
+
+    const messages = selectChatMessages(runtime.state!)
+    expect(messages.some(message => String(message.id).includes('turn-old'))).toBe(false)
+    expect(runtime.state?.core?.turns?.['turn-old']).toBeUndefined()
   })
 
   it('transports text, structured input items, and command operations', async () => {
@@ -773,6 +833,171 @@ describe('core appServer runtime store', () => {
     expect(part?.artifacts?.[0]?.artifact_id).toBe('art-1')
   })
 
+  it('keeps a terminal failure explanation and closes the leftovers', async () => {
+    // 2026-10-10：内存不足把会话打断在"写终态"这一步，界面就一直停在运行中。
+    // 服务端把失败原因放在终态项的 payload 里，实时路径也必须留下它，而且必须
+    // 把悬挂的工具项收掉——否则用户看到的永远是"正在创建文件…"。
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('thread-1')
+
+    // A tool call left mid-flight when the machine ran out of memory.
+    onEvent?.({
+      event_id: 'tool-running',
+      thread_id: 'thread-1',
+      seq: 2,
+      method: 'core/runItem',
+      created_at: '2026-07-15T00:00:01Z',
+      turn_id: 'turn-1',
+      item_id: 'turn-1:tool:write_file',
+      payload: {
+        event_id: 'tool-running',
+        thread_id: 'thread-1',
+        turn_id: 'turn-1',
+        item_id: 'turn-1:tool:write_file',
+        kind: 'tool_call',
+        status: 'running',
+        payload: { type: 'dynamicToolCall', tool_name: 'write_file' },
+      },
+    } as CoreAppEvent)
+    frames[0]()
+
+    const explanation = '本机内存不足，本轮已中断。可用内存（物理内存 + 页面文件）大于 4 GB 时 Sunday 会自动继续。'
+    onEvent?.({
+      event_id: 'oom-terminal',
+      thread_id: 'thread-1',
+      seq: 3,
+      method: 'core/runItem',
+      created_at: '2026-07-15T00:00:02Z',
+      turn_id: 'turn-1',
+      item_id: 'turn-1:terminal',
+      payload: {
+        event_id: 'oom-terminal',
+        thread_id: 'thread-1',
+        turn_id: 'turn-1',
+        item_id: 'turn-1:terminal',
+        kind: 'status',
+        status: 'failed',
+        payload: {
+          type: 'turn',
+          status: 'failed',
+          raw_end_reason: 'host_memory_exhausted',
+          message: explanation,
+        },
+      },
+    } as CoreAppEvent)
+    frames[1]()
+
+    // The turn is terminal, the terminal item carries the reason…
+    expect(runtime.state?.core?.turns?.['turn-1']?.status).toBe('failed')
+    const terminal = runtime.state?.core?.items?.['turn-1:terminal']
+    expect(terminal?.status).toBe('failed')
+    expect(terminal?.payload?.raw_end_reason).toBe('host_memory_exhausted')
+    expect(terminal?.payload?.message).toBe(explanation)
+    expect(runtime.state?.core?.turns?.['turn-1']?.items).toContain('turn-1:terminal')
+    // …and nothing is left claiming to be running.
+    expect(runtime.state?.core?.items?.['turn-1:tool:write_file']?.status).toBe('failed')
+
+    // What the failure banner reads: a status part in error state whose
+    // payload keeps the explanation.
+    // What MessageView's failure banner reads: the workbench projection turns
+    // the terminal item into a status part in error state, and the explanation
+    // reaches the part's own text (terminalErrorText reads detail/content).
+    const parts = selectCoreWorkbenchMessages(runtime.state!).flatMap((message) => message.parts ?? [])
+    const banner = parts.find((part) => part.partType === 'status' && part.status === 'error')
+    expect(banner).toBeDefined()
+    expect(String(banner?.detail || banner?.content || '')).toContain('内存不足')
+    expect(String(banner?.detail || banner?.content || '')).toContain('4 GB')
+  })
+
+  it('does not itemize the final reply of a cleanly finished turn as a status row', async () => {
+    // A completed turn's terminal event carries the same fields as a failed
+    // one (`raw_end_reason`, plus the final reply text as `message`). The
+    // server projection only stores the terminal explanation item for
+    // failed/cancelled/error endings; the live path must match, or every
+    // clean finish grows a stray "status" row holding the whole reply.
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('thread-1')
+
+    const reply = '收工。这一轮把"跳切"那个问题解决掉了，账目如下。'
+    onEvent?.({
+      event_id: 'final-message',
+      thread_id: 'thread-1',
+      seq: 2,
+      method: 'core/runItem',
+      created_at: '2026-07-15T00:00:01Z',
+      turn_id: 'turn-1',
+      item_id: 'turn-1:response-1:text',
+      payload: {
+        event_id: 'final-message',
+        thread_id: 'thread-1',
+        turn_id: 'turn-1',
+        item_id: 'turn-1:response-1:text',
+        kind: 'message',
+        status: 'completed',
+        payload: {
+          type: 'agentMessage',
+          content: reply,
+          final_response: true,
+          has_tool_calls: false,
+        },
+      },
+    } as CoreAppEvent)
+    frames[0]()
+
+    onEvent?.({
+      event_id: 'clean-terminal',
+      thread_id: 'thread-1',
+      seq: 3,
+      method: 'core/runItem',
+      created_at: '2026-07-15T00:00:02Z',
+      turn_id: 'turn-1',
+      item_id: 'turn-1:terminal',
+      payload: {
+        event_id: 'clean-terminal',
+        thread_id: 'thread-1',
+        turn_id: 'turn-1',
+        item_id: 'turn-1:terminal',
+        kind: 'status',
+        status: 'completed',
+        payload: {
+          type: 'turn',
+          status: 'completed',
+          raw_end_reason: 'completed',
+          message: reply,
+        },
+      },
+    } as CoreAppEvent)
+    frames[1]()
+
+    expect(runtime.state?.core?.turns?.['turn-1']?.status).toBe('completed')
+    expect(runtime.state?.core?.items?.['turn-1:terminal']).toBeUndefined()
+    expect(runtime.state?.core?.turns?.['turn-1']?.items).not.toContain('turn-1:terminal')
+    // The reply itself stays an ordinary message item.
+    expect(runtime.state?.core?.items?.['turn-1:response-1:text']?.content).toBe(reply)
+  })
+
   it('anchors incremental items on the envelope seq for chronological interleaving', async () => {
     // Mid-turn queue guide messages must interleave between runtime items; the
     // store saves the envelope seq (thread-global) — NOT the batch-relative
@@ -899,6 +1124,320 @@ describe('core appServer runtime store', () => {
     })
     frames[0]()
     expect(runtime.state?.core?.items?.['response-2']?.seq).toBe(50)
+  })
+
+  it('retainOnly keeps the requested thread and evicts every other cached thread', () => {
+    const store = new CoreSessionStateStore()
+    expect(store.applySnapshot(versionedSnapshot(1, 'idle', 1))).toBe(true)
+    expect(store.applySnapshot({ ...versionedSnapshot(2, 'idle', 2), thread_id: 'thread-2' })).toBe(true)
+    expect(store.get('thread-1')).not.toBeNull()
+    expect(store.get('thread-2')).not.toBeNull()
+
+    store.retainOnly('thread-2')
+    expect(store.get('thread-2')).not.toBeNull()
+    expect(store.get('thread-1')).toBeNull()
+
+    // Retaining a thread that is not cached legitimately empties the cache —
+    // the contract is "keep only this id" — and must not throw.
+    store.retainOnly('thread-3')
+    expect(store.get('thread-2')).toBeNull()
+    expect(store.get('thread-3')).toBeNull()
+  })
+
+  it('switching sessions evicts every non-active thread from the session cache', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method, params) => {
+        if (method !== 'thread/resume') return {}
+        const threadId = String(params.thread_id)
+        return {
+          snapshot: {
+            ...versionedSnapshot(1, 'idle', 1),
+            thread_id: threadId,
+            core: { ...coreState(1, 'idle'), thread_id: threadId },
+          },
+        }
+      }),
+    })
+    const retainOnly = vi.spyOn(CoreSessionStateStore.prototype, 'retainOnly')
+    try {
+      await controller.connect('thread-1')
+      // First connect opens the only thread; there is nothing to evict.
+      expect(retainOnly).not.toHaveBeenCalled()
+
+      await controller.switchThread('thread-2')
+      expect(retainOnly).toHaveBeenLastCalledWith('thread-2')
+
+      await controller.switchThread('thread-1')
+      expect(retainOnly).toHaveBeenLastCalledWith('thread-1')
+    } finally {
+      retainOnly.mockRestore()
+    }
+  })
+
+  it('rehydrates a revisited thread from the newest server snapshot after eviction', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const resumes: string[] = []
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method, params) => {
+        if (method !== 'thread/resume') return {}
+        const threadId = String(params.thread_id)
+        resumes.push(threadId)
+        const revision = threadId === 'thread-1' && resumes.filter((id) => id === threadId).length > 1 ? 9 : 5
+        return {
+          snapshot: {
+            ...versionedSnapshot(1, 'idle', revision),
+            thread_id: threadId,
+            core: { ...coreState(1, 'idle'), thread_id: threadId, revision },
+          },
+        }
+      }),
+    })
+
+    await controller.connect('thread-1')
+    expect(runtime.state?.revision).toBe(5)
+    await controller.switchThread('thread-2')
+    expect(runtime.state?.thread_id).toBe('thread-2')
+    await controller.switchThread('thread-1')
+    // The revisit must show the fresh server state, not a blend with the
+    // evicted visit's cached snapshot.
+    expect(runtime.state?.thread_id).toBe('thread-1')
+    expect(runtime.state?.revision).toBe(9)
+  })
+
+  it('applies the journal tail that follows the resume snapshot after a switch', async () => {
+    // 新后端语义：resume 的日志增量从快照序号之后开始。快照说 running，尾部
+    // 事件说 completed——快照先水合、尾部事件随后补上，两段必须都生效。
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method, params) => {
+        if (method !== 'thread/resume') return {}
+        const threadId = String(params.thread_id)
+        const resumed = {
+          ...versionedSnapshot(10, 'running', 10),
+          thread_id: threadId,
+          core: { ...coreState(10, 'running'), thread_id: threadId },
+        }
+        const events = threadId === 'thread-1'
+          ? [{ ...runStatusEvent('tail-done', 'completed'), seq: 11 }]
+          : []
+        return { snapshot: resumed, events }
+      }),
+    })
+
+    await controller.switchThread('thread-1')
+
+    expect(runtime.state?.thread_id).toBe('thread-1')
+    expect(runtime.state?.core?.status).toBe('completed')
+    expect(runtime.state?.snapshot_seq).toBe(11)
+    expect(runtime.state?.core?.seen_event_ids).toContain('tail-done')
+  })
+
+  it('keeps untouched item identities when a journal tail event lands on the resumed snapshot', () => {
+    // 投影缓存按条目对象引用判定是否重建：尾部事件只改动自己那条 item，
+    // 其余 item 的引用必须原样保留，未变化的消息才不会整窗重渲。
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+
+    const base = snapshot(10, 'running')
+    const core = base.core!
+    core.turns!['turn-1'] = { turn_id: 'turn-1', status: 'running', items: ['item-a', 'item-b'] }
+    core.items!['item-a'] = {
+      item_id: 'item-a', turn_id: 'turn-1', kind: 'message', status: 'running',
+      content: 'partial', payload: { type: 'agentMessage' },
+    }
+    core.items!['item-b'] = {
+      item_id: 'item-b', turn_id: 'turn-1', kind: 'tool_call', status: 'completed',
+      content: 'done', payload: { type: 'dynamicToolCall', tool_name: 'read_file' },
+    }
+    core.item_order = ['item-a', 'item-b']
+    controller.applyResponse({ snapshot: base })
+    const itemsBefore = runtime.state?.core?.items
+
+    controller.applyResponse({
+      events: [{
+        event_id: 'tail-delta',
+        thread_id: 'thread-1',
+        seq: 11,
+        method: 'core/runItem',
+        created_at: '2026-10-11T00:00:00Z',
+        item_id: 'item-a',
+        turn_id: 'turn-1',
+        payload: {
+          event_id: 'tail-delta',
+          thread_id: 'thread-1',
+          item_id: 'item-a',
+          turn_id: 'turn-1',
+          kind: 'message',
+          status: 'running',
+          payload: { type: 'agentMessage', delta: ' full' },
+        },
+      }],
+    })
+
+    expect(runtime.state?.core?.items?.['item-a']?.content).toBe('partial full')
+    expect(runtime.state?.core?.items?.['item-b']).toBe(itemsBefore?.['item-b'])
+  })
+
+  it('applies two rapid switches in order and lands on the last selected thread', async () => {
+    // 快速连续切换：两次切换串行执行，最终状态是最后选择的线程，中间线程的
+    // 快照不得泄漏成当前状态；竞态到达的旧线程快照推送同样必须被忽略。
+    const runtime = createCoreAppServerRuntimeState()
+    const resumedThreads: string[] = []
+    let pushSnapshot: ((snapshot: CoreAppSnapshot) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: ({ onConnectionState, onSnapshot }) => {
+        pushSnapshot = onSnapshot
+        return {
+          async connect() { onConnectionState?.('open') },
+          async request(method: string, params: Record<string, unknown> = {}) {
+            if (method !== 'thread/resume') return {}
+            const threadId = String(params.thread_id)
+            resumedThreads.push(threadId)
+            return {
+              snapshot: {
+                ...versionedSnapshot(1, 'idle', 1),
+                thread_id: threadId,
+                core: { ...coreState(1, 'idle'), thread_id: threadId },
+              },
+            }
+          },
+          respondServerRequest: () => false,
+          close() {},
+        }
+      },
+    })
+
+    const first = controller.switchThread('thread-2')
+    const second = controller.switchThread('thread-1')
+    await Promise.all([first, second])
+
+    expect(runtime.activeThreadId).toBe('thread-1')
+    expect(runtime.state?.thread_id).toBe('thread-1')
+    expect(resumedThreads).toEqual(['thread-2', 'thread-1'])
+
+    // A racing snapshot push for the thread we already left must not take
+    // over the visible state.
+    pushSnapshot?.({
+      ...versionedSnapshot(9, 'running', 9),
+      thread_id: 'thread-2',
+      core: { ...coreState(9, 'running'), thread_id: 'thread-2', revision: 9 },
+    })
+    expect(runtime.state?.thread_id).toBe('thread-1')
+    expect(runtime.state?.snapshot_seq).toBe(1)
+  })
+
+  it('ignores a mutation response snapshot for a thread the user has switched away from', async () => {
+    // 执行命令这类长耗时请求的响应带着整包快照回来时，用户可能已经切走。
+    // 旧线程的快照不得顶掉当前界面，否则当前会话会整卡显示成旧会话。
+    const runtime = createCoreAppServerRuntimeState()
+    let resolveCommand!: (value: Record<string, unknown>) => void
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method, params) => {
+        if (method === 'thread/resume') {
+          const threadId = String(params.thread_id)
+          return {
+            snapshot: {
+              ...versionedSnapshot(1, 'idle', 1),
+              thread_id: threadId,
+              core: { ...coreState(1, 'idle'), thread_id: threadId },
+            },
+          }
+        }
+        if (method === 'command.execute') {
+          return await new Promise<Record<string, unknown>>((resolve) => { resolveCommand = resolve })
+        }
+        return {}
+      }),
+    })
+
+    await controller.connect('thread-1')
+    const running = controller.executeCommand('thread-1', 'compact')
+    await controller.switchThread('thread-2')
+    expect(runtime.state?.thread_id).toBe('thread-2')
+
+    resolveCommand({
+      result: {},
+      snapshot: {
+        ...versionedSnapshot(2, 'idle', 2),
+        thread_id: 'thread-1',
+        core: { ...coreState(2, 'idle'), thread_id: 'thread-1' },
+      },
+    })
+    await running
+
+    expect(runtime.state?.thread_id).toBe('thread-2')
+    expect(runtime.state?.snapshot_seq).toBe(1)
+  })
+
+  it('still hydrates snapshot pushes for the active thread', async () => {
+    // 过滤不能误伤正常路径：活跃线程自己的快照推送（回合边界）必须照常生效。
+    const runtime = createCoreAppServerRuntimeState()
+    let pushSnapshot: ((snapshot: CoreAppSnapshot) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: ({ onSnapshot }) => {
+        pushSnapshot = onSnapshot
+        return fakeClient(async (method, params) => {
+          if (method !== 'thread/resume') return {}
+          const threadId = String(params.thread_id)
+          return {
+            snapshot: {
+              ...versionedSnapshot(1, 'idle', 1),
+              thread_id: threadId,
+              core: { ...coreState(1, 'idle'), thread_id: threadId },
+            },
+          }
+        })
+      },
+    })
+
+    await controller.connect('thread-1')
+    pushSnapshot?.({ ...versionedSnapshot(5, 'completed', 5), core: { ...coreState(5, 'completed'), revision: 5 } })
+
+    expect(runtime.state?.thread_id).toBe('thread-1')
+    expect(runtime.state?.snapshot_seq).toBe(5)
+    expect(runtime.state?.core?.status).toBe('completed')
+  })
+
+  it('records applied journal tail ids so the next boundary snapshot can be skipped', () => {
+    // 切会话补拉事件的标识补录进已收集合后，回合边界快照若只罗列已收事件
+    // 且内容一致，就应整体跳过，不再强制一次全量替换（投影缓存得以保留）。
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+
+    const base = snapshot(10, 'running')
+    base.core!.turns!['turn-1'] = { turn_id: 'turn-1', status: 'running', items: ['response-1'] }
+    base.core!.items!['response-1'] = {
+      item_id: 'response-1', turn_id: 'turn-1', kind: 'message', status: 'running',
+      content: 'hello', payload: { type: 'agentMessage' },
+    }
+    base.core!.item_order = ['response-1']
+    controller.applyResponse({ snapshot: base })
+
+    controller.applyResponse({
+      events: [{ ...runItemDelta('tail-1', ' tail'), seq: 11 }],
+    })
+    expect(runtime.state?.core?.items?.['response-1']?.content).toBe('hello tail')
+
+    // The boundary snapshot adds nothing the client has not already received
+    // and its content matches the event-derived state — skip the hydration.
+    const boundary = snapshot(12, 'running')
+    boundary.seen_event_ids = ['tail-1']
+    boundary.core!.turns!['turn-1'] = { turn_id: 'turn-1', status: 'running', items: ['response-1'] }
+    boundary.core!.items!['response-1'] = {
+      item_id: 'response-1', turn_id: 'turn-1', kind: 'message', status: 'running',
+      content: 'hello tail', seq: 11, payload: { type: 'agentMessage' },
+    }
+    boundary.core!.item_order = ['response-1']
+    const stateBefore = runtime.state
+    controller.hydrate(boundary)
+
+    expect(runtime.state).toBe(stateBefore)
+    expect(runtime.state?.snapshot_seq).toBe(11)
   })
 })
 

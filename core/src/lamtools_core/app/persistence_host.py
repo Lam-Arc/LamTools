@@ -239,6 +239,14 @@ class AppPersistenceHost:
     async def load(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
         return await self.snapshot_store.load(db, thread_id)
 
+    async def load_metadata(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
+        """Load the metadata row only (turns/queue/requests/item_order).
+
+        ``core.items`` is intentionally empty; never hand this to clients as a
+        conversation snapshot.
+        """
+        return await self.snapshot_store.load_metadata(db, thread_id)
+
     async def list_thread_ids(self, db: AsyncSession) -> list[str]:
         return await self.snapshot_store.list_thread_ids(db)
 

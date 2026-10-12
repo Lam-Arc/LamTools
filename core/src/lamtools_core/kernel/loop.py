@@ -69,6 +69,15 @@ from lamtools_core.runtime import (
     RuntimeTurnInput,
 )
 from lamtools_core.runtime.audit import build_kernel_audit
+from lamtools_core.runtime.memory_guard import (
+    HOST_MEMORY_EXHAUSTED,
+    clear_failure_detail,
+    clear_memory_resume_streak,
+    clear_pending_memory_resume,
+    is_memory_exhaustion,
+    memory_exhausted_message_for,
+    note_memory_interruption,
+)
 from lamtools_core.runtime_owner import LIVE_RUN_STATES, is_own_token, read_owner
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 from lamtools_core.tool import ToolCall, ToolResult
@@ -379,6 +388,14 @@ class CoreLoopKernel:
     # path must persist this list; reloading from the store instead dropped
     # everything the stopped turn had already produced. None outside a run.
     _live_history: list[ChatMessage] | None = field(default=None, init=False, repr=False)
+    # Number of leading _live_history entries already present as store rows.
+    # The run flushes history incrementally (append-only) instead of rewriting
+    # the whole table at loop exit. None = unaligned (request-local compaction
+    # rewrote the list) or not a checkpoint store — fall back to full replace.
+    _persisted_len: int | None = field(default=None, init=False, repr=False)
+    # Fire-and-forget finalizers spawned by the external-cancel path so the
+    # cancelled turn task exits immediately while persistence continues.
+    _background_finalizers: set[asyncio.Task[None]] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._base_event_sink = self.event_sink
@@ -412,13 +429,49 @@ class CoreLoopKernel:
         try:
             return await self._run(turn_input)
         except asyncio.CancelledError:
-            # task.cancel() bypasses the cooperative cancel check below. Keep
-            # terminal persistence in Kernel so main, delegated, and CLI runs
-            # all converge through the same state boundary.
-            await asyncio.shield(self._persist_external_cancellation(turn_input))
+            # task.cancel() bypasses the cooperative cancel check below.
+            # Terminal persistence runs as a detached task: the turn task must
+            # exit immediately so the registry claim is released and the UI is
+            # never held hostage by a slow write on a huge session (the
+            # Codex-style "ack first, settle in background" contract).
+            history = self._live_history
+            run_span = self._run_span
+            self._run_span = None
+            self._spawn_external_cancel_persist(turn_input, history, run_span)
             raise
         finally:
             self._live_history = None
+            self._persisted_len = None
+
+    def _spawn_external_cancel_persist(
+        self,
+        turn_input: RuntimeTurnInput,
+        history: list[ChatMessage] | None,
+        run_span: Any | None,
+    ) -> None:
+        task = asyncio.get_running_loop().create_task(
+            self._persist_external_cancellation(turn_input, history=history, run_span=run_span)
+        )
+        self._background_finalizers.add(task)
+
+        def _done(done: asyncio.Task[None]) -> None:
+            self._background_finalizers.discard(done)
+            if not done.cancelled() and done.exception() is not None:
+                _logger.error(
+                    "[kernel] external-cancel persistence failed sid=%s: %s",
+                    str(turn_input.metadata.get("session_id") or ""),
+                    done.exception(),
+                )
+
+        task.add_done_callback(_done)
+
+    async def await_background_persistence(self) -> None:
+        """Wait for detached cancel-finalizer tasks (test/introspection hook)."""
+        while True:
+            pending = [t for t in tuple(self._background_finalizers) if not t.done()]
+            if not pending:
+                return
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def _run(self, turn_input: RuntimeTurnInput) -> KernelResult:
         """Execute the main loop.
@@ -548,6 +601,10 @@ class CoreLoopKernel:
         # written to the store at loop exit, so a run cut short by Stop must
         # persist this list or the turn's own assistant/tool content is lost.
         self._live_history = history
+        # Everything loaded came from the store (the request-local compaction
+        # summary inserted above is never persisted): the tail flush starts
+        # after it.
+        self._persisted_len = len(history)
 
         # Each user turn is a new run inside the same session. Persisted state
         # carries session memory and turn_count, but a stale run_id/status from
@@ -608,6 +665,8 @@ class CoreLoopKernel:
         # (2026-09-25 audit P3).
         try:
             new_messages = await self._begin_run(state, turn_input, history)
+            # _begin_run appended (and persisted) this turn's input rows.
+            self._persisted_len = len(history)
         except Exception as exc:  # noqa: BLE001 — the run still needs a terminal state
             _logger.exception("[kernel:_run] run setup failed sid=%s", state.session_id)
             state.status = _status_from_decision("failed")
@@ -698,6 +757,9 @@ class CoreLoopKernel:
                         trimmed = cut
                         del history[:cut]
                         await self._replace_history_checkpoint(state, history)
+                        # The rewrite renumbered the rows; the live list now
+                        # maps 1:1 onto the store again.
+                        self._persisted_len = len(history)
                         await self._emit_history_compacted(state, trimmed, len(history))
 
                 context = await self.kit.build_context(state, turn_input, history, index)
@@ -897,6 +959,18 @@ class CoreLoopKernel:
                     for call in turn.tool_calls
                     if call.id in invalid_tool_argument_errors
                 }
+                # A permission-preset switch can land between the model
+                # producing this call and the waiting gate below.  Every call
+                # carries the ``requires_approval`` decision computed when it
+                # was parsed, so re-run the approval boundary against the
+                # toolbox's live (current-session) permission state before
+                # deciding whether to surface a card.  A preset that already
+                # auto-approves the call must not produce a stale card; the
+                # one exception is ``question``, which is a user-input request
+                # rather than a permission decision and is never auto-released
+                # (plan A, 2026-10-12).  This runs before the PreToolUse hook
+                # so a hook's own ask_user decision is never overwritten.
+                self._refresh_live_approval_requirements(turn.tool_calls, blocked_results)
                 payload_matches: dict[str, tuple[dict[str, Any], dict[str, Any] | None]] = {}
                 for call in turn.tool_calls:
                     payload = self._substantive_tool_payload(call)
@@ -996,13 +1070,39 @@ class CoreLoopKernel:
                             steps_log = state.metadata.setdefault("kernel_steps", [])
                             steps_log.append(self._summarize_step(step))
                         await self._save_checkpoint(state)
-                        await self._emit_tool_waiting_for_approval(
-                            state,
-                            approval_call,
-                            response_index=index,
+                        # The pending record is durable now, so a permission
+                        # switch that landed in the window between the
+                        # pre-emission check and this save — the switch side
+                        # looked for a card *before* it existed — becomes
+                        # visible here.  If the live preset already covers the
+                        # call, release it on the spot instead of surfacing a
+                        # stale card.  This is the cheapest close of that
+                        # window: one extra permission read, no reconciliation.
+                        released_call = self._release_approval_if_live_preset_covers(
+                            state, step, approval_call
                         )
-                        await self._emit_approval_request(state, approval_call, response_index=index)
-                        break
+                        if released_call is not None:
+                            for _position, _existing in enumerate(turn.tool_calls):
+                                if _existing.id == released_call.id:
+                                    turn.tool_calls[_position] = released_call
+                                    break
+                            decision = "continue"
+                            step.decision = decision
+                            final_decision = decision
+                            # Correct the "wait" the gate recorded a moment ago:
+                            # this turn is proceeding, not waiting.
+                            await self.kit.writeback(
+                                state, turn, tool_results, VerificationResult(passed=True), decision
+                            )
+                            await self._save_checkpoint(state)
+                        else:
+                            await self._emit_tool_waiting_for_approval(
+                                state,
+                                approval_call,
+                                response_index=index,
+                            )
+                            await self._emit_approval_request(state, approval_call, response_index=index)
+                            break
                 parallel_names = set(self.policy.parallel_tool_names)
                 can_parallelize_named_tools = (
                     bool(parallel_names)
@@ -1434,8 +1534,24 @@ class CoreLoopKernel:
                     break
                 index += 1
 
+            except MemoryError as e:
+                # Host memory exhaustion gets its own branch: it is the most
+                # common way a long turn dies, and it needs the threshold text
+                # the resume watchdog honours (runtime/memory_guard.py). The
+                # generic branch below would report "Unexpected error: " with an
+                # empty detail, because MemoryError's str() is empty.
+                _logger.error(
+                    "[kernel:_run] host memory exhausted sid=%s step=%d",
+                    state.session_id, index,
+                )
+                error_msg = self._record_memory_exhaustion(state)
+                step.error = error_msg
+                final_decision = "failed"
+                break
             except KernelError as e:
                 error_msg = str(e)
+                if is_memory_exhaustion(e):
+                    error_msg = self._record_memory_exhaustion(state)
                 step.error = error_msg
                 final_decision = "failed"
                 break
@@ -1448,6 +1564,8 @@ class CoreLoopKernel:
                 _logger.exception("[kernel:_run] unexpected error sid=%s step=%d",
                                   state.session_id, index)
                 error_msg = f"Unexpected error: {e}"
+                if is_memory_exhaustion(e):
+                    error_msg = self._record_memory_exhaustion(state)
                 step.error = error_msg
                 final_decision = "failed"
                 break
@@ -1466,7 +1584,15 @@ class CoreLoopKernel:
         if error_msg == "cancelled":
             state.status = "cancelled"
         state.loop_state = final_decision
-        await self._replace_history_checkpoint(state, history)
+        if str(state.metadata.get("failure_code") or "") != HOST_MEMORY_EXHAUSTED:
+            # This turn did not end in memory exhaustion, so the chain of
+            # consecutive memory interruptions is broken: the next one gets the
+            # full auto-resume budget again. The previous explanation goes with
+            # it — otherwise a later, unrelated failure would inherit "memory
+            # exhausted" and could arm a resume nothing asked for.
+            clear_memory_resume_streak(state)
+            clear_failure_detail(state)
+        await self._persist_history_tail(state, history)
 
         # Build result
         result = KernelResult(
@@ -1512,6 +1638,14 @@ class CoreLoopKernel:
         previous_status = str(state.status or "")
         previous_owner = read_owner(state.metadata)
         state.status = "running"
+        # A new turn means nothing is waiting to be resumed in this thread: the
+        # user (or the resume watchdog, which clears the descriptor before it
+        # starts) has moved on. Without this, a turn sent by hand while an
+        # auto-resume was armed would be continued a second time later. The
+        # previous failure's explanation goes too — a turn that has not failed
+        # yet must not advertise an old reason.
+        clear_pending_memory_resume(state)
+        clear_failure_detail(state)
         # A run that was in flight but belongs to a process that is gone is
         # being taken over here.  Leave a durable trace instead of silently
         # overwriting it, so a crashed CLI run can be told apart from a clean
@@ -1603,7 +1737,13 @@ class CoreLoopKernel:
                 steps=len(result.steps),
             )
 
-    async def _persist_external_cancellation(self, turn_input: RuntimeTurnInput) -> None:
+    async def _persist_external_cancellation(
+        self,
+        turn_input: RuntimeTurnInput,
+        *,
+        history: list[ChatMessage] | None,
+        run_span: Any | None,
+    ) -> None:
         state = turn_input.state
         if state is None:
             session_id = str(turn_input.metadata.get("session_id") or "")
@@ -1623,10 +1763,9 @@ class CoreLoopKernel:
         # the store here discarded them and the next message was sent with no
         # record of the stopped turn. Fall back to the store only when the run
         # never reached the history load.
-        history = self._live_history
         if history is None:
             history = await self._load_history(state.session_id)
-        await self._replace_history_checkpoint(state, history)
+        await self._persist_history_tail(state, history)
 
         # Converge the same terminal tail as the normal finish path (audit 02:
         # the cancel path previously skipped on_run_end / Stop hook / terminal
@@ -1640,7 +1779,7 @@ class CoreLoopKernel:
             state=state,
             error="cancelled",
         )
-        await self._finalize_run(state, result, getattr(self, "_run_span", None))
+        await self._finalize_run(state, result, run_span)
         self._run_span = None
 
     @staticmethod
@@ -1855,16 +1994,72 @@ class CoreLoopKernel:
             return None
 
     async def _save_checkpoint(self, state: RuntimeState) -> None:
-        """Persist runtime state metadata (mid-loop checkpoint).
+        """Persist runtime state metadata (mid-loop checkpoint) and the history tail.
 
-        Only state metadata is saved here; conversation history is NOT
-        written. History is persisted separately at well-defined boundaries:
-        the initial checkpoint after the user message
-        (``_append_history_checkpoint``), after context compaction, and at
-        loop exit (``_replace_history_checkpoint``). Writing history on every
-        mid-loop step would be wasteful; the boundary checkpoints are
-        sufficient for crash recovery.
+        State is saved on every mid-loop step. The conversation history rides
+        along as an incremental append of only the unpersisted tail — messages
+        reach history complete, so an early flush is always well-formed. This
+        is what makes loop exit / external cancellation cheap: there is no
+        whole-session rewrite left to do when a run ends.
         """
+        await self._flush_history_delta(state, self._live_history)
+        await self.state_store.save(state)
+
+    @staticmethod
+    def _is_request_local_summary(message: ChatMessage) -> bool:
+        return (
+            message.role == "system"
+            and isinstance(message.metadata, dict)
+            and message.metadata.get("key") == "context_compaction_summary"
+        )
+
+    async def _flush_history_delta(
+        self, state: RuntimeState, history: list[ChatMessage] | None
+    ) -> None:
+        """Append unpersisted live-history messages as new store rows.
+
+        Only valid while the live list still aligns with the row table: the
+        alignment counter starts at the loaded length and advances with each
+        flush, and outside writers (approval backfill, sub-agent approval)
+        only append between runs — each run re-aligns at load. A request-local
+        compaction rewrote the list mid-run → ``_persisted_len`` is None and
+        this becomes a no-op; ``_persist_history_tail`` falls back to a full
+        replace there.
+        """
+        if history is None or not isinstance(self.state_store, RuntimeCheckpointStore):
+            return
+        start = self._persisted_len
+        if start is None or start >= len(history):
+            return
+        pending = [
+            message
+            for message in history[start:]
+            if not self._is_request_local_summary(message)
+        ]
+        if pending:
+            await self.state_store.append_history(
+                state.session_id, [m.to_dict() for m in pending]
+            )
+        self._persisted_len = len(history)
+
+    async def _persist_history_tail(
+        self, state: RuntimeState, history: list[ChatMessage]
+    ) -> None:
+        """Persist the unpersisted history tail at loop exit / cancellation.
+
+        Aligned runs append only the delta; runs whose in-memory list was
+        rewritten by request-local compaction keep the exact historical
+        contract of one full ``replace_history`` (renumbering + boundary
+        re-anchor) because the compaction decision must land atomically.
+        """
+        if self._persisted_len is None or not isinstance(self.state_store, RuntimeCheckpointStore):
+            await self._replace_history_checkpoint(state, history)
+            self._persisted_len = len(history)
+            return
+        await self._flush_history_delta(state, history)
+        # The terminal status/loop_state are applied after the last mid-loop
+        # checkpoint; the old full-replace path persisted them via its
+        # trailing save. Keep that contract on the incremental path too.
         await self.state_store.save(state)
 
     async def _append_history_checkpoint(
@@ -2801,6 +2996,82 @@ class CoreLoopKernel:
                 },
             )
 
+    def _refresh_live_approval_requirements(
+        self,
+        calls: list[ToolCall],
+        blocked_results: dict[str, ToolResult],
+    ) -> None:
+        """Re-evaluate prepared calls against the live session permissions.
+
+        ``toolbox.prepare_call`` refreshes the approval gate from the session's
+        current permission state and re-checks the manifest/mode boundaries, so
+        calling it here turns a stale ``requires_approval`` (computed when the
+        model output was parsed) into the current truth.  A call that is no
+        longer approval-gated is left in ``turn.tool_calls`` and simply executes
+        normally; a call that became blocked keeps its blocked metadata and will
+        be refused by ``toolbox.execute``.
+        """
+        for index, call in enumerate(calls):
+            if call.id in blocked_results or not call.requires_approval:
+                continue
+            calls[index] = self._reprepare_against_live_permissions(call)
+
+    def _reprepare_against_live_permissions(self, call: ToolCall) -> ToolCall:
+        """Re-run one call through the toolbox's live permission boundary.
+
+        Returns a refreshed call when the toolbox can prepare it.  ``question``
+        is deliberately untouched: it is a user-input request, not a permission
+        decision, so no preset ever auto-releases it.
+        """
+        if call.name == "question":
+            return call
+        prepare = getattr(getattr(self.kit, "toolbox", None), "prepare_call", None)
+        if not callable(prepare):
+            return call
+        try:
+            return prepare(call)
+        except Exception:  # noqa: BLE001 - keep the parsed decision on refresh failure
+            return call
+
+    def _release_approval_if_live_preset_covers(
+        self,
+        state: RuntimeState,
+        step: KernelStep,
+        call: ToolCall,
+    ) -> ToolCall | None:
+        """Release a just-persisted approval when the live preset covers it.
+
+        The pre-emission refresh cannot close the whole race: a permission
+        switch may look for a pending card *before* this one became durable, so
+        its own release pass misses it.  Re-checking immediately after the card
+        is persisted closes exactly that window — the switch side has already
+        updated the session by then — without introducing any periodic work.
+
+        Returns the refreshed, now approval-free call after clearing the pending
+        record, or ``None`` to keep the card (still required, or hard-blocked).
+        """
+        # A PreToolUse hook that escalated this call to ``ask_user`` did so on
+        # purpose and independently of the session preset; a preset switch must
+        # not silently cancel that ask.  Only gate-derived waits are releasable.
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        if "hook_permission_reason" in metadata:
+            return None
+        refreshed = self._reprepare_against_live_permissions(call)
+        approval = refreshed.metadata.get("approval") if isinstance(refreshed.metadata, dict) else None
+        if refreshed.requires_approval or (isinstance(approval, dict) and approval.get("blocked")):
+            return None
+        state.metadata.pop("pending_approval", None)
+        state.metadata.pop("pending_waiting_request", None)
+        step.metadata.pop("pending_approval", None)
+        if self.policy.persist_steps:
+            steps_log = state.metadata.get("kernel_steps")
+            if isinstance(steps_log, list) and steps_log:
+                # Drop the "wait" audit entry this gate just appended: the turn
+                # is not waiting after all.
+                steps_log.pop()
+        state.loop_state = "continue"
+        return refreshed
+
     async def _apply_pre_tool_hook(
         self,
         state: RuntimeState,
@@ -3519,6 +3790,10 @@ class CoreLoopKernel:
                     *([summary_history] if summary_history is not None else []),
                     *compacted_history,
                 ]
+                # The in-memory list no longer aligns with the store rows
+                # positionally: invalidate the incremental counter so the
+                # tail persist falls back to one atomic full replace.
+                self._persisted_len = None
         request.metadata["estimated_prompt_tokens"] = result.after_tokens
 
         request.metadata["context_compacted"] = True
@@ -4028,6 +4303,30 @@ class CoreLoopKernel:
             return f"需要授权后才能执行命令：{command}"
         return f"需要授权后才能执行工具：{call.name}"
 
+    def _record_memory_exhaustion(self, state: RuntimeState) -> str:
+        """Name a memory-caused interruption on the state.
+
+        The code, the explanation and the pending auto-resume ride the state —
+        not just the step error — so every terminal writer (kernel event,
+        app-layer failure record, startup/periodic reconcile) can tell the user
+        what happened and the resume watchdog knows what to wait for.
+        """
+        note_memory_interruption(state)
+        message = memory_exhausted_message_for(state)
+        state.metadata["failure_message"] = message
+        return message
+
+    @staticmethod
+    def _failure_detail(state: RuntimeState) -> dict[str, Any]:
+        """``failure_code`` / ``failure_message`` from the state, when present."""
+        metadata = state.metadata if isinstance(state.metadata, dict) else {}
+        detail: dict[str, Any] = {}
+        for key in ("failure_code", "failure_message"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                detail[key] = value.strip()
+        return detail
+
     async def _emit_terminal_event(
         self, state: RuntimeState, result: KernelResult
     ) -> None:
@@ -4041,6 +4340,7 @@ class CoreLoopKernel:
             if isinstance(state.metadata.get("runtime_context_metrics"), dict)
             else None
         )
+        failure_detail = self._failure_detail(state)
         if result.decision == "done":
             event = CoreEvent(
                 name="runtime.done",
@@ -4079,6 +4379,7 @@ class CoreLoopKernel:
                 payload={
                     "error": result.error,
                     "message": result.message,
+                    **failure_detail,
                     "duration_ms": duration_ms,
                     **({"runtime_metrics": runtime_metrics} if runtime_metrics else {}),
                 },

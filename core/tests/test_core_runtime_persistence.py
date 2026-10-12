@@ -530,7 +530,12 @@ async def test_core_history_survives_agent_and_database_recreation(tmp_path) -> 
         )
         assert second.status == "ok"
         assert "do-not-return" not in json.dumps(second.payload, ensure_ascii=False)
-        messages = [message.to_dict() for message in second_llm.requests[0].messages if message.role != "system"]
+        # Internal runtime-status messages (capability line, plan snapshot) are
+        # request framing, not conversation content.
+        messages = [
+            message.to_dict() for message in second_llm.requests[0].messages
+            if message.role != "system" and not (message.metadata or {}).get("internal")
+        ]
         assert [(item["role"], item["content"]) for item in messages] == [
             ("user", "Remember alpha."),
             ("assistant", "I will remember alpha."),
@@ -577,7 +582,10 @@ async def test_core_pending_approval_survives_restart_and_continues_once(tmp_pat
         assert duplicate.status == "error"
         assert duplicate.payload["error"] in {"approval already resolving", "no pending approval"}
         assert (work_root / "approved.md").read_text(encoding="utf-8") == "approved\n"
-        messages = [message.to_dict() for message in continuation_llm.requests[0].messages if message.role != "system"]
+        messages = [
+            message.to_dict() for message in continuation_llm.requests[0].messages
+            if message.role != "system" and not (message.metadata or {}).get("internal")
+        ]
         assert messages[0] == {"role": "user", "content": "Write the approval file."}
         assert messages[1]["role"] == "assistant"
         assert messages[1]["tool_calls"][0]["id"] == "call-write"

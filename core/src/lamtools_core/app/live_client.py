@@ -12,6 +12,14 @@ WebSocketConnect = Callable[[str], Awaitable[Any]]
 
 logger = logging.getLogger(__name__)
 
+# The app-server delivers a snapshot page as one WebSocket text message, and a
+# page is delimited by complete turns — on a long thread one page can be tens of
+# MB.  aiohttp's default single-message cap (4 MiB) aborted the CLI turn on
+# exactly that (it closes 1009 while receiving), so the built-in client raises
+# the cap.  A finite ceiling is kept rather than "no limit" so one hostile frame
+# cannot exhaust memory.
+CLI_WEBSOCKET_MAX_MESSAGE_BYTES = 256 * 1024 * 1024
+
 
 class CoreAppServerClient:
     def __init__(
@@ -331,12 +339,22 @@ class CoreAppServerClient:
 
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, connect=10))
-        return await self._session.ws_connect(url, headers=self._headers() or None)
+        return await self._session.ws_connect(
+            url,
+            headers=self._headers() or None,
+            max_msg_size=CLI_WEBSOCKET_MAX_MESSAGE_BYTES,
+        )
 
     async def _resume_thread(self, *, thread_id: str, last_seen_seq: int) -> None:
         after_seq = last_seen_seq
         while True:
-            response = await self.request("thread/resume", {"thread_id": thread_id, "last_seen_seq": after_seq})
+            # Replay-style consumer: this client rebuilds state purely from the
+            # ordered event journal (the snapshot is not surfaced to callers),
+            # so it must opt back into the full journal despite the snapshot.
+            response = await self.request(
+                "thread/resume",
+                {"thread_id": thread_id, "last_seen_seq": after_seq, "full_journal": True},
+            )
             events = [event for event in response.get("events") or [] if isinstance(event, dict)]
             for event in events:
                 await self.put_app_server_event(event)

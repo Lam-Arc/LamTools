@@ -499,6 +499,28 @@ class SqlAlchemyThreadSnapshotStore:
         core["item_order"] = order
         return _strip_inline_image_copies(self.projector.reconcile_status(state))
 
+    async def load_metadata(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
+        """Load only the metadata row: turns/queue/requests/registry/item_order.
+
+        Callers that need turn status, queue membership, or the top-level user
+        item order — but not the per-item conversation content — avoid the
+        full item-table scan and JSON parse here. ``core.items`` is empty by
+        design; consumers must not treat this as a complete snapshot.
+        """
+        row = await db.get(self.snapshot_model, thread_id)
+        if row is None:
+            return self.projector.empty(thread_id)
+        state = dict(row.snapshot_json or self.projector.empty(thread_id))
+        state["snapshot_seq"] = row.snapshot_seq
+        state["revision"] = _row_revision(row, state)
+        core = state.get("core")
+        if not isinstance(core, dict):
+            core = empty_thread_snapshot(thread_id)
+            state["core"] = core
+        core.setdefault("items", {})
+        core.setdefault("item_order", [])
+        return _strip_inline_image_copies(self.projector.reconcile_status(state))
+
     async def _partial_state(
         self,
         db: AsyncSession,

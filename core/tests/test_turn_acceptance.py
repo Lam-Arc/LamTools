@@ -65,7 +65,9 @@ def test_cancelled_turn_event_uses_accepted_id_for_run_and_turn() -> None:
     assert event.event_id == "accepted-turn-1:cancelled"
     assert event.run_id == "accepted-turn-1"
     assert event.turn_id == "accepted-turn-1"
-    assert event.item_id == "accepted-turn-1:cancelled"
+    # Shared identity with the kernel's terminal projection: the fallback write
+    # must refresh the turn's single cancel row, not stack a second bubble.
+    assert event.item_id == "accepted-turn-1:terminal"
     assert event.status == "cancelled"
     assert event.payload == {
         "type": "turn",
@@ -73,3 +75,10 @@ def test_cancelled_turn_event_uses_accepted_id_for_run_and_turn() -> None:
         "raw_end_reason": "user_interrupt",
         "message": "stopped",
     }
+
+
+def test_cancelled_turn_event_defaults_to_a_chinese_explanation() -> None:
+    event = build_cancelled_turn_event(thread_id="thread-1", turn_id="accepted-turn-2")
+
+    assert event.item_id == "accepted-turn-2:terminal"
+    assert event.payload["message"] == "已中断。"

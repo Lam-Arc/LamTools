@@ -48,8 +48,8 @@ export interface WorkbenchRuntimeOptions {
   getTurnOptions?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Shared UI controls the projection's shallow-thinking state. */
   shallowThinking?: Readonly<Ref<boolean>>
-  /** Called when the live composer accepts a submission. */
-  onSubmitStart?: () => void
+  /** Called when the live composer accepts a submission, with the trimmed text. */
+  onSubmitStart?: (submittedText: string) => void
   /** Called once a submission reaches any outcome (sent / queued / guided /
    *  failed). Hosts use it to retire the "sending" placeholder. */
   onSubmitSettled?: () => void
@@ -65,7 +65,7 @@ export interface WorkbenchRuntimeOptions {
 export interface WorkbenchComposerCallbacks {
   onError?: (message: string) => void
   onStatusText?: (message: string) => void
-  onSubmitStart?: () => void
+  onSubmitStart?: (submittedText: string) => void
   onSubmitSettled?: () => void
   onTurnStarted?: () => void | Promise<void>
   onCommandResult?: (result: Record<string, unknown>) => void | Promise<void>

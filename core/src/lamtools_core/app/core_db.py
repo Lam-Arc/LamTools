@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 import uuid
@@ -636,6 +637,11 @@ class SqlAlchemyRuntimeStateStore:
         if row is None:
             return None
         payload = dict(row.runtime_state_json or {})
+        # A state row belongs to the session whose id is its primary key, but
+        # rows written by earlier builds can carry an empty payload. Trust the
+        # row key instead of raising a TypeError out of a plain read — every
+        # caller of this store treats "no row" as None, not as an exception.
+        payload.setdefault("session_id", str(row.thread_id))
         metadata = dict(payload.get("metadata") or {})
         metadata.update(dict(row.pending_approval_json or {}))
         payload["metadata"] = metadata
@@ -792,6 +798,35 @@ class SqlAlchemyRuntimeStateStore:
             return None
         metadata = payload.get("metadata")
         return read_owner(metadata if isinstance(metadata, dict) else {})
+
+    async def list_thread_ids(self) -> list[str]:
+        """Every thread with a runtime state row (cheap id-only read)."""
+        async with self.session_factory() as db:
+            rows = (await db.execute(select(CoreRuntimeSession.thread_id))).scalars().all()
+        return [str(row) for row in rows]
+
+    async def find_threads_with_metadata_key(self, key: str) -> list[str]:
+        """Thread ids whose runtime-state metadata carries ``key``.
+
+        For watchers that look for a rare marker (the armed memory-resume
+        descriptor, for instance) and must not deserialise every state row on
+        each poll. ``json_extract`` is sqlite-native, the only backend this
+        store targets, and lets the filter run in SQLite instead of Python.
+        """
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key or ""):
+            return []
+        async with self.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(CoreRuntimeSession.thread_id).where(
+                        func.json_extract(
+                            CoreRuntimeSession.runtime_state_json,
+                            f"$.metadata.{key}",
+                        ).isnot(None)
+                    )
+                )
+            ).scalars().all()
+        return [str(row) for row in rows]
 
     async def find_pending_approval(self, request_id: str) -> RuntimeState | None:
         async with self.session_factory() as db:

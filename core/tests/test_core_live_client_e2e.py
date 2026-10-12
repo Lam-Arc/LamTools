@@ -153,14 +153,28 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
                 timeout=5,
             )
             release_steered_turn.set()
+            # Default resume: the snapshot is authoritative through its seq, so
+            # a snapshot-hydrating client is never re-sent journal it already
+            # holds; any event that does come back must sit after that watermark.
             resumed = await client.request("thread.resume", {"thread_id": "thread-running", "last_seen_seq": 0})
+            resumed_snapshot_seq = resumed["snapshot"]["snapshot_seq"]
+            assert resumed["next_after_seq"] >= resumed_snapshot_seq
+            resumed_sequences = [int(event["seq"]) for event in resumed["events"]]
+            assert resumed_sequences == sorted(resumed_sequences)
+            assert all(seq > resumed_snapshot_seq for seq in resumed_sequences)
+            # Replay-style clients (the shared client's own resume loop among
+            # them) page the raw journal with the explicit full_journal opt-in.
+            replayed = await client.request(
+                "thread.resume",
+                {"thread_id": "thread-running", "last_seen_seq": 0, "full_journal": True},
+            )
             read = await client.read_thread(thread_id="thread-running")
 
             assert all(result["queue_item"]["status"] == "queued" for result in queued_items)
             assert steered["applied"] is True
-            assert resumed["events"]
-            resumed_sequences = [event["seq"] for event in resumed["events"]]
-            assert resumed_sequences == list(range(1, len(resumed_sequences) + 1))
+            replayed_sequences = [event["seq"] for event in replayed["events"]]
+            assert replayed_sequences
+            assert replayed_sequences == list(range(1, len(replayed_sequences) + 1))
             assert read["snapshot"]["thread_id"] == "thread-running"
             await _wait_for_terminal(client, "thread-running")
 
@@ -184,10 +198,9 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
                 ),
                 timeout=5,
             )
-            assert [event["method"] for event in cancelled["events"]] == ["turn/interrupted", "core/runItem"]
+            assert cancelled["status"] == "cancelling"
             cancelled_turn_id = cancelling["runtime_start"]["turn_id"]
             assert "snapshot" not in cancelled
-            assert cancelled["events"][1]["payload"]["status"] == "interrupting"
             await _wait_for_terminal(client, "thread-cancel")
             cancelled_snapshot = (await client.read_thread(thread_id="thread-cancel"))["snapshot"]
             cancelled_turn = cancelled_snapshot["core"]["turns"][cancelled_turn_id]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pytest
 
@@ -374,3 +374,66 @@ async def test_status_message_emitted():
     assert len(status_events) >= 1
     assert status_events[0].payload["tool_name"] == "run_command"
     assert status_events[0].payload["message"] == "checking tool safety..."
+
+class _GateAutoApprovedToolbox:
+    """A toolbox whose live permission state now auto-approves every call.
+
+    Stands in for a session that switched to a preset that covers the call:
+    re-preparing the call clears ``requires_approval``.
+    """
+
+    def tool_specs(self) -> list:
+        return []
+
+    def prepare_call(self, call: ToolCall) -> ToolCall:
+        return replace(
+            call,
+            requires_approval=False,
+            metadata={
+                **dict(call.metadata or {}),
+                "approval": {"blocked": False, "requires_approval": False, "auto_approved": True},
+            },
+        )
+
+
+@dataclass
+class PreToolAskUserHookEngine:
+    """PreToolUse: escalate a call the permission gate would auto-approve."""
+
+    async def run(self, event: HookEvent) -> HookDecision:
+        if event.event_name == "PreToolUse" and event.tool_name == "write_file":
+            return HookDecision(
+                permission_decision="ask_user",
+                permission_decision_reason="hook wants a human",
+            )
+        return HookDecision()
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_ask_user_survives_the_live_permission_refresh():
+    """The live-preset refresh runs before the PreToolUse hook, so a hook's
+    own ask_user decision must survive it and still surface a card."""
+    kit = MockRuntimeKit(steps=[
+        MockKitStep(
+            reply="",
+            tool_calls=[ToolCall(id="call-write", name="write_file", arguments={"path": "a.md"}, requires_approval=True)],
+            decision="wait",
+        ),
+    ])
+    kit.toolbox = _GateAutoApprovedToolbox()
+    sink = CollectingEventSink()
+    kernel = CoreLoopKernel(
+        kit=kit,
+        llm_client=MockLLMClient(),
+        state_store=InMemoryRuntimeStateStore(),
+        event_sink=sink,
+        policy=LoopPolicy(),
+        hook_engine=PreToolAskUserHookEngine(),
+    )
+
+    result = await kernel.run(RuntimeTurnInput(user_message="write", metadata={"session_id": "s1"}))
+
+    assert [e for e in sink.events if e.name == "runtime.approval_request"], (
+        "the hook's ask_user decision was cleared by the live permission refresh"
+    )
+    assert result.decision == "wait"

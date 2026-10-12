@@ -139,8 +139,19 @@ export function createCoreAppServerRuntimeController<
     runtime.activeThreadId = threadId
     if (!switchOptions.preserveState) {
       runtime.state = null
+      // A fresh switch rebuilds from the server snapshot; dropping the cached
+      // entry also removes the version baseline so a same-thread re-selection
+      // keeps accepting the server's (possibly turn-boundary-stale) snapshot
+      // instead of stranding a nulled runtime.state behind the guard.
       sessionStateStore.clear(threadId)
     }
+    // Memory bound: session snapshots for huge threads can be tens of MB.
+    // Keeping one cached snapshot per visited thread leaked the previous
+    // thread's snapshot on every session switch (memory grew without bound).
+    // An evicted thread rehydrates from the server on its next resume, so
+    // only the thread being opened keeps an entry — and with `preserveState`
+    // the incoming local-first snapshot survives for the event-only overlay.
+    sessionStateStore.retainOnly(threadId)
     pendingEvents.length = 0
     receivedEventIds.clear()
 
@@ -233,6 +244,18 @@ export function createCoreAppServerRuntimeController<
   }
 
   function hydrate(snapshot: Snapshot) {
+    const incomingThreadId = typeof (snapshot as { thread_id?: unknown } | null | undefined)?.thread_id === 'string'
+      ? (snapshot as unknown as { thread_id: string }).thread_id
+      : ''
+    // A mutation response (or a racing subscription push) for a thread the
+    // user has already switched away from must never replace the visible
+    // state — the active thread would flash the stale thread's data until the
+    // next switch. Snapshots for other threads are dropped entirely: they
+    // would also re-enter the session cache that `retainOnly` keeps bounded
+    // to the active thread. Threads are only ignored while a selection is
+    // active; hosts that apply responses without selecting a thread
+    // (activeThreadId === '') keep today's behavior.
+    if (incomingThreadId && runtime.activeThreadId && incomingThreadId !== runtime.activeThreadId) return
     const incoming = hydrateSnapshot(snapshot as Snapshot) as CoreAppSnapshot
     const currentState = sessionStateStore.get(incoming.thread_id)
     const incomingVersion = {
@@ -390,12 +413,29 @@ export function createCoreAppServerRuntimeController<
     // events onto the already-hydrated local snapshot without replacing the
     // whole conversation object.
     if (Array.isArray(response.events) && runtime.state) {
+      // The hydrated snapshot is the authority for everything up to its
+      // snapshot_seq. A fresh resume pages the conversation down to the newest
+      // turns while last_seen_seq 0 re-delivers the journal from the beginning;
+      // re-applying those old events re-materialized the paged-out turns as
+      // orphan assistant cards appended to the bottom of the thread on every
+      // restart (2026-10-11). Events the snapshot already covers are never
+      // re-applied; transient deltas (no seq) and newer events still are.
+      const snapshotSeq = Number(runtime.state.snapshot_seq || runtime.state.core?.snapshot_seq || 0)
       for (const value of response.events) {
         if (!isRecord(value)) continue
         const event = value as unknown as CoreAppEvent
         if (event.thread_id && runtime.activeThreadId && event.thread_id !== runtime.activeThreadId) continue
+        // Record the id as received even when the seq filter below skips the
+        // event (matching `enqueueEvent`, which records every id on the
+        // wire): the next boundary snapshot listing it can then be skipped as
+        // redundant instead of forcing a full re-hydration.
+        const eventId = runItemEventId(event)
+        if (eventId) receivedEventIds.add(eventId)
+        const seq = Number(event.seq || 0)
+        if (snapshotSeq > 0 && seq > 0 && seq <= snapshotSeq) continue
         applyRuntimeEvent(event, { allowSequenceRegression: true })
       }
+      if (receivedEventIds.size > 200_000) receivedEventIds.clear()
     }
   }
 
@@ -451,6 +491,9 @@ export function createCoreAppServerRuntimeController<
       thread_id: threadId,
       client_message_id: crypto.randomUUID(),
       input: inputItems,
+      // 事件已携带全部状态变化与修订号；响应里的整包会话快照在大线程上是
+      // 纯延迟（48MB 级解析），一律不要。
+      include_snapshot: false,
       ...turnOptions,
     }, threadId)
     applyResponse(response)
@@ -462,6 +505,7 @@ export function createCoreAppServerRuntimeController<
       thread_id: threadId,
       queue_item_id: queueItemId,
       text,
+      include_snapshot: false,
     }, threadId)
     applyResponse(response)
   }
@@ -471,6 +515,7 @@ export function createCoreAppServerRuntimeController<
     const response = await requestMutation('queue/delete', {
       thread_id: threadId,
       queue_item_id: queueItemId,
+      include_snapshot: false,
     }, threadId)
     applyResponse(response)
   }
@@ -482,6 +527,7 @@ export function createCoreAppServerRuntimeController<
       turn_id: turnId,
       queue_item_id: queueItemId,
       client_message_id: `queue-guide:${queueItemId}`,
+      include_snapshot: false,
       ...(text?.trim() ? { text: text.trim() } : {}),
     }, threadId)
     applyResponse(response)
@@ -526,6 +572,8 @@ export function createCoreAppServerRuntimeController<
       turn_id: turnId,
       client_message_id: crypto.randomUUID(),
       input: inputItems,
+      // 引导是否生效由事件与 applied 字段回答；整包快照在大线程上是纯延迟。
+      include_snapshot: false,
     }, threadId)
     applyResponse(response)
     // 后端明确拒绝时不能当成已接受：调用方据此决定是否显示"已发送引导"与待生效
@@ -761,17 +809,27 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
         ? value.status
         : currentCore.status
     const status = isCoreAppThreadStatus(rawStatus) ? rawStatus : currentCore.status
+    const turns = { ...(currentCore.turns ?? {}) }
+    // A turn the runtime already closed stays closed: a late `waiting` (the
+    // parked question arriving after Stop) must not revive it. Same lock as the
+    // server projection (`snapshot/__init__.py`, `existing_status in
+    // TERMINAL_STATUSES`).
+    const existingTurnStatus = turnId
+      ? String(turns[turnId]?.status ?? (snapshot.turns ?? {})[turnId]?.status ?? '')
+      : ''
+    const revivesClosedTurn = isTerminalThreadStatus(existingTurnStatus)
+      && status !== existingTurnStatus
     // Resume hydrates the current snapshot before replaying old journal
     // events. Closing a previous turn must not close a different active turn.
     const hasOtherActiveTurn = turnId && Object.entries({
       ...(snapshot.turns ?? {}),
       ...(currentCore.turns ?? {}),
     }).some(([id, turn]) => id !== turnId && (turn.status === 'running' || turn.status === 'waiting' || turn.status === 'interrupting'))
-    const threadStatus = hasOtherActiveTurn && (status === 'completed' || status === 'failed' || status === 'cancelled')
+    const threadStatus = revivesClosedTurn
+      || (hasOtherActiveTurn && (status === 'completed' || status === 'failed' || status === 'cancelled'))
       ? currentCore.status
       : status
-    const turns = { ...(currentCore.turns ?? {}) }
-    if (turnId) {
+    if (turnId && !revivesClosedTurn) {
       const turn = turns[turnId] ?? { turn_id: turnId, status: status || 'running', items: [] }
       const runtimeMetrics = isRecord(runPayload.runtime_metrics)
         ? runPayload.runtime_metrics
@@ -788,9 +846,70 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
         } : {}),
       }
     }
+    // A terminal turn owns its items: close whichever it left non-terminal.
+    // The server snapshot projection does the same (`snapshot/__init__.py`
+    // `_close_turn_items`); a live client that skipped it kept a request item
+    // (approval / question) at `waiting` forever, so after Stop the composer
+    // stayed taken over by a question the runtime no longer held — every option
+    // click died on "no pending approval" and the input area stayed unusable
+    // until the next full snapshot (2026-10-10).
+    let items = currentCore.items
+    let itemOrder: string[] | null = null
+    if (turnId && isTerminalThreadStatus(status)) {
+      let closedItems: Record<string, CoreRuntimeItem> | null = null
+      for (const itemId of turns[turnId]?.items ?? []) {
+        const item = items?.[itemId]
+        if (!item || isTerminalItemStatus(item.status)) continue
+        if (!closedItems) closedItems = { ...(items ?? {}) }
+        closedItems[itemId] = { ...item, status }
+      }
+      // A turn that ends badly has to say why. The server stores this terminal
+      // status item with its payload — that is where a named failure such as
+      // low memory keeps the explanation — while this live path used to flip
+      // the status and drop the item, so the reason only appeared after a
+      // reload (and never when the record itself could not be written, which
+      // left the session looking alive with a half-finished tool row). Mirror
+      // the server's item here so live and reloaded views agree — including
+      // its guard: the server only itemizes failed/cancelled/error endings
+      // (`snapshot/__init__.py`). A clean finish carries the same fields
+      // (`raw_end_reason` plus the final reply as `message`), so an
+      // unrestricted check appended a stray "status" row holding the whole
+      // reply to every completed turn (2026-10-11).
+      const endsBadly = status === 'failed' || status === 'cancelled'
+      const hasExplanation = typeof runPayload.message === 'string' || typeof runPayload.raw_end_reason === 'string'
+      if (itemId && endsBadly && hasExplanation) {
+        const terminalSeq = typeof event.seq === 'number' && event.seq > 0 ? event.seq : undefined
+        if (!closedItems) closedItems = { ...(items ?? {}) }
+        const existingTerminal = closedItems[itemId]
+        closedItems[itemId] = {
+          ...(existingTerminal ?? { item_id: itemId, content: '', deltas: [] }),
+          item_id: itemId,
+          turn_id: turnId,
+          kind: 'status',
+          last_kind: 'status',
+          status,
+          seq: terminalSeq ?? existingTerminal?.seq,
+          payload: { ...(existingTerminal?.payload ?? {}), ...runPayload },
+        }
+        const turnItems = turns[turnId]?.items ?? []
+        if (turns[turnId] && !turnItems.includes(itemId)) {
+          turns[turnId] = { ...turns[turnId], items: [...turnItems, itemId] }
+        }
+        const currentOrder = currentCore.item_order ?? []
+        if (!currentOrder.includes(itemId)) itemOrder = [...currentOrder, itemId]
+      }
+      if (closedItems) items = closedItems
+    }
     return {
       ...snapshot,
-      core: { ...currentCore, seen_event_ids: seen, turns, status: threadStatus },
+      core: {
+        ...currentCore,
+        seen_event_ids: seen,
+        turns,
+        status: threadStatus,
+        ...(items !== currentCore.items ? { items } : {}),
+        ...(itemOrder ? { item_order: itemOrder } : {}),
+      },
     }
   }
   if (kind === 'usage') {
@@ -812,6 +931,17 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
 
   const items = { ...(currentCore.items ?? {}) }
   const existing = items[itemId] ?? { item_id: itemId, content: '', deltas: [] }
+  // An item that lands on an already-terminal turn is born terminal. A Stop
+  // that races the question event left the late request item `waiting`, which
+  // re-took over the composer for a decision nobody could answer (2026-10-10).
+  // The server projection applies the same rule before the item is even stored
+  // (`snapshot/__init__.py`, `terminal_turn_status`).
+  const existingTurn = turnId
+    ? (currentCore.turns ?? {})[turnId] ?? (snapshot.turns ?? {})[turnId]
+    : undefined
+  const terminalTurnStatus = existingTurn && isTerminalThreadStatus(existingTurn.status)
+    ? existingTurn.status
+    : ''
   const delta = typeof runPayload.delta === 'string' ? runPayload.delta : undefined
   const content = typeof runPayload.content === 'string' ? runPayload.content : undefined
   // Transient stream deltas (default_agent `_persist_core_event_live`) are not
@@ -830,7 +960,7 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     parent_item_id: typeof value.parent_item_id === 'string' ? value.parent_item_id : existing.parent_item_id,
     kind: kind === 'tool_result' ? 'tool_result' : existing.kind || kind,
     last_kind: kind,
-    status: typeof value.status === 'string' ? value.status : existing.status,
+    status: terminalTurnStatus || (typeof value.status === 'string' ? value.status : existing.status),
     payload: { ...(existing.payload ?? {}), ...runPayload },
   }
   if (delta !== undefined) {
@@ -867,7 +997,9 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
   const itemOrder = [...(currentCore.item_order ?? [])]
   if (!itemOrder.includes(itemId)) itemOrder.push(itemId)
   const turns = { ...(currentCore.turns ?? {}) }
-  const itemStatus = typeof value.status === 'string' ? value.status : existing.status
+  // A late event must not revive a turn the runtime already closed: only a
+  // non-terminal turn can be `waiting`.
+  const promotesWaiting = item.status === 'waiting' && !terminalTurnStatus
   if (turnId) {
     const turn = turns[turnId] ?? { turn_id: turnId, status: 'running', items: [] }
     const turnItems = [...(turn.items ?? [])]
@@ -875,7 +1007,7 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     turns[turnId] = {
       ...turn,
       items: turnItems,
-      ...(itemStatus === 'waiting' ? { status: 'waiting' } : {}),
+      ...(promotesWaiting ? { status: 'waiting' } : {}),
     }
   }
   return {
@@ -887,7 +1019,7 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
       items,
       item_order: itemOrder,
       ...(artifacts !== currentCore.artifacts ? { artifacts } : {}),
-      ...(itemStatus === 'waiting' ? { status: 'waiting' } : {}),
+      ...(promotesWaiting ? { status: 'waiting' } : {}),
     },
   }
 }
@@ -1255,6 +1387,16 @@ function isCoreAppThreadStatus(value: unknown): value is CoreAppThreadStatus {
     || value === 'completed'
     || value === 'failed'
     || value === 'cancelled'
+}
+
+/** Turn statuses that mean "this turn is over"; mirrored from the server's
+ * `snapshot/__init__.py` TERMINAL_STATUSES. */
+function isTerminalThreadStatus(value: unknown): value is CoreAppThreadStatus {
+  return value === 'completed' || value === 'failed' || value === 'cancelled'
+}
+
+function isTerminalItemStatus(status: unknown): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'skipped'
 }
 
 function isCoreAppSnapshot(value: unknown): value is CoreAppSnapshot {

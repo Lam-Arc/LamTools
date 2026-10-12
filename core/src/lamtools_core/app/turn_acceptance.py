@@ -100,22 +100,24 @@ def build_cancelled_turn_event(
     *,
     thread_id: str,
     turn_id: str,
-    message: str = "",
+    message: str = "已中断。",
 ) -> RunItemEvent:
+    # item_id must match the kernel's own terminal projection so a lost live
+    # terminal write and this fallback collapse into ONE visible row instead
+    # of stacking a second cancel bubble on the same turn.
     payload: dict[str, Any] = {
         "type": "turn",
         "status": "cancelled",
         "raw_end_reason": "user_interrupt",
+        "message": message,
     }
-    if message:
-        payload["message"] = message
     return RunItemEvent(
         kind="status",
         thread_id=thread_id,
         event_id=f"{turn_id}:cancelled",
         run_id=turn_id,
         turn_id=turn_id,
-        item_id=f"{turn_id}:cancelled",
+        item_id=f"{turn_id}:terminal",
         status="cancelled",
         payload=payload,
     )

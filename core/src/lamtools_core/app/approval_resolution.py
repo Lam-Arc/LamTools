@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -114,11 +115,12 @@ class ApprovalResolutionLifecycle:
         *,
         tool_event: CoreEvent | None = None,
         tool_history: ChatMessage | None = None,
+        failure_origin: str = "approval_resolution",
     ) -> OperationResult:
         if not self.decision_durable:
             return await self._restore_retryable_pending(exc)
 
-        reason = _failure_reason(exc)
+        reason = self._failure_reason(exc)
         candidate = deepcopy(self.state)
         self._clear_pending(candidate)
         candidate.status = "failed"
@@ -145,7 +147,14 @@ class ApprovalResolutionLifecycle:
                 payload={
                     "error": reason,
                     "failure_reason": reason,
-                    "decision": "approval_resolution_failed",
+                    # Name the fact, not the layer: when this failure is the
+                    # outcome of the user-approved tool itself, the
+                    # machine-readable reason must say which tool outcome it
+                    # was instead of blaming the approval step (2026-10-12).
+                    # Everything else here is genuinely an approval-resolution
+                    # failure.
+                    "decision": _failure_decision(failure_origin, tool_event),
+                    **_state_failure_detail(self.state),
                 },
                 session_id=self.thread_id,
                 run_id=self.state.run_id,
@@ -222,15 +231,30 @@ class ApprovalResolutionLifecycle:
         *,
         message: str,
     ) -> OperationResult:
+        # Reached when the terminal record itself could not be written — in a
+        # host-memory crash that is memory again, so this branch must stay
+        # cheap (no deep copy of the whole state) and must not throw away why
+        # the turn failed in the first place: the original reason is what the
+        # user has to see.  The write failure is recorded alongside it.
         reason = _failure_reason(exc)
-        candidate = deepcopy(self.state)
+        original = ""
+        previous = self.state.metadata.get("approval_resolution")
+        if isinstance(previous, dict):
+            original = str(previous.get("error") or "")
+        candidate = copy.copy(self.state)
         self._clear_pending(candidate)
         self._set_resolution_metadata(
             candidate,
             phase="terminal_persistence_failed",
             recoverable=True,
-            error=reason,
+            error=original or reason,
         )
+        resolution = candidate.metadata.get("approval_resolution")
+        if isinstance(resolution, dict):
+            resolution["persist_error"] = reason
+        failure_detail = _state_failure_detail(candidate)
+        if failure_detail:
+            candidate.metadata.update(failure_detail)
         await self._commit_state(candidate)
         return OperationResult(
             name=self.operation_name,
@@ -238,7 +262,7 @@ class ApprovalResolutionLifecycle:
             payload={
                 "thread_id": self.thread_id,
                 "decision": "failed",
-                "message": message or reason,
+                "message": failure_detail.get("failure_message") or message or original or reason,
                 "error": reason,
                 "run_items": [item.to_dict() for item in self.decision_run_items],
                 "snapshot": self.decision_snapshot or self.snapshot_from_events([self.decision_event]),
@@ -312,6 +336,18 @@ class ApprovalResolutionLifecycle:
         if not self.decision_durable:
             raise RuntimeError("approval decision is not durable")
 
+    def _failure_reason(self, exc: BaseException | str) -> str:
+        """Why the turn failed, preferring the explanation the runtime recorded.
+
+        A named failure (host memory exhaustion) carries text that says what
+        happened and when the turn resumes; the bare exception name it came
+        from is useless to the user.
+        """
+        recorded = _state_failure_detail(self.state).get("failure_message")
+        if recorded:
+            return recorded
+        return _failure_reason(exc)
+
     @staticmethod
     def _clear_pending(state: RuntimeState) -> None:
         state.metadata.pop("pending_approval", None)
@@ -321,6 +357,34 @@ class ApprovalResolutionLifecycle:
 def _failure_reason(exc: BaseException | str) -> str:
     reason = str(exc).strip()
     return reason or type(exc).__name__
+
+
+def _failure_decision(failure_origin: str, tool_event: CoreEvent | None) -> str:
+    """The machine-readable end reason recorded on ``runtime.failed``.
+
+    A failure caused by the user-approved tool's own outcome is named after
+    that outcome (``approved_tool_failed`` / ``approved_tool_blocked``) so a
+    reader can tell a tool result from an approval-layer failure.  Anything
+    else stays ``approval_resolution_failed``.
+    """
+    if failure_origin != "tool_execution":
+        return "approval_resolution_failed"
+    status = ""
+    payload = tool_event.payload if tool_event is not None else None
+    if isinstance(payload, dict):
+        status = str(payload.get("status") or "").strip().lower()
+    return f"approved_tool_{status}" if status else "approved_tool_failed"
+
+
+def _state_failure_detail(state: RuntimeState) -> dict[str, str]:
+    """``failure_code`` / ``failure_message`` recorded on the state, if any."""
+    metadata = state.metadata if isinstance(state.metadata, dict) else {}
+    detail: dict[str, str] = {}
+    for key in ("failure_code", "failure_message"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            detail[key] = value.strip()
+    return detail
 
 
 # Metadata keys owned by approval resolution. On a state-conflict retry,

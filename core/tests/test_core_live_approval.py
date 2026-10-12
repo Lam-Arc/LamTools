@@ -185,3 +185,92 @@ def test_auto_preset_keeps_the_session_capability_tier() -> None:
     assert resolved.active_tier == "read_only"
     assert resolved.approval_policy == "auto_approve"
     assert resolved.allow_access_outside_workdir is False
+
+
+def test_end_reason_names_the_approved_tool_outcome_not_the_approval_layer() -> None:
+    """A failure caused by the approved tool must not be labelled as an
+    approval-layer failure: the machine-readable reason must say what actually
+    happened."""
+    from lamtools_core.app.approval_resolution import _failure_decision
+    from lamtools_core.event import CoreEvent
+
+    def tool_event(status: str) -> CoreEvent:
+        return CoreEvent(
+            name="runtime.tool.finished",
+            category="tool",
+            payload={"status": status},
+            session_id="t",
+            run_id="r",
+        )
+
+    assert _failure_decision("tool_execution", tool_event("blocked")) == "approved_tool_blocked"
+    assert _failure_decision("tool_execution", tool_event("error")) == "approved_tool_error"
+    # A missing tool event still names the fact rather than the layer.
+    assert _failure_decision("tool_execution", None) == "approved_tool_failed"
+    # Everything else is still an approval-resolution failure.
+    assert _failure_decision("approval_resolution", tool_event("blocked")) == "approval_resolution_failed"
+
+
+@pytest.mark.asyncio
+async def test_finalize_failure_records_the_tool_outcome_in_the_terminal_event() -> None:
+    from lamtools_core.app.approval_resolution import ApprovalResolutionLifecycle
+    from lamtools_core.event import CoreEvent
+    from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState
+
+    store = InMemoryRuntimeStateStore()
+    state = RuntimeState(
+        session_id="thread-tool-failure",
+        run_id="run-tool-failure",
+        status="waiting",
+        loop_state="wait",
+        metadata={
+            "pending_approval": {
+                "request_id": "call-edit",
+                "status": "executing",
+                "tool_call": {"id": "call-edit", "name": "edit_file", "arguments": {}},
+            }
+        },
+    )
+    await store.save(state)
+
+    persisted: list[list[object]] = []
+
+    async def persist_run_items(items: list[object]) -> dict | None:
+        persisted.append(list(items))
+        return None
+
+    lifecycle = ApprovalResolutionLifecycle(
+        operation_name="approval.respond",
+        thread_id="thread-tool-failure",
+        state=state,
+        state_store=store,
+        request_id="call-edit",
+        tool_call={"id": "call-edit", "name": "edit_file"},
+        decision="approve",
+        guidance="",
+        persist_run_items=persist_run_items,
+        run_items_from_events=lambda events: list(events),
+        snapshot_from_events=lambda events: {},
+    )
+    assert await lifecycle.persist_decision() is None
+
+    tool_event = CoreEvent(
+        name="runtime.tool.finished",
+        category="tool",
+        payload={"tool_name": "edit_file", "call_id": "call-edit", "status": "blocked", "error": "refused"},
+        session_id="thread-tool-failure",
+        run_id="run-tool-failure",
+        tags=["tool"],
+    )
+    result = await lifecycle.finalize_failure(
+        "refused",
+        tool_event=tool_event,
+        failure_origin="tool_execution",
+    )
+
+    assert result.status == "error"
+    failure_events = [
+        item for item in persisted[-1] if getattr(item, "name", "") == "runtime.failed"
+    ]
+    assert failure_events, persisted[-1]
+    assert failure_events[-1].payload["decision"] == "approved_tool_blocked"

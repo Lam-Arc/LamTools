@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 import pytest
 import asyncio
@@ -22,7 +23,7 @@ from lamtools_core.app.default_agent import _persist_core_event_live, _persist_r
 from lamtools_core.app.base_agent import core_events_to_run_items
 from lamtools_core.app.core_db import CoreDbBase
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
-from lamtools_core.event import CoreEvent
+from lamtools_core.event import CoreEvent, RunItemEvent
 
 
 class Base(DeclarativeBase):
@@ -429,4 +430,112 @@ async def test_core_approval_response_is_published_before_continuation_finishes(
         if approval_task is not None:
             await approval_task
         hub.unsubscribe("thread-approval-live", subscription)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_persist_run_items_keeps_events_when_the_snapshot_load_fails(tmp_path, monkeypatch):
+    """The record must survive losing the snapshot: rebuilding it is optional,
+    losing the turn's ending is not (2026-10-10 host-memory crash)."""
+    engine, session_factory, event_store, snapshot_store = await _persistence(tmp_path)
+    try:
+        from lamtools_core.app import persistence_host as persistence_module
+
+        def _boom(self, db, thread_id):
+            raise MemoryError()
+
+        monkeypatch.setattr(persistence_module.AppPersistenceHost, "load", _boom)
+
+        run_items = [
+            RunItemEvent(
+                kind="status",
+                thread_id="thread-oom",
+                turn_id="turn-oom",
+                item_id="turn-oom:terminal",
+                status="failed",
+                payload={
+                    "type": "turn",
+                    "status": "failed",
+                    "raw_end_reason": "host_memory_exhausted",
+                    "message": "本机内存不足，本轮已中断。",
+                },
+            )
+        ]
+        snapshot = await _persist_run_items(
+            run_items,
+            db_session_factory=session_factory,
+            app_event_store=event_store,
+            thread_snapshot_store=snapshot_store,
+        )
+        # No snapshot to hand back — the caller recomputes it locally.
+        assert snapshot is None
+
+        # …but the event IS durable, so the session stops claiming to be alive.
+        async with session_factory() as db:
+            rows = await event_store.list_after(db, thread_id="thread-oom", after_seq=0)
+        assert len(rows) == 1
+        assert rows[0].payload["payload"]["raw_end_reason"] == "host_memory_exhausted"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_persist_run_items_retries_with_only_the_terminal_record(tmp_path, monkeypatch):
+    """A batch too large to write must still leave the ending behind."""
+    engine, session_factory, event_store, snapshot_store = await _persistence(tmp_path)
+    try:
+        from lamtools_core.app.persistence_host import AppPersistenceHost
+
+        original_append = AppPersistenceHost.append_batch
+        calls = {"n": 0}
+
+        async def _append_failing_first(self, db, *, run_item_events=(), **kwargs):
+            events = list(run_item_events)
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # The full batch is what a starved writer cannot push through.
+                raise MemoryError()
+            return await original_append(self, db, run_item_events=events, **kwargs)
+
+        monkeypatch.setattr(AppPersistenceHost, "append_batch", _append_failing_first)
+
+        run_items = [
+            RunItemEvent(
+                kind="message",
+                thread_id="thread-oom",
+                turn_id="turn-oom",
+                item_id="turn-oom:text",
+                status="completed",
+                payload={"type": "agentMessage", "content": "working"},
+            ),
+            RunItemEvent(
+                kind="status",
+                thread_id="thread-oom",
+                turn_id="turn-oom",
+                item_id="turn-oom:terminal",
+                status="failed",
+                payload={
+                    "type": "turn",
+                    "status": "failed",
+                    "raw_end_reason": "host_memory_exhausted",
+                    "message": "本机内存不足，本轮已中断。",
+                },
+            ),
+        ]
+        snapshot = await _persist_run_items(
+            run_items,
+            db_session_factory=session_factory,
+            app_event_store=event_store,
+            thread_snapshot_store=snapshot_store,
+        )
+        del snapshot
+
+        async with session_factory() as db:
+            rows = await event_store.list_after(db, thread_id="thread-oom", after_seq=0)
+        kinds = [row.payload["payload"].get("type") for row in rows]
+        # Only the terminal record made it: the big batch failed, the minimal
+        # retry wrote the one item that makes the session stop looking alive.
+        assert kinds == ["turn"]
+        assert rows[0].payload["payload"]["raw_end_reason"] == "host_memory_exhausted"
+    finally:
         await engine.dispose()

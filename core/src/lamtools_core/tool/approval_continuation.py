@@ -77,6 +77,30 @@ def approved_tool_continuation_prompt(
     )
 
 
+def approved_tool_failure_continuation_prompt(
+    *,
+    original_task: str,
+    approved_tool: ApprovedToolExecution,
+) -> str:
+    """Continue a turn after an approved tool ran and returned a failure.
+
+    A tool that produced a failed *result* (bad edit context, missing file,
+    non-zero exit) has been executed — it is a correctable outcome, not a
+    run-level failure.  The model gets the real failure and must fix it, so
+    the turn continues instead of dying with nothing the user can act on.
+    """
+    return (
+        "继续完成同一个用户任务。用户已经批准并由后端执行了等待中的工具调用，"
+        "但该工具执行失败。\n\n"
+        f"原始任务：{original_task}\n"
+        f"已执行工具：{approved_tool.tool_name}\n"
+        f"工具参数：{json.dumps(approved_tool.tool_args, ensure_ascii=False)}\n"
+        f"工具失败结果：{approved_tool.tool_content[:4000]}\n\n"
+        "这是一次可纠正的工具失败：请根据失败原因修正参数或改用别的方式，"
+        "然后继续完成后续步骤；不要把这次失败当作任务已完成。"
+    )
+
+
 def question_answer_continuation_prompt(
     *,
     original_task: str,

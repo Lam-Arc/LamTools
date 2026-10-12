@@ -21,10 +21,11 @@ from lamtools_core.app import (
 )
 from lamtools_core.app.default_agent import CoreAgentPaths, create_core_agent_operations
 from lamtools_core.app.core_db import CoreDbBase
-from lamtools_core.app.event_store import SqlAlchemyAppEventStore
+from lamtools_core.app.event_store import AppEventInput, SqlAlchemyAppEventStore
 from lamtools_core.app.live_hub import CoreAppEventHub
 from lamtools_core.app.live_operations import (
     CoreLiveContext,
+    _character_page_snapshot,
     _ensure_turn_terminal,
     handle_queue_create_operation,
     handle_queue_delete_operation,
@@ -38,6 +39,7 @@ from lamtools_core.app.live_operations import (
     handle_turn_steer_operation,
     handle_command_execute_operation,
     recover_stale_active_turns,
+    wait_live_background_tasks,
 )
 from lamtools_core.app.live_member import DefaultCoreLiveMemberHooks
 from lamtools_core.event import RunItemEvent
@@ -313,15 +315,19 @@ async def test_core_live_command_action_receives_arguments_without_reparsing(tmp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("tool_name", "expected_status", "expected_approval_calls"),
+    ("tool_name", "preset", "expected_status", "expected_approval_calls"),
     [
-        ("write_file", "accepted", 1),
-        ("question", "user_input_required", 0),
+        ("write_file", "auto", "accepted", 1),
+        ("question", "auto", "user_input_required", 0),
+        # Switching to the asking preset must never release a parked
+        # approval: only a preset that itself auto-approves may do so.
+        ("write_file", "ask", "not_pending", 0),
     ],
 )
 async def test_session_permission_switch_persists_and_releases_only_tool_approvals(
     tmp_path,
     tool_name,
+    preset,
     expected_status,
     expected_approval_calls,
 ):
@@ -384,17 +390,24 @@ async def test_session_permission_switch_persists_and_releases_only_tool_approva
         outcome = await context.host.execute(
             "session.permissions.set",
             request_id=1,
-            params={"thread_id": record.id, "permission_preset": "auto"},
+            params={"thread_id": record.id, "permission_preset": preset},
             context=context,
         )
 
-        assert outcome.response["result"]["permission_preset"] == "auto"
+        assert outcome.response["result"]["permission_preset"] == preset
         assert outcome.response["result"]["approval_status"] == expected_status
-        assert record.metadata["runtime_preferences"]["permission_preset"] == "auto"
+        assert record.metadata["runtime_preferences"]["permission_preset"] == preset
         assert len(approval_calls) == expected_approval_calls
         if approval_calls:
             assert approval_calls[0]["request_id"] == "approval-live"
             assert approval_calls[0]["approval_policy"] == "auto_approve"
+        if expected_status == "not_pending":
+            parked = await state_store.get(record.id)
+            assert parked is not None
+            pending = parked.metadata.get("pending_approval")
+            assert isinstance(pending, dict) and pending.get("status") == "waiting", (
+                "switching to the asking preset dropped a parked approval"
+            )
     finally:
         await engine.dispose()
 
@@ -1809,10 +1822,22 @@ async def test_core_live_turn_cancel_publishes_interrupting_status(tmp_path):
             context=context,
         )
 
-        result = outcome.response["result"]
-        assert "snapshot" not in result
-        assert [event["method"] for event in result["events"]] == ["turn/interrupted", "core/runItem"]
-        assert result["events"][1]["payload"]["status"] == "interrupting"
+        # The ack is immediate; the interrupting record settles in background.
+        assert outcome.response["result"]["status"] == "cancelling"
+        assert "snapshot" not in outcome.response["result"]
+        await wait_live_background_tasks()
+
+        async with context.session_factory() as db:
+            events = await context.persistence.list_thread(db, thread_id="thread-1")
+        interrupting = [
+            event for event in events
+            if event.turn_id == turn_id
+            and event.method == "core/runItem"
+            and isinstance(event.payload, dict)
+            and event.payload.get("status") == "interrupting"
+        ]
+        assert len(interrupting) == 1
+        assert any(event.method == "turn/interrupted" for event in events if event.turn_id == turn_id)
     finally:
         if task is not None:
             with pytest.raises(asyncio.CancelledError):
@@ -1866,11 +1891,15 @@ async def test_core_live_turn_cancel_interrupts_provider_before_persistence_roun
         await asyncio.wait_for(write_entered.wait(), timeout=1)
         await asyncio.sleep(0)
         assert task.cancelling() > 0 or task.done()
+        # The RPC returned while the first write is still blocked: the ack
+        # must never ride behind persistence (the 8-minute interrupt hang).
+        assert cancel_task.done() and not release_write.is_set()
 
         release_write.set()
         await asyncio.wait_for(cancel_task, timeout=2)
         with pytest.raises(asyncio.CancelledError):
             await task
+        await wait_live_background_tasks()
     finally:
         release_write.set()
         if cancel_task is not None and not cancel_task.done():
@@ -1909,14 +1938,23 @@ async def test_core_live_turn_cancel_closes_persisted_run_without_live_task(tmp_
             context=context,
         )
 
-        result = outcome.response["result"]
-        assert [event["method"] for event in result["events"]] == [
-            "turn/interrupted",
-            "core/runItem",
-            "core/runItem",
+        assert outcome.response["result"]["status"] == "idle"
+        await wait_live_background_tasks()
+
+        async with context.session_factory() as db:
+            events = await context.persistence.list_thread(db, thread_id="thread-stale-running")
+            snapshot = await context.persistence.load(db, "thread-stale-running")
+        recorded = [event for event in events if event.turn_id == turn_id]
+        statuses = [
+            str(event.payload.get("status") or "")
+            for event in recorded
+            if event.method == "core/runItem"
+            and isinstance(event.payload, dict)
+            and event.payload.get("status") in {"interrupting", "cancelled"}
         ]
-        assert result["events"][-1]["payload"]["status"] == "cancelled"
-        assert result["snapshot"]["core"]["turns"][turn_id]["status"] == "cancelled"
+        assert statuses == ["interrupting", "cancelled"]
+        assert any(event.method == "turn/interrupted" for event in recorded)
+        assert snapshot["core"]["turns"][turn_id]["status"] == "cancelled"
     finally:
         if task is not None and not task.done():
             task.cancel()
@@ -1956,17 +1994,27 @@ async def test_core_live_turn_cancel_falls_back_to_registry_when_no_turn_id(tmp_
 
         # Cancel WITHOUT passing turn_id. The snapshot does carry the turn
         # here, but the point is that even if it didn't, the registry
-        # fallback resolves turn_id. Assert we get an interrupting event,
-        # not the idle "no active turn" response.
+        # fallback resolves turn_id. Assert the ack targets the live run and
+        # the interrupting record lands in background.
         outcome = await handle_turn_cancel_operation(
             request_id=2,
             params={"thread_id": "thread-registry-fallback", "include_snapshot": False},
             context=context,
         )
         result = outcome.response["result"]
-        assert "status" not in result or result.get("status") != "idle"
-        assert [event["method"] for event in result["events"]] == ["turn/interrupted", "core/runItem"]
-        assert result["events"][1]["payload"]["status"] == "interrupting"
+        assert result["status"] == "cancelling"
+        await wait_live_background_tasks()
+
+        async with context.session_factory() as db:
+            events = await context.persistence.list_thread(db, thread_id="thread-registry-fallback")
+        interrupting = [
+            event for event in events
+            if event.turn_id == turn_id
+            and event.method == "core/runItem"
+            and isinstance(event.payload, dict)
+            and event.payload.get("status") == "interrupting"
+        ]
+        assert interrupting and interrupting[0].payload["status"] == "interrupting"
     finally:
         release.set()
         if task is not None:
@@ -2003,10 +2051,11 @@ async def test_force_cancel_persists_and_publishes_cancelled_terminal(tmp_path):
             params={"thread_id": thread_id, "turn_id": turn_id},
             context=context,
         )
-        assert interrupt.response["result"]["snapshot"]["core"]["turns"][turn_id]["status"] == "interrupting"
+        assert interrupt.response["result"]["status"] == "cancelling"
 
         with pytest.raises(asyncio.CancelledError):
             await task
+        await wait_live_background_tasks()
         await asyncio.sleep(0)
 
         resumed = await handle_thread_resume_operation(
@@ -2236,6 +2285,8 @@ async def test_core_live_operation_host_uses_injected_persistence_and_runtime_re
             params={"thread_id": "thread-host", "turn_id": turn_id},
             context=context,
         )
+        # The claim release happens in the background finalizer now.
+        await wait_live_background_tasks()
 
         assert runtime_registry.cancel_calls == [("thread-host", turn_id, True)]
     finally:
@@ -2773,3 +2824,336 @@ async def test_ensure_turn_terminal_does_not_complete_waiting_turn(tmp_path):
         for env in events
     ), "waiting turn was wrongly marked completed"
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_turn_start_honors_include_snapshot_opt_out(tmp_path):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    try:
+        outcome = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-start-no-snap",
+                "input": [{"type": "text", "text": "start"}],
+                "include_snapshot": False,
+            },
+            context=context,
+        )
+        result = outcome.response["result"]
+        assert "snapshot" not in result
+        assert [event["method"] for event in result["events"]] == [
+            "turn/accepted",
+            "item/started",
+            "core/runItem",
+        ]
+        assert result["runtime_start"]["thread_id"] == "thread-start-no-snap"
+
+        included = await handle_turn_start_operation(
+            request_id=2,
+            params={"thread_id": "thread-start-no-snap-2", "input": [{"type": "text", "text": "start"}]},
+            context=context,
+        )
+        assert isinstance(included.response["result"]["snapshot"], dict)
+    finally:
+        task = context.runtime_task_registry.task("thread-start-no-snap")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_turn_steer_honors_include_snapshot_opt_out(tmp_path):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={"thread_id": "thread-steer-no-snap", "input": [{"type": "text", "text": "start"}]},
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        steered = await handle_turn_steer_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-steer-no-snap",
+                "turn_id": turn_id,
+                "client_message_id": "steer-no-snap",
+                "input": [{"type": "text", "text": "guide"}],
+                "include_snapshot": False,
+            },
+            context=context,
+        )
+        result = steered.response["result"]
+        assert result["applied"] is True
+        assert "snapshot" not in result
+        assert [event["method"] for event in result["events"]] == ["turn/steered"]
+
+        rejected = await handle_turn_steer_operation(
+            request_id=3,
+            params={
+                "thread_id": "thread-steer-no-snap",
+                "turn_id": "nonexistent-turn",
+                "client_message_id": "steer-no-snap-mismatch",
+                "input": [{"type": "text", "text": "guide"}],
+                "include_snapshot": False,
+            },
+            context=context,
+        )
+        rejected_result = rejected.response["result"]
+        assert rejected_result["applied"] is False
+        assert rejected_result["reason"] == "active_turn_mismatch"
+        assert "snapshot" not in rejected_result
+    finally:
+        task = context.runtime_task_registry.task("thread-steer-no-snap")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_queue_create_honors_include_snapshot_opt_out(tmp_path):
+    engine, context = await _context(tmp_path)
+    try:
+        queued = await handle_queue_create_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-queue-no-snap",
+                "client_message_id": "queue-no-snap",
+                "input": [{"type": "text", "text": "queued"}],
+                "include_snapshot": False,
+            },
+            context=context,
+        )
+        result = queued.response["result"]
+        assert "snapshot" not in result
+        assert result["queue_item"]["queue_item_id"]
+        assert result["queue_item"]["input"] == [{"type": "text", "text": "queued"}]
+        assert [event["method"] for event in result["events"]] == ["queue/itemAccepted"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_thread_resume_returns_only_events_past_the_snapshot(tmp_path):
+    """Snapshot-hydrating clients must not re-download the covered journal."""
+    engine, context = await _context(tmp_path)
+    thread_id = "thread-resume-floor"
+    try:
+        async with context.session_factory() as db:
+            for index in range(3):
+                await context.persistence.append(
+                    db,
+                    AppEventInput(
+                        thread_id=thread_id,
+                        method="item/started",
+                        payload={"type": "userMessage", "content": f"m{index}"},
+                    ),
+                )
+
+        async with context.session_factory() as db:
+            resumed = await handle_thread_resume_operation(
+                request_id=1,
+                params={"thread_id": thread_id, "last_seen_seq": 0},
+                context=context,
+            )
+        result = resumed.response["result"]
+        assert result["events"] == []
+        assert result["has_more"] is False
+        assert result["next_after_seq"] == 3
+        assert result["snapshot"]["snapshot_seq"] == 3
+
+        # Projection applies inside the append transaction, so the snapshot has
+        # already absorbed the new event: a fresh resume still owes no journal.
+        async with context.session_factory() as db:
+            await context.persistence.append(
+                db,
+                AppEventInput(
+                    thread_id=thread_id,
+                    method="item/started",
+                    payload={"type": "userMessage", "content": "later"},
+                ),
+            )
+        async with context.session_factory() as db:
+            second = await handle_thread_resume_operation(
+                request_id=2,
+                params={"thread_id": thread_id, "last_seen_seq": 0},
+                context=context,
+            )
+        assert second.response["result"]["events"] == []
+        assert second.response["result"]["snapshot"]["snapshot_seq"] == 4
+        assert second.response["result"]["next_after_seq"] == 4
+
+        # Replay-style clients opt back into the raw journal explicitly.
+        async with context.session_factory() as db:
+            journal = await handle_thread_resume_operation(
+                request_id=3,
+                params={"thread_id": thread_id, "last_seen_seq": 0, "full_journal": True},
+                context=context,
+            )
+        assert [event["seq"] for event in journal.response["result"]["events"]] == [1, 2, 3, 4]
+        assert journal.response["result"]["snapshot"]["snapshot_seq"] == 4
+
+        # Snapshot-less journal mode keeps the legacy from-last_seen semantics.
+        async with context.session_factory() as db:
+            delta = await handle_thread_resume_operation(
+                request_id=4,
+                params={
+                    "thread_id": thread_id,
+                    "last_seen_seq": 2,
+                    "include_snapshot": False,
+                },
+                context=context,
+            )
+        assert [event["seq"] for event in delta.response["result"]["events"]] == [3, 4]
+        assert "snapshot" not in delta.response["result"]
+
+        # last_seen_seq beyond the journal start never rewinds the page.
+        async with context.session_factory() as db:
+            ahead = await handle_thread_resume_operation(
+                request_id=5,
+                params={"thread_id": thread_id, "last_seen_seq": 4},
+                context=context,
+            )
+        assert ahead.response["result"]["events"] == []
+        assert ahead.response["result"]["next_after_seq"] == 4
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_thread_resume_under_snapshot_lag_pages_by_full_page(tmp_path):
+    """White-box: with the projection lagging behind the journal (should not
+    happen — projection shares the append transaction), the trimmed journal
+    still pages by full page instead of silently claiming there is no more."""
+    engine, context = await _context(tmp_path)
+    thread_id = "thread-resume-lag"
+    try:
+        async with context.session_factory() as db:
+            for index in range(4):
+                await context.persistence.append(
+                    db,
+                    AppEventInput(
+                        thread_id=thread_id,
+                        method="thread/note",
+                        payload={"index": index},
+                    ),
+                )
+        # Simulate lag: pretend the projection only reached seq 0.
+        async with context.session_factory() as db:
+            row = await db.get(context.persistence.snapshot_store.snapshot_model, thread_id)
+            row.snapshot_seq = 0
+            await db.commit()
+        async with context.session_factory() as db:
+            resumed = await handle_thread_resume_operation(
+                request_id=1,
+                params={"thread_id": thread_id, "last_seen_seq": 0, "limit": 2},
+                context=context,
+            )
+        result = resumed.response["result"]
+        assert [event["seq"] for event in result["events"]] == [1, 2]
+        assert result["has_more"] is True
+        assert result["next_after_seq"] == 2
+    finally:
+        await engine.dispose()
+
+
+def test_character_page_snapshot_contract():
+    """The page carries every documented field, never mutates its input, and
+    replaces (rather than aliases) the containers it rewrites."""
+    snapshot = {
+        "thread_id": "t-contract",
+        "snapshot_seq": 6,
+        "status": "completed",
+        "seen_event_ids": ["e1", "e2"],
+        "session": {"title": "S", "member_id": "core"},
+        "items": {
+            "u1": {"item_id": "u1", "type": "userMessage", "turn_id": "turn-1", "seq": 1, "content": "question"},
+            "u2": {"item_id": "u2", "type": "userMessage", "turn_id": "turn-2", "seq": 5, "content": "second"},
+        },
+        "item_order": ["u1", "u2"],
+        "turns": {"turn-1": {"turn_id": "turn-1", "status": "completed", "items": ["u1"]}},
+        "core": {
+            "thread_id": "t-contract",
+            "snapshot_seq": 6,
+            "status": "completed",
+            "seen_event_ids": ["e1"],
+            "items": {
+                "a1": {"item_id": "a1", "turn_id": "turn-1", "type": "agentMessage", "seq": 3, "payload": {"text": "answer"}},
+                "a2": {"item_id": "a2", "turn_id": "turn-2", "type": "toolCall", "seq": 7, "payload": {"name": "read_file", "input": "x" * 40}},
+            },
+            "item_order": ["a1", "a2"],
+            "turns": {
+                "turn-1": {"turn_id": "turn-1", "status": "completed", "items": ["a1"], "last_seq": 3},
+                "turn-2": {"turn_id": "turn-2", "status": "completed", "items": ["a2"], "last_seq": 7},
+            },
+            "artifacts": {"art1": {"artifact_id": "art1", "kind": "file_read", "name": "n.png"}},
+            "requests": {},
+        },
+        "artifacts": {},
+        "queue": [],
+    }
+    baseline = json.loads(json.dumps(snapshot))
+
+    page = _character_page_snapshot(
+        snapshot,
+        before_item_id=None,
+        before_seq=None,
+        char_limit=200_000,
+        turn_limit=10,
+    )
+
+    # The input snapshot is left exactly as it was.
+    assert snapshot == baseline
+
+    # Every documented history_page field is present.
+    history = page["history_page"]
+    assert set(history) == {
+        "char_limit",
+        "character_count",
+        "turn_limit",
+        "turn_count",
+        "item_count",
+        "total_items",
+        "has_more",
+        "next_before_item_id",
+        "next_before_seq",
+    }
+    assert history["char_limit"] == 200_000
+    assert history["turn_limit"] == 10
+    assert history["turn_count"] == 2
+    assert history["item_count"] == 4
+    assert history["total_items"] == 4
+    assert history["has_more"] is False
+    assert history["next_before_item_id"] is None
+    assert history["next_before_seq"] is None
+    # character_count is the exact compact serialization of the page items.
+    expected_chars = sum(
+        len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+        for item in (
+            snapshot["items"]["u1"],
+            snapshot["items"]["u2"],
+            snapshot["core"]["items"]["a1"],
+            snapshot["core"]["items"]["a2"],
+        )
+    )
+    assert history["character_count"] == expected_chars
+
+    # Artifacts and seen ids never ride with a conversation page.
+    assert page["core"]["artifacts"] == {}
+    assert page["artifacts"] == {}
+    assert page["core"]["seen_event_ids"] == []
+    assert page["seen_event_ids"] == []
+
+    # Replaced containers are fresh: rewriting them never leaks into the input.
+    assert page["core"] is not snapshot["core"]
+    assert page["items"] is not snapshot["items"]
+    assert page["turns"] is not snapshot["turns"]
+    page["items"]["added"] = {"item_id": "added"}
+    page["item_order"].append("added")
+    page["core"]["artifacts"] = {"sentinel": True}
+    page["turns"]["extra"] = {"turn_id": "extra"}
+    page["history_page"]["item_count"] = -1
+    assert snapshot == baseline

@@ -79,6 +79,21 @@ export class CoreSessionStateStore {
     else this.states.clear()
   }
 
+  /**
+   * Memory bound: evict every cached thread except `threadId`. Huge threads
+   * carry multi-megabyte snapshots, so keeping one entry per visited thread
+   * made every session switch leak the previous one. An evicted thread always
+   * rehydrates from the server on its next resume (`switchThreadNow`
+   * re-requests a full snapshot); the caller passes the thread it is opening,
+   * which also drops stale-arrival entries other threads may have re-added
+   * after an earlier eviction.
+   */
+  retainOnly(threadId: string): void {
+    for (const id of [...this.states.keys()]) {
+      if (id !== threadId) this.states.delete(id)
+    }
+  }
+
   applySnapshot(snapshot: CoreAppSnapshot): boolean {
     const threadId = String(snapshot.thread_id || '')
     if (!threadId) return false

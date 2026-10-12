@@ -676,3 +676,296 @@ async def test_full_projection_roundtrip_via_write_full_projection(tmp_path):
             assert restored["core"]["item_order"] == captured["core"]["item_order"]
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_load_strips_legacy_inline_image_copies(tmp_path):
+    """Legacy rows stored one image data URL three times; loading keeps only
+    the item-artifacts copy the UI renders."""
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        data_url = "data:image/png;base64,AAAA" + "B" * 64
+        item = {
+            "item_id": "item-1",
+            "kind": "tool_result",
+            "payload": {"metadata": {"image_data_url": data_url, "path": "a.png"}},
+            "artifacts": [
+                {"artifact_id": "artifact-1", "metadata": {"image_data_url": data_url, "path": "a.png"}}
+            ],
+        }
+        metadata_state = {
+            "thread_id": "thread-1",
+            "revision": 3,
+            "snapshot_seq": 3,
+            "core": {
+                "thread_id": "thread-1",
+                "items": {},
+                "item_order": ["item-1"],
+                "artifacts": {
+                    "artifact-1": {
+                        "artifact_id": "artifact-1",
+                        "metadata": {"image_data_url": data_url, "path": "a.png"},
+                    }
+                },
+            },
+        }
+        async with session_factory() as db:
+            db.add(ThreadSnapshotRow(thread_id="thread-1", snapshot_seq=3, snapshot_json=metadata_state))
+            db.add(SnapshotItemRow(thread_id="thread-1", item_id="item-1", seq=1, item_json=item))
+            await db.commit()
+            store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow)
+            state = await store.load(db, "thread-1")
+
+            registry_artifact = state["core"]["artifacts"]["artifact-1"]
+            assert "image_data_url" not in registry_artifact["metadata"]
+            assert registry_artifact["metadata"]["path"] == "a.png"
+            loaded_item = state["core"]["items"]["item-1"]
+            assert "image_data_url" not in loaded_item["payload"]["metadata"]
+            # The UI renders from the item artifacts copy; it must survive.
+            assert loaded_item["artifacts"][0]["metadata"]["image_data_url"] == data_url
+
+            meta_only = await store.load_metadata(db, "thread-1")
+            assert meta_only["core"]["items"] == {}
+            assert "image_data_url" not in meta_only["core"]["artifacts"]["artifact-1"]["metadata"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_projection_writes_registry_without_inline_image(tmp_path):
+    """New projections keep the registry copy image-free from the start."""
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow)
+            data_url = "data:image/png;base64,CCCC"
+            event = RunItemEvent(
+                event_id="run-item-img",
+                kind="tool_result",
+                thread_id="thread-1",
+                run_id="run-1",
+                turn_id="turn-1",
+                item_id="item-img",
+                seq=1,
+                status="completed",
+                payload={"type": "dynamicToolCall", "metadata": {"image_data_url": data_url}},
+                artifacts=[
+                    {"artifact_id": "artifact-img", "metadata": {"image_data_url": data_url, "path": "b.png"}}
+                ],
+            )
+            envelope = _envelope(1, event.to_dict())
+            await store.apply(db, envelope)
+            state = await store.load(db, "thread-1")
+            assert state["core"]["artifacts"]["artifact-img"]["metadata"].get("path") == "b.png"
+            assert "image_data_url" not in state["core"]["artifacts"]["artifact-img"]["metadata"]
+            assert state["core"]["items"]["item-img"]["artifacts"][0]["metadata"]["image_data_url"] == data_url
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_read_file_image_preview_end_to_end_contract(tmp_path):
+    """read_file -> projection -> item snapshot -> model request, locked end to end.
+
+    Contract for a real image read:
+    * the payload metadata carries no image (nothing dead is persisted);
+    * the item artifact keeps the downscaled render preview the UI draws, and
+      that same preview is what the snapshot stores;
+    * the model's follow-up request still gets the untouched original through the
+      non-persisted ``model_image_data_url`` channel.
+    """
+    pytest.importorskip("PIL.Image")
+    import base64
+    import io
+    import random
+
+    from PIL import Image
+
+    from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
+    from lamtools_core.event.runtime_projection import runtime_fact_to_run_item_events
+    from lamtools_core.runtime import RuntimeState
+    from lamtools_core.tool import ToolCall
+    from lamtools_core.tool.workspace_files import WorkspaceReadOnlyTools
+
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    image = Image.new("RGB", (2400, 1200))
+    image.putdata([(random.randrange(256), random.randrange(256), random.randrange(256))
+                   for _ in range(2400 * 1200)])
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    raw = buffer.getvalue()
+    (work_root / "sheet.png").write_bytes(raw)
+
+    call = ToolCall(id="call-img", name="read_file", arguments={"path": "sheet.png"})
+    result = await WorkspaceReadOnlyTools(work_root).read_file(call)
+
+    original = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+    preview = result.artifacts[0].metadata["image_data_url"]
+    assert result.model_image_data_url == original          # model channel: original
+    assert "image_data_url" not in result.metadata          # payload: no image
+    assert preview.startswith("data:image/") and preview != original
+
+    # The kernel emits runtime.tool.finished with exactly this payload shape.
+    fact_payload = {
+        "turn_id": "turn-1",
+        "tool_name": call.name,
+        "call_id": call.id,
+        "status": result.status,
+        "content": result.content,
+        "error": result.error or "",
+        "artifacts": [artifact.to_dict() for artifact in result.artifacts],
+        "metadata": result.metadata,
+    }
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="tool",
+        source="core",
+        phase="runtime.tool.finished",
+        status="ok",
+        sequence=1,
+        preview=result.content[:80],
+        metadata={"payload": fact_payload, "turn_id": "turn-1"},
+    )
+    assert events is not None and len(events) == 1
+    event = events[0]
+    assert "image_data_url" not in event.payload["metadata"]
+    assert event.artifacts[0]["metadata"]["image_data_url"] == preview
+
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow)
+            await store.apply(db, _envelope(1, event.to_dict()))
+            state = await store.load(db, "thread-1")
+        items = state["core"]["items"]
+        assert len(items) == 1
+        item = next(iter(items.values()))
+        assert "image_data_url" not in item["payload"]["metadata"]
+        assert item["artifacts"][0]["metadata"]["image_data_url"] == preview
+
+        kit = CoreBaseAgentKit(
+            work_root=tmp_path, config=CoreBaseAgentConfig(capability="multimodal")
+        )
+        message = await kit.format_tool_result_for_model(RuntimeState(session_id="s"), call, result)
+        image_block = next(block for block in message.content if block["type"] == "image_url")
+        assert image_block["image_url"]["url"] == original
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_projection_writes_registry_without_content_body(tmp_path):
+    """The registry is an index, not a body store: the item copy keeps the
+    artifact content the UI and future readers need."""
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow)
+            body = "read file body " * 64
+            event = RunItemEvent(
+                event_id="run-item-text",
+                kind="tool_result",
+                thread_id="thread-1",
+                run_id="run-1",
+                turn_id="turn-1",
+                item_id="item-text",
+                seq=1,
+                status="completed",
+                payload={"type": "dynamicToolCall"},
+                artifacts=[
+                    {
+                        "artifact_id": "artifact-text",
+                        "kind": "file_read",
+                        "content": body,
+                        "metadata": {"path": "a.txt"},
+                    }
+                ],
+            )
+            envelope = _envelope(1, event.to_dict())
+            await store.apply(db, envelope)
+            state = await store.load(db, "thread-1")
+
+            registry_entry = state["core"]["artifacts"]["artifact-text"]
+            assert "content" not in registry_entry
+            assert registry_entry["kind"] == "file_read"
+            assert registry_entry["metadata"]["path"] == "a.txt"
+            # The item copy keeps the full body.
+            assert state["core"]["items"]["item-text"]["artifacts"][0]["content"] == body
+
+            meta_only = await store.load_metadata(db, "thread-1")
+            assert "content" not in meta_only["core"]["artifacts"]["artifact-text"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_natural_write_slims_legacy_registry_inline_image(tmp_path):
+    """A metadata row written before the registry dedup rule shrinks on the
+    thread's next natural projection write — no migration pass, no rewrite of
+    untouched history. The item copy the UI renders and the registry content
+    body (deliberately kept, see ``_slim_registry_inline_images``) survive."""
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        data_url = "data:image/png;base64,LEGACY" + "B" * 64
+        body = "legacy file body " * 32
+        image_entry = {
+            "artifact_id": "artifact-1",
+            "kind": "file_read",
+            "content": body,
+            "metadata": {"image_data_url": data_url, "path": "a.png"},
+        }
+        legacy_metadata = {
+            "thread_id": "thread-1",
+            "revision": 3,
+            "snapshot_seq": 3,
+            "artifacts": {"artifact-1": dict(image_entry)},
+            "core": {
+                "thread_id": "thread-1",
+                "items": {},
+                "item_order": ["item-1"],
+                "artifacts": {"artifact-1": dict(image_entry)},
+            },
+        }
+        legacy_item = {
+            "item_id": "item-1",
+            "kind": "tool_result",
+            "payload": {"metadata": {"image_data_url": data_url, "path": "a.png"}},
+            "artifacts": [dict(image_entry)],
+        }
+        async with session_factory() as db:
+            db.add(ThreadSnapshotRow(thread_id="thread-1", snapshot_seq=3, snapshot_json=legacy_metadata))
+            db.add(SnapshotItemRow(thread_id="thread-1", item_id="item-1", seq=1, item_json=legacy_item))
+            await db.commit()
+
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow)
+            event = RunItemEvent(
+                event_id="run-item-2",
+                kind="message",
+                thread_id="thread-1",
+                run_id="run-1",
+                turn_id="turn-1",
+                item_id="item-2",
+                seq=4,
+                status="completed",
+                payload={"role": "assistant", "content": "next turn"},
+            )
+            await store.apply(db, _envelope(4, event.to_dict()))
+            await db.commit()
+
+        async with session_factory() as db:
+            row = await db.get(ThreadSnapshotRow, "thread-1")
+            for entry in (
+                row.snapshot_json["core"]["artifacts"]["artifact-1"],
+                row.snapshot_json["artifacts"]["artifact-1"],
+            ):
+                assert "image_data_url" not in entry["metadata"]
+                assert entry["metadata"]["path"] == "a.png"
+                assert entry["content"] == body
+            # The untouched item row keeps the copy the UI renders.
+            item_row = await db.get(SnapshotItemRow, ("thread-1", "item-1"))
+            assert item_row.item_json["artifacts"][0]["metadata"]["image_data_url"] == data_url
+    finally:
+        await engine.dispose()

@@ -753,11 +753,16 @@ def runtime_fact_to_run_item_events(
             key=len,
             default="",
         )
+        if completed_status == "cancelled":
+            # The longest-text pick lets a raw English error string ("cancelled")
+            # outrun the user-facing summary; a cancelled turn always speaks the
+            # projected summary ("任务已取消。" or a named failure's message).
+            message = str(fact.summary or "") or message
         completed_payload: dict[str, Any] = {
             "type": "turn",
             "status": completed_status,
-            "raw_end_reason": payload.get("decision") or payload.get("error") or completed_status,
-            "message": message,
+            "raw_end_reason": _terminal_end_reason(payload, completed_status),
+            "message": _terminal_message(payload, message),
         }
         runtime_metrics = payload.get("runtime_metrics") if isinstance(payload.get("runtime_metrics"), dict) else None
         if runtime_metrics is not None:
@@ -777,6 +782,32 @@ def runtime_fact_to_run_item_events(
         ]
 
     return None
+
+
+def _terminal_end_reason(payload: dict[str, Any], fallback: str) -> str:
+    """Machine-readable reason a turn ended.
+
+    A named failure (host memory exhaustion, for instance) publishes its own
+    code; it is more useful — and far shorter — than the raw error string the
+    generic fallback would surface.
+    """
+    code = payload.get("failure_code")
+    if isinstance(code, str) and code.strip():
+        return code.strip()
+    return str(payload.get("decision") or payload.get("error") or fallback)
+
+
+def _terminal_message(payload: dict[str, Any], fallback: str) -> str:
+    """User-facing text for a terminal item.
+
+    A named failure publishes an explanation (what happened, when the turn
+    resumes); otherwise the longest text on the event stands in, which for a
+    successful turn is the final answer.
+    """
+    message = payload.get("failure_message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    return fallback
 
 
 def _payload(fact: RuntimeProjectionInput) -> dict[str, Any]:

@@ -855,3 +855,83 @@ describe('mid-turn guidance projection', () => {
     expect(guidePartOf(messages)?.content).toBe('改成蓝色')
   })
 })
+
+describe('cancelled turn explanation collapse', () => {
+  /** A legacy thread where Stop, force reset and crash recovery each appended
+   *  their own terminal status row, plus a retry bar the crash froze mid-run. */
+  function stackedCancelSnapshot(): CoreAppSnapshot {
+    const items = {
+      'turn-1:running': {
+        item_id: 'turn-1:running',
+        turn_id: 'turn-1',
+        kind: 'status',
+        status: 'running',
+        payload: { type: 'turn', status: 'running' },
+      },
+      'turn-1:model-retry:1': {
+        item_id: 'turn-1:model-retry:1',
+        turn_id: 'turn-1',
+        kind: 'tool_result',
+        status: 'cancelled',
+        content: '模型请求重试中 (1/9)',
+        payload: { type: 'status', label: '模型请求重试中 (1/9)' },
+      },
+      'turn-1:force_reset': {
+        item_id: 'turn-1:force_reset',
+        turn_id: 'turn-1',
+        kind: 'status',
+        status: 'cancelled',
+        payload: { type: 'turn', status: 'cancelled', raw_end_reason: 'force_reset', message: 'Force reset to standby' },
+      },
+      'turn-1:unexpected_shutdown': {
+        item_id: 'turn-1:unexpected_shutdown',
+        turn_id: 'turn-1',
+        kind: 'status',
+        status: 'cancelled',
+        payload: { type: 'turn', status: 'cancelled', raw_end_reason: 'unexpected_shutdown', message: 'Recovered after unexpected shutdown' },
+      },
+      'turn-1:terminal': {
+        item_id: 'turn-1:terminal',
+        turn_id: 'turn-1',
+        kind: 'status',
+        status: 'cancelled',
+        payload: { type: 'turn', status: 'cancelled', raw_end_reason: 'user_interrupt', message: '任务已取消。' },
+      },
+    }
+    return hydrateSnapshot({
+      thread_id: 'thread-cancel',
+      snapshot_seq: 9,
+      status: 'cancelled',
+      turns: {
+        'turn-1': { turn_id: 'turn-1', status: 'cancelled', items: Object.keys(items) },
+      },
+      core: {
+        thread_id: 'thread-cancel',
+        snapshot_seq: 9,
+        status: 'cancelled',
+        item_order: Object.keys(items),
+        turns: {
+          'turn-1': { turn_id: 'turn-1', status: 'cancelled', items: Object.keys(items) },
+        },
+        items,
+      },
+    } satisfies CoreAppSnapshot)
+  }
+
+  it('keeps only one terminal explanation row per cancelled turn', () => {
+    const messages = selectChatMessages(stackedCancelSnapshot())
+    const assistant = messages.find(message => message.role === 'assistant')
+    const terminalRows = (assistant?.parts ?? []).filter(
+      part => part.type === 'status' && part.status === 'cancelled' && typeof part.raw_end_reason === 'string',
+    )
+    expect(terminalRows).toHaveLength(1)
+    // The newest row wins.
+    expect(terminalRows[0]?.item_id).toBe('turn-1:terminal')
+  })
+
+  it('hides a retry bar the turn can no longer answer', () => {
+    const messages = selectChatMessages(stackedCancelSnapshot())
+    const assistant = messages.find(message => message.role === 'assistant')
+    expect((assistant?.parts ?? []).some(part => String(part.item_id).includes(':model-retry:'))).toBe(false)
+  })
+})

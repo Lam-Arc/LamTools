@@ -1282,3 +1282,40 @@ def test_runtime_payload_helpers_parse_usage_and_visible_content():
         preview="",
         summary="",
     ) == "visible"
+
+
+def test_runtime_projection_keeps_inline_image_only_on_artifacts():
+    """The payload metadata copy of an inline image is dropped; the artifact
+    copy the UI renders survives (snapshots must not store images twice)."""
+    data_url = "data:image/png;base64,AAAA"
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="tool",
+        source="core",
+        phase="runtime.tool.finished",
+        status="ok",
+        sequence=8,
+        preview="done",
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "tool_name": "read_file",
+                "call_id": "call-1",
+                "content": "image saved",
+                "metadata": {"image_data_url": data_url, "path": "a.png"},
+                "artifacts": [
+                    {"kind": "image", "path": "a.png", "metadata": {"image_data_url": data_url, "path": "a.png"}}
+                ],
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "tool_result"
+    assert "image_data_url" not in event.payload["metadata"]
+    assert event.payload["metadata"]["path"] == "a.png"
+    assert event.artifacts[0]["metadata"]["image_data_url"] == data_url

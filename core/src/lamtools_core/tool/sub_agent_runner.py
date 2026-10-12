@@ -29,7 +29,11 @@ from lamtools_core.skills import SkillRegistry
 from lamtools_core.sub_agent import SubAgentEventForwardingSink
 from lamtools_core.sub_session import normalize_sub_session_agent_name
 from lamtools_core.tool import ToolCall, ToolSpec
-from lamtools_core.tool.approval_continuation import ApprovedToolExecution, approved_tool_continuation_prompt
+from lamtools_core.tool.approval_continuation import (
+    ApprovedToolExecution,
+    approved_tool_continuation_prompt,
+    approved_tool_failure_continuation_prompt,
+)
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
 from lamtools_core.tool.loadtools import LoadTools, mode_names
 from lamtools_core.tool.mcp_tools import MCPToolCaller
@@ -947,7 +951,9 @@ class KernelSubAgentRunner:
             run_id=state.run_id,
             tags=["tool"],
         ))
-        if tool_result.status != "ok":
+        if tool_result.status == "blocked":
+            # A refused call cannot be continued with; a *failed* result is a
+            # correctable tool failure and is handed back to the child below.
             raise RuntimeError(tool_result.error or tool_result.content or "Approved sub-agent tool failed")
 
         state.metadata.pop("pending_approval", None)
@@ -969,13 +975,26 @@ class KernelSubAgentRunner:
         approved_tool = ApprovedToolExecution(
             tool_name=call.name,
             tool_args=call.arguments,
-            tool_content=tool_result.content or tool_result.error,
-            tool_status="completed",
+            tool_content=(
+                (tool_result.content or tool_result.error)
+                + (
+                    f"\nerror_code: {tool_result.error_code}"
+                    if tool_result.error_code
+                    else ""
+                )
+            ),
+            tool_status="completed" if tool_result.status == "ok" else "failed",
         )
-        continuation = approved_tool_continuation_prompt(
-            original_task=task,
-            approved_tool=approved_tool,
-        )
+        if tool_result.status == "failed":
+            continuation = approved_tool_failure_continuation_prompt(
+                original_task=task,
+                approved_tool=approved_tool,
+            )
+        else:
+            continuation = approved_tool_continuation_prompt(
+                original_task=task,
+                approved_tool=approved_tool,
+            )
         async def continue_child() -> SubAgentRunResult:
             resume_late_context = (
                 await supervisor.request_local_context(agent)

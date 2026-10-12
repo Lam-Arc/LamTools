@@ -38,7 +38,10 @@ export interface CoreAppSnapshot {
 }
 
 export interface CoreHistoryPage {
+  /** 只作展示的度量：本页声明的字符预算。分页以**完整回合**为单位（turn_limit），
+   *  字符数不参与裁剪、也不构成体积护栏——回合不会被切开，超大回合照原样整回下发。 */
   char_limit: number
+  /** 只作展示的度量：本页实测字符数；同样不参与裁剪、不设上限。 */
   character_count: number
   turn_limit?: number
   turn_count?: number

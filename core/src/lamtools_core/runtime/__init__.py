@@ -223,6 +223,20 @@ class InMemoryRuntimeStateStore:
                 return state
         return None
 
+    async def find_threads_with_metadata_key(self, key: str) -> list[str]:
+        """Thread ids whose state metadata carries ``key`` (mirrors the SQL store)."""
+        if not key:
+            return []
+        return [
+            session_id
+            for session_id, state in self._states.items()
+            if isinstance(state.metadata, dict) and state.metadata.get(key) is not None
+        ]
+
+    async def list_thread_ids(self) -> list[str]:
+        """Every thread with a state (mirrors the SQL store)."""
+        return list(self._states.keys())
+
     def clear(self) -> None:
         self._states.clear()
         self._history.clear()

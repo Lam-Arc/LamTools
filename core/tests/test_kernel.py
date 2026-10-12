@@ -5,7 +5,7 @@ CoreLoopKernel behavior without any business logic.
 """
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import pytest
@@ -4723,6 +4723,7 @@ class TestKernelCancellation:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+        await kernel.await_background_persistence()
 
         saved = await store.get("externally-cancelled")
         assert saved is not None
@@ -4786,6 +4787,7 @@ class TestKernelCancellation:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+        await kernel.await_background_persistence()
 
         history = await store.get_history("stopped-turn-history")
         assert [message["role"] for message in history] == ["user", "assistant", "tool"]
@@ -4824,6 +4826,7 @@ class TestKernelCancellation:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+        await kernel.await_background_persistence()
 
         # The assistant call is kept — only its result never arrived.
         persisted = await store.get_history("stopped-dangling-call")
@@ -5391,3 +5394,316 @@ class TestApprovalRequestMessage:
         message = CoreLoopKernel._approval_request_message(call)
 
         assert "git push" in message
+
+
+class _LivePresetToolbox:
+    """Stands in for ``CoreToolbox.prepare_call`` against live session state.
+
+    ``prepare_call`` refreshes the approval gate from the session's current
+    permission state, so after a preset switch it returns the call with
+    ``requires_approval=False`` for anything the new preset auto-approves.
+    """
+
+    def __init__(self, auto_approve: set[str] | None = None) -> None:
+        self.auto_approve = set(auto_approve or set())
+        self.prepared: list[str] = []
+
+    def tool_specs(self) -> list[Any]:
+        return []
+
+    def prepare_call(self, call: ToolCall) -> ToolCall:
+        self.prepared.append(call.name)
+        if call.name not in self.auto_approve:
+            return call
+        approval = {"blocked": False, "requires_approval": False, "auto_approved": True}
+        return replace(
+            call,
+            requires_approval=False,
+            metadata={**dict(call.metadata or {}), "approval": approval},
+        )
+
+
+class TestLivePermissionRefreshAtTheWaitingGate:
+    """A preset switch must not leave a stale approval card behind.
+
+    The call carries the ``requires_approval`` decision computed when it was
+    parsed.  If the session preset changed in between, the waiting gate
+    re-evaluates the call against the live permissions: a preset that already
+    covers it must not surface a card, while ``question`` keeps its card
+    because it is a user-input request, never a permission decision.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_live_preset_that_covers_the_call_emits_no_card(self):
+        toolbox = _LivePresetToolbox(auto_approve={"write_file"})
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                reply="",
+                tool_calls=[ToolCall(id="call-write", name="write_file", arguments={"path": "a.md"}, requires_approval=True)],
+                tool_results=[ToolResult(call_id="call-write", name="write_file", status="ok", content="written")],
+                decision="continue",
+            ),
+            MockKitStep(reply="done", decision="done"),
+        ])
+        kit.toolbox = toolbox
+        sink = CollectingEventSink()
+        kernel = _make_kernel(kit, event_sink=sink)
+
+        result = await kernel.run(_make_turn_input())
+
+        assert toolbox.prepared == ["write_file"], "the gate did not refresh the live permission state"
+        assert [e for e in sink.events if e.name == "runtime.approval_request"] == []
+        assert result.decision == "done"
+        assert result.state is not None
+        assert "pending_approval" not in result.state.metadata
+
+    @pytest.mark.asyncio
+    async def test_a_question_keeps_its_card_even_when_the_preset_covers_everything(self):
+        toolbox = _LivePresetToolbox(auto_approve={"question"})
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                reply="",
+                tool_calls=[ToolCall(id="call-ask", name="question", arguments={"question": "which one?"}, requires_approval=True)],
+                decision="wait",
+            ),
+        ])
+        kit.toolbox = toolbox
+        sink = CollectingEventSink()
+        kernel = _make_kernel(kit, event_sink=sink)
+
+        result = await kernel.run(_make_turn_input())
+
+        assert toolbox.prepared == [], "question must never be routed through the permission refresh"
+        assert len([e for e in sink.events if e.name == "runtime.approval_request"]) == 1
+        assert result.decision == "wait"
+        assert result.state is not None
+        pending = result.state.metadata.get("pending_approval")
+        assert isinstance(pending, dict) and pending.get("status") == "waiting"
+
+    @pytest.mark.asyncio
+    async def test_a_switch_landing_after_the_card_is_persisted_is_released_on_the_spot(self):
+        """The switch side looked before the card was durable; the post-persist
+        re-check must catch it and release instead of emitting a stale card."""
+
+        class _FlipOnSecondRefreshToolbox:
+            """First prepare_call (pre-emission) still asks; the second (after
+            the card is durable) already covers the call — exactly the window
+            the switch side could not see."""
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def tool_specs(self) -> list[Any]:
+                return []
+
+            def prepare_call(self, call: ToolCall) -> ToolCall:
+                self.calls += 1
+                if self.calls == 1:
+                    return call
+                return replace(
+                    call,
+                    requires_approval=False,
+                    metadata={
+                        **dict(call.metadata or {}),
+                        "approval": {"blocked": False, "requires_approval": False, "auto_approved": True},
+                    },
+                )
+
+        toolbox = _FlipOnSecondRefreshToolbox()
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                reply="",
+                tool_calls=[ToolCall(id="call-write", name="write_file", arguments={"path": "a.md"}, requires_approval=True)],
+                tool_results=[ToolResult(call_id="call-write", name="write_file", status="ok", content="written")],
+                decision="continue",
+            ),
+            MockKitStep(reply="done", decision="done"),
+        ])
+        kit.toolbox = toolbox
+        sink = CollectingEventSink()
+        kernel = _make_kernel(kit, event_sink=sink)
+
+        result = await kernel.run(_make_turn_input())
+
+        assert toolbox.calls == 2, "the post-persist re-check did not run"
+        assert [e for e in sink.events if e.name == "runtime.approval_request"] == []
+        assert [
+            e for e in sink.events
+            if e.name == "runtime.part"
+            and e.payload.get("part_id") == "part-call-write"
+            and e.payload.get("status") == "waiting"
+        ] == []
+        assert result.decision == "done"
+        assert result.state is not None
+        assert "pending_approval" not in result.state.metadata
+        # The released call actually ran rather than being left blocked.
+        assert result.steps[0].tool_steps[0].result.status == "ok"
+
+
+class _MemoryExhaustedKit(MockRuntimeKit):
+    """Kit whose context build runs the machine out of memory (the step body)."""
+
+    async def build_context(self, state, turn_input, history, step_index):
+        raise MemoryError()
+
+
+class TestMemoryExhaustionInterruption:
+    """A host-memory crash is a named failure, not "Unexpected error: ".
+
+    The interruption has to explain itself and arm the auto resume, and it has
+    to survive on the state (not only in the step error) because every terminal
+    writer — kernel event, app-layer failure record, startup/periodic
+    reconcile — reads it from there.
+    """
+
+    @pytest.mark.asyncio
+    async def test_memory_error_is_named_and_arms_the_resume(self, isolated_config_root):
+        from lamtools_core.runtime.memory_guard import (
+            HOST_MEMORY_EXHAUSTED,
+            pending_memory_resume,
+        )
+
+        state_store = InMemoryStateStore()
+        sink = CollectingEventSink()
+        kernel = _make_kernel(_MemoryExhaustedKit(), state_store=state_store, event_sink=sink)
+
+        result = await kernel.run(_make_turn_input(session_id="thread-oom"))
+
+        assert result.decision == "failed"
+        assert "内存不足" in result.error
+        assert "4 GB" in result.error
+
+        state = await state_store.get("thread-oom")
+        assert state is not None
+        assert state.status == "failed"
+        assert state.metadata["failure_code"] == HOST_MEMORY_EXHAUSTED
+        assert state.metadata["failure_message"] == result.error
+        pending = pending_memory_resume(state)
+        assert pending is not None and pending["turn_id"] == state.run_id
+
+        # The terminal event carries the code and the explanation onward.
+        failed = [e for e in sink.events if e.name == "runtime.failed"]
+        assert len(failed) == 1
+        assert failed[0].payload["failure_code"] == HOST_MEMORY_EXHAUSTED
+        assert failed[0].payload["failure_message"] == result.error
+
+    @pytest.mark.asyncio
+    async def test_spent_resume_budget_stops_promising(self, isolated_config_root):
+        from lamtools_core.runtime.memory_guard import (
+            MEMORY_RESUME_MAX_ATTEMPTS,
+            HOST_MEMORY_EXHAUSTED,
+            pending_memory_resume,
+        )
+
+        state_store = InMemoryStateStore()
+        await state_store.save(
+            RuntimeState(
+                session_id="thread-oom",
+                run_id="turn-old",
+                status="idle",
+                # The budget is counted in interruptions: MAX of them already
+                # happened, so this one must not promise another resume.
+                metadata={"memory_resume_attempts": MEMORY_RESUME_MAX_ATTEMPTS},
+            )
+        )
+        kernel = _make_kernel(_MemoryExhaustedKit(), state_store=state_store)
+
+        result = await kernel.run(_make_turn_input(session_id="thread-oom"))
+
+        assert result.decision == "failed"
+        assert "不再自动继续" in result.error
+        state = await state_store.get("thread-oom")
+        assert state is not None
+        assert state.metadata["failure_code"] == HOST_MEMORY_EXHAUSTED
+        # Still armed on purpose: the watchdog decides, and it disarms when the
+        # budget is spent so the state stays truthful in the meantime.
+        assert pending_memory_resume(state) is not None
+
+    @pytest.mark.asyncio
+    async def test_a_clean_turn_resets_the_streak(self, isolated_config_root):
+        from lamtools_core.runtime.memory_guard import memory_resume_attempts
+
+        state_store = InMemoryStateStore()
+        await state_store.save(
+            RuntimeState(
+                session_id="test-session",
+                run_id="turn-old",
+                status="idle",
+                metadata={"memory_resume_attempts": 2},
+            )
+        )
+        kernel = _make_kernel(MockRuntimeKit(steps=[MockKitStep(decision="done")]), state_store=state_store)
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "done"
+        state = await state_store.get("test-session")
+        assert state is not None
+        assert memory_resume_attempts(state) == 0
+
+    @pytest.mark.asyncio
+    async def test_a_new_turn_disarms_a_pending_resume(self, isolated_config_root):
+        """A turn the user sent by hand must cancel the armed auto resume."""
+        from lamtools_core.runtime.memory_guard import (
+            HOST_MEMORY_EXHAUSTED,
+            pending_memory_resume,
+        )
+
+        state_store = InMemoryStateStore()
+        await state_store.save(
+            RuntimeState(
+                session_id="test-session",
+                run_id="turn-old",
+                status="failed",
+                metadata={
+                    "failure_code": HOST_MEMORY_EXHAUSTED,
+                    "memory_resume": {"thread_id": "test-session", "turn_id": "turn-old"},
+                },
+            )
+        )
+        kernel = _make_kernel(MockRuntimeKit(steps=[MockKitStep(decision="done")]), state_store=state_store)
+
+        await kernel.run(_make_turn_input())
+
+        state = await state_store.get("test-session")
+        assert state is not None
+        assert pending_memory_resume(state) is None
+
+
+class TestStaleFailureDetail:
+    """A previous failure's explanation must not leak into a later turn."""
+
+    @pytest.mark.asyncio
+    async def test_a_new_turn_does_not_advertise_the_old_reason(self, isolated_config_root):
+        from lamtools_core.runtime.memory_guard import HOST_MEMORY_EXHAUSTED
+
+        state_store = InMemoryStateStore()
+        await state_store.save(
+            RuntimeState(
+                session_id="test-session",
+                run_id="turn-old",
+                status="failed",
+                metadata={
+                    "failure_code": HOST_MEMORY_EXHAUSTED,
+                    "failure_message": "本机内存不足，本轮已中断。",
+                    "failure_turn_id": "turn-old",
+                },
+            )
+        )
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            MockRuntimeKit(steps=[MockKitStep(decision="done")]),
+            state_store=state_store,
+            event_sink=sink,
+        )
+
+        await kernel.run(_make_turn_input())
+
+        state = await state_store.get("test-session")
+        assert state is not None
+        assert state.metadata.get("failure_code") is None
+        # Nothing claims the (successful) turn was a memory interruption.
+        failed = [e for e in sink.events if e.name == "runtime.failed"]
+        assert failed == []
+        done = [e for e in sink.events if e.name == "runtime.done"]
+        assert done and "failure_code" not in done[0].payload

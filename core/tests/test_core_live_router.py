@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -314,6 +315,79 @@ def test_core_live_connection_drops_message_when_outbound_full() -> None:
     asyncio.run(run())
 
 
+def test_core_live_sender_warns_when_outbound_message_exceeds_client_cap(caplog) -> None:
+    """An oversized page is still a local send success, so it must be logged with
+    its size and thread/turn identity — otherwise the peer's 1009 abort looks
+    like an unexplained disconnect (2026-10-12 oversized-response incident)."""
+    from lamtools_core.app import live_router as router_module
+
+    class RecordingWebSocket:
+        def __init__(self) -> None:
+            self.texts: list[str] = []
+
+        async def send_text(self, payload: str) -> None:
+            self.texts.append(payload)
+
+        async def send_json(self, message: dict) -> None:  # pragma: no cover - send_text wins
+            raise AssertionError("send_text should be preferred so the payload is serialized once")
+
+    async def run() -> str:
+        websocket = RecordingWebSocket()
+        connection = CoreLiveConnection(websocket, context=SimpleNamespace())
+        connection._request_methods["77"] = "thread.resume"
+        connection.outbound.put_nowait({
+            "id": 77,
+            "result": {
+                "thread": {"id": "thread-big"},
+                "snapshot": {
+                    "thread_id": "thread-big",
+                    "history_page": {"turn_count": 10},
+                },
+                "content": "x" * router_module.LARGE_OUTBOUND_MESSAGE_BYTES,
+            },
+        })
+        sender = asyncio.create_task(connection._sender())
+        for _ in range(50):
+            if websocket.texts:
+                break
+            await asyncio.sleep(0)
+        sender.cancel()
+        await asyncio.gather(sender, return_exceptions=True)
+        assert len(websocket.texts) == 1
+        assert '"thread-big"' in websocket.texts[0]
+        return websocket.texts[0]
+
+    with caplog.at_level(logging.WARNING, logger="lamtools_core.app.live_router"):
+        asyncio.run(run())
+
+    assert "outbound message is" in caplog.text
+    assert "thread.resume" in caplog.text
+    assert "thread=thread-big" in caplog.text
+    assert "page_turns=10" in caplog.text
+
+
+def test_describe_large_outbound_names_method_thread_and_turn() -> None:
+    from lamtools_core.app.live_router import _describe_large_outbound
+
+    notification = _describe_large_outbound(
+        {"method": "core/runItem", "params": {"thread_id": "t-1", "turn_id": "turn-1"}},
+        5_000_000,
+        {},
+    )
+    assert "core/runItem" in notification
+    assert "thread=t-1" in notification
+    assert "turn=turn-1" in notification
+
+    response = _describe_large_outbound(
+        {"id": 3, "result": {"snapshot": {"thread_id": "thread-x", "history_page": {"turn_count": 7}}}},
+        5_000_000,
+        {"3": "thread.read"},
+    )
+    assert "thread.read" in response
+    assert "thread=thread-x" in response
+    assert "page_turns=7" in response
+
+
 def _run_item_event(event_id: str, delta: str, *, kind: str = "message") -> dict:
     return {
         "event_id": event_id,
@@ -509,16 +583,23 @@ def test_core_live_resume_response_exposes_page_cursor() -> None:
         async def load(self, _db, thread_id: str):
             return {"thread_id": thread_id, "snapshot_seq": 1201}
 
-    async def run() -> dict:
+    async def run(params: dict) -> dict:
         outcome = await handle_thread_resume_operation(
             request_id=1,
-            params={"thread_id": "thread-1", "last_seen_seq": 0},
+            params={"thread_id": "thread-1", **params},
             context=SimpleNamespace(session_factory=SessionFactory, persistence=Persistence()),
         )
         return outcome.response["result"]
 
-    result = asyncio.run(run())
+    # Default: the snapshot is authoritative through seq 1201, so the journal
+    # delta starts past it and carries nothing the client already received.
+    result = asyncio.run(run({"last_seen_seq": 0}))
+    assert result["events"] == []
+    assert result["has_more"] is False
+    assert result["next_after_seq"] == 1201
 
+    # Replay-style clients page the raw journal with the same cursors.
+    result = asyncio.run(run({"last_seen_seq": 0, "full_journal": True}))
     assert len(result["events"]) == 500
     assert result["has_more"] is True
     assert result["next_after_seq"] == 500

@@ -60,6 +60,7 @@ from .factory import add_spa_fallback, create_app
 from .live_hub import CoreAppEventHub
 from .live_member import DefaultCoreLiveMemberHooks
 from .live_operations import CoreLiveContext, CoreLiveOperationHost, recover_stale_active_turns
+from .memory_resume_supervisor import MemoryResumeSupervisor
 from .project_store import ActiveProjectSessionsError, CoreProjectStore
 from lamtools_core.artifact import ArtifactRegistry, ArtifactStore, kind_from_mime
 from lamtools_core.tool.command_runner import warm_command_shell
@@ -593,6 +594,16 @@ def create_core_agent_http_app(
         _logger.info("[startup] stale-turn recovery ready in %.3fs", perf_counter() - phase_started)
         await arrange_runner.start()
         await observer_supervisor.start()
+        # Watches host memory so a turn stopped by memory exhaustion continues by
+        # itself once the machine can afford it, and closes the turns whose
+        # recorded ending never reached the snapshot (a memory crash usually
+        # stops the writer between the two).
+        memory_resume_supervisor = MemoryResumeSupervisor(context=live_context())
+        app_state["memory_resume_supervisor"] = memory_resume_supervisor
+        try:
+            await memory_resume_supervisor.start()
+        except BaseException:
+            _logger.exception("[startup] memory resume supervisor failed to start (non-fatal)")
         _logger.info("[startup] backend ready in %.3fs", perf_counter() - startup_started)
 
         # Optional plugin backends are loaded and started by
@@ -605,6 +616,9 @@ def create_core_agent_http_app(
 
         await shutdown_sub_agent_supervisors()
         await shutdown_plugin_backends(app_state.get("plugin_runtimes") or [])
+        memory_resume_supervisor = app_state.get("memory_resume_supervisor")
+        if memory_resume_supervisor is not None:
+            await memory_resume_supervisor.stop()
         observer_supervisor = app_state.get("observer_supervisor")
         if observer_supervisor is not None:
             await observer_supervisor.stop()

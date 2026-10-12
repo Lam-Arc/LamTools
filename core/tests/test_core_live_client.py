@@ -71,7 +71,7 @@ async def test_core_app_server_client_connects_initializes_and_resumes_thread():
     assert websocket.sent[2] == {
         "id": 3,
         "method": "thread/resume",
-        "params": {"thread_id": "thread-1", "last_seen_seq": 7},
+        "params": {"thread_id": "thread-1", "last_seen_seq": 7, "full_journal": True},
     }
     await websocket.inbound.put({
         "id": 3,
@@ -332,3 +332,44 @@ async def test_core_app_server_client_passes_configured_path_and_bearer_token_to
     await client._connect_websocket()
 
     assert calls == [("wss://core.test/custom/live", {"Authorization": "Bearer secret-token"})]
+
+
+@pytest.mark.asyncio
+async def test_builtin_client_raises_aiohttp_single_message_cap(monkeypatch):
+    """aiohttp defaults to a 4 MiB single-message cap, which aborted the CLI on a
+    large snapshot page (one turn can be tens of MB); the built-in client must
+    ask for the wider cap instead."""
+    import aiohttp
+
+    from lamtools_core.app import live_client as live_client_module
+
+    captured: dict[str, object] = {}
+
+    class FakeWebSocket:
+        closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class FakeSession:
+        closed = False
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def ws_connect(self, url: str, **kwargs):
+            captured["url"] = url
+            captured.update(kwargs)
+            return FakeWebSocket()
+
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+
+    client = CoreAppServerClient("http://core.test", path="/api/core/app-server")
+    await client._connect_websocket()
+
+    assert captured["url"] == "ws://core.test/api/core/app-server"
+    assert captured["max_msg_size"] == live_client_module.CLI_WEBSOCKET_MAX_MESSAGE_BYTES
+    assert captured["max_msg_size"] > 4 * 1024 * 1024

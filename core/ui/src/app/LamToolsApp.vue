@@ -2235,8 +2235,13 @@ workbench.setComposerCallbacks({
   onError: (text) => { composerErrorText.value = text },
   onStatusText: setRuntimeStatus,
   onTurnStarted: refreshSessions,
-  onSubmitStart: () => {
-    pendingPlaceholder.value = { id: `placeholder-${Date.now()}`, content: '…' }
+  onSubmitStart: (submittedText: string) => {
+    const preview = submittedText.trim()
+    pendingPlaceholder.value = {
+      id: `placeholder-${Date.now()}`,
+      // 发送即见原文（长文本截断预览）：完整气泡等服务器回执的正式消息替换。
+      content: preview ? (preview.length > 400 ? `${preview.slice(0, 400)}…` : preview) : '…',
+    }
   },
   // 提交一有结果就收掉占位：引导与排队不会立刻产生用户消息，只等消息出现会一直挂着
   onSubmitSettled: () => { pendingPlaceholder.value = null },

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -8,7 +9,7 @@ import os
 import sys
 import time as time_module
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -35,6 +36,12 @@ from lamtools_core.runtime import (
 from lamtools_core.runtime.background_processes import (
     default_background_process_registry,
     status_to_dict,
+)
+from lamtools_core.runtime.memory_guard import (
+    HOST_MEMORY_EXHAUSTED,
+    ensure_pending_memory_resume,
+    memory_exhausted_message_for,
+    state_is_memory_exhaustion,
 )
 from lamtools_core.tool.approval import load_access_tools, normalize_command_policies
 from lamtools_core.tool.approval import PermissionMode, TierTools
@@ -88,6 +95,23 @@ from .runtime_permissions import (
 
 
 TERMINAL_TURN_STATUSES = {"completed", "failed", "cancelled", "skipped"}
+# History paging bounds.
+#
+# ``char_limit`` is *not* a size guard.  Every live paging path
+# (thread.resume / thread.read / thread.history) passes a ``turn_limit`` (default
+# 10), and in turn-limit mode a page is a whole number of complete turns that the
+# character budget never splits — it only feeds the informational
+# ``history_page.char_limit`` / ``character_count`` fields.  So
+# ``MAX_THREAD_HISTORY_CHAR_LIMIT`` does NOT bound the response body: one
+# oversized turn can exceed it arbitrarily (see the "单个超大回合" section in
+# docs/core-ui-streaming-perf.md).  Do not rely on it as a byte/size guard.
+#
+# If a real size budget is ever wanted it must (a) be a byte limit measured after
+# the page is assembled, (b) be able to cut *inside* a turn while keeping tool
+# calls paired with their results and the before_item_id/before_seq cursor
+# meaningful, and (c) raise the receiving clients' single-message caps with it
+# (aiohttp's max_msg_size and Node/undici's non-configurable permessage-deflate
+# decompressed limit).  That is a new design, not a retune of this figure.
 DEFAULT_THREAD_HISTORY_CHAR_LIMIT = 200_000
 MAX_THREAD_HISTORY_CHAR_LIMIT = 1_000_000
 DEFAULT_THREAD_HISTORY_TURN_LIMIT = 10
@@ -714,20 +738,37 @@ async def handle_thread_resume_operation(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
         )
     include_snapshot = params.get("include_snapshot") is not False
+    full_journal = params.get("full_journal") is True
     page_limit = max(1, min(_int_param(params.get("limit"), default=500), 500))
     async with context.session_factory() as db:
-        # Resume is a journal catch-up operation.  A snapshot is an optional
-        # convenience projection, not a replacement for the ordered event
-        # delta: clients use the delta for paging, deduplication and live
-        # continuity even when they also request the latest snapshot.
-        events = await context.persistence.list_after(
-            db, thread_id=thread_id, after_seq=after_seq, limit=page_limit
-        )
+        # The snapshot is the durable authority for everything up to its
+        # snapshot_seq.  Journal paging therefore starts after that seq unless
+        # the client opts out of the snapshot or explicitly asks for the raw
+        # journal (replay-style clients that rebuild state from events).
+        # Re-delivering events the snapshot already covers made every session
+        # switch fetch and serialize up to 500 stale events (~8.5MB on long
+        # threads) that snapshot-hydrating clients immediately discard.
         snapshot = await context.persistence.load(db, thread_id)
+        journal_after_seq = after_seq
+        if include_snapshot and not full_journal:
+            projected_seq = _int_param(
+                snapshot.get("snapshot_seq") if isinstance(snapshot, dict) else None,
+                default=0,
+            )
+            journal_after_seq = max(after_seq, projected_seq)
+        events = await context.persistence.list_after(
+            db, thread_id=thread_id, after_seq=journal_after_seq, limit=page_limit
+        )
     await _reconcile_cancelled_runtime_state(context=context, thread_id=thread_id, snapshot=snapshot)
-    last_event_seq = max((event.seq for event in events), default=after_seq)
+    last_event_seq = max((event.seq for event in events), default=journal_after_seq)
     snapshot_seq = _int_param(snapshot.get("snapshot_seq") if isinstance(snapshot, dict) else None, default=last_event_seq)
-    has_more = bool(events) and last_event_seq < snapshot_seq
+    if include_snapshot and not full_journal:
+        # Projection writes share the event's transaction, so the journal tail
+        # past the snapshot is normally empty.  A full page is the only honest
+        # "more may exist" signal that does not depend on that invariant.
+        has_more = bool(events) and len(events) >= page_limit
+    else:
+        has_more = bool(events) and last_event_seq < snapshot_seq
     result: dict[str, Any] = {
         "thread": {"id": thread_id},
         "events": [event.to_dict() for event in events],
@@ -902,11 +943,21 @@ async def handle_thread_outline_operation(
 
 
 def _history_char_limit(params: dict[str, Any]) -> int:
+    """Clamp the requested character budget.
+
+    Informational only on every live path: it is handed to
+    ``_character_page_snapshot`` together with a ``turn_limit``, and turn-limit
+    mode never splits a turn by characters.  It surfaces as
+    ``history_page.char_limit`` and drives selection only in the legacy
+    character-only mode that direct callers can reach by passing
+    ``turn_limit=None`` (no live RPC does).  See the constants block above.
+    """
     raw = params.get("char_limit") or params.get("charLimit")
     return max(1_000, min(_int_param(raw, default=DEFAULT_THREAD_HISTORY_CHAR_LIMIT), MAX_THREAD_HISTORY_CHAR_LIMIT))
 
 
 def _history_turn_limit(params: dict[str, Any]) -> int:
+    """Clamp the requested page size in complete turns (this is the real bound)."""
     raw = params.get("turn_limit") or params.get("turnLimit")
     return max(1, min(_int_param(raw, default=DEFAULT_THREAD_HISTORY_TURN_LIMIT), MAX_THREAD_HISTORY_TURN_LIMIT))
 
@@ -924,25 +975,36 @@ def _character_page_snapshot(
     When ``turn_limit`` is provided, complete turns are the atomic page unit;
     the character budget becomes informational and never splits a turn. The
     legacy character-only mode remains for direct compatibility callers.
-    Artifact bodies are available through artifact operations and never ride
-    with conversation pages.
+    Consequence: the page size is bounded by turns, not by ``char_limit``, so a
+    single oversized turn can make the response arbitrarily large — see the
+    constants block above and the "单个超大回合" section of
+    docs/core-ui-streaming-perf.md.  Artifact bodies are available through
+    artifact operations and never ride with conversation pages.
+
+    The page is assembled without cloning the snapshot: every key the page
+    replaces is rebuilt into a fresh container, so the input snapshot is never
+    mutated, while untouched branches — including the exposed item dicts — are
+    shared with the caller. The page is meant to be serialized into a response
+    immediately, not stored or mutated by callers. Item character sizes — only
+    needed for the informational ``character_count`` and the legacy
+    character-only selection — are measured lazily per item instead of
+    serializing the whole thread up front (tens of MB on long sessions).
     """
-    page = deepcopy(snapshot)
-    core = page.get("core") if isinstance(page.get("core"), dict) else {}
+    core = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
     raw_core_items = core.get("items") if isinstance(core.get("items"), dict) else {}
     raw_core_order = (
         core.get("item_order")
         if isinstance(core.get("item_order"), list)
         else list(raw_core_items)
     )
-    raw_top_items = page.get("items") if isinstance(page.get("items"), dict) else {}
+    raw_top_items = snapshot.get("items") if isinstance(snapshot.get("items"), dict) else {}
     raw_top_order = (
-        page.get("item_order")
-        if isinstance(page.get("item_order"), list)
+        snapshot.get("item_order")
+        if isinstance(snapshot.get("item_order"), list)
         else list(raw_top_items)
     )
     turn_id_by_item: dict[str, str] = {}
-    for raw_turns in (page.get("turns"), core.get("turns")):
+    for raw_turns in (snapshot.get("turns"), core.get("turns")):
         if not isinstance(raw_turns, dict):
             continue
         for raw_turn_id, raw_turn in raw_turns.items():
@@ -952,11 +1014,28 @@ def _character_page_snapshot(
             for raw_item_id in raw_turn.get("items") or []:
                 turn_id_by_item.setdefault(str(raw_item_id), turn_id)
 
+    char_sizes: dict[str, int] = {}
+
+    def _item_chars(item_id: str) -> int:
+        # Mirrors the merged-timeline semantics: an item id present in both the
+        # top-level and core maps contributes both serialized sizes.
+        cached = char_sizes.get(item_id)
+        if cached is None:
+            cached = 0
+            item = raw_top_items.get(item_id)
+            if isinstance(item, dict):
+                cached += len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+            item = raw_core_items.get(item_id)
+            if isinstance(item, dict):
+                cached += len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+            char_sizes[item_id] = cached
+        return cached
+
     # User messages live in the top-level item map while assistant process
     # items live in ``core``. Paging only the latter made the user side of a
     # large turn unreachable: its id could never become a history cursor.
     # Build one thread-global timeline, matching the UI's seq-based merge.
-    ordered_by_id: dict[str, tuple[int, int, int, str, int, str]] = {}
+    ordered_by_id: dict[str, tuple[int, int, int, str, str]] = {}
     for source_rank, (raw_order, raw_items) in enumerate(
         ((raw_top_order, raw_top_items), (raw_core_order, raw_core_items))
     ):
@@ -966,17 +1045,12 @@ def _character_page_snapshot(
             if not isinstance(item, dict):
                 continue
             seq = _int_param(item.get("seq") or item.get("last_seq"), default=index)
-            item_chars = len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
             turn_id = str(item.get("turn_id") or turn_id_by_item.get(item_id) or "")
             previous = ordered_by_id.get(item_id)
             if previous is None:
-                ordered_by_id[item_id] = (seq, source_rank, index, item_id, item_chars, turn_id)
+                ordered_by_id[item_id] = (seq, source_rank, index, item_id, turn_id)
             else:
-                ordered_by_id[item_id] = (
-                    *previous[:4],
-                    previous[4] + item_chars,
-                    previous[5] or turn_id,
-                )
+                ordered_by_id[item_id] = (*previous[:4], previous[4] or turn_id)
     full_order = sorted(ordered_by_id.values(), key=lambda entry: entry[:4])
 
     before_index = None
@@ -992,29 +1066,28 @@ def _character_page_snapshot(
     else:
         ordered = full_order
 
-    selected: list[tuple[int, int, int, str, int, str]] = []
+    selected: list[tuple[int, int, int, str, str]] = []
     if turn_limit is not None:
         selected_turns: set[str] = set()
         for entry in reversed(ordered):
-            turn_key = entry[5] or f"item:{entry[3]}"
+            turn_key = entry[4] or f"item:{entry[3]}"
             if turn_key not in selected_turns and len(selected_turns) >= turn_limit:
                 continue
             selected_turns.add(turn_key)
         selected = [
             entry
             for entry in ordered
-            if (entry[5] or f"item:{entry[3]}") in selected_turns
+            if (entry[4] or f"item:{entry[3]}") in selected_turns
         ]
     else:
         character_count = 0
         for entry in reversed(ordered):
-            item_chars = entry[4]
+            item_chars = _item_chars(entry[3])
             if selected and character_count + item_chars > char_limit:
                 break
             selected.append(entry)
             character_count += item_chars
         selected.reverse()
-    character_count = sum(entry[4] for entry in selected)
     selected_ids = {entry[3] for entry in selected}
     earliest_seq = min((entry[0] for entry in selected), default=None)
     has_more = len(selected) < len(ordered)
@@ -1024,7 +1097,7 @@ def _character_page_snapshot(
     # anchors, do not affect the contiguous history cursor, and prevent an
     # assistant-only first render for a large single-turn thread.
     selected_turn_max_seq: dict[str, int] = {}
-    for seq, _, _, item_id, _, _turn_id in selected:
+    for seq, _, _, item_id, _turn_id in selected:
         item = raw_core_items.get(item_id)
         turn_id = str(item.get("turn_id") or "") if isinstance(item, dict) else ""
         if turn_id:
@@ -1041,7 +1114,7 @@ def _character_page_snapshot(
         if max_seq is not None and seq <= max_seq:
             context_user_ids.add(item_id)
     visible_ids = selected_ids | context_user_ids
-    character_count += sum(
+    character_count = sum(_item_chars(entry[3]) for entry in selected) + sum(
         len(json.dumps(raw_top_items[item_id], ensure_ascii=False, separators=(",", ":")))
         for item_id in context_user_ids - selected_ids
     )
@@ -1059,30 +1132,32 @@ def _character_page_snapshot(
                 result[str(turn_id)] = {**raw_turn, "items": kept}
         return result
 
-    core["items"] = {
+    page_core = dict(core)
+    page_core["items"] = {
         item_id: item for item_id, item in raw_core_items.items() if item_id in selected_ids
     }
-    core["item_order"] = [
+    page_core["item_order"] = [
         str(item_id) for item_id in raw_core_order if str(item_id) in selected_ids
     ]
-    core["turns"] = filtered_turns(core.get("turns"))
-    core["artifacts"] = {}
-    core["seen_event_ids"] = []
-    page["core"] = core
+    page_core["turns"] = filtered_turns(core.get("turns"))
+    page_core["artifacts"] = {}
+    page_core["seen_event_ids"] = []
+    page = dict(snapshot)
+    page["core"] = page_core
     page["items"] = {
         item_id: item for item_id, item in raw_top_items.items() if item_id in visible_ids
     }
     page["item_order"] = [
         str(item_id) for item_id in raw_top_order if str(item_id) in visible_ids
     ]
-    page["turns"] = filtered_turns(page.get("turns"))
+    page["turns"] = filtered_turns(snapshot.get("turns"))
     page["artifacts"] = {}
     page["seen_event_ids"] = []
     page["history_page"] = {
         "char_limit": char_limit,
         "character_count": character_count,
         "turn_limit": turn_limit,
-        "turn_count": len({entry[5] or f"item:{entry[3]}" for entry in selected}),
+        "turn_count": len({entry[4] or f"item:{entry[3]}" for entry in selected}),
         "item_count": len(visible_ids),
         "total_items": len(full_order),
         "has_more": has_more,
@@ -1197,23 +1272,15 @@ async def handle_turn_start_operation(
         _w1 = time_module.perf_counter()
         _logger.info("[PERF:turn_start:write] find_client_event=%.3fs", _w1 - _w0)
         if existing is not None:
-            snapshot = await context.persistence.load(db, thread_id)
-            return CoreLiveOperationOutcome(
-                response=rpc_result(
-                    request_id,
-                    {
-                        "events": [existing.to_dict()],
-                        "snapshot": snapshot,
-                    },
-                ),
-                notify_events=[existing],
-            )
+            return ("existing", existing, None, None, None, False)
 
         _w2 = time_module.perf_counter()
         await context.persistence.assert_revision(db, thread_id, expected_revision)
-        snapshot = await context.persistence.load(db, thread_id)
+        # 只需要轮次状态与顶层用户条目顺序（活跃轮判定 + 首条消息判定），
+        # 全部存放在元数据行——这里曾装配整个会话的条目表，大会话上阻塞写锁秒级。
+        snapshot = await context.persistence.load_metadata(db, thread_id)
         _w3 = time_module.perf_counter()
-        _logger.info("[PERF:turn_start:write] load#1=%.3fs snapshot_size=%s", _w3 - _w2, len(str(snapshot)) if isinstance(snapshot, dict) else 0)
+        _logger.info("[PERF:turn_start:write] load_metadata=%.3fs", _w3 - _w2)
         active_run_id = latest_active_turn_id(snapshot) or context.host.runtime_task_registry.active_run_id(thread_id)
         if active_run_id:
             return CoreLiveOperationOutcome(
@@ -1274,25 +1341,17 @@ async def handle_turn_start_operation(
                 include_turn_status=materialized.include_turn_status,
             )
             _w4 = time_module.perf_counter()
-            envelopes, projected = await context.persistence.append_batch(
+            envelopes = await context.persistence.append_batch(
                 db,
                 app_events=[_app_event_input(plan.turn_accepted), _app_event_input(plan.user_item)],
                 run_item_events=[plan.running_status],
-                return_state=True,
             )
             _w5 = time_module.perf_counter()
             _logger.info("[PERF:turn_start:write] append_batch=%.3fs", _w5 - _w4)
             accepted, user, running = envelopes[0], envelopes[1], envelopes[2]
-            # Reuse the in-memory projection from append_batch instead of
-            # re-loading (and re-parsing) the whole snapshot row from the DB.
-            # reconcile_status keeps the result byte-equivalent to load().
-            snapshot = projected if isinstance(projected, dict) else await context.persistence.load(db, thread_id)
-            if isinstance(projected, dict):
-                snapshot["snapshot_seq"] = int(projected.get("snapshot_seq") or 0)
-                context.persistence.snapshot_store.projector.reconcile_status(snapshot)
-            _w6 = time_module.perf_counter()
-            _logger.info("[PERF:turn_start:write] load#2=%.3fs", _w6 - _w5)
-            return accepted, user, running, snapshot, materialized, is_first_message
+            # 响应快照不再在写锁内装配（曾有一次全量 load + 一次 return_state 全量
+            # load）；需要快照的调用方在事务提交后于锁外装配。
+            return ("applied", accepted, user, running, materialized, is_first_message)
         except BaseException:
             context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
             run_claimed = False
@@ -1309,7 +1368,19 @@ async def handle_turn_start_operation(
     _logger.info("[PERF:turn_start] persistence.write=%.3fs thread_id=%s", _t1 - _t0, thread_id)
     if isinstance(write_result, CoreLiveOperationOutcome):
         return write_result
-    accepted, user, running, snapshot, materialized, is_first_message = write_result
+    include_snapshot = _include_snapshot_param(params)
+    response_snapshot: dict[str, Any] | None = None
+    outcome_kind, accepted, user, running, materialized, is_first_message = write_result
+    if include_snapshot:
+        response_snapshot = await _load_snapshot_outside_write_lock(context, thread_id)
+    if outcome_kind == "existing":
+        response_payload: dict[str, Any] = {"events": [accepted.to_dict()]}
+        if response_snapshot is not None:
+            response_payload["snapshot"] = response_snapshot
+        return CoreLiveOperationOutcome(
+            response=rpc_result(request_id, response_payload),
+            notify_events=[accepted],
+        )
 
     # Best-effort: generate a short title from the first user message.
     if is_first_message and context.host.llm_client and prepared.runtime_text:
@@ -1397,20 +1468,22 @@ async def handle_turn_start_operation(
     _t4 = time_module.perf_counter()
     _logger.info("[PERF:turn_start] _start_runtime_task=%.3fs", _t4 - _t3)
     if start_failure is not None:
-        failure_event, snapshot = start_failure
+        failure_event, failure_snapshot = start_failure
         events.append(failure_event)
+        # 失败终态快照比提交后的常规快照更新（含 failed 终态），必须覆盖。
+        if include_snapshot:
+            response_snapshot = failure_snapshot
     _logger.info("[PERF:turn_start] total=%.3fs thread_id=%s", _t4 - _t0, thread_id)
     _logger.info("[live:handle_turn_start] dispatched background task thread_id=%s turn_id=%s model=%s",
                   thread_id, turn_id, runtime_start.get("model_id") or "default")
+    response_payload = {
+        "events": [event.to_dict() for event in events],
+        "runtime_start": runtime_start,
+    }
+    if response_snapshot is not None:
+        response_payload["snapshot"] = response_snapshot
     return CoreLiveOperationOutcome(
-        response=rpc_result(
-            request_id,
-            {
-                "events": [event.to_dict() for event in events],
-                "snapshot": snapshot,
-                "runtime_start": runtime_start,
-            },
-        ),
+        response=rpc_result(request_id, response_payload),
         notify_events=events,
         runtime_start=runtime_start,
     )
@@ -1689,6 +1762,52 @@ def _load_load_tools(context: "CoreLiveContext") -> LoadTools:
     return default_load_tools()
 
 
+CANCEL_ESCALATION_DELAYS_SECONDS: tuple[float, ...] = (1.0, 8.0)
+CANCEL_FINALIZER_TASK_WAIT_CAP_SECONDS = 60.0
+
+_LIVE_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _spawn_live_background(
+    coro: Coroutine[Any, Any, None],
+    *,
+    label: str,
+    thread_id: str = "",
+) -> asyncio.Task[None]:
+    """Run a fire-and-forget finalizer with ownership and failure logging.
+
+    The cancel paths never await persistence inline any more: the RPC/task
+    must return immediately while bookkeeping settles in the background
+    (Codex-style "ack first, settle later"). The task set keeps a strong
+    reference so the loop cannot GC the work mid-flight; use
+    ``wait_live_background_tasks`` in tests to drain it.
+    """
+    task = asyncio.create_task(coro)
+    _LIVE_BACKGROUND_TASKS.add(task)
+
+    def _done(done: asyncio.Task[None]) -> None:
+        _LIVE_BACKGROUND_TASKS.discard(done)
+        if not done.cancelled() and done.exception() is not None:
+            _logger.error(
+                "[live] background task %s failed thread_id=%s: %s",
+                label,
+                thread_id,
+                done.exception(),
+            )
+
+    task.add_done_callback(_done)
+    return task
+
+
+async def wait_live_background_tasks() -> None:
+    """Wait for spawned background finalizers (test/introspection hook)."""
+    while True:
+        pending = [t for t in tuple(_LIVE_BACKGROUND_TASKS) if not t.done()]
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 async def handle_turn_cancel_operation(
     *,
     request_id: int | str | None,
@@ -1707,6 +1826,9 @@ async def handle_turn_cancel_operation(
     requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "")
     registry = context.host.runtime_task_registry
     live_turn_id = registry.active_run_id(thread_id) or ""
+    # Interrupt provider I/O before any persistence work.  Previously the
+    # task was cancelled only after append_batch/load completed, which made
+    # Stop appear inert for several seconds under write contention.
     preempted_live_task = False
     request_cancel = getattr(registry, "request_cancel", None)
     if (
@@ -1714,15 +1836,114 @@ async def handle_turn_cancel_operation(
         and live_turn_id
         and (not requested_turn_id or requested_turn_id == live_turn_id)
     ):
-        # Interrupt provider I/O before waiting for SQLite.  Previously the
-        # task was cancelled only after append_batch/load completed, which made
-        # Stop appear inert for several seconds under write contention.
         preempted_live_task = request_cancel(
             thread_id,
             run_id=live_turn_id,
             force=True,
         )
-    async def write(db):
+    # Acknowledge immediately — the durable interrupting record, the watchdog
+    # escalation and the claim release all settle in the background task
+    # below.  Waiting inline made Stop ride behind the turn's own terminal
+    # writes: on a huge session the serialized write queue held the
+    # interrupt for minutes and the UI timed out (30s transport limit) while
+    # the turn was in fact being torn down.
+    matched_live = bool(live_turn_id) and (
+        not requested_turn_id or requested_turn_id == live_turn_id
+    )
+    _spawn_live_background(
+        _turn_cancel_finalizer(
+            context=context,
+            thread_id=thread_id,
+            requested_turn_id=requested_turn_id,
+            expected_revision=expected_revision,
+            live_turn_id=live_turn_id,
+            preempted_live_task=preempted_live_task,
+        ),
+        label="turn-cancel-finalizer",
+        thread_id=thread_id,
+    )
+    status = "cancelling" if matched_live else "idle"
+    return CoreLiveOperationOutcome(
+        response=rpc_result(request_id, {"status": status, "event": None})
+    )
+
+
+async def _turn_cancel_finalizer(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    requested_turn_id: str,
+    expected_revision: int | None,
+    live_turn_id: str,
+    preempted_live_task: bool,
+) -> None:
+    """Settle a turn interrupt off the RPC critical path.
+
+    Idempotent: concurrent/repeated interrupts re-check inside the write
+    transaction, so only the first lands the interrupting record.  A request
+    naming a turn that is not the live run never touches the live task — the
+    old inline flow returned idle before any registry mutation, and so does
+    the finalizer.
+    """
+    registry = context.host.runtime_task_registry
+    targets_live_run = bool(live_turn_id) and (
+        not requested_turn_id or requested_turn_id == live_turn_id
+    )
+    task = None
+    if targets_live_run:
+        task_getter = getattr(registry, "task", None)
+        task = task_getter(thread_id, run_id=live_turn_id) if callable(task_getter) else None
+    had_live_task = bool(preempted_live_task or task is not None)
+    recorded_turn_id = await _append_interrupting_record(
+        context=context,
+        thread_id=thread_id,
+        requested_turn_id=requested_turn_id,
+        expected_revision=expected_revision,
+        live_turn_id=live_turn_id,
+    )
+    if task is not None and not task.done():
+        await _escalate_and_wait_cancel(thread_id, task)
+    # Release the claim only after the record landed (and the task had its
+    # grace): turn.start stays blocked while the old turn is still dying.
+    # Skipped entirely when the request targeted a foreign/stale turn.
+    if targets_live_run or recorded_turn_id:
+        registry.cancel(
+            thread_id,
+            run_id=recorded_turn_id or live_turn_id or None,
+            force=True,
+        )
+    if not had_live_task and recorded_turn_id:
+        # No in-memory task can emit a terminal item (process restart while
+        # the snapshot still says running): close the durably stuck turn.
+        await _persist_cancelled_terminal(
+            context=context,
+            thread_id=thread_id,
+            turn_id=recorded_turn_id,
+        )
+
+
+async def _append_interrupting_record(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    requested_turn_id: str,
+    expected_revision: int | None,
+    live_turn_id: str,
+) -> str:
+    """Durably record the user interrupt for the active turn and publish it.
+
+    Returns the resolved turn id, or "" when nothing was recorded (turn
+    already terminal, already recorded as interrupting, or the requested id
+    does not match an active turn).
+
+    The client revision CAS is intentionally absent here: by the time the
+    background finalizer runs, the turn itself has written new revisions, so
+    the request-time revision is always stale.  Idempotency comes from the
+    interrupting-record check inside the transaction instead.
+    """
+    del expected_revision  # validated at request time only
+
+    async def write_action(db: AsyncSession):
         snapshot = await context.persistence.load(db, thread_id)
         turn_id = requested_turn_id or latest_active_turn_id(snapshot) or live_turn_id
         # Fallback to the in-memory registry: when the snapshot has lost the
@@ -1736,16 +1957,16 @@ async def handle_turn_cancel_operation(
         if requested_turn_id and not _is_active_turn(snapshot, requested_turn_id):
             turn_id = ""
         if not turn_id:
-            payload: dict[str, Any] = {"status": "idle", "event": None}
-            if params.get("include_snapshot") is not False:
-                payload["snapshot"] = snapshot
-            return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
+            return "", []
         if _turn_is_terminal(snapshot, turn_id):
-            payload = {"status": "cancelled", "event": None}
-            if params.get("include_snapshot") is not False:
-                payload["snapshot"] = snapshot
-            return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
-        await context.persistence.assert_revision(db, thread_id, expected_revision)
+            return "", []
+        core = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
+        turns = core.get("turns") if isinstance(core.get("turns"), dict) else {}
+        turn_view = turns.get(turn_id) if isinstance(turns.get(turn_id), dict) else {}
+        if str(turn_view.get("status") or "") == "interrupting":
+            # A previous interrupt (this one or a duplicate click) already
+            # recorded the interrupting state — do not append it twice.
+            return turn_id, []
         interrupted_input = AppEventInput(
             thread_id=thread_id,
             method="turn/interrupted",
@@ -1767,43 +1988,56 @@ async def handle_turn_cancel_operation(
             app_events=[interrupted_input],
             run_item_events=[status_event],
         )
-        interrupted, status = envelopes[0], envelopes[1]
-        snapshot = await context.persistence.load(db, thread_id)
-        return interrupted, status, snapshot, turn_id
+        return turn_id, list(envelopes)
 
-    write_result = await context.persistence.write(write)
-    if isinstance(write_result, CoreLiveOperationOutcome):
-        return write_result
-    interrupted, status, snapshot, turn_id = write_result
-    had_live_task = preempted_live_task or registry.active_run_id(thread_id) == turn_id
-    # request_cancel() already delivered the forceful cancellation.  A second
-    # task.cancel() here can interrupt the runtime's shielded terminal write,
-    # leaving the UI stuck in an intermediate state.
-    registry.cancel(
-        thread_id,
-        run_id=turn_id or None,
-        force=not preempted_live_task,
-    )
-    events = [interrupted, status]
-    for event in events:
-        await context.hub.publish(event)
-    if not had_live_task:
-        terminal = await _persist_cancelled_terminal(
-            context=context,
-            thread_id=thread_id,
-            turn_id=turn_id,
+    turn_id, envelopes = await context.persistence.write(write_action)
+    # Publish after the write transaction committed, matching the old inline
+    # ordering so hub subscribers never observe an uncommitted record.
+    for envelope in envelopes:
+        await context.hub.publish(envelope)
+    return turn_id
+
+
+async def _escalate_and_wait_cancel(thread_id: str, task: asyncio.Task[Any]) -> None:
+    """Give the cancelled turn task a short grace, then break through shields.
+
+    The terminal persistence now runs as detached tasks, so a second
+    ``task.cancel()`` can no longer strand the interrupting state — it only
+    breaks the task out of an await that ignored the first cancel.
+    """
+    async def _escalate() -> None:
+        for delay in CANCEL_ESCALATION_DELAYS_SECONDS:
+            await asyncio.sleep(delay)
+            if not task.done():
+                _logger.warning(
+                    "[live] turn task still running %ss after cancel; escalating thread_id=%s",
+                    delay,
+                    thread_id,
+                )
+                task.cancel()
+
+    escalation = asyncio.create_task(_escalate())
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=CANCEL_FINALIZER_TASK_WAIT_CAP_SECONDS)
+    except asyncio.CancelledError:
+        # Normal exit path: the turn task ends cancelled. (Also covers the
+        # finalizer itself being cancelled — cleanup below still runs.)
+        pass
+    except asyncio.TimeoutError:
+        pass
+    except Exception:
+        _logger.exception("[live] turn task raised during cancel unwind thread_id=%s", thread_id)
+    finally:
+        escalation.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await escalation
+    if not task.done():
+        _logger.warning(
+            "[live] turn task did not exit within %ss of cancel; releasing claim anyway thread_id=%s",
+            CANCEL_FINALIZER_TASK_WAIT_CAP_SECONDS,
+            thread_id,
         )
-        if terminal is not None:
-            events.append(terminal)
-            async with context.session_factory() as db:
-                snapshot = await context.persistence.load(db, thread_id)
-    response_payload: dict[str, Any] = {"events": [event.to_dict() for event in events]}
-    if params.get("include_snapshot") is not False:
-        response_payload["snapshot"] = snapshot
-    return CoreLiveOperationOutcome(
-        response=rpc_result(request_id, response_payload),
-        publish_events=events,
-    )
+        task.cancel()
 
 
 async def handle_turn_force_reset_operation(
@@ -1855,7 +2089,7 @@ async def handle_turn_force_reset_operation(
                         turn_id=turn_id,
                         item_id=item_id,
                         reason="force_reset",
-                        message="Interrupted by force reset",
+                        message="已中断",
                     ),
                 )
             )
@@ -1873,13 +2107,16 @@ async def handle_turn_force_reset_operation(
                     event_id=f"{turn_id}:force_reset",
                     run_id=turn_id,
                     turn_id=turn_id,
-                    item_id=f"{turn_id}:force_reset",
+                    # Same identity as the kernel's terminal projection: a
+                    # force reset refreshes the turn's single cancel row
+                    # instead of stacking a second one.
+                    item_id=f"{turn_id}:terminal",
                     status="cancelled",
                     payload={
                         "type": "turn",
                         "status": "cancelled",
                         "raw_end_reason": "force_reset",
-                        "message": "Force reset to standby",
+                        "message": "已中断。",
                     },
                 ),
             )
@@ -1928,6 +2165,7 @@ async def handle_turn_steer_operation(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="steer input must include text")
         )
     guidance_accepted = False
+    include_snapshot = _include_snapshot_param(params)
 
     async def write(db):
         nonlocal guidance_accepted
@@ -1938,22 +2176,18 @@ async def handle_turn_steer_operation(
             methods={"turn/steered"},
         )
         if existing is not None:
-            snapshot = await context.persistence.load(db, thread_id)
-            return CoreLiveOperationOutcome(
-                response=rpc_result(
-                    request_id,
-                    {"applied": True, "reason": "already_applied", "events": [existing.to_dict()], "snapshot": snapshot},
-                )
-            )
+            return "existing", existing
         await context.persistence.assert_revision(db, thread_id, expected_revision)
-        snapshot = await context.persistence.load(db, thread_id)
         registry_run_id = context.host.runtime_task_registry.active_run_id(thread_id)
         # run id 有两种写法（`<thread>:turn:<run>` 与 `<run>`）：这里必须归一后比较，
         # 否则写法不同就会被判成"轮次不匹配"而把一条合法引导挡在门外（2026-10-09）。
-        if not _is_active_turn(snapshot, turn_id) and normalize_run_id(thread_id, registry_run_id) != normalize_run_id(thread_id, turn_id):
-            return CoreLiveOperationOutcome(
-                response=rpc_result(request_id, {"applied": False, "reason": "active_turn_mismatch", "events": [], "snapshot": snapshot})
-            )
+        turn_is_active = normalize_run_id(thread_id, registry_run_id) == normalize_run_id(thread_id, turn_id)
+        if not turn_is_active:
+            # 轮次状态只存于元数据行（turns/requests）；正在运行的回合在这里
+            # 直接命中注册表，一次条目表扫描都不需要。
+            metadata_state = await context.persistence.load_metadata(db, thread_id)
+            if not _is_active_turn(metadata_state, turn_id):
+                return "mismatch", None
         guidance_status = context.host.runtime_task_registry.accept_guidance(
             thread_id,
             text,
@@ -1961,9 +2195,7 @@ async def handle_turn_steer_operation(
             guidance_id=client_message_id,
         )
         if guidance_status not in {"accepted", "duplicate"}:
-            return CoreLiveOperationOutcome(
-                response=rpc_result(request_id, {"applied": False, "reason": "run_not_active", "events": [], "snapshot": snapshot})
-            )
+            return "run_not_active", None
         if guidance_status == "accepted":
             guidance_accepted = True
         try:
@@ -1978,14 +2210,13 @@ async def handle_turn_steer_operation(
                     payload={"type": "turn", "input": input_items},
                 ),
             )
-            snapshot = await context.persistence.load(db, thread_id)
-            return event, snapshot
         except BaseException:
             context.host.runtime_task_registry.retract_guidance(
                 thread_id, run_id=turn_id, guidance_id=client_message_id
             )
             guidance_accepted = False
             raise
+        return "applied", event
 
     try:
         write_result = await context.persistence.write(write)
@@ -1995,15 +2226,37 @@ async def handle_turn_steer_operation(
                 thread_id, run_id=turn_id, guidance_id=client_message_id
             )
         raise
-    if isinstance(write_result, CoreLiveOperationOutcome):
-        return write_result
-    event, snapshot = write_result
+    outcome_kind, payload = write_result
+    snapshot: dict[str, Any] | None = None
+    if include_snapshot:
+        snapshot = await _load_snapshot_outside_write_lock(context, thread_id)
+    if outcome_kind == "existing":
+        assert isinstance(payload, AppEventEnvelope)
+        response_payload: dict[str, Any] = {
+            "applied": True,
+            "reason": "already_applied",
+            "events": [payload.to_dict()],
+        }
+        if snapshot is not None:
+            response_payload["snapshot"] = snapshot
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, response_payload))
+    if outcome_kind == "mismatch":
+        response_payload = {"applied": False, "reason": "active_turn_mismatch", "events": []}
+        if snapshot is not None:
+            response_payload["snapshot"] = snapshot
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, response_payload))
+    if outcome_kind == "run_not_active":
+        response_payload = {"applied": False, "reason": "run_not_active", "events": []}
+        if snapshot is not None:
+            response_payload["snapshot"] = snapshot
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, response_payload))
+    event = payload
     await context.hub.publish(event)
+    response_payload = {"applied": True, "reason": "", "events": [event.to_dict()]}
+    if snapshot is not None:
+        response_payload["snapshot"] = snapshot
     return CoreLiveOperationOutcome(
-        response=rpc_result(
-            request_id,
-            {"applied": True, "reason": "", "events": [event.to_dict()], "snapshot": snapshot},
-        ),
+        response=rpc_result(request_id, response_payload),
         publish_events=[event],
     )
 
@@ -2341,8 +2594,7 @@ async def handle_queue_create_operation(
             methods=QUEUE_ITEM_ACCEPTED_METHODS,
         )
         if existing is not None:
-            snapshot = await context.persistence.load(db, thread_id)
-            return existing, snapshot
+            return existing, None
         await context.persistence.assert_revision(db, thread_id, expected_revision)
         materialized = await context.host.member_hooks.materialize_queue(
             db=db,
@@ -2363,17 +2615,27 @@ async def handle_queue_create_operation(
                 payload={**payload, **materialized.payload_extra},
             ),
         )
-        snapshot = await context.persistence.load(db, thread_id)
-        return event, snapshot
+        return event, materialized
 
-    event, snapshot = await context.persistence.write(write)
+    event, materialized = await context.persistence.write(write)
     await context.hub.publish(event)
-    queue_item = next(
-        (item for item in snapshot.get("queue", []) if isinstance(item, dict) and item.get("queue_item_id") == queue_item_id),
-        {"queue_item_id": queue_item_id, "status": "queued", "input": input_items},
-    )
+    # Response queue item is rebuilt from the payload we just wrote; the queue
+    # lives in the metadata row, so no full snapshot assembly is required.
+    queue_item = {
+        **payload,
+        **(materialized.payload_extra if materialized is not None else {}),
+        "queue_item_id": queue_item_id,
+        "status": "queued",
+        "mode": str(payload.get("mode") or "next_turn"),
+        "input": prepared.visible_input,
+        "seq": event.seq,
+        "last_method": "queue/itemAccepted",
+    }
+    response_payload: dict[str, Any] = {"queue_item": queue_item, "events": [event.to_dict()]}
+    if _include_snapshot_param(params):
+        response_payload["snapshot"] = await _load_snapshot_outside_write_lock(context, thread_id)
     return CoreLiveOperationOutcome(
-        response=rpc_result(request_id, {"queue_item": queue_item, "events": [event.to_dict()], "snapshot": snapshot}),
+        response=rpc_result(request_id, response_payload),
         publish_events=[event],
     )
 
@@ -2422,8 +2684,9 @@ async def handle_queue_update_operation(
         )
     async def write(
         db: AsyncSession,
-    ) -> CoreLiveOperationOutcome | tuple[AppEventEnvelope, dict[str, Any]]:
-        snapshot = await context.persistence.load(db, thread_id)
+    ) -> tuple[str, AppEventEnvelope | None]:
+        # 队列条目本身存放在元数据行；更新计划不需要逐条装配会话内容。
+        snapshot = await context.persistence.load_metadata(db, thread_id)
         plan = build_queue_update_plan(
             snapshot,
             queue_item_id=queue_item_id,
@@ -2432,17 +2695,7 @@ async def handle_queue_update_operation(
             mode=str(params.get("mode") or "").strip() or None,
         )
         if not plan.applied:
-            return CoreLiveOperationOutcome(
-                response=rpc_result(
-                    request_id,
-                    {
-                        "applied": False,
-                        "reason": plan.reason,
-                        "events": [],
-                        "snapshot": snapshot,
-                    },
-                )
-            )
+            return plan.reason, None
         await context.persistence.assert_revision(db, thread_id, expected_revision)
         event = await _append_app_event(
             db,
@@ -2454,16 +2707,21 @@ async def handle_queue_update_operation(
                 payload=plan.payload or {},
             ),
         )
-        snapshot = await context.persistence.load(db, thread_id)
-        return event, snapshot
+        return "applied", event
 
-    write_result = await context.persistence.write(write)
-    if isinstance(write_result, CoreLiveOperationOutcome):
-        return write_result
-    event, snapshot = write_result
+    outcome_kind, payload = await context.persistence.write(write)
+    if outcome_kind != "applied":
+        response_payload = {"applied": False, "reason": outcome_kind, "events": []}
+        if _include_snapshot_param(params):
+            response_payload["snapshot"] = await _load_snapshot_outside_write_lock(context, thread_id)
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, response_payload))
+    event = payload
     await context.hub.publish(event)
+    response_payload = {"events": [event.to_dict()]}
+    if _include_snapshot_param(params):
+        response_payload["snapshot"] = await _load_snapshot_outside_write_lock(context, thread_id)
     return CoreLiveOperationOutcome(
-        response=rpc_result(request_id, {"events": [event.to_dict()], "snapshot": snapshot}),
+        response=rpc_result(request_id, response_payload),
         publish_events=[event],
     )
 
@@ -2484,9 +2742,9 @@ async def handle_queue_delete_operation(
         expected_revision = _expected_revision(params)
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    async def write(db: AsyncSession) -> tuple[AppEventEnvelope, dict[str, Any]]:
+    async def write(db: AsyncSession) -> AppEventEnvelope:
         await context.persistence.assert_revision(db, thread_id, expected_revision)
-        event = await _append_app_event(
+        return await _append_app_event(
             db,
             context=context,
             event=AppEventInput(
@@ -2496,13 +2754,14 @@ async def handle_queue_delete_operation(
                 payload=queue_delete_payload(queue_item_id=queue_item_id, status="deleted"),
             ),
         )
-        snapshot = await context.persistence.load(db, thread_id)
-        return event, snapshot
 
-    event, snapshot = await context.persistence.write(write)
+    event = await context.persistence.write(write)
     await context.hub.publish(event)
+    response_payload: dict[str, Any] = {"events": [event.to_dict()]}
+    if _include_snapshot_param(params):
+        response_payload["snapshot"] = await _load_snapshot_outside_write_lock(context, thread_id)
     return CoreLiveOperationOutcome(
-        response=rpc_result(request_id, {"events": [event.to_dict()], "snapshot": snapshot}),
+        response=rpc_result(request_id, response_payload),
         publish_events=[event],
     )
 
@@ -2536,7 +2795,8 @@ async def handle_queue_guidance_operation(
 
     async def write(
         db: AsyncSession,
-    ) -> CoreLiveOperationOutcome | tuple[list[AppEventEnvelope], dict[str, Any], Any]:
+    ) -> tuple[str, Any, Any]:
+        """Return (kind, payload, plan): kind is existing/mismatch/applied/not_applied."""
         nonlocal guidance_accepted
         existing = await context.persistence.find_client_event(
             db,
@@ -2545,14 +2805,9 @@ async def handle_queue_guidance_operation(
             methods={"turn/steered"},
         )
         if existing is not None:
-            snapshot = await context.persistence.load(db, thread_id)
-            return CoreLiveOperationOutcome(
-                response=rpc_result(
-                    request_id,
-                    {"applied": True, "reason": "already_applied", "events": [existing.to_dict()], "snapshot": snapshot},
-                )
-            )
-        snapshot = await context.persistence.load(db, thread_id)
+            return "existing", existing, None
+        # 引导计划只需要队列与轮次状态（元数据行），不需要装配全部会话条目。
+        snapshot = await context.persistence.load_metadata(db, thread_id)
         plan = build_queue_guidance_plan(
             snapshot,
             thread_id=thread_id,
@@ -2571,28 +2826,22 @@ async def handle_queue_guidance_operation(
                 guidance_id=client_message_id,
             )
             if guidance_status not in {"accepted", "duplicate"}:
-                return CoreLiveOperationOutcome(
-                    response=rpc_result(
-                        request_id,
-                        {"applied": False, "reason": "run_not_active", "events": [], "snapshot": snapshot},
-                    )
-                )
+                return "run_not_active", None, plan
             if guidance_status == "accepted":
                 guidance_accepted = True
-            events: list[AppEventEnvelope] = []
             try:
                 app_event_inputs = [_app_event_input(spec) for spec in plan.events]
+                events: list[AppEventEnvelope] = []
                 if app_event_inputs:
                     events = await context.persistence.append_batch(db, app_events=app_event_inputs)
-                snapshot = await context.persistence.load(db, thread_id)
             except BaseException:
                 context.host.runtime_task_registry.retract_guidance(
                     thread_id, run_id=turn_id, guidance_id=client_message_id
                 )
                 guidance_accepted = False
                 raise
-            return events, snapshot, plan
-        return [], snapshot, plan
+            return "applied", events, plan
+        return "not_applied", None, plan
 
     try:
         write_result = await context.persistence.write(write)
@@ -2602,9 +2851,27 @@ async def handle_queue_guidance_operation(
                 thread_id, run_id=turn_id, guidance_id=client_message_id
             )
         raise
-    if isinstance(write_result, CoreLiveOperationOutcome):
-        return write_result
-    events, snapshot, plan = write_result
+    outcome_kind, payload, plan = write_result
+    snapshot: dict[str, Any] | None = None
+    if _include_snapshot_param(params):
+        snapshot = await _load_snapshot_outside_write_lock(context, thread_id)
+
+    def _guidance_response(**extra: Any) -> CoreLiveOperationOutcome:
+        response_payload: dict[str, Any] = {
+            "applied": plan.applied if plan is not None else outcome_kind == "applied",
+            "reason": plan.reason if plan is not None else "",
+            **extra,
+        }
+        if snapshot is not None:
+            response_payload["snapshot"] = snapshot
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, response_payload))
+
+    if outcome_kind == "existing":
+        assert isinstance(payload, AppEventEnvelope)
+        return _guidance_response(applied=True, reason="already_applied", events=[payload.to_dict()])
+    if outcome_kind == "run_not_active":
+        return _guidance_response(applied=False, reason="run_not_active", events=[])
+    events = payload if outcome_kind == "applied" else []
     for event in events:
         await context.hub.publish(event)
     return CoreLiveOperationOutcome(
@@ -2614,7 +2881,7 @@ async def handle_queue_guidance_operation(
                 "applied": plan.applied,
                 "reason": plan.reason,
                 "events": [event.to_dict() for event in events],
-                "snapshot": snapshot,
+                **({"snapshot": snapshot} if snapshot is not None else {}),
             },
         ),
         publish_events=events,
@@ -2938,12 +3205,17 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
                 turn_id,
                 _elapsed,
             )
-            await asyncio.shield(
+            # Detached: the turn task must exit now so the registry claim is
+            # released immediately; the terminal record settles in the
+            # background like every other cancel-path write.
+            _spawn_live_background(
                 _persist_cancelled_terminal(
                     context=context,
                     thread_id=thread_id,
                     turn_id=turn_id,
-                )
+                ),
+                label="turn-cancelled-terminal",
+                thread_id=thread_id,
             )
             raise
         _logger.exception(
@@ -3225,7 +3497,7 @@ def _build_interrupted_tool_event(
     turn_id: str,
     item_id: str,
     reason: str = "unexpected_shutdown",
-    message: str = "Interrupted by unexpected shutdown",
+    message: str = "已中断",
 ) -> RunItemEvent:
     """Build a terminal ``tool_result`` event that closes a dangling tool_call.
 
@@ -3343,6 +3615,147 @@ async def _reconcile_cancelled_runtime_state(
     await _save_runtime_state_with_retry(store, thread_id, mutate=_mark_cancelled)
 
 
+async def _active_thread_ids(*, context: "CoreLiveContext") -> list[str]:
+    """Thread ids whose snapshot still holds a non-terminal turn."""
+    try:
+        async with context.session_factory() as db:
+            list_active = getattr(context.persistence, "list_active_thread_ids", None)
+            if callable(list_active):
+                return list(await list_active(db))
+            return list(await context.persistence.list_thread_ids(db))
+    except BaseException:
+        _logger.exception("[live:reconcile] failed to enumerate threads")
+        return []
+
+
+async def _close_active_turns(
+    db: AsyncSession,
+    *,
+    context: "CoreLiveContext",
+    thread_id: str,
+    verdict_for: "Callable[[str, dict[str, Any]], tuple[str, str, str] | None]",
+) -> list[tuple[str, AppEventEnvelope]]:
+    """Close a thread's leftover active turns with the verdict ``verdict_for`` returns.
+
+    The dangling non-terminal items (a half-streamed tool_call, for instance)
+    are closed BEFORE the turn-level terminal event: the snapshot reducer's
+    turn-terminal lock would otherwise force-override item status on later
+    events while the event log still held orphaned ``running`` events, leaving
+    replay inconsistent. A ``None`` verdict leaves that turn alone.
+    """
+    events: list[tuple[str, AppEventEnvelope]] = []
+    seen: set[str] = set()
+    while True:
+        snapshot = await context.persistence.load(db, thread_id)
+        active = latest_active_turn_id(snapshot)
+        if not active or active in seen:
+            break
+        verdict = verdict_for(active, snapshot)
+        if verdict is None:
+            break
+        seen.add(active)
+        status, reason, message = verdict
+        dangling = _collect_non_terminal_turn_item_ids(snapshot, active)
+        for item_id in dangling:
+            tool_event = await _append_run_item(
+                db,
+                context=context,
+                event=_build_interrupted_tool_event(
+                    thread_id=thread_id,
+                    turn_id=active,
+                    item_id=item_id,
+                    reason=reason,
+                    message=message,
+                ),
+            )
+            events.append((active, tool_event))
+            if len(events) > 50:  # guard against a runaway loop
+                break
+        if len(events) > 50:
+            break
+        event = await _append_run_item(
+            db,
+            context=context,
+            event=RunItemEvent(
+                kind="status",
+                thread_id=thread_id,
+                event_id=f"{active}:{reason}",
+                run_id=active,
+                turn_id=active,
+                # Same identity as the kernel's terminal projection: the
+                # reaper refreshes the turn's single cancel row rather than
+                # appending another "recovered" bubble on every incident.
+                item_id=f"{active}:terminal",
+                status=status,
+                payload={
+                    "type": "turn",
+                    "status": status,
+                    "raw_end_reason": reason,
+                    "message": message,
+                },
+            ),
+        )
+        events.append((active, event))
+        if len(events) > 50:
+            break
+    return events
+
+
+def _terminal_verdict(state: Any) -> tuple[str, str, str] | None:
+    """Terminal ``(status, reason, message)`` for a state the runtime already ended.
+
+    ``None`` while the state is not terminal: a live turn owns its own ending,
+    and a state that has not been written is not evidence of anything.
+    """
+    status = str(getattr(state, "status", "") or "")
+    if status not in {"failed", "cancelled"}:
+        return None
+    metadata = getattr(state, "metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if state_is_memory_exhaustion(state):
+        # Includes states written before the code existed: the interruption is
+        # still memory, so the user gets the same explanation and the same
+        # armed resume rather than a generic "ended unexpectedly".
+        message = str(metadata.get("failure_message") or "").strip() or memory_exhausted_message_for(state)
+        return status, HOST_MEMORY_EXHAUSTED, message
+    code = str(metadata.get("failure_code") or "")
+    message = str(metadata.get("failure_message") or "").strip()
+    if not message:
+        message = "已中断。"
+    return status, code or ("user_interrupt" if status == "cancelled" else "failed"), message
+
+
+async def _arm_pending_memory_resume(
+    *,
+    context: "CoreLiveContext",
+    thread_id: str,
+    state: Any,
+    verdict: tuple[str, str, str] | None,
+) -> bool:
+    """Arm the auto resume for a turn whose recorded ending was memory exhaustion.
+
+    Idempotent and best-effort: arming is what lets the watchdog continue the
+    turn once the machine can afford it, so it must survive the restart that
+    interrupted the write.
+    """
+    if verdict is None or verdict[1] != HOST_MEMORY_EXHAUSTED:
+        return False
+    store = context.runtime_state_store
+    if store is None:
+        return False
+    try:
+        if not ensure_pending_memory_resume(state):
+            return False
+        await _save_runtime_state_with_retry(
+            store, thread_id, mutate=ensure_pending_memory_resume
+        )
+    except BaseException:
+        _logger.exception("[live:reconcile] arming the memory resume failed thread_id=%s", thread_id)
+        return False
+    _logger.warning("[live:reconcile] armed the memory resume thread_id=%s", thread_id)
+    return True
+
+
 async def recover_stale_active_turns(*, context: "CoreLiveContext") -> int:
     """Startup reaper mirroring ``ArrangeJobStore.recover_running``.
 
@@ -3360,97 +3773,75 @@ async def recover_stale_active_turns(*, context: "CoreLiveContext") -> int:
     user can answer it after the restart. Reaping that turn wrote a cancelled
     terminal over the request the user was about to answer, which is how
     closing Sunday mid-approval lost the approval entirely (2026-10-01).
-    """
-    try:
-        async with context.session_factory() as db:
-            list_active = getattr(context.persistence, "list_active_thread_ids", None)
-            thread_ids = (
-                await list_active(db)
-                if callable(list_active)
-                else await context.persistence.list_thread_ids(db)
-            )
-    except BaseException:
-        _logger.exception("[live:recover] failed to enumerate threads")
-        return 0
 
+    ``reconcile_terminal_turns`` runs after this and repairs the turns whose
+    runtime state already recorded *why* they ended.
+    """
     recovered = 0
-    for thread_id in thread_ids:
+    for thread_id in await _active_thread_ids(context=context):
         if await _active_turn_awaits_user_decision(context=context, thread_id=thread_id):
             _logger.info(
                 "[live:recover] keeping thread_id=%s parked on a user decision", thread_id
             )
             continue
-        async def write(db: AsyncSession, *, thread_id: str = thread_id) -> list[tuple[str, AppEventEnvelope]]:
-            events: list[tuple[str, AppEventEnvelope]] = []
-            seen: set[str] = set()
-            while True:
-                snapshot = await context.persistence.load(db, thread_id)
-                active = latest_active_turn_id(snapshot)
-                if not active or active in seen:
-                    break
-                seen.add(active)
-                # Close out any dangling non-terminal items (e.g. a half-baked
-                # tool_call whose arguments never finished streaming) BEFORE
-                # writing the turn-level terminal event. The snapshot reducer's
-                # turn-terminal lock would otherwise force-override item status
-                # on later events, but the event log would still hold orphaned
-                # ``running`` events — appending per-item cancelled tool_result
-                # events here makes replay self-consistent.
-                dangling = _collect_non_terminal_turn_item_ids(snapshot, active)
-                for item_id in dangling:
-                    tool_event = await _append_run_item(
-                        db,
-                        context=context,
-                        event=_build_interrupted_tool_event(
-                            thread_id=thread_id,
-                            turn_id=active,
-                            item_id=item_id,
-                        ),
-                    )
-                    events.append((active, tool_event))
-                    if len(events) > 50:  # guard against a runaway loop
-                        break
-                if len(events) > 50:
-                    break
-                event = await _append_run_item(
-                    db,
-                    context=context,
-                    event=RunItemEvent(
-                        kind="status",
-                        thread_id=thread_id,
-                        event_id=f"{active}:recovered",
-                        run_id=active,
-                        turn_id=active,
-                        item_id=f"{active}:recovered",
-                        status="cancelled",
-                        payload={
-                            "type": "turn",
-                            "status": "cancelled",
-                            "raw_end_reason": "unexpected_shutdown",
-                            "message": "Recovered after unexpected shutdown",
-                        },
-                    ),
-                )
-                events.append((active, event))
-                if len(events) > 50:  # guard against a runaway loop
-                    break
-            return events
+
+        # Ask the durable state first. When the runtime already recorded why the
+        # turn ended (a memory exhaustion, for instance) that reason is the
+        # truth; stamping the generic "unexpected shutdown" over it buried the
+        # cause AND swallowed the auto resume — the interrupted PV session was
+        # closed as an anonymous cancellation that way (2026-10-10).
+        store = context.runtime_state_store
+        state = None
+        try:
+            if store is not None:
+                state = await store.get(thread_id)
+        except BaseException:
+            _logger.exception("[live:recover] runtime-state read failed thread_id=%s", thread_id)
+        state_verdict = _terminal_verdict(state) if state is not None else None
+        recorded_run_id = str(getattr(state, "run_id", "") or "") if state is not None else ""
+        fallback_verdict = ("cancelled", "unexpected_shutdown", "已中断。")
+        from_record = False
+
+        def _verdict_for(active: str, _snapshot: dict[str, Any]) -> tuple[str, str, str] | None:
+            nonlocal from_record
+            if state_verdict is not None and (not recorded_run_id or active == recorded_run_id):
+                from_record = True
+                return state_verdict
+            return fallback_verdict
+
+        async def write(
+            db: AsyncSession, *, thread_id: str = thread_id
+        ) -> list[tuple[str, AppEventEnvelope]]:
+            return await _close_active_turns(
+                db,
+                context=context,
+                thread_id=thread_id,
+                verdict_for=_verdict_for,
+            )
 
         try:
             items = await context.persistence.write(write)
         except BaseException:
             _logger.exception("[live:recover] failed thread_id=%s", thread_id)
             continue
+        if state_verdict is not None and state is not None:
+            await _arm_pending_memory_resume(
+                context=context, thread_id=thread_id, state=state, verdict=state_verdict
+            )
         for turn_id, event in items:
-            try:
-                await _persist_cancelled_runtime_state(
-                    context=context, thread_id=thread_id, turn_id=turn_id
-                )
-            except BaseException:
-                _logger.exception(
-                    "[live:recover] runtime-state reconcile failed thread_id=%s turn_id=%s",
-                    thread_id, turn_id,
-                )
+            if not from_record:
+                # Only a turn we closed ourselves needs the state reconciled to
+                # "cancelled"; a verdict that came from the state must not be
+                # overwritten by the very cleanup that reads it.
+                try:
+                    await _persist_cancelled_runtime_state(
+                        context=context, thread_id=thread_id, turn_id=turn_id
+                    )
+                except BaseException:
+                    _logger.exception(
+                        "[live:recover] runtime-state reconcile failed thread_id=%s turn_id=%s",
+                        thread_id, turn_id,
+                    )
             try:
                 await context.hub.publish(event)
             except BaseException:
@@ -3462,6 +3853,75 @@ async def recover_stale_active_turns(*, context: "CoreLiveContext") -> int:
             recovered,
         )
     return recovered
+
+
+async def reconcile_terminal_turns(*, context: "CoreLiveContext") -> int:
+    """Close turns the runtime already ended but the snapshot still calls active.
+
+    The runtime writes its terminal state (``failed`` / ``cancelled``) before it
+    writes the terminal event, so anything that stops it in between leaves the
+    durable state terminal and the snapshot ``running`` forever: the session
+    keeps showing a spinner and a half-finished tool row, no error is ever
+    shown, and the pending guidance is never handed back. A host-memory crash
+    during that write is the usual cause (2026-10-10), and nothing repaired it
+    short of the next restart.
+
+    Only states the runtime itself declared terminal are reconciled — never a
+    guess based on how long a turn has been quiet, which would kill legitimate
+    long tools (a 25-minute video generation looks identical from the outside).
+    Best-effort: never raises.
+    """
+    store = context.runtime_state_store
+    if store is None:
+        return 0
+    registry = context.runtime_task_registry
+    reconciled = 0
+    for thread_id in await _active_thread_ids(context=context):
+        try:
+            if registry is not None and registry.is_running(thread_id):
+                continue  # a live turn owns this thread and will write its own ending
+            state = await store.get(thread_id)
+            if state is None:
+                continue
+            verdict = _terminal_verdict(state)
+            if verdict is None:
+                continue
+            await _arm_pending_memory_resume(
+                context=context, thread_id=thread_id, state=state, verdict=verdict
+            )
+
+            async def write(
+                db: AsyncSession,
+                *,
+                thread_id: str = thread_id,
+                verdict: tuple[str, str, str] = verdict,
+                expected_run_id: str = str(getattr(state, "run_id", "") or ""),
+            ) -> list[tuple[str, AppEventEnvelope]]:
+                return await _close_active_turns(
+                    db,
+                    context=context,
+                    thread_id=thread_id,
+                    verdict_for=lambda active, _snapshot: (
+                        None if expected_run_id and active != expected_run_id else verdict
+                    ),
+                )
+
+            items = await context.persistence.write(write)
+        except BaseException:
+            _logger.exception("[live:reconcile] failed thread_id=%s", thread_id)
+            continue
+        for _turn_id, event in items:
+            try:
+                await context.hub.publish(event)
+            except BaseException:
+                pass
+        if items:
+            reconciled += len(items)
+            _logger.warning(
+                "[live:reconcile] closed %d item(s) of an already-terminal turn thread_id=%s reason=%s",
+                len(items), thread_id, verdict[1],
+            )
+    return reconciled
 
 
 async def _active_turn_awaits_user_decision(*, context: "CoreLiveContext", thread_id: str) -> bool:
@@ -3996,6 +4456,29 @@ def _expected_revision(params: dict[str, Any]) -> int | None:
     if revision < 0:
         raise ValueError("expected_revision must be a non-negative integer")
     return revision
+
+
+def _include_snapshot_param(params: dict[str, Any]) -> bool:
+    """Mutation responses embed the full snapshot unless the caller opts out.
+
+    The desktop UI opts out everywhere: the response's event list already
+    carries the state change and the revision, so a 48MB snapshot parse per
+    send/guide on large threads was pure latency (measured 0.6-1.6s round
+    trips on a 509-item session). CLI/mobile callers keep the legacy default.
+    """
+    return params.get("include_snapshot") is not False
+
+
+async def _load_snapshot_outside_write_lock(context: CoreLiveContext, thread_id: str) -> dict[str, Any]:
+    """Assemble the full snapshot after the write transaction committed.
+
+    Full assembly scans every item row; doing it inside the global SQLite
+    write lock stalled concurrent sends/streaming for its whole duration.
+    Reading after commit is monotonic for clients (revision only moves
+    forward), so the tiny race window is harmless.
+    """
+    async with context.session_factory() as db:
+        return await context.persistence.load(db, thread_id)
 
 
 _CORE_LIVE_OPERATION_EXECUTORS = {

@@ -96,6 +96,12 @@ export function selectChatMessages(
   // (ChatThread keys on msg.id). The first segment keeps the legacy
   // `assistant:<turn>` id, later ones append `:<n>`.
   const assistantSegments = new Map<string, number>()
+  // One cancel explanation per turn. Stop, force reset and crash recovery each
+  // used to write their own terminal status row (different item ids), so a
+  // reopened session stacked several cancel bubbles at the turn's tail; the
+  // backend now shares one identity, but legacy threads still hold the stack —
+  // keep only the newest terminal row per turn when projecting.
+  const terminalStatusPartByTurn = new Map<string, CoreAppItem>()
   /** Open (or reuse) this turn's assistant segment. A mid-turn guidance part
    *  is rendered inside it — the instruction belongs to the turn's process and
    *  must not open a second assistant block, which is what made one turn look
@@ -176,6 +182,15 @@ export function selectChatMessages(
     }
     const turnId = resolvedTurnId || 'none'
     const assistant = ensureAssistantSegment(item, turnId)
+    if (isDeadModelRetryItem(item)) continue
+    if (isTurnTerminalStatusItem(item)) {
+      const previous = terminalStatusPartByTurn.get(turnId)
+      if (previous) {
+        const index = assistant.parts.indexOf(previous)
+        if (index >= 0) assistant.parts.splice(index, 1)
+      }
+      terminalStatusPartByTurn.set(turnId, item)
+    }
     if (item.type === 'agentMessage') {
       const content = String(item.content ?? '')
       // Always accumulate the last agentMessage text as content for backward compat
@@ -731,6 +746,22 @@ function normalizeDeliveryRecord(value: unknown): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** Turn-level terminal row ("已中断。" / a named failure): the one explanation
+ *  a cancelled or failed turn is allowed to show. */
+function isTurnTerminalStatusItem(item: CoreAppItem): boolean {
+  return item.type === 'status'
+    && (item.status === 'cancelled' || item.status === 'failed')
+    && typeof item.raw_end_reason === 'string'
+}
+
+/** A model-retry bar the turn can no longer answer: crash recovery flipped it
+ *  to a terminal status, so it would render forever as a stuck "重试中" row. */
+function isDeadModelRetryItem(item: CoreAppItem): boolean {
+  return typeof item.item_id === 'string'
+    && item.item_id.includes(':model-retry:')
+    && (item.status === 'cancelled' || item.status === 'failed')
 }
 
 function coreItemType(item: CoreRuntimeItem): string {
