@@ -659,7 +659,10 @@ async def test_forbidden_strategy_keeps_guide_but_has_priority_and_runtime_block
     assert guide_index < strategy_index < roles_index
     assert "takes precedence over the general delegation guide" in system_prompt
     assert "do not delegate to sub-agents" in system_prompt
-    assert "ask the user for a text description" in system_prompt
+    # The capability line changes with attachments, so it lives in the trailing
+    # runtime message instead of the cache-stable system prompt.
+    runtime_prompt = str(request.messages[-1].content)
+    assert "ask the user for a text description" in runtime_prompt
 
     visible = {spec.name for spec in kit.toolbox.tool_specs()}
     assert "sub_agent" not in visible
@@ -706,12 +709,13 @@ async def test_base_agent_injects_capability_prompt_for_text_model(tmp_path, iso
         PromptContext(session_id="cap-text"),
     )
 
-    system_prompt = str(request.messages[0].content)
-    assert "Current model capability" in system_prompt
-    assert "text only" in system_prompt
-    assert "image, video, and audio input are unsupported" in system_prompt
-    assert "sub_agent" in system_prompt
-    assert "multimodal model" in system_prompt
+    runtime_prompt = str(request.messages[-1].content)
+    assert "Current model capability" in runtime_prompt
+    assert "text only" in runtime_prompt
+    assert "image, video, and audio input are unsupported" in runtime_prompt
+    assert "sub_agent" in runtime_prompt
+    assert "multimodal model" in runtime_prompt
+    assert "Current model capability" not in str(request.messages[0].content)
 
 
 @pytest.mark.asyncio
@@ -730,9 +734,10 @@ async def test_base_agent_injects_capability_prompt_for_multimodal_model(tmp_pat
         PromptContext(session_id="cap-mm"),
     )
 
-    system_prompt = str(request.messages[0].content)
-    assert "Current model capability" in system_prompt
-    assert "multimodal" in system_prompt
+    runtime_prompt = str(request.messages[-1].content)
+    assert "Current model capability" in runtime_prompt
+    assert "multimodal" in runtime_prompt
+    assert "Current model capability" not in str(request.messages[0].content)
 
 
 @pytest.mark.asyncio
@@ -751,8 +756,8 @@ async def test_base_agent_omits_capability_line_when_capability_unknown(tmp_path
         PromptContext(session_id="cap-none"),
     )
 
-    system_prompt = str(request.messages[0].content)
-    assert "Current model capability" not in system_prompt
+    assert "Current model capability" not in str(request.messages[0].content)
+    assert "Current model capability" not in str(request.messages[-1].content)
 
 
 # --- Default multimodal model resolution -----------------------------------
@@ -818,9 +823,10 @@ async def test_text_model_capability_prompt_uses_first_multimodal_model(tmp_path
         PromptContext(session_id="cap-dynamic"),
     )
 
-    system_prompt = str(request.messages[0].content)
-    assert 'set model to "alpha-mm"' in system_prompt
-    assert "Kimi-K2.6" not in system_prompt
+    runtime_prompt = str(request.messages[-1].content)
+    assert 'set model to "alpha-mm"' in runtime_prompt
+    assert "Kimi-K2.6" not in runtime_prompt
+    assert "Kimi-K2.6" not in str(request.messages[0].content)
 
 
 @pytest.mark.asyncio
@@ -838,7 +844,8 @@ async def test_text_model_capability_prompt_omits_concrete_model_when_none(tmp_p
         PromptContext(session_id="cap-no-mm"),
     )
 
-    system_prompt = str(request.messages[0].content)
-    assert "set model to a model that supports images" in system_prompt
-    assert 'model="' not in system_prompt
-    assert "Kimi-K2.6" not in system_prompt
+    runtime_prompt = str(request.messages[-1].content)
+    assert "set model to a model that supports images" in runtime_prompt
+    assert 'model="' not in runtime_prompt
+    assert "Kimi-K2.6" not in runtime_prompt
+    assert "Kimi-K2.6" not in str(request.messages[0].content)

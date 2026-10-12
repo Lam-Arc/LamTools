@@ -44,6 +44,49 @@ async def test_read_file_returns_metadata_and_artifact(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_read_file_keeps_shape_in_metadata_not_in_content(tmp_path):
+    """The bracketed summary used to be appended to the body, so models copied
+    it into ``edit_file`` context and the edit then failed to match.  The content
+    must be exactly the file text, with the shape carried as metadata."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    body = "# title\n\nline three\n"
+    (work_root / "note.md").write_bytes(body.encode("utf-8"))
+    tools = WorkspaceReadOnlyTools(work_root)
+
+    result = await tools.read_file(ToolCall(id="read-shape", name="read_file", arguments={"path": "note.md"}))
+
+    assert result.status == "ok"
+    assert result.content == body
+    assert "[file:" not in result.content
+    assert result.metadata["line_count"] == 3
+    assert result.metadata["size_bytes"] == len(body.encode("utf-8"))
+    # The artifact carries the same shape for the UI footer.
+    assert result.artifacts[0].metadata["line_count"] == 3
+    assert result.artifacts[0].metadata["size_bytes"] == len(body.encode("utf-8"))
+    assert result.artifacts[0].metadata["modified"] not in ("", None)
+    assert result.artifacts[0].content == body
+
+
+@pytest.mark.asyncio
+async def test_read_file_truncation_marker_stays_in_content(tmp_path):
+    """Truncation is the one shape fact that must stay in the body: it warns the
+    text below is cut, and the model cannot see a metadata-only signal in the
+    same glance as the content."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    (work_root / "big.txt").write_bytes(b"abcdefghij\n")
+    tools = WorkspaceReadOnlyTools(work_root, max_text_length=4)
+
+    result = await tools.read_file(ToolCall(id="read-trunc", name="read_file", arguments={"path": "big.txt"}))
+
+    assert result.status == "ok"
+    assert result.content == "abcd\n[... truncated]"
+    assert "[file:" not in result.content
+    assert result.metadata["truncated"] is True
+
+
+@pytest.mark.asyncio
 async def test_read_file_can_use_registered_resource_root(tmp_path):
     work_root = tmp_path / "project"
     resource_root = tmp_path / "skill"
@@ -71,14 +114,107 @@ async def test_read_file_returns_png_as_image_data_url(tmp_path):
     result = await tools.read_file(ToolCall(id="read-img", name="read_file", arguments={"path": "shot.png"}))
 
     assert result.status == "ok"
-    assert result.metadata["image_data_url"].startswith("data:image/png;base64,")
+    # 原图走内存里的模型通道，不再写进 metadata（否则会随事件/条目 payload 落盘）
+    assert "image_data_url" not in result.metadata
     expected = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
-    assert result.metadata["image_data_url"] == expected
+    assert result.model_image_data_url == expected
     assert result.artifacts[0].kind == "file_read"
+    # 这份假 PNG 无法解码，预览 fail open，保留原始字节与 mime
     assert result.artifacts[0].metadata["image_data_url"] == expected
     # 像素内容不进文本（避免乱码），content 为文件说明
     assert "图片文件" in result.content
     assert "\x89PNG" not in result.content
+    # 模型看到的图片引用是绝对路径：图片降级成低分辨率副本之后，重读原文件是
+    # 唯一能细看的方式，绝对路径不需要模型再猜工作区根目录。
+    assert f"图片文件: {(work_root / 'shot.png').resolve().as_posix()}" in result.content
+    assert f"图片文件: shot.png" not in result.content
+    # artifact/UI 侧仍保留工作区相对路径。
+    assert result.metadata["path"] == "shot.png"
+
+
+@pytest.mark.asyncio
+async def test_read_file_render_copy_is_downscaled_while_model_keeps_original(tmp_path):
+    """The persisted/rendered artifact is a capped preview; the model's first
+    view stays the untouched original via the non-serialized model channel."""
+    Image = pytest.importorskip("PIL.Image")
+    import io
+    import random
+
+    image = Image.new("RGB", (2400, 1200))
+    image.putdata([(random.randrange(256), random.randrange(256), random.randrange(256))
+                   for _ in range(2400 * 1200)])
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    raw = buffer.getvalue()
+
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    (work_root / "sheet.png").write_bytes(raw)
+    tools = WorkspaceReadOnlyTools(work_root)
+
+    result = await tools.read_file(ToolCall(id="read-prev", name="read_file", arguments={"path": "sheet.png"}))
+
+    original = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+    assert result.model_image_data_url == original
+    assert "image_data_url" not in result.metadata
+
+    preview = result.artifacts[0].metadata["image_data_url"]
+    assert preview.startswith("data:image/jpeg;base64,")
+    preview_b64 = preview.split(";base64,", 1)[1]
+    assert len(preview_b64) < len(original.split(";base64,", 1)[1])
+    with Image.open(io.BytesIO(base64.b64decode(preview_b64))) as decoded:
+        assert max(decoded.size) <= 1600
+        assert decoded.format == "JPEG"
+
+
+@pytest.mark.asyncio
+async def test_read_file_transparent_preview_keeps_alpha_as_webp(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    import io
+    import random
+
+    image = Image.new("RGBA", (2400, 1200))
+    image.putdata([(random.randrange(256), random.randrange(256), random.randrange(256),
+                    random.randrange(256)) for _ in range(2400 * 1200)])
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    raw = buffer.getvalue()
+
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    (work_root / "sprite.png").write_bytes(raw)
+    tools = WorkspaceReadOnlyTools(work_root)
+
+    result = await tools.read_file(ToolCall(id="read-alpha", name="read_file", arguments={"path": "sprite.png"}))
+
+    preview = result.artifacts[0].metadata["image_data_url"]
+    assert preview.startswith("data:image/webp;base64,")
+    with Image.open(io.BytesIO(base64.b64decode(preview.split(";base64,", 1)[1]))) as decoded:
+        assert max(decoded.size) <= 1600
+        assert decoded.mode in {"RGBA", "LA", "PA"}
+
+
+@pytest.mark.asyncio
+async def test_read_file_small_image_preview_keeps_original_when_not_smaller(tmp_path):
+    """A tiny image must not be re-encoded into a larger blob."""
+    Image = pytest.importorskip("PIL.Image")
+    import io
+
+    image = Image.new("RGB", (16, 16), (10, 20, 30))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    raw = buffer.getvalue()
+
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    (work_root / "dot.png").write_bytes(raw)
+    tools = WorkspaceReadOnlyTools(work_root)
+
+    result = await tools.read_file(ToolCall(id="read-small", name="read_file", arguments={"path": "dot.png"}))
+
+    original = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+    assert result.model_image_data_url == original
+    assert result.artifacts[0].metadata["image_data_url"] == original
 
 
 @pytest.mark.parametrize(
@@ -102,7 +238,9 @@ async def test_read_file_image_mime_mapping(tmp_path, suffix, mime):
     result = await tools.read_file(ToolCall(id="read-img", name="read_file", arguments={"path": f"pic{suffix}"}))
 
     assert result.status == "ok"
-    assert result.metadata["image_data_url"].startswith(f"data:{mime};base64,")
+    assert result.model_image_data_url.startswith(f"data:{mime};base64,")
+    # 假字节无法解码：预览 fail open，同样保留映射出的 mime
+    assert result.artifacts[0].metadata["image_data_url"].startswith(f"data:{mime};base64,")
 
 
 @pytest.mark.asyncio
@@ -1013,12 +1151,15 @@ async def test_edit_file_context_and_content_hash_target_the_exact_match(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_edit_file_diagnoses_literal_null_context_without_writing(tmp_path):
+async def test_edit_file_reads_placeholder_null_context_as_no_constraint(tmp_path):
+    """A model that fills every optional schema field writes the literal string
+    "null" where it means "no constraint".  Read literally it silently became a
+    bogus context and failed the edit with a misleading ``context_mismatch``
+    (the reported bug), so it must read as "not supplied" instead."""
     work_root = tmp_path / "project"
     work_root.mkdir()
     target = work_root / "literal-null.txt"
-    original = b"prefix\nold\nsuffix\n"
-    target.write_bytes(original)
+    target.write_bytes(b"prefix\nold\nsuffix\n")
 
     result = await edit_file_tool(
         ToolCall(
@@ -1036,39 +1177,393 @@ async def test_edit_file_diagnoses_literal_null_context_without_writing(tmp_path
         work_root=work_root,
     )
 
-    assert result.status == "failed"
-    assert result.error_code == "context_mismatch"
-    assert "literal string \"null\"" in result.error
-    assert "JSON null" in result.error
-    assert result.metadata["old_string_match_count"] == 1
-    assert result.metadata["suspected_null_string_fields"] == ["before_context", "after_context"]
-    assert target.read_bytes() == original
+    assert result.status == "ok"
+    assert target.read_bytes() == b"prefix\nnew\nsuffix\n"
 
 
 @pytest.mark.asyncio
-async def test_edit_file_keeps_literal_null_context_matchable(tmp_path):
+async def test_edit_file_placeholder_context_names_the_ignored_field_on_mismatch(tmp_path):
+    """A real constraint that does not match still fails, and the failure says
+    which sibling field was a placeholder that got ignored — so the model knows
+    the mismatch comes from the field it actually supplied."""
     work_root = tmp_path / "project"
     work_root.mkdir()
-    target = work_root / "literal-null-match.txt"
-    target.write_bytes(b"nulloldnull\n")
+    target = work_root / "placeholder-diagnostic.txt"
+    original = b"left:target\nright:target\n"
+    target.write_bytes(original)
 
     result = await edit_file_tool(
         ToolCall(
-            id="edit-literal-null-match",
+            id="edit-placeholder-diagnostic",
             name="edit_file",
             arguments={
-                "path": "literal-null-match.txt",
-                "old_string": "old",
-                "new_string": "new",
-                "before_context": "null",
+                "path": "placeholder-diagnostic.txt",
+                "old_string": "target",
+                "new_string": "updated",
+                "before_context": "wrong:",
                 "after_context": "null",
             },
         ),
         work_root=work_root,
     )
 
+    assert result.status == "failed"
+    assert result.error_code == "context_mismatch"
+    assert "after_context received the literal string \"null\"" in result.error
+    assert result.metadata["old_string_match_count"] == 2
+    assert result.metadata["suspected_null_string_fields"] == ["after_context"]
+    assert target.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_edit_file_context_mismatch_shows_real_context_for_one_shot_fix(tmp_path):
+    """When old_string is unique but the supplied context is wrong, the failure
+    must hand the model the real surrounding bytes so the next attempt can be
+    correct — otherwise it re-reads, guesses again, and falls back to a
+    whole-file ``write_file``.  The guard itself still refuses the edit."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "context-note.md"
+    original = (
+        "# note\n"
+        "\n"
+        "- 用途：验证编辑\n"
+        "- 位置：E:/LamTools/lamsmoke/smoke-note.md\n"
+        "- 创建时间：本轮自检第 7 项\n"
+        "- 后续会被修改一次\n"
+    )
+    target.write_bytes(original.encode("utf-8"))
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-context-preview",
+            name="edit_file",
+            # The model copied read_file's decorated metadata line into
+            # after_context, and dropped the trailing newline from the line
+            # above — both are wrong, but only one round should be needed to see
+            # and fix them from the printed context.
+            arguments={
+                "path": "context-note.md",
+                "old_string": "- 创建时间：本轮自检第 7 项\n- 后续会被修改一次",
+                "new_string": "- 创建时间：本轮自检第 7 项（已改）\n- 后续会被修改一次",
+                "before_context": "- 位置：E:/LamTools/lamsmoke/smoke-note.md",
+                "after_context": "\n\n[file: 6 lines, 224B, modified 2026-10-12 12:00]",
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "context_mismatch"
+    assert result.metadata["old_string_match_count"] == 1
+    # Names the fields that did not match...
+    assert "before_context and after_context do not match" in result.error
+    # ...and prints the real neighbouring lines so the fix needs no re-read.
+    assert "old_string matches exactly once, at line 5" in result.error
+    assert ">>    5 | - 创建时间：本轮自检第 7 项" in result.error
+    assert "- 位置：E:/LamTools/lamsmoke/smoke-note.md" in result.error
+    assert "| - 后续会被修改一次" in result.error
+    # The rejected edit never touched the file.
+    assert target.read_bytes() == original.encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_edit_file_context_mismatch_names_the_single_wrong_field(tmp_path):
+    """Only the field that actually mismatched is blamed, so the model changes
+    the right one."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "one-field.txt"
+    original = b"alpha\nbeta\ngamma\n"
+    target.write_bytes(original)
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-one-wrong-field",
+            name="edit_file",
+            arguments={
+                "path": "one-field.txt",
+                "old_string": "beta",
+                "new_string": "BETA",
+                # Correct neighbour, wrong one: only after_context should be named.
+                "before_context": "alpha\n",
+                "after_context": "delta\n",
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "context_mismatch"
+    assert "but after_context does not match" in result.error
+    assert target.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_edit_file_context_mismatch_lists_every_match_when_ambiguous(tmp_path):
+    """With several occurrences and no candidate matching the context, the
+    failure shows each match's line so the model can choose an occurrence."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "many.txt"
+    original = b"only:target;one\nonly:target;two\n"
+    target.write_bytes(original)
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-many-shown",
+            name="edit_file",
+            arguments={
+                "path": "many.txt",
+                "old_string": "target",
+                "new_string": "updated",
+                "before_context": "wrong:",
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "context_mismatch"
+    assert result.metadata["old_string_match_count"] == 2
+    assert "matches 2 times, but none matched" in result.error
+    assert "-- match at line 1 --" in result.error
+    assert "-- match at line 2 --" in result.error
+    assert "only:target;one" in result.error
+    assert "only:target;two" in result.error
+    assert target.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_edit_file_ambiguous_match_shows_each_occurrence(tmp_path):
+    """With no context and several matches of the same text, the refusal must
+    list every occurrence (line number + real text), the same one-shot contract
+    as the context-mismatch path."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "ambiguous.txt"
+    original = b"same\nother\nsame\n"
+    target.write_bytes(original)
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-ambiguous-shown",
+            name="edit_file",
+            arguments={"path": "ambiguous.txt", "old_string": "same", "new_string": "changed"},
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "ambiguous_match"
+    assert result.metadata["old_string_match_count"] == 2
+    assert "old_string found 2 times" in result.error
+    assert "-- match at line 1 --" in result.error
+    assert "-- match at line 3 --" in result.error
+    assert ">>    1 | same" in result.error
+    assert ">>    3 | same" in result.error
+    assert "Pass occurrence (1-based)" in result.error
+    assert target.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_edit_file_not_found_points_at_near_candidate(tmp_path):
+    """A not-found quote must be correctable in one shot: report the file's
+    current shape and, when close text exists, the candidate line with its real
+    content — clearly marked a candidate, never a match.  The edit is refused."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "drift.txt"
+    original = b"# note\n\n- alpha\n    - beta: value 12\n- gamma\n"
+    target.write_bytes(original)
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-not-found-candidate",
+            name="edit_file",
+            arguments={
+                "path": "drift.txt",
+                # Off by one digit from the file's actual text.
+                "old_string": "- beta: value 13",
+                "new_string": "- beta: value 99",
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "old_string_not_found"
+    assert result.metadata["old_string_match_count"] == 0
+    assert result.metadata["line_count"] == 5
+    assert result.metadata["size_bytes"] == len(original)
+    # Shape and a change criterion the model can act on.
+    assert "The file now has 5 lines and" in result.error
+    assert "file_hash" in result.error
+    assert "No expected_file_hash was supplied" in result.error
+    # The candidate is flagged as a candidate and shows the real line.
+    assert "candidates, NOT matches" in result.error
+    assert "-- candidate at line 4 --" in result.error
+    assert "~~    4 |     - beta: value 12" in result.error
+    # And the model is told to re-read before retrying.
+    assert "Read the file again with read_file" in result.error
+    assert target.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_edit_file_not_found_reports_unchanged_when_baseline_matches(tmp_path):
+    """When the model quotes a read baseline and the file still matches it, the
+    failure can say so — ruling out a lost race and pointing at the text."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "baseline.txt"
+    original = b"alpha\nbeta\ngamma\n"
+    target.write_bytes(original)
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-not-found-baseline",
+            name="edit_file",
+            arguments={
+                "path": "baseline.txt",
+                "old_string": "betaX",
+                "new_string": "BETA",
+                "expected_file_hash": compute_sha256(original),
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "old_string_not_found"
+    assert "unchanged since the read this edit was based on" in result.error
+    assert target.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_edit_file_not_found_without_candidates_says_so(tmp_path):
+    """Nothing close in the file: the failure must say so instead of inventing a
+    candidate, and still report the shape."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "unrelated.txt"
+    original = b"alpha\nbeta\ngamma\n"
+    target.write_bytes(original)
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-not-found-none",
+            name="edit_file",
+            arguments={
+                "path": "unrelated.txt",
+                "old_string": "zzzz qqqq totally unrelated phrase",
+                "new_string": "x",
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "old_string_not_found"
+    assert "No text close enough to old_string was found" in result.error
+    assert "candidates, NOT matches" not in result.error
+    assert result.metadata["line_count"] == 3
+    assert target.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_edit_file_not_found_output_is_bounded_on_a_large_file(tmp_path):
+    """A large file must never be echoed back: the failure stays a shape line plus
+    at most a few bounded candidate windows."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "large.txt"
+    filler = "".join(f"line {index}: filler filler filler\n" for index in range(4000))
+    body = filler + "unique marker alpha beta gamma delta\n" + "".join(
+        f"tail {index}\n" for index in range(4000)
+    )
+    target.write_bytes(body.encode("utf-8"))
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-not-found-large",
+            name="edit_file",
+            arguments={
+                "path": "large.txt",
+                # One word differs from the marker line.
+                "old_string": "unique marker alpha beta gamma DELTA",
+                "new_string": "x",
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "old_string_not_found"
+    assert result.metadata["line_count"] == 8001
+    assert "-- candidate at line 4001 --" in result.error
+    # Bounded output: a shape line plus three 5-row windows at most, never 8001
+    # lines.  Well under the 12k model-evidence cap.
+    assert len(result.error) < 1200
+    assert result.error.count("|") <= 5 * 3
+    assert "tail 3999" not in result.error
+    assert target.read_bytes() == body.encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_edit_file_stale_context_is_still_refused(tmp_path):
+    """A context that used to match but no longer does is exactly the stale-read
+    signal the guard exists for; showing the real bytes must not turn it into a
+    silent pass."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "stale.txt"
+    target.write_bytes(b"before old after\n")
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-stale-context",
+            name="edit_file",
+            arguments={
+                "path": "stale.txt",
+                "old_string": "old",
+                "new_string": "new",
+                "before_context": "stale ",  # never present
+                "after_context": " after",
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "context_mismatch"
+    assert target.read_bytes() == b"before old after\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_reads_placeholder_content_hash_as_no_guard(tmp_path):
+    """The same "null" placeholder on expected_content_hash must not fail the
+    edit as a phantom content-race."""
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "hash-placeholder.txt"
+    target.write_bytes(b"target\n")
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-placeholder-content-hash",
+            name="edit_file",
+            arguments={
+                "path": "hash-placeholder.txt",
+                "old_string": "target",
+                "new_string": "replaced",
+                "expected_content_hash": "null",
+            },
+        ),
+        work_root=work_root,
+    )
+
     assert result.status == "ok"
-    assert target.read_bytes() == b"nullnewnull\n"
+    assert target.read_bytes() == b"replaced\n"
 
 
 @pytest.mark.asyncio

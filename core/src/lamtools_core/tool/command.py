@@ -58,8 +58,14 @@ def _windows_command_creationflags() -> int:
     return flags
 
 
-def terminate_process_tree(process: subprocess.Popen[Any]) -> None:
+def terminate_process_tree(
+    process: subprocess.Popen[Any],
+    *,
+    job_handle: int | None = None,
+) -> None:
     pid = process.pid
+    if job_handle is not None and _terminate_windows_job(job_handle):
+        return
     if sys.platform == "win32":
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
@@ -71,6 +77,175 @@ def terminate_process_tree(process: subprocess.Popen[Any]) -> None:
         )
         return
     process.kill()
+
+
+# Windows Job Object plumbing (ctypes, win32 only). A job guarantees the whole
+# descendant tree dies on TerminateJobObject: taskkill /T can miss children
+# whose intermediate process already restructured, and a survivor inherits the
+# stdout/stderr pipe handles so the parent's communicate() never sees EOF —
+# exactly the "interrupt never returns" failure mode.
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00000200
+_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS = 1
+_WINDOWS_JOB_HANDLES: set[int] = set()
+
+if sys.platform == "win32":
+    import ctypes as _ctypes
+    from ctypes import wintypes as _wintypes
+
+    _kernel32 = _ctypes.WinDLL("kernel32", use_last_error=True)
+    # Explicit argtypes are mandatory: without them ctypes narrows pointer
+    # arguments to 32-bit ints, which corrupts buffer addresses on x64.
+    _kernel32.CreateJobObjectW.restype = _wintypes.HANDLE
+    _kernel32.CreateJobObjectW.argtypes = [_wintypes.LPCWSTR, _wintypes.LPCWSTR]
+    _kernel32.SetInformationJobObject.restype = _wintypes.BOOL
+    _kernel32.SetInformationJobObject.argtypes = [
+        _wintypes.HANDLE, _ctypes.c_int, _ctypes.c_void_p, _wintypes.DWORD,
+    ]
+    _kernel32.QueryInformationJobObject.restype = _wintypes.BOOL
+    _kernel32.QueryInformationJobObject.argtypes = [
+        _wintypes.HANDLE, _ctypes.c_int, _ctypes.c_void_p, _wintypes.DWORD,
+        _ctypes.POINTER(_wintypes.DWORD),
+    ]
+    _kernel32.AssignProcessToJobObject.restype = _wintypes.BOOL
+    _kernel32.AssignProcessToJobObject.argtypes = [_wintypes.HANDLE, _wintypes.HANDLE]
+    _kernel32.TerminateJobObject.restype = _wintypes.BOOL
+    _kernel32.TerminateJobObject.argtypes = [_wintypes.HANDLE, _wintypes.UINT]
+    _kernel32.CloseHandle.restype = _wintypes.BOOL
+    _kernel32.CloseHandle.argtypes = [_wintypes.HANDLE]
+else:
+    _kernel32 = None
+
+
+def _windows_job_assign(process: subprocess.Popen[Any]) -> int | None:
+    """Put *process* into a kill-on-close job; returns the job handle or None."""
+    if _kernel32 is None:
+        return None
+    try:
+        import struct
+
+        job = _kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        # JOBOBJECT_EXTENDED_LIMIT_INFORMATION with LimitFlags at offset 40.
+        # The canonical x64 size is 168; some sandboxed/layered environments
+        # expect a shorter 144-byte layout, so probe a small size ladder on
+        # ERROR_BAD_LENGTH. LimitFlags sits at offset 40 in every variant.
+        assigned = False
+        for size in (168, 144):
+            buffer = _ctypes.create_string_buffer(size)
+            struct.pack_into("<I", buffer, 40, _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+            if _kernel32.SetInformationJobObject(
+                job,
+                _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                _ctypes.c_void_p(_ctypes.addressof(buffer)),
+                size,
+            ):
+                assigned = True
+                break
+        if not assigned:
+            _kernel32.CloseHandle(job)
+            return None
+        if not _kernel32.AssignProcessToJobObject(job, _wintypes.HANDLE(process._handle)):
+            _kernel32.CloseHandle(job)
+            return None
+        handle = int(job)
+        _WINDOWS_JOB_HANDLES.add(handle)
+        return handle
+    except Exception:
+        return None
+
+
+def _terminate_windows_job(job_handle: int) -> bool:
+    if _kernel32 is None:
+        return False
+    try:
+        return bool(_kernel32.TerminateJobObject(_wintypes.HANDLE(job_handle), 1))
+    except Exception:
+        return False
+
+
+def _windows_job_active_processes(job_handle: int) -> int | None:
+    if _kernel32 is None:
+        return None
+    try:
+        import ctypes as _ct
+
+        class _BasicAccounting(_ct.Structure):
+            _fields_ = [
+                ("TotalUserTime", _ct.c_int64),
+                ("TotalKernelTime", _ct.c_int64),
+                ("ThisPeriodTotalUserTime", _ct.c_int64),
+                ("ThisPeriodTotalKernelTime", _ct.c_int64),
+                ("TotalPageFaultCount", _wintypes.DWORD),
+                ("TotalProcesses", _wintypes.DWORD),
+                ("ActiveProcesses", _wintypes.DWORD),
+                ("TotalTerminatedProcesses", _wintypes.DWORD),
+            ]
+
+        info = _BasicAccounting()
+        if not _kernel32.QueryInformationJobObject(
+            _wintypes.HANDLE(job_handle),
+            _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS,
+            _ct.c_void_p(_ct.addressof(info)),
+            _ct.sizeof(info),
+            None,
+        ):
+            return None
+        return int(info.ActiveProcesses)
+    except Exception:
+        return None
+
+
+def _windows_job_release(job_handle: int | None) -> None:
+    """Drop the job handle unless processes are still alive inside it.
+
+    Closing the handle of a kill-on-close job while a detached descendant is
+    still alive would kill a process the command legitimately left running,
+    so the handle is kept (tracked) until backend exit in that case; the
+    exit hook closes it, which deliberately reaps survivors.
+    """
+    if job_handle is None or _kernel32 is None:
+        return
+    _WINDOWS_JOB_HANDLES.discard(job_handle)
+    try:
+        if _windows_job_active_processes(job_handle) != 0:
+            _WINDOWS_JOB_HANDLES.add(job_handle)
+            return
+        _kernel32.CloseHandle(_wintypes.HANDLE(job_handle))
+    except Exception:
+        pass
+
+
+def _release_windows_jobs_at_exit() -> None:
+    for handle in tuple(_WINDOWS_JOB_HANDLES):
+        _WINDOWS_JOB_HANDLES.discard(handle)
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception:
+            pass
+
+
+if sys.platform == "win32":
+    import atexit
+
+    atexit.register(_release_windows_jobs_at_exit)
+
+
+def _close_pipes(process: subprocess.Popen[Any]) -> None:
+    """Close our pipe read ends so a surviving descendant cannot wedge reads.
+
+    communicate()/readline() only return at EOF; a grandchild holding the
+    write end keeps the pipe open even after the direct child is dead.
+    """
+    for stream in (process.stdout, process.stderr):
+        try:
+            if stream is not None and not stream.closed:
+                stream.close()
+        except Exception:
+            pass
 
 
 def run_subprocess_blocking(
@@ -85,6 +260,7 @@ def run_subprocess_blocking(
     started_at = time.monotonic()
     creationflags = _windows_command_creationflags()
     process: subprocess.Popen[str] | None = None
+    job_handle: int | None = None
     try:
         process = subprocess.Popen(
             argv,
@@ -98,11 +274,12 @@ def run_subprocess_blocking(
             errors="replace",
             creationflags=creationflags,
         )
+        job_handle = _windows_job_assign(process)
         deadline = time.monotonic() + timeout
         while True:
             if cancel_event is not None and cancel_event.is_set():
-                terminate_process_tree(process)
-                stdout, stderr = process.communicate(timeout=2)
+                terminate_process_tree(process, job_handle=job_handle)
+                stdout, stderr = _collect_after_terminate(process)
                 return CommandExecution(
                     exit_code=-1,
                     stdout=stdout or "",
@@ -127,19 +304,15 @@ def run_subprocess_blocking(
         )
     except subprocess.TimeoutExpired as exc:
         if process is not None:
-            terminate_process_tree(process)
-            try:
-                stdout, stderr = process.communicate(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                stdout, stderr = process.communicate(timeout=2)
+            terminate_process_tree(process, job_handle=job_handle)
+            stdout, stderr = _collect_after_terminate(process)
         else:
             stdout = _decode_timeout_output(exc.stdout)
             stderr = _decode_timeout_output(exc.stderr)
         return CommandExecution(
             exit_code=-1,
-            stdout=_decode_timeout_output(stdout),
-            stderr=_decode_timeout_output(stderr),
+            stdout=stdout,
+            stderr=stderr,
             timed_out=True,
             duration_seconds=time.monotonic() - started_at,
             error=f"Command timed out after {timeout}s",
@@ -159,6 +332,25 @@ def run_subprocess_blocking(
             error=f"Command execution failed: {_exception_summary(exc)}",
             error_type=type(exc).__name__,
         )
+    finally:
+        _windows_job_release(job_handle)
+
+
+def _collect_after_terminate(process: subprocess.Popen[Any]) -> tuple[str, str]:
+    """Read output after a forced terminate without ever hanging or raising.
+
+    A terminated tree usually closes the pipes promptly. If a survivor still
+    holds the write end, the pipe read ends are closed so no reader can wedge
+    on EOF — output is best-effort at this point, and the caller already has
+    its own cancel/timeout result.
+    """
+    try:
+        return process.communicate(timeout=2)
+    except Exception:
+        _close_pipes(process)
+        with contextlib.suppress(Exception):
+            process.wait(timeout=2)
+        return "", ""
 
 
 def run_subprocess_streaming_blocking(
@@ -173,6 +365,7 @@ def run_subprocess_streaming_blocking(
     started_at = time.monotonic()
     creationflags = _windows_command_creationflags()
     process: subprocess.Popen[str] | None = None
+    job_handle: int | None = None
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
     threads: list[threading.Thread] = []
@@ -222,10 +415,11 @@ def run_subprocess_streaming_blocking(
         ]
         for thread in threads:
             thread.start()
+        job_handle = _windows_job_assign(process)
         deadline = time.monotonic() + timeout
         while True:
             if cancel_event is not None and cancel_event.is_set():
-                terminate_process_tree(process)
+                terminate_process_tree(process, job_handle=job_handle)
                 for thread in threads:
                     thread.join(timeout=0.2)
                 stdout, stderr = _snapshot()
@@ -256,7 +450,11 @@ def run_subprocess_streaming_blocking(
         )
     except subprocess.TimeoutExpired as exc:
         if process is not None:
-            terminate_process_tree(process)
+            terminate_process_tree(process, job_handle=job_handle)
+            # The job kill closes every write end; the reader threads see EOF
+            # promptly. Close our read ends too so a stray survivor cannot
+            # wedge a daemon reader on a blocked readline.
+            _close_pipes(process)
             for thread in threads:
                 thread.join(timeout=0.2)
             stdout, stderr = _snapshot()
@@ -286,6 +484,8 @@ def run_subprocess_streaming_blocking(
             error=f"Command execution failed: {_exception_summary(exc)}",
             error_type=type(exc).__name__,
         )
+    finally:
+        _windows_job_release(job_handle)
 
 
 async def run_subprocess(

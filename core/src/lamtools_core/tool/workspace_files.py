@@ -19,7 +19,7 @@ from lamtools_core.tool.document_normalize import (
     DocumentNormalizationError,
     normalize_document,
 )
-from lamtools_core.tool.optional_arguments import optional_string
+from lamtools_core.tool.optional_arguments import optional_string, optional_text
 from lamtools_core.tool.workspace import (
     format_file_size,
     is_within_path,
@@ -289,26 +289,34 @@ def _context_mismatch_result(
     matches: list[tuple[int, int]],
     before_context: str | None,
     after_context: str | None,
+    *,
+    content: str,
+    ignored_placeholders: list[str] | None = None,
 ) -> ToolResult:
-    suspected_null_string_fields = [
-        field_name
-        for field_name, value in (
-            ("before_context", before_context),
-            ("after_context", after_context),
-        )
-        if value == "null"
-    ]
+    # ``ignored_placeholders`` names context fields the model filled with the
+    # literal string "null"; they were treated as absent, so the mismatch comes
+    # from the remaining constraint.  Saying so is what makes the failure
+    # actionable instead of looking like a false negative.
+    #
+    # ``content`` lets the failure show the *real* bytes around the match.
+    # Without it the model only learns "some context did not match", re-reads,
+    # guesses the context again, and — when the guard keeps rejecting — abandons
+    # a small edit for a whole-file ``write_file``.  Printing the surrounding
+    # text turns a repeated failure into a one-shot correction while the guard
+    # itself stays strict (a stale read and a wrong target are still refused).
     metadata: dict[str, Any] = {"old_string_match_count": len(matches)}
-    if suspected_null_string_fields:
-        metadata["suspected_null_string_fields"] = suspected_null_string_fields
-        fields = ", ".join(suspected_null_string_fields)
-        message = (
-            f"Context did not match any occurrence of old_string in {path_str}; "
-            f"{fields} received the literal string \"null\". "
-            "Pass JSON null (without quotes) or omit that field when no context constraint is intended."
+    message = f"Context did not match any occurrence of old_string in {path_str}"
+    if ignored_placeholders:
+        metadata["suspected_null_string_fields"] = list(ignored_placeholders)
+        fields = ", ".join(ignored_placeholders)
+        message += (
+            f"; {fields} received the literal string \"null\" and was treated as "
+            "no constraint. Pass JSON null (without quotes) or omit that field "
+            "when no context constraint is intended."
         )
-    else:
-        message = f"Context did not match any occurrence of old_string in {path_str}"
+    message += "\n" + _context_mismatch_guidance(
+        content, matches, before_context, after_context
+    )
     return _failed_result(call, "context_mismatch", message, metadata=metadata)
 
 
@@ -324,6 +332,26 @@ def _find_non_overlapping_occurrences(content: str, needle: str) -> list[tuple[i
         offset = end
 
 
+def _context_field_verdict(
+    content: str,
+    start: int,
+    end: int,
+    before_context: str | None,
+    after_context: str | None,
+) -> tuple[bool, bool]:
+    """Whether each supplied context field matches at one occurrence.
+
+    An unsupplied (``None``) field counts as matching, so the verdict isolates
+    the field the model actually supplied and got wrong.
+    """
+    before_ok = before_context is None or (
+        start - len(before_context) >= 0
+        and content[start - len(before_context):start] == before_context
+    )
+    after_ok = after_context is None or content[end:end + len(after_context)] == after_context
+    return before_ok, after_ok
+
+
 def _context_matches(
     content: str,
     start: int,
@@ -331,13 +359,329 @@ def _context_matches(
     before_context: str | None,
     after_context: str | None,
 ) -> bool:
-    if before_context is not None:
-        before_start = start - len(before_context)
-        if before_start < 0 or content[before_start:start] != before_context:
-            return False
-    if after_context is not None and content[end:end + len(after_context)] != after_context:
-        return False
-    return True
+    before_ok, after_ok = _context_field_verdict(
+        content, start, end, before_context, after_context
+    )
+    return before_ok and after_ok
+
+
+_CONTEXT_MISMATCH_PREVIEW_SPAN = 2
+_CONTEXT_MISMATCH_MAX_MATCHES_SHOWN = 3
+_CONTEXT_MISMATCH_MAX_MATCH_LINES = 40
+
+
+def _context_preview(
+    content: str,
+    start: int,
+    end: int,
+    *,
+    span: int = _CONTEXT_MISMATCH_PREVIEW_SPAN,
+) -> str:
+    """Render the real file text around one match, marked with line numbers.
+
+    The matched lines are marked ``>>`` so the model sees exactly which bytes the
+    guard is comparing against and can copy the neighbours verbatim into its
+    ``before_context`` / ``after_context``.
+    """
+    lines = content.split("\n")
+    first_match = content.count("\n", 0, start)
+    last_match = content.count("\n", 0, max(start, end - 1))
+
+    def render(index: int, marker: str) -> str:
+        return f"{marker} {index + 1:4d} | {lines[index]}"
+
+    rendered: list[str] = [
+        render(index, "  ") for index in range(max(0, first_match - span), first_match)
+    ]
+    match_count = last_match - first_match + 1
+    if match_count > _CONTEXT_MISMATCH_MAX_MATCH_LINES:
+        rendered.append(render(first_match, ">>"))
+        rendered.append(f"  ... ({match_count - 2} matched lines omitted) ...")
+        rendered.append(render(last_match, ">>"))
+    else:
+        rendered.extend(render(index, ">>") for index in range(first_match, last_match + 1))
+    rendered.extend(
+        render(index, "  ")
+        for index in range(last_match + 1, min(len(lines), last_match + 1 + span))
+    )
+    return "\n".join(rendered)
+
+
+def _ambiguous_match_result(
+    call: ToolCall,
+    path_str: str,
+    content: str,
+    candidates: list[tuple[int, int]],
+    *,
+    has_context: bool,
+) -> ToolResult:
+    """Refuse an ambiguous edit, but show every candidate so one retry suffices.
+
+    Same contract as ``_context_mismatch_result``: the guard stays strict, and
+    the model is handed the real per-match text (with line numbers) so it can
+    pick a 1-based ``occurrence`` or copy a matching context, instead of
+    re-reading and guessing until it gives up on ``edit_file``.
+    """
+    metadata: dict[str, Any] = {"old_string_match_count": len(candidates)}
+    lines = [
+        f"old_string found {len(candidates)} times in {path_str}"
+        + (" that all match the supplied context" if has_context else "")
+        + "; it must be disambiguated before the file is written."
+    ]
+    shown = candidates[:_CONTEXT_MISMATCH_MAX_MATCHES_SHOWN]
+    for start, end in shown:
+        line_no = content.count("\n", 0, start) + 1
+        lines.append(f"-- match at line {line_no} --")
+        lines.append(_context_preview(content, start, end, span=1))
+    if len(candidates) > len(shown):
+        lines.append(f"... {len(candidates) - len(shown)} more occurrence(s) not shown.")
+    lines.append(
+        "Pass occurrence (1-based) or before_context/after_context copied from "
+        "one of the matches above, then retry."
+    )
+    return _failed_result(call, "ambiguous_match", "\n".join(lines), metadata=metadata)
+
+
+def _context_mismatch_guidance(
+    content: str,
+    matches: list[tuple[int, int]],
+    before_context: str | None,
+    after_context: str | None,
+) -> str:
+    supplied = [
+        name
+        for name, value in (
+            ("before_context", before_context),
+            ("after_context", after_context),
+        )
+        if value is not None
+    ]
+    supplied_label = " and ".join(supplied) if supplied else "before_context/after_context"
+    lines: list[str] = []
+    if len(matches) == 1:
+        start, end = matches[0]
+        line_no = content.count("\n", 0, start) + 1
+        before_ok, after_ok = _context_field_verdict(
+            content, start, end, before_context, after_context
+        )
+        failing = [
+            name
+            for name, ok in (("before_context", before_ok), ("after_context", after_ok))
+            if not ok
+        ]
+        if len(failing) == 1:
+            culprit, verb = failing[0], "does"
+        elif failing:
+            culprit, verb = " and ".join(failing), "do"
+        else:  # defensive: callers only reach here when at least one field failed
+            culprit, verb = "the supplied context", "does"
+        lines.append(
+            f"old_string matches exactly once, at line {line_no}, "
+            f"but {culprit} {verb} not match the file there."
+        )
+        lines.append("The file actually reads, around that match:")
+        lines.append(_context_preview(content, start, end))
+        lines.append(
+            f"Context is compared byte-for-byte (newlines and spaces included). "
+            f"Copy the surrounding text above into {supplied_label}, or omit the "
+            "context fields entirely, then retry."
+        )
+    else:
+        lines.append(
+            f"old_string matches {len(matches)} times, but none matched the supplied context."
+        )
+        shown = matches[:_CONTEXT_MISMATCH_MAX_MATCHES_SHOWN]
+        for start, end in shown:
+            line_no = content.count("\n", 0, start) + 1
+            lines.append(f"-- match at line {line_no} --")
+            lines.append(_context_preview(content, start, end, span=1))
+        if len(matches) > len(shown):
+            lines.append(f"... {len(matches) - len(shown)} more occurrence(s) not shown.")
+        lines.append(
+            "Pass occurrence (1-based) or context copied from the file above, then retry."
+        )
+    return "\n".join(lines)
+
+
+# ``old_string_not_found`` is the most common way a small edit dies, and it used
+# to answer with the bare sentence "old_string not found".  A model that quoted
+# stale or slightly-off text had nothing to correct against, re-read, guessed
+# again, and often gave up on a small edit for a whole-file rewrite.  The failure
+# now reports the file's current shape and, when the file contains text close to
+# what was asked for, the candidate lines as *candidates* — bounded so a large
+# file can never be dumped back.
+_NOT_FOUND_MAX_CANDIDATES = 3
+_NOT_FOUND_CANDIDATE_SPAN = 2
+_NOT_FOUND_MIN_ANCHOR_LEN = 3
+_NOT_FOUND_MAX_ANCHORS = 8
+_NOT_FOUND_CLUSTER_GAP = 3
+_NOT_FOUND_FUZZY_CUTOFF = 0.72
+_NOT_FOUND_SCAN_MAX_LINES = 200_000
+_NOT_FOUND_FUZZY_SCAN_MAX_LINES = 20_000
+
+
+def _old_string_anchors(old_string: str) -> list[str]:
+    """The distinctive, non-empty lines of ``old_string``, stripped and unique."""
+    anchors: list[str] = []
+    for raw in old_string.splitlines():
+        normalized = raw.strip()
+        if len(normalized) >= _NOT_FOUND_MIN_ANCHOR_LEN and normalized not in anchors:
+            anchors.append(normalized)
+        if len(anchors) >= _NOT_FOUND_MAX_ANCHORS:
+            break
+    return anchors
+
+
+def _near_candidate_hits(
+    normalized_lines: list[str], anchors: list[str]
+) -> dict[int, set[int]]:
+    """Line index -> anchor indexes of text close to an anchor line.
+
+    Exact (whitespace-insensitive) matches first.  Only when there are none does
+    a bounded fuzzy pass run, so an unrelated edit never pays for similarity
+    scoring across a large file.
+    """
+    anchor_index = {anchor: index for index, anchor in enumerate(anchors)}
+    hits: dict[int, set[int]] = {}
+    for line_index, line in enumerate(normalized_lines):
+        anchor = anchor_index.get(line)
+        if anchor is not None:
+            hits.setdefault(line_index, set()).add(anchor)
+    if hits:
+        return hits
+
+    probes = sorted(anchors, key=len, reverse=True)[:2]
+    scan = normalized_lines[:_NOT_FOUND_FUZZY_SCAN_MAX_LINES]
+    for probe in probes:
+        probe_index = anchor_index[probe]
+        matcher = difflib.SequenceMatcher()
+        matcher.set_seq1(probe)
+        for line_index, line in enumerate(scan):
+            if not line:
+                continue
+            matcher.set_seq2(line)
+            if matcher.real_quick_ratio() < _NOT_FOUND_FUZZY_CUTOFF:
+                continue
+            if matcher.quick_ratio() < _NOT_FOUND_FUZZY_CUTOFF:
+                continue
+            if matcher.ratio() >= _NOT_FOUND_FUZZY_CUTOFF:
+                hits.setdefault(line_index, set()).add(probe_index)
+    return hits
+
+
+def _near_candidate_windows(
+    content: str, old_string: str
+) -> list[tuple[int, set[int], int]]:
+    """Bounded candidate windows: ``(representative_line, covered_anchors, covered_count)``.
+
+    0-based line indexes for ``representative_line``.  Each window renders at
+    most ``2 * span + 1`` rows, so no input can make the failure echo a whole
+    file.
+    """
+    anchors = _old_string_anchors(old_string)
+    if not anchors:
+        return []
+    lines = content.split("\n")[:_NOT_FOUND_SCAN_MAX_LINES]
+    hits = _near_candidate_hits([line.strip() for line in lines], anchors)
+    if not hits:
+        return []
+
+    ordered = sorted(hits)
+    clusters: list[list[int]] = []
+    for line_index in ordered:
+        if clusters and line_index - clusters[-1][-1] <= _NOT_FOUND_CLUSTER_GAP:
+            clusters[-1].append(line_index)
+        else:
+            clusters.append([line_index])
+
+    ranked: list[tuple[int, int, int, int, set[int]]] = []
+    for cluster in clusters:
+        covered = set().union(*(hits[index] for index in cluster))
+        covered_chars = sum(len(anchors[anchor]) for anchor in covered)
+        # Deterministic representative line: the first hit in the cluster.
+        representative = cluster[0]
+        ranked.append((len(covered), covered_chars, -representative, representative, covered))
+    ranked.sort(key=lambda item: item[:4], reverse=True)
+
+    windows = [
+        (representative, covered, len(covered))
+        for _, _, _, representative, covered in ranked[:_NOT_FOUND_MAX_CANDIDATES]
+    ]
+    windows.sort(key=lambda item: item[0])
+    return windows
+
+
+def _candidate_preview(
+    content: str,
+    hit_line: int,
+    *,
+    span: int = _NOT_FOUND_CANDIDATE_SPAN,
+) -> str:
+    lines = content.split("\n")
+    first = max(0, hit_line - span)
+    last = min(len(lines), hit_line + span + 1)
+    return "\n".join(
+        f"{'~~' if index == hit_line else '  '} {index + 1:4d} | {lines[index]}"
+        for index in range(first, last)
+    )
+
+
+def _old_string_not_found_result(
+    call: ToolCall,
+    path_str: str,
+    content: str,
+    old_string: str,
+    *,
+    size_bytes: int,
+    current_file_hash: str,
+    expected_file_hash_supplied: bool,
+) -> ToolResult:
+    lines = [
+        f"old_string not found in {path_str}.",
+        f"The file now has {line_count(content)} lines and {size_bytes} bytes; "
+        f"current file_hash: {current_file_hash}.",
+    ]
+    if expected_file_hash_supplied:
+        lines.append(
+            "The file is unchanged since the read this edit was based on "
+            "(expected_file_hash still matches), so the text you quoted is not in "
+            "it — likely a whitespace, indentation, or line-ending difference."
+        )
+    else:
+        lines.append(
+            "No expected_file_hash was supplied, so it cannot be checked here "
+            "whether the file changed since your last read; compare the current "
+            "file_hash above with the one your read_file returned."
+        )
+
+    candidates = _near_candidate_windows(content, old_string)
+    if candidates:
+        lines.append("Closest text in the file (candidates, NOT matches — verify before using):")
+        for hit_line, _covered, covered_count in candidates:
+            label = f"-- candidate at line {hit_line + 1}"
+            if covered_count > 1:
+                label += f" (this region covers {covered_count} lines of your old_string)"
+            lines.append(label + " --")
+            lines.append(_candidate_preview(content, hit_line))
+    else:
+        lines.append(
+            "No text close enough to old_string was found in the file."
+        )
+    lines.append(
+        "Read the file again with read_file and copy the exact text (including "
+        "whitespace and line endings), then retry."
+    )
+    return _failed_result(
+        call,
+        "old_string_not_found",
+        "\n".join(lines),
+        metadata={
+            "old_string_match_count": 0,
+            "line_count": line_count(content),
+            "size_bytes": size_bytes,
+            "current_file_hash": current_file_hash,
+        },
+    )
 
 
 def _selected_content_hash(
@@ -581,8 +925,17 @@ class WorkspaceReadOnlyTools:
             "content_hash": content_hash,
         }
 
-        meta_suffix = f"\n[file: {total_lines} lines, {format_file_size(file_size)}, modified {mtime}]"
-        suffix = ("\n[... truncated]" if truncated else "") + meta_suffix
+        # The file's line count, byte size, and mtime travel as structured
+        # metadata (see ``artifact_metadata``), never as a bracketed line inside
+        # ``content``.  Appended to the body, a line like
+        # ``[file: 6 lines, 224B, modified ...]`` was indistinguishable from file
+        # text: models copied it into ``edit_file`` context and the edit then
+        # failed to match.  The model still sees ``line_count`` / ``size_bytes``
+        # through the tool-evidence renderer, and the UI reads the same keys.
+        # A truncation marker stays in the body on purpose: it warns that the
+        # text below is cut, and truncation is exactly when the model must not
+        # trust its copy as the whole file.
+        suffix = "\n[... truncated]" if truncated else ""
         rel = relative_workspace_uri(resolved, access_root)
         artifact_metadata = {
             "path": rel,
@@ -1113,12 +1466,31 @@ async def edit_file_tool(
     expected_content_hash = args.get("expected_content_hash")
     if expected_content_hash is not None and not isinstance(expected_content_hash, str):
         return _failed_result(call, "invalid_argument", "'expected_content_hash' must be a string or null")
-    before_context = args.get("before_context")
-    if before_context is not None and not isinstance(before_context, str):
+    # Same placeholder mistake as expected_file_hash above: the literal string
+    # "null" must mean "no guard", not a hash that can never match (that failure
+    # reads as a lost race and hides the real cause).
+    expected_content_hash = optional_string(expected_content_hash) or None
+    raw_before_context = args.get("before_context")
+    if raw_before_context is not None and not isinstance(raw_before_context, str):
         return _failed_result(call, "invalid_argument", "'before_context' must be a string or null")
-    after_context = args.get("after_context")
-    if after_context is not None and not isinstance(after_context, str):
+    raw_after_context = args.get("after_context")
+    if raw_after_context is not None and not isinstance(raw_after_context, str):
         return _failed_result(call, "invalid_argument", "'after_context' must be a string or null")
+    # A model that fills every optional schema field writes the literal string
+    # "null" where it means "no constraint".  Read literally it would silently
+    # become a bogus context and fail the edit with a misleading mismatch, so a
+    # placeholder reads as "not supplied" here.  Real text is kept byte-for-byte
+    # (whitespace can be significant in an exact-match context).
+    before_context = optional_text(raw_before_context)
+    after_context = optional_text(raw_after_context)
+    ignored_context_placeholders = [
+        field_name
+        for field_name, raw_value, normalized in (
+            ("before_context", raw_before_context, before_context),
+            ("after_context", raw_after_context, after_context),
+        )
+        if isinstance(raw_value, str) and normalized is None
+    ]
     occurrence = args.get("occurrence")
     if occurrence is not None and (type(occurrence) is not int or occurrence < 1):
         return _failed_result(call, "invalid_argument", "'occurrence' must be a positive 1-based integer or null")
@@ -1165,7 +1537,15 @@ async def edit_file_tool(
 
         matches = _find_non_overlapping_occurrences(content, old_string)
         if not matches:
-            return _failed_result(call, "old_string_not_found", f"old_string not found in {path_str}")
+            return _old_string_not_found_result(
+                call,
+                path_str,
+                content,
+                old_string,
+                size_bytes=len(current_bytes),
+                current_file_hash=current_file_hash,
+                expected_file_hash_supplied=expected_file_hash is not None,
+            )
 
         has_context = before_context is not None or after_context is not None
         candidates = [
@@ -1180,21 +1560,29 @@ async def edit_file_tool(
                 matches,
                 before_context,
                 after_context,
+                content=content,
+                ignored_placeholders=ignored_context_placeholders,
             )
         if occurrence is not None:
             if occurrence > len(candidates):
+                available = len(candidates)
                 return _failed_result(
                     call,
                     "context_mismatch" if has_context else "old_string_not_found",
-                    f"Occurrence {occurrence} is not available for old_string in {path_str}",
+                    f"Occurrence {occurrence} is not available for old_string in "
+                    f"{path_str}: {available} occurrence(s) found"
+                    + (f", pass 1-{available}" if available else "")
+                    + ".",
                 )
             match_offset, match_end = candidates[occurrence - 1]
         else:
             if len(candidates) > 1:
-                return _failed_result(
+                return _ambiguous_match_result(
                     call,
-                    "ambiguous_match",
-                    f"old_string found {len(candidates)} times in {path_str} - provide context or a 1-based occurrence",
+                    path_str,
+                    content,
+                    candidates,
+                    has_context=has_context,
                 )
             match_offset, match_end = candidates[0]
 

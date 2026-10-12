@@ -27,4 +27,20 @@ def optional_string(value: object) -> str:
     return text
 
 
-__all__ = ["optional_string"]
+def optional_text(value: object) -> str | None:
+    """Like :func:`optional_string`, but keeps real text byte-for-byte.
+
+    Returns ``None`` for JSON ``null`` and for a placeholder word a model wrote
+    where it meant "no constraint"; a genuine string is returned unchanged,
+    because leading/trailing whitespace can be significant in exact-match
+    context (``edit_file``'s ``before_context`` / ``after_context``).  Callers
+    that must reject a bad type validate it before calling this.
+    """
+    if not isinstance(value, str):
+        return None
+    if value.strip().lower() in _PLACEHOLDER_WORDS:
+        return None
+    return value
+
+
+__all__ = ["optional_string", "optional_text"]

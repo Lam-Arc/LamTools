@@ -9,7 +9,11 @@ from lamtools_core.tool.default_toolbox import (
     DEFAULT_TOOL_PERMISSIONS,
     build_core_toolbox,
 )
-from lamtools_core.tool.memory_tools import MEMORY_TOOL_NAME, make_memory_handler
+from lamtools_core.tool.memory_tools import (
+    MEMORY_TOOL_DESCRIPTION,
+    MEMORY_TOOL_NAME,
+    make_memory_handler,
+)
 
 
 def _call(**arguments):
@@ -23,6 +27,19 @@ def test_memory_tool_is_exposed_and_auto_allowed(tmp_path):
 
     assert MEMORY_TOOL_NAME in names
     assert DEFAULT_TOOL_PERMISSIONS[MEMORY_TOOL_NAME] == "auto_allow"
+
+
+def test_memory_tool_description_teaches_trigger_titles(tmp_path):
+    """A memory is retrieved by title, so the authoring rule must be in the
+    description the model actually receives — not only in the index."""
+    assert "first line" in MEMORY_TOOL_DESCRIPTION
+    assert "trigger" in MEMORY_TOOL_DESCRIPTION
+
+    toolbox = build_core_toolbox(work_root=tmp_path)
+    spec = next(
+        item for item in toolbox.model_tools() if item["function"]["name"] == MEMORY_TOOL_NAME
+    )
+    assert "trigger" in spec["function"]["description"]
 
 
 def test_memory_tool_needs_no_approval(tmp_path):

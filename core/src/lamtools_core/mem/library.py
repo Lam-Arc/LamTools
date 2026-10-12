@@ -11,6 +11,12 @@ one-line summary per file) and injected into every session, so the model
 learns what is stored without reading every file.  The model then uses the
 ``memory`` tool to list, read and edit the files.
 
+A memory is retrieved by the model recognising that the current task matches
+it, so the summary line is a *trigger*, not a topic label: authors (model or
+human) write each file's title as the condition under which it should be
+consulted — the role a skill's description plays for skills.  Both the
+generated index and the tool description state that convention.
+
 ``INDEX.md`` is generated output: it is never searched for content, never
 returned as a memory file, and cannot be written, renamed or deleted through
 any surface.  The name is reserved at every depth of the tree, so a memory
@@ -353,6 +359,10 @@ def render_index(scope: str, work_root: str | Path | None) -> str:
         "",
         "> 本文件由 LamTools 按记忆库目录结构自动生成，请勿手动编辑。",
         f"> 档位：{scope_hint}。使用 memory 工具（scope={normalized}）读取或写入本档记忆。",
+        "> 开始一项任务前先扫一遍本索引：某条记忆的标题描述的情形与当前任务相符时，"
+        "先用 memory 工具 read 那条记忆，再动手。",
+        "> 记忆的标题写的就是「什么时候该查阅它」（调用它的触发条件）；"
+        "写新记忆时标题也要这么写，不要只写一个主题词。",
         "",
     ]
     if not root.is_dir():

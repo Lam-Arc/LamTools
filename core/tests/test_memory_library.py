@@ -155,6 +155,24 @@ def test_index_summarises_files_and_reports_empty(project_work):
     assert "scope=project" in index
 
 
+def test_index_states_the_trigger_title_convention(project_work):
+    """Retrieval is recognition: the injected index has to say that a memory's
+    title is the condition for consulting it, otherwise topic-titled memories
+    are never recognised as relevant and go unread."""
+    empty = memory.render_index(memory.SCOPE_PROJECT, project_work)
+    assert "触发条件" in empty
+    assert "memory 工具" in empty
+
+    memory.write_memory(
+        memory.SCOPE_PROJECT, project_work, "notes/api.md", "# 改表结构前先看这条\n\nREST。\n"
+    )
+    index = memory.render_index(memory.SCOPE_PROJECT, project_work)
+
+    assert "触发条件" in index
+    # The first line is what the index shows, so the trigger reaches the model.
+    assert "改表结构前先看这条" in index
+
+
 def test_index_text_for_prompt_is_empty_until_something_is_stored(project_work):
     assert memory.index_text_for_prompt(memory.SCOPE_PROJECT, project_work) == ""
 

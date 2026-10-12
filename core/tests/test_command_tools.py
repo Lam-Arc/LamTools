@@ -722,6 +722,49 @@ async def test_run_subprocess_cancellation_terminates_child(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_run_subprocess_cancellation_reports_cancelled_not_timeout(tmp_path: Path):
+    """A user cancel must surface as cancelled, never as a timeout.
+
+    The kill-then-read fallback used to re-raise TimeoutExpired out of the
+    worker thread when a surviving descendant kept the stdout pipe open,
+    which mislabelled the user's Stop as a command timeout.
+    """
+    task = asyncio.create_task(
+        run_subprocess(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            cwd=tmp_path,
+            timeout=60,
+        )
+    )
+
+    await asyncio.sleep(0.3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_run_subprocess_blocking_cancel_event_returns_cancelled(tmp_path: Path):
+    import threading
+
+    from lamtools_core.tool.command import run_subprocess_blocking
+
+    cancel_event = threading.Event()
+    cancel_event.set()
+    result = run_subprocess_blocking(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=tmp_path,
+        timeout=60,
+        cancel_event=cancel_event,
+    )
+
+    assert result.exit_code == -1
+    assert result.error_type == "CancelledError"
+    assert result.error == "Command cancelled by user"
+    assert not result.timed_out
+
+
+@pytest.mark.asyncio
 async def test_run_command_persistent_flag_reaches_background_runner(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):

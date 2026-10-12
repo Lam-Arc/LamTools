@@ -765,6 +765,126 @@ async def test_child_approval_pauses_only_sub_agent_not_parent(tmp_path):
     await shutdown_parent_sub_agents("thread-child-approval")
 
 
+@pytest.mark.asyncio
+async def test_child_approved_tool_failure_continues_child_and_parent(tmp_path):
+    """Regression: a sub-agent's approved tool that ran and failed must be handed
+    back to the child (which continues), not turn the parent turn into a failure."""
+    llm = FailingApprovalSubAgentLLM()
+    state_store = InMemoryRuntimeStateStore()
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    (work_root / "note.md").write_text("original\n", encoding="utf-8")
+    _write_project_model(work_root, "fake-model", "text")
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(default_model="fake-model"),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
+        model_provider=llm,
+        runtime_state_store=state_store,
+    )
+
+    started = await catalog.execute(
+        "turn.start",
+        {
+            "thread_id": "thread-child-failure",
+            "message": "delegate with approval",
+            "approval_policy": "require",
+        },
+    )
+    assert started.payload["decision"] == "done"
+    accepted = await catalog.execute(
+        "sub_agent.message",
+        {
+            "thread_id": "thread-child-failure",
+            "type": "execute",
+            "name": "writer",
+            "prompt": "write note.md",
+        },
+    )
+    assert accepted.status == "ok"
+    for _ in range(100):
+        listed = await catalog.execute("sub_agent.list", {"thread_id": "thread-child-failure"})
+        if listed.payload["items"][0]["status"] == "paused":
+            break
+        await asyncio.sleep(0.01)
+    assert listed.payload["items"][0]["status"] == "paused"
+
+    child_state = await state_store.get("thread-child-failure:sub:writer")
+    pending = child_state.metadata["pending_approval"]
+    approved = await catalog.execute(
+        "approval.respond",
+        {
+            "thread_id": "thread-child-failure",
+            "request_id": pending["request_id"],
+            "action": "approve",
+        },
+    )
+
+    assert approved.status == "ok"
+    assert llm.child_saw_failure is True
+    assert (work_root / "note.md").read_text(encoding="utf-8") == "original\n"
+    await shutdown_parent_sub_agents("thread-child-failure")
+
+
+class FailingApprovalSubAgentLLM:
+    """Child asks to write with a stale hash guard, so the approved write fails.
+    The child must then receive that failure and finish normally."""
+
+    def __init__(self) -> None:
+        self.requests: list[LLMRequest] = []
+        self.main_steps = 0
+        self.child_steps = 0
+        self.child_saw_failure = False
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("Core operation should use streaming")
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        tool_names = {tool["function"]["name"] for tool in request.tools or []}
+        if "sub_agent" in tool_names:
+            self.main_steps += 1
+            if self.main_steps == 1:
+                yield LLMStreamEvent(kind="done", tool_calls=[
+                    LLMToolCall(
+                        id="call-failing-sub",
+                        name="sub_agent",
+                        arguments={
+                            "action": "create", "type": "execute", "name": "writer",
+                            "model": "fake-model", "reasoning_level": "high",
+                        },
+                    )
+                ])
+                return
+            yield LLMStreamEvent(
+                kind="content_delta", content="Main remains responsive during child approval."
+            )
+            yield LLMStreamEvent(kind="done")
+            return
+        self.child_steps += 1
+        if self.child_steps == 1:
+            yield LLMStreamEvent(kind="done", tool_calls=[
+                LLMToolCall(
+                    id="call-child-write-fail",
+                    name="write_file",
+                    arguments={
+                        "path": "note.md",
+                        "content": "child content",
+                        "expected_file_hash": "sha256:" + "0" * 64,
+                    },
+                )
+            ])
+            return
+        self.child_saw_failure = any(
+            message.role == "tool"
+            and "The file changed since it was read" in str(message.content)
+            for message in request.messages
+        )
+        yield LLMStreamEvent(
+            kind="content_delta", content="Child corrected the write after the failure."
+        )
+        yield LLMStreamEvent(kind="done")
+
+
 class SystemPromptInspectingLLM:
     """LLM that records the system prompt and advertised tools for assertions."""
 
@@ -778,8 +898,14 @@ class SystemPromptInspectingLLM:
     async def stream(self, request: LLMRequest):
         self.requests.append(request)
         assert request.model == self.expected_model
-        assert request.messages[-1].role == "user"
-        assert request.messages[-1].content == "inspect the project"
+        # The trailing runtime status message is internal; the task itself is
+        # the last non-internal user message in the request.
+        task_message = [
+            message for message in request.messages
+            if message.role == "user" and not (message.metadata or {}).get("internal")
+        ][-1]
+        assert task_message.role == "user"
+        assert task_message.content == "inspect the project"
         yield LLMStreamEvent(kind="content_delta", content="sub result")
         yield LLMStreamEvent(kind="done")
 
@@ -828,9 +954,12 @@ async def test_sub_agent_runner_consider_mode_filters_tools_and_injects_prompt(t
     assert "read_file" in tool_names
     assert "write_file" not in tool_names
     assert "sub_agent" not in tool_names
-    system_prompt = str(llm.requests[0].messages[0].content)
-    assert "Current mode" in system_prompt
-    assert "consider" in system_prompt
+    # The mode line is session state and lives in the trailing runtime
+    # message, keeping the leading system prompt stable for the prompt cache.
+    runtime_prompt = str(llm.requests[0].messages[-1].content)
+    assert "Current mode" in runtime_prompt
+    assert "consider" in runtime_prompt
+    assert "Current mode" not in str(llm.requests[0].messages[0].content)
 
 
 @pytest.mark.asyncio
@@ -854,9 +983,10 @@ async def test_sub_agent_runner_execute_mode_keeps_full_access(tmp_path):
     assert "sub_agent" not in tool_names
     # execute mode has an empty tool list, so tools are not filtered, but the mode prompt line
     # is still injected (mode_prompt_line fires whenever the mode is known).
-    system_prompt = str(llm.requests[0].messages[0].content)
-    assert "Current mode" in system_prompt
-    assert "execute" in system_prompt
+    runtime_prompt = str(llm.requests[0].messages[-1].content)
+    assert "Current mode" in runtime_prompt
+    assert "execute" in runtime_prompt
+    assert "Current mode" not in str(llm.requests[0].messages[0].content)
 
 
 @pytest.mark.asyncio
@@ -877,8 +1007,8 @@ async def test_sub_agent_runner_unknown_mode_falls_back_to_full_access(tmp_path)
     tool_names = {tool["function"]["name"] for tool in llm.requests[0].tools or []}
     # unknown mode is treated as no filtering so the sub-agent is never locked out
     assert "write_file" in tool_names
-    system_prompt = str(llm.requests[0].messages[0].content)
-    assert "Current mode" not in system_prompt
+    assert "Current mode" not in str(llm.requests[0].messages[0].content)
+    assert "Current mode" not in str(llm.requests[0].messages[-1].content)
 
 
 @pytest.mark.asyncio
@@ -891,8 +1021,8 @@ async def test_sub_agent_runner_empty_mode_is_full_access_by_default(tmp_path):
     assert result.succeeded is True
     tool_names = {tool["function"]["name"] for tool in llm.requests[0].tools or []}
     assert "write_file" in tool_names
-    system_prompt = str(llm.requests[0].messages[0].content)
-    assert "Current mode" not in system_prompt
+    assert "Current mode" not in str(llm.requests[0].messages[0].content)
+    assert "Current mode" not in str(llm.requests[0].messages[-1].content)
 
 
 class _FakeAttachment:

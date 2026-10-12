@@ -275,6 +275,36 @@ async def test_edit_context_diagnostic_is_forwarded_to_model(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_read_file_shape_reaches_model_as_evidence(tmp_path):
+    """read_file no longer appends a bracketed summary to the content, so the
+    line count and byte size must reach the model through the evidence keys."""
+    kit = CoreBaseAgentKit(work_root=tmp_path)
+    call = ToolCall(id="call-read-shape", name="read_file")
+    result = ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="ok",
+        content="hello\nworld\n",
+        metadata={"path": "hello.txt", "line_count": 2, "size_bytes": 12},
+        artifacts=[
+            ToolArtifact(
+                kind="file_read",
+                uri="hello.txt",
+                content="hello\nworld\n",
+                metadata={"line_count": 2, "size_bytes": 12},
+            )
+        ],
+    )
+
+    message = await kit.format_tool_result_for_model(RuntimeState(session_id="s-read"), call, result)
+    content = str(message.content)
+
+    assert "line_count: 2" in content
+    assert "size_bytes: 12" in content
+    assert "[file:" not in content
+
+
+@pytest.mark.asyncio
 async def test_tool_evidence_is_redacted_and_truncated(tmp_path):
     kit = CoreBaseAgentKit(work_root=tmp_path)
     call = ToolCall(id="call-2", name="run_command")

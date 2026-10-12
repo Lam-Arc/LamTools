@@ -86,6 +86,12 @@ _MODEL_EVIDENCE_KEYS = (
     "current_file_hash",
     "content_hash",
     "current_content_hash",
+    # read_file reports the file's shape as metadata instead of appending a
+    # bracketed summary line to the body (models copied that line into edit
+    # context and the edit failed to match).  These two keys keep the line count
+    # and byte size visible to the model now that the line is gone.
+    "line_count",
+    "size_bytes",
     "old_string_match_count",
     "suspected_null_string_fields",
     "start",
@@ -115,6 +121,12 @@ _COMMON_TOOL_PROTOCOL = (
     "After receiving a tool result, continue to the next step or give the final response.",
     "Treat successful tool results as reusable evidence. Before querying the same resource again, state what fact is missing; otherwise reuse the evidence already obtained.",
     "After several tool-only steps, briefly report confirmed facts, remaining uncertainties, and the next step before continuing to use tools. Keep progress summaries concise and do not repeat existing evidence.",
+    # Recall rule for long-term memory, parallel to the load_skill line above:
+    # the index alone is passive, and a memory whose title states when it
+    # applies is only useful if the model checks it before acting. Appended
+    # last so the study protocol below keeps selecting by index (study mode
+    # loads no memory index).
+    "Memory: the long-term memory index lists memories by the situation each one applies to; when the current task matches one, read that memory with the memory tool before acting.",
 )
 _STUDY_TOOL_PROTOCOL = (
     _COMMON_TOOL_PROTOCOL[0],

@@ -3,7 +3,9 @@
 One tool, dispatched by ``action``, over the ``project`` or ``global`` tier.
 Memory is a directory of plain Markdown files whose tree *is* the index; the
 generated ``INDEX.md`` in each tier is injected every session and is read-only
-here.  All paths are relative to the tier root and cannot escape it.
+here.  A file's first line doubles as its title in that index, so it is
+written as the trigger for consulting the memory rather than as a topic label.
+All paths are relative to the tier root and cannot escape it.
 """
 
 from __future__ import annotations
@@ -19,7 +21,13 @@ MEMORY_TOOL_NAME = "memory"
 MEMORY_TOOL_DESCRIPTION = (
     "Read and edit long-term memory. Memory is a directory of Markdown files, "
     "and the folder structure is the index; each tier's generated INDEX.md is "
-    "injected into your context every turn. Two tiers: 'project' "
+    "injected into your context every turn. Title every memory — its first "
+    "line, which is what the index shows — with the condition under which it "
+    "should be consulted: the trigger, written the way a skill's description "
+    "reads ('when X, read this'), not just the topic. A memory titled only "
+    "with a topic is not retrieved at the moment it matters. When a task "
+    "matches the condition in a title, read that file before acting. Two "
+    "tiers: 'project' "
     "(<workspace>/.lam/memory/) for this project only, 'global' "
     "(user config memory/) shared across all projects. Paths are relative to "
     "the tier root. Actions: list (browse; set recursive/max_depth), read, "

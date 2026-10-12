@@ -379,7 +379,12 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "description": (
             "Read file content within the workspace. DOCX, PDF, and XLSX documents are automatically normalized "
             "to Markdown and labeled as untrusted content. "
-            "Image files (PNG/JPG/JPEG/GIF/WebP/AVIF/BMP) are returned as an image the model can view directly."
+            "Image files (PNG/JPG/JPEG/GIF/WebP/AVIF/BMP) are returned as an image the model can view directly. "
+            "An image is shown at full resolution only in the request that immediately follows this call; later "
+            "requests carry a low-resolution copy for recognition. Read the file again when you need fine detail, "
+            "small text, or a picture-quality judgement. "
+            "The content is exactly the file text; the line count and byte size are reported as structured metadata, "
+            "never as a line inside the content."
         ),
         "input_schema": _schema(
             {"path": {"type": "string", "description": "File path relative to the workspace"}},
@@ -451,7 +456,7 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
             "all whitespace and line endings. The edit must be unique unless occurrence (1-based) or exact "
             "before_context/after_context makes it unique; never guess among multiple matches. "
             "When no context constraint is needed, omit those fields or pass JSON null without quotes; the "
-            "string \"null\" is treated as four literal characters."
+            "placeholder string \"null\" is also read as no constraint."
         ),
         "input_schema": _schema(
             {
@@ -470,14 +475,14 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                     "type": ["string", "null"],
                     "description": (
                         "Exact text immediately before old_string, or JSON null (without quotes) when unused; "
-                        "the string \"null\" is literal text"
+                        "the placeholder string \"null\" is also read as absent"
                     ),
                 },
                 "after_context": {
                     "type": ["string", "null"],
                     "description": (
                         "Exact text immediately after old_string, or JSON null (without quotes) when unused; "
-                        "the string \"null\" is literal text"
+                        "the placeholder string \"null\" is also read as absent"
                     ),
                 },
                 "expected_content_hash": {
