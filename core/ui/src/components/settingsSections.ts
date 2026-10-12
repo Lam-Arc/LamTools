@@ -83,6 +83,9 @@ export function settingsSectionIcon(icon: string | undefined): LucideIcon | null
 
 export const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
   { id: 'models', label: '模型与供应商', icon: 'database' },
+  // 通用 sits second on purpose: the settings page still opens on 模型与供应商,
+  // and this pane is a rarely-touched system surface rather than the landing view.
+  { id: 'general', label: '通用', icon: 'settings' },
   { id: 'appearance', label: '界面', icon: 'palette' },
   { id: 'loadtools', label: '工具模式', icon: 'list-checks' },
   { id: 'permissions', label: '权限', icon: 'lock' },

@@ -16,6 +16,13 @@
           @section-change="$emit('section-change', $event)"
         >
           <template #default="{ activeSection }">
+      <section v-if="activeSection === 'general'" class="settings-panel">
+        <!-- KeepAlive: switching sections must not wipe an unsaved draft. -->
+        <KeepAlive>
+          <CoreGeneralEditor :request-rpc="requestRpc || defaultRequestRpc" :platform="commandShellPlatform" />
+        </KeepAlive>
+      </section>
+
       <section v-if="activeSection === 'models'" class="settings-panel models-panel">
         <header class="settings-title models-title">
           <div class="models-title-copy">
@@ -289,6 +296,7 @@
           :density-options="densityOptions"
           :content-width="contentWidth"
           :theme-mode="themeMode"
+          :theme-schedule="themeSchedule"
           :effective-theme-mode="effectiveThemeMode"
           :get-stops="getStops"
           :get-angle="getAngle"
@@ -303,6 +311,7 @@
           @reset-theme="$emit('reset-theme')"
           @apply-preset="(preset) => $emit('apply-preset', preset)"
           @update:theme-mode="(mode) => $emit('update:theme-mode', mode)"
+          @update:theme-schedule="(schedule) => $emit('update:theme-schedule', schedule)"
           @update:density="(value) => $emit('update:density', value as CoreSettingsDensity)"
           @update:content-width="(value) => $emit('update:content-width', value)"
           @update:stops="(area: ThemeArea, stops: ThemeStop[]) => $emit('update-stops', area, stops)"
@@ -1032,6 +1041,7 @@ import {
   type ThemeData,
   type ThemeMode,
   type ThemePreset,
+  type ThemeSchedule,
   type ThemeStop,
 } from '../helpers/theme'
 import { openUpdatePage } from '../helpers/update'
@@ -1040,6 +1050,7 @@ import SettingsShell from './SettingsShell.vue'
 import { CORE_SETTINGS_SECTIONS, type SettingsSection } from './settingsSections'
 import ThemeEditor from './ThemeEditor.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
+import CoreGeneralEditor from './CoreGeneralEditor.vue'
 import CoreLoadToolsEditor from './CoreLoadToolsEditor.vue'
 import MobileControlPanel, {
   type MobileControlAccountDevice,
@@ -1139,6 +1150,7 @@ const props = withDefaults(defineProps<{
   theme: ThemeData
   contentWidth?: number
   themeMode?: ThemeMode
+  themeSchedule?: ThemeSchedule
   effectiveThemeMode?: 'light' | 'dark'
   allowEnvironmentImport?: boolean
   commandShellPlatform?: 'windows' | 'linux' | 'mobile' | 'web' | 'other'
@@ -1168,6 +1180,7 @@ const emit = defineEmits<{
   'update:density': [density: CoreSettingsDensity]
   'update:content-width': [width: number]
   'update:theme-mode': [mode: ThemeMode]
+  'update:theme-schedule': [schedule: ThemeSchedule]
   'import-environment': []
   'reopen-onboarding': []
   'update-permission-preset': [preset: CorePermissionPreset]

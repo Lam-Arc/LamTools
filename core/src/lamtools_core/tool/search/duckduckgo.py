@@ -13,6 +13,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from lamtools_core.config.network import httpx_client_kwargs
+
 from .protocol import SearchResult
 from .image_candidates import extract_image_candidates
 
@@ -46,11 +48,16 @@ class DuckDuckGoSearchProvider:
 
     async def _session(self) -> httpx.AsyncClient:
         if self._client is None:
+            # The engine's own proxy_port wins over 设置 → 通用 when set; the
+            # global routing still decides when it is left empty.
+            kwargs = httpx_client_kwargs(self.endpoint)
+            if self.proxy:
+                kwargs["proxy"] = self.proxy
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout),
                 follow_redirects=True,
                 headers={"User-Agent": DEFAULT_UA},
-                proxy=self.proxy,
+                **kwargs,
             )
         return self._client
 

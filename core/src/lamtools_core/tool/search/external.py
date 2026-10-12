@@ -18,6 +18,7 @@ import json
 import sys
 
 import httpx
+from lamtools_core.config.network import httpx_client_kwargs, subprocess_env
 
 from .protocol import SearchResult
 
@@ -66,6 +67,7 @@ class ExternalSearchProvider:
             *(list(self.command) + [json.dumps(payload, ensure_ascii=False)]),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=subprocess_env(),
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
@@ -82,7 +84,10 @@ class ExternalSearchProvider:
         if not self.url:
             raise ExternalSearchError("http 内核未配置 url")
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout)) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout),
+                **httpx_client_kwargs(self.url),
+            ) as client:
                 resp = await client.post(self.url, json=payload)
         except httpx.HTTPError as exc:
             raise ExternalSearchError(f"外部搜索服务请求失败: {exc}") from exc

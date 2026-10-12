@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from lamtools_core.config.network import subprocess_env as network_subprocess_env
 from lamtools_core.event import CoreEvent
 from lamtools_core.runtime.background_processes import (
     BackgroundProcessRegistry,
@@ -255,9 +256,18 @@ class CommandToolHandlers:
                 else command
             )
             argv = command_shell.argv_for(shell_command, cwd=self._work_root)
-            subprocess_env = command_shell.prepare_environment()
+            # The routing settings own the route, so an inherited HTTP_PROXY
+            # must not leak into a spawned command.  WSL is the one exception:
+            # prepare_environment already applied (and path-translated) them,
+            # and keeps ``None`` as "inherit" when nothing is configured.
+            prepared_env = command_shell.prepare_environment()
+            subprocess_env = (
+                prepared_env
+                if command_shell.kind == "wsl"
+                else network_subprocess_env()
+            )
         else:
-            subprocess_env = None
+            subprocess_env = network_subprocess_env()
             try:
                 argv = shlex.split(command)
             except ValueError as exc:

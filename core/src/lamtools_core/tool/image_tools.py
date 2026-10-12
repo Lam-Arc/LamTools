@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from lamtools_core.config.network import httpx_client_kwargs
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
 from lamtools_core.tool.workspace import is_within_path
 
@@ -89,7 +90,11 @@ def make_generate_image_handler(
 
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         try:
-            async with httpx.AsyncClient(timeout=_IMAGE_TIMEOUT, headers=headers) as client:
+            async with httpx.AsyncClient(
+                timeout=_IMAGE_TIMEOUT,
+                headers=headers,
+                **httpx_client_kwargs(api_url),
+            ) as client:
                 if reference_urls:
                     saved = await _run_edit(
                         client, api_url, model, prompt, reference_urls, work_root_path

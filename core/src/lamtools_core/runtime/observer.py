@@ -15,6 +15,8 @@ import subprocess
 import sys
 from typing import Any
 
+from lamtools_core.config.network import subprocess_env
+
 from .arrange import ArrangeJob, ArrangeManager, ArrangeStore
 
 
@@ -155,7 +157,7 @@ class ObserverSupervisor:
             return
         state_dir = self.data_dir / "observers" / job.id
         state_dir.mkdir(parents=True, exist_ok=True)
-        env = os.environ.copy()
+        env = subprocess_env()
         env.update({
             "LAMTOOLS_OBSERVER_ID": job.id,
             "LAMTOOLS_OBSERVER_JOB_ID": job.id,

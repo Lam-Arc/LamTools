@@ -47,6 +47,13 @@ export {
 } from './useCoreApprovalController'
 
 export {
+  ASK_SKIP_GUIDANCE,
+  ASK_SKIP_TIMEOUT_MS,
+  useCoreAskAutoContinue,
+  type UseCoreAskAutoContinueOptions,
+} from './useCoreAskAutoContinue'
+
+export {
   useCoreLiveTurnController,
   type CoreLiveConnectionState,
   type UseCoreLiveTurnControllerOptions,

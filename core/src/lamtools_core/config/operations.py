@@ -24,9 +24,11 @@ from lamtools_core.context_compaction_budget import (
     MAX_RETAINED_STEPS,
 )
 
+from .automation import ASK_AUTO_CONTINUE_NAMESPACE, merge_ask_auto_continue
 from .imagegen_store import IMAGEGEN_NAMESPACE, load_imagegen_config, save_imagegen_config
 from .model_store import ModelConfig, ModelStore, make_model_record_id
 from .model_group_store import ModelGroupRevisionConflict, ModelGroupStore
+from .network import NETWORK_NAMESPACE, merge_network
 from .provider_store import (
     MASKED_API_KEY,
     ApiKeyValidationError,
@@ -37,6 +39,9 @@ from .provider_store import (
     validate_api_key_text,
 )
 from .settings_store import get_setting, set_setting
+
+KEEP_AWAKE_NAMESPACE = "core.keepAwake"
+MEMORY_RESUME_NAMESPACE = "core.memoryResume"
 
 
 def build_config_operation_catalog(
@@ -518,6 +523,39 @@ def build_config_operation_catalog(
             )
             if merged is None:
                 return _error(request, "invalid core.contextCompaction value")
+            set_setting(namespace, merged)
+        elif namespace == NETWORK_NAMESPACE:
+            # Routing settings decide where model / MCP / command egress goes,
+            # so the value is validated here rather than blindly merged; the
+            # user gets the field-level reason back.
+            try:
+                merged = merge_network(get_setting(namespace), dict(value))
+            except ValueError as exc:
+                return _error(request, str(exc))
+            set_setting(namespace, merged)
+        elif namespace == KEEP_AWAKE_NAMESPACE:
+            from lamtools_core.runtime.power import apply_keep_awake, merge_keep_awake
+
+            merged = merge_keep_awake(get_setting(namespace), dict(value))
+            if merged is None:
+                return _error(request, "core.keepAwake.enabled 必须是布尔值")
+            set_setting(namespace, merged)
+            # Take effect immediately; the next app start re-applies it.
+            apply_keep_awake(bool(merged["enabled"]))
+        elif namespace == ASK_AUTO_CONTINUE_NAMESPACE:
+            merged = merge_ask_auto_continue(get_setting(namespace), dict(value))
+            if merged is None:
+                return _error(request, "core.askAutoContinue.enabled 必须是布尔值")
+            set_setting(namespace, merged)
+        elif namespace == MEMORY_RESUME_NAMESPACE:
+            from lamtools_core.runtime.memory_guard import merge_memory_resume
+
+            merged = merge_memory_resume(get_setting(namespace), dict(value))
+            if merged is None:
+                return _error(
+                    request,
+                    "core.memoryResume 需要 enabled（布尔值）与 threshold_gb（0.5–1024 的数字）",
+                )
             set_setting(namespace, merged)
         else:
             current = get_setting(namespace)

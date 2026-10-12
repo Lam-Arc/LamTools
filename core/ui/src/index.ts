@@ -102,6 +102,7 @@ export type { CoreProjectSettingsProject } from './components/CoreProjectSetting
 export { default as CoreProjectCreate } from './components/CoreProjectCreate.vue';
 export { default as CoreSessionTitleEditor } from './components/CoreSessionTitleEditor.vue';
 export { default as CoreImageGenEditor } from './components/CoreImageGenEditor.vue';
+export { default as CoreGeneralEditor } from './components/CoreGeneralEditor.vue';
 export { default as ArtifactPanel } from './components/ArtifactPanel.vue';
 export { default as RightSidebarHost } from './components/RightSidebarHost.vue';
 export { default as RightSidebarModule } from './components/RightSidebarModule.vue';

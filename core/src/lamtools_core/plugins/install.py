@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from lamtools_core.tool.command import run_subprocess
+from lamtools_core.config.network import httpx_client_kwargs
+
 
 _logger = logging.getLogger(__name__)
 
@@ -91,7 +93,11 @@ async def download_to_file(url: str, target: Path, *, timeout: int = 300) -> tup
     target.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=timeout,
+            **httpx_client_kwargs(url),
+        ) as client:
             async with client.stream("GET", url) as response:
                 if response.status_code != 200:
                     return False, f"download failed: HTTP {response.status_code}"

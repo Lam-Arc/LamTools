@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from lamtools_core.config.network import subprocess_env
 from lamtools_core.event.run_item import RunItemEvent, RunItemStatus
 
 from .cache import WorkflowContentCache, WorkflowCacheLookup, content_signature
@@ -4261,7 +4262,7 @@ class WorkflowRunner:
         if not command:
             raise ValueError("command node requires config.command")
         cwd = str(cfg.get("cwd") or work_root or ".")
-        env = dict(os.environ)
+        env = subprocess_env()
         extra_env = cfg.get("env") or {}
         # Preserve declaration order when generating WSLENV: explicit node
         # environment entries first, followed by bound workflow inputs.
@@ -4397,7 +4398,7 @@ class WorkflowRunner:
         timeout = _as_float(cfg.get("timeout"), default=60.0)
         # Inputs reach the user code as locals (via the runner reading stdin);
         # INPUT_<PORT> env vars are also set as a convenience.
-        env = dict(os.environ)
+        env = subprocess_env()
         for name, value in bound_inputs.items():
             if value is None:
                 continue

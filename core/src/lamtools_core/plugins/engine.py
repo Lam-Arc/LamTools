@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import json
-import os
 import shlex
 from dataclasses import replace
 from typing import Any, Protocol
-from urllib.parse import urlparse
 
 import httpx
+
+from lamtools_core.config.network import httpx_client_kwargs, subprocess_env
 
 from .models import HookDecision, HookDefinition, HookEvent
 
@@ -93,7 +92,7 @@ class HookEngine:
         if hook.handler.type != "command":
             return HookDecision(), {"hook_id": hook.id, "status": "skipped_unsupported"}
         payload = self._payload(hook, event)
-        env = os.environ.copy()
+        env = subprocess_env()
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env.update({
@@ -172,14 +171,9 @@ class HookEngine:
             return HookDecision(), audit
         payload = self._payload(hook, event)
         try:
-            host = urlparse(hook.handler.url).hostname or ""
-            try:
-                is_loopback = ipaddress.ip_address(host).is_loopback
-            except ValueError:
-                is_loopback = host.lower() == "localhost"
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(hook.handler.timeout),
-                trust_env=not is_loopback,
+                **httpx_client_kwargs(hook.handler.url),
             ) as client:
                 response = await client.post(hook.handler.url, json=payload)
             audit = {

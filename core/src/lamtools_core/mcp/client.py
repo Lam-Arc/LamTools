@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import subprocess
 import sys
 from typing import Any
+
+from lamtools_core.config.network import subprocess_env
 
 from .schemas import MCPServerConfig, MCPTool
 
@@ -46,7 +47,7 @@ class MCPClient:
     async def start(self) -> None:
         if self._proc is not None and self._proc.returncode is None:
             return
-        env = os.environ.copy()
+        env = subprocess_env()
         env.update(self.config.env)
         self._proc = await asyncio.create_subprocess_exec(
             self.config.command,

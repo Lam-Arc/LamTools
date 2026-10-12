@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from lamtools_core.config.network import httpx_client_kwargs
+
 _log = logging.getLogger(__name__)
 
 #: The Windows installer is ~95 MB; this is a sanity bound against a wrong URL,
@@ -187,6 +189,7 @@ def download_update(url: str, sha256: str, file_name: str = "") -> dict[str, Any
             timeout=DOWNLOAD_TIMEOUT_SECONDS,
             follow_redirects=True,
             headers={"User-Agent": _user_agent(), "Accept": "application/octet-stream"},
+            **httpx_client_kwargs(url),
         ) as response:
             response.raise_for_status()
             length = response.headers.get("content-length", "")

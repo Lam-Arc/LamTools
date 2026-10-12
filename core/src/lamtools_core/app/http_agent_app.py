@@ -219,6 +219,12 @@ def create_core_agent_http_app(
     # selection runs a bounded WSL probe whose cost must not land on the first
     # model request; the cached decision is what the prompt and run_command use.
     warm_command_shell()
+    # Apply the stored power preference here, on the event-loop thread: the
+    # ES_CONTINUOUS request is tied to the calling thread, and this is the one
+    # that lives as long as the backend does.
+    from lamtools_core.runtime.power import apply_keep_awake
+
+    apply_keep_awake()
     resolved_boot_model = ""
     try:
         config = load_llm_config(model_ref=model_id)

@@ -77,6 +77,7 @@ from lamtools_core.llm.profiles import (
 from lamtools_core.llm.reasoning import reasoning_level_from_legacy
 from lamtools_core.llm.model_capabilities import resolve_capability
 from lamtools_core.config.model_store import ModelConfig, ModelStore
+from lamtools_core.config.network import httpx_client_kwargs
 from lamtools_core.config.provider_store import ProviderConfig, ProviderStore
 from lamtools_core.config.settings_store import delete_setting, get_setting, set_setting
 from lamtools_core.context_compaction_budget import (
@@ -404,9 +405,13 @@ class CoreHttpLLMClient:
     async def complete(self, request: LLMRequest) -> LLMResponse:
         prepared = self._request_with_defaults(request)
         assembled = self._assemble_request(prepared, stream=False)
-        async with httpx.AsyncClient(timeout=httpx.Timeout(360.0, connect=30.0)) as client:
+        endpoint = f"{self.config.base_url.rstrip('/')}{assembled['endpoint']}"
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(360.0, connect=30.0),
+            **httpx_client_kwargs(endpoint),
+        ) as client:
             response = await client.post(
-                f"{self.config.base_url.rstrip('/')}{assembled['endpoint']}",
+                endpoint,
                 json=assembled["payload"],
                 headers=self._headers(),
             )
@@ -428,10 +433,14 @@ class CoreHttpLLMClient:
         assembled = self._assemble_request(prepared, stream=True)
         provider_state: Any = None
         protocol = self._protocol()
-        async with httpx.AsyncClient(timeout=httpx.Timeout(360.0, connect=30.0)) as client:
+        endpoint = f"{self.config.base_url.rstrip('/')}{assembled['endpoint']}"
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(360.0, connect=30.0),
+            **httpx_client_kwargs(endpoint),
+        ) as client:
             async with client.stream(
                 "POST",
-                f"{self.config.base_url.rstrip('/')}{assembled['endpoint']}",
+                endpoint,
                 json=assembled["payload"],
                 headers=self._headers(),
             ) as response:
@@ -2159,6 +2168,53 @@ def build_parser(
     command_shell_set.add_argument("preference", choices=("auto", "wsl", "git-bash", "powershell"))
     command_shell_set.set_defaults(func=cmd_command_shell_set)
 
+    network = sub.add_parser("network", help="Show or set outbound routing (proxy / bypass list / CA bundle)")
+    network_sub = network.add_subparsers(dest="network_command", required=True)
+    network_get = network_sub.add_parser("get", help="Print the saved routing settings")
+    network_get.set_defaults(func=cmd_network_get)
+    network_set = network_sub.add_parser("set", help="Update routing settings (only the flags you pass change)")
+    network_set.add_argument("--proxy", default=None, help="Proxy URL (http://127.0.0.1:7890); empty string means direct")
+    network_set.add_argument("--no-proxy", dest="no_proxy", default=None, help="Comma-separated hosts that bypass the proxy")
+    network_set.add_argument("--ca-cert", dest="ca_cert", default=None, help="PEM bundle path; empty string clears it")
+    network_set.set_defaults(func=cmd_network_set)
+
+    keep_awake = sub.add_parser("keep-awake", help="Show or set whether the app keeps the machine awake")
+    keep_awake_sub = keep_awake.add_subparsers(dest="keep_awake_command", required=True)
+    keep_awake_get = keep_awake_sub.add_parser("get", help="Print the stored preference and whether it is active")
+    keep_awake_get.set_defaults(func=cmd_keep_awake_get)
+    keep_awake_set = keep_awake_sub.add_parser("set", help="Save the preference and apply it now")
+    keep_awake_set.add_argument("state", choices=("on", "off"))
+    keep_awake_set.set_defaults(func=cmd_keep_awake_set)
+
+    ask_auto_continue = sub.add_parser(
+        "ask-auto-continue", help="Show or set unattended question auto-continue (approvals are never auto-answered)"
+    )
+    ask_auto_continue_sub = ask_auto_continue.add_subparsers(dest="ask_auto_continue_command", required=True)
+    ask_auto_continue_get = ask_auto_continue_sub.add_parser(
+        "get", help="Print the stored preference and the wait window"
+    )
+    ask_auto_continue_get.set_defaults(func=cmd_ask_auto_continue_get)
+    ask_auto_continue_set = ask_auto_continue_sub.add_parser("set", help="Save the preference")
+    ask_auto_continue_set.add_argument("state", choices=("on", "off"))
+    ask_auto_continue_set.set_defaults(func=cmd_ask_auto_continue_set)
+
+    memory_resume = sub.add_parser(
+        "memory-resume",
+        help="Show or set whether a turn interrupted by low memory continues by itself once memory recovers",
+    )
+    memory_resume_sub = memory_resume.add_subparsers(dest="memory_resume_command", required=True)
+    memory_resume_get = memory_resume_sub.add_parser(
+        "get", help="Print the stored preference, the threshold and the current reading"
+    )
+    memory_resume_get.set_defaults(func=cmd_memory_resume_get)
+    memory_resume_set = memory_resume_sub.add_parser("set", help="Save the preference and threshold")
+    memory_resume_set.add_argument("state", choices=("on", "off"), nargs="?")
+    memory_resume_set.add_argument(
+        "--threshold-gb", type=float, default=None,
+        help="Continue once available memory (physical + page file) exceeds this many GB",
+    )
+    memory_resume_set.set_defaults(func=cmd_memory_resume_set)
+
     loadtools = sub.add_parser("loadtools", help="Manage mode tool-set configuration (loadtools.jsonc)")
     loadtools_sub = loadtools.add_subparsers(dest="loadtools_command", required=True)
     loadtools_show = loadtools_sub.add_parser("show", help="Print the effective mode tool-sets")
@@ -3366,10 +3422,15 @@ async def cmd_attachment_upload(args: argparse.Namespace) -> int:
     if not path.is_file():
         raise FileNotFoundError(f"Attachment file not found: {path}")
     headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
-    async with httpx.AsyncClient(timeout=60.0, headers=headers) as client:
+    upload_url = f"{args.base_url.rstrip('/')}/api/core/sessions/{quote(args.thread_id, safe='')}/attachments"
+    async with httpx.AsyncClient(
+        timeout=60.0,
+        headers=headers,
+        **httpx_client_kwargs(upload_url),
+    ) as client:
         with path.open("rb") as stream:
             response = await client.post(
-                f"{args.base_url.rstrip('/')}/api/core/sessions/{quote(args.thread_id, safe='')}/attachments",
+                upload_url,
                 files={"file": (path.name, stream)},
             )
         response.raise_for_status()
@@ -5364,6 +5425,99 @@ async def cmd_command_shell_set(args: argparse.Namespace) -> int:
     preference = str(args.preference)
     set_setting("core.commandShell", {"preference": preference})
     print(json.dumps({"preference": preference}, ensure_ascii=False), flush=True)
+    return 0
+
+
+async def cmd_network_get(args: argparse.Namespace) -> int:
+    from lamtools_core.config.network import network_config
+
+    print(json.dumps(network_config(), ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_network_set(args: argparse.Namespace) -> int:
+    from lamtools_core.config.network import NETWORK_NAMESPACE, merge_network
+
+    update: dict[str, str] = {}
+    if args.proxy is not None:
+        update["proxy"] = args.proxy
+    if args.no_proxy is not None:
+        update["no_proxy"] = args.no_proxy
+    if args.ca_cert is not None:
+        update["ca_cert"] = args.ca_cert
+    if not update:
+        print("error: nothing to change (pass --proxy, --no-proxy or --ca-cert)", file=sys.stderr)
+        return 1
+    try:
+        merged = merge_network(get_setting(NETWORK_NAMESPACE), update)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    set_setting(NETWORK_NAMESPACE, merged)
+    print(json.dumps(merged, ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_keep_awake_get(args: argparse.Namespace) -> int:
+    from lamtools_core.runtime.power import keep_awake_status
+
+    print(json.dumps(keep_awake_status(), ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_keep_awake_set(args: argparse.Namespace) -> int:
+    from lamtools_core.runtime.power import KEEP_AWAKE_NAMESPACE, apply_keep_awake, keep_awake_status
+
+    enabled = str(args.state) == "on"
+    set_setting(KEEP_AWAKE_NAMESPACE, {"enabled": enabled})
+    apply_keep_awake(enabled)
+    print(json.dumps(keep_awake_status(), ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_ask_auto_continue_get(args: argparse.Namespace) -> int:
+    from lamtools_core.config.automation import ask_auto_continue_status
+
+    print(json.dumps(ask_auto_continue_status(), ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_ask_auto_continue_set(args: argparse.Namespace) -> int:
+    from lamtools_core.config.automation import ASK_AUTO_CONTINUE_NAMESPACE, ask_auto_continue_status
+
+    set_setting(ASK_AUTO_CONTINUE_NAMESPACE, {"enabled": str(args.state) == "on"})
+    print(json.dumps(ask_auto_continue_status(), ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_memory_resume_get(args: argparse.Namespace) -> int:
+    from lamtools_core.runtime.memory_guard import memory_resume_status
+
+    print(json.dumps(memory_resume_status(), ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_memory_resume_set(args: argparse.Namespace) -> int:
+    from lamtools_core.runtime.memory_guard import (
+        MEMORY_RESUME_NAMESPACE,
+        memory_resume_status,
+        merge_memory_resume,
+    )
+
+    incoming: dict[str, object] = {}
+    if args.state is not None:
+        incoming["enabled"] = str(args.state) == "on"
+    if args.threshold_gb is not None:
+        incoming["threshold_gb"] = float(args.threshold_gb)
+    if not incoming:
+        print("error: give a state (on|off) and/or --threshold-gb", file=sys.stderr)
+        return 2
+    merged = merge_memory_resume(get_setting(MEMORY_RESUME_NAMESPACE), incoming)
+    if merged is None:
+        print("error: threshold-gb must be a number between 0.5 and 1024", file=sys.stderr)
+        return 2
+    set_setting(MEMORY_RESUME_NAMESPACE, merged)
+    print(json.dumps(memory_resume_status(), ensure_ascii=False, indent=2), flush=True)
     return 0
 
 

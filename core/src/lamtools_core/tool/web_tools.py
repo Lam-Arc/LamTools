@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from lamtools_core.config.network import httpx_client_kwargs, proxy_url, url_bypasses_proxy
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult, ToolResultStatus
 from lamtools_core.tool.document_normalize import DocumentNormalizationError, normalize_pdf_bytes
 from lamtools_core.tool.search.image_candidates import extract_image_candidates
@@ -19,6 +20,9 @@ _FETCH_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 _HTTP_CLIENT: httpx.AsyncClient | None = None
+#: Proxied session, kept apart from the direct one so a bypassed host does not
+#: drag the other route's connection pool along.
+_HTTP_PROXY_CLIENT: httpx.AsyncClient | None = None
 
 #: Redirect hops followed while fetching one URL (matches httpx's default budget).
 _MAX_REDIRECTS = 5
@@ -29,13 +33,30 @@ class BlockedTargetError(Exception):
     """A fetch target (or one of its redirect hops) is not a public http(s) address."""
 
 
-def _http_session() -> httpx.AsyncClient:
-    global _HTTP_CLIENT
+def _http_session(target_url: str = "") -> httpx.AsyncClient:
+    """Return the fetch session for ``target_url``.
+
+    Which of the two sessions is used — proxied or direct — comes from
+    设置 → 通用, so model-facing tools never inherit the shell that launched
+    the app.
+    """
+    global _HTTP_CLIENT, _HTTP_PROXY_CLIENT
+    use_proxy = bool(proxy_url()) and not (target_url and url_bypasses_proxy(target_url))
+    if use_proxy:
+        if _HTTP_PROXY_CLIENT is None:
+            _HTTP_PROXY_CLIENT = httpx.AsyncClient(
+                timeout=httpx.Timeout(_DEFAULT_FETCH_TIMEOUT),
+                follow_redirects=False,
+                headers={"User-Agent": _FETCH_USER_AGENT},
+                **httpx_client_kwargs(target_url),
+            )
+        return _HTTP_PROXY_CLIENT
     if _HTTP_CLIENT is None:
         _HTTP_CLIENT = httpx.AsyncClient(
             timeout=httpx.Timeout(_DEFAULT_FETCH_TIMEOUT),
             follow_redirects=False,
             headers={"User-Agent": _FETCH_USER_AGENT},
+            **httpx_client_kwargs(target_url),
         )
     return _HTTP_CLIENT
 
@@ -131,13 +152,13 @@ async def _get_following_safe_redirects(
 async def _fetch_with_loopback_bypass(url: str) -> httpx.Response:
     if not _is_loopback_url(url):
         return await _get_following_safe_redirects(
-            _http_session(), url, allow_local_hops=_is_local_target(url)
+            _http_session(url), url, allow_local_hops=_is_local_target(url)
         )
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(_DEFAULT_FETCH_TIMEOUT),
         follow_redirects=False,
         headers={"User-Agent": _FETCH_USER_AGENT},
-        trust_env=False,
+        **httpx_client_kwargs(url),
     ) as client:
         return await _get_following_safe_redirects(client, url, allow_local_hops=True)
 

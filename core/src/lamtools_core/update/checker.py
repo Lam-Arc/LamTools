@@ -25,6 +25,7 @@ from itertools import zip_longest
 from typing import Any
 
 from lamtools_core import __version__
+from lamtools_core.config.network import httpx_client_kwargs
 
 _log = logging.getLogger(__name__)
 
@@ -131,6 +132,7 @@ def _http_get_json(url: str) -> dict[str, Any]:
         timeout=REQUEST_TIMEOUT_SECONDS,
         follow_redirects=True,
         headers={"User-Agent": _USER_AGENT, "Accept": accept},
+        **httpx_client_kwargs(url),
     ) as client:
         response = client.get(url)
         response.raise_for_status()

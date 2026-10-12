@@ -23,6 +23,8 @@ from html import unescape
 
 import httpx
 
+from lamtools_core.config.network import httpx_client_kwargs
+
 from .protocol import SearchResult
 
 DEFAULT_UA = (
@@ -69,6 +71,7 @@ class BaiduSearchProvider:
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                     "Accept-Language": "zh-CN,zh;q=0.9",
                 },
+                **httpx_client_kwargs(self.endpoint),
             )
             # warmup：先拿 Cookies（BAIDUID 等），否则 tn=json 会 302 到验证码
             try:

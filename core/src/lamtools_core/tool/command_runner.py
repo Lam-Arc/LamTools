@@ -597,18 +597,26 @@ class CommandShell:
         *,
         forward_names: tuple[str, ...] | list[str] | set[str] = (),
     ) -> dict[str, str] | None:
+        from lamtools_core.config.network import has_routing, subprocess_env, wsl_forward_names
+
+        routed = has_routing()
         if self.kind != "wsl":
             return env
         # Ordinary run_command has no explicit per-call environment; leave the
         # inherited process environment and WSLENV untouched in that case.
-        if env is None and not forward_names:
+        if env is None and not forward_names and not routed:
             return None
-        values = dict(os.environ if env is None else env)
+        values = subprocess_env(dict(os.environ if env is None else env), wsl=True)
+        requested = list(forward_names)
+        if routed:
+            # wsl.exe only relays names listed in WSLENV, so the routing
+            # variables have to be named there to reach the Linux-side tool.
+            requested.extend(wsl_forward_names(values))
         # Add only workflow env entries and INPUT_* bindings. Exclude Windows
         # PATH from these generated WSLENV entries so it cannot replace Linux
         # PATH; the ordinary run_command path leaves inherited WSLENV untouched.
         names = [
-            str(name) for name in forward_names
+            str(name) for name in requested
             if str(name).casefold() not in {"path", "wslenv"} and str(name) in values
         ]
         existing = [part for part in values.get("WSLENV", "").split(":") if part]
