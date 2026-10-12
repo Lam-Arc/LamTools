@@ -67,6 +67,21 @@
 
 `open` 读取 `scripts/ports.json`，不要求用户记端口；`doctor` 检查 Python/Node/npm、Core 目录、根 CLI、Core 数据库目录和前端 dev server。
 
+### 数据维护
+
+一次性维护命令，默认只读预览（dry-run），`--apply` 才写入：
+
+```powershell
+cd core
+py -3.14 -m lamtools_core.cli maintenance strip-snapshot-images
+py -3.14 -m lamtools_core.cli maintenance strip-snapshot-images --apply
+```
+
+- 作用：剥离"读取不可见"的历史图片副本——会话元数据行登记表里的图片、以及条目行 / 事件流水 / 同步变更表三处载荷元数据里的同一份图片 base64（新写入早已不再记录；历史行会在会话下次自然写入时惰性瘦身，本命令一次性处理全部）。
+- 只允许指向本机开发数据目录（`<repo>/data`）；安装版（绿色/便携或用户级）数据目录一律拒绝（退出码 2），不会写入任何内容。
+- `--apply` 先做文件级备份到 `<data>/backups/strip-snapshot-images-<UTC 时间戳>/`（数据库文件 + 记录摘要的 `manifest.json`），再在单个写事务里改写，随后逐会话校验：改写后的行必须只少掉被剥离的死键，且真实读取器组装出的会话状态与剥离前逐字节相同（这些键本就在装载时被丢弃，所以装载结果必须完全一致）。最后打印迁移前后体积。命令可重复执行：已干净时报告 `already_clean`，不会产生第二次备份。
+- 只剥离上面这些读取不可见的副本；条目里的渲染副本（`artifacts[].metadata.image_data_url`）与模型可见的历史正文一律不动（剥离会改变读取语义）。结果以单行 JSON 输出，含每会话明细与各表回收字节。被回收的空间先进入数据库空闲页（文件大小不变），除非另行执行 `VACUUM`。
+
 ## 推荐命令形态
 
 面向日常使用，优先记住以下入口：

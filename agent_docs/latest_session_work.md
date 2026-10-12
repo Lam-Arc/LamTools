@@ -1,5 +1,35 @@
 # Latest Session Work
 
+## 发送/引导链路延迟修复：响应不再携带整包快照 + 图片数据去重（2026-10-11）
+
+- 触发：用户要求「从点击发送到指令送达、前端显示完成 ≤ 50ms（极端条件：百万上下文、千次调用、千条工具行）」，并以
+  High-Quality Game PV 会话（509 条工具行/信息）引导超时（前端 30s 超时）为抓手。只读调查后用户拍板「要修就修彻底」。
+- 实测根因（副本库 + 独立进程，`tmp/latency-probe/` 可复跑）：
+  - 引导/队列类每一次操作的响应都内嵌完整会话快照：该会话 47.6MB；即使引导被拒也付全价（0.6-1.6s）。
+    `turn/start` 前端早已传 `include_snapshot:false` 但后端从未兑现（一直返回快照）。
+  - 一张内联图片（read_file 图片分支的 base64 data URL）在快照里存三份：条目 payload 元数据 + 条目 artifacts + core.artifacts 登记表；
+    该会话登记表内 15.2MB 几乎全是 base64 图片。每次快照投影写回都整块重写这些字节。
+  - 全部写入串行过一把全局 SQLite 写锁，引导在锁内做两次全量装载；5 个并发写把第 5 个拖到 8.4s。
+  - 冷缓存下 34MB 条目表扫描实测 7.4s（磁盘抖动即 30s 超时的来源）。
+- 修复（本轮全部落地）：
+  1. `turn/start`、`turn/steer`、`queue/create|update|delete|guide` 支持 `include_snapshot=false`；
+     共享 UI 的发送/引导/队列/编辑/删除请求一律不再要快照（事件 + 修订号已足够，CAS 由事件 revision 推进）。
+     CLI/手机端默认行为不变（默认仍带快照）。
+  2. 全量快照装配移出写锁（提交后锁外装配）；引导的活跃轮判定优先走内存注册表，回退时只读元数据行
+     （新增 `load_metadata`：turns/queue/requests/item_order，不扫条目表）。
+  3. 图片数据在持久化投影中去重：新写入只保留条目 artifacts 一份（UI 渲染源）；payload 元数据与登记表不再复制；
+     旧库行在读取时就地剥离（`_strip_inline_image_copies`），既有大会话无需迁移立即受益。
+- 实测效果（同会话、缓存热）：全量快照装配 47.6MB→20.2MB（读时剥离）；元数据级装载 6ms（此前锁内全量 ~0.3s×2）；
+  引导/队列响应不再携带快照（KB 级）。墙钟 RTT 复测被正在运行的实例磁盘争用污染（同操作 0.8s→100s），
+  以缓存热后的进程内基准为准。前端 JSON.parse 48MB≈45ms 的成本随响应瘦身整体消失。
+- 验证：后端 live/快照/投影/检查点相关套件全绿（新增 6 条回归：include_snapshot 兑现、读时剥离、投影去重）；
+  全量后端套件与基线一致（既有失败仅 `test_command_tools.py::test_python_http_server_lifecycle_contract_with_real_process`，
+  已 stash 对照确认为既有）；UI typecheck 的 4 处错误与构建均确认来自未提交的既有测试改动（资源统计/内存续跑横幅），
+  相关 contract 74 条全绿；`npm run build` 通过。未做 Tauri 人工验收（按项目规则）。
+- 需要向用户说明的非性能影响（业务语言，已当面汇报）：旧大会话里"读时剥离"只发生在内存，落盘的旧数据仍是三份，
+  会话继续写入才逐步瘦身；打开旧大会话（整包快照路径：进会话/回合边界推送）仍比新会话重（20MB 级）；
+  响应不再带快照后，"引导已进队列"的确切呈现依赖事件到达（本机毫秒级，弱网/隧道下短暂滞后于点击）。
+
 ## 内容不再保留历史版本，撤回/编辑只作用于上下文（2026-10-03）
 
 - 触发：用户报「编辑报 Artifact revision not found，撤回也撤回不了」，随后明确要求
@@ -523,7 +553,9 @@ mobile UI.
 - Packaging uses the repository-owned Inno chain:
   `core/desktop/installer/Sunday.iss` and `build-installer.ps1`, orchestrated
   by the package script. Tauri uses `--no-bundle`; the stable upgrade/runtime
-  boundary remains `lamcore.exe`, `lamcore-backend/LamCore.exe`, and
+  boundary remains `lamcore.exe`, `lamcore-backend/sunday-core.exe` (the
+  deployed backend; renamed from the build-time `LamCore.exe`, which
+  PyInstaller and CI still produce, on 2026-10-12), and
   `com.lamtools.lamcore`, with legacy installation migration retained.
 - Startup first-paint bootstrap resolves the saved/system Sunday theme before
   stylesheet paint, preventing the dark-preference ~80ms light flash. Tauri

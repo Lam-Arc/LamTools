@@ -377,6 +377,28 @@ stash 验证与本改动无关）。
 - 验证：聚焦滚动测试 20/20、全套 UI contracts 87 文件 / 678 测试、typecheck、UI build
   均通过；`git diff --check` 仅有换行警告，未运行 Tauri 人工验证。
 
+### 过程组的排除面与展开稳定性（2026-10-09）
+
+- 记忆工具（`memory`）此前会与相邻的思考/普通工具一起折进「思考了一会，调用了 N 个工具」；
+  现与委派行、技能加载行同等对待，独占一行——项目档/全局档的路径与档位不被摘要吞掉。
+- 过程组的身份原先是全部成员 part id 的拼接：流式中分组持续追加成员就会换身份，
+  用户点开的组在下一个工具行到来时当场收起（已复现）。改为每组固定取首成员 id，
+  组在流式中长大而展开状态跟着组走；同时该组的 v-for key 不再因追加而重挂载。
+- 保持不变的设计：移出组/卡片 5s 后自动收起（G4）；未答复的审批卡强制展开（G5）。
+- 验证：`tests/chat-thread-process.test.ts` 82 测试通过（新增 3 条：记忆独占行、
+  追加工具行后组保持展开、追加思考 part 后组保持展开；临时还原旧身份算法后后两条按预期失败，
+  证明缺陷真实存在）；全套 `npm run test:contract` 124 文件 / 1093 测试通过。
+  未运行 Tauri 人工验证。
+
+### 失败命令的重复块（2026-10-12 修复）
+
+- 现象（用户在窗口自检步骤四看到）：故意失败的命令展开卡片后有**两个块**——红框（错误）+ 白框（兜底明细），同一段失败文字显示两遍。
+- 根因（jsdom 实测复现）：卡片正文本应是一条 `v-if/v-else-if` 链（错误 → 命中清单 → 输入预览 → 终端窗 → 通用结果），但**图片行写的是 `v-if`**，把链截成两条；挂在它下面的"兜底明细" `<pre class="tool-output">` 因此独立于前面的结果块渲染。失败部件的 `readableProcessDetail` 对错误早返回，于是兜底明细把红框里那段错误文字又渲染了一遍。
+- 修复：兜底明细的条件补上"无错误块、且无任何结果块"（`!displayToolError(...) && !displayToolResult(...)`，单行卡片与成组行两处）。凡有结果文本必有结果块（命中清单 / 网页卡 / 文件 diff / 测试卡 / 输入预览 / 终端窗 / 通用结果），所以这条守卫等价于"别的块都没画时才补位"；命令类与文件类都在此收口。
+- 测试：`core/ui/tests/chat-thread-process.test.ts` 三条——「失败命令只出现单个展示块」（1 个错误块、红框语义、同一文字只出现一次）、「成功命令只出现单个展示块」（终端窗 1 个、兜底明细 0 个）、「读写文件卡片只出现单个展示块」（带行号 diff 块 1 个、兜底明细 0 个）。临时还原对应否项，那一条按预期失败（只收终端窗时，只有文件类那条变红——证明放宽的正是它）。
+- 验证：全套 UI contracts 131 文件 / 1191 测试通过；`npm run typecheck` 三段全绿。窗口热更由用户确认，未另做人工验证。
+- 记录在案、本轮未动：失败时命令输出仍留在 `content/tool_result` 里、被红框优先的链挡住，是否要在红框下补一份输出属产品选择。
+
 ### Android Rust OpenAI Chat SSE batching（2026-09-23）
 
 - Rust 原生 OpenAI Chat SSE 现增量传送 UTF-8 文本、reasoning 和带索引的工具调用；原生事件约每 32 ms 批量一次，TypeScript UI 更新约每 50 ms 批量一次。最终响应仍覆盖临时增量，重试/重置与内部压缩、dreaming 阶段门控一并处理。
@@ -443,6 +465,47 @@ stash 验证与本改动无关）。
 - 结束瞬间仍以整篇渲染为准（整段替换内容节点，shell/content 节点不变），这是权威结果。
 - 缩进代码块（4 空格）内含空行仍会被切开（扫描器只识别 ``` / ~~~ 围栏）；`~~~` 围栏内的 `$$` 仍会被公式保护误判（`protectMath` 只保护 ``` 围栏，属既有行为，未在本次改动范围）。
 - ≥1KB 且刚被限频的尾段在段闭合时会被重新渲染一次（闭合优先于限频），这是「闭合立即成型」换来的单次成本。
+
+## 发送/引导链路响应瘦身包（2026-10-11）
+
+> 用户目标：点击发送 → 指令送达 + 前端显示完成 ≤ 50ms（极端条件：百万上下文/千次调用/千条工具行）。
+> 实测与修复详情记录在 `agent_docs/latest_session_work.md`（2026-10-11 条目）；要点：
+> 变更类操作（turn/start 兑现 include_snapshot、steer、queue/*）响应不再内嵌整包快照，
+> 全量装配移出写锁，内联图片在持久化投影中只保留条目 artifacts 一份 + 旧库读时剥离（47.6MB→20.2MB）。
+> 本文档的流式热路径结论不受影响；边界快照推送（1s 节流）受益于读时剥离。
+
+## 首屏分批挂载包（2026-10-12）
+
+**目标**：切到长会话时首屏只同步挂载投影窗口（5a 已把初始窗口定为最近 10 个完整回合），其余回合由空闲控制器分页补齐；用户随后向上翻历史时内容已经在 DOM 里，不再出现滚动中途等挂载的顿挫，首绘的 DOM 创建与 Markdown 排版量只与窗口相关。
+
+**改动**：
+
+1. 新增 `core/ui/src/composables/useIdleHistoryMount.ts`：空闲补齐控制器。`requestIdleCallback`（timeout 400ms）调度，无该 API 的环境退化为 32ms 定时器；单页锁与用户滚动触发的历史加载共用 `historyPageLoading`（两个来源不互相插页）；每页固定纪律「采集锚点 → 加宽窗口 → 等 DOM → 还原视口 → 等一帧 → 再还原」（第二遍吸收异步撑高的元素）；只做从新到旧的逐页加宽，投影数组顺序即真实时序，补挂行全部插在既有行之上，DOM 顺序永不重排；`cancel()` 在会话切换时丢弃未执行的补齐。
+2. `core/ui/src/app/LamToolsApp.vue` 接线：锚点复用 `captureThreadHistoryAnchor`（首条可见消息视口坐标 + 滚动基准），还原复用 `restoreThreadHistoryAnchor`，锚点失效按高度差兜底；排页由 `[messages, hasMoreHistory, historyPageLoading]` 驱动——锁被用户加载占用时那次排页让路，锁一释放重排，补齐链不断在半途；页面在途时会话被切走则放弃该页还原（旧会话锚点与高度差对新会话没有意义）。
+3. **有上限的预取**：每会话空闲补齐 12 页（`IDLE_HISTORY_MAX_BATCHES`），一页就是宿主的分页粒度 `HISTORY_TURN_PAGE_SIZE` = 10 个完整回合，故上限约「最近 130 个回合 / 约 260 条消息」（初始窗口 10 回合 + 120 回合）。取值理由：正常规模会话（百来回合量级）仍补齐到无等待，而文档里那种千级回合的巨型线程只被补约十分之一，闲置期不再被逐页拉成全量 DOM；到顶即停，剩余历史交给用户上翻时既有的按需加载（两屏阈值、同一套锚定）。排页信号沿用 workbench 的 `hasMoreHistory`（本地投影缺口 ∪ 服务端历史页 `has_more`）与同一个 `loadMoreHistory`，另加 `progress` 探针：在等服务端分页的空气页不占预算、也不空转续排（内容变化后由宿主重排）。上限是单个具名常量，按实测调参即可。
+4. `core/ui/tests/setup.ts` 增加 requestIdleCallback 桩（jsdom 无该 API）：排入的回调保持待命、不自行触发，挂载应用外壳的测试因此确定；需要驱动时用 `__flushIdleCallbacksForTests()`。
+
+**测试与验证**：
+
+- `core/ui/tests/idle-history-mount.test.ts` 6 条：每页纪律顺序（capture→widen→dom→restore→frame→restore）、busy 期间不排页与会话切换作废、严格从新到旧逐页加宽、到页预算上限即停（其余交按需加载）、空气页不占预算也不续排、会话切换重置预算。
+- `core/ui/tests/core-workbench-scroll.test.ts` 新增 1 条主机契约（静态源断言，沿用该文件既有风格）：页锁共用、锚定与高度差兜底、锁释放重排、会话切走不还原。
+- 窗口顺序与身份稳定沿用既有 `tests/core-workbench-projection-window.test.ts` 7 条（10 回合分页、加宽后窗口内消息对象引用不变、新回合到达重算起点）。
+- 全套 UI contracts 130 文件 / 1169 测试通过；`npm run typecheck` 三段（src、workflow-plugin、test）全绿。未运行 Tauri 人工验证。
+
+### 已知限制：单个超大回合在首屏整回合下发，回决不截断（2026-10-12 定稿）
+
+**限制（不是缺陷，请勿重开）**：会话装载的分页最小单位是**完整回合**，不是字符数。若某个回合本身超大（一个回合内堆积了大量工具行/长文本/长过程），该回合在首屏与历史分页里都会整回合下发；字符预算只作度量，绝不会把一个回合切开。极端情况下，首屏第一个回合就可能远大于投影窗口的常规体量。
+
+**缘由**：回合是对话因果与渲染的最小完整单元——用户输入与它引发的助手过程、工具调用与结果链属于同一条时间线。在回合中间切开会让工具调用与结果分家、过程分组与 seq 顺序错位，并让历史游标（`before_item_id` / `before_seq`）的含义变得含混。因此这一取舍是定稿行为：宁可单回合偏重，也不做会破坏回合完整性的回合内截断。
+
+**当前口径**：
+
+- 服务端 `core/src/lamtools_core/app/live_operations.py` 的 `_character_page_snapshot` 在 `turn_limit` 模式下以完整回合为页单位，`char_limit` 在该模式只作信息度量（`_history_char_limit` / `_history_turn_limit` 给默认与上限）；页内会带上所属助手回合因果前置的用户锚点，避免只渲染回合后半截。
+- **`char_limit` 不是体积保险（2026-10-12 写清）**：所有实时分页路径（`thread.resume` / `thread.read` / `thread.history`）都会带上 `turn_limit`（默认 10），因此字符预算从不参与裁剪，只出现在 `history_page.char_limit` / `character_count` 里；`MAX_THREAD_HISTORY_CHAR_LIMIT`（1,000,000）**不构成对响应体的上限**，单个超大回合可以任意超过它。客户端不要把它当体积护栏依赖（桌面端 `createWorkbench.ts` 传的 `char_limit: 200_000` 同样只作展示）。真正约束页大小的是 `turn_limit`（默认 10、上限 100）。
+- 客户端首屏投影窗口是最近 10 个完整回合（`core/ui/src/workbench/createWorkbench.ts` 的 `turn_limit`），其余回合由空闲控制器分页补齐（`core/ui/src/composables/useIdleHistoryMount.ts`）。
+- **单条消息的接收上限（2026-10-12 事故结论）**：一页快照作为**一条 WebSocket 文本消息**下发，而常见客户端库对单条消息有 4 MiB 上限——aiohttp 的 `max_msg_size` 默认值，以及 Node/undici 的 permessage-deflate **解压后**上限（超限以 1009 + `Max decompressed message size exceeded` 关闭，且**该常量不可配置**）。服务端本地 `send_json` 会成功并记录 `core.rpc.response_sent`，随后才收到对端 1009，所以现象是"日志显示已发送、连接却断开"。实测：某线程单回合约 24 MB、另一线程快照条目合计约 140 MB，都会触发。服务端不加体积限制（回合原子性定稿），改为**可诊断**：`live_router` 对 ≥4 MiB 的出站消息打一条带体积/线程/回合身份的 WARNING（`LARGE_OUTBOUND_MESSAGE_BYTES`），不再把超大响应只当普通成功处理。自带命令行客户端已把 aiohttp 单条上限放宽到 256 MiB（`live_client.CLI_WEBSOCKET_MAX_MESSAGE_BYTES`）；浏览器端（桌面 WebView / 移动 WebView）本无该库级上限。
+- 移动端 `core/mobile/src/App.vue` 用 `turn_limit: 100` 且不传 `char_limit`，是产品里范围最大的合法请求（有界回合、无界字节），是否收紧待用户拍板。
+- 若将来确要处理超大单回合，必须在「回合可安全切分」（工具调用与结果成对、过程组完整、游标语义明确）的前提下另立方案，属新设计而非修 bug；且若要做**字节预算**，必须是装配后测量的字节上限、能切到回合内部，并同步放宽接收方单条上限（注意 undici 的上限不可配置，Node 客户端只能靠服务端侧），不能把这里的字符数直接当护栏。
 
 ## 子代理分屏包（2026-10-05）
 

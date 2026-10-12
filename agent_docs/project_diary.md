@@ -6,6 +6,15 @@ logs.
 
 ## Decisions and Lessons
 
+- **发送/引导链路的响应契约：事件足够，快照是纯延迟（2026-10-11）。** 变更类操作（turn/start、steer、queue/*）
+  的响应曾一律内嵌完整会话快照——引导即使被拒也付 0.6-1.6s 全价，48MB 级 JSON 走网络 + 客户端解析 + 整树重建；
+  前端传的 `include_snapshot:false` 在 turn/start 上被后端静默忽略过。教训：**"响应带快照"这类兼容默认必须有兑现的
+  开关并且两端都验过**；事件 + 修订号已足以维持 CAS 与 UI 状态，整包快照只留给断线恢复/进会话。
+  另：一张内联图片在快照里曾存三份（条目 payload 元数据 + 条目 artifacts + 登记表），任何新增持久化字段都要问一遍
+  "同一份字节已经存在哪里"；大对象进登记表/元数据行之前先看它会不会被整块重写。
+- **写锁窗口的测量口径**：全局 SQLite 写锁内的全量装载会把并发发送/流式整体卡住（5 并发写第 5 个 8.4s）；
+  锁内只允许元数据级读（turns/queue/requests/item_order），全量装配移到提交后锁外。磁盘争用会污染墙钟 RTT
+  （同操作 0.8s→100s），进程内基准要用缓存热后的数字说话。
 - **内容不保留历史版本；撤回/编辑只作用于上下文（用户 2026-10-03 明确要求）。** 成果只记
   "当前是什么"，内容就是磁盘上的那个文件（聊天上传的原件走附件通路）；资料库里不再有
   "版本历史/恢复某个版本"这类入口；检查点只保存对话快照，撤回与编辑只删该轮及之后的
@@ -189,8 +198,10 @@ logs.
   themes, repository-owned SVG/ICO assets, and validated project
   `icon_key`/`color_key` metadata. The repository-owned Inno Setup chain owns
   Windows installer presentation, while `lamcore.exe`,
-  `lamcore-backend/LamCore.exe`, `com.lamtools.lamcore`, protocols, storage,
-  and configuration identifiers remain compatibility boundaries.
+  `lamcore-backend/sunday-core.exe` (the deployed backend; renamed from the
+  build-time `LamCore.exe`, which PyInstaller and CI still produce, on
+  2026-10-12), `com.lamtools.lamcore`, protocols, storage, and configuration
+  identifiers remain compatibility boundaries.
 - Project visual/name edits are immediate-save interactions: commit on the
   relevant change/blur/enter or icon/color selection, while AGENTS content
   remains an explicit save. The desktop bootstrap must resolve saved/system

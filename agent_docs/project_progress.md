@@ -500,8 +500,10 @@ canvas into a text dashboard.
 - Packaging uses the repository-owned Inno Setup chain:
   `core/desktop/installer/Sunday.iss` plus `build-installer.ps1`, orchestrated
   by the package script. Tauri remains `--no-bundle`; `lamcore.exe`,
-  `lamcore-backend/LamCore.exe`, `com.lamtools.lamcore`, and legacy migration
-  behavior remain compatibility boundaries.
+  `lamcore-backend/sunday-core.exe` (the deployed backend; renamed from the
+  build-time `LamCore.exe`, which PyInstaller and CI still produce, on
+  2026-10-12), `com.lamtools.lamcore`, and legacy migration behavior remain
+  compatibility boundaries.
 - Empty sessions use an animated Sunday logo/greeting. Startup first-paint
   bootstrap now resolves the saved/system Sunday theme before stylesheet paint,
   preventing the dark-preference ~80ms light flash. Tauri verification covered
@@ -3663,3 +3665,28 @@ LAN/Relay 配对重连和 Docker Hub 镜像构建仍是并行后续事项；本�
   data — stopped, then the installed build stayed up.
 - Record: `core/desktop/artifacts/release-0.3.8/RELEASE.md` (transaction table,
   evidence, rollback); the installed app was left running after acceptance.
+
+## Send-path latency closure (send_guide_latency_20261011; 2026-10-11)
+
+- State: complete (code + tests; no Tauri manual acceptance per project rule).
+- User goal: click-to-send → delivered + displayed ≤ 50ms under extreme conditions
+  (≤1M context, ≤1k calls, ≤1k tool rows). Diagnosis used an isolated DB copy and a
+  second backend process (`tmp/latency-probe/`); fixes were agreed with the user
+  ("fix it thoroughly").
+- Changes: mutation responses (turn/start honoring the existing opt-out, turn/steer,
+  queue create/update/delete/guide) no longer embed the full thread snapshot for
+  callers that opt out (shared UI opts out everywhere; CLI/mobile defaults intact);
+  full snapshot assembly moved outside the global SQLite write lock; guidance
+  active-turn checks use the in-memory registry first and a new metadata-only load
+  as fallback; inline image data URLs are de-duplicated in the persisted projection
+  (only the item-artifacts copy remains) and stripped on read for legacy rows.
+- Measured (warm cache, 509-item session): full snapshot assembly 47.6MB → 20.2MB;
+  metadata-only load 6ms (previously two ~0.3s full loads inside the lock);
+  steer/queue responses carry no snapshot. Wall-clock RTT re-measurement was
+  polluted by the live instance's disk contention and is not used as evidence.
+- Verification: live/snapshot/projection/checkpoint suites green with 6 new
+  regression tests; full backend suite matches the pre-existing baseline
+  (`test_python_http_server_lifecycle_contract_with_real_process` fails identically
+  with the changes stashed); UI: 74 focused contract tests green, `npm run build`
+  green; typecheck reports 4 pre-existing errors in uncommitted test files
+  (verified unrelated).
