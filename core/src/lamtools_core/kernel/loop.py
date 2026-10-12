@@ -376,6 +376,11 @@ class CoreLoopKernel:
     model_context_sink: Callable[[RuntimeState, LLMRequest], Awaitable[None] | None] | None = field(default=None, repr=False)
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _run_started_at: float = field(default=0.0, init=False, repr=False)
+    # Monotonic instant the previous model response arrived (0.0 before the
+    # run's first call).  Feeds the per-step "gap_since_last_result" log line,
+    # which is the only way to tell provider wait apart from the local work
+    # between two calls (tool execution, history writeback, state save).
+    _last_response_at: float = field(default=0.0, init=False, repr=False)
     # External cancel signal source (e.g. RuntimeTaskRegistry.get_cancel_event).
     # When set by the app layer's turn.cancel path, the kernel can detect it
     # mid-stream and abort the model call cooperatively instead of waiting for
@@ -788,13 +793,21 @@ class CoreLoopKernel:
                         )
 
                 # 5.4 Call model — try streaming first
-                _step_start = time_module.time()
-                _logger.info("[kernel:_run] step=%d calling stream model sid=%s", index, state.session_id)
+                _step_start = time_module.monotonic()
+                _logger.info(
+                    "[kernel:_run] step=%d dispatching model request sid=%s "
+                    "gap_since_last_result=%.2fs messages=%d tools=%d model=%s",
+                    index, state.session_id,
+                    (_step_start - self._last_response_at) if self._last_response_at else 0.0,
+                    len(request.messages), len(request.tools or []), request.model,
+                )
                 response = await self._stream_model(request, state, response_index=index)
                 streamed_response = response is not None
                 if response is None:
                     response = await self._call_model(request, state=state, response_index=index)
-                _step_elapsed = time_module.time() - _step_start
+                _response_at = time_module.monotonic()
+                _step_elapsed = _response_at - _step_start
+                self._last_response_at = _response_at
                 _logger.info(
                     "[kernel:_run] model response received sid=%s step=%d "
                     "streamed=%s content_len=%d tool_calls=%d elapsed=%.2fs",
@@ -2189,6 +2202,11 @@ class CoreLoopKernel:
         stream_finish_reason: str | None = None
         terminal_tool_calls: list[LLMToolCall] = []
         provider_state: Any = None
+        # Time-to-first-event is measured from here: constructing the generator
+        # sends nothing, the first __anext__ is what crosses the network.  A
+        # stalled gateway shows up as a large ttft, never as a large elapsed.
+        _dispatch_at = time_module.monotonic()
+        _first_event_seen = False
         try:
             stream_iterator = stream.__aiter__()
             while True:
@@ -2196,6 +2214,14 @@ class CoreLoopKernel:
                     event = await self._next_stream_event(stream_iterator)
                 except StopAsyncIteration:
                     break
+                if not _first_event_seen:
+                    _first_event_seen = True
+                    _logger.info(
+                        "[kernel:_stream_model] step=%s first stream event sid=%s "
+                        "kind=%s ttft=%.2fs",
+                        response_index, state.session_id, event.kind,
+                        time_module.monotonic() - _dispatch_at,
+                    )
                 # Cooperative cancel during streaming: the app-layer Stop
                 # button sets the registry cancel event. Abort the stream
                 # immediately rather than waiting for the model to finish —
@@ -3507,6 +3533,17 @@ class CoreLoopKernel:
         usage = getattr(response, "usage", None)
         if usage is None:
             return
+        # Publish the provider's own count of the request it just answered,
+        # before any anchor bookkeeping.  The anchored-prefix check below only
+        # decides whether the compaction *trigger* may reuse the number, and it
+        # rarely can (the system prompt shifts between steps: 9 of 115
+        # measurements on one live session).  The resource panel needs the
+        # provider's count regardless — the local estimate undercounts it badly
+        # (measured 75,969 estimated vs 119,365 reported for one request).
+        reported_prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        metrics = state.metadata.get("runtime_context_metrics")
+        if reported_prompt_tokens > 0 and isinstance(metrics, dict):
+            metrics["context_usage_prompt_tokens"] = reported_prompt_tokens
         if sent_message_count <= 0 or sent_message_count != len(request.messages):
             # The request is no longer the one the provider measured (or was
             # empty), so its count cannot be anchored to this state.
@@ -3641,15 +3678,46 @@ class CoreLoopKernel:
                 request.messages,
                 trigger_tokens=trigger_tokens,
             )
-        before_tokens = measurement.tokens
-        metrics["context_measurement_source"] = measurement.resolved_source
-        if measurement.source == USAGE_ANCHOR_SOURCE and isinstance(usage_anchor, dict):
-            metrics["context_usage_prompt_tokens"] = int(
-                usage_anchor.get("prompt_tokens") or 0
-            )
+        # The local estimator undercounts the request.  On one live session it
+        # read 388,564 where the provider reported 590,541, and it counts every
+        # picture as 85 tokens regardless of the picture's real size.  The
+        # provider's count of the last request is a floor for this one, because
+        # history only grows inside a turn.  Triggering on the larger of the two
+        # can only fire compaction earlier; firing later is what let requests
+        # run past the context limit while the estimate still looked safe.
+        provider_count = 0
+        if isinstance(usage_anchor, dict) and str(usage_anchor.get("model_id") or "") == current_model:
+            try:
+                provider_count = max(0, int(usage_anchor.get("prompt_tokens") or 0))
+            except (TypeError, ValueError):
+                provider_count = 0
+        if provider_count > measurement.tokens:
+            # Hand the floored measurement to the controller as well, so its own
+            # trigger check sees the provider count, not the optimistic estimate.
+            measurement = replace(measurement, tokens=provider_count, exact=True)
+            metrics["context_measurement_source"] = "provider_count_floor"
         else:
-            # Never let an earlier anchor's count look like the current
-            # measurement once the trigger fell back to estimation.
+            metrics["context_measurement_source"] = measurement.resolved_source
+        before_tokens = measurement.tokens
+        # The provider's own count of the last request it received.  Publish it
+        # whenever an anchor exists, not only when the trigger could reuse it:
+        # the anchored-prefix check is about trusting a number for a compaction
+        # *decision*, while this metric only reports what the provider said.
+        # The system prompt changes between steps, so the anchor is reusable
+        # rarely (9 of 115 measurements on one live session) — gating the metric
+        # on reuse left the UI showing the local estimate, which undercounts the
+        # real request badly (measured 75,969 vs 119,365 for one request).
+        anchor_prompt_tokens = 0
+        if isinstance(usage_anchor, dict):
+            try:
+                anchor_prompt_tokens = max(0, int(usage_anchor.get("prompt_tokens") or 0))
+            except (TypeError, ValueError):
+                anchor_prompt_tokens = 0
+        if anchor_prompt_tokens > 0:
+            metrics["context_usage_prompt_tokens"] = anchor_prompt_tokens
+        else:
+            # No provider number yet (first call of a session, or a provider that
+            # reports no usage): the panel must fall back to the estimate.
             metrics.pop("context_usage_prompt_tokens", None)
         request.metadata["estimated_prompt_tokens"] = before_tokens
         request.metadata["context_window_tokens"] = window

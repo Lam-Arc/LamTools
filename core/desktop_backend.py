@@ -110,11 +110,14 @@ def _run() -> None:
     _log.info("core_db=%s  data_dir=%s", core_db, data_dir)
 
     # --- attach file logger now that data_dir is known ---
-    log_file = data_dir / "backend.log"
-    file_handler = logging.FileHandler(str(log_file), encoding="utf-8")
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(logging.Formatter("%(levelname)s [%(name)s] %(message)s"))
-    logging.getLogger().addHandler(file_handler)
+    # Console and file share one millisecond-stamped format so step timings can
+    # be subtracted across lines (see lamtools_core.logging_setup).
+    from lamtools_core.logging_setup import attach_backend_file_logger, backend_log_formatter
+
+    _formatter = backend_log_formatter()
+    for _handler in logging.getLogger().handlers:
+        _handler.setFormatter(_formatter)
+    log_file = attach_backend_file_logger(data_dir)
     _log.info("Log file: %s", log_file)
 
     # --- frontend (optional) ------------------------------------------------

@@ -1311,6 +1311,10 @@ const SUM_USAGE_FIELDS = [
 const CONTEXT_METRIC_FIELDS = new Set([
   'estimated_prompt_tokens',
   'estimatedPromptTokens',
+  // The provider's own count for the last request it received; carried next to
+  // the estimate so the resource panel can say which one it is showing.
+  'context_usage_prompt_tokens',
+  'contextUsagePromptTokens',
   'context_tokens',
   'contextTokens',
   'context_window_tokens',

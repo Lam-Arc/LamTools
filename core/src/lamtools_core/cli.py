@@ -2851,9 +2851,14 @@ def _print_live_result(args: argparse.Namespace, result: dict[str, Any], message
 
 
 async def cmd_serve(args: argparse.Namespace) -> int:
+    from lamtools_core.logging_setup import LOG_DATEFMT, LOG_FORMAT
+
+    # Millisecond timestamps: the step lines emitted by the kernel are compared
+    # against each other to split a step into model time and local time.
     logging.basicConfig(
         level=logging.INFO,
-        format="%(levelname)s [%(name)s] %(message)s",
+        format=LOG_FORMAT,
+        datefmt=LOG_DATEFMT,
         force=True,
     )
     try:

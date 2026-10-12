@@ -296,6 +296,13 @@ def create_core_agent_http_app(
     resolved_data_dir = Path(data_dir or os.environ.get("LAMTOOLS_CORE_DATA_DIR") or core_db_path.parent / "core-agent").resolve()
     resolved_work_root.mkdir(parents=True, exist_ok=True)
     resolved_data_dir.mkdir(parents=True, exist_ok=True)
+    # The Tauri shell discards this process's stdout/stderr, so an unattached
+    # file handler means a dev run leaves no trace at all.  Idempotent: the
+    # packaged entry point already attached the same path.
+    from lamtools_core.logging_setup import attach_backend_file_logger
+
+    _backend_log_path = attach_backend_file_logger(resolved_data_dir)
+    _logger.info("[startup] backend log file: %s", _backend_log_path)
     # Long-lived background processes archive here so a restart can still
     # account for the processes a session had registered.
     default_background_process_registry().attach_store(
