@@ -349,6 +349,36 @@
   border-color: var(--settings-control-text, var(--theme-control-text));
 }
 
+.theme-schedule-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.theme-schedule-options .field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The shared text-input recipe already paints the composer tokens; these only
+   size the native time picker inside the schedule row. */
+.theme-schedule-options input[type="time"] {
+  width: 108px;
+  min-height: 30px;
+  padding-block: 1px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.theme-schedule-hint {
+  margin: 0;
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) 62%, transparent);
+  font-size: 12px;
+}
+
 .theme-preset-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 200px));

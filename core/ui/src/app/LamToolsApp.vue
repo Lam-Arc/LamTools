@@ -329,6 +329,7 @@
           :theme="theme"
           :on-open-session="openSessionFromSearch"
           :on-open-plugins="openPluginsFromSearch"
+          :on-open-file="openFileFromSearch"
           :commands="searchCommands"
           @close="closeFullArea"
         />
@@ -366,6 +367,7 @@
           :content-width="contentWidth"
           :show-right-panel-header="false"
           :theme-mode="themeMode"
+          :theme-schedule="themeSchedule"
           :effective-theme-mode="effectiveThemeMode"
           :permission-preset="defaultPermissionPreset"
           :allow-access-outside-workdir="allowAccessOutsideWorkdir"
@@ -386,6 +388,7 @@
           @update:density="uiPreferences.setDensity"
           @update:content-width="uiPreferences.setContentWidth"
           @update:theme-mode="uiPreferences.setThemeMode"
+          @update:theme-schedule="uiPreferences.setThemeSchedule"
           @reset-theme="uiPreferences.resetTheme"
           @apply-preset="uiPreferences.applyThemePreset"
           @update-stops="uiPreferences.updateThemeStops"
@@ -739,8 +742,6 @@
         :transport="transport"
         :messages="messages"
         :context-window="executionControls.activeModel.value?.context_window"
-        :runtime-status="latestStatus"
-        :runtime-mode-label="runtimeModeLabel"
         :process-signal="lastWorkbenchEvent"
         :active-plugin-id="activePluginMode?.pluginId || null"
         :active-mode-id="activePluginMode?.id || null"
@@ -853,6 +854,7 @@ import {
   coreApplyHistoryScrollCeiling,
   coreHistoryAutoLoadThreshold,
   coreShouldAutoLoadHistory,
+  createIdleHistoryMount,
   readUpdateAutoCheck,
   useCoreAutoFollowScroll,
   useCoreExecutionControlsState,
@@ -1814,7 +1816,7 @@ async function uploadArtifactFiles(folder: string): Promise<void> {
 }
 
 const uiPreferences = useCoreUiPreferences('lamtools.core.ui.preferences')
-const { density, contentWidth, theme, themeMode, effectiveThemeMode } = uiPreferences
+const { density, contentWidth, theme, themeMode, themeSchedule, effectiveThemeMode } = uiPreferences
 const availableModels = ref<RawModel[]>([])
 const availableProviders = ref<RawProvider[]>([])
 const modelGroups = ref<RawModelGroup[]>([])
@@ -4035,6 +4037,21 @@ function openSessionFromSearch(sessionId: string): void {
 }
 
 /**
+ * 文件命中行：交给系统默认应用打开（与资料库点文件同一条通道，路径相对
+ * 工作根、越界与不存在都会由后端拒绝）。不走带重试的配置通道——打不开要
+ * 立刻说话，不能让用户在被重试的等待里沉默几秒。失败向上抛，由搜索面
+ * 在结果旁边显示；命中行号一并带上，当前外部应用只会从头显示它——精确
+ * 落到某一行需要应用内预览层，属后续能力，不在本轮范围。
+ */
+async function openFileFromSearch(hit: { path: string; line?: number }): Promise<void> {
+  const path = String(hit.path || '').trim()
+  if (!path) throw new Error('这一行没有可打开的文件路径')
+  const projectId = activeProjectId.value ?? selectedProjectId.value
+  if (!projectId) throw new Error('当前没有可用的项目，无法打开文件')
+  await appRuntime.requestRpc('artifact.open', { project_id: projectId, path })
+}
+
+/**
  * The shortcut rows the search dialog shows while the query is empty.
  * Only commands this host really has: the phone has no terminal or preview, so
  * it passes fewer of them instead of advertising what it cannot do.
@@ -4215,12 +4232,74 @@ watch(selectedModelId, (modelId) => {
     .catch(() => { /* best-effort persistence */ })
 })
 
+// 只为"新用户消息落地即收占位"存在。浅层监听即可：投影在消息增删时都会
+// 产出新数组，引用变化就会触发；deep 会在每个流式 tick 全窗口深遍历所有
+// part（性能排查 #6），而嵌套变化根本不产生新的用户消息，纯属开销。
 watch(messages, (newVal, oldVal) => {
   const oldIds = new Set((oldVal || []).map(m => m.id))
   const newUserMsgs = (newVal || []).filter(m => !oldIds.has(m.id) && m.role === 'user')
   if (newUserMsgs.length > 0) pendingPlaceholder.value = null
   // 滚动跟随由底部哨兵单一通道驱动；这里不再按消息变化隐式写 scrollTop。
-}, { deep: true })
+})
+
+// ── 首屏分批挂载：先出最近 10 个回合，其余回合空闲时分页补齐 ──
+// 初始窗口小、首绘快；补齐走空闲回调，不与流式帧抢主线程。每页复用滚动
+// 加载的锚定纪律：采集首条可见消息的视口坐标 → 加宽窗口 → 还原（两遍，
+// 第二遍吸收异步撑高的元素），用户正读历史时视口不跳。投影数组顺序即真实
+// 时序，补挂的行全部位于既有行之上，DOM 顺序永不重排。与用户滚动触发的
+// 历史加载共用同一把 historyPageLoading 页锁，两个来源不互相插页。
+// 补齐有页数上限（见 useIdleHistoryMount 的 IDLE_HISTORY_MAX_BATCHES）：
+// 巨型线程到顶即停，剩余历史由用户上翻时的按需加载接手。progress 让"在等
+// 服务端分页的空气页"不占预算也不空转。
+const idleHistoryMount = createIdleHistoryMount({
+  hasMoreHistory,
+  busy: historyPageLoading,
+  loadMoreHistory,
+  progress: () => messages.value.length,
+  captureAnchor: () => {
+    const el = threadScrollEl.value
+    if (!el) return null
+    return {
+      sessionId: activeSessionId.value,
+      anchor: captureThreadHistoryAnchor(el),
+      prevScrollTop: el.scrollTop,
+      prevHeight: el.scrollHeight,
+    }
+  },
+  restoreViewport: (anchor) => {
+    const el = threadScrollEl.value
+    const state = anchor as {
+      sessionId: string | null
+      anchor: ThreadHistoryAnchor | null
+      prevScrollTop: number
+      prevHeight: number
+    } | null
+    if (!el || !state) return
+    // 页面在途时会话被切走：旧会话的锚点与高度差都对新会话没有意义，直接放弃
+    // 这一遍还原（新会话的补齐由它自己的排页重新起步）。
+    if (state.sessionId !== activeSessionId.value) return
+    restoringHistoryAnchor = true
+    try {
+      if (!restoreThreadHistoryAnchor(el, state.anchor) && el.scrollHeight > state.prevHeight) {
+        el.scrollTop = state.prevScrollTop + (el.scrollHeight - state.prevHeight)
+      }
+      historyScrollCeiling = el.scrollTop
+      threadScroll.handleScroll()
+      outlineNavigator.value?.updateScroll()
+    } finally {
+      restoringHistoryAnchor = false
+    }
+  },
+  afterDomUpdate: nextTick,
+  afterFrame: afterHistoryLayoutFrame,
+})
+
+// 补齐只在页锁空闲时排页；锁被用户滚动加载占用时那一次排页会让路，所以锁一
+// 释放也要重排一次，否则补齐链断在半途——用户随后向上翻历史仍要现挂。
+watch([messages, hasMoreHistory, historyPageLoading], () => {
+  if (!historyPageLoading.value && hasMoreHistory.value) idleHistoryMount.schedule()
+})
+watch(activeSessionId, () => idleHistoryMount.cancel())
 
 watch([activeSessionId, messages, latestStatus], ([threadId]) => {
   void refreshGoal(threadId)

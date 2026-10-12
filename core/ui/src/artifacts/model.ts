@@ -278,3 +278,79 @@ export function absoluteArtifactPath(item: Pick<ProjectArtifact, 'path' | 'uri'>
   if (/^[A-Za-z]:/.test(root)) return `${root}\\${relative.replace(/\//g, '\\')}`
   return `${root}/${relative}`
 }
+
+// ---------------------------------------------------------------------------
+// 消息流「本轮产出」的入选判定（2026-10-12 用户规则）
+//
+// 一个回合写过的文件不再全部进产物区：只有①本回合被收进资料库的文件、②本回合
+// 汇报文本里以相对或绝对路径出现过的文件才进。这两个判定是纯值换算，放在这里
+// 与资料库共用同一份规范化，避免界面上"同一个文件"有两种写法。
+// ---------------------------------------------------------------------------
+
+/** 消息流产物区的入选输入。 */
+export interface TurnArtifactSelectionOptions {
+  /** 本回合的汇报文本（最终答复）：文件据此被认领。 */
+  reportText: string
+  /** 本回合经资料库工具登记的文件（工作区相对路径，已规范化的集合）。 */
+  libraryPaths: ReadonlySet<string>
+  /** 工作根：把相对路径展开成绝对路径再匹配一次；缺省时只匹配相对写法。 */
+  workRoot?: string | null
+}
+
+const WORKSPACE_REFERENCE_PREFIX = 'workspace://'
+
+/** 路径引用的规范形：workspace:// 前缀剥掉、反斜杠归一、去掉 ./ 与重复斜杠。 */
+export function normalizeArtifactReference(raw: unknown): string {
+  let value = String(raw ?? '').trim().replace(/\\/g, '/')
+  if (value.startsWith(WORKSPACE_REFERENCE_PREFIX)) value = value.slice(WORKSPACE_REFERENCE_PREFIX.length)
+  while (value.startsWith('./')) value = value.slice(2)
+  return value.replace(/\/{2,}/g, '/')
+}
+/** 绝对引用（盘符或根路径）——它不在工作区相对命名空间里。 */
+export function isAbsoluteArtifactReference(value: string): boolean {
+  return /^[A-Za-z]:\//.test(value) || value.startsWith('/')
+}
+
+/** 入选判定用的那一个路径引用：path 优先，其次 metadata.path，最后 uri。 */
+export function artifactListingReference(artifact: Pick<ProjectArtifact, 'path' | 'uri'> & { metadata?: Record<string, unknown> }): string {
+  const metadataPath = typeof artifact.metadata?.path === 'string' ? artifact.metadata.path : ''
+  return normalizeArtifactReference(artifact.path || metadataPath || artifact.uri || '')
+}
+
+/**
+ * 汇报文本有没有以相对或绝对路径提到这个文件。
+ * 兼容正反斜杠两种分隔符，以及工作根展开后的绝对写法（Windows 盘符不区分大小写）。
+ */
+export function reportMentionsArtifactPath(
+  reportText: string,
+  reference: string,
+  workRoot?: string | null,
+): boolean {
+  const text = String(reportText || '').replace(/\\/g, '/')
+  const normalized = normalizeArtifactReference(reference)
+  if (!text || !normalized) return false
+  if (text.includes(normalized)) return true
+  if (isAbsoluteArtifactReference(normalized)) return false
+  const root = String(workRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
+  if (!root) return false
+  const absolute = `${root}/${normalized}`
+  if (text.includes(absolute)) return true
+  return /^[A-Za-z]:\//.test(absolute) && text.toLowerCase().includes(absolute.toLowerCase())
+}
+
+/**
+ * 这个产物条目要不要进「本轮产出」区。
+ * - 生成图片（kind=image）不套两条规则：它们本就是这个区的另一类内容，不是
+ *   "本回合写过的文件"，写法也不总是工作区路径（可能是内联 data URL）。
+ * - 其余条目要在本回合的入库清单里，或被汇报文本以路径提到，才留下。
+ */
+export function shouldListTurnArtifact(
+  artifact: Pick<ProjectArtifact, 'kind' | 'path' | 'uri'> & { metadata?: Record<string, unknown> },
+  options: TurnArtifactSelectionOptions,
+): boolean {
+  if (String(artifact.kind || '') === 'image') return true
+  const reference = artifactListingReference(artifact)
+  if (!reference) return false
+  if (!isAbsoluteArtifactReference(reference) && options.libraryPaths.has(reference)) return true
+  return reportMentionsArtifactPath(options.reportText, reference, options.workRoot)
+}

@@ -16,7 +16,9 @@ import {
   migrateSundayThemeDefaults,
   normalizeGradientStops,
   normalizeTheme,
+  normalizeThemeSchedule,
   relativeLuminance,
+  resolveScheduledThemeMode,
   themeToCSSVars,
 } from '../src/helpers/theme'
 import { THEME_PRESETS } from '../src/data/theme-presets'
@@ -206,5 +208,34 @@ describe('theme gradient normalization', () => {
     ])
     expect(preset.darkTheme?.controlStops).toEqual([{ color: '#1a2824', position: 0 }])
     expect(preset.darkTheme?.controlText).toBe('#f3eee8')
+  })
+})
+
+describe('theme schedule', () => {
+  const at = (hours: number, minutes: number) => new Date(2026, 0, 1, hours, minutes)
+
+  it('normalizes clock values and falls back to the default pair', () => {
+    expect(normalizeThemeSchedule(undefined)).toEqual({ lightFrom: '07:00', darkFrom: '19:00' })
+    expect(normalizeThemeSchedule({ lightFrom: '7:05', darkFrom: '19:30' })).toEqual({ lightFrom: '07:05', darkFrom: '19:30' })
+    expect(normalizeThemeSchedule({ lightFrom: '24:00', darkFrom: 'nope' })).toEqual({ lightFrom: '07:00', darkFrom: '19:00' })
+    expect(normalizeThemeSchedule({ lightFrom: '07:00' })).toEqual({ lightFrom: '07:00', darkFrom: '19:00' })
+  })
+
+  it('resolves both stretches and keeps the wrapping one past midnight', () => {
+    const daytime = { lightFrom: '07:00', darkFrom: '19:00' }
+    expect(resolveScheduledThemeMode(daytime, at(6, 59))).toBe('dark')
+    expect(resolveScheduledThemeMode(daytime, at(7, 0))).toBe('light')
+    expect(resolveScheduledThemeMode(daytime, at(18, 59))).toBe('light')
+    expect(resolveScheduledThemeMode(daytime, at(19, 0))).toBe('dark')
+
+    // Light from the evening through the morning: the light stretch wraps midnight.
+    const overnight = { lightFrom: '22:00', darkFrom: '06:00' }
+    expect(resolveScheduledThemeMode(overnight, at(12, 0))).toBe('dark')
+    expect(resolveScheduledThemeMode(overnight, at(22, 0))).toBe('light')
+    expect(resolveScheduledThemeMode(overnight, at(23, 30))).toBe('light')
+    expect(resolveScheduledThemeMode(overnight, at(3, 0))).toBe('light')
+    expect(resolveScheduledThemeMode(overnight, at(6, 0))).toBe('dark')
+
+    expect(resolveScheduledThemeMode({ lightFrom: '09:00', darkFrom: '09:00' }, at(12, 0))).toBe('light')
   })
 })

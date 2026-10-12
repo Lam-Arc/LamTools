@@ -5,13 +5,17 @@ import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ContextMenuHost from '../src/components/context-menu/ContextMenuHost.vue'
+import ContextMenuPanel from '../src/components/context-menu/ContextMenuPanel.vue'
 import {
   closeContextMenu,
   contextMenuState,
+  isMenuGroupCollapsed,
   isNativeContextTarget,
   LONG_PRESS_CONTEXT_MENU_DELAY_MS,
   openContextMenu,
   registerTextSelectionMenuContributor,
+  resetMenuGroupMemoryForTests,
+  setMenuGroupCollapsed,
 } from '../src/components/context-menu/context-menu'
 import type { ContextMenuEntry } from '../src/components/context-menu/types'
 
@@ -64,7 +68,8 @@ function touchPointerEvent(
 }
 
 function menuPanel(level = 0): HTMLElement | null {
-  return document.querySelector<HTMLElement>(`[data-context-menu-level="${level}"]`)
+  // 退场中的面板（关闭动效未播完）不算数：查询一律排除。
+  return document.querySelector<HTMLElement>(`[data-context-menu-level="${level}"]:not(.context-menu-leave-active)`)
 }
 
 function menuButton(index: number, level = 0): HTMLButtonElement {
@@ -86,6 +91,7 @@ describe('ContextMenuHost', () => {
     host?.unmount()
     host = null
     vi.restoreAllMocks()
+    resetMenuGroupMemoryForTests()
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: defaultViewport.width })
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: defaultViewport.height })
   })
@@ -539,6 +545,126 @@ describe('ContextMenuHost', () => {
 
     expect(menuPanel(1)).toBeNull()
     expect(menuPanel(0)?.textContent).toContain('新菜单')
+  })
+
+  it('renders semantic groups with collapsible heads and remembers their state', async () => {
+    const fileGroup = { id: 'test.file', label: '文件' }
+    const organizeGroup = { id: 'test.organize', label: '整理' }
+    openContextMenu({
+      event: contextEvent(),
+      items: [
+        { id: 'open', label: '打开', group: fileGroup, action: vi.fn() },
+        { id: 'copy', label: '复制路径', group: fileGroup, action: vi.fn() },
+        { id: 'favorite', label: '添加到收藏', group: organizeGroup, action: vi.fn() },
+        { id: 'remove', label: '移除', destructive: true, action: vi.fn() },
+      ],
+    })
+    await settleRender()
+
+    const heads = menuPanel()!.querySelectorAll<HTMLButtonElement>('.context-menu-group-head')
+    expect(heads).toHaveLength(2)
+    expect(heads[0]!.textContent).toContain('文件')
+    expect(heads[1]!.textContent).toContain('整理')
+    // 缺省全展开。
+    expect(heads[0]!.getAttribute('aria-checked')).toBe('true')
+    expect(menuPanel()!.querySelector('.context-menu-group-body.is-collapsed')).toBeNull()
+
+    // 点击组头折叠：组体收起并写进记忆，另一组不受影响。
+    heads[0]!.click()
+    await settleRender()
+    const collapsed = menuPanel()!.querySelector('.context-menu-group-body.is-collapsed')
+    expect(collapsed).not.toBeNull()
+    expect(collapsed!.getAttribute('aria-hidden')).toBe('true')
+    expect(isMenuGroupCollapsed('test.file')).toBe(true)
+    expect(isMenuGroupCollapsed('test.organize')).toBe(false)
+
+    // 记忆跨开关生效：重开同一菜单，文件组仍是折叠的。
+    closeContextMenu()
+    await settleRender()
+    openContextMenu({
+      event: contextEvent(),
+      items: [
+        { id: 'open', label: '打开', group: fileGroup, action: vi.fn() },
+        { id: 'copy', label: '复制路径', group: fileGroup, action: vi.fn() },
+      ],
+    })
+    await settleRender()
+    expect(menuPanel()!.querySelector('.context-menu-group-body.is-collapsed')).not.toBeNull()
+
+    // 再次点组头展开，记忆同步翻转。
+    menuPanel()!.querySelector<HTMLButtonElement>('.context-menu-group-head')!.click()
+    await settleRender()
+    expect(isMenuGroupCollapsed('test.file')).toBe(false)
+  })
+
+  it('honors defaultCollapsed and skips collapsed entries in keyboard navigation', async () => {
+    const archiveGroup = { id: 'test.archive', label: '归档', defaultCollapsed: true }
+    openContextMenu({
+      event: contextEvent(),
+      items: [
+        { id: 'a1', label: '归档一', group: archiveGroup, action: vi.fn() },
+        { id: 'a2', label: '归档二', group: archiveGroup, action: vi.fn() },
+        { id: 'top', label: '置顶操作', action: vi.fn() },
+        { id: 'bottom', label: '末尾操作', action: vi.fn() },
+      ],
+    })
+    await settleRender()
+
+    // 缺省收起生效；初始焦点跳过隐藏条目落在第一个可达项上。
+    expect(menuPanel()!.querySelector('.context-menu-group-body.is-collapsed')).not.toBeNull()
+    expect(document.activeElement).toBe(menuButton(2))
+
+    // 键盘导航跳过折叠组里的条目。
+    menuButton(2).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    await nextTick()
+    expect(document.activeElement).toBe(menuButton(3))
+
+    // 用户展开一次后，记忆覆盖缺省值。
+    setMenuGroupCollapsed('test.archive', false)
+    await nextTick()
+    expect(menuPanel()!.querySelector('.context-menu-group-body.is-collapsed')).toBeNull()
+  })
+
+  it('keeps the panel inside the window when its measured size settles late', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 400 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 300 })
+    let measuredHeight = 60
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('context-menu-panel')) {
+        return { left: 0, top: 0, right: 200, bottom: measuredHeight, width: 200, height: measuredHeight } as DOMRect
+      }
+      return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 } as DOMRect
+    })
+
+    openContextMenu({ event: contextEvent(40, 40), items: [{ id: 'a', label: 'A', action: vi.fn() }] })
+    await settleRender()
+    expect(menuPanel()?.style.top).toBe('40px')
+
+    // 实际高度随后长到 280px（条目渲染、字体就绪都会造成）：重定位必须把
+    // 面板压回窗口内，底边不得越过窗口下缘减去安全边距。
+    measuredHeight = 280
+    const exposed = (host!.findComponent(ContextMenuPanel).vm.$ as unknown as {
+      exposed?: { reposition?: () => void }
+    }).exposed
+    expect(typeof exposed?.reposition).toBe('function')
+    exposed!.reposition!()
+    await settleRender()
+    const top = Number.parseInt(menuPanel()?.style.top ?? '', 10)
+    expect(top).toBeLessThanOrEqual(300 - 280 - 8)
+  })
+
+  it('animates entry, exit, group folding, and falls back for reduced motion', () => {
+    // 出场是内容层的 popover-in（既有契约）；退场是面板层短淡出；
+    // 组折叠与箭头转向都有过渡；减弱动态下全部退化为直切。
+    expect(contextMenuPanelSource).toMatch(/\.context-menu-leave-active\s*\{[^}]*transition: opacity/)
+    expect(contextMenuPanelSource).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.context-menu-leave-active\s*\{[^}]*transition: none/)
+    expect(contextMenuPanelSource).toMatch(/\.context-menu-group-body\s*\{[^}]*grid-template-rows: 1fr/)
+    expect(contextMenuPanelSource).toMatch(/\.context-menu-group-body\.is-collapsed\s*\{[^}]*grid-template-rows: 0fr/)
+    expect(contextMenuPanelSource).toMatch(/\.context-menu-group-chevron\s*\{[^}]*transition: transform/)
+    expect(contextMenuPanelSource).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.context-menu-group-body,\s*\n\s*\.context-menu-group-chevron\s*\{[^}]*transition: none/)
+    // 尺寸稳定后的重定位回路真实存在。
+    expect(contextMenuPanelSource).toContain('new ResizeObserver')
+    expect(contextMenuPanelSource).toContain('requestAnimationFrame')
   })
 
   it('closes on outside input, Escape, scroll, resize, and window blur', async () => {

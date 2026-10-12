@@ -4,7 +4,7 @@
     ref="rootEl"
     class="runtime-checklist-card"
     :data-status="currentStep.status"
-    :class="{ 'is-expanded': expanded }"
+    :class="expanded ? 'is-expanded optical-glass optical-glass--low-trans' : undefined"
     :role="expanded ? undefined : 'button'"
     :tabindex="expanded ? undefined : 0"
     :aria-expanded="expanded"
@@ -34,7 +34,7 @@
         class="runtime-checklist-card__compact-icon"
         :class="`is-${currentStep.status}`"
         aria-hidden="true"
-      >{{ stepNumber(currentStep) }}</span>
+      >{{ progressLabel }}</span>
     </div>
 
     <template v-if="expanded">
@@ -141,6 +141,7 @@ const currentStep = computed(() => {
   return [...orderedSteps.value].reverse().find((step) => step.status === 'running' || step.status === 'failed')
 })
 const currentStepIndex = computed(() => currentStep.value ? orderedSteps.value.indexOf(currentStep.value) : -1)
+const progressLabel = computed(() => `${currentStepIndex.value + 1}/${orderedSteps.value.length}`)
 
 watch(currentStep, async (step) => {
   if (!step) {
@@ -205,7 +206,10 @@ function detailsEnter(element: Element, done: () => void) {
 }
 
 function detailsLeave(element: Element, done: () => void) {
-  animateDetails(element, false, done)
+  // 收起时卡片同帧弹回胶囊（fit-content 宽度也跟着变），清单内容若还参与
+  // 布局会把胶囊撑宽再猛缩，看起来像抖动。直接置隐，不做这段淡出。
+  gsap.set(element, { autoAlpha: 0 })
+  done()
 }
 
 function detailsCancelled() {
@@ -255,18 +259,17 @@ function statusLabel(status: CoreRuntimeStepStatus): string {
 <style scoped>
 .runtime-checklist-card {
   --text: var(--theme-backdrop-text);
+  position: relative;
   display: grid;
   gap: var(--space-2);
   min-width: 0;
   max-width: 100%;
   padding: var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
   border-radius: var(--radius);
-  background: var(--theme-backdrop-background);
   color: var(--text);
-  box-shadow: var(--shadow-md);
 }
 .runtime-checklist-card.is-expanded {
+  --optical-glass-surface: var(--theme-backdrop-solid);
   grid-template-rows: auto auto auto minmax(0, 1fr);
   height: min(
     520px,
@@ -278,31 +281,34 @@ function statusLabel(status: CoreRuntimeStepStatus): string {
 .runtime-checklist-card:not(.is-expanded) {
   display: grid;
   place-items: center;
-  width: var(--space-6);
-  height: var(--space-6);
+  width: fit-content;
   margin-left: auto;
-  padding: 0;
-  border-radius: 50%;
+  min-height: var(--space-6);
+  padding: 0 var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
+  border-radius: 999px;
+  background: var(--theme-backdrop-solid);
   box-shadow: var(--shadow-sm);
+  overflow: hidden;
   cursor: pointer;
   transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
 }
 .runtime-checklist-card:not(.is-expanded):hover {
   border-color: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
-  background: color-mix(in srgb, var(--text) var(--alpha-hover), var(--theme-backdrop-background));
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), var(--theme-backdrop-solid));
   transform: translateY(-1px);
 }
 .runtime-checklist-card:not(.is-expanded):active {
-  background: color-mix(in srgb, var(--text) var(--alpha-active), var(--theme-backdrop-background));
+  background: color-mix(in srgb, var(--text) var(--alpha-active), var(--theme-backdrop-solid));
   transform: translateY(0);
 }
 .runtime-checklist-card:not(.is-expanded)[data-status='running'] {
   border-color: color-mix(in srgb, var(--green) 52%, transparent);
-  background: color-mix(in srgb, var(--green) 10%, var(--theme-backdrop-background));
+  background: color-mix(in srgb, var(--green) 10%, var(--theme-backdrop-solid));
 }
 .runtime-checklist-card:not(.is-expanded)[data-status='failed'] {
   border-color: color-mix(in srgb, var(--red) 56%, transparent);
-  background: color-mix(in srgb, var(--red) 10%, var(--theme-backdrop-background));
+  background: color-mix(in srgb, var(--red) 10%, var(--theme-backdrop-solid));
 }
 .runtime-checklist-card:not(.is-expanded)[data-status='failed'] .runtime-checklist-card__compact-icon {
   color: color-mix(in srgb, var(--red) 78%, var(--text) 22%);
@@ -331,24 +337,11 @@ function statusLabel(status: CoreRuntimeStepStatus): string {
   place-items: center;
 }
 .runtime-checklist-card__compact-icon {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: var(--space-4);
-  height: var(--space-4);
   color: color-mix(in srgb, var(--green) 78%, var(--text) 22%);
   font-size: 12px;
   font-weight: 760;
   line-height: 1;
-}
-.runtime-checklist-card__compact-icon.is-running::before {
-  position: absolute;
-  inset: -2px;
-  border: 1px solid color-mix(in srgb, var(--green) 28%, transparent);
-  border-top-color: var(--green);
-  border-radius: 50%;
-  content: '';
-  animation: runtime-checklist-spin 1.2s linear infinite;
+  white-space: nowrap;
 }
 
 .runtime-checklist-card__heading {
@@ -432,11 +425,11 @@ function statusLabel(status: CoreRuntimeStepStatus): string {
   padding: var(--space-2);
   border: 1px solid color-mix(in srgb, var(--green) 28%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--green) 8%, var(--theme-backdrop-background));
+  background: color-mix(in srgb, var(--green) 8%, var(--theme-backdrop-solid));
 }
 .runtime-checklist-card__current.is-failed {
   border-color: color-mix(in srgb, var(--red) 42%, transparent);
-  background: color-mix(in srgb, var(--red) 10%, var(--theme-backdrop-background));
+  background: color-mix(in srgb, var(--red) 10%, var(--theme-backdrop-solid));
 }
 .runtime-checklist-card__current.is-failed .runtime-checklist-card__current-title,
 .runtime-checklist-card__current.is-failed .runtime-checklist-card__current-status {
@@ -564,7 +557,6 @@ function statusLabel(status: CoreRuntimeStepStatus): string {
 
 @media (prefers-reduced-motion: reduce) {
   .runtime-checklist-card__indicator--running,
-  .runtime-checklist-card__compact-icon.is-running::before,
   .runtime-checklist-card__toggle,
   .runtime-checklist-card:not(.is-expanded) {
     animation: none;

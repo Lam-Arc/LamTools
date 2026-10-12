@@ -15,44 +15,90 @@
     @contextmenu.prevent.stop
   >
     <div class="context-menu-panel-content">
-      <template v-for="(entry, index) in items" :key="entry.id || `${pathKey}-${index}`">
-        <div v-if="entry.type === 'separator'" class="context-menu-separator" role="separator" />
-        <div v-else-if="entry.type === 'label'" class="context-menu-label" role="presentation">{{ entry.label }}</div>
-        <ContextMenuItem
-          v-else-if="entry.type !== 'submenu'"
-          :entry="entry"
-          :focused="focusedIndex === index"
-          :tabindex="focusedIndex === index ? 0 : -1"
-          :data-index="index"
-          @mounted="setItemRef(index, $event)"
-          @activate="activate(index)"
-          @pointer-enter="focusItem(index, true)"
-          @focus="focusItem(index, false)"
-          @keydown="handleKeydown(index, $event)"
-        />
-        <ContextMenuSubmenu
-          v-else
-          :entry="entry"
-          :focused="focusedIndex === index"
-          :expanded="isSubmenuExpanded(index)"
-          :tabindex="focusedIndex === index ? 0 : -1"
-          :data-index="index"
-          @mounted="setItemRef(index, $event)"
-          @activate="activate(index)"
-          @pointer-enter="focusItem(index, true)"
-          @focus="focusItem(index, false)"
-          @keydown="handleKeydown(index, $event)"
-        />
+      <template v-for="run in itemRuns" :key="run.key">
+        <div class="context-menu-run" :class="{ 'context-menu-run--group': run.group }">
+          <button
+            v-if="run.group"
+            type="button"
+            class="context-menu-group-head"
+            role="menuitemcheckbox"
+            :aria-checked="!isGroupCollapsed(run.group)"
+            :tabindex="0"
+            @click="toggleMenuGroup(run.group)"
+            @keydown.enter.prevent="toggleMenuGroup(run.group)"
+            @keydown.space.prevent="toggleMenuGroup(run.group)"
+          >
+            <ChevronDown
+              class="context-menu-group-chevron"
+              :class="{ 'is-open': !isGroupCollapsed(run.group) }"
+              :size="14"
+              :stroke-width="1.8"
+              aria-hidden="true"
+            />
+            <span>{{ run.group.label }}</span>
+          </button>
+          <div
+            class="context-menu-group-body"
+            :class="{ 'is-collapsed': run.group !== null && isGroupCollapsed(run.group) }"
+            :aria-hidden="run.group !== null && isGroupCollapsed(run.group) ? 'true' : undefined"
+            :inert="run.group !== null && isGroupCollapsed(run.group) || undefined"
+          >
+            <div class="context-menu-group-rows">
+              <template
+                v-for="{ entry, index } in run.entries"
+                :key="entry.id || `${pathKey}-${index}`"
+              >
+                <div v-if="entry.type === 'separator'" class="context-menu-separator" role="separator" />
+                <div v-else-if="entry.type === 'label'" class="context-menu-label" role="presentation">{{ entry.label }}</div>
+                <ContextMenuItem
+                  v-else-if="entry.type !== 'submenu'"
+                  :entry="entry"
+                  :focused="focusedIndex === index"
+                  :tabindex="focusedIndex === index ? 0 : -1"
+                  :data-index="index"
+                  @mounted="setItemRef(index, $event)"
+                  @activate="activate(index)"
+                  @pointer-enter="focusItem(index, true)"
+                  @focus="focusItem(index, false)"
+                  @keydown="handleKeydown(index, $event)"
+                />
+                <ContextMenuSubmenu
+                  v-else
+                  :entry="entry"
+                  :focused="focusedIndex === index"
+                  :expanded="isSubmenuExpanded(index)"
+                  :tabindex="focusedIndex === index ? 0 : -1"
+                  :data-index="index"
+                  @mounted="setItemRef(index, $event)"
+                  @activate="activate(index)"
+                  @pointer-enter="focusItem(index, true)"
+                  @focus="focusItem(index, false)"
+                  @keydown="handleKeydown(index, $event)"
+                />
+              </template>
+            </div>
+          </div>
+        </div>
       </template>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ChevronDown } from 'lucide-vue-next'
 import ContextMenuItem from './ContextMenuItem.vue'
 import ContextMenuSubmenu from './ContextMenuSubmenu.vue'
-import type { ContextMenuAnchor, ContextMenuAttributes, ContextMenuEntry } from './types'
+import {
+  isMenuGroupCollapsed,
+  setMenuGroupCollapsed,
+} from './context-menu'
+import type {
+  ContextMenuAnchor,
+  ContextMenuAttributes,
+  ContextMenuEntry,
+  ContextMenuGroupMeta,
+} from './types'
 
 const props = withDefaults(defineProps<{
   items: ContextMenuEntry[]
@@ -88,12 +134,73 @@ const panelStyle = computed(() => ({
   top: `${Math.round(position.value.top)}px`,
 }))
 
+// ── 语义分组：把携带同一 group 元数据且相邻的条目收进一个可折叠组。──
+// 分组只是视图结构：条目的扁平下标不变，键盘导航 / 激活 / 子菜单路径都按
+// 原下标工作。没带 group 的条目（含分隔线）自成一段，不参与任何组。
+interface ItemRun {
+  key: string
+  group: ContextMenuGroupMeta | null
+  entries: Array<{ entry: ContextMenuEntry; index: number }>
+}
+
+function entryGroup(entry: ContextMenuEntry): ContextMenuGroupMeta | null {
+  if (!entry || entry.type === 'separator' || entry.type === 'label') return null
+  const group = (entry as { group?: ContextMenuGroupMeta }).group
+  return group && group.id ? group : null
+}
+
+const itemRuns = computed<ItemRun[]>(() => {
+  const runs: ItemRun[] = []
+  let current: ItemRun | null = null
+  props.items.forEach((entry, index) => {
+    const group = entryGroup(entry)
+    // 相邻同组条目并入同一段；没带 group 的条目（含分隔线、标签）并入当前段，
+    // 没有当前段就新起一段——整份无组菜单保持原来的兄弟结构，不拆散选择器
+    // 依赖的行序（nth-last-of-type 等）。
+    if (current && (group ? current.group?.id === group.id : current.group === null)) {
+      current.entries.push({ entry, index })
+      return
+    }
+    current = group
+      ? { key: `${group.id}:${index}`, group, entries: [{ entry, index }] }
+      : { key: `bare:${index}`, group: null, entries: [{ entry, index }] }
+    runs.push(current)
+  })
+  return runs
+})
+
+const indexGroups = computed(() => {
+  const map = new Map<number, ContextMenuGroupMeta>()
+  for (const run of itemRuns.value) {
+    if (!run.group) continue
+    for (const { index } of run.entries) map.set(index, run.group)
+  }
+  return map
+})
+
+function isGroupCollapsed(group: ContextMenuGroupMeta): boolean {
+  return isMenuGroupCollapsed(group.id, group.defaultCollapsed === true)
+}
+
+function toggleMenuGroup(group: ContextMenuGroupMeta): void {
+  setMenuGroupCollapsed(group.id, !isGroupCollapsed(group))
+  // 组体高度要变：先收起挂着的子菜单，等折叠动画铺开后再校一次定位。
+  emit('close-submenus')
+  if (focusedIndex.value !== null && indexGroups.value.get(focusedIndex.value)?.id === group.id) {
+    focusIndex(null)
+  }
+  void nextTick(positionPanel)
+}
+
 function isNavigable(index: number): boolean {
   const entry = props.items[index]
   if (!entry || entry.type === 'separator' || entry.type === 'label') return false
-  return entry.type === 'submenu'
-    ? !entry.disabled && entry.children.length > 0
-    : !entry.disabled
+  if (entry.type === 'submenu'
+    ? entry.disabled || entry.children.length === 0
+    : entry.disabled) return false
+  const group = indexGroups.value.get(index)
+  if (group && isGroupCollapsed(group)) return false
+  return true
 }
 
 function firstNavigableIndex(): number | null {
@@ -253,7 +360,46 @@ onMounted(() => {
   void nextTick(() => {
     positionPanel()
     focusIndex(focusedIndex.value)
+    // 定位必须用稳定后的真实尺寸：首帧布局、字体替换、条目渲染都会让
+    // 挂载时量到的高度偏小，而定位按量到的高度钳制——偏小就压不住底边。
+    // 因此下一帧再校一次，并挂尺寸观察：之后任何高度变化（组折叠、
+    // 字体就绪、条目增减）都立即重定位，面板任何时刻都不得超出窗口。
+    if (typeof requestAnimationFrame === 'function') {
+      repositionFrame = requestAnimationFrame(() => {
+        repositionFrame = 0
+        positionPanel()
+      })
+    }
+    if (typeof ResizeObserver !== 'undefined' && panelRef.value) {
+      contentObserver = new ResizeObserver(() => scheduleReposition())
+      contentObserver.observe(panelRef.value)
+    }
   })
+})
+
+// ── 尺寸稳定后的重定位 ──
+let contentObserver: ResizeObserver | null = null
+let repositionFrame = 0
+
+function scheduleReposition(): void {
+  if (typeof requestAnimationFrame !== 'function') {
+    positionPanel()
+    return
+  }
+  if (repositionFrame) return
+  repositionFrame = requestAnimationFrame(() => {
+    repositionFrame = 0
+    positionPanel()
+  })
+}
+
+onBeforeUnmount(() => {
+  contentObserver?.disconnect()
+  contentObserver = null
+  if (repositionFrame && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(repositionFrame)
+  }
+  repositionFrame = 0
 })
 
 watch(() => props.anchor, () => void nextTick(positionPanel), { deep: true })
@@ -420,6 +566,86 @@ defineExpose({
   background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
+/* ── 语义分组 ──
+   组头是披露按钮（menuitemcheckbox）：点击或回车折叠/展开本组。折叠体用
+   grid-template-rows 过渡收展，收起后行不可达（导航跳过 + inert）。 */
+.context-menu-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-height: var(--space-6);
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 56%, transparent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 560;
+  letter-spacing: .02em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu-group-head:hover,
+.context-menu-group-head:focus-visible {
+  outline: none;
+  color: var(--text);
+}
+
+.context-menu-group-chevron {
+  flex: 0 0 auto;
+  transform: rotate(-90deg);
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.context-menu-group-chevron.is-open {
+  transform: rotate(0deg);
+}
+
+.context-menu-group-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows var(--dur-base) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out);
+}
+
+.context-menu-group-body > .context-menu-group-rows {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.context-menu-group-body.is-collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+/* ── 菜单退场：短淡出，消失与出现同节奏。 ── */
+.context-menu-leave-active {
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.context-menu-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-menu-panel-content {
+    animation: none;
+  }
+
+  .context-menu-leave-active {
+    transition: none;
+  }
+
+  .context-menu-group-body,
+  .context-menu-group-chevron {
+    transition: none;
+  }
+}
+
 .context-menu-label {
   min-height: var(--space-6);
   display: flex;
@@ -429,12 +655,6 @@ defineExpose({
   font-size: 12px;
   font-weight: 560;
   letter-spacing: .02em;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .context-menu-panel-content {
-    animation: none;
-  }
 }
 
 @media (max-width: 640px) {

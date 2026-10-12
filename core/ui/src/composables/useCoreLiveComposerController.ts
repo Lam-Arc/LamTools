@@ -56,7 +56,7 @@ export interface UseCoreLiveComposerControllerOptions {
   onError?(text: string): void
   onTurnStarted?(): void | Promise<void>
   onTurnStartedError?(error: unknown): void
-  onSubmitStart?: () => void
+  onSubmitStart?: (submittedText: string) => void
   /** 一次提交走到终点（发送/排队/引导/失败）都会回调一次：宿主用它收掉"待发送"占位。
    *  引导与排队不会立刻产生用户消息，只等消息出现会永远等不到。 */
   onSubmitSettled?: () => void
@@ -301,7 +301,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     // return { status: 'ignored' } and the placeholder would never be
     // cleared by an incoming user message.
     if (parsedCommand?.kind !== 'action' && (submittedText || (options.attachments.value || []).length > 0)) {
-      options.onSubmitStart?.()
+      options.onSubmitStart?.(submittedText)
     }
     try {
       const result = await submitCoreComposerTask({

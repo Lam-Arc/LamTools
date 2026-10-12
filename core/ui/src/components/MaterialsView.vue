@@ -282,6 +282,7 @@ import type { LamToolsTransport } from '../transport'
 import { copyText } from '../helpers/clipboard'
 import { useLibraryZoom } from '../composables/useLibraryZoom'
 import { openContextMenu, type ContextMenuEntry } from './context-menu'
+import type { ContextMenuGroupMeta } from './context-menu/types'
 import { extractVideoPoster } from '../artifacts/poster'
 import {
   absoluteArtifactPath,
@@ -304,6 +305,10 @@ import {
   roleLabel,
   statusLabel,
 } from '../artifacts/model'
+
+// 文件卡右键菜单的语义分组：组头可折叠，折叠状态按这两个稳定 id 记忆。
+const MATERIALS_FILE_GROUP: ContextMenuGroupMeta = { id: 'materials.file', label: '文件' }
+const MATERIALS_ORGANIZE_GROUP: ContextMenuGroupMeta = { id: 'materials.organize', label: '整理' }
 
 const props = defineProps<{
   projectId?: string | null
@@ -708,15 +713,17 @@ function openMenu(event: MouseEvent, item: ProjectArtifact): void {
   openContextMenu({
     event,
     items: [
-      { id: 'open', label: '打开', action: () => void openWithSystem(item) },
+      // 语义分组：文件级操作与整理操作各成一组（组头可折叠、状态有记忆）；
+      // 危险操作不入组，始终裸露在菜单尾部，不能被折叠藏起来。
+      { id: 'open', label: '打开', group: MATERIALS_FILE_GROUP, action: () => void openWithSystem(item) },
+      { id: 'copy', label: '复制路径', group: MATERIALS_FILE_GROUP, action: () => void copyText(displayPath(item)) },
       {
         id: 'favorite',
         label: item.favorite ? '取消收藏' : '添加到收藏',
+        group: MATERIALS_ORGANIZE_GROUP,
         action: () => void setFavorite(item, !item.favorite),
       },
-      { id: 'folder', type: 'submenu', label: '归到文件夹', children },
-      { type: 'separator' as const, id: 'sep-copy' },
-      { id: 'copy', label: '复制路径', action: () => void copyText(displayPath(item)) },
+      { id: 'folder', type: 'submenu', label: '归到文件夹', group: MATERIALS_ORGANIZE_GROUP, children },
       { type: 'separator' as const, id: 'sep-danger' },
       { id: 'remove', label: '从资料库移除', destructive: true, action: () => { pendingRemove.value = [item] } },
     ],

@@ -119,6 +119,13 @@ export {
 } from './useCoreAutoFollowScroll'
 
 export {
+  createIdleHistoryMount,
+  IDLE_HISTORY_MAX_BATCHES,
+  type IdleHistoryMountController,
+  type IdleHistoryMountOptions,
+} from './useIdleHistoryMount'
+
+export {
   useCoreGoals,
   type UseCoreGoalsOptions,
 } from './useCoreGoals'

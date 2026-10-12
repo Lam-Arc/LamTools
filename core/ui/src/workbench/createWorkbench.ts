@@ -383,7 +383,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       return true
     },
     turnOptions: () => turnOptionsProvider(),
-    onSubmitStart: () => composerCallbacks.onSubmitStart?.(),
+    onSubmitStart: (submittedText: string) => composerCallbacks.onSubmitStart?.(submittedText),
     onSubmitSettled: () => composerCallbacks.onSubmitSettled?.(),
     clearComposer: () => { composerText.value = '' },
     clearAttachments: () => { attachments.value = [] },

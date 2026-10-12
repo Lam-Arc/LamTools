@@ -17,6 +17,14 @@ import {
 import { getWidget, pluginUIRegistry, registerWidget } from '../src/plugins/registry'
 import type { PluginWidgetEntry, RightSidebarRpc } from '../src/right-sidebar/types'
 
+/** 合成指针事件：jsdom 没有 PointerEvent，用 MouseEvent 加指针属性派发。 */
+function firePointer(target: Element, type: string, options: { clientX: number; pointerId?: number }): void {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: options.clientX })
+  Object.defineProperty(event, 'pointerId', { value: options.pointerId ?? 1 })
+  Object.defineProperty(event, 'isPrimary', { value: true })
+  target.dispatchEvent(event)
+}
+
 describe('RightSidebarHost', () => {
 beforeEach(() => localStorage.clear())
 afterEach(() => {
@@ -36,21 +44,23 @@ afterEach(() => {
 
     // 竖栏 = 内置模块，一模块一图标，按固定顺序排列；插件/表面条目不入栏。
     const railIds = wrapper.findAll('[data-right-rail-module]').map(b => b.attributes('data-right-rail-module'))
-    expect(railIds).toEqual(['runtime', 'resources', 'sub-agents', 'web-search', 'processes', 'rag'])
+    expect(railIds).toEqual(['checklist', 'resources', 'sub-agents', 'web-search', 'processes', 'rag'])
     // 未悬停时不出卡。
     expect(document.querySelector('[data-right-sidebar-card]')).toBeNull()
 
     // 悬停图标：左侧浮出对应模块卡（低透玻璃，压住背后的亮色文字）。
-    await wrapper.get('[data-right-rail-module="runtime"]').trigger('mouseenter')
+    await wrapper.get('[data-right-rail-module="checklist"]').trigger('mouseenter')
     // 卡片挂在 body 上：嵌在带玻璃的抽屉里时，内层模糊采样不到窗外内容。
     const card = new DOMWrapper(document.querySelector('[data-right-sidebar-card]') as HTMLElement)
     expect(card.classes()).toContain('optical-glass')
     expect(card.classes()).toContain('optical-glass--low-trans')
-    expect(card.text()).toContain('Runtime Status')
+    // 右侧栏不再显示模块名标题：卡片内容直接呈现 checklist 面板。
+    expect(card.find('.right-sidebar-card-head').exists()).toBe(false)
+    expect(card.text()).toContain('当前没有 checklist')
 
     // 移进卡片保持显示；两侧都离开并越过后，才收起。
     await card.trigger('mouseenter')
-    await wrapper.get('[data-right-rail-module="runtime"]').trigger('mouseleave')
+    await wrapper.get('[data-right-rail-module="checklist"]').trigger('mouseleave')
     expect(document.querySelector('[data-right-sidebar-card]')).not.toBeNull()
     await card.trigger('mouseleave')
     vi.advanceTimersByTime(1000)
@@ -138,7 +148,7 @@ afterEach(() => {
     const hostSource = readFileSync(resolve(import.meta.dirname, '../src/components/RightSidebarHost.vue'), 'utf8')
 
     expect(hostSource).toContain('class="right-sidebar-card optical-glass optical-glass--low-trans"')
-    // 卡片头已带模块名：面板内部同名标题在卡内隐藏，避免重复。
+    // 右侧栏不显示模块名标题：面板内部同名标题在卡内隐藏。
     expect(hostSource).toMatch(/\.right-sidebar-card-body :deep\(\.runtime-widget-head h3\)\s*\{[^}]*display: none;/)
     // 大圆角 + 只设尺寸上限（可小于、不可大于）。
     expect(hostSource).toMatch(/\.right-sidebar-card\s*\{[^}]*border-radius: var\(--radius-lg\);/)
@@ -152,6 +162,73 @@ afterEach(() => {
     // 入场只做透明度淡入，且带减弱动态效果回退。
     expect(hostSource).toMatch(/@keyframes right-card-in\s*\{[^}]*opacity/)
     expect(hostSource).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?right-sidebar-card \{ animation: none; \}/)
+  })
+
+  it('resizes the hover card by dragging its left edge within limits', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(RightSidebarHost, { attachTo: document.body })
+    await wrapper.get('[data-right-rail-module="resources"]').trigger('mouseenter')
+    const cardElement = () => document.querySelector('[data-right-sidebar-card]') as HTMLElement
+    const card = new DOMWrapper(cardElement())
+    const handleEl = card.get('[data-right-sidebar-resize]').element
+    expect(handleEl.getAttribute('role')).toBe('separator')
+    expect(handleEl.getAttribute('aria-label')).toBe('调整右侧栏宽度')
+
+    // 向左拖 = 加宽：285 → 285 + 80。
+    firePointer(handleEl, 'pointerdown', { clientX: 500 })
+    firePointer(handleEl, 'pointermove', { clientX: 420 })
+    await wrapper.vm.$nextTick()
+    expect(cardElement().style.width).toBe('365px')
+    // 拖动中指针离开也不收卡（宽限计时被拖拽状态抑制）。
+    await card.trigger('mouseleave')
+    vi.advanceTimersByTime(1000)
+    await wrapper.vm.$nextTick()
+    expect(cardElement()).not.toBeNull()
+    firePointer(handleEl, 'pointerup', { clientX: 420 })
+    // 释放捕获后，浏览器会补发边界事件重新判定悬停：指针不在卡上 → 补 mouseleave。
+    await card.trigger('mouseleave')
+    vi.advanceTimersByTime(1000)
+    await wrapper.vm.$nextTick()
+    // 松手后指针不在卡上也不在竖栏上：宽限走完正常收起。
+    expect(document.querySelector('[data-right-sidebar-card]')).toBeNull()
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
+  it('clamps card width to its limits while dragging', async () => {
+    const wrapper = mount(RightSidebarHost, { attachTo: document.body })
+    await wrapper.get('[data-right-rail-module="rag"]').trigger('mouseenter')
+    const cardElement = () => document.querySelector('[data-right-sidebar-card]') as HTMLElement
+    const handleEl = new DOMWrapper(cardElement()).get('[data-right-sidebar-resize]').element
+
+    firePointer(handleEl, 'pointerdown', { clientX: 900 })
+    // 向左拖 2000px：宽度封顶，不无限拉宽。
+    firePointer(handleEl, 'pointermove', { clientX: -1100 })
+    await wrapper.vm.$nextTick()
+    expect(Number.parseInt(cardElement().style.width, 10)).toBeLessThanOrEqual(480)
+    // 向右拖 2000px：宽度保底，右栏不会被拖没。
+    firePointer(handleEl, 'pointermove', { clientX: 2900 })
+    await wrapper.vm.$nextTick()
+    expect(Number.parseInt(cardElement().style.width, 10)).toBeGreaterThanOrEqual(240)
+    firePointer(handleEl, 'pointerup', { clientX: 2900 })
+    wrapper.unmount()
+  })
+
+  it('resizes the card with arrow keys as the mouse-equivalent', async () => {
+    const wrapper = mount(RightSidebarHost, { attachTo: document.body })
+    await wrapper.get('[data-right-rail-module="checklist"]').trigger('mouseenter')
+    const cardElement = () => document.querySelector('[data-right-sidebar-card]') as HTMLElement
+    const handle = new DOMWrapper(cardElement()).get('[data-right-sidebar-resize]')
+
+    // 向左箭头 = 加宽（与鼠标拖动方向一致）。
+    await handle.trigger('keydown', { key: 'ArrowLeft' })
+    expect(cardElement().style.width).toBe('297px')
+    await handle.trigger('keydown', { key: 'ArrowRight', shiftKey: true })
+    expect(cardElement().style.width).toBe('265px')
+    // 其他按键不动宽度。
+    await handle.trigger('keydown', { key: 'ArrowDown' })
+    expect(cardElement().style.width).toBe('265px')
+    wrapper.unmount()
   })
 
   it('loads module data only when its card opens', async () => {

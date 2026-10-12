@@ -51,6 +51,7 @@
         </header>
 
         <main class="search-body full-area-column">
+          <p v-if="actionError" class="search-status search-error" role="alert">{{ actionError }}</p>
           <p v-if="searching" class="search-status">搜索中…</p>
           <p v-else-if="error" class="search-status search-error" role="alert">{{ error }}</p>
           <p v-else-if="!visibleRows.length" class="search-status search-hint">{{ hintText }}</p>
@@ -148,6 +149,9 @@ const props = defineProps<{
   onOpenSession?: (sessionId: string) => void
   /** Open the plugins panel on the section a plugin/skill/hook hit belongs to. */
   onOpenPlugins?: (target: SearchPluginTarget) => void
+  /** Open a workspace file hit through the host's own opener (desktop = system default app).
+   *  `line` rides along for a future in-app preview surface; an external app cannot jump to it. */
+  onOpenFile?: (hit: { path: string; line?: number }) => void | Promise<void>
   commands?: SearchCommand[]
 }>()
 
@@ -210,6 +214,8 @@ const inputEl = ref<HTMLInputElement | null>(null)
 const cursor = ref(0)
 const searching = ref(false)
 const error = ref('')
+/** 打开命中文件的失败信息：单独一行，不顶掉结果清单，用户可以直接换一条再点。 */
+const actionError = ref('')
 const ragEnabled = ref(false)
 const composing = ref(false)
 
@@ -353,6 +359,7 @@ const rows = computed<SearchRow[]>(() => {
         icon: File,
         title: hit.path || '',
         subtitle: '文件名',
+        action: fileAction(hit),
       })
     }
     for (const hit of contentHits.value) {
@@ -363,8 +370,15 @@ const rows = computed<SearchRow[]>(() => {
         title: hit.path || '',
         subtitle: hit.content,
         meta: hit.line ? `第 ${hit.line} 行` : undefined,
+        action: fileAction(hit),
       })
     }
+    // 文档命中行刻意保持信息行、不接打开动作：这些命中来自外部 lamtools-rag
+    // 插件（本仓库不随附 RAG 提供方），字段是防御式读取的（results/hits/
+    // documents/items 都可能，path 还可能只是标题兜底），没有任何「工作区
+    // 相对路径」的契约。若把这样的字符串接到工作区打开通道，docs 根相对路径
+    // 会按工作根解析，可能打开同名但不相干的文件——比打开失败更坏。等 RAG
+    // 插件把路径契约定下来再接（右栏 RAG 模块同样只展示不打开）。
     for (const hit of docHits.value) {
       built.push({
         key: `doc-${hit.path}-${hit.heading || ''}`,
@@ -433,6 +447,27 @@ function jumpSession(hit: SearchHit): void {
 function jumpStudy(hit: StudySearchHit): void {
   emit('close')
   void props.onStudyHit?.(hit)
+}
+
+/** 命中行打开工作区文件：动作交给宿主（桌面端用系统默认应用）。 */
+async function openHitFile(hit: SearchHit): Promise<void> {
+  const path = String(hit.path || '').trim()
+  if (!path) return
+  actionError.value = ''
+  try {
+    await props.onOpenFile?.({ path, line: hit.line })
+  } catch (cause) {
+    // 打不开必须说出来：静默吞掉会让用户以为点了没反应，或以为文件已经打开。
+    const name = path.split('/').pop() || path
+    const reason = cause instanceof Error ? cause.message : String(cause)
+    actionError.value = `打开「${name}」失败：${reason}`
+  }
+}
+
+/** 命中文件能不能打开：宿主没给打开通道、或路径为空时保持信息行不动。 */
+function fileAction(hit: SearchHit): (() => void) | undefined {
+  if (!props.onOpenFile || !String(hit.path || '').trim()) return undefined
+  return () => { void openHitFile(hit) }
 }
 
 function onInput(event: Event): void {
@@ -512,6 +547,7 @@ function resetRemoteHits(): void {
 async function runSearch(needle: string): Promise<void> {
   const seq = ++searchSeq
   error.value = ''
+  actionError.value = ''
   searching.value = true
   const category = activeCategory.value
   const wantsTasks = category === 'all' || category === 'tasks'

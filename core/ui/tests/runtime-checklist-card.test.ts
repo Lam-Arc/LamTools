@@ -15,11 +15,11 @@ const stepGroups: CoreRuntimeStepGroup[] = [{
 }]
 
 describe('RuntimeChecklistCard', () => {
-  it('shows only the current step number in the compact view', () => {
+  it('shows only the current progress in the compact pill', () => {
     const wrapper = mount(RuntimeChecklistCard, { props: { stepGroups } })
 
     expect(wrapper.find('.runtime-checklist-card').exists()).toBe(true)
-    expect(wrapper.find('.runtime-checklist-card__compact-icon').text()).toBe('2')
+    expect(wrapper.find('.runtime-checklist-card__compact-icon').text()).toBe('2/3')
     expect(wrapper.find('.runtime-checklist-card__compact-title').exists()).toBe(false)
     expect(wrapper.find('.runtime-checklist-card__compact-row .runtime-checklist-card__status').exists()).toBe(false)
     expect(wrapper.find('.runtime-checklist-card__compact-row').text()).not.toContain('测试报告')
@@ -39,6 +39,8 @@ describe('RuntimeChecklistCard', () => {
     expect(wrapper.find(`#${detailsId}`).attributes('aria-hidden')).toBe('true')
 
     await card.trigger('click')
+    expect(wrapper.get('.runtime-checklist-card').classes()).toContain('optical-glass')
+    expect(wrapper.get('.runtime-checklist-card').classes()).toContain('optical-glass--low-trans')
     expect(wrapper.get('.runtime-checklist-card').attributes('aria-expanded')).toBe('true')
     expect(wrapper.findAll('.runtime-checklist-card__step')).toHaveLength(3)
     expect(wrapper.find(`#${detailsId}`).attributes('aria-hidden')).toBe('false')
@@ -63,7 +65,7 @@ describe('RuntimeChecklistCard', () => {
     })
 
     expect(wrapper.find('.runtime-checklist-card').exists()).toBe(true)
-    expect(wrapper.find('.runtime-checklist-card__compact-icon').text()).toBe('3')
+    expect(wrapper.find('.runtime-checklist-card__compact-icon').text()).toBe('3/3')
     expect(wrapper.find('.runtime-checklist-card__compact-icon').classes()).toContain('is-failed')
     expect(wrapper.find('.runtime-checklist-card__compact-row .runtime-checklist-card__status').exists()).toBe(false)
     expect(wrapper.get('.runtime-checklist-card').attributes('aria-label')).toBe('当前步骤：第 3 步，整理交付，失败')

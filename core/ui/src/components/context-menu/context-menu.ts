@@ -427,6 +427,56 @@ export function isContextMenuOpen(ownerId?: string): boolean {
   return contextMenuState.open && (ownerId === undefined || contextMenuState.ownerId === ownerId)
 }
 
+// ── 菜单组折叠记忆 ──
+// 折叠状态按组 id 记住并写入本地存储：同一组在下次打开菜单、下次会话里都保持
+// 用户上次的取舍。缺省值由组声明（defaultCollapsed），用户动过组头就以记忆为准。
+// 读写都容忍无 localStorage 的嵌入环境，退化为会话内记忆。
+const MENU_GROUP_STORAGE_KEY = 'lamtools.ui.context-menu-groups'
+
+function readStoredMenuGroups(): Map<string, boolean> {
+  try {
+    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(MENU_GROUP_STORAGE_KEY)
+    if (!raw) return new Map()
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Map()
+    const entries: Array<[string, boolean]> = []
+    for (const item of parsed) {
+      if (Array.isArray(item) && typeof item[0] === 'string' && typeof item[1] === 'boolean') {
+        entries.push([item[0], item[1]])
+      }
+    }
+    return new Map(entries)
+  } catch {
+    return new Map()
+  }
+}
+
+const collapsedMenuGroups = shallowReactive(readStoredMenuGroups())
+
+/** 该组当前是否折叠：用户记忆优先，没动过就用宿主声明的缺省值。 */
+export function isMenuGroupCollapsed(groupId: string, defaultCollapsed = false): boolean {
+  return collapsedMenuGroups.get(groupId) ?? defaultCollapsed
+}
+
+export function setMenuGroupCollapsed(groupId: string, collapsed: boolean): void {
+  collapsedMenuGroups.set(groupId, collapsed)
+  try {
+    localStorage?.setItem(MENU_GROUP_STORAGE_KEY, JSON.stringify([...collapsedMenuGroups.entries()]))
+  } catch {
+    // 无存储环境只保留会话内记忆。
+  }
+}
+
+/** 测试隔离用：清空组折叠记忆与本地存储。 */
+export function resetMenuGroupMemoryForTests(): void {
+  collapsedMenuGroups.clear()
+  try {
+    localStorage?.removeItem(MENU_GROUP_STORAGE_KEY)
+  } catch {
+    // 忽略。
+  }
+}
+
 export function openContextMenu(options: OpenContextMenuOptions): void {
   if (!options.items.length) return
 

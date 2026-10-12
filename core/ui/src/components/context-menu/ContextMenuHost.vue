@@ -1,35 +1,42 @@
 <template>
   <Teleport to="body">
     <template v-if="contextMenuState.open">
-      <ContextMenuPanel
-        :items="contextMenuState.items"
-        :anchor="rootAnchor"
-        :level="0"
-        :path="[]"
-        :expanded-path="expandedPath"
-        :aria-label="contextMenuState.ariaLabel"
-        :panel-attributes="contextMenuState.panelAttributes"
-        @activate="activate([],$event)"
-        @open-submenu="handleRootSubmenu"
-        @close-submenus="closeSubmenus(0)"
-        @close="closeContextMenu"
-      />
-      <ContextMenuPanel
+      <Transition name="context-menu">
+        <ContextMenuPanel
+          :items="contextMenuState.items"
+          :anchor="rootAnchor"
+          :level="0"
+          :path="[]"
+          :expanded-path="expandedPath"
+          :aria-label="contextMenuState.ariaLabel"
+          :panel-attributes="contextMenuState.panelAttributes"
+          @activate="activate([],$event)"
+          @open-submenu="handleRootSubmenu"
+          @close-submenus="closeSubmenus(0)"
+          @close="closeContextMenu"
+        />
+      </Transition>
+      <Transition
         v-for="panel in submenuPanels"
         :key="panel.path.join('.')"
-        :items="panel.items"
-        :anchor="panel.anchor"
-        :level="panel.path.length"
-        :path="panel.path"
-        :expanded-path="expandedPath"
-        :aria-label="panel.ariaLabel"
-        :panel-attributes="panel.panelAttributes"
-        @activate="activate(panel.path,$event)"
-        @open-submenu="(...args) => handlePanelSubmenu(panel.path, ...args)"
-        @close-submenus="closeSubmenus(panel.path.length)"
-        @close-submenu="closeOneSubmenu(panel.path)"
-        @close="closeContextMenu"
-      />
+        name="context-menu"
+      >
+        <ContextMenuPanel
+          :key="panel.path.join('.')"
+          :items="panel.items"
+          :anchor="panel.anchor"
+          :level="panel.path.length"
+          :path="panel.path"
+          :expanded-path="expandedPath"
+          :aria-label="panel.ariaLabel"
+          :panel-attributes="panel.panelAttributes"
+          @activate="activate(panel.path,$event)"
+          @open-submenu="(...args) => handlePanelSubmenu(panel.path, ...args)"
+          @close-submenus="closeSubmenus(panel.path.length)"
+          @close-submenu="closeOneSubmenu(panel.path)"
+          @close="closeContextMenu"
+        />
+      </Transition>
     </template>
   </Teleport>
 </template>

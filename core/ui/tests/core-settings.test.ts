@@ -181,6 +181,42 @@ describe('CoreSettings', () => {
     expect(wrapper.emitted('update-process-icon-color')).toEqual([['#6755e8']])
   })
 
+  it('offers 定时切换 next to the fixed modes and edits the daily switch times', async () => {
+    const wrapper = mount(CoreSettings, {
+      props: {
+        models,
+        providers,
+        modelGroups: [],
+        catalogView: 'provider',
+        commandShellPlatform: 'other',
+        density: 'standard',
+        theme: structuredClone(DEFAULT_THEME),
+        themeMode: 'scheduled',
+      },
+      global: { stubs: { Teleport: true } },
+    })
+
+    await wrapper.get('[data-settings-section="appearance"]').trigger('click')
+    expect(wrapper.get('[data-theme-mode="scheduled"]').text()).toContain('定时切换')
+    // No schedule forwarded: the editor falls back to the default pair.
+    expect(wrapper.find('[data-theme-schedule]').exists()).toBe(true)
+    expect((wrapper.get('[data-theme-schedule-light]').element as HTMLInputElement).value).toBe('07:00')
+    expect((wrapper.get('[data-theme-schedule-dark]').element as HTMLInputElement).value).toBe('19:00')
+
+    const darkInput = wrapper.get('[data-theme-schedule-dark]')
+    ;(darkInput.element as HTMLInputElement).value = '21:30'
+    await darkInput.trigger('change')
+
+    expect(wrapper.emitted('update:theme-schedule')).toEqual([[{ lightFrom: '07:00', darkFrom: '21:30' }]])
+  })
+
+  it('hides the daily switch times while a fixed mode is selected', async () => {
+    const wrapper = mountSettings()
+    await wrapper.get('[data-settings-section="appearance"]').trigger('click')
+
+    expect(wrapper.find('[data-theme-schedule]').exists()).toBe(false)
+  })
+
   it('marks free presets for the durable Free group and opens the API key page externally', async () => {
     const openUrl = vi.fn(async () => true)
     window.__LAMTOOLS_OPEN_URL__ = openUrl

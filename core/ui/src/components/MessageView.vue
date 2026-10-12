@@ -245,6 +245,11 @@
                           class="process-group-text process-card-preview"
                         >{{ processTitleSnapshot(processGroupCurrentPart(group)) }}</span>
                       </Transition>
+                      <span
+                        v-if="!isGroupExpanded(processGroupId(group))"
+                        class="process-group-count"
+                        aria-hidden="true"
+                      >{{ group.parts.length }} 步</span>
                     </button>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
@@ -297,7 +302,7 @@
                           <button
                             type="button"
                             class="tool-card-header process-card-header"
-                            :class="[{ 'has-detail': hasToolDisplay(part), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
+                            :class="[{ 'has-detail': hasToolDisplay(part), 'has-flag': Boolean(toolRowFlagTone(part)), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
                             :aria-expanded="hasToolDisplay(part) ? shouldShowToolBody(part, isLiveMessage(msg)) : undefined"
                             :aria-label="processAccessibleLabel(part)"
                             @click="togglePartExpand(part, isLiveMessage(msg))"
@@ -306,6 +311,11 @@
                             <Transition name="process-caption" mode="out-in">
                               <span :key="processTitleSnapshot(part)" v-beam="part.status === 'running'" class="process-step-title tool-row-summary process-card-preview">{{ processTitleSnapshot(part) }}</span>
                             </Transition>
+                            <span
+                              v-if="toolRowFlagTone(part)"
+                              class="process-tool-flag"
+                              :class="`process-tool-flag--${toolRowFlagTone(part)}`"
+                            ><template v-if="toolRowFlagTone(part) === 'stat'"><span class="process-tool-flag-add">+{{ toolRowFlagStat(part).added }}</span><span class="process-tool-flag-del">−{{ toolRowFlagStat(part).removed }}</span></template><template v-else>{{ toolRowFlagText(part) }}</template></span>
                           </button>
                           <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                           <div
@@ -315,6 +325,23 @@
                             @click="promotePartCard(part.id, $event)"
                           >
                             <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
+                            <!-- 内容搜索命中清单：`路径:行号: 内容` 逐行成单，替代整段原始文本 -->
+                            <div v-else-if="displayToolResult(part) && isContentSearchTool(part) && contentSearchHits(part).length" class="search-hit-list" :class="{ 'search-hit-list--wrap': isToolWrapEnabled(part.id) }">
+                              <div v-for="(hit, hitIndex) in contentSearchHits(part)" :key="hitIndex" class="search-hit-row">
+                                <span class="search-hit-loc"><span class="search-hit-file" :title="hit.path">{{ hit.path }}</span><span class="search-hit-line">:{{ hit.line }}</span></span>
+                                <span class="search-hit-text">{{ hit.text }}</span>
+                              </div>
+                              <div v-for="note in contentSearchNotes(part)" :key="note" class="search-hit-note">{{ note }}</div>
+                            </div>
+                            <!-- 网页获取：标题与正文摘要先行，原始全文收进可展开区 -->
+                            <div v-else-if="displayToolResult(part) && isWebFetchTool(part)" class="web-fetch-card">
+                              <div v-if="webFetchTitle(part)" class="web-fetch-title">{{ webFetchTitle(part) }}</div>
+                              <p class="web-fetch-summary">{{ webFetchSummary(part) || '未提取到正文摘要。' }}</p>
+                              <details class="web-fetch-more">
+                                <summary class="web-fetch-more-toggle">查看全文</summary>
+                                <pre class="web-fetch-raw" :class="{ 'web-fetch-raw--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolResult(part) }}</pre>
+                              </details>
+                            </div>
                             <div v-else-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
                               <div class="diff-header">
                                 <span class="diff-file">{{ diffHeaderText(part) }}</span>
@@ -366,7 +393,10 @@
                                 <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
                               </figure>
                             </div>
-                            <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
+                            <!-- 兜底明细只在既无错误块、也无任何结果块（命中清单/网页卡/文件 diff/
+                                 测试卡/输入预览/终端窗/通用结果，凡有结果文本必有其一）时才补位；
+                                 图片行另起一条 v-if 链，这条曾与它们并存，同一段内容被画两遍。 -->
+                            <pre v-else-if="!isContentSearchTool(part) && !isWebFetchTool(part) && !displayToolInputPreview(part) && !displayToolError(part) && !displayToolResult(part) && readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                           </div>
                           </Transition>
                         </div>
@@ -438,7 +468,7 @@
                     <button
                       type="button"
                       class="tool-card-header process-card-header"
-                      :class="[{ 'has-detail': hasToolDisplay(group.part), 'process-tool-row': !isCommandTool(group.part), 'tool-card-header--command': isCommandTool(group.part) }, toolColorClass(group.part)]"
+                      :class="[{ 'has-detail': hasToolDisplay(group.part), 'has-flag': Boolean(toolRowFlagTone(group.part)), 'process-tool-row': !isCommandTool(group.part), 'tool-card-header--command': isCommandTool(group.part) }, toolColorClass(group.part)]"
                       :aria-expanded="!isCommandTool(group.part) && hasToolDisplay(group.part) ? shouldShowToolBody(group.part, isLiveMessage(msg)) : undefined"
                       :aria-label="processAccessibleLabel(group.part)"
                       @click="togglePartExpand(group.part, isLiveMessage(msg))"
@@ -447,6 +477,11 @@
                       <Transition name="process-caption" mode="out-in">
                         <span :key="processTitleSnapshot(group.part)" v-beam="group.part.status === 'running'" class="process-step-title tool-row-summary process-card-preview">{{ processTitleSnapshot(group.part) }}</span>
                       </Transition>
+                      <span
+                        v-if="toolRowFlagTone(group.part)"
+                        class="process-tool-flag"
+                        :class="`process-tool-flag--${toolRowFlagTone(group.part)}`"
+                      ><template v-if="toolRowFlagTone(group.part) === 'stat'"><span class="process-tool-flag-add">+{{ toolRowFlagStat(group.part).added }}</span><span class="process-tool-flag-del">−{{ toolRowFlagStat(group.part).removed }}</span></template><template v-else>{{ toolRowFlagText(group.part) }}</template></span>
                     </button>
                     <span v-if="!displayToolInputPreview(group.part) && !hasToolDisplay(group.part) && !group.part.toolArgs && readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
@@ -457,8 +492,25 @@
                       @click="promotePartCard(group.part.id, $event)"
                     >
                       <pre v-if="displayToolError(group.part)" class="tool-output tool-output--error">{{ displayToolError(group.part) }}</pre>
+                      <!-- 内容搜索命中清单：`路径:行号: 内容` 逐行成单，替代整段原始文本 -->
+                      <div v-else-if="displayToolResult(group.part) && isContentSearchTool(group.part) && contentSearchHits(group.part).length" class="search-hit-list" :class="{ 'search-hit-list--wrap': isToolWrapEnabled(group.part.id) }">
+                        <div v-for="(hit, hitIndex) in contentSearchHits(group.part)" :key="hitIndex" class="search-hit-row">
+                          <span class="search-hit-loc"><span class="search-hit-file" :title="hit.path">{{ hit.path }}</span><span class="search-hit-line">:{{ hit.line }}</span></span>
+                          <span class="search-hit-text">{{ hit.text }}</span>
+                        </div>
+                        <div v-for="note in contentSearchNotes(group.part)" :key="note" class="search-hit-note">{{ note }}</div>
+                      </div>
+                      <!-- 网页获取：标题与正文摘要先行，原始全文收进可展开区 -->
+                      <div v-else-if="displayToolResult(group.part) && isWebFetchTool(group.part)" class="web-fetch-card">
+                        <div v-if="webFetchTitle(group.part)" class="web-fetch-title">{{ webFetchTitle(group.part) }}</div>
+                        <p class="web-fetch-summary">{{ webFetchSummary(group.part) || '未提取到正文摘要。' }}</p>
+                        <details class="web-fetch-more">
+                          <summary class="web-fetch-more-toggle">查看全文</summary>
+                          <pre class="web-fetch-raw" :class="{ 'web-fetch-raw--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ displayToolResult(group.part) }}</pre>
+                        </details>
+                      </div>
                       <!-- File tools: diff-style block with line numbers -->
-                      <div v-if="displayToolResult(group.part) && isFileTool(group.part)" class="diff-block" :class="[fileDiffClass(group.part), { 'diff-block--wrap': isToolWrapEnabled(group.part.id) }]">
+                      <div v-else-if="displayToolResult(group.part) && isFileTool(group.part)" class="diff-block" :class="[fileDiffClass(group.part), { 'diff-block--wrap': isToolWrapEnabled(group.part.id) }]">
                         <div class="diff-header">
                           <span class="diff-file">{{ diffHeaderText(group.part) }}</span>
                           <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(group.part.id)">{{ isToolWrapEnabled(group.part.id) ? 'wrap' : 'scroll' }}</button>
@@ -510,7 +562,8 @@
                           <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
                         </figure>
                       </div>
-                      <pre v-else-if="!displayToolInputPreview(group.part) && readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
+                      <!-- 同上：既无错误块也无任何结果块时才补兜底明细。 -->
+                      <pre v-else-if="!isContentSearchTool(group.part) && !isWebFetchTool(group.part) && !displayToolInputPreview(group.part) && !displayToolError(group.part) && !displayToolResult(group.part) && readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
                     </div>
                     </Transition>
                   </div>
@@ -673,6 +726,7 @@
                             <span class="sub-line-status">{{ agentStatusLabel(group.part) }}</span>
                           </button>
                           <button
+                            v-if="agentSubMessages(group.part).length > 0"
                             type="button"
                             class="sub-line-toggle"
                             :aria-expanded="isPartExpanded(group.part, isLiveMessage(msg))"
@@ -947,6 +1001,7 @@ import { useNarrowViewport } from '../composables/useNarrowViewport'
 import AutoTextarea from './AutoTextarea.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import MessageAttachmentDeck from './MessageAttachmentDeck.vue'
+import { artifactListingReference, normalizeArtifactReference, shouldListTurnArtifact } from '../artifacts/model'
 import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu'
 import type { ContextMenuEntry } from './context-menu/types'
 import MessageView from './MessageView.vue'
@@ -1318,8 +1373,12 @@ function isGroupExpanded(groupId: string): boolean {
   return expandedGroupIds.value.has(groupId)
 }
 
+/** A live group keeps growing while reasoning and tool parts stream in, so its
+ * identity is its first member and not the member list: expanding a group and
+ * having the next tool row arrive must land on the same id, otherwise the group
+ * the user opened on purpose silently closes under them. */
 function processGroupId(group: PartGroupProcessGroup): string {
-  return group.parts.map(p => p.id).join('-')
+  return group.parts[0]?.id ?? ''
 }
 
 function isPartExpanded(part: MessagePart, live = false): boolean {
@@ -1442,8 +1501,19 @@ function modelRetryDetail(part: MessagePart): string {
   return error
 }
 
+/**
+ * 子代理那一行：点整行打开右侧分屏、行尾箭头就地展开嵌套过程。
+ *
+ * 投影对委派工具的生命周期行（`sub_agent` create/close）保留 `tool_call` 类型
+ * （见 `selectors.ts` 的 `normalizeCoreItemDisplayType`），但它和其余子代理行
+ * 是同一类东西：识别漏掉它时，点整行只会就地展开卡片（用户 2026-10-12 报的
+ * 正是这一处）。这里按部件类型与工具名一起认定。
+ */
 function isSubLinePart(part: MessagePart): boolean {
-  return part.partType === 'sub_line' || part.partType === 'agent_summary'
+  if (part.partType === 'sub_line' || part.partType === 'agent_summary') return true
+  const name = String(part.toolName || '').trim().toLowerCase()
+  return name === 'sub_agent' || name === 'subagent'
+    || name === 'sub_agent_message' || name === 'sub_agent_receive'
 }
 
 function agentAssistantMessageId(part: MessagePart): string {
@@ -1641,6 +1711,153 @@ function fileDiffClass(part: MessagePart): string {
   if (/write_file|edit_file|create_file/.test(name)) return 'diff-block--write'
   if (/read_file|list_dir|glob|grep|search_content/.test(name)) return 'diff-block--read'
   return ''
+}
+
+// ── 因地制宜批次一：收起行尾部的结果小标记 ──
+// 命令行看成败与运行时长，文件改动看增删行数，测试行看结论；成功绿、失败红，
+// 与任务状态色语义一致。标记只是收起行的摘要，展开体保持各自原有形态。
+function commandElapsedLabel(part: MessagePart): string {
+  const start = part.startedAt ? new Date(part.startedAt).getTime() : Number.NaN
+  if (!Number.isFinite(start)) return ''
+  const end = part.completedAt ? new Date(part.completedAt).getTime() : Date.now()
+  const seconds = Math.max(0, Math.round((end - start) / 1000))
+  return seconds >= 1 ? `${seconds}s` : ''
+}
+
+function commandExitCode(part: MessagePart): number | null {
+  const meta = (part.metadata || {}) as Record<string, unknown>
+  const raw = meta.exit_code ?? meta.exitCode
+  const direct = raw === undefined || raw === null ? Number.NaN : Number(raw)
+  if (Number.isFinite(direct)) return direct
+  const match = /\[exit_code[:\s]+(-?\d+)\s*\]/i.exec(displayToolResult(part))
+  return match ? Number(match[1]) : null
+}
+
+function fileDiffStat(part: MessagePart): { added: number; removed: number } | null {
+  // 只统计写类工具的统一差异：读类输出即使长得像差异也不是改动量。
+  if (fileDiffClass(part) !== 'diff-block--write') return null
+  const result = displayToolResult(part)
+  if (!result || !isUnifiedDiff(part)) return null
+  let added = 0
+  let removed = 0
+  for (const line of result.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) continue
+    if (line.startsWith('+')) added += 1
+    else if (line.startsWith('-')) removed += 1
+  }
+  return added || removed ? { added, removed } : null
+}
+
+type ToolRowFlagTone = 'good' | 'bad' | 'muted' | 'stat' | 'info'
+
+function toolRowFlagTone(part: MessagePart): ToolRowFlagTone | '' {
+  const memory = memoryRowDirection(part)
+  if (memory) return memory === 'read' ? 'muted' : 'info'
+  if (testArtifact(part)) return testArtifactMetadata(part).passed === true ? 'good' : 'bad'
+  if (isCommandTool(part)) {
+    if (part.status === 'running') return commandElapsedLabel(part) ? 'muted' : ''
+    if (part.status === 'error' || part.toolError) return 'bad'
+    const exit = commandExitCode(part)
+    if (exit !== null && exit !== 0) return 'bad'
+    return part.status === 'completed' ? 'good' : ''
+  }
+  return fileDiffStat(part) ? 'stat' : ''
+}
+
+function toolRowFlagText(part: MessagePart): string {
+  const memory = memoryRowDirection(part)
+  if (memory) return memory === 'read' ? '读' : '写'
+  if (testArtifact(part)) {
+    const meta = testArtifactMetadata(part)
+    if (meta.passed === true) return '✓ 通过'
+    return meta.summary === 'timed_out' ? '✗ 超时' : '✗ 失败'
+  }
+  if (isCommandTool(part)) {
+    if (part.status === 'running') return commandElapsedLabel(part)
+    if (part.status === 'error' || part.toolError) return '✗ 失败'
+    const exit = commandExitCode(part)
+    if (exit !== null && exit !== 0) return `✗ 退出码 ${exit}`
+    return part.status === 'completed' ? '✓' : ''
+  }
+  return ''
+}
+
+function toolRowFlagStat(part: MessagePart): { added: number; removed: number } {
+  return fileDiffStat(part) ?? { added: 0, removed: 0 }
+}
+
+// ── 因地制宜批次二：搜索、网页、记忆的专属形态 ──
+
+// 内容搜索：`路径:行号: 内容` 逐行成命中清单，替代整段原始文本块。
+function isContentSearchTool(part: MessagePart): boolean {
+  const name = (part.toolName || '').toLowerCase()
+  return /grep|search_content|search_files/.test(name)
+}
+
+interface ContentSearchHit { path: string; line: string; text: string }
+
+function contentSearchHits(part: MessagePart): ContentSearchHit[] {
+  const result = displayToolResult(part)
+  if (!result) return []
+  const hits: ContentSearchHit[] = []
+  for (const line of result.split('\n')) {
+    const match = /^(.+?):(\d+):\s?(.*)$/.exec(line)
+    if (match) hits.push({ path: match[1], line: match[2], text: match[3] })
+  }
+  return hits
+}
+
+function contentSearchNotes(part: MessagePart): string[] {
+  const result = displayToolResult(part)
+  if (!result) return []
+  return result.split('\n').filter(line => /^\[\.\.\./.test(line.trim()))
+}
+
+// 网页获取：突出页面标题与正文开头摘要，原始全文收进"查看全文"。
+function isWebFetchTool(part: MessagePart): boolean {
+  const name = (part.toolName || '').toLowerCase()
+  return /fetch|http|browser|crawl|read_url|open_url|web_page|webpage/.test(name) && !/search/.test(name)
+}
+
+function decodeBasicEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, '\'')
+    .replace(/&apos;/gi, '\'')
+    .replace(/&amp;/gi, '&')
+}
+
+function webFetchTitle(part: MessagePart): string {
+  const result = displayToolResult(part)
+  if (!result) return ''
+  const titleTag = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(result)
+  if (titleTag?.[1]) return decodeBasicEntities(titleTag[1].replace(/\s+/g, ' ').trim())
+  const markdown = /^#\s+(.+)$/m.exec(result)
+  return markdown?.[1] ? decodeBasicEntities(markdown[1].trim()) : ''
+}
+
+function webFetchSummary(part: MessagePart): string {
+  const result = displayToolResult(part)
+  if (!result) return ''
+  const text = decodeBasicEntities(result
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim())
+  if (!text) return ''
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text
+}
+
+// 记忆：读写方向标记——read/list 是读，其余动作都是写。
+function memoryRowDirection(part: MessagePart): 'read' | 'write' | '' {
+  if ((part.toolName || '').toLowerCase() !== 'memory') return ''
+  const action = String((part.toolArgs || {}).action || '').toLowerCase()
+  if (!action) return ''
+  return action === 'read' || action === 'list' ? 'read' : 'write'
 }
 
 function isUnifiedDiff(part: MessagePart): boolean {
@@ -1889,13 +2106,16 @@ function isControlTool(part: MessagePart): boolean {
 }
 
 /** Tools whose rows stay on their own line inside a message's process stream:
- * sub-agent hand-offs (delegating, messaging, receiving) and skill loads. */
+ * sub-agent hand-offs (delegating, messaging, receiving), skill loads, and
+ * memory reads/writes — a memory call is a fact the operator tracks across the
+ * turn, so folding it into "调用了 N 个工具" hides the tier and path it touched. */
 const STANDALONE_PROCESS_TOOLS = new Set([
   'sub_agent',
   'subagent',
   'sub_agent_message',
   'sub_agent_receive',
   'load_skill',
+  'memory',
 ])
 
 function isStandaloneProcessPart(part: MessagePart): boolean {
@@ -2685,10 +2905,19 @@ const allMessageImages = computed<Array<ToolArtifact & { artifact_id?: string }>
 const messageArtifacts = computed<Array<ToolArtifact & { artifact_id?: string }>>(() => {
   const raw: Array<ToolArtifact & { artifact_id?: string }> = []
   for (const part of props.msg.parts || []) collectOutputArtifacts(part, raw)
+  // 本轮产出只收两类（用户规则 2026-10-12）：本回合被收进资料库的文件、以及
+  // 本回合汇报文本里以相对或绝对路径出现过的文件。生成图片不套这两条。
+  const libraryPaths = collectLibraryFiledPaths(props.msg.parts || [])
+  const reportText = answerContent(props.msg)
+  const listed = raw.filter(artifact => shouldListTurnArtifact(artifact, {
+    reportText,
+    libraryPaths,
+    workRoot: props.workRoot,
+  }))
   // 归一化键去重：artifact_id → uri → image_data_url；同一文件在多个 part
   // 重复出现时只保留一项，同一 uri 优先保留带 artifact_id 的权威条目。
   const seen = new Map<string, ToolArtifact & { artifact_id?: string }>()
-  for (const artifact of raw) {
+  for (const artifact of listed) {
     const idKey = artifact.artifact_id || ''
     const uriKey = typeof artifact.uri === 'string' ? artifact.uri : ''
     if (idKey) {
@@ -2712,7 +2941,22 @@ const messageArtifacts = computed<Array<ToolArtifact & { artifact_id?: string }>
       seen.set(`no-key-${seen.size}`, artifact)
     }
   }
-  return [...seen.values()]
+  // 同一文件的相对/绝对两种写法（正反斜杠）合并成一项：引用归一后同名只留一次，
+  // 带 artifact_id 的权威条目优先（都不带 id 时保留先出现的），顺序保持原样。
+  const merged: Array<ToolArtifact & { artifact_id?: string }> = []
+  const referenceIndexes = new Map<string, number>()
+  for (const artifact of seen.values()) {
+    const reference = artifactListingReference(artifact)
+    const index = reference ? referenceIndexes.get(reference) : undefined
+    if (index === undefined) {
+      if (reference) referenceIndexes.set(reference, merged.length)
+      merged.push(artifact)
+      continue
+    }
+    const prev = merged[index]
+    if (!prev.artifact_id && artifact.artifact_id) merged[index] = artifact
+  }
+  return merged
 })
 
 async function loadArtifactSource(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): Promise<void> {
@@ -2747,6 +2991,33 @@ function collectOutputArtifacts(
   if (Array.isArray(subLineParts)) {
     for (const sub of subLineParts) collectOutputArtifacts(sub, out)
   }
+}
+
+/**
+ * 本回合经资料库工具登记的文件：工具结果的元数据带 artifact_id + path
+ * （register 动作独有；list/favorite/folder/remove/restore 都不是这个形状）。
+ * 投影把工具结果元数据提升到部件元数据上，这里把两种落位都读一遍。
+ */
+function collectLibraryFiledPaths(parts: MessagePart[]): Set<string> {
+  const paths = new Set<string>()
+  const visit = (list: MessagePart[]): void => {
+    for (const part of list) {
+      if (part.toolName === 'library') {
+        const metadata = (part.metadata || {}) as Record<string, unknown>
+        const nested = typeof metadata.metadata === 'object' && metadata.metadata
+          ? metadata.metadata as Record<string, unknown>
+          : (metadata.payload as { metadata?: unknown } | undefined)?.metadata as Record<string, unknown> | undefined
+        if (nested && typeof nested.artifact_id === 'string' && typeof nested.path === 'string') {
+          const reference = normalizeArtifactReference(nested.path)
+          if (reference) paths.add(reference)
+        }
+      }
+      const subLineParts = (part.metadata as { subLineParts?: MessagePart[] } | undefined)?.subLineParts
+      if (Array.isArray(subLineParts)) visit(subLineParts)
+    }
+  }
+  visit(parts)
+  return paths
 }
 
 watch(allMessageImages, (items) => {
@@ -3808,6 +4079,125 @@ function formatContextSummary(c: ContextCounts): string {
 
 @media (prefers-reduced-motion: reduce) {
   .mobile-turn-progress__fill { animation: none; }
+}
+
+/* ── 收起行结果小标记（因地制宜批次一）──
+   行尾一枚小字：命令成败/运行时长、文件增删行数、测试结论。
+   成功绿、失败红，与任务状态色语义一致；数字走等宽字。
+   非命令行是 flex 行，margin-left 推到行尾；命令行是网格行，
+   has-flag 扩出第三列（flag 区）承接。 */
+.process-tool-flag {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 52%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.process-tool-flag--good { color: color-mix(in srgb, var(--green) 78%, var(--theme-main-text, #fff) 22%); }
+.process-tool-flag--bad { color: color-mix(in srgb, var(--red) 78%, var(--theme-main-text, #fff) 22%); }
+.process-tool-flag--stat { display: inline-flex; gap: 5px; padding-left: 8px; }
+.process-tool-flag-add { color: color-mix(in srgb, var(--green) 78%, var(--theme-main-text, #fff) 22%); }
+.process-tool-flag-del { color: color-mix(in srgb, var(--red) 78%, var(--theme-main-text, #fff) 22%); }
+.tool-card-header.has-flag {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "marker title flag"
+    ". args flag";
+}
+.tool-card-header.has-flag .process-tool-flag {
+  grid-area: flag;
+  margin-left: 0;
+  padding-left: 0;
+}
+
+/* 折叠组头的步骤计数：第三列小字，展开后随行列表一并隐藏。 */
+.process-group-count {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 45%, transparent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── 搜索命中清单与网页获取的专属形态（因地制宜批次二）── */
+.search-hit-list {
+  display: grid;
+  gap: 1px;
+  padding: 2px 0 6px;
+}
+.search-hit-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.search-hit-loc {
+  flex: 0 1 auto;
+  display: inline-flex;
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.search-hit-file { overflow: hidden; text-overflow: ellipsis; }
+.search-hit-line { flex: 0 0 auto; color: color-mix(in srgb, var(--theme-main-text, #fff) 42%, transparent); }
+.search-hit-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 82%, transparent);
+}
+.search-hit-list--wrap .search-hit-text { white-space: normal; overflow-wrap: anywhere; }
+.search-hit-note { padding: 2px 6px; color: color-mix(in srgb, var(--theme-main-text, #fff) 45%, transparent); font-size: 11px; }
+.web-fetch-card { display: grid; gap: 6px; margin: 2px 0 8px; }
+.web-fetch-title { color: var(--theme-main-text, #fff); font-size: 13px; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
+.web-fetch-summary { margin: 0; color: color-mix(in srgb, var(--theme-main-text, #fff) 65%, transparent); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.web-fetch-more-toggle { color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent); font-size: 11px; cursor: pointer; }
+.web-fetch-more-toggle:hover { color: var(--theme-main-text, #fff); }
+.web-fetch-raw {
+  max-height: 240px;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in srgb, var(--theme-main-sunken-background, transparent) 88%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 78%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.web-fetch-raw--wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 记忆行的读写方向：写是信息性动作，走蓝色；读保持次要灰。 */
+.process-tool-flag--info { color: color-mix(in srgb, var(--blue) 78%, var(--theme-main-text, #fff) 22%); }
+
+/* 进行中的清单步骤向右栏清单看齐：绿色文字 + 转圈指示（减弱动态退化为静态）。 */
+.checklist-item--running .checklist-text { color: color-mix(in srgb, var(--green) 78%, var(--theme-main-text, #fff) 22%); }
+.checklist-item--running .checklist-box { border-color: var(--green); color: transparent; }
+.checklist-item--running .checklist-box::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border: 1px solid color-mix(in srgb, var(--green) 36%, transparent);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: checklist-box-spin 1.2s linear infinite;
+}
+@keyframes checklist-box-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .checklist-item--running .checklist-box::after { animation: none; }
 }
 
 /* Generated image cards inside process details + fullscreen preview. */

@@ -29,12 +29,21 @@ export function buildCoreResourceSummary(
   let max = firstNumber(modelContextWindow)
   let threshold = -1
   let contextCompacted = false
+  // The provider's own count for the last request it actually received.  The
+  // local estimator only approximates it — measured on one live request:
+  // 75,969 estimated vs 119,365 reported — so the provider number is preferred
+  // whenever it is the newest thing we know.
+  let providerPromptTokens = -1
   for (const record of contextRecords) {
     current = latestNumber(current,
       record.estimated_prompt_tokens,
       record.estimatedPromptTokens,
       record.context_tokens,
       record.contextTokens,
+    )
+    providerPromptTokens = latestNumber(providerPromptTokens,
+      record.context_usage_prompt_tokens,
+      record.contextUsagePromptTokens,
     )
     max = latestNumber(max, record.context_window_tokens, record.contextWindowTokens)
     threshold = latestNumber(threshold,
@@ -45,12 +54,41 @@ export function buildCoreResourceSummary(
     )
     contextCompacted = record.context_compacted === true || record.contextCompacted === true
   }
-  for (const message of messages) {
+  // A completed compaction describes the request that follows it, so its number
+  // may stand in for the live value only until the session moves on.  It used to
+  // override the context size for the rest of the thread, which froze the
+  // indicator at the post-compaction figure — a live session read 17k while the
+  // real context had grown back past 119k.  Track where each record sits in the
+  // transcript and let the newest one win.
+  let lastMetricsIndex = -1
+  let lastProviderIndex = -1
+  let lastCompactionIndex = -1
+  let lastCompactionTokens = -1
+  messages.forEach((message, index) => {
+    const metadata = message.metadata as Record<string, unknown> | undefined
+    // Mirrors collectMetricRecords: the processMetrics alias only carries
+    // provider usage when no dedicated contextMetrics field is present.
+    if (metadata?.contextMetrics || metadata?.processMetrics) lastMetricsIndex = index
+    if (metadata?.usageMetrics || (!metadata?.contextMetrics && metadata?.processMetrics)) {
+      lastProviderIndex = index
+    }
     const compactedTokens = latestCompletedCompactionTokens(message.parts)
     if (compactedTokens >= 0) {
-      current = compactedTokens
-      contextCompacted = true
+      lastCompactionIndex = index
+      lastCompactionTokens = compactedTokens
     }
+  })
+  let contextSource: 'estimate' | 'provider' | 'compacted' = 'estimate'
+  if (lastCompactionTokens >= 0) {
+    contextCompacted = true
+    if (lastCompactionIndex >= Math.max(lastMetricsIndex, lastProviderIndex)) {
+      current = lastCompactionTokens
+      contextSource = 'compacted'
+    }
+  }
+  if (contextSource !== 'compacted' && providerPromptTokens >= 0) {
+    current = providerPromptTokens
+    contextSource = 'provider'
   }
 
   const hasContext = current >= 0 && max > 0
@@ -107,10 +145,20 @@ export function buildCoreResourceSummary(
   const hasProviderUsage = hasProviderRecord && (hasCalls || hasInput || hasOutput || hasCache || usageReported)
   if (!hasContext && !hasProviderUsage) return null
 
+  // Say where the number comes from: the provider's count for the last request
+  // it received, the local estimate, or the post-compaction figure.
+  const contextSourceLabel = contextSource === 'provider'
+    ? '实测'
+    : contextSource === 'compacted'
+      ? '压缩后'
+      : '估算'
+
   return {
     currentPct,
     thresholdPct,
-    contextLabel: hasContext ? `${formatTokenCompact(current)} / ${formatTokenCompact(max)}` : '暂无上下文',
+    contextLabel: hasContext
+      ? `${formatTokenCompact(current)} / ${formatTokenCompact(max)} · ${contextSourceLabel}`
+      : '暂无上下文',
     percentLabel: hasContext ? `${currentPct}%` : '--',
     statusLabel: contextCompacted ? '已压缩' : (hasContext && currentPct >= thresholdPct ? '需压缩' : '正常'),
     currentRatio,
@@ -124,6 +172,42 @@ export function buildCoreResourceSummary(
       ...(cacheHitRate >= 0 ? [{ label: '缓存', value: formatPercent(cacheHitRate) }] : []),
     ],
   }
+}
+
+export interface CoreCacheTrendPoint {
+  /** 累计模型调用次数（横坐标）。 */
+  calls: number
+  /** 该回合的缓存命中率，已收敛到 0..1（纵坐标）。 */
+  rate: number
+}
+
+/**
+ * 按时间顺序给出缓存命中率趋势：横坐标是累计调用次数，纵坐标是回合命中率。
+ * 每个回合一个点；回合未上报缓存字段时只推进调用计数、不产出点——缺失的
+ * 缓存字段是"未知"而不是"未命中"，与汇总命中率的口径一致。
+ */
+export function buildCacheTrend(
+  messages: Array<Pick<CoreMessage, 'metadata' | 'id'>>,
+): CoreCacheTrendPoint[] {
+  const points: CoreCacheTrendPoint[] = []
+  let calls = 0
+  for (const record of collectMetricRecords(messages, 'usageMetrics')) {
+    const reported = firstNumber(record.llm_calls, record.llmCalls, record.model_calls, record.modelCalls)
+    // 缺失的调用数按后端默认的 1 次记（历史快照可能不带该字段）。
+    const callCount = reported >= 0 ? reported : 1
+    if (callCount > 0) calls += callCount
+    const rate = recordCacheHitRate(record)
+    if (callCount > 0 && rate >= 0) points.push({ calls, rate: clampRatio(rate) })
+  }
+  return points
+}
+
+function recordCacheHitRate(record: Record<string, unknown>): number {
+  const direct = firstNumber(record.cache_hit_rate, record.cacheHitRate)
+  if (direct >= 0) return direct
+  const cached = cacheReadTokens(record)
+  const input = firstNumber(record.input_tokens, record.inputTokens, record.prompt_tokens, record.promptTokens)
+  return cached >= 0 && input > 0 ? cached / input : -1
 }
 
 function collectMetricRecords(
@@ -233,7 +317,7 @@ function formatCompactNumber(value: number): string {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value)
 }
 
-function formatPercent(rate: number): string {
+export function formatPercent(rate: number): string {
   const pct = Math.round(rate * 1000) / 10
   return `${pct}%`
 }

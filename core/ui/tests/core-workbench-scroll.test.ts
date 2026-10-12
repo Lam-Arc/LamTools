@@ -114,6 +114,36 @@ describe('core workbench auto-follow scroll', () => {
     expect(source).toContain('restoreThreadHistoryAnchor')
   })
 
+  it('idle backfill of unmounted history reuses the paging lock and the anchor discipline', () => {
+    // 首屏分批挂载：切会话只同步挂最近窗口，其余回合由空闲控制器分页补齐。
+    // 补齐与用户滚动触发的加载共用同一把页锁（historyPageLoading），两个来源
+    // 不互相插页；每一页都走同一套锚定流程，用户正读历史时视口不跳；只做
+    // 从新到旧的加宽，投影数组顺序即真实时序，DOM 里永不重排。
+    const source = readFileSync(resolve(__dirname, '../src/app/LamToolsApp.vue'), 'utf8')
+    expect(source).toContain('createIdleHistoryMount({')
+    expect(source).toContain('busy: historyPageLoading')
+    expect(source).toContain('loadMoreHistory,')
+    // 有上限的预取：进度探针让"在等服务端分页的空气页"不占预算（上限值在
+    // composable 的 IDLE_HISTORY_MAX_BATCHES）。
+    expect(source).toContain('progress: () => messages.value.length')
+    expect(source).toContain('anchor: captureThreadHistoryAnchor(el)')
+    expect(source).toContain('restoreThreadHistoryAnchor(el, state.anchor)')
+    // 锚点失效（元素被重挂/不再可见）时按高度差兜底。
+    expect(source).toContain('el.scrollHeight > state.prevHeight')
+    // 页面在途时会话被切走：不复原旧会话的锚点，也不给新会话写滚动。
+    expect(source).toContain('state.sessionId !== activeSessionId.value')
+    // 每页两遍还原：先等 DOM，再等一帧吸收异步撑高的元素。
+    expect(source).toContain('afterDomUpdate: nextTick')
+    expect(source).toContain('afterFrame: afterHistoryLayoutFrame')
+    // 仍有缺口且页锁空闲时排下一页；锁释放（用户滚动加载结束）也要重排，
+    // 否则补齐链断在半途；切会话立即作废未执行的补齐。
+    expect(source).toContain(
+      'if (!historyPageLoading.value && hasMoreHistory.value) idleHistoryMount.schedule()',
+    )
+    expect(source).toContain('watch([messages, hasMoreHistory, historyPageLoading]')
+    expect(source).toContain('watch(activeSessionId, () => idleHistoryMount.cancel())')
+  })
+
   it('detects whether the thread is near the bottom', () => {
     // scrollHeight 1000, clientHeight 300 → bottom at 700, threshold 80 → near when scrollTop >= 620
     expect(coreIsScrollNearBottom({ scrollHeight: 1000, scrollTop: 620, clientHeight: 300 })).toBe(true)

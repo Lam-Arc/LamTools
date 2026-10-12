@@ -12,7 +12,7 @@
             <section class="theme-editor-section">
               <div class="theme-section-copy">
                 <strong>外观</strong>
-                <span>选择主题随系统变化，或固定在一个模式。</span>
+                <span>选择主题随系统变化、固定在一个模式，或按时段自动切换。</span>
               </div>
               <div class="theme-mode-options" role="radiogroup" aria-label="外观模式">
                 <button
@@ -29,6 +29,29 @@
                   <span aria-hidden="true" />
                   {{ mode.label }}
                 </button>
+              </div>
+              <div v-if="themeMode === 'scheduled'" class="theme-schedule-options" data-theme-schedule>
+                <label class="field">
+                  <span>浅色从</span>
+                  <input
+                    type="time"
+                    :value="themeSchedule.lightFrom"
+                    aria-label="浅色开始时间"
+                    data-theme-schedule-light
+                    @change="updateThemeSchedule('lightFrom', ($event.target as HTMLInputElement).value)"
+                  />
+                </label>
+                <label class="field">
+                  <span>深色从</span>
+                  <input
+                    type="time"
+                    :value="themeSchedule.darkFrom"
+                    aria-label="深色开始时间"
+                    data-theme-schedule-dark
+                    @change="updateThemeSchedule('darkFrom', ($event.target as HTMLInputElement).value)"
+                  />
+                </label>
+                <p class="theme-schedule-hint">其余时间用另一个模式；跨天时段同样有效。</p>
               </div>
             </section>
 
@@ -198,7 +221,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import ThemeAreaEditor from './ThemeAreaEditor.vue'
 import ThemePreview from './ThemePreview.vue'
-import { gradientFromStops, themeForMode, type ThemeArea, type ThemeMode, type ThemePreset, type ThemeStop } from '../helpers/theme'
+import { gradientFromStops, themeForMode, DEFAULT_THEME_SCHEDULE, type ThemeArea, type ThemeMode, type ThemePreset, type ThemeSchedule, type ThemeStop } from '../helpers/theme'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 
 const props = withDefaults(defineProps<{
@@ -208,6 +231,7 @@ const props = withDefaults(defineProps<{
   densityOptions: Array<{ value: string; label: string }>
   contentWidth?: number
   themeMode?: ThemeMode
+  themeSchedule?: ThemeSchedule
   effectiveThemeMode?: 'light' | 'dark'
   getStops: (area: ThemeArea) => ThemeStop[]
   getAngle: (area: ThemeArea) => number
@@ -223,6 +247,7 @@ const props = withDefaults(defineProps<{
   productName: 'Sunday',
   contentDescription: 'Sunday 工作区',
   themeMode: 'system',
+  themeSchedule: () => ({ ...DEFAULT_THEME_SCHEDULE }),
   effectiveThemeMode: 'dark',
   processIconColor: '#a693ff',
 })
@@ -231,6 +256,7 @@ const emit = defineEmits<{
   'reset-theme': []
   'apply-preset': [preset: ThemePreset]
   'update:theme-mode': [mode: ThemeMode]
+  'update:theme-schedule': [schedule: ThemeSchedule]
   'update:density': [value: string]
   'update:content-width': [value: number]
   'update:stops': [area: ThemeArea, stops: ThemeStop[]]
@@ -253,6 +279,7 @@ const appearanceModes: Array<{ value: ThemeMode; label: string }> = [
   { value: 'system', label: '跟随系统' },
   { value: 'light', label: '浅色' },
   { value: 'dark', label: '深色' },
+  { value: 'scheduled', label: '定时切换' },
 ]
 
 const activeArea = ref<ThemeArea | null>(null)
@@ -306,6 +333,10 @@ function isPresetActive(preset: ThemePreset) {
 
 function setThemeMode(mode: ThemeMode) {
   emit('update:theme-mode', mode)
+}
+
+function updateThemeSchedule(key: keyof ThemeSchedule, value: string) {
+  emit('update:theme-schedule', { ...props.themeSchedule, [key]: value })
 }
 
 function openAreaPopover(area: ThemeArea) {

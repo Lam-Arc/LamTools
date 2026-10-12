@@ -9,6 +9,9 @@ import {
   gradientFromStops,
   migrateSundayThemeDefaults,
   normalizeTheme,
+  normalizeThemeSchedule,
+  resolveScheduledThemeMode,
+  type ResolvedThemeMode,
   type ThemeData,
   type ThemeMode,
 } from '../helpers/theme'
@@ -20,6 +23,7 @@ type StartupThemeStorage = Pick<Storage, 'getItem'>
 
 interface StoredUiPreferences {
   themeMode?: unknown
+  themeSchedule?: unknown
   theme?: Partial<ThemeData>
   lightTheme?: Partial<ThemeData>
   darkTheme?: Partial<ThemeData>
@@ -112,12 +116,14 @@ export function resolveStartupThemePreference(
   }
   const preferences = readStoredUiPreferences(resolvedStorage ?? null)
   const storedMode = preferences?.themeMode
-  const themeMode: ThemeMode = storedMode === 'light' || storedMode === 'dark' || storedMode === 'system'
+  const themeMode: ThemeMode = storedMode === 'light' || storedMode === 'dark' || storedMode === 'system' || storedMode === 'scheduled'
     ? storedMode
     : 'system'
-  const effectiveMode = themeMode === 'system'
+  const effectiveMode: ResolvedThemeMode = themeMode === 'system'
     ? (systemPrefersDark ? 'dark' : 'light')
-    : themeMode
+    : themeMode === 'scheduled'
+      ? resolveScheduledThemeMode(normalizeThemeSchedule(preferences?.themeSchedule))
+      : themeMode
   const defaultTheme = effectiveMode === 'dark' ? SUNDAY_DARK_THEME : SUNDAY_LIGHT_THEME
   const savedTheme = effectiveMode === 'dark' ? preferences?.darkTheme : preferences?.lightTheme
   const theme = migrateSundayThemeDefaults(normalizeTheme({

@@ -3,6 +3,15 @@ import type { Component } from 'vue'
 export type ContextMenuAttributeValue = string | number | boolean | undefined
 export type ContextMenuAttributes = Record<string, ContextMenuAttributeValue>
 
+/** 语义分组：面板把它管辖的连续条目收进一个可折叠的组。 */
+export interface ContextMenuGroupMeta {
+  /** 稳定 id：折叠状态按它记忆（跨开关、跨会话）。 */
+  id: string
+  label: string
+  /** 缺省展开；确有超长菜单需要默认收起时由宿主显式声明。 */
+  defaultCollapsed?: boolean
+}
+
 export interface ContextMenuAction {
   type?: 'item'
   id?: string
@@ -15,6 +24,8 @@ export interface ContextMenuAction {
   shortcut?: string
   disabled?: boolean
   destructive?: boolean
+  /** 语义分组：同组且相邻的条目共用一个可折叠组头。 */
+  group?: ContextMenuGroupMeta
   attributes?: ContextMenuAttributes
   action: () => void | Promise<void>
 }
@@ -36,6 +47,8 @@ export interface ContextMenuSubmenu {
   label: string
   icon?: Component
   disabled?: boolean
+  /** 语义分组：同组且相邻的条目共用一个可折叠组头。 */
+  group?: ContextMenuGroupMeta
   attributes?: ContextMenuAttributes
   panelAttributes?: ContextMenuAttributes
   children: ContextMenuEntry[]

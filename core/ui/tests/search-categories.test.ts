@@ -167,4 +167,121 @@ describe('global search categories', () => {
 
     expect(onOpenSession).toHaveBeenCalledWith('session-1')
   })
+
+  it('opens a file hit through onOpenFile, line included', async () => {
+    const onOpenFile = vi.fn()
+    const wrapper = mountSearch({
+      ...CATALOG,
+      'workspace.search': {
+        results: [{ path: 'src/app/main.ts', line: 12, content: 'const app = createApp()' }],
+      },
+    }, { onOpenFile })
+    await flushPromises()
+
+    await wrapper.find('input').setValue('app')
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    await flushPromises()
+
+    const row = wrapper.find('[data-search-row="content-src/app/main.ts-12"]')
+    expect(row.exists()).toBe(true)
+    await row.trigger('mousedown')
+    await flushPromises()
+
+    expect(onOpenFile).toHaveBeenCalledWith({ path: 'src/app/main.ts', line: 12 })
+  })
+
+  it('opens a file hit with the keyboard too', async () => {
+    const onOpenFile = vi.fn()
+    const wrapper = mountSearch({
+      ...CATALOG,
+      'workspace.search': {
+        results: [{ path: 'src/app/main.ts', line: 12, content: 'const app = createApp()' }],
+      },
+    }, { onOpenFile })
+    await flushPromises()
+
+    await wrapper.find('input').setValue('app')
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    await flushPromises()
+
+    // 命中行现在是可选项：光标默认在第一条（文件名命中），下一行是内容命中（带行号）。
+    await wrapper.find('input').trigger('keydown.down')
+    await wrapper.find('input').trigger('keydown.enter')
+    await flushPromises()
+
+    expect(onOpenFile).toHaveBeenCalledWith({ path: 'src/app/main.ts', line: 12 })
+  })
+
+  it('says why a file cannot be opened instead of swallowing it', async () => {
+    const onOpenFile = vi.fn(async () => { throw new Error('该文件不存在或已被移动') })
+    const wrapper = mountSearch({
+      ...CATALOG,
+      'workspace.search': {
+        results: [{ path: 'src/app/main.ts', line: 12, content: 'const app = createApp()' }],
+      },
+    }, { onOpenFile })
+    await flushPromises()
+
+    await wrapper.find('input').setValue('app')
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    await flushPromises()
+
+    await wrapper.find('[data-search-row="content-src/app/main.ts-12"]').trigger('mousedown')
+    await flushPromises()
+
+    const alert = wrapper.find('.search-error')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('打开「main.ts」失败')
+    expect(alert.text()).toContain('该文件不存在或已被移动')
+    // 结果清单还在：换一条再点就行，不必重新搜。
+    expect(wrapper.find('.search-results').exists()).toBe(true)
+  })
+
+  it('keeps file hits informational when the host has no opener', async () => {
+    const wrapper = mountSearch({
+      ...CATALOG,
+      'workspace.search': {
+        results: [{ path: 'src/app/main.ts', line: 12, content: 'const app = createApp()' }],
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('input').setValue('app')
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    await flushPromises()
+
+    // 没有打开通道（例如手机端）的宿主：命中行保持信息行，不进键盘光标。
+    const row = wrapper.find('[data-search-row="file-src/app/main.ts"]')
+    expect(row.exists()).toBe(true)
+    expect(row.classes()).toContain('is-static')
+  })
+
+  it('keeps document hits informational even when the host can open files', async () => {
+    // 语义检索的文档命中来自外部 lamtools-rag 插件，其 path 语义不属本仓库的
+    // 工作区文件契约（字段是防御式读取的，path 甚至可能只是标题兜底）。把它
+    // 接到工作区打开通道可能打开同名但不相干的文件，所以这些行保持不可点。
+    const onOpenFile = vi.fn()
+    const wrapper = mountSearch({
+      ...CATALOG,
+      'plugin.list': {
+        plugins: [{ name: 'lamtools-rag', description: '工作区索引', enabled: true }],
+      },
+      'rag.docs.search': {
+        hits: [{ path: 'guides/index.md', title: '索引说明', snippet: '…' }],
+      },
+    }, { onOpenFile })
+    await flushPromises()
+
+    await wrapper.find('input').setValue('索引')
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    await flushPromises()
+
+    const row = wrapper.find('[data-search-row="doc-guides/index.md-"]')
+    expect(row.exists()).toBe(true)
+    expect(row.classes()).toContain('is-static')
+
+    await row.trigger('mousedown')
+    await flushPromises()
+    expect(onOpenFile).not.toHaveBeenCalled()
+  })
 })

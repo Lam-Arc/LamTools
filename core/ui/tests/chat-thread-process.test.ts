@@ -587,6 +587,118 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.command-output-result').text()).not.toContain('[duration_seconds]');
   });
 
+  it('shows a failed command as one failure block, not a red box plus a duplicate', async () => {
+    // 后端非零退出：status=failed、error 带失败原因（红框），输出仍留在 content/tool_result。
+    const messages: CoreMessage[] = [{
+      id: 'm-command-fail',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-command-fail',
+        partType: 'tool_call',
+        status: 'error',
+        label: 'run_command',
+        toolName: 'run_command',
+        toolArgs: { command: 'npm test', cwd: 'E:/LamTools' },
+        toolResult: 'boom: one test failed\n[exit_code] 1',
+        toolError: 'Command exited with code 1',
+      }],
+    }];
+
+    const wrapper = mountChatThread({
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-command-fail']),
+      },
+    });
+
+    await wrapper.find('.tool-card-header').trigger('click');
+
+    const body = wrapper.get('.tool-card-body');
+    // 失败只有一个展示块，且保留红框语义与完整失败原因。
+    expect(body.findAll('.tool-output--error')).toHaveLength(1);
+    expect(body.get('.tool-output--error').text()).toContain('Command exited with code 1');
+    // 兜底明细行不再把同一段错误文字再渲染一遍（它挂在图片行另起的那条 v-if 链上）。
+    expect(body.findAll('.tool-output')).toHaveLength(1);
+    expect(body.text().split('Command exited with code 1')).toHaveLength(2);
+  });
+
+  it('shows a successful command as one block — the terminal window, no duplicate detail', async () => {
+    // 同一处结构在成功路径的表现：终端窗 + 兜底明细两个白块（同一段输出画两遍）。
+    const messages: CoreMessage[] = [{
+      id: 'm-command-ok',
+      role: 'assistant',
+      content: 'Done.',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-command-ok',
+        partType: 'tool_call',
+        status: 'completed',
+        label: 'run_command',
+        toolName: 'run_command',
+        toolArgs: { command: 'npm test', cwd: 'E:/LamTools' },
+        // 后端成功：content 进 tool_result，detail 是它的前缀摘要。
+        toolResult: '[stdout]\nok\n[exit_code] 0\n[duration_seconds] 1.25',
+        detail: '[stdout]\nok',
+      }],
+    }];
+
+    const wrapper = mountChatThread({
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-command-ok']),
+      },
+    });
+
+    await wrapper.find('.tool-card-header').trigger('click');
+
+    const body = wrapper.get('.tool-card-body');
+    // 成功只有一个块：终端窗（命令 + 输出）。
+    expect(body.findAll('.command-output')).toHaveLength(1);
+    expect(body.get('.command-output-result').text()).toContain('ok');
+    // 兜底明细不再补位：它会把同一段输出再画一遍。
+    expect(body.findAll('.tool-output')).toHaveLength(0);
+  });
+
+  it('shows a read/write file card as one block — the line-numbered view, no duplicate detail', async () => {
+    // 文件类工具是同一根因的另一处：带行号的 diff 块先画一遍，兜底明细又画一遍同一段内容。
+    const readMessages: CoreMessage[] = [{
+      id: 'm-read-one-block',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-read-one-block',
+        partType: 'tool_call',
+        status: 'completed',
+        label: 'read_file',
+        toolName: 'read_file',
+        toolArgs: { path: 'notes.txt' },
+        toolResult: 'file body lines',
+        detail: 'file body lines',
+      }],
+    }];
+    const readWrapper = mountChatThread({
+      props: { messages: readMessages, processExpandedIds: new Set(['m-read-one-block']) },
+    });
+    await readWrapper.find('.tool-card-header').trigger('click');
+    const readBody = readWrapper.get('.tool-card-body');
+    expect(readBody.findAll('.diff-block')).toHaveLength(1);
+    expect(readBody.findAll('.tool-output')).toHaveLength(0);
+
+    const writeWrapper = mountChatThread({
+      props: { messages: writeDiffMessages(), processExpandedIds: new Set(['m-write']) },
+    });
+    await writeWrapper.find('.tool-card-header').trigger('click');
+    const writeBody = writeWrapper.get('.tool-card-body');
+    expect(writeBody.findAll('.diff-block')).toHaveLength(1);
+    expect(writeBody.findAll('.tool-output')).toHaveLength(0);
+  });
+
   it('renders browser checks with the real tool name', async () => {
     const messages: CoreMessage[] = [{
       id: 'm-browser-check',
@@ -800,6 +912,182 @@ describe('ChatThread process cards', () => {
     });
 
     expect(wrapper.find('.tool-card-header').text()).toContain('加载技能 · lam-design-spec');
+  });
+
+  it('shows result flags on collapsed rows for commands, diffs, and tests', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-row-flags',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [
+        {
+          id: 'cmd-ok', partType: 'tool_call', status: 'completed', toolName: 'run_command',
+          toolArgs: { command: 'echo ok' }, toolResult: '[exit_code 0]\nok',
+        },
+        {
+          id: 'cmd-fail', partType: 'tool_call', status: 'completed', toolName: 'run_command',
+          toolArgs: { command: 'exit 3' }, toolResult: '[exit_code 3]\nboom',
+        },
+        {
+          id: 'cmd-run', partType: 'tool_call', status: 'running', toolName: 'run_command',
+          toolArgs: { command: 'sleep 60' },
+          startedAt: new Date(Date.now() - 60_000).toISOString(),
+        },
+        {
+          id: 'edit-file', partType: 'tool_call', status: 'completed', toolName: 'edit_file',
+          toolArgs: { path: 'notes.txt' },
+          toolResult: '+++ b/notes.txt\n@@ -1,2 +1,3 @@\n-a\n+b\n+c',
+          artifacts: [{ kind: 'file_change', uri: 'notes.txt', metadata: { path: 'notes.txt', action: 'edit' } }],
+        },
+        {
+          id: 'tests-pass', partType: 'tool_call', status: 'completed', toolName: 'run_command',
+          toolArgs: { command: 'vitest run' }, toolResult: '2 passed',
+          artifacts: [{ kind: 'test_result', content: '2 passed', metadata: { passed: true } }],
+        },
+        {
+          id: 'tests-fail', partType: 'tool_call', status: 'completed', toolName: 'run_command',
+          toolArgs: { command: 'vitest run --bail' }, toolResult: '1 failed',
+          artifacts: [{ kind: 'test_result', content: '1 failed', metadata: { passed: false } }],
+        },
+      ],
+    }];
+    const wrapper = mountChatThread({ props: { messages, processExpandedIds: new Set(['m-row-flags']) } });
+    await nextTick();
+
+    // 连续小工具先归成一组且默认收起：先展开组，行级的收起态标记才在 DOM 里。
+    await wrapper.find('.process-group-summary').trigger('click');
+    await nextTick();
+
+    const headers = wrapper.findAll('.tool-card-header');
+    const rowWith = (text: string) => headers.find(row => row.text().includes(text));
+
+    // 命令成功：绿勾；命令失败：红叉带退出码。
+    expect(rowWith('运行 echo ok')!.find('.process-tool-flag--good').text()).toBe('✓');
+    expect(rowWith('运行 exit 3')!.find('.process-tool-flag--bad').text()).toBe('✗ 退出码 3');
+    // 命令运行中：显示已运行时长（取整秒）。
+    expect(rowWith('运行 sleep 60')!.find('.process-tool-flag--muted').text()).toMatch(/^\d+s$/);
+    // 文件改动：增删行数徽章，+绿 −红。
+    const editRow = rowWith('编辑 notes.txt')!;
+    expect(editRow.find('.process-tool-flag--stat .process-tool-flag-add').text()).toBe('+2');
+    expect(editRow.find('.process-tool-flag--stat .process-tool-flag-del').text()).toBe('−1');
+    // 测试结论：通过绿、失败红。
+    expect(rowWith('运行 vitest run')!.find('.process-tool-flag--good').text()).toBe('✓ 通过');
+    expect(rowWith('运行 vitest run --bail')!.find('.process-tool-flag--bad').text()).toBe('✗ 失败');
+  });
+
+  it('shows the collapsed process group step count and hides it when expanded', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-group-count',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [
+        { id: 'g-tool-1', partType: 'tool_call', status: 'completed', toolName: 'run_command', toolArgs: { command: 'echo 1' }, toolResult: '1' },
+        { id: 'g-tool-2', partType: 'tool_call', status: 'completed', toolName: 'run_command', toolArgs: { command: 'echo 2' }, toolResult: '2' },
+        { id: 'g-tool-3', partType: 'tool_call', status: 'completed', toolName: 'run_command', toolArgs: { command: 'echo 3' }, toolResult: '3' },
+      ],
+    }];
+    const wrapper = mountChatThread({ props: { messages, processExpandedIds: new Set(['m-group-count']) } });
+    await nextTick();
+
+    // 收起态：组头带步骤计数。
+    const group = wrapper.find('.process-group-summary');
+    expect(group.find('.process-group-count').text()).toBe('3 步');
+
+    // 展开后步骤全可见，计数随之隐藏。
+    await group.trigger('click');
+    await nextTick();
+    expect(wrapper.find('.process-group-summary .process-group-count').exists()).toBe(false);
+  });
+
+  it('renders content-search hits as a hit list and web fetches as summary with full text', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-search-web',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [
+        {
+          id: 'grep-hits', partType: 'tool_call', status: 'completed', toolName: 'search_content',
+          toolArgs: { pattern: 'render' },
+          toolResult: 'src/app.ts:12: export function render() {}\nsrc/ui/view.ts:40: render(view)\n[... at least 5 more matches]',
+        },
+        {
+          id: 'fetch-page', partType: 'tool_call', status: 'completed', toolName: 'fetch_url',
+          toolArgs: { url: 'https://example.com' },
+          toolResult: '<html><head><title>Example Domain</title></head><body><p>Hello &amp; world.</p></body></html>',
+        },
+      ],
+    }];
+    const wrapper = mountChatThread({ props: { messages, processExpandedIds: new Set(['m-search-web']) } });
+    await nextTick();
+
+    // 连续小工具先归组且默认收起：先展开组，再把每行点开，行体里的专属形态才在 DOM 里。
+    await wrapper.find('.process-group-summary').trigger('click');
+    await nextTick();
+    for (const header of wrapper.findAll('.tool-card-header')) {
+      await header.trigger('click');
+      await nextTick();
+    }
+
+    // 搜索命中清单：路径、行号、内容逐行成单，附溢出说明，不再输出整段原始块。
+    const hits = wrapper.findAll('.search-hit-row');
+    expect(hits).toHaveLength(2);
+    expect(hits[0]!.find('.search-hit-file').text()).toBe('src/app.ts');
+    expect(hits[0]!.find('.search-hit-line').text()).toBe(':12');
+    expect(hits[0]!.find('.search-hit-text').text()).toContain('render()');
+    expect(wrapper.find('.search-hit-note').text()).toContain('at least 5 more matches');
+    const searchStep = wrapper.findAll('.process-step--tool').find(step => step.find('.search-hit-list').exists());
+    expect(searchStep).toBeDefined();
+    expect(searchStep!.find('.tool-output').exists()).toBe(false);
+
+    // 网页获取：标题与摘要先行，原文收进查看全文。
+    const webStep = wrapper.findAll('.process-step--tool').find(step => step.find('.web-fetch-card').exists());
+    expect(webStep).toBeDefined();
+    expect(webStep!.find('.web-fetch-title').text()).toBe('Example Domain');
+    expect(webStep!.find('.web-fetch-summary').text()).toContain('Hello & world.');
+    expect(webStep!.find('.web-fetch-raw').text()).toContain('<title>');
+  });
+
+  it('marks memory rows with their read or write direction', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-memory-rows',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [
+        {
+          id: 'mem-read', partType: 'tool_call', status: 'completed', toolName: 'memory',
+          toolArgs: { action: 'read', scope: 'project', path: 'INDEX.md' }, toolResult: 'index text',
+        },
+        {
+          id: 'mem-write', partType: 'tool_call', status: 'completed', toolName: 'memory',
+          toolArgs: { action: 'write', scope: 'project', path: 'notes.md', content: 'x' }, toolResult: 'written',
+        },
+      ],
+    }];
+    const wrapper = mountChatThread({ props: { messages, processExpandedIds: new Set(['m-memory-rows']) } });
+    await nextTick();
+
+    // 方向标记直接落在行尾：读为次要灰、写为信息蓝。
+    const readFlag = wrapper.findAll('.process-tool-flag').find(flag => flag.text() === '读');
+    const writeFlag = wrapper.findAll('.process-tool-flag').find(flag => flag.text() === '写');
+    expect(readFlag).toBeDefined();
+    expect(writeFlag).toBeDefined();
+    expect(writeFlag!.classes()).toContain('process-tool-flag--info');
+    expect(readFlag!.classes()).toContain('process-tool-flag--muted');
+  });
+
+  it('aligns running checklist steps with the right-rail state colors', () => {
+    const source = readFileSync(resolve(__dirname, '../src/components/MessageView.vue'), 'utf8');
+    expect(source).toMatch(/\.checklist-item--running \.checklist-text\s*\{[^}]*var\(--green\)/);
+    expect(source).toMatch(/\.checklist-item--running \.checklist-box::after\s*\{[^}]*animation: checklist-box-spin/);
+    expect(source).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.checklist-item--running \.checklist-box::after\s*\{[^}]*animation: none/);
   });
 
   it('renders running write tool input preview before final result', async () => {
@@ -1156,6 +1444,65 @@ describe('ChatThread process cards', () => {
     await block.find('.sub-line-toggle').trigger('click');
     expect(block.find('.sub-line-body').exists()).toBe(true);
     expect(wrapper.emitted('open-sub-agent')!.length).toBe(1);
+  }, 20_000);
+
+  it('opens the split view from a delegation tool row too (projection keeps it tool_call)', async () => {
+    // 投影对委派工具的生命周期行（`sub_agent` create/close）保留 tool_call 类型
+    // （钉在 core-app-server-workbench-projection 的用例里），但它同样是"子代理
+    // 那一行"：点整行要开右侧分屏，不能退化成就地展开工具卡（2026-10-12 用户报的
+    // 正是这一处：整行只展开、右侧面板不出现）。
+    const messages: CoreMessage[] = [{
+      id: 'm-agent-delegate',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-agent-delegate',
+        partType: 'tool_call',
+        status: 'completed',
+        label: 'sub_agent',
+        toolName: 'sub_agent',
+        content: '{"name": "reviewer"}',
+        toolResult: '{"name": "reviewer"}',
+        toolArgs: {
+          action: 'create',
+          type: 'consider',
+          name: 'reviewer',
+          model: 'model-a',
+          reasoning_level: 'medium',
+        },
+        metadata: {
+          name: 'reviewer',
+          type: 'consider',
+          model: 'model-a',
+          reasoning_level: 'medium',
+          lifecycle_action: 'created',
+          sub_session_id: 'thread-1:sub:reviewer',
+        },
+      }],
+    }];
+
+    const wrapper = mountChatThread({
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-agent-delegate']),
+      },
+    });
+
+    const block = wrapper.find('.sub-line-block');
+    expect(block.exists()).toBe(true);
+    // 不再退化成工具卡：没有工具卡的展开头与正文。
+    expect(block.find('.tool-card-header').exists()).toBe(false);
+
+    // 点整行：只开分屏、不动就地展开。
+    await block.find('.sub-line-heading').trigger('click');
+    expect(wrapper.emitted('open-sub-agent')!.at(-1)).toEqual([
+      { subSessionId: 'thread-1:sub:reviewer', name: 'reviewer' },
+    ]);
+    expect(block.find('.sub-line-body').exists()).toBe(false);
+    // 这一行还没有可展开的嵌套过程：不摆一个点了没反应的箭头。
+    expect(block.find('.sub-line-toggle').exists()).toBe(false);
   }, 20_000);
 
   it('renders sub agent process through the same ChatThread timeline renderer', async () => {
@@ -2753,6 +3100,105 @@ it('marks the memory tier on the card, so two identical paths do not read as one
   expect(text).toContain('档位 项目档');
   expect(text).toContain('档位 全局档');
   wrapper.unmount();
+});
+
+it('keeps memory reads on their own rows instead of folding them into the tool group', async () => {
+  const wrapper = mountChatThread({
+    props: { messages: memoryReadMessages(), processExpandedIds: new Set(['m-memory']) },
+  });
+  await nextTick();
+
+  // 记忆调用不再并进「思考了一会，调用了 N 个工具」：项目档与全局档各占一行，
+  // 档位与路径不会被摘要吞掉。
+  expect(wrapper.find('.process-group-summary').exists()).toBe(false);
+  expect(wrapper.findAll('.process-tool-row')).toHaveLength(2);
+  wrapper.unmount();
+});
+
+describe('Process group expansion survives streaming', () => {
+  /** 一个分组：先想一下，然后读文件；streamed 时再追加第三次读取。 */
+  function growingGroupMessages(streamed: boolean): CoreMessage[] {
+    const parts: NonNullable<CoreMessage['parts']> = [
+      { id: 'g-r1', partType: 'reasoning', status: 'completed', content: '先看一下入口。' },
+      {
+        id: 'g-t1',
+        partType: 'tool_call',
+        status: 'completed',
+        label: 'read_file',
+        toolName: 'read_file',
+        toolArgs: { path: 'app.ts' },
+        toolResult: 'ok',
+      },
+    ];
+    if (streamed) {
+      parts.push({
+        id: 'g-t2',
+        partType: 'tool_call',
+        status: 'completed',
+        label: 'read_file',
+        toolName: 'read_file',
+        toolArgs: { path: 'router.ts' },
+        toolResult: 'ok',
+      });
+    }
+    return [{
+      id: 'm-growing-group',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-10-09T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts,
+    }];
+  }
+
+  it('stays open when the next tool row streams into the same group', async () => {
+    const wrapper = mountChatThread({
+      props: {
+        messages: growingGroupMessages(false),
+        processExpandedIds: new Set(['m-growing-group']),
+      },
+    });
+    await nextTick();
+
+    await wrapper.find('.process-group-summary').trigger('click');
+    await nextTick();
+    expect(wrapper.find('.process-group-body').exists()).toBe(true);
+    expect(wrapper.findAll('.process-group-body .part-wrap')).toHaveLength(2);
+
+    // 同一个分组继续追加工具行：用户点开的分组必须留着展开，而不是被新的工具条收起。
+    await wrapper.setProps({ messages: growingGroupMessages(true) });
+    await nextTick();
+    expect(wrapper.find('.process-group-body').exists()).toBe(true);
+    expect(wrapper.findAll('.process-group-body .part-wrap')).toHaveLength(3);
+    wrapper.unmount();
+  });
+
+  it('keeps a group open when an appended reasoning part grows it', async () => {
+    const wrapper = mountChatThread({
+      props: {
+        messages: growingGroupMessages(false),
+        processExpandedIds: new Set(['m-growing-group']),
+      },
+    });
+    await nextTick();
+
+    await wrapper.find('.process-group-summary').trigger('click');
+    await nextTick();
+    expect(wrapper.find('.process-group-body').exists()).toBe(true);
+
+    const streamed = growingGroupMessages(true);
+    streamed[0].parts!.push({
+      id: 'g-r2',
+      partType: 'reasoning',
+      status: 'completed',
+      content: '再看一下路由。',
+    });
+    await wrapper.setProps({ messages: streamed });
+    await nextTick();
+    expect(wrapper.find('.process-group-body').exists()).toBe(true);
+    expect(wrapper.findAll('.process-group-body .part-wrap')).toHaveLength(4);
+    wrapper.unmount();
+  });
 });
 
 describe('Mid-turn guidance inside the process', () => {

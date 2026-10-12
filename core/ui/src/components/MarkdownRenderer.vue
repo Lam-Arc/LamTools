@@ -14,6 +14,7 @@ import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { isExternalUrl, openExternalUrl } from '../helpers/openUrl'
 import { renderAutoMathPlot } from './mathAutoPlot'
+import { getCachedMarkdown, setCachedMarkdown } from './markdownRenderCache'
 
 defineOptions({ name: 'MarkdownRenderer' })
 
@@ -107,14 +108,8 @@ const inlineMathPlots: { id: string; html: string }[] = []
 let inlineMathPlotSeq = 0
 // Content → rendered HTML cache (see renderedHtml for rationale). Entries keep
 // the mermaid blocks captured during parsing so cached hits still render
-// diagrams.
-const markdownCache = new Map<string, {
-  html: string
-  blocks: { id: string; code: string }[]
-  seq: number
-  inlinePlots: { id: string; html: string }[]
-  inlinePlotSeq: number
-}>()
+// diagrams. The cache lives at module scope (markdownRenderCache.ts): shared
+// across renderer instances and sessions, true LRU with entry + char caps.
 
 // ── Code block copy button ──
 // Inline lucide Copy / Check icons (same geometry as the <Copy>/<Check>
@@ -653,7 +648,7 @@ const renderedHtml = computed(() => {
   // computed with unchanged content; re-parsing marked + sanitizing on every
   // toggle made those interactions produce ~60ms long tasks on large messages.
   const cacheKey = `${props.mermaid ? 'm1' : 'm0'}:${props.autoPlotMath ? 'p1' : 'p0'}:${props.content}`
-  const cached = markdownCache.get(cacheKey)
+  const cached = getCachedMarkdown(cacheKey)
   if (cached) {
     mermaidBlocks.length = 0
     mermaidBlocks.push(...cached.blocks)
@@ -670,17 +665,13 @@ const renderedHtml = computed(() => {
   // renderSegmentHtml never throws: a failed parse falls back to escaped text,
   // exactly like the whole-document path used to.
   const html = renderSegmentHtml(props.content, true)
-  markdownCache.set(cacheKey, {
+  setCachedMarkdown(cacheKey, {
     html,
     blocks: [...mermaidBlocks],
     seq: mermaidSeq,
     inlinePlots: [...inlineMathPlots],
     inlinePlotSeq: inlineMathPlotSeq,
   })
-  if (markdownCache.size > 100) {
-    const oldest = markdownCache.keys().next().value
-    if (oldest !== undefined) markdownCache.delete(oldest)
-  }
   return html
 })
 

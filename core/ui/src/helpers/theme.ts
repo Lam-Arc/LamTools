@@ -14,7 +14,58 @@ export interface ThemeStop {
 }
 
 export type ThemeArea = 'backdrop' | 'main' | 'composer' | 'control'
-export type ThemeMode = 'system' | 'light' | 'dark'
+export type ThemeMode = 'system' | 'light' | 'dark' | 'scheduled'
+/** What a theme mode collapses to once the system preference or the schedule is evaluated. */
+export type ResolvedThemeMode = 'light' | 'dark'
+
+/** Daily switch points for `scheduled`: the local `HH:MM` the light and the dark stretch start. */
+export interface ThemeSchedule {
+  lightFrom: string
+  darkFrom: string
+}
+
+export const DEFAULT_THEME_SCHEDULE: ThemeSchedule = { lightFrom: '07:00', darkFrom: '19:00' }
+
+export function normalizeThemeSchedule(value: unknown): ThemeSchedule {
+  const source = (value && typeof value === 'object' ? value : {}) as Partial<ThemeSchedule>
+  return {
+    lightFrom: normalizeClockTime(source.lightFrom) ?? DEFAULT_THEME_SCHEDULE.lightFrom,
+    darkFrom: normalizeClockTime(source.darkFrom) ?? DEFAULT_THEME_SCHEDULE.darkFrom,
+  }
+}
+
+/**
+ * Which mode the schedule is on right now. `lightFrom` opens the light stretch
+ * and `darkFrom` the dark one, so whichever starts later wraps past midnight;
+ * identical times leave the whole day in the light stretch.
+ */
+export function resolveScheduledThemeMode(schedule: ThemeSchedule, now: Date = new Date()): ResolvedThemeMode {
+  const light = minutesOfDay(schedule.lightFrom)
+  const dark = minutesOfDay(schedule.darkFrom)
+  if (light === null || dark === null || light === dark) return 'light'
+  const minutes = now.getHours() * 60 + now.getMinutes()
+  const inLightStretch = light < dark
+    ? minutes >= light && minutes < dark
+    : minutes >= light || minutes < dark
+  return inLightStretch ? 'light' : 'dark'
+}
+
+function normalizeClockTime(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim())
+  if (!match) return null
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  if (hours > 23 || minutes > 59) return null
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+}
+
+function minutesOfDay(value: string): number | null {
+  const normalized = normalizeClockTime(value)
+  if (!normalized) return null
+  const [hours, minutes] = normalized.split(':').map(Number)
+  return hours * 60 + minutes
+}
 
 export interface ThemeData {
   backdropStops: ThemeStop[]
@@ -48,7 +99,7 @@ export interface ThemePreset {
   darkTheme?: Partial<ThemeData>
 }
 
-export function themeForMode(preset: ThemePreset, mode: Exclude<ThemeMode, 'system'>): Partial<ThemeData> {
+export function themeForMode(preset: ThemePreset, mode: ResolvedThemeMode): Partial<ThemeData> {
   return mode === 'dark' ? preset.darkTheme || preset.theme : preset.lightTheme || preset.theme
 }
 
@@ -455,7 +506,7 @@ function cloneTheme(theme: ThemeData): ThemeData {
 /** Replace only exact previous Sunday defaults; preserve every custom theme. */
 export function migrateSundayThemeDefaults(
   theme: ThemeData,
-  mode?: Exclude<ThemeMode, 'system'>,
+  mode?: ResolvedThemeMode,
 ): ThemeData {
   const legacyMode = themesEqual(theme, LEGACY_SUNDAY_UNIFIED_COMPOSER_LIGHT_THEME)
     ? 'light'

@@ -1,8 +1,11 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import CoreResourceStats from '../src/components/CoreResourceStats.vue'
-import { buildCoreResourceSummary } from '../src/runtime/resources'
-import type { CoreMessage } from '../src/types'
+import { buildCacheTrend, buildCoreResourceSummary } from '../src/runtime/resources'
+import type { CoreMessage, MessagePart } from '../src/types'
 
 const messages = [{ id: 'msg-1', metadata: { processMetrics: {
   estimated_prompt_tokens: 25_000,
@@ -178,5 +181,144 @@ describe('CoreResourceStats', () => {
     expect(summary).not.toBeNull()
     expect(summary!.usageStatusLabel).toBe('未获取')
     expect(summary!.callItems.map(item => item.value)).toEqual(['--', '--', '--'])
+  })
+
+  it('renders the cache trend chart only when cache data exists', () => {
+    const withCache = mount(CoreResourceStats, { props: { messages: cachedSingleTurn() } })
+    expect(withCache.find('.core-resource-cache-plot').exists()).toBe(true)
+    expect(withCache.text()).toContain('缓存命中率')
+
+    const withoutCache = mount(CoreResourceStats, { props: { messages } })
+    expect(withoutCache.find('.core-resource-cache-plot').exists()).toBe(false)
+    expect(withoutCache.text()).not.toContain('缓存命中率')
+  })
+
+  it('draws the trend line from the second cache-reporting turn on', () => {
+    const single = mount(CoreResourceStats, { props: { messages: cachedSingleTurn() } })
+    expect(single.find('.core-resource-cache-line').exists()).toBe(false)
+    // 单样本也必须有可读主体：末端数据点锚在绘图区右端、25% 命中率对应的高度。
+    const dot = single.get('.core-resource-cache-dot')
+    const dotStyle = dot.attributes('style') || ''
+    expect(Number.parseFloat(/left: ([\d.]+)%/.exec(dotStyle)![1])).toBeCloseTo(97, 0)
+    expect(Number.parseFloat(/top: ([\d.]+)%/.exec(dotStyle)![1])).toBeCloseTo(70.455, 1)
+
+    const multi = mount(CoreResourceStats, { props: { messages: [
+      { id: 'assistant:thread-1:turn:1', metadata: { usageMetrics: { llm_calls: 1, input_tokens: 1_000, cached_tokens: 250 } } },
+      { id: 'assistant:thread-1:turn:2', metadata: { usageMetrics: { llm_calls: 1, cache_hit_rate: 0.9 } } },
+    ] } })
+    expect(multi.find('.core-resource-cache-line').exists()).toBe(true)
+    expect(multi.find('.core-resource-cache-dot').exists()).toBe(true)
+    expect(multi.text()).toContain('90%')
+  })
+
+  it('pins both y-axis labels to the exact gridline heights', () => {
+    const wrapper = mount(CoreResourceStats, { props: { messages: cachedSingleTurn() } })
+    const maxTop = Number.parseFloat(/top: ([\d.]+)%/.exec(wrapper.get('.core-resource-cache-scale-max').attributes('style') || '')![1])
+    const minTop = Number.parseFloat(/top: ([\d.]+)%/.exec(wrapper.get('.core-resource-cache-scale-min').attributes('style') || '')![1])
+    expect(maxTop).toBeCloseTo(9.091, 2)
+    expect(minTop).toBeCloseTo(90.909, 2)
+  })
+
+  it('keeps the chart responsive with a proportional clamped height', () => {
+    const source = readFileSync(resolve(import.meta.dirname, '../src/components/CoreResourceStats.vue'), 'utf8')
+    expect(source).toMatch(/\.core-resource-cache-figure\s*\{[^}]*aspect-ratio: 6 \/ 1;/)
+    expect(source).toMatch(/\.core-resource-cache-figure\s*\{[^}]*min-height: 32px;[^}]*max-height: 72px;/)
+  })
+})
+
+function cachedSingleTurn() {
+  return [{ id: 'assistant:thread-1:turn:cached', metadata: { usageMetrics: { llm_calls: 1, input_tokens: 1_000, cached_tokens: 250 } } }]
+}
+
+/** 后端投影的压缩段 part（context size source 用例共用同一个形状）。 */
+function compactionPart(): MessagePart {
+  return {
+    id: 'compaction-1',
+    partType: 'compaction',
+    status: 'completed',
+    metadata: { compaction_status: 'compacted', after_tokens: 2_067 },
+  }
+}
+
+describe('buildCacheTrend', () => {
+  it('builds one point per cache-reporting turn over cumulative calls', () => {
+    const messages = [
+      { id: 'assistant:thread-1:turn:1', metadata: { usageMetrics: { llm_calls: 1, input_tokens: 1_000, cached_tokens: 700 } } },
+      { id: 'assistant:thread-1:turn:2', metadata: { usageMetrics: { llm_calls: 2, cache_hit_rate: 0.5 } } },
+      // 无缓存字段的回合：调用计数照常推进，但不产出点。
+      { id: 'assistant:thread-1:turn:3', metadata: { usageMetrics: { llm_calls: 1, input_tokens: 2_000 } } },
+    ]
+    expect(buildCacheTrend(messages)).toEqual([
+      { calls: 1, rate: 0.7 },
+      { calls: 3, rate: 0.5 },
+    ])
+  })
+
+  it('returns an empty trend when no turn reports cache data', () => {
+    expect(buildCacheTrend([{ id: 'assistant:thread-1:turn:1', metadata: { usageMetrics: { llm_calls: 1 } } }])).toEqual([])
+  })
+
+  it('defaults a missing call count to one call like the backend does', () => {
+    expect(buildCacheTrend([{ id: 'assistant:thread-1:turn:1', metadata: { usageMetrics: { input_tokens: 1_000, cached_tokens: 400 } } }]))
+      .toEqual([{ calls: 1, rate: 0.4 }])
+  })
+})
+
+describe('context size source', () => {
+  const baseMetrics = {
+    estimated_prompt_tokens: 25_000,
+    context_window_tokens: 100_000,
+    context_compaction_trigger_tokens: 80_000,
+  }
+
+  it('stops showing the compaction result once a later turn arrives', () => {
+    const messagesWithLaterTurn = [
+      { id: 'msg-1', metadata: { contextMetrics: { ...baseMetrics } } },
+      {
+        id: 'msg-2',
+        metadata: {},
+        parts: [compactionPart()],
+      },
+      // The next turn measures the real request again — the compaction figure
+      // describes a request that is no longer the current one.
+      { id: 'msg-3', metadata: { contextMetrics: { ...baseMetrics, estimated_prompt_tokens: 40_000 } } },
+    ]
+
+    const summary = buildCoreResourceSummary(messagesWithLaterTurn)
+
+    expect(summary?.contextLabel).toContain('40k / 100k')
+    expect(summary?.contextLabel).toContain('估算')
+    // The thread did compact, so the badge stays.
+    expect(summary?.statusLabel).toBe('已压缩')
+  })
+
+  it('prefers the provider count over the local estimate and says so', () => {
+    const messagesWithProviderCount = [{
+      id: 'msg-1',
+      metadata: {
+        contextMetrics: { ...baseMetrics, context_usage_prompt_tokens: 119_365 },
+      },
+    }]
+
+    const summary = buildCoreResourceSummary(messagesWithProviderCount)
+
+    expect(summary?.contextLabel).toContain('119k / 100k')
+    expect(summary?.contextLabel).toContain('实测')
+  })
+
+  it('keeps the compaction figure while it is the newest thing known', () => {
+    const messagesCompactedLast = [
+      { id: 'msg-1', metadata: { contextMetrics: { ...baseMetrics } } },
+      {
+        id: 'msg-2',
+        metadata: {},
+        parts: [compactionPart()],
+      },
+    ]
+
+    const summary = buildCoreResourceSummary(messagesCompactedLast)
+
+    expect(summary?.contextLabel).toContain('2.1k / 100k')
+    expect(summary?.contextLabel).toContain('压缩后')
   })
 })

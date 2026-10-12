@@ -22,6 +22,8 @@ afterEach(() => {
  * 1. 产出一旦到达就显示——live/history 使用同一位置；子代理 sub-line 段仍经
  *    suppressArtifactsPanel 显式抑制，避免嵌套面板重复；
  * 2. 面板接纳生成图片与 file_change，排除 file_read；同一产物跨多个 part 去重。
+ * 3. 2026-10-12 起收窄：file_change 还要"本回合进了资料库"或"被汇报文本以路径
+ *    提到"才进（生成图片不受此限）——入选规则本身见 tests/turn-artifacts.test.ts。
  */
 
 function artifact(uri?: string, extra?: { artifact_id?: string; dataUrl?: string }): ToolArtifact & { artifact_id?: string } {
@@ -133,17 +135,22 @@ describe('「本轮产出」面板：内部去重', () => {
   })
 
   it('展示代码/配置/文档 file_change，并排除 command/file-read 证据', () => {
-    const m = msg('assistant:t5', [part('p1', [
-      { kind: 'file_change', uri: 'src/app.ts', content: '+export const ready = true' },
-      { kind: 'file_change', uri: 'settings.jsonc', content: '+{"ready": true}' },
-      { kind: 'file_change', uri: 'README.md', content: '+# Ready' },
-      {
-        kind: 'file_read',
-        uri: '.lam/preview/legacy.png',
-        metadata: { image_data_url: 'data:image/png;base64,AAAA' },
-      },
-      { kind: 'file_read', uri: 'notes.txt', content: 'read only' },
-    ])])
+    // file_change 现在要"被汇报文本以路径提到"或"本回合进了资料库"才进面板，
+    // 所以这份夹具的汇报文本报出这三个产物路径（旧写法是写过的文件全进）。
+    const m: CoreMessage = {
+      ...msg('assistant:t5', [part('p1', [
+        { kind: 'file_change', uri: 'src/app.ts', content: '+export const ready = true' },
+        { kind: 'file_change', uri: 'settings.jsonc', content: '+{"ready": true}' },
+        { kind: 'file_change', uri: 'README.md', content: '+# Ready' },
+        {
+          kind: 'file_read',
+          uri: '.lam/preview/legacy.png',
+          metadata: { image_data_url: 'data:image/png;base64,AAAA' },
+        },
+        { kind: 'file_read', uri: 'notes.txt', content: 'read only' },
+      ])]),
+      content: '本轮产物：`src/app.ts`、`settings.jsonc`、`README.md`。',
+    }
     const wrapper = mountMessageView({ props: { msg: m } })
     const cards = wrapper.findAll('.message-artifacts .message-attachment-deck__card')
     expect(cards).toHaveLength(3)
