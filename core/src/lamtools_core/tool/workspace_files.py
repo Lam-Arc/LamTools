@@ -73,6 +73,67 @@ IMAGE_MIME_TYPES: dict[str, str] = {
 }
 IMAGE_DATA_URL_METADATA_KEY = "image_data_url"
 
+# The bytes the UI renders and the snapshot stores are a preview, not the
+# original: a session that reads a handful of scene sheets otherwise grows by
+# hundreds of MB of full-size PNG.  The original stays on disk (re-reading the
+# file is how the model inspects detail again) and the model's *first* view is
+# served from the untouched bytes carried on the tool result, so capping this
+# copy changes nothing the model can see.
+PREVIEW_IMAGE_MAX_SIDE = 1600
+PREVIEW_IMAGE_QUALITY = 85
+
+
+def _image_preview_data_url(raw_bytes: bytes, mime: str) -> str:
+    """Downscaled preview data URL for the UI + persisted artifact copy.
+
+    The long side is capped at ``PREVIEW_IMAGE_MAX_SIDE`` and the picture is
+    re-encoded (JPEG, or WebP when it carries an alpha channel).  Transparent
+    images keep their alpha: flattening them onto a matte colour would change
+    what the user sees over the app's theme-dependent backgrounds, and a
+    lossless PNG re-encode stays far too large to be worth it — WebP keeps the
+    alpha at JPEG-like size and renders in the Chromium-based WebView2/Android
+    WebView targets.
+
+    Fail open by design: an image that cannot be decoded, is animated, or would
+    not get smaller keeps its original bytes untouched.
+    """
+    original = f"data:{mime};base64,{base64.b64encode(raw_bytes).decode('ascii')}"
+    try:
+        import io
+
+        from PIL import Image
+    except Exception:  # noqa: BLE001 — a missing Pillow must never break a read
+        return original
+    try:
+        with Image.open(io.BytesIO(raw_bytes)) as opened:
+            if getattr(opened, "is_animated", False):
+                return original
+            has_alpha = opened.mode in {"RGBA", "LA", "PA"} or (
+                opened.mode == "P" and "transparency" in opened.info
+            )
+            source = opened.convert("RGBA" if has_alpha else "RGB")
+            width, height = source.size
+            longest = max(width, height)
+            if longest > PREVIEW_IMAGE_MAX_SIDE:
+                scale = PREVIEW_IMAGE_MAX_SIDE / longest
+                source = source.resize(
+                    (max(1, int(width * scale)), max(1, int(height * scale))),
+                    Image.LANCZOS,
+                )
+            buffer = io.BytesIO()
+            if has_alpha:
+                source.save(buffer, format="WEBP", quality=PREVIEW_IMAGE_QUALITY, method=4)
+                preview_mime = "image/webp"
+            else:
+                source.save(buffer, format="JPEG", quality=PREVIEW_IMAGE_QUALITY, optimize=True)
+                preview_mime = "image/jpeg"
+    except Exception:  # noqa: BLE001 — an undecodable picture keeps its original
+        return original
+    payload = buffer.getvalue()
+    if not payload or len(payload) >= len(raw_bytes):
+        return original
+    return f"data:{preview_mime};base64,{base64.b64encode(payload).decode('ascii')}"
+
 SKIP_SEARCH_DIRS = frozenset({
     ".git",
     "node_modules",
@@ -436,6 +497,7 @@ class WorkspaceReadOnlyTools:
 
         document_metadata: dict[str, Any] = {}
         image_data_url: str | None = None
+        image_preview_url: str | None = None
         try:
             normalized = await asyncio.to_thread(
                 normalize_document,
@@ -463,10 +525,20 @@ class WorkspaceReadOnlyTools:
             # 而是以 image_url 块随工具结果返回，由 base_agent 按模型 capability 决定是否发送。
             mime = IMAGE_MIME_TYPES[resolved.suffix.lower()]
             image_data_url = f"data:{mime};base64,{base64.b64encode(raw_bytes).decode('ascii')}"
-            rel_preview = relative_workspace_uri(resolved, access_root)
+            # The UI/persisted copy is downscaled here; re-encoding is CPU-bound
+            # and a scene sheet is several MB, so keep it off the event loop.
+            image_preview_url = await asyncio.to_thread(
+                _image_preview_data_url, raw_bytes, mime
+            )
+            # Absolute path on purpose: once this image is past its full-fidelity
+            # request the model only holds a low-resolution copy, and re-reading
+            # the file is the only way to inspect detail.  An absolute path needs
+            # no work-root guess, and the file tools accept it unchanged.
+            display_path = resolved.as_posix()
             content = (
-                f"图片文件: {rel_preview}（{format_file_size(len(raw_bytes))}）。"
+                f"图片文件: {display_path}（{format_file_size(len(raw_bytes))}）。"
                 "像素内容以图片形式随本工具结果返回，支持图片输入的模型可直接查看。"
+                "本次为原图；此后回合只保留低分辨率副本用于辨认，需要细看请重新读取本文件。"
             )
         else:
             try:
@@ -523,10 +595,13 @@ class WorkspaceReadOnlyTools:
         }
         result_metadata = dict(artifact_metadata)
         if image_data_url:
-            # 图片数据 URL 进 metadata：LLM 侧 base_agent 读取组装 image_url 块，
-            # UI 侧 MessageView.imageSrc 直接渲染缩略图。
-            artifact_metadata[IMAGE_DATA_URL_METADATA_KEY] = image_data_url
-            result_metadata[IMAGE_DATA_URL_METADATA_KEY] = image_data_url
+            # 图片分两路，互不重叠：
+            # - artifacts 里只放降采样预览（UI 从 MessageView.imageSrc 渲染，
+            #   快照/事件落盘的就是这份，因此体积可控）；
+            # - 原图只挂在 ToolResult.model_image_data_url 上，供模型紧随其后的
+            #   一次请求查看细节。该字段不序列化，不会写进事件或快照；原图始终
+            #   还在磁盘源文件里，重读即可细看。
+            artifact_metadata[IMAGE_DATA_URL_METADATA_KEY] = image_preview_url or image_data_url
         return ToolResult(
             call_id=call.id,
             name=call.name,
@@ -541,6 +616,7 @@ class WorkspaceReadOnlyTools:
                 )
             ],
             metadata={**result_metadata, **version_metadata},
+            model_image_data_url=image_data_url or "",
         )
 
     async def list_dir(self, call: ToolCall) -> ToolResult:

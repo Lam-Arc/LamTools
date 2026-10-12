@@ -91,6 +91,12 @@ class ToolResult:
     usage: LLMUsage | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     error_code: str = ""
+    # Model-only full-fidelity copy of a read_file image.  It exists so the one
+    # request that may still inspect fine detail gets the original bytes while
+    # the persisted/rendered artifact carries only a downscaled preview.  It is
+    # deliberately absent from ``to_dict`` (and therefore from every event and
+    # snapshot): the point is that it never reaches the database.
+    model_image_data_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {

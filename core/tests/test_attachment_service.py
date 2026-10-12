@@ -229,3 +229,20 @@ async def test_open_refuses_executable_types(tmp_path, monkeypatch):
     record = await service.create("session-ok", "notes.txt", b"hello")
     result = await service.open(record["id"])
     assert result["status"] == "opened"
+
+
+def test_attachment_index_gives_the_model_a_path_back_to_the_file(tmp_path):
+    """The index must carry a real path, not just a file name.
+
+    An image stops being sent at full resolution after its first request, so
+    reading the file again is the only way to inspect detail — and a directly
+    sent image carries no delegation id, so without a path it is unreachable.
+    """
+    img = _image_record(tmp_path, "img-1")
+
+    index_text, blocks, _ = build_capability_aware_attachment_input([img], ["img-1"], "multimodal")
+
+    assert any(block.get("type") == "image_url" for block in blocks)
+    assert "本地存储路径不会提供给模型" not in index_text
+    stored = Path(img.storage_path).resolve().as_posix()
+    assert f"路径: {stored}" in index_text

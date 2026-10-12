@@ -497,7 +497,7 @@ class SqlAlchemyThreadSnapshotStore:
             state["core"] = core
         core["items"] = items
         core["item_order"] = order
-        return self.projector.reconcile_status(state)
+        return _strip_inline_image_copies(self.projector.reconcile_status(state))
 
     async def _partial_state(
         self,
@@ -551,7 +551,7 @@ class SqlAlchemyThreadSnapshotStore:
         core["items"] = items
         core["item_order"] = order
         core["_item_seq_map"] = seq_map
-        return state
+        return _strip_inline_image_copies(state)
 
     @staticmethod
     def _touched_item_ids(events: list[AppEventEnvelope], core: dict[str, Any]) -> set[str]:
@@ -733,7 +733,9 @@ class SqlAlchemyThreadSnapshotStore:
         rewritten whole from a copy so the returned state keeps its items.
         flag_modified keeps the JSON column write honest (the shallow-copy
         projection mutates shared children, which SQLAlchemy's value-equality
-        diff would otherwise miss).
+        diff would otherwise miss). The artifact registry copy written into
+        the metadata row is slimmed of legacy inline image bytes, so rows
+        written before that rule shrink on the thread's next natural write.
         """
         core = state.get("core")
         items: dict[str, Any] = {}
@@ -747,6 +749,7 @@ class SqlAlchemyThreadSnapshotStore:
             core_copy["items"] = {}
             core_copy.pop("_item_seq_map", None)
             metadata_state["core"] = core_copy
+        metadata_state = slim_registry_inline_images(metadata_state)
         metadata_state.pop("_item_seq_map", None)
         now = datetime.now()
         for item_id, item in items.items():
@@ -801,7 +804,122 @@ class SqlAlchemyThreadSnapshotStore:
 __all__ = [
     "CoreAppSnapshotProjector",
     "SqlAlchemyThreadSnapshotStore",
+    "slim_registry_inline_images",
 ]
+
+# read_file 风格的图片 artifact 曾把同一份 base64 data URL 存三份：条目 payload
+# 元数据、条目 artifacts 列表、core.artifacts 登记表。UI 只从条目 artifacts 渲染
+# （messageParts 的 part.artifacts），其余两份是每次装载/写回/序列化的纯重量。
+# 新写入不再记录冗余副本（runtime_projection / _apply_artifact）；旧库行在读取时
+# 就地剥离，并在下一次自然写回元数据行时落盘变瘦（slim_registry_inline_images）。
+_INLINE_IMAGE_METADATA_KEY = "image_data_url"
+
+
+def _slim_registry_inline_images(registry: Any) -> Any:
+    """Drop legacy inline image bytes from artifact registry copies before the
+    metadata row is written back.
+
+    New projections never record them (snapshot._apply_artifact strips the
+    registry copy), but rows written before that rule carried the base64 in
+    the registry metadata and every partial projection copied it forward
+    verbatim. Stripping at write time slims those rows lazily on the thread's
+    next natural write — no migration, no rewrite of untouched history. Read
+    behavior is unchanged: _strip_inline_image_copies already removed these
+    copies from every loaded state, so nothing ever observed them.
+
+    Content bodies are deliberately NOT stripped here: a payload-only artifact
+    (an event with no per-item artifacts list) can carry the snapshot's only
+    body copy, and a metadata write-back must not load the item table to prove
+    otherwise — stripping it would change read semantics. Inline image bytes
+    carry no such risk: every read path already drops the registry copy
+    (``_strip_inline_image_copies``), so removing it at write time cannot change
+    what any reader sees. Affected entries are copied before stripping — the
+    caller's state shares them.
+    """
+    if not isinstance(registry, dict):
+        return registry
+    stripped: dict[str, Any] | None = None
+    for artifact_id, artifact in registry.items():
+        if not isinstance(artifact, dict):
+            continue
+        metadata = artifact.get("metadata")
+        if not (isinstance(metadata, dict) and _INLINE_IMAGE_METADATA_KEY in metadata):
+            continue
+        if stripped is None:
+            stripped = dict(registry)
+        slim_entry = dict(artifact)
+        slim_entry["metadata"] = {
+            key: value for key, value in metadata.items() if key != _INLINE_IMAGE_METADATA_KEY
+        }
+        stripped[artifact_id] = slim_entry
+    return stripped if stripped is not None else registry
+
+
+def slim_registry_inline_images(state: Any) -> Any:
+    """Return ``state`` with legacy inline image bytes dropped from its artifact
+    registry copies; a state that carries none is returned unchanged.
+
+    Every natural write-back of a session metadata row passes its state through
+    here — snapshot projections (``_persist``), session metadata updates, and
+    project ownership writes. Rows written before the write-side dedup rule
+    still hold the base64 data URL in the registry; the next ordinary write of
+    that session rewrites the row without it, so history shrinks on use. No
+    migration pass, no direct rewrite of untouched rows. Readers are unaffected:
+    ``_strip_inline_image_copies`` already removed these copies from every
+    loaded state, so nothing ever observed them.
+    """
+    if not isinstance(state, dict):
+        return state
+    slim_state: dict[str, Any] | None = None
+    core = state.get("core")
+    if isinstance(core, dict):
+        registry = core.get("artifacts")
+        slimmed = _slim_registry_inline_images(registry)
+        if slimmed is not registry:
+            slim_state = dict(state)
+            slim_core = dict(core)
+            slim_core["artifacts"] = slimmed
+            slim_state["core"] = slim_core
+    base = slim_state if slim_state is not None else state
+    top_level = base.get("artifacts")
+    if isinstance(top_level, dict):
+        slimmed = _slim_registry_inline_images(top_level)
+        if slimmed is not top_level:
+            if slim_state is None:
+                slim_state = dict(state)
+            slim_state["artifacts"] = slimmed
+    return slim_state if slim_state is not None else state
+
+
+def _strip_inline_image_metadata(metadata: Any) -> Any:
+    if isinstance(metadata, dict) and _INLINE_IMAGE_METADATA_KEY in metadata:
+        return {k: v for k, v in metadata.items() if k != _INLINE_IMAGE_METADATA_KEY}
+    return metadata
+
+
+def _strip_inline_image_copies(state: dict[str, Any]) -> dict[str, Any]:
+    """Drop redundant inline image copies from an assembled/loaded state."""
+    core = state.get("core") if isinstance(state.get("core"), dict) else None
+    registry = core.get("artifacts") if isinstance(core, dict) else None
+    if isinstance(registry, dict):
+        for artifact in registry.values():
+            if not isinstance(artifact, dict):
+                continue
+            stripped = _strip_inline_image_metadata(artifact.get("metadata"))
+            if stripped is not None:
+                artifact["metadata"] = stripped
+    items = core.get("items") if isinstance(core, dict) else None
+    if isinstance(items, dict):
+        for item in items.values():
+            if not isinstance(item, dict):
+                continue
+            payload = item.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            stripped = _strip_inline_image_metadata(payload.get("metadata"))
+            if stripped is not None:
+                payload["metadata"] = stripped
+    return state
 
 
 def _row_revision(row: Any | None, state: dict[str, Any] | None = None) -> int:

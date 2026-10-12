@@ -18,6 +18,7 @@ from lamtools_core.session import SessionRecord
 
 from .core_db import CoreDbMetadata, CoreProject, CoreThreadSnapshot
 from .core_session_store import delete_session_records, session_record_from_snapshot, session_snapshot
+from .snapshot_store import slim_registry_inline_images
 from .project_visuals import (
     DEFAULT_PROJECT_COLOR_KEY,
     DEFAULT_PROJECT_ICON_KEY,
@@ -280,6 +281,7 @@ class CoreProjectStore:
                     state["session"] = session_state
                     revision = int(getattr(row, "revision", 0) or state.get("revision") or 0) + 1
                     state["revision"] = revision
+                    state = slim_registry_inline_images(state)
                     row.snapshot_json = state
                     flag_modified(row, "snapshot_json")
                     if hasattr(row, "revision"):
@@ -520,6 +522,7 @@ class CoreProjectStore:
                     "created_at": session.created_at.isoformat(),
                 }
                 state["revision"] = current_revision + 1
+                state = slim_registry_inline_images(state)
                 row.snapshot_json = state
                 if hasattr(row, "revision"):
                     row.revision = current_revision + 1

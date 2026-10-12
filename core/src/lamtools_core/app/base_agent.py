@@ -5,7 +5,7 @@ import logging
 import re
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -23,6 +23,9 @@ from lamtools_core.event import (
 )
 from lamtools_core.kernel.state import KernelStep, KernelTurn, VerificationResult
 from lamtools_core.llm import ChatMessage, LLMRequest, LLMResponse
+from lamtools_core.llm.image_payload import (
+    degrade_stale_message_images as _messages_with_degraded_stale_images,
+)
 from lamtools_core.member import VerificationPolicy
 from lamtools_core.prompt import PromptContext, PromptPart
 from lamtools_core.runtime import RuntimeState, RuntimeTurnInput
@@ -194,8 +197,24 @@ def _redact_model_tool_evidence(value: str) -> str:
     return redacted
 
 
+_IMAGE_FIDELITY_GUIDANCE = (
+    "Images: a picture read from a file or attached by the user is shown at full "
+    "resolution only in the request that immediately follows; later requests carry a "
+    "low-resolution copy marked as such. Judge detail or quality only from the "
+    "full-resolution view, and read the file again when you need it."
+)
+
+
 def _find_image_data_url(result: ToolResult) -> str | None:
-    """从 tool result 提取 read_file 图片分支产生的 base64 data URL。"""
+    """从 tool result 提取 read_file 图片分支产生的 base64 data URL。
+
+    优先取 ``model_image_data_url``（原图，只在内存里，不落盘），这样紧随读图
+    的那次请求仍看到全保真原图；artifacts 里的预览只是 UI 渲染用，降采样后不
+    再适合给模型判断画质细节。
+    """
+    model_url = getattr(result, "model_image_data_url", "")
+    if isinstance(model_url, str) and model_url:
+        return model_url
     candidates: list[Any] = []
     if isinstance(result.metadata, dict):
         candidates.append(result.metadata.get(IMAGE_DATA_URL_METADATA_KEY))

@@ -84,6 +84,14 @@ async def compact_runtime_history(
         thread_id,
         metadata,
     )
+    # The compaction summarizes exactly what a normal request would carry at
+    # this point: same assembly, same image handling.  If the agent can still
+    # run, this input is provably within what the gateway accepts.
+    from lamtools_core.llm.image_payload import degrade_stale_message_images
+
+    messages = degrade_stale_message_images(
+        messages, current_step=int(getattr(state, "turn_count", 0) or 0)
+    )
 
     total_context_window_tokens = _first_positive_int(
         runtime_snapshot.get("context_window_tokens"),

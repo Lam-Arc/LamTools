@@ -322,7 +322,9 @@ def runtime_fact_to_run_item_events(
                     "delta": fact.preview or fact.summary or str(payload.get("result") or payload.get("error") or ""),
                     "tool_result": result_text,
                     "replace": True,
-                    "metadata": payload_metadata,
+                    # 图片 data URL 只保留在条目 artifacts 里（UI 从那里渲染）；
+                    # payload 元数据不再携带第二份，否则每张图在快照里存三遍。
+                    "metadata": _metadata_without_inline_image(payload_metadata),
                     "status": completed_status,
                     "error": str(payload.get("error") or "") or None,
                     **(
@@ -597,7 +599,7 @@ def runtime_fact_to_run_item_events(
                         "delta": result_text,
                         "tool_result": result_text,
                         "replace": status in TERMINAL_STATUSES,
-                        "metadata": payload_metadata,
+                        "metadata": _metadata_without_inline_image(payload_metadata),
                         "status": "completed" if status in {"done", "ok"} else _canonical_status(status),
                         "error": str(payload.get("error") or payload.get("tool_error") or "") or None,
                         **(
@@ -1000,6 +1002,20 @@ def _artifact_sources(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
     return [item for item in raw if isinstance(item, dict)]
+
+
+def _metadata_without_inline_image(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Drop the inline image data URL from event payload metadata.
+
+    read_file-style image artifacts keep the base64 data URL on the artifact
+    itself (the copy the UI renders). Persisting the same bytes again in the
+    payload metadata (and again in the core.artifacts registry) tripled every
+    image inside thread snapshots; see snapshot_store._strip_inline_image_copies
+    for the read-side cleanup of rows written before this rule.
+    """
+    if "image_data_url" in metadata:
+        return {key: value for key, value in metadata.items() if key != "image_data_url"}
+    return metadata
 
 
 def _artifact_id(thread_id: str, turn_id: str, item_id: str, artifact: dict[str, Any]) -> str:

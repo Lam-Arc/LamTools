@@ -231,12 +231,19 @@ def build_capability_aware_attachment_input(
     """
     current = set(current_attachment_ids)
     cap = (capability or "").strip().lower()
-    lines: list[str] = ["", "当前会话附件索引（本地存储路径不会提供给模型）："]
+    lines: list[str] = ["", "当前会话附件索引（文件已保存在本机，需要时可按下述路径重新读取）："]
     content_blocks: list[dict[str, Any]] = []
     deferred: list[str] = []
     for record in records:
         marker = "本条消息附件" if record.id in current else "历史附件"
         path = Path(record.storage_path)
+        # The model needs a way back to the file.  An image stops being sent at
+        # full resolution after its first request, so "read the file again" is the
+        # only way to inspect detail — and a directly-sent image carries no
+        # delegation id either, so without a path it becomes unreachable.
+        location = (
+            f" | 路径: {path.resolve().as_posix()}" if path.exists() else " | 路径: 文件缺失"
+        )
         modality = attachment_modality(record.mime_type, record.preview_type)
         is_current = record.id in current
         if is_current and _is_pdf_attachment(record):
@@ -260,11 +267,11 @@ def build_capability_aware_attachment_input(
                     "image_url": {"url": f"data:{record.mime_type};base64,{encoded}", "detail": "auto"},
                 }
             )
-            lines.append(f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes | 已作为图片输入提供")
+            lines.append(f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes{location} | 已作为图片输入提供")
             continue
         if can_send and modality == "text" and path.exists():
             lines.append(
-                f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes | 文本内容如下：\n"
+                f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes{location} | 文本内容如下：\n"
                 f"{read_text_preview(path)}"
             )
             continue
@@ -272,11 +279,11 @@ def build_capability_aware_attachment_input(
         if is_current:
             deferred.append(record.id)
             lines.append(
-                f"- [{marker}] {record.filename} | {record.mime_type} | {modality} | id={record.id} | "
+                f"- [{marker}] {record.filename} | {record.mime_type} | {modality}{location} | id={record.id} | "
                 f"主模型无法直接处理，需委派 sub_agent(attachments=[\"{record.id}\"], model=<多模态模型>) 查看"
             )
         else:
-            lines.append(f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes | {modality}")
+            lines.append(f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes{location} | {modality}")
     return ("\n".join(lines) if records else ""), content_blocks, deferred
 
 
@@ -289,7 +296,10 @@ def _pdf_attachment_runtime_text(
     path: Path,
     marker: str,
 ) -> str:
-    prefix = f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes"
+    prefix = (
+        f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes"
+        f" | 路径: {path.resolve().as_posix()}"
+    )
     if not path.exists():
         return f"{prefix} | PDF 文件缺失，未能解析"
     try:

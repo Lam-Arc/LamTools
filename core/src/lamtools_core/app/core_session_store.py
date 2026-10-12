@@ -22,7 +22,7 @@ from .core_db import (
     CoreProject, CoreThreadSnapshot, CoreThreadSnapshotItem, CoreWorkspaceManifest,
 )
 from .session_autotitle import is_default_title
-from .snapshot_store import CoreAppSnapshotProjector
+from .snapshot_store import CoreAppSnapshotProjector, slim_registry_inline_images
 from .runtime_permissions import (
     merge_session_runtime_preferences,
     session_runtime_preferences,
@@ -216,6 +216,7 @@ class CoreDbSessionStore:
             state = dict(row.snapshot_json or {})
             state.update(_session_state(session, messages=state.get("messages")))
             state["revision"] = current_revision + 1
+            state = slim_registry_inline_images(state)
             row.snapshot_json = state
             if hasattr(row, "revision"):
                 row.revision = current_revision + 1
@@ -282,6 +283,7 @@ class CoreDbSessionStore:
             state = dict(row.snapshot_json or {})
             state.update(_session_state(record, messages=state.get("messages")))
             state["revision"] = current_revision + 1
+            state = slim_registry_inline_images(state)
             row.snapshot_json = state
             if hasattr(row, "revision"):
                 row.revision = current_revision + 1
@@ -357,6 +359,7 @@ class CoreDbSessionStore:
             messages.append(message.to_dict())
             state["messages"] = messages
             state["revision"] = current_revision + 1
+            state = slim_registry_inline_images(state)
             row.snapshot_json = state
             if hasattr(row, "revision"):
                 row.revision = current_revision + 1
@@ -518,6 +521,7 @@ async def _persist_legacy_fork_project_metadata(
             session_state["title"] = inherited["title"]
             session_state["metadata"] = metadata
             state["session"] = session_state
+            state = slim_registry_inline_images(state)
             row.snapshot_json = state
             row.updated_at = datetime.now()
         await connection.flush()
@@ -558,6 +562,7 @@ async def _persist_legacy_runtime_preferences(db: CoreAppDb, *records: SessionRe
             session_state = dict(state.get("session") or {})
             session_state["metadata"] = current.metadata
             state["session"] = session_state
+            state = slim_registry_inline_images(state)
             row.snapshot_json = state
             row.updated_at = datetime.now()
         await connection.flush()

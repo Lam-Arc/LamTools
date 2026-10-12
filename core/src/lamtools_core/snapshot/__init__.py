@@ -376,7 +376,24 @@ def _apply_artifact(state: dict[str, Any], event: RunItemEvent) -> None:
         if not isinstance(artifact, dict):
             continue
         artifact_id = str(artifact.get("artifact_id") or artifact.get("id") or event.item_id or event.event_id)
-        state.setdefault("artifacts", {})[artifact_id] = artifact
+        # 登记表是索引不是仓库。事件带 artifacts 时，_upsert_item 已把完整
+        # 副本（含 content 正文与 image_data_url）挂在条目上，登记表再存一份
+        # 会让每张图、每段正文在快照里出现两次，装载、写回、同步全部陪跑。
+        # 仅 payload 兜底（event.artifacts 为空）时保留 content：那时登记表
+        # 可能是快照里唯一的正文副本。
+        registry_copy = artifact
+        metadata = artifact.get("metadata")
+        drop_inline_image = isinstance(metadata, dict) and "image_data_url" in metadata
+        drop_content = bool(event.artifacts) and "content" in artifact
+        if drop_inline_image or drop_content:
+            registry_copy = dict(artifact)
+            if drop_inline_image:
+                registry_copy["metadata"] = {
+                    key: value for key, value in metadata.items() if key != "image_data_url"
+                }
+            if drop_content:
+                registry_copy.pop("content", None)
+        state.setdefault("artifacts", {})[artifact_id] = registry_copy
 
 
 def _has_open_request(state: dict[str, Any]) -> bool:

@@ -20,6 +20,9 @@ dependencies = [
     "openpyxl>=3.1.5",
     "python-pptx>=1.0.2",
     "PyMuPDF>=1.26.4",
+    # Image-payload degradation for model-visible pictures: stale images are
+    # re-sent as small JPEGs instead of multi-MB originals (llm/image_payload.py).
+    "pillow>=11.0.0",
     "python-multipart>=0.0.32",
     # IANA timezone database — Windows Python lacks zoneinfo data, and
     # runtime/arrange.py resolves local wall-clock via ZoneInfo("Asia/Shanghai").

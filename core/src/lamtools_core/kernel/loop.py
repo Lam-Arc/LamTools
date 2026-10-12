@@ -46,9 +46,11 @@ from lamtools_core.context_compaction_budget import (
     resolve_compaction_budget,
     resolve_retained_steps,
 )
+from lamtools_core.dialogue_records import COMPACTION_RECORD, build_compaction_record
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
+from lamtools_core.llm.image_payload import MESSAGE_ADDED_AT_STEP
 from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.llm.retry import (
     ModelRetryEvent,
@@ -217,6 +219,19 @@ def _strip_internal_message_metadata(messages: list[ChatMessage]) -> list[ChatMe
             )
         result.append(message)
     return result
+
+
+def _stamp_message_origin(message: ChatMessage, step_index: int) -> None:
+    """Record the step that produced *message*.
+
+    Neutral bookkeeping, not policy: the kernel does not decide how long an
+    image may stay visible, but the app layer needs the arrival step to know
+    when a picture is past its full-fidelity request (see
+    ``lamtools_core.llm.image_payload``).
+    """
+    if not isinstance(message.metadata, dict):
+        message.metadata = {}
+    message.metadata.setdefault(MESSAGE_ADDED_AT_STEP, int(step_index))
 
 
 def _repair_incomplete_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
@@ -1025,6 +1040,7 @@ class CoreLoopKernel:
                         step.tool_steps.append(RuntimeToolStep(call=call, result=result))
                         await self._emit_tool_finished(state, call, result, response_index=index)
                         tool_message = await self.kit.format_tool_result_for_model(state, call, result)
+                        _stamp_message_origin(tool_message, index)
                         history.append(tool_message)
                         await self._save_checkpoint(state)
                 else:
@@ -1042,6 +1058,7 @@ class CoreLoopKernel:
                         await self._emit_tool_finished(state, call, result, response_index=index)
                         # 5.9 Append formatted tool result to history
                         tool_message = await self.kit.format_tool_result_for_model(state, call, result)
+                        _stamp_message_origin(tool_message, index)
                         history.append(tool_message)
                         await self._save_checkpoint(state)
                         # Collect (do not yet apply) new guidance: the rest of the
