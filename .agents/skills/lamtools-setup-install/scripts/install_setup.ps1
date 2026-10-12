@@ -147,7 +147,7 @@ if ($destinationLeaf -ne $packageVersion -or $destination.TrimEnd('\') -ieq $des
 New-Item -ItemType Directory -Path $installRootPath -Force | Out-Null
 
 $appPath = [System.IO.Path]::GetFullPath((Join-Path $destination 'lamcore.exe'))
-$backendPath = [System.IO.Path]::GetFullPath((Join-Path $destination 'lamcore-backend\LamCore.exe'))
+$backendPath = [System.IO.Path]::GetFullPath((Join-Path $destination 'lamcore-backend\sunday-core.exe'))
 $destinationPrefix = $destination.TrimEnd('\') + '\'
 $existingProcesses = @(
     Get-ProcessSnapshot |
@@ -204,7 +204,7 @@ if ($mainProcess.Count -eq 0) {
 }
 
 if ($backendProcesses.Count -eq 0) {
-    throw "LamCore backend did not start within ${StartupTimeoutSeconds}s: $backendPath"
+    throw "Sunday backend did not start within ${StartupTimeoutSeconds}s: $backendPath"
 }
 
 $fileVersion = (Get-Item -LiteralPath $appPath).VersionInfo.ProductVersion

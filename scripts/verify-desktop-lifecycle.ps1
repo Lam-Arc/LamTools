@@ -187,7 +187,7 @@ try {
     $code = Invoke-Installer 'fresh-install'
     Assert-True ($code -eq 0) "fresh install succeeded"
     Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir 'lamcore.exe')) "lamcore.exe installed"
-    Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir 'lamcore-backend\LamCore.exe')) "bundled backend installed"
+    Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir 'lamcore-backend\sunday-core.exe')) "bundled backend installed"
     $installedBackend = Get-BackendFileCount
     Write-Host "  backend files: $installedBackend"
 

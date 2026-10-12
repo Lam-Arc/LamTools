@@ -1648,36 +1648,32 @@ fn prod_backend_storage_paths(
     }
 }
 
-fn backend_executable_name(windows: bool) -> &'static str {
+/// Backend executable file names, most preferred first.
+///
+/// The Windows installer deploys the bundled Python runtime as
+/// `sunday-core.exe` so Task Manager attributes it to Sunday instead of an
+/// anonymous name. `LamCore.exe` stays as a fallback for layouts assembled
+/// straight from the raw PyInstaller output (portable copies, the project dist
+/// directory), which still use the build-time name. Linux keeps the
+/// extension-less `LamCore`, which the Linux bundle and its acceptance scripts
+/// pin.
+fn backend_executable_names(windows: bool) -> &'static [&'static str] {
     if windows {
-        "LamCore.exe"
+        &["sunday-core.exe", "LamCore.exe"]
     } else {
-        "LamCore"
+        &["LamCore"]
     }
 }
 
 fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let executable_name = backend_executable_name(cfg!(windows));
+    let executable_names = backend_executable_names(cfg!(windows));
     // 1) Tauri resource directory (bundled flat)
-    let resource = app
-        .path()
-        .resource_dir()?
-        .join("lamcore-backend")
-        .join(executable_name);
-    if resource.exists() {
-        return Ok(resource);
-    }
-
+    let resource = app.path().resource_dir()?.join("lamcore-backend");
     // 2) Adjacent to the current exe (portable layout)
     let adjacent = env::current_exe()?
         .parent()
         .ok_or("cannot locate app directory")?
-        .join("LamCore")
-        .join(executable_name);
-    if adjacent.exists() {
-        return Ok(adjacent);
-    }
-
+        .join("LamCore");
     // 3) Project dist directory (dev convenience)
     let project_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent() // src-tauri/ -> desktop/
@@ -1685,14 +1681,20 @@ fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Err
         .and_then(|p| p.parent()) // core/ -> repo root
         .ok_or("cannot locate project root")?
         .join("dist")
-        .join("LamCore")
-        .join(executable_name);
-    if project_dist.exists() {
-        return Ok(project_dist);
+        .join("LamCore");
+
+    for directory in [&resource, &adjacent, &project_dist] {
+        for executable_name in executable_names {
+            let candidate = directory.join(executable_name);
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
     }
 
     Err(format!(
-        "Sunday backend executable ({executable_name}) not found at any of:\n  {}\n  {}\n  {}",
+        "Sunday backend executable ({}) not found at any of:\n  {}\n  {}\n  {}",
+        executable_names.join(" or "),
         resource.display(),
         adjacent.display(),
         project_dist.display(),
@@ -2595,7 +2597,7 @@ fn anchored_position(
 #[cfg(test)]
 mod desktop_window_tests {
     use super::{
-        anchored_position, backend_executable_name, checked_desktop_drop_total,
+        anchored_position, backend_executable_names, checked_desktop_drop_total,
         clamp_desktop_plugin_position, desktop_plugin_dock_zone_for_geometry,
         desktop_plugin_position_from_placement, desktop_window_size_matches,
         desktop_window_target_geometry, desktop_window_target_geometry_with_size,
@@ -2611,8 +2613,11 @@ mod desktop_window_tests {
 
     #[test]
     fn backend_executable_name_is_platform_aware() {
-        assert_eq!(backend_executable_name(true), "LamCore.exe");
-        assert_eq!(backend_executable_name(false), "LamCore");
+        assert_eq!(
+            backend_executable_names(true),
+            &["sunday-core.exe", "LamCore.exe"][..]
+        );
+        assert_eq!(backend_executable_names(false), &["LamCore"][..]);
     }
 
     #[test]

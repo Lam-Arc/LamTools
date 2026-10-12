@@ -96,8 +96,39 @@ CI 固定使用 Inno Setup 6.6.1，避免编译器版本漂移导致产物或
     Sunday_<版本>_x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="E:\Apps\Sunday"
 
 - Inno AppId 是稳定升级身份，后续版本不得修改。
-- 应用内部兼容边界继续使用 lamcore.exe、
-  lamcore-backend/LamCore.exe 与 identifier com.lamtools.lamcore。
+- 应用内部兼容边界继续使用 lamcore.exe（主程序文件名不变）、
+  lamcore-backend/ 内的后端可执行文件与 identifier com.lamtools.lamcore。
+
+## 任务管理器里的进程身份
+
+装机版与开发模式在任务管理器里显示的名字不同，这是有意为之，不是缺陷：
+
+- **装机版**：主程序 `lamcore.exe` 的文件描述与产品名都是 Sunday；后端是随包的
+  Python 运行时，安装时部署为 `lamcore-backend\sunday-core.exe`，并带
+  「Sunday Core Backend」文件描述与 Sunday 产品名。所以在任务管理器「进程」页里
+  两者分别显示为 Sunday 与 Sunday Core Backend，一眼能看出属于同一产品。
+
+  这里有两件事必须一起做，缺一不可：改名（否则进程名认不出）和嵌入文件描述
+  （否则「描述」列是空的、进程页只会回落到文件名）。改名只发生在安装包 payload
+  组装这一步——`installer/build-installer.ps1` 把 `LamCore.exe` 改成
+  `sunday-core.exe`；PyInstaller 产物本身仍叫 `LamCore.exe`，因为本地构建、CI 与
+  WebSocket 冒烟都按这个名字引用它。重命名 onedir 引导程序是安全的：它按自身路径
+  解析 `_internal`。文件描述来自 `lamtools-core-backend.spec` 里嵌入的版本资源
+  （`version=`）——改名搬不动资源，所以资源必须写在产物上、并在改名之前就进去。
+  应用壳侧的后端查找按「新名优先、旧名兜底」尝试，兼容从原始 PyInstaller 产物
+  直接拼出的便携目录。
+
+- **开发模式（`npx tauri dev`）**：后端由**系统** Python 解释器直接跑
+  （`py -3.14 -m lamtools_core.cli serve --port 随机`），进程名与文件描述都随
+  解释器，在任务管理器里就是 `python.exe`。这一层改不了名字：解释器属于系统安装，
+  改它等于改系统 Python。这是开发模式的固有差别，也不该消除——开发模式跑的是源码，
+  与装机版的进程形象本来就不同。排查问题时用「端口 + 命令行」定位这个后端，不要
+  按进程名认（历史上正是按进程名把它当成了无关的 Python 进程）。
+
+  另注意：`npx tauri dev` 会监视 `src-tauri/`，改动其中任何文件（纯 Rust 改动也算）
+  都会自动重编译并重启应用窗口与其后端（日志里的 `File ... changed. Rebuilding
+  application...`）。有人正在看窗口时不要动 Rust 源码，否则窗口会当场重启、后端随机
+  端口也会换一个——看起来像环境自己崩了，其实是热重载。
 
 ## 升级与正在运行的应用
 

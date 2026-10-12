@@ -2,7 +2,7 @@
 
 Check order:
   1. LAMTOOLS_CORE_CONFIG_ROOT  environment variable
-  2. {exe_dir}/.lam/core/        (LamCore.exe / python executable directory)
+  2. {exe_dir}/.lam/core/        (sunday-core.exe / python executable directory)
 """
 
 from __future__ import annotations

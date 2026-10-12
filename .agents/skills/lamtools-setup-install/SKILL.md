@@ -22,7 +22,7 @@ description: '在 Sunday Core 完成新的 Windows Inno Setup 构建或版本更
    `dist/` 或 `dist-plugins/` 中的同名包。
 3. 默认安装到 `E:\setuptest\<版本号>`，每个版本使用独立目录，不删除旧版本目录。
 4. 安装成功后启动安装目录内的 `lamcore.exe`，等待并确认主程序与
-   `lamcore-backend\LamCore.exe` 进程都来自该版本目录。
+   `lamcore-backend\sunday-core.exe` 进程都来自该版本目录。
 5. helper 使用 Inno Setup 的 `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=...` 安装；不得退回 NSIS `/S /D=...`。
 6. 回报实际使用的 setup 路径、安装目录、版本和已验证的进程 PID；任何一步失败都停止，不要把旧进程当作新版本成功。
 

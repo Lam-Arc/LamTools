@@ -31,6 +31,79 @@ _BACKEND_ICON = "desktop/app-icon.ico" if _IS_WINDOWS else None
 # is installed on Windows.
 _USE_UPX = shutil.which("upx") is not None
 
+
+def _backend_win_version_info():
+    """Windows version resource for the backend sidecar (None off Windows).
+
+    The Windows installer deploys this executable as ``sunday-core.exe`` (the
+    rename itself happens in ``desktop/installer/build-installer.ps1``, because
+    the local build and CI reference the PyInstaller artifact by its build-time
+    name).  A rename cannot add a resource, so the display strings are embedded
+    here, on the artifact, before the installer picks it up: FileDescription is
+    what Task Manager shows in the Processes tab, and ProductName ties the
+    backend to the product it belongs to.
+
+    The version is read from the desktop app config so it never drifts from the
+    application version.
+    """
+    if not _IS_WINDOWS:
+        return None
+
+    import json
+
+    from PyInstaller.utils.win32.versioninfo import (
+        FixedFileInfo,
+        StringFileInfo,
+        StringStruct,
+        StringTable,
+        VarFileInfo,
+        VarStruct,
+        VSVersionInfo,
+    )
+
+    _config = _PROJECT_ROOT / "desktop" / "src-tauri" / "tauri.conf.json"
+    try:
+        _version = str(json.loads(_config.read_text(encoding="utf-8")).get("version") or "0.0.0")
+    except Exception:
+        _version = "0.0.0"
+
+    _numeric = [int(part) for part in _version.split("-")[0].split("+")[0].split(".") if part.isdigit()][:4]
+    while len(_numeric) < 4:
+        _numeric.append(0)
+    _filevers = tuple(_numeric)
+
+    return VSVersionInfo(
+        ffi=FixedFileInfo(
+            filevers=_filevers,
+            prodvers=_filevers,
+            mask=0x3F,
+            flags=0x0,
+            OS=0x40004,
+            fileType=0x1,
+            subtype=0x0,
+            date=(0, 0),
+        ),
+        kids=[
+            StringFileInfo(
+                [
+                    StringTable(
+                        "040904B0",
+                        [
+                            StringStruct("CompanyName", "lamtools"),
+                            StringStruct("FileDescription", "Sunday Core Backend"),
+                            StringStruct("FileVersion", _version),
+                            StringStruct("InternalName", "sunday-core"),
+                            StringStruct("OriginalFilename", "sunday-core.exe"),
+                            StringStruct("ProductName", "Sunday"),
+                            StringStruct("ProductVersion", _version),
+                        ],
+                    )
+                ]
+            ),
+            VarFileInfo([VarStruct("Translation", [1033, 1200])]),
+        ],
+    )
+
 # ---------------------------------------------------------------------------
 # Bundled data files
 # ---------------------------------------------------------------------------
@@ -345,6 +418,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=_BACKEND_ICON,
+    version=_backend_win_version_info(),
 )
 
 coll = COLLECT(

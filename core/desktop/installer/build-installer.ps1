@@ -3,6 +3,8 @@
   Compile the repository-owned Sunday Windows installer with Inno Setup.
 .DESCRIPTION
   The source directory must contain lamcore.exe and lamcore-backend\LamCore.exe.
+  The bundled backend is deployed as lamcore-backend\sunday-core.exe (renamed
+  here, see below) so Task Manager attributes it to Sunday.
   Inno Setup can be supplied explicitly, through INNO_SETUP_ISCC, or installed
   in one of its standard machine/current-user locations.
 #>
@@ -103,6 +105,28 @@ foreach ($requiredFile in $requiredFiles) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "Required installer input is missing: $requiredFile"
     }
+}
+
+# The bundled Python runtime is deployed as sunday-core.exe so Task Manager
+# shows it as a Sunday component ("Sunday Core Backend") instead of an
+# anonymous name nobody can attribute. The rename happens here, on the
+# installer payload only: the PyInstaller artifact and everything upstream
+# (package.ps1, CI release jobs, the WebSocket smoke test) keep referencing the
+# build-time name. Renaming the onedir bootloader is safe - it resolves its own
+# _internal directory relative to its path. The embedded display strings come
+# from the spec's version resource, which a rename cannot add.
+$backendDir = Join-Path $source 'lamcore-backend'
+$buildTimeBackend = Join-Path $backendDir 'LamCore.exe'
+$deployedBackend = Join-Path $backendDir 'sunday-core.exe'
+if (Test-Path -LiteralPath $buildTimeBackend -PathType Leaf) {
+    if (Test-Path -LiteralPath $deployedBackend -PathType Leaf) {
+        Remove-Item -LiteralPath $buildTimeBackend -Force
+    } else {
+        Move-Item -LiteralPath $buildTimeBackend -Destination $deployedBackend
+    }
+}
+if (-not (Test-Path -LiteralPath $deployedBackend -PathType Leaf)) {
+    throw "Installer payload is missing the Sunday backend executable: $deployedBackend"
 }
 
 $compiler = Resolve-IsccPath $IsccPath
