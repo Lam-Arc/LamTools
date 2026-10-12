@@ -197,6 +197,78 @@ class CoreHistoryEntry(CoreDbBase):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class CoreDialogueRecord(CoreDbBase):
+    """Append-only control records for one thread's dialogue log.
+
+    Compaction and rollback change which slice of a thread's history the model
+    sees.  Both currently do that by rewriting the history rows in place, which
+    leaves no durable trace of *what* was folded or *which* suffix was detached.
+    These rows record that trace: one per compaction and one per rollback.
+
+    The table is append-only and is never rewritten by compaction, rollback or
+    checkpoint pruning.  ``seq`` is monotonic per thread, so the records replay
+    in the order they were produced.  ``branch_epoch`` is the branch generation
+    the record belongs to (a rollback's record carries the *new* epoch).
+    """
+
+    __tablename__ = "core_dialogue_records"
+    __table_args__ = (
+        UniqueConstraint("thread_id", "seq", name="uq_core_dialogue_records_thread_seq"),
+        Index("idx_core_dialogue_records_thread_seq", "thread_id", "seq"),
+        Index("idx_core_dialogue_records_kind", "thread_id", "kind"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    branch_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    watermark: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    record_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+async def append_dialogue_record_in_session(
+    db: Any,
+    session_id: str,
+    *,
+    kind: str,
+    record: dict[str, Any],
+    branch_epoch: int = 0,
+    watermark: int = 0,
+) -> int:
+    """Append a control record inside an existing session/transaction.
+
+    Used by the rollback path, which must land its marker atomically with the
+    truncation it describes.  The runtime-state store's
+    :meth:`SqlAlchemyRuntimeStateStore.append_dialogue_record` is the
+    standalone-session equivalent for the compaction path.
+    """
+    max_seq = int(
+        (
+            await db.execute(
+                select(func.coalesce(func.max(CoreDialogueRecord.seq), 0)).where(
+                    CoreDialogueRecord.thread_id == session_id
+                )
+            )
+        ).scalar_one()
+    )
+    next_seq = max_seq + 1
+    db.add(
+        CoreDialogueRecord(
+            id=uuid.uuid4().hex,
+            thread_id=session_id,
+            seq=next_seq,
+            kind=str(kind or ""),
+            branch_epoch=max(0, int(branch_epoch)),
+            watermark=max(0, int(watermark)),
+            record_json=_json_safe(dict(record or {})),
+            created_at=datetime.now(),
+        )
+    )
+    return next_seq
+
+
 class CoreGoal(CoreDbBase):
     __tablename__ = "core_goals"
 
@@ -681,6 +753,83 @@ class SqlAlchemyRuntimeStateStore:
             result = await db.execute(
                 select(func.coalesce(func.max(CoreHistoryEntry.seq), 0)).where(
                     CoreHistoryEntry.thread_id == session_id
+                )
+            )
+            return int(result.scalar_one())
+
+    async def append_dialogue_record(
+        self,
+        session_id: str,
+        *,
+        kind: str,
+        record: dict[str, Any],
+        branch_epoch: int = 0,
+        watermark: int = 0,
+    ) -> int:
+        """Append one control record to a thread's dialogue log.
+
+        ``seq`` is allocated per thread inside the same write transaction as the
+        insert, so concurrent appends cannot collide or reorder.  This is a pure
+        addition: it never rewrites history rows, events or snapshots, which is
+        what lets it be written alongside the existing compaction/rollback
+        behaviour without changing it.
+        """
+
+        async def write(db: Any) -> int:
+            max_seq = int(
+                (
+                    await db.execute(
+                        select(func.coalesce(func.max(CoreDialogueRecord.seq), 0)).where(
+                            CoreDialogueRecord.thread_id == session_id
+                        )
+                    )
+                ).scalar_one()
+            )
+            next_seq = max_seq + 1
+            db.add(
+                CoreDialogueRecord(
+                    id=uuid.uuid4().hex,
+                    thread_id=session_id,
+                    seq=next_seq,
+                    kind=str(kind or ""),
+                    branch_epoch=max(0, int(branch_epoch)),
+                    watermark=max(0, int(watermark)),
+                    record_json=_json_safe(dict(record or {})),
+                    created_at=datetime.now(),
+                )
+            )
+            return next_seq
+
+        return await self.write_coordinator.run(write)
+
+    async def list_dialogue_records(self, session_id: str) -> list[dict[str, Any]]:
+        """Read a thread's control records in append order."""
+        async with self.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(CoreDialogueRecord)
+                    .where(CoreDialogueRecord.thread_id == session_id)
+                    .order_by(CoreDialogueRecord.seq.asc())
+                )
+            ).scalars().all()
+        return [
+            {
+                "seq": int(row.seq or 0),
+                "kind": str(row.kind or ""),
+                "branch_epoch": int(row.branch_epoch or 0),
+                "watermark": int(row.watermark or 0),
+                "record": dict(row.record_json or {}),
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ]
+
+    async def dialogue_record_epoch(self, session_id: str) -> int:
+        """Highest branch epoch recorded for the thread (0 when none)."""
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(func.coalesce(func.max(CoreDialogueRecord.branch_epoch), 0)).where(
+                    CoreDialogueRecord.thread_id == session_id
                 )
             )
             return int(result.scalar_one())

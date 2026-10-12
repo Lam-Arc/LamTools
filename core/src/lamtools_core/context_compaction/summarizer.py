@@ -54,9 +54,17 @@ async def summarize_context_messages(
         if summary_budget is not None
         else input_limit_tokens
     )
-    summary_output_tokens = _summary_output_limit(limit_tokens)
-    if summary_budget is not None:
-        summary_output_tokens = min(summary_output_tokens, summary_budget.output_tokens)
+    # The compaction budget owns the output allowance, and that budget follows
+    # the main model's own output limit.  Re-capping it locally with the 4096
+    # heuristic is what made a long-but-valid summary end with
+    # finish_reason=length — and a truncated summary is rejected outright, so
+    # the session could never be compacted.  The heuristic stays only as the
+    # fallback for callers that pass no budget.
+    summary_output_tokens = (
+        summary_budget.output_tokens
+        if summary_budget is not None
+        else _summary_output_limit(limit_tokens)
+    )
     effective_prefix = list(prefix_messages or [])
     try:
         chunks = _split_compaction_messages(

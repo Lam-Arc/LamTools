@@ -551,7 +551,7 @@ async def test_compact_context_auto_preserves_prefix_and_latest_user_message():
     assert "## Recent user messages" in result.summary
     assert result.replacement_messages[0].content == "stable system prefix"
     assert result.replacement_messages[1].metadata["key"] == "context_compaction_summary"
-    assert result.replacement_messages[-1].content.endswith("20. latest user request")
+    assert result.replacement_messages[-1].content.endswith("latest user request")
     assert llm.last_request.messages[0] == messages[0]
     assert llm.last_request.messages[-1].role == "user"
     assert llm.last_request.messages[-1].metadata["key"] == "context_compaction_instruction"
@@ -693,7 +693,7 @@ async def test_compact_context_manual_reuses_same_entry_and_retains_tail_message
 
 
 @pytest.mark.asyncio
-async def test_repeated_compaction_rolls_recent_users_forward_with_a_bounded_twenty_entry_suffix():
+async def test_repeated_compaction_rolls_recent_users_forward_with_a_bounded_suffix():
     old_users = [f"old user {index}" for index in range(20)]
     old_messages: list[ChatMessage] = []
     for index, user in enumerate(old_users):
@@ -745,18 +745,11 @@ async def test_repeated_compaction_rolls_recent_users_forward_with_a_bounded_twe
         )
     )
 
-    expected = [*old_users[5:], *new_users]
+    expected = [*old_users, *new_users]
     assert second.status == "compacted"
     assert second.recent_user_messages == expected
-    assert second.summary.endswith(
-        "1. old user 5\n\n2. old user 6\n\n3. old user 7\n\n"
-        "4. old user 8\n\n5. old user 9\n\n6. old user 10\n\n"
-        "7. old user 11\n\n8. old user 12\n\n9. old user 13\n\n"
-        "10. old user 14\n\n11. old user 15\n\n12. old user 16\n\n"
-        "13. old user 17\n\n14. old user 18\n\n15. old user 19\n\n"
-        "16. new user 0\n\n17. new user 1\n\n18. new user 2\n\n"
-        "19. new user 3\n\n20. new user 4"
-    )
+    numbered = "\n\n".join(f"{index}. {user}" for index, user in enumerate(expected, start=1))
+    assert second.summary.endswith(numbered)
 
 
 @pytest.mark.asyncio
@@ -1644,3 +1637,94 @@ def test_truncate_omits_marker_when_marker_cannot_fit():
     result = truncate_text_to_tokens("a" * 10_000, 1)
 
     assert estimate_text_tokens(result) <= 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: the summary output allowance follows the main model's output limit
+# ---------------------------------------------------------------------------
+
+
+def test_summary_output_allowance_prefers_the_model_limit_and_keeps_input_room():
+    """The summary must not be capped below what the model itself can emit.
+
+    The old fixed 4096 default truncated a long-but-valid summary, and a
+    truncated summary (``finish_reason=length``) is rejected wholesale — so a
+    session that needed compacting could never be compacted at all.
+    """
+    from lamtools_core.context_compaction.controller import _summary_output_allowance
+
+    # The main model's own output limit wins over the legacy heuristic.
+    assert _summary_output_allowance(
+        explicit=None, model_output_tokens=131_072, model_window=1_000_000, limit_tokens=520_000
+    ) == 131_072
+    # An explicit policy value still wins over the model limit.
+    assert _summary_output_allowance(
+        explicit=8_192, model_output_tokens=131_072, model_window=1_000_000, limit_tokens=520_000
+    ) == 8_192
+    # A limit that would consume the whole window is clamped so the summary
+    # still gets an input budget of its own.
+    assert _summary_output_allowance(
+        explicit=None, model_output_tokens=131_072, model_window=65_536, limit_tokens=40_000
+    ) == 32_768
+    # Without a model limit the legacy heuristic stays in place.
+    assert _summary_output_allowance(
+        explicit=None, model_output_tokens=None, model_window=1_000_000, limit_tokens=520_000
+    ) == 4_096
+
+
+@pytest.mark.asyncio
+async def test_large_summary_budget_is_not_recapped_to_the_heuristic():
+    llm = _SegmentingCompactionClient()
+    budget = SummaryTokenBudget(
+        context_window=1_000_000,
+        output_tokens=131_072,
+        protocol_tokens=1_024,
+        safety_margin_tokens=30_000,
+    )
+    messages = [
+        ChatMessage(role="user", content=f"segment {index} " + ("x" * 300))
+        for index in range(20)
+    ]
+
+    await summarize_context_messages(
+        messages,
+        llm_client=llm,
+        model="mock-model",
+        limit_tokens=520_000,
+        input_limit_tokens=99_999,
+        summary_budget=budget,
+    )
+
+    assert llm.requests
+    assert all(request.max_tokens == 131_072 for request in llm.requests)
+
+
+@pytest.mark.asyncio
+async def test_controller_summary_output_follows_the_model_output_limit():
+    client = _CompactionClient()
+    controller = ContextCompactionController(
+        llm_client=client,
+        estimate_request_tokens=lambda messages, fast: estimate_message_tokens(
+            [message.to_dict() for message in messages], fast=fast
+        ),
+        model_output_tokens=131_072,
+    )
+
+    execution = await controller.compact(
+        _with_compactable_steps(
+            [
+                ChatMessage(role="user", content="old request " + ("x" * 6_000)),
+                ChatMessage(role="assistant", content="old result " + ("y" * 6_000)),
+                ChatMessage(role="user", content="latest request"),
+            ]
+        ),
+        budget=TokenBudget(context_window=1_000_000, trigger_tokens=1_200, target_tokens=1_200),
+        timeout=None,
+        current_model="mock-model",
+    )
+
+    assert execution.result is not None
+    assert execution.result.status == "compacted"
+    assert client.last_request is not None
+    assert client.last_request.max_tokens == 131_072
+

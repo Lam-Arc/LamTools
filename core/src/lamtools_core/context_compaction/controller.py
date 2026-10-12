@@ -169,6 +169,42 @@ class ContextCompactor:
         return await compact_context(request)
 
 
+def _summary_output_allowance(
+    *,
+    explicit: int | None,
+    model_output_tokens: int | None,
+    model_window: int,
+    limit_tokens: int,
+) -> int:
+    """Return the output allowance for one summary model call.
+
+    Compaction must not invent a smaller cap than the model can produce.  With
+    the old fixed 4096-token default a long-but-valid summary ended with
+    ``finish_reason=length``, and a truncated summary is rejected outright — so
+    a context that actually needed compacting could never be compacted twice in
+    a row on the same session.
+
+    Priority: an explicit policy value, then the main model's own output limit
+    (the same number its ordinary requests use), then the legacy heuristic.  The
+    model limit is capped to leave at least half the window for the summary
+    *input*; without that guard a large output limit would collapse the input
+    budget to zero and compaction could not run at all.
+    """
+    if explicit is not None and explicit > 0:
+        return explicit
+    if model_output_tokens is not None and model_output_tokens > 0:
+        ceiling = max(256, model_window // 2) if model_window > 0 else model_output_tokens
+        return max(256, min(model_output_tokens, ceiling))
+    return max(
+        256,
+        min(
+            DEFAULT_SUMMARY_OUTPUT_TOKENS,
+            limit_tokens // 3 if limit_tokens > 0 else DEFAULT_SUMMARY_OUTPUT_TOKENS,
+            max(256, model_window // 8),
+        ),
+    )
+
+
 class ContextCompactionController:
     """Coordinate request measurement and model-selection fallback.
 
@@ -190,6 +226,7 @@ class ContextCompactionController:
         retry_policy: RetryPolicy | None = None,
         on_model_retry: ModelRetrySink | None = None,
         summary_output_tokens: int | None = None,
+        model_output_tokens: int | None = None,
         safety_margin_tokens: int | None = None,
     ) -> None:
         self._llm_client = llm_client
@@ -201,6 +238,7 @@ class ContextCompactionController:
         self._retry_policy = retry_policy or RetryPolicy()
         self._on_model_retry = on_model_retry
         self._summary_output_tokens = summary_output_tokens
+        self._model_output_tokens = model_output_tokens
         self._safety_margin_tokens = safety_margin_tokens
 
     def measure(
@@ -262,16 +300,12 @@ class ContextCompactionController:
             strategy: str,
             fallback_on_terminal: bool,
         ) -> ContextCompactionResult:
-            summary_output_tokens = self._summary_output_tokens
-            if summary_output_tokens is None:
-                summary_output_tokens = max(
-                    256,
-                    min(
-                        DEFAULT_SUMMARY_OUTPUT_TOKENS,
-                        limit_tokens // 3 if limit_tokens > 0 else DEFAULT_SUMMARY_OUTPUT_TOKENS,
-                        max(256, model_window // 8),
-                    ),
-                )
+            summary_output_tokens = _summary_output_allowance(
+                explicit=self._summary_output_tokens,
+                model_output_tokens=self._model_output_tokens,
+                model_window=model_window,
+                limit_tokens=limit_tokens,
+            )
             summary_budget = SummaryTokenBudget.for_context_window(
                 context_window=model_window,
                 output_tokens=summary_output_tokens,

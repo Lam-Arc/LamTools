@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -35,6 +36,7 @@ from lamtools_core.app.core_db import (
     CoreCheckpointV2Materialized,
     CoreCheckpointV2SessionHistory,
     CoreCheckpointV2SessionMessages,
+    CoreDialogueRecord,
     CoreHistoryEntry,
     CoreDbBase,
     CoreRestoreOperation,
@@ -42,13 +44,17 @@ from lamtools_core.app.core_db import (
     CoreThreadSnapshot,
     CoreThreadSnapshotItem,
     CoreWorkspaceManifest,
+    append_dialogue_record_in_session,
 )
 from lamtools_core.app.event_store import AppEventInput, AppEventEnvelope, SqlAlchemyAppEventStore
 from lamtools_core.app.session_autotitle import MAX_TITLE_LEN, is_default_title
 from lamtools_core.app.snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
 from lamtools_core.app.sqlite_write import SQLiteWriteCoordinator
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
+from lamtools_core.dialogue_records import ROLLBACK_RECORD, build_rollback_record
 
+
+_logger = logging.getLogger(__name__)
 
 ActorKind = Literal["main", "sub_agent", "tool", "hook", "restore", "fork"]
 CheckpointEdgeKind = Literal["checkpoint", "hook", "rollback", "session_fork"]
@@ -337,10 +343,26 @@ class CoreCheckpointCoordinator:
             try:
                 # 恢复只作用于上下文：文件与成果不参与，也不再记录内容历史。
                 conversation_touched = True
-                await self._restore_conversation(target, operation_id)
                 append_rollback_event = getattr(self.conversation_backend, "append_rollback_event", None)
+                target_event_seq = 0
+                target_history_seq = 0
+                detached: dict[str, Any] = {}
                 if callable(append_rollback_event):
+                    # Read the boundary and the range about to be detached
+                    # *before* the restore truncates it, so the rollback record
+                    # can describe what was detached.
                     target_event_seq = await self._checkpoint_event_seq(target)
+                    async with self.session_factory() as boundary_db:
+                        v2_row = await boundary_db.get(CoreCheckpointV2, target.id)
+                    if v2_row is not None:
+                        target_history_seq = max(0, int(v2_row.history_seq or 0))
+                    detached = await self._rollback_detached_stats(
+                        session_id=target.session_id,
+                        target_event_seq=target_event_seq,
+                        target_history_seq=target_history_seq,
+                    )
+                await self._restore_conversation(target, operation_id)
+                if callable(append_rollback_event):
                     rollback_event = await self.write_coordinator.run(
                         lambda db: append_rollback_event(
                             db,
@@ -351,6 +373,8 @@ class CoreCheckpointCoordinator:
                             target_revision=0,
                             scope=restore_scope,
                             operation_id=operation_id,
+                            target_history_seq=target_history_seq,
+                            detached=detached,
                         )
                     )
                 derived = await self._capture(
@@ -839,6 +863,52 @@ class CoreCheckpointCoordinator:
             )
         return 0
 
+    async def _rollback_detached_stats(
+        self,
+        *,
+        session_id: str,
+        target_event_seq: int,
+        target_history_seq: int,
+    ) -> dict[str, Any]:
+        """Row ranges a rollback is about to detach (best-effort, read-only)."""
+        async with self.session_factory() as db:
+            event = (
+                await db.execute(
+                    select(
+                        func.min(CoreAppEvent.seq),
+                        func.max(CoreAppEvent.seq),
+                        func.count(),
+                    ).where(
+                        CoreAppEvent.thread_id == session_id,
+                        CoreAppEvent.seq > int(target_event_seq or 0),
+                    )
+                )
+            ).one()
+            history = (
+                await db.execute(
+                    select(
+                        func.min(CoreHistoryEntry.seq),
+                        func.max(CoreHistoryEntry.seq),
+                        func.count(),
+                    ).where(
+                        CoreHistoryEntry.thread_id == session_id,
+                        CoreHistoryEntry.seq > int(target_history_seq or 0),
+                    )
+                )
+            ).one()
+        return {
+            "events": {
+                "count": int(event[2] or 0),
+                "min": int(event[0] or 0),
+                "max": int(event[1] or 0),
+            },
+            "history": {
+                "count": int(history[2] or 0),
+                "min": int(history[0] or 0),
+                "max": int(history[1] or 0),
+            },
+        }
+
     async def _create_operation(
         self,
         operation_id: str,
@@ -1067,7 +1137,13 @@ class CoreCheckpointConversationBackend:
         if source_session is not None:
             projection["session"] = copy.deepcopy(source_session)
         runtime = await db.get(CoreRuntimeSession, session_id)
-        history = _conversation_history_from_events(kept_events)
+        history = await self._history_at_boundary(
+            db,
+            session_id=session_id,
+            boundary_seq=boundary_seq,
+            include_turn=include_turn,
+            last_event_seq=int(events[-1].seq or 0) if events else 0,
+        )
         return {
             "session_id": session_id,
             "runtime": _conversation_runtime_payload(
@@ -1084,6 +1160,86 @@ class CoreCheckpointConversationBackend:
             "events": [event.to_dict() for event in kept_events],
         }, boundary_seq
 
+    async def _history_at_boundary(
+        self,
+        db: Any,
+        *,
+        session_id: str,
+        boundary_seq: int,
+        include_turn: bool,
+        last_event_seq: int,
+    ) -> list[dict[str, Any]]:
+        """Return the model-visible transcript as it stood at ``boundary_seq``.
+
+        The transcript is read back from the checkpoint captured at that exact
+        event boundary, the same fact ``restore_v2`` restores from.  It is
+        deliberately not re-derived from the event stream: events record what
+        the UI showed, not what the model saw, so tool calls, their arguments
+        and their results only exist in the stored history.  An earlier version
+        re-derived them, matched no production payload shape, and therefore
+        returned an empty transcript — every rollback and turn-fork started the
+        model from nothing.
+        """
+        if boundary_seq <= 0:
+            # Nothing precedes the removed turn, and "before the first turn"
+            # cannot have a boundary checkpoint.
+            return []
+        captured = await self._captured_history(db, session_id=session_id, boundary_seq=boundary_seq)
+        if captured is not None:
+            return captured
+        if include_turn and boundary_seq == last_event_seq:
+            # The selected turn is the newest one and nothing was appended
+            # after it, so the live transcript ends exactly at this boundary.
+            return await self._live_history(db, session_id)
+        # Refuse instead of guessing: an unlocatable boundary must never be
+        # answered with a silently empty (or partial) transcript.
+        raise LookupError(
+            f"找不到该轮的边界记录（每个会话只保留最近 {MAX_CHECKPOINTS_PER_SESSION} 条），"
+            "为避免清空对话，本次操作已中止"
+        )
+
+    async def _captured_history(
+        self,
+        db: Any,
+        *,
+        session_id: str,
+        boundary_seq: int,
+    ) -> list[dict[str, Any]] | None:
+        """The history captured by the checkpoint sitting on ``boundary_seq``."""
+        row = (await db.execute(
+            select(CoreCheckpointV2SessionHistory.history_json)
+            .join(
+                CoreCheckpointV2,
+                CoreCheckpointV2.id == CoreCheckpointV2SessionHistory.checkpoint_id,
+            )
+            .join(CoreCheckpoint, CoreCheckpoint.id == CoreCheckpointV2.id)
+            .where(
+                CoreCheckpoint.session_id == session_id,
+                CoreCheckpoint.status == "ready",
+                CoreCheckpointV2.status == "ready",
+                CoreCheckpointV2.event_seq == int(boundary_seq),
+            )
+            .order_by(CoreCheckpoint.created_at.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if not isinstance(row, list):
+            return None
+        return [copy.deepcopy(item) for item in row if isinstance(item, dict)]
+
+    async def _live_history(self, db: Any, session_id: str) -> list[dict[str, Any]]:
+        """The session's current durable transcript (rows, else legacy blob)."""
+        rows = list((await db.execute(
+            select(CoreHistoryEntry)
+            .where(CoreHistoryEntry.thread_id == session_id)
+            .order_by(CoreHistoryEntry.seq.asc())
+        )).scalars())
+        if rows:
+            return [copy.deepcopy(dict(row.message_json or {})) for row in rows]
+        runtime = await db.get(CoreRuntimeSession, session_id)
+        if runtime is None or not isinstance(runtime.history_json, list):
+            return []
+        return [copy.deepcopy(item) for item in runtime.history_json if isinstance(item, dict)]
+
     async def append_rollback_event(
         self,
         db: Any,
@@ -1095,6 +1251,8 @@ class CoreCheckpointConversationBackend:
         target_revision: int,
         scope: str,
         operation_id: str = "",
+        target_history_seq: int = 0,
+        detached: dict[str, Any] | None = None,
     ) -> AppEventEnvelope:
         """Append the durable control event that announces a rollback.
 
@@ -1149,7 +1307,74 @@ class CoreCheckpointConversationBackend:
                 entity["rollback"] = dict(payload)
                 change.entity_json = entity
         await db.flush()
+        # Double-write: append the rollback marker to the append-only dialogue
+        # log.  This does not change the truncation above; it makes the
+        # detached range and the new branch epoch durable and replayable.
+        await self._append_rollback_dialogue_record(
+            db,
+            session_id=session_id,
+            scope=str(scope or "all"),
+            target_event_seq=target_event_seq,
+            target_history_seq=target_history_seq,
+            detached=detached or {},
+            operation_id=operation_id,
+        )
         return refreshed
+
+    async def _append_rollback_dialogue_record(
+        self,
+        db: Any,
+        *,
+        session_id: str,
+        scope: str,
+        target_event_seq: int,
+        target_history_seq: int,
+        detached: dict[str, Any],
+        operation_id: str,
+    ) -> None:
+        """Append one rollback control record (best effort, never fatal)."""
+        events = detached.get("events") if isinstance(detached, dict) else None
+        history = detached.get("history") if isinstance(detached, dict) else None
+        events = events if isinstance(events, dict) else {}
+        history = history if isinstance(history, dict) else {}
+        try:
+            previous_epoch = int(
+                (
+                    await db.execute(
+                        select(
+                            func.coalesce(func.max(CoreDialogueRecord.branch_epoch), 0)
+                        ).where(CoreDialogueRecord.thread_id == session_id)
+                    )
+                ).scalar_one()
+            )
+            branch_epoch = previous_epoch + 1
+            record = build_rollback_record(
+                scope=scope,
+                target_event_seq=target_event_seq,
+                target_history_seq=target_history_seq,
+                detached_event_count=int(events.get("count") or 0),
+                detached_event_min=int(events.get("min") or 0),
+                detached_event_max=int(events.get("max") or 0),
+                detached_history_count=int(history.get("count") or 0),
+                detached_history_min=int(history.get("min") or 0),
+                detached_history_max=int(history.get("max") or 0),
+                branch_epoch=branch_epoch,
+                operation_id=operation_id,
+            )
+            await append_dialogue_record_in_session(
+                db,
+                session_id,
+                kind=ROLLBACK_RECORD,
+                record=record,
+                branch_epoch=branch_epoch,
+                watermark=max(target_event_seq, target_history_seq),
+            )
+        except Exception:  # noqa: BLE001 — bookkeeping must never break a rollback
+            _logger.warning(
+                "[checkpoint:_append_rollback_dialogue_record] failed sid=%s",
+                session_id,
+                exc_info=True,
+            )
 
     async def rollback_conversation_before_turn(
         self,
@@ -1159,7 +1384,7 @@ class CoreCheckpointConversationBackend:
         turn_id: str,
         event_sink: list[AppEventEnvelope] | None = None,
     ) -> int:
-        """Discard ``turn_id`` and later events, then rebuild the projection.
+        """Discard ``turn_id`` and later events, then rewrite the projection.
 
         This intentionally does not touch workspace files, tool side effects,
         or external systems.  The caller must have checked that the runtime is
@@ -1170,34 +1395,98 @@ class CoreCheckpointConversationBackend:
             session_id=session_id,
             turn_id=turn_id,
         )
+        # Describe the range about to be detached *before* the deletes below.
+        event_range = (
+            await db.execute(
+                select(func.min(CoreAppEvent.seq), func.max(CoreAppEvent.seq), func.count()).where(
+                    CoreAppEvent.thread_id == session_id,
+                    CoreAppEvent.seq > boundary_seq,
+                )
+            )
+        ).one()
+        current_history_count = int(
+            (
+                await db.execute(
+                    select(func.count()).select_from(CoreHistoryEntry).where(
+                        CoreHistoryEntry.thread_id == session_id
+                    )
+                )
+            ).scalar_one()
+        )
+        kept_history_count = len(
+            [
+                message
+                for message in list((payload.get("runtime") or {}).get("history_json") or [])
+                if isinstance(message, dict)
+            ]
+        )
+        detached = {
+            "events": {
+                "count": int(event_range[2] or 0),
+                "min": int(event_range[0] or 0),
+                "max": int(event_range[1] or 0),
+            },
+            "history": {
+                "count": max(0, current_history_count - kept_history_count),
+                "min": kept_history_count + 1,
+                "max": current_history_count,
+            },
+        }
         await db.execute(delete(CoreAppEvent).where(
             CoreAppEvent.thread_id == session_id,
             CoreAppEvent.seq > boundary_seq,
         ))
-        await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
         runtime_payload = dict(payload["runtime"])
+        # Cut the durable transcript at the boundary instead of rebuilding it.
+        # The messages are the model-visible record (tool calls, arguments and
+        # results included) and are rewritten with the same fresh sequential
+        # numbering ``replace_history`` uses, so compaction anchors stay valid.
+        history = [
+            dict(message)
+            for message in list(runtime_payload["history_json"] or [])
+            if isinstance(message, dict)
+        ]
+        await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
+        for seq, message in enumerate(history, 1):
+            metadata = message.get("metadata")
+            if isinstance(metadata, dict):
+                message["metadata"] = {**metadata, "history_seq": seq}
+            db.add(CoreHistoryEntry(
+                thread_id=session_id,
+                seq=seq,
+                revision=seq,
+                message_json=message,
+            ))
         runtime = await db.get(CoreRuntimeSession, session_id)
         if runtime is None:
             runtime = CoreRuntimeSession(thread_id=session_id)
             db.add(runtime)
         runtime.revision = max(int(runtime.revision or 0) + 1, int(runtime_payload["revision"] or 0))
         runtime.runtime_state_json = dict(runtime_payload["runtime_state_json"])
-        # Keep the reconstructed history in the legacy field for this path.
-        # The empty fact table makes get_history use it until the next normal
-        # kernel run appends durable history entries.
-        runtime.history_json = list(runtime_payload["history_json"])
+        # The rows above are authoritative again; clear the legacy blob so no
+        # stale copy can be read back through the pre-migration fallback.
+        runtime.history_json = []
         runtime.pending_approval_json = {}
         runtime.last_event_seq = boundary_seq
         runtime.updated_at = datetime.now()
-        kept_events = [
-            event for event in payload["events"]
-            if isinstance(event, dict)
-        ]
-        envelopes = [
-            self.event_store._to_envelope(_app_event_row(event, thread_id=session_id))
-            for event in kept_events
-        ]
-        await self.snapshot_store.rebuild(db, session_id, envelopes)
+        projection = payload.get("projection")
+        if isinstance(projection, dict) and isinstance(projection.get("snapshot_json"), dict):
+            # Write the bounded projection as captured: replayed events alone
+            # cannot rebuild the session header, so a rebuild here would drop
+            # the session's title and project ownership.
+            await SqlAlchemyThreadSnapshotStore(
+                CoreThreadSnapshot, item_model=CoreThreadSnapshotItem
+            ).write_full_projection(db, session_id, dict(projection))
+        else:
+            kept_events = [
+                event for event in payload["events"]
+                if isinstance(event, dict)
+            ]
+            envelopes = [
+                self.event_store._to_envelope(_app_event_row(event, thread_id=session_id))
+                for event in kept_events
+            ]
+            await self.snapshot_store.rebuild(db, session_id, envelopes)
         rollback_event = await self.append_rollback_event(
             db,
             session_id=session_id,
@@ -1206,6 +1495,8 @@ class CoreCheckpointConversationBackend:
             target_event_seq=boundary_seq,
             target_revision=0,
             scope="conversation_only",
+            target_history_seq=kept_history_count,
+            detached=detached,
         )
         if event_sink is not None:
             event_sink.append(rollback_event)
@@ -1299,6 +1590,12 @@ class CoreCheckpointConversationBackend:
             CoreAppEvent.seq > checkpoint.event_seq,
         ))
         if session_id == _root_session_id(session_id):
+            prior_snapshot = await self.snapshot_store.load(db, session_id)
+            prior_session = (
+                prior_snapshot.get("session")
+                if isinstance(prior_snapshot.get("session"), dict)
+                else None
+            )
             events = list((await db.execute(
                 select(CoreAppEvent).where(
                     CoreAppEvent.thread_id == session_id,
@@ -1310,6 +1607,16 @@ class CoreCheckpointConversationBackend:
             await SqlAlchemyThreadSnapshotStore(
                 CoreThreadSnapshot, item_model=CoreThreadSnapshotItem
             ).rebuild(db, session_id, envelopes)
+            # Replayed events rebuild the conversation items, but the session
+            # header (title, project ownership) exists only in the snapshot, so
+            # a rebuild alone would leave the session advertised as a bare id.
+            if prior_session is not None:
+                projection = await db.get(CoreThreadSnapshot, session_id)
+                if projection is not None:
+                    state = dict(projection.snapshot_json or {})
+                    state["session"] = copy.deepcopy(prior_session)
+                    projection.snapshot_json = state
+                    projection.updated_at = datetime.now()
             session_messages = await db.get(CoreCheckpointV2SessionMessages, checkpoint.id)
             if session_messages is not None:
                 projection = await db.get(CoreThreadSnapshot, session_id)
@@ -2100,41 +2407,6 @@ def _runtime_payload(row: CoreRuntimeSession | None) -> dict[str, Any] | None:
         "pending_approval_json": dict(row.pending_approval_json or {}),
         "last_event_seq": int(row.last_event_seq or 0),
     }
-
-
-def _conversation_history_from_events(events: list[Any]) -> list[dict[str, Any]]:
-    """Reconstruct the model-visible transcript from durable message events.
-
-    Tool/runtime state is deliberately excluded: this is the safe fallback
-    used when there is no checkpoint capable of restoring those side effects.
-    Later updates to an item replace its earlier event while retaining its
-    original position in the transcript.
-    """
-    messages: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
-    for event in events:
-        if str(getattr(event, "method", "")) != "core/runItem":
-            continue
-        run_item = getattr(event, "payload", None)
-        if not isinstance(run_item, dict) or str(run_item.get("kind") or "") != "message":
-            continue
-        payload = run_item.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        role = str(payload.get("role") or "").strip()
-        content = payload.get("content")
-        if role not in {"user", "assistant", "system"} or not isinstance(content, str):
-            continue
-        item_id = str(getattr(event, "item_id", "") or run_item.get("item_id") or getattr(event, "event_id", ""))
-        if not item_id:
-            continue
-        if item_id not in messages:
-            order.append(item_id)
-        message: dict[str, Any] = {"role": role, "content": content}
-        if isinstance(payload.get("name"), str) and payload["name"]:
-            message["name"] = payload["name"]
-        messages[item_id] = message
-    return [messages[item_id] for item_id in order]
 
 
 def _conversation_runtime_payload(

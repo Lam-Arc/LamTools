@@ -31,6 +31,7 @@ _logger = logging.getLogger(__name__)
 from lamtools_core.context_compaction import (
     ContextCompactionController,
     ContextCompactionError,
+    ContextCompactionResult,
     RECENT_USER_MESSAGES_METADATA_KEY,
     USAGE_ANCHOR_METADATA_KEY,
     USAGE_ANCHOR_SOURCE,
@@ -3612,6 +3613,10 @@ class CoreLoopKernel:
             model_timeout_seconds=self.policy.model_timeout_seconds,
             retry_policy=self.retry_policy,
             summary_output_tokens=self.policy.compact_summary_output_tokens,
+            # The summary must be allowed as much output as this turn's own
+            # request uses; a summary truncated at a smaller cap is rejected
+            # wholesale and leaves the session unable to compact.
+            model_output_tokens=request.max_tokens,
             safety_margin_tokens=self.policy.compact_safety_margin_tokens,
             on_model_retry=lambda retry: self._emit_model_retry_from_event(
                 retry,
@@ -3838,6 +3843,75 @@ class CoreLoopKernel:
             compacted_message_ids=_message_reference_ids(result.compacted_messages),
             retained_message_ids=_message_reference_ids(result.retained_messages),
         )
+        # Double-write: append the complete compaction product (full summary,
+        # folded/retained identity, parameters, watermark) to the thread's
+        # append-only dialogue log.  This does not change the rewrite/load
+        # behaviour above; it only makes the decision durable and replayable.
+        await self._persist_dialogue_compaction_record(
+            state,
+            result=result,
+            trigger="auto",
+            trigger_tokens=trigger_tokens,
+            limit_tokens=limit_tokens,
+            retained_steps=retained_steps,
+            execution_model=execution_model,
+            strategy=compaction_strategy,
+            prefix_count=len(result.prefix_messages),
+            before_messages=before_messages,
+            sent_messages=list(request.messages[len(result.prefix_messages):]),
+        )
+
+    async def _persist_dialogue_compaction_record(
+        self,
+        state: RuntimeState,
+        *,
+        result: ContextCompactionResult,
+        trigger: str,
+        trigger_tokens: int,
+        limit_tokens: int,
+        retained_steps: int,
+        execution_model: str,
+        strategy: str,
+        prefix_count: int,
+        before_messages: int,
+        sent_messages: list[ChatMessage],
+    ) -> None:
+        """Append one compaction control record; never fail the run over it."""
+        append = getattr(self.state_store, "append_dialogue_record", None)
+        if not callable(append) or result.summary_message is None:
+            return
+        try:
+            record = build_compaction_record(
+                trigger=trigger,
+                summary_message=result.summary_message,
+                retained=list(result.retained_messages),
+                folded=list(result.compacted_messages),
+                sent_messages=sent_messages,
+                prefix_count=prefix_count,
+                limit_tokens=limit_tokens,
+                trigger_tokens=trigger_tokens,
+                retained_steps=retained_steps,
+                before_tokens=result.before_tokens,
+                after_tokens=result.after_tokens,
+                before_messages=before_messages,
+                after_messages=len(sent_messages),
+                segments=result.segment_count,
+                strategy=strategy,
+                execution_model=execution_model,
+                recent_user_messages=list(result.recent_user_messages),
+            )
+            await append(
+                state.session_id,
+                kind=COMPACTION_RECORD,
+                record=record,
+                watermark=int(record.get("watermark") or 0),
+            )
+        except Exception:  # noqa: BLE001 — bookkeeping must never break a run
+            _logger.warning(
+                "[kernel:_persist_dialogue_compaction_record] failed sid=%s",
+                state.session_id,
+                exc_info=True,
+            )
 
     def _resolve_compaction_budget(self, window: int) -> TokenBudget:
         """Resolve user-facing ratio policy into concrete compaction limits."""

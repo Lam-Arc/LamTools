@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from copy import deepcopy
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -23,6 +24,7 @@ from lamtools_core.context_compaction_budget import (
     resolve_compaction_budget,
     resolve_retained_steps,
 )
+from lamtools_core.dialogue_records import COMPACTION_RECORD, build_compaction_record
 from lamtools_core.llm import ChatMessage, LLMClient, LLMToolCall
 from lamtools_core.llm.shallow_thinking import ShallowThinkingClient
 from lamtools_core.runtime import RuntimeCheckpointStore, RuntimeState, RuntimeStateStore
@@ -30,6 +32,8 @@ from lamtools_core.tokens import estimate_message_tokens
 
 
 CommandActionHandler = Callable[..., dict[str, Any] | Awaitable[dict[str, Any]]]
+
+_logger = logging.getLogger(__name__)
 
 
 async def execute_command_action(
@@ -218,6 +222,10 @@ async def compact_runtime_history(
         model_timeout_seconds=model_timeout_seconds,
         retry_policy=retry_policy_from_config(retry_config),
         summary_output_tokens=summary_output_tokens,
+        # Summary output follows the output limit this session's model already
+        # runs with (the reserved output tokens above).  The fixed 4096 default
+        # truncated long summaries, and a truncated summary is rejected whole.
+        model_output_tokens=reserved_output_tokens,
         safety_margin_tokens=safety_margin_tokens,
     )
     measurement = controller.measure(messages, trigger_tokens=budget.trigger_tokens)
@@ -538,6 +546,69 @@ async def _persist_manual_compaction_metadata(
         "context_compaction_execution_model": execution.execution_model,
     }
     await runtime_state_store.save(state)
+    await _persist_manual_compaction_record(
+        runtime_state_store,
+        state,
+        result=result,
+        execution=execution,
+        retained_steps=retained_steps,
+        before_messages=before_messages,
+    )
+
+
+async def _persist_manual_compaction_record(
+    runtime_state_store: RuntimeStateStore,
+    state: RuntimeState,
+    *,
+    result: Any,
+    execution: Any,
+    retained_steps: int,
+    before_messages: int,
+) -> None:
+    """Append one complete compaction control record (best effort).
+
+    Mirrors the automatic path: the record carries the full summary, folded and
+    retained identity, parameters and watermark.  It is a pure addition to the
+    append-only dialogue log and never changes the existing rewrite/load
+    behaviour.
+    """
+    append = getattr(runtime_state_store, "append_dialogue_record", None)
+    if not callable(append) or result.summary_message is None:
+        return
+    try:
+        summary_message = result.summary_message
+        retained = list(result.retained_messages)
+        record = build_compaction_record(
+            trigger="manual",
+            summary_message=summary_message,
+            retained=retained,
+            folded=list(result.compacted_messages),
+            sent_messages=[summary_message, *retained],
+            prefix_count=len(result.prefix_messages),
+            limit_tokens=int(result.limit_tokens or 0),
+            trigger_tokens=int(result.limit_tokens or 0),
+            retained_steps=int(retained_steps or 0),
+            before_tokens=int(result.before_tokens or 0),
+            after_tokens=int(result.after_tokens or 0),
+            before_messages=int(before_messages or 0),
+            after_messages=len([summary_message, *retained]),
+            segments=int(result.segment_count or 0),
+            strategy=str(getattr(execution, "strategy", "") or ""),
+            execution_model=str(getattr(execution, "execution_model", "") or ""),
+            recent_user_messages=list(result.recent_user_messages),
+        )
+        await append(
+            state.session_id,
+            kind=COMPACTION_RECORD,
+            record=record,
+            watermark=int(record.get("watermark") or 0),
+        )
+    except Exception:  # noqa: BLE001 — bookkeeping must never break a command
+        _logger.warning(
+            "[command_execution:_persist_manual_compaction_record] failed sid=%s",
+            state.session_id,
+            exc_info=True,
+        )
 
 
 def _first_positive_number(*values: Any) -> float | None:

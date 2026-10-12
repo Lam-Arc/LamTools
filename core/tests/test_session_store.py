@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from lamtools_core.app.core_db import open_core_app_db
+from lamtools_core.app.core_db import CoreThreadSnapshot, open_core_app_db
 from lamtools_core.app.core_session_store import CoreDbSessionStore
 from lamtools_core.session import InMemorySessionStore, MessageRecord, SessionRecord
 
@@ -340,6 +340,51 @@ def test_core_db_session_store_repairs_legacy_fork_project_ownership(tmp_path: P
             assert persisted.title == "Source（1）"
             assert persisted.metadata["work_root"] == str(tmp_path / "workspace")
             assert persisted.metadata["project_id"] == "project-1"
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_session_patch_slims_legacy_registry_inline_image(tmp_path: Path) -> None:
+    """Renaming a session rewrites its metadata row; a legacy fat registry is
+    slimmed on that natural write-back while everything else is preserved."""
+
+    async def scenario() -> None:
+        db = await open_core_app_db(tmp_path / "core-slim-registry.db")
+        store = CoreDbSessionStore(lambda: db)
+        try:
+            await store.create(SessionRecord(id="slim-1", member_id="core", title="Legacy", status="idle"))
+            data_url = "data:image/png;base64,LEGACY" + "B" * 64
+            async with db.session_factory() as connection:
+                row = await connection.get(CoreThreadSnapshot, "slim-1")
+                state = dict(row.snapshot_json or {})
+                core = dict(state.get("core") or {})
+                core["artifacts"] = {
+                    "artifact-1": {
+                        "artifact_id": "artifact-1",
+                        "kind": "file_read",
+                        "content": "legacy body",
+                        "metadata": {"image_data_url": data_url, "path": "a.png"},
+                    }
+                }
+                state["core"] = core
+                row.snapshot_json = state
+                await connection.commit()
+
+            await store.patch("slim-1", title="Renamed")
+
+            async with db.session_factory() as connection:
+                row = await connection.get(CoreThreadSnapshot, "slim-1")
+                entry = row.snapshot_json["core"]["artifacts"]["artifact-1"]
+                assert row.snapshot_json["session"]["title"] == "Renamed"
+                assert "image_data_url" not in entry["metadata"]
+                assert entry["metadata"]["path"] == "a.png"
+                # Content bodies stay: they are not part of the inline-image rule.
+                assert entry["content"] == "legacy body"
+            reloaded = await store.get("slim-1")
+            assert reloaded is not None
+            assert reloaded.title == "Renamed"
         finally:
             await db.close()
 

@@ -1238,6 +1238,73 @@ def build_parser(
     migrate.add_argument("--apply", action="store_true", help="Apply the migration (default is a dry-run preview)")
     migrate.set_defaults(func=cmd_migrate_projects)
 
+    maintenance = sub.add_parser(
+        "maintenance",
+        help="Run one-shot data maintenance on the local development database",
+    )
+    maintenance_sub = maintenance.add_subparsers(dest="maintenance_command", required=True)
+    strip_images = maintenance_sub.add_parser(
+        "strip-snapshot-images",
+        help=(
+            "Drop legacy inline image copies no reader observes (snapshot registry, "
+            "item/event/sync payload metadata) from the local dev database only"
+        ),
+    )
+    strip_images.add_argument(
+        "--core-db",
+        default="",
+        help="Core-owned SQLite runtime database (defaults to the local development database)",
+    )
+    strip_images.add_argument(
+        "--apply",
+        action="store_true",
+        help="Back up, migrate and verify (default is a dry-run preview)",
+    )
+    strip_images.set_defaults(func=cmd_maintenance_strip_snapshot_images)
+
+    checkpoint_baseline = maintenance_sub.add_parser(
+        "checkpoint-baseline",
+        help=(
+            "Capture (or compare) the shape and size baseline of every checkpoint; "
+            "read-only, local development database only"
+        ),
+    )
+    checkpoint_baseline.add_argument("--core-db", default="")
+    checkpoint_baseline.add_argument(
+        "--out", default="", help="Write the baseline JSON document to this path"
+    )
+    checkpoint_baseline.add_argument(
+        "--compare", default="", help="Compare the current database against a baseline JSON file"
+    )
+    checkpoint_baseline.set_defaults(func=cmd_maintenance_checkpoint_baseline)
+
+    prune_checkpoints = maintenance_sub.add_parser(
+        "prune-checkpoints",
+        help=(
+            "Delete superseded checkpoints, keeping the newest per session "
+            "(default is a dry-run preview; local development database only)"
+        ),
+    )
+    prune_checkpoints.add_argument("--core-db", default="")
+    prune_checkpoints.add_argument(
+        "--apply", action="store_true", help="Back up, delete and verify (default is a preview)"
+    )
+    prune_checkpoints.add_argument(
+        "--keep-recent",
+        type=int,
+        default=1,
+        help="How many newest checkpoints to keep per session (default 1)",
+    )
+    prune_checkpoints.set_defaults(func=cmd_maintenance_prune_checkpoints)
+
+    dialogue_records = maintenance_sub.add_parser(
+        "dialogue-records",
+        help="Verify the append-only compaction/rollback control records; read-only",
+    )
+    dialogue_records.add_argument("--core-db", default="")
+    dialogue_records.add_argument("--thread-id", default="", help="Limit to one thread")
+    dialogue_records.set_defaults(func=cmd_maintenance_dialogue_records)
+
     run = sub.add_parser("run", help="Start a Sunday task")
     run.add_argument("message", nargs="+")
     run.add_argument("--model-id", default="", help="Model record id, provider model id, or display name")
@@ -2849,6 +2916,106 @@ async def cmd_migrate_projects(args: argparse.Namespace) -> int:
     label = "migrated" if report.applied else "dry-run"
     print(json.dumps({"status": label, **report.to_dict()}, ensure_ascii=False, sort_keys=True), flush=True)
     return 0
+
+
+async def cmd_maintenance_strip_snapshot_images(args: argparse.Namespace) -> int:
+    from lamtools_core.maintenance import (
+        ConcurrentModificationError,
+        MaintenanceScopeError,
+        strip_snapshot_registry_images,
+    )
+
+    db_path = _resolve_core_db(args.core_db or None)
+    try:
+        report = await strip_snapshot_registry_images(db_path, apply=bool(args.apply))
+    except MaintenanceScopeError as exc:
+        print(
+            json.dumps({"status": "refused", "error": str(exc)}, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+        return 2
+    except ConcurrentModificationError as exc:
+        print(
+            json.dumps(
+                {"status": "aborted", "error": str(exc)}, ensure_ascii=False, sort_keys=True
+            ),
+            flush=True,
+        )
+        return 1
+    label = "applied" if args.apply else "dry-run"
+    print(json.dumps({"status": label, **report.to_dict()}, ensure_ascii=False, sort_keys=True), flush=True)
+    return 0 if report.ok else 1
+
+
+async def cmd_maintenance_checkpoint_baseline(args: argparse.Namespace) -> int:
+    from lamtools_core.checkpoint_maintenance import (
+        capture_checkpoint_baseline,
+        compare_checkpoint_baseline,
+    )
+    from lamtools_core.maintenance import MaintenanceScopeError
+
+    db_path = _resolve_core_db(args.core_db or None)
+    try:
+        baseline = await capture_checkpoint_baseline(db_path)
+    except MaintenanceScopeError as exc:
+        print(
+            json.dumps({"status": "refused", "error": str(exc)}, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+        return 2
+    payload: dict[str, Any] = {"captured": baseline.to_dict()}
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(baseline.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        payload["out"] = str(out_path)
+    if args.compare:
+        prior = json.loads(Path(args.compare).read_text(encoding="utf-8"))
+        payload["compare"] = compare_checkpoint_baseline(prior, baseline)
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str), flush=True)
+    return 0
+
+
+async def cmd_maintenance_prune_checkpoints(args: argparse.Namespace) -> int:
+    from lamtools_core.checkpoint_maintenance import prune_superseded_checkpoints
+    from lamtools_core.maintenance import MaintenanceScopeError
+
+    db_path = _resolve_core_db(args.core_db or None)
+    try:
+        report = await prune_superseded_checkpoints(
+            db_path,
+            apply=bool(args.apply),
+            keep_recent=int(args.keep_recent or 1),
+        )
+    except MaintenanceScopeError as exc:
+        print(
+            json.dumps({"status": "refused", "error": str(exc)}, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+        return 2
+    label = "applied" if args.apply else "dry-run"
+    print(json.dumps({"status": label, **report.to_dict()}, ensure_ascii=False, sort_keys=True), flush=True)
+    return 0 if report.ok else 1
+
+
+async def cmd_maintenance_dialogue_records(args: argparse.Namespace) -> int:
+    from lamtools_core.checkpoint_maintenance import verify_dialogue_records
+    from lamtools_core.maintenance import MaintenanceScopeError
+
+    db_path = _resolve_core_db(args.core_db or None)
+    try:
+        report = await verify_dialogue_records(db_path, thread_id=str(args.thread_id or ""))
+    except MaintenanceScopeError as exc:
+        print(
+            json.dumps({"status": "refused", "error": str(exc)}, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+        return 2
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True, default=str), flush=True)
+    return 0 if report.get("ok") else 1
 
 
 async def cmd_start(args: argparse.Namespace) -> int:

@@ -8,7 +8,7 @@ from lamtools_core.app.core_db import CoreSyncChange
 from lamtools_core.app.operation_catalog import OperationCatalog
 from lamtools_core.app.sync_store import SYNC_CURSOR_EXPIRED
 from lamtools_core.app.live_operations import _character_page_snapshot, _history_turn_limit
-from lamtools_core.checkpoint import register_checkpoint_operations
+from lamtools_core.checkpoint import CoreCheckpointCoordinator, register_checkpoint_operations
 from lamtools_core.event import RunItemEvent
 
 
@@ -400,6 +400,13 @@ async def test_rollback_is_a_persisted_sync_boundary_that_requires_a_snapshot(tm
 
     try:
         await append_turn("turn-1", "one")
+        # 撤回靠"该轮开始前的边界存档"定位边界（生产里每轮开始前都会留一条），
+        # 所以这里必须留下 turn-2 的边界存档。
+        await CoreCheckpointCoordinator(
+            work_root=work_root,
+            session_factory=db.session_factory,
+            write_coordinator=db.persistence.write_coordinator,
+        ).begin_turn(session_id="rollback-sync", turn_id="turn-2", actor_kind="main")
         await append_turn("turn-2", "two")
         before = await db.sync_journal.current_cursor()
 

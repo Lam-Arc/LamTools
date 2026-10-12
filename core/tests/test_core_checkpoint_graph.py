@@ -76,12 +76,99 @@ async def _append_message_turn(db: Any, session_id: str, turn_id: str, text: str
         await session.commit()
 
 
+async def _append_production_turn(db: Any, session_id: str, turn_id: str, text: str) -> None:
+    """Append a turn using the payload shapes the desktop app really writes.
+
+    Production carries the conversation as ``type``-tagged run items and
+    ``item/started`` user messages; no message event ever carries ``role``.
+    A transcript rebuilt from these events is therefore empty, which is why
+    the fixtures here must not use a friendlier shape than production.
+    """
+    async with db.session_factory() as session:
+        await db.event_store.append(session, AppEventInput(
+            thread_id=session_id,
+            method="turn/accepted",
+            payload={"type": "turn", "status": "running", "input": [{"type": "text", "text": text}]},
+            turn_id=turn_id,
+        ))
+        await db.event_store.append(session, AppEventInput(
+            thread_id=session_id,
+            method="item/started",
+            item_id=f"{session_id}:turn:{turn_id}:user",
+            payload={
+                "type": "userMessage",
+                "status": "completed",
+                "content": [{"type": "text", "text": text}],
+            },
+            turn_id=turn_id,
+        ))
+        await db.event_store.append_run_item_event(session, RunItemEvent(
+            kind="message",
+            thread_id=session_id,
+            turn_id=turn_id,
+            item_id=f"{session_id}:turn:{turn_id}:assistant",
+            status="completed",
+            payload={"type": "agentMessage", "content": f"reply {text}"},
+        ))
+        for kind, suffix, result in (("tool_call", "call", ""), ("tool_result", "result", "stub")):
+            await db.event_store.append_run_item_event(session, RunItemEvent(
+                kind=kind,
+                thread_id=session_id,
+                turn_id=turn_id,
+                item_id=f"{session_id}:turn:{turn_id}:{suffix}",
+                status="completed",
+                payload={
+                    "type": "dynamicToolCall",
+                    "tool_name": "read_file",
+                    "arguments": {"path": f"docs/{turn_id}.md"},
+                    "delta": result,
+                    "tool_result": result,
+                },
+            ))
+        await db.event_store.append(session, AppEventInput(
+            thread_id=session_id,
+            method="turn/completed",
+            payload={"turn_id": turn_id},
+            turn_id=turn_id,
+        ))
+        await db.event_store.append_run_item_event(session, RunItemEvent(
+            kind="status",
+            thread_id=session_id,
+            turn_id=turn_id,
+            item_id=f"{session_id}:turn:{turn_id}:terminal",
+            status="completed",
+            payload={"type": "turn", "status": "completed"},
+        ))
+        events = await db.event_store.list_thread(session, thread_id=session_id)
+        await db.snapshot_store.apply_many(session, events)
+        await session.commit()
+
+
+def _tool_call_history(text: str) -> list[dict[str, Any]]:
+    """A transcript in the real stored shape, tool call and result included."""
+    return [
+        {"role": "user", "content": text},
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": f"call_{text}",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": "{\"path\": \"方案.md\"}"},
+        }]},
+        {"role": "tool", "tool_call_id": f"call_{text}", "content": f"内容 {text}"},
+        {"role": "assistant", "content": f"reply {text}"},
+    ]
+
+
 @pytest.mark.asyncio
-async def test_turn_fork_keeps_selected_turn_and_rollback_removes_it_without_checkpoint(tmp_path: Path) -> None:
+async def test_turn_fork_keeps_selected_turn_and_rollback_truncates_the_history(tmp_path: Path) -> None:
     work_root = tmp_path / "workspace"
     work_root.mkdir()
     db = await open_core_app_db(tmp_path / "core.db")
     sessions = CoreDbSessionStore(lambda: db)
+    coordinator = CoreCheckpointCoordinator(
+        work_root=work_root,
+        session_factory=db.session_factory,
+        write_coordinator=db.persistence.write_coordinator,
+    )
     from lamtools_core.app.operation_catalog import OperationCatalog
 
     catalog = OperationCatalog()
@@ -96,8 +183,22 @@ async def test_turn_fork_keeps_selected_turn_and_rollback_removes_it_without_che
             metadata={"work_root": str(work_root)},
         ))
         await _runtime(db, "turn-source", history=[])
-        await _append_message_turn(db, "turn-source", "turn-1", "one")
-        await _append_message_turn(db, "turn-source", "turn-2", "two")
+        # The kernel takes a boundary checkpoint before every turn (see
+        # test_main_agent_creates_checkpoint_before_the_model_sees_each_turn),
+        # so the boundary that removes turn-2 is captured by turn-2's own
+        # checkpoint: it holds exactly the transcript turn-1 left behind.
+        await coordinator.begin_turn(
+            session_id="turn-source", turn_id="turn-1", actor_kind="main",
+        )
+        await _append_production_turn(db, "turn-source", "turn-1", "one")
+        first_history = _tool_call_history("one")
+        await _runtime(db, "turn-source", history=first_history)
+        await coordinator.begin_turn(
+            session_id="turn-source", turn_id="turn-2", actor_kind="main",
+        )
+        await _append_production_turn(db, "turn-source", "turn-2", "two")
+        second_history = [*first_history, *_tool_call_history("two")]
+        await _runtime(db, "turn-source", history=second_history)
 
         forked = await catalog.execute("session.fork", {
             "session_id": "turn-source", "turn_id": "turn-1", "new_session_id": "turn-fork",
@@ -110,6 +211,9 @@ async def test_turn_fork_keeps_selected_turn_and_rollback_removes_it_without_che
         assert fork_session is not None
         assert fork_session.title == "Source（1）"
         assert fork_session.metadata["work_root"] == str(work_root)
+        # The fork must hand the model the transcript through turn-1 — tool
+        # call and result included — not an empty conversation.
+        assert await db.runtime_state_store.get_history("turn-fork") == first_history
 
         second_fork = await catalog.execute("session.fork", {
             "session_id": "turn-source", "turn_id": "turn-1", "new_session_id": "turn-fork-2",
@@ -140,8 +244,127 @@ async def test_turn_fork_keeps_selected_turn_and_rollback_removes_it_without_che
         assert not {event.turn_id for event in events if event.turn_id}
         assert "turn-1" not in str(snapshot)
         assert "turn-2" not in str(snapshot)
+        # 第一轮之前没有任何对话，撤回后模型看到的必须是空历史。
+        assert await db.runtime_state_store.get_history("turn-source") == []
+        # 会话档案跟着对话一起留下：撤回不得把标题/项目归属一起清掉。
+        survived = await sessions.get("turn-source")
+        assert survived is not None
+        assert survived.title == "Source"
+        assert survived.metadata["work_root"] == str(work_root)
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_rollback_and_fork_keep_the_stored_transcript_not_the_events(tmp_path: Path) -> None:
+    """撤回/分叉后的对话 = 存下来的真实对话，而不是从事件里重推出来的。
+
+    事件记录的是界面显示了什么（``agentMessage``/``dynamicToolCall`` 这些带上
+    ``type`` 的条目），模型真正看到的工具调用与结果只存在于对话历史里。曾经
+    这里按事件重推历史，对线上形态一条都认不出来，于是每次撤回都把整段上下文
+    清空、让模型从零重新摸索工作区。
+    """
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    sessions = CoreDbSessionStore(lambda: db)
+    coordinator = CoreCheckpointCoordinator(
+        work_root=work_root,
+        session_factory=db.session_factory,
+        write_coordinator=db.persistence.write_coordinator,
+    )
+    from lamtools_core.app.operation_catalog import OperationCatalog
+
+    catalog = OperationCatalog()
+    register_checkpoint_operations(
+        catalog,
+        session_factory=db.session_factory,
+        default_work_root=work_root,
+    )
+    try:
+        session_id = "shape-source"
+        await sessions.create(SessionRecord(
+            id=session_id, member_id="core", title="Shape", status="idle",
+            metadata={"work_root": str(work_root)},
+        ))
+        await _runtime(db, session_id, history=[])
+        await coordinator.begin_turn(session_id=session_id, turn_id="turn-1", actor_kind="main")
+        await _append_production_turn(db, session_id, "turn-1", "one")
+        transcript = _tool_call_history("one")
+        await _runtime(db, session_id, history=transcript)
+        await coordinator.begin_turn(session_id=session_id, turn_id="turn-2", actor_kind="main")
+        await _append_production_turn(db, session_id, "turn-2", "two")
+        await _runtime(db, session_id, history=[*transcript, *_tool_call_history("two")])
+
+        forked = await catalog.execute("session.fork", {
+            "session_id": session_id, "turn_id": "turn-2", "new_session_id": "shape-fork",
+        })
+        assert forked.status == "ok", forked.payload
+        # 分叉到最新一轮：整段对话（含工具调用）都在。
+        assert await db.runtime_state_store.get_history("shape-fork") == [
+            *transcript, *_tool_call_history("two")
+        ]
+
+        rolled_back = await catalog.execute("session.rollback", {
+            "session_id": session_id, "turn_id": "turn-2",
+        })
+        assert rolled_back.status == "ok", rolled_back.payload
+        # 撤回第二轮：回到第一轮留下的对话，一条工具调用都不少。
+        assert await db.runtime_state_store.get_history(session_id) == transcript
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_operations_refuse_when_the_boundary_is_gone_instead_of_emptying(tmp_path: Path) -> None:
+    """边界记录缺失时报错收手，绝不用空历史顶替。"""
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    sessions = CoreDbSessionStore(lambda: db)
+    from lamtools_core.app.operation_catalog import OperationCatalog
+
+    catalog = OperationCatalog()
+    register_checkpoint_operations(
+        catalog,
+        session_factory=db.session_factory,
+        default_work_root=work_root,
+    )
+    try:
+        session_id = "no-boundary"
+        await sessions.create(SessionRecord(
+            id=session_id, member_id="core", title="NoBoundary", status="idle",
+            metadata={"work_root": str(work_root)},
+        ))
+        await _runtime(db, session_id, history=[])
+        await _append_production_turn(db, session_id, "turn-1", "one")
+        transcript = _tool_call_history("one")
+        await _runtime(db, session_id, history=transcript)
+        await _append_production_turn(db, session_id, "turn-2", "two")
+        await _runtime(db, session_id, history=[*transcript, *_tool_call_history("two")])
+
+        forked = await catalog.execute("session.fork", {
+            "session_id": session_id, "turn_id": "turn-1", "new_session_id": "no-boundary-fork",
+        })
+        assert forked.status == "error"
+        assert "边界记录" in str(forked.payload)
+        assert await sessions.get("no-boundary-fork") is None
+
+        rolled_back = await catalog.execute("session.rollback", {
+            "session_id": session_id, "turn_id": "turn-2",
+        })
+        assert rolled_back.status == "error"
+        assert "边界记录" in str(rolled_back.payload)
+        # 中止后什么都没变：对话、轮次都原样保留。
+        assert await db.runtime_state_store.get_history(session_id) == [
+            *transcript, *_tool_call_history("two")
+        ]
+        async with db.session_factory() as session:
+            events = await db.event_store.list_thread(session, thread_id=session_id)
+        assert {event.turn_id for event in events if event.turn_id} == {"turn-1", "turn-2"}
+    finally:
+        await db.close()
+
 
 
 @pytest.mark.asyncio

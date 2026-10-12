@@ -7,7 +7,7 @@ import sqlite3
 import pytest
 
 from lamtools_core.app import open_core_app_db
-from lamtools_core.app.core_db import CoreAppEvent, CoreRuntimeSession
+from lamtools_core.app.core_db import CoreAppEvent, CoreRuntimeSession, CoreThreadSnapshot
 from lamtools_core.app.core_session_store import CoreDbSessionStore
 from lamtools_core.app.project_store import (
     ActiveProjectSessionsError,
@@ -192,6 +192,47 @@ async def test_fallback_project_backfills_orphaned_sessions_without_changing_val
         assert (await store.get("missing-root")).metadata["work_root"] == str(fallback_root.resolve())
         assert (await store.get("dangling-root")).metadata["work_root"] == str(fallback_root.resolve())
         assert (await store.get(valid_session.id)).metadata["work_root"] == str(valid_root.resolve())
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_fallback_project_backfill_slims_legacy_registry_image(tmp_path: Path) -> None:
+    """The orphan backfill rewrites the metadata row; a legacy fat registry is
+    slimmed on that natural write while the inferred ownership is applied."""
+    db = await open_core_app_db(tmp_path / "core.db")
+    store = CoreDbSessionStore(lambda: db)
+    fallback_root = tmp_path / "MyProject"
+    try:
+        await store.create(SessionRecord(id="orphan", member_id="core", title="Orphan", status="idle"))
+        data_url = "data:image/png;base64,LEGACY" + "B" * 64
+        async with db.session_factory() as connection:
+            row = await connection.get(CoreThreadSnapshot, "orphan")
+            state = dict(row.snapshot_json or {})
+            core = dict(state.get("core") or {})
+            core["artifacts"] = {
+                "artifact-1": {
+                    "artifact_id": "artifact-1",
+                    "kind": "file_read",
+                    "content": "legacy body",
+                    "metadata": {"image_data_url": data_url, "path": "a.png"},
+                }
+            }
+            state["core"] = core
+            row.snapshot_json = state
+            await connection.commit()
+
+        fallback, migrated = await db.project_store.ensure_fallback_project(fallback_root)
+        assert migrated == 1
+        assert fallback.work_root == str(fallback_root.resolve())
+        assert (await store.get("orphan")).metadata["work_root"] == str(fallback_root.resolve())
+
+        async with db.session_factory() as connection:
+            row = await connection.get(CoreThreadSnapshot, "orphan")
+            entry = row.snapshot_json["core"]["artifacts"]["artifact-1"]
+            assert "image_data_url" not in entry["metadata"]
+            assert entry["metadata"]["path"] == "a.png"
+            assert entry["content"] == "legacy body"
     finally:
         await db.close()
 
