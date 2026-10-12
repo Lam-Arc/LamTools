@@ -196,6 +196,12 @@ core/tests/fixtures/context_compaction/real_api_runs/
 .tmp_*
 .tmp-*/
 
+# 与本轮无关的独立项目与自检残留（2026-10-12 发版盘点）
+# pricing-index：AI 模型套餐情报索引，与 Core 无关的独立项目；用户后续可自行决定是否移出仓库
+/pricing-index/
+# lamsmoke：界面自检残留目录（临时保留，仅挡住入库，清理另行安排）
+/lamsmoke/
+
 # codex-workflow-managed-start
 .codex_workflow_hidden_resources/
 AGENTS.md
