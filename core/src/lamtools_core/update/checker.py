@@ -1,15 +1,13 @@
 """Update check — read the official site manifest, fall back to GitHub Releases.
 
-The desktop app (设置 → 关于与更新) and the CLI both call :func:`check_update`
-to learn whether a newer release exists and where to download it. Only the
-*check* is automated: installing stays a manual step (the user runs the
-downloaded platform installer), so no signing infrastructure is involved.
+The desktop app and CLI both call :func:`check_update` to learn whether a newer
+release exists and where to download it. Verified updates can be installed
+in the app after the user chooses to update.
 
 The official site is the primary *download* channel: ``downloads/desktop-update.json``
 sits next to the installers the project publishes, so it points at a download that
-works in the same regions. Both sources are consulted and the higher version wins
-(a stale manifest can no longer freeze update detection); on a tie the manifest
-supplies the download URL and GitHub supplies the release notes. Network/parse
+works in the same regions. GitHub is consulted only when the official manifest
+is unavailable or has no installer for this platform. Network/parse
 failures are folded into a ``check_failed`` result instead of raising, so a
 temporary outage never breaks the app or the CLI — and when both sources fail,
 the error names both.
@@ -38,7 +36,7 @@ RELEASES_PAGE_URL = f"https://github.com/{UPDATE_REPO}/releases/latest"
 
 #: Official-site update manifest, published next to the installers and beside
 #: the mobile manifest (``scripts/build-desktop-update.py`` writes it).
-DEFAULT_SITE_UPDATE_URL = "https://47.114.43.99.nip.io/downloads/desktop-update.json"
+DEFAULT_SITE_UPDATE_URL = "https://ainarit.com/downloads/desktop-update.json"
 #: Deployment override, so a renamed or self-hosted manifest needs no code change.
 SITE_UPDATE_URL_ENV = "LAMTOOLS_DESKTOP_UPDATE_URL"
 
@@ -274,17 +272,25 @@ def _github_candidate() -> dict[str, Any]:
     notes = str(release.get("body") or "").strip()
     if len(notes) > NOTES_MAX_CHARS:
         notes = notes[:NOTES_MAX_CHARS].rstrip() + "…"
+    asset = next(
+        (item for item in release.get("assets") or []
+         if item.get("browser_download_url") == download_url),
+        {},
+    )
+    digest = str(asset.get("digest") or "").removeprefix("sha256:").lower()
     return {
         "version": version,
         "download_url": download_url,
         "release_url": RELEASES_PAGE_URL,
         "release_notes": notes,
         "published_at": str(release.get("published_at") or ""),
+        "sha256": digest if re.fullmatch(r"[0-9a-f]{64}", digest) else "",
+        "size": asset.get("size") or 0,
     }
 
 
 def check_update() -> dict[str, Any]:
-    """Check for a newer Sunday, consulting both sources and taking the higher.
+    """Check the official Sunday website, using GitHub only as a fallback.
 
     Returns one of:
 
@@ -301,11 +307,9 @@ def check_update() -> dict[str, Any]:
     - ``{"status": "check_failed", "current_version", "error"}`` — both
       sources failed; the error names each one. Never raises.
 
-    Both sources are asked, and the *higher* version wins; on a tie the
-    official site supplies the download URL (same build, better regional
-    reach) while GitHub supplies the release notes (it has the real release
-    body). A stale site manifest therefore no longer freezes update detection
-    — it only loses the download link (2026-09-25 审计 P1).
+    A usable official manifest supplies the version, download and release notes
+    without depending on GitHub availability. Website publication determines
+    when a release becomes available on the primary channel.
     """
     base: dict[str, Any] = {"current_version": __version__}
     candidates: dict[str, dict[str, Any]] = {}
@@ -318,6 +322,7 @@ def check_update() -> dict[str, Any]:
     ):
         try:
             candidates[key] = loader()
+            break
         except SourceUnavailable as exc:
             reasons.append(f"{name}: {_first_line(str(exc))}")
             if exc.latest_version and not reported_version:
@@ -342,20 +347,11 @@ def check_update() -> dict[str, Any]:
         base["error"] = "; ".join(reasons)
         return base
 
-    # Tie-break order: whoever appears first wins, i.e. the official site.
-    chosen_key = ""
-    for key in (SOURCE_SITE, SOURCE_GITHUB):
-        if key not in candidates:
-            continue
-        if not chosen_key or compare_versions(candidates[key]["version"], candidates[chosen_key]["version"]) > 0:
-            chosen_key = key
+    chosen_key = next(iter(candidates))
     chosen = candidates[chosen_key]
     latest = chosen["version"]
 
-    github = candidates.get(SOURCE_GITHUB)
     notes_key = chosen_key
-    if github is not None and compare_versions(github["version"], latest) == 0:
-        notes_key = SOURCE_GITHUB
 
     base["latest_version"] = latest
     base["source"] = chosen_key

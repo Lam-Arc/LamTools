@@ -3295,7 +3295,12 @@ async def _auto_title_session(
                 record_model_notice("后台任务没有可用模型，已跳过会话标题生成；请先添加供应商/模型")
                 return
 
-        title = await generate_session_title(llm_client, resolved_model, first_message)
+        title = await generate_session_title(
+            llm_client,
+            resolved_model,
+            first_message,
+            session_id=thread_id,
+        )
         if not title:
             return
 

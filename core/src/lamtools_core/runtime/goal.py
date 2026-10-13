@@ -287,11 +287,13 @@ class ModelGoalEvaluator:
 
     async def __call__(self, goal: Goal, context: dict[str, Any]) -> CompletionResult:
         evidence = _completion_evidence(context)
+        session_id = str(context.get("session_id") or context.get("thread_id") or "").strip()
         request = LLMRequest(
             model=self.model_id,
             temperature=0,
             max_tokens=600,
             response_format={"type": "json_object"},
+            metadata={"_runtime_session_id": session_id} if session_id else {},
             messages=[
                 ChatMessage(
                     role="system",

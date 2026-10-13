@@ -214,21 +214,20 @@ def _site_manifest(*, version="9.9.9", **extra) -> dict:
 
 
 def test_site_manifest_is_the_primary_source(monkeypatch) -> None:
-    _stub_by_url(monkeypatch, **{DEFAULT_SITE_UPDATE_URL: _site_manifest()})
+    calls = _stub_by_url(monkeypatch, **{DEFAULT_SITE_UPDATE_URL: _site_manifest()})
     result = check_update()
     assert result["status"] == "update_available"
     assert result["source"] == SOURCE_SITE
     assert result["latest_version"] == "9.9.9"
     assert result["download_url"].startswith("https://site/downloads/")
     assert result["release_url"] == "https://site/#download"
+    assert calls == [DEFAULT_SITE_UPDATE_URL]
+    assert DEFAULT_SITE_UPDATE_URL == "https://ainarit.com/downloads/desktop-update.json"
 
 
 def test_site_version_wins_over_a_newer_github_release(monkeypatch) -> None:
-    """落后不再冻结：两源都问、取版本较高者（2026-09-25 审计 P1）。
-
-    旧实现"先答者胜"，清单停在 9.9.9 时 GitHub 的 v10.0.0 永远不会被看到。
-    """
-    _stub_by_url(
+    """The official publication channel controls which release is offered."""
+    calls = _stub_by_url(
         monkeypatch,
         **{DEFAULT_SITE_UPDATE_URL: _site_manifest(version="9.9.9"),
            RELEASES_LATEST_URL: _release(tag="v10.0.0")},
@@ -236,13 +235,13 @@ def test_site_version_wins_over_a_newer_github_release(monkeypatch) -> None:
     result = check_update()
 
     assert result["status"] == "update_available"
-    assert result["latest_version"] == "10.0.0"
-    assert result["source"] == SOURCE_GITHUB
+    assert result["latest_version"] == "9.9.9"
+    assert result["source"] == SOURCE_SITE
+    assert calls == [DEFAULT_SITE_UPDATE_URL]
 
 
-def test_same_version_takes_the_site_download_and_github_notes(monkeypatch) -> None:
-    """同版本时：下载地址用官网，更新说明用 GitHub 的发布正文。"""
-    _stub_by_url(
+def test_site_supplies_download_and_notes_without_github(monkeypatch) -> None:
+    calls = _stub_by_url(
         monkeypatch,
         **{DEFAULT_SITE_UPDATE_URL: _site_manifest(version="9.9.9"),
            RELEASES_LATEST_URL: _release(tag="v9.9.9", body="## 更新内容\n- 真正文")},
@@ -252,9 +251,10 @@ def test_same_version_takes_the_site_download_and_github_notes(monkeypatch) -> N
     assert result["status"] == "update_available"
     assert result["latest_version"] == "9.9.9"
     assert result["source"] == SOURCE_SITE
-    assert result["notes_source"] == SOURCE_GITHUB
+    assert result["notes_source"] == SOURCE_SITE
     assert result["download_url"].startswith("https://site/downloads/")
-    assert "真正文" in result["release_notes"]
+    assert result["release_notes"] == "Sunday 9.9.9"
+    assert calls == [DEFAULT_SITE_UPDATE_URL]
 
 
 def test_notes_come_from_the_winner_when_github_is_older(monkeypatch) -> None:
@@ -276,7 +276,37 @@ def test_site_failure_falls_back_to_github(monkeypatch) -> None:
     assert result["status"] == "update_available"
     assert result["source"] == SOURCE_GITHUB
     assert result["latest_version"] == "9.9.9"
-    assert DEFAULT_SITE_UPDATE_URL in calls
+    assert calls == [DEFAULT_SITE_UPDATE_URL, RELEASES_LATEST_URL]
+
+
+def test_current_site_release_does_not_contact_github(monkeypatch) -> None:
+    calls = _stub_by_url(monkeypatch, **{
+        DEFAULT_SITE_UPDATE_URL: _site_manifest(version=lamtools_core.__version__),
+        RELEASES_LATEST_URL: _release(tag="v9.9.9"),
+    })
+    result = check_update()
+    assert result["status"] == "up_to_date"
+    assert result["source"] == SOURCE_SITE
+    assert calls == [DEFAULT_SITE_UPDATE_URL]
+
+
+def test_github_fallback_preserves_installer_digest(monkeypatch) -> None:
+    release = _release(tag="v9.9.9")
+    release["assets"][0].update(digest="sha256:" + "a" * 64, size=12345)
+    monkeypatch.setattr("lamtools_core.update.checker.os.name", "nt")
+    _stub_by_url(monkeypatch, **{RELEASES_LATEST_URL: release})
+    result = check_update()
+    assert result["source"] == SOURCE_GITHUB
+    assert result["sha256"] == "a" * 64
+    assert result["size"] == 12345
+    assert result["install_supported"] is True
+
+
+def test_github_fallback_without_digest_does_not_offer_install(monkeypatch) -> None:
+    _stub_by_url(monkeypatch, **{RELEASES_LATEST_URL: _release(tag="v9.9.9")})
+    result = check_update()
+    assert result["source"] == SOURCE_GITHUB
+    assert "install_supported" not in result
 
 
 def test_site_manifest_without_a_version_is_ignored(monkeypatch) -> None:
@@ -347,6 +377,6 @@ def test_site_update_url_can_be_pointed_elsewhere(monkeypatch) -> None:
     calls = _stub_by_url(monkeypatch, **{custom: _site_manifest()})
     result = check_update()
     assert result["source"] == SOURCE_SITE
-    # 覆盖生效：请求的是自定义地址，不是内置默认（两源都会问，见 check_update）
+    # The override replaces the default official manifest URL.
     assert custom in calls
     assert DEFAULT_SITE_UPDATE_URL not in calls

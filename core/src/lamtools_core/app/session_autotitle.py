@@ -46,6 +46,8 @@ async def generate_session_title(
     llm_client: "LLMClient",
     model_id: str,
     first_message_text: str,
+    *,
+    session_id: str = "",
 ) -> str | None:
     """Generate a ≤20-char title without reasoning or an output-token cap."""
     text = (first_message_text or "").strip()
@@ -70,6 +72,7 @@ async def generate_session_title(
         metadata={
             "thinking_enabled": False,
             "reasoning_level": "off",
+            **({"_runtime_session_id": session_id} if session_id else {}),
         },
     )
     try:

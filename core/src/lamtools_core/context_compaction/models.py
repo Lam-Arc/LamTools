@@ -173,6 +173,7 @@ class ContextCompactionRequest:
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     on_model_retry: ModelRetrySink | None = None
     options: CompactionOptions = field(default_factory=CompactionOptions)
+    request_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

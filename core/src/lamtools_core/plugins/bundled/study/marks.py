@@ -229,7 +229,7 @@ def _translate_payload(content: str):
     return None, translation or content
 
 
-async def answer(context, store, p):
+async def answer(context, store, p, *, request_metadata=None):
     # Serialize per mark, not globally: simultaneous actions never erase a reply.
     runtime = context.service('study')
     lock = runtime.locks.setdefault(p['id'], asyncio.Lock())
@@ -271,7 +271,22 @@ async def answer(context, store, p):
             # max_tokens by some providers, and a small cap then truncates the
             # answer before any visible text exists.  The model config owns the
             # budget for every other call, so it owns this one too.
-            request = LLMRequest(messages=messages, model=str(p.get('model_id') or context.model_id), timeout=60, metadata={'thinking_enabled': False})
+            session_id = str(
+                (request_metadata or {}).get('_runtime_session_id')
+                or (request_metadata or {}).get('session_id')
+                or (request_metadata or {}).get('thread_id')
+                or (request_metadata or {}).get('parent_session_id')
+                or ''
+            ).strip()
+            llm_metadata = {'thinking_enabled': False}
+            if session_id:
+                llm_metadata['_runtime_session_id'] = session_id
+            request = LLMRequest(
+                messages=messages,
+                model=str(p.get('model_id') or context.model_id),
+                timeout=60,
+                metadata=llm_metadata,
+            )
             if action == 'translate':
                 request = replace(request, response_format={'type': 'json_schema', 'json_schema': {'name': 'selection', 'schema': TRANSLATE_SCHEMA, 'strict': False}})
             response = await asyncio.wait_for(client.complete(request), timeout=65)

@@ -554,7 +554,7 @@ async def operation(request, *, context=None, **_):
         elif name == 'study.marks':
             payload = mark_operation(store, p)
         elif name == 'study.text':
-            payload = await answer(context, store, p)
+            payload = await answer(context, store, p, request_metadata=request.metadata)
         else:
             raise ValueError('Unknown study operation')
         if name in ('study.build', 'study.sign', 'study.exam', 'study.marks', 'study.text', 'study.notes'):

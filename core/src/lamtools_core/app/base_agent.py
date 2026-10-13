@@ -677,6 +677,10 @@ class CoreBaseAgentKit:
             tool_choice="auto",
             metadata={
                 "core_base_agent": True,
+                # Reuse this runtime session identity for provider routing. A
+                # reusable sub-agent's state.session_id already includes the
+                # parent session and its normalized agent name.
+                "_runtime_session_id": state.session_id,
                 **(
                     {"reasoning_level": self.config.reasoning_level}
                     if self.config.reasoning_level

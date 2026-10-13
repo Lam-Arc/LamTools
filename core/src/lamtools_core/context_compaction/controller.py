@@ -80,6 +80,7 @@ class ContextCompactor:
         on_model_retry: ModelRetrySink | None = None,
         retained_steps: int | None = None,
         pipeline: Callable[..., Awaitable[ContextCompactionResult]] | None = None,
+        request_metadata: dict[str, Any] | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._model = model
@@ -97,6 +98,7 @@ class ContextCompactor:
         self._on_model_retry = on_model_retry
         self._retained_steps = retained_steps
         self._pipeline = pipeline
+        self._request_metadata = dict(request_metadata or {})
 
     async def compact(
         self,
@@ -152,6 +154,7 @@ class ContextCompactor:
             limit_tokens=target_tokens,
             input_limit_tokens=input_limit_tokens,
             existing_summary=self._existing_summary,
+            request_metadata=dict(self._request_metadata),
             on_delta=self._on_delta,
             on_event=self._on_event,
             estimate_tokens=self._estimate_tokens,
@@ -228,6 +231,7 @@ class ContextCompactionController:
         summary_output_tokens: int | None = None,
         model_output_tokens: int | None = None,
         safety_margin_tokens: int | None = None,
+        request_metadata: dict[str, Any] | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._estimate_request_tokens = estimate_request_tokens
@@ -240,6 +244,7 @@ class ContextCompactionController:
         self._summary_output_tokens = summary_output_tokens
         self._model_output_tokens = model_output_tokens
         self._safety_margin_tokens = safety_margin_tokens
+        self._request_metadata = dict(request_metadata or {})
 
     def measure(
         self,
@@ -370,6 +375,7 @@ class ContextCompactionController:
                 model_timeout_seconds=self._model_timeout_seconds,
                 retry_policy=self._retry_policy,
                 on_model_retry=self._on_model_retry,
+                request_metadata=self._request_metadata,
             )
             attempt_window = max(1, model_window, limit_tokens)
             return await compactor.compact(
@@ -629,6 +635,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
             model_timeout_seconds=request.model_timeout_seconds,
             retry_policy=request.retry_policy,
             on_model_retry=request.on_model_retry,
+            request_metadata=request.request_metadata,
         )
     except asyncio.CancelledError:
         result = _failed_compaction_result(

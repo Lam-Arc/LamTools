@@ -413,7 +413,7 @@ class CoreHttpLLMClient:
             response = await client.post(
                 endpoint,
                 json=assembled["payload"],
-                headers=self._headers(),
+                headers=self._headers(prepared),
             )
         if response.status_code >= 400:
             raise self._provider_error(response.status_code, response.text[:300], response)
@@ -442,7 +442,7 @@ class CoreHttpLLMClient:
                 "POST",
                 endpoint,
                 json=assembled["payload"],
-                headers=self._headers(),
+                headers=self._headers(prepared),
             ) as response:
                 if response.status_code >= 400:
                     text = await response.aread()
@@ -577,7 +577,18 @@ class CoreHttpLLMClient:
             return "x-api-key"
         return "Bearer"
 
-    def _headers(self) -> dict[str, str]:
+    def _uses_opencode_session_header(self) -> bool:
+        """OpenCode inference endpoints use a stable session for routing/cache affinity."""
+        provider_name = str(self.config.provider_name or "").strip().casefold()
+        parsed = urlsplit(self.config.base_url)
+        host = str(parsed.hostname or "").casefold()
+        path = str(parsed.path or "").rstrip("/").casefold()
+        return provider_name.startswith("opencode") or (
+            host == "opencode.ai"
+            and (path.startswith("/inference/") or path.startswith("/zen/"))
+        )
+
+    def _headers(self, request: LLMRequest | None = None) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         protocol = self._protocol()
         auth = str(self.adapter_profile.get("auth") or protocol).strip().lower()
@@ -594,6 +605,21 @@ class CoreHttpLLMClient:
             headers["Authorization"] = f"Bearer {self._validate_api_key()}"
             if protocol == "anthropic-messages":
                 headers["anthropic-version"] = str(self.adapter_profile.get("anthropic_version") or "2023-06-01")
+        if self._uses_opencode_session_header():
+            metadata = request.metadata if request is not None and isinstance(request.metadata, dict) else {}
+            session_id = ""
+            for key in ("_runtime_session_id", "session_id", "thread_id", "parent_session_id"):
+                value = metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    session_id = value.strip()
+                    break
+            if not session_id:
+                raise ValueError(
+                    "OpenCode API requests require a stable conversation session ID "
+                    "in request metadata (_runtime_session_id, session_id, thread_id, "
+                    "or parent_session_id)."
+                )
+            headers["x-opencode-session"] = session_id
         return headers
 
     def _validate_api_key(self) -> str:

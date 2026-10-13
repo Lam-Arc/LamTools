@@ -39,8 +39,8 @@ BUNDLE = DESKTOP / "src-tauri" / "target" / "release" / "bundle"
 REPO_MANIFEST = DESKTOP / "update-manifest.json"
 TAURI_CONF = DESKTOP / "src-tauri" / "tauri.conf.json"
 
-DEFAULT_BASE_URL = "https://47.114.43.99.nip.io/downloads"
-DEFAULT_RELEASE_URL = "https://47.114.43.99.nip.io/#download"
+DEFAULT_BASE_URL = "https://ainarit.com/downloads"
+DEFAULT_RELEASE_URL = "https://ainarit.com/sunday.html"
 
 SETUP_NAME = re.compile(
     r"^Sunday_(?P<version>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)_x64-setup\.exe$"

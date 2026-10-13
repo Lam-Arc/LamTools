@@ -33,7 +33,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$BaseUrl = 'https://47.114.43.99.nip.io',
+    [string]$BaseUrl = 'https://ainarit.com',
     [string]$InstallDir = '',
     [switch]$KeepInstall,
     [int]$StartupTimeoutSeconds = 90

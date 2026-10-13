@@ -1501,6 +1501,7 @@ class CoreLoopKernel:
                         step.metadata.pop("goal_completion", None)
                     else:
                         completion = await self.completion_gate.verify(state, {
+                            "session_id": state.session_id,
                             "turn_input": turn_input,
                             "turn": turn,
                             "tool_results": tool_results,
@@ -3631,6 +3632,9 @@ class CoreLoopKernel:
             # wholesale and leaves the session unable to compact.
             model_output_tokens=request.max_tokens,
             safety_margin_tokens=self.policy.compact_safety_margin_tokens,
+            request_metadata={
+                "_runtime_session_id": request.metadata["_runtime_session_id"]
+            } if request.metadata.get("_runtime_session_id") else {},
             on_model_retry=lambda retry: self._emit_model_retry_from_event(
                 retry,
                 state=state,

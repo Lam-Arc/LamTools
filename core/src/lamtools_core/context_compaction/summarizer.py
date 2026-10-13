@@ -47,6 +47,7 @@ async def summarize_context_messages(
     model_timeout_seconds: float | None = None,
     retry_policy: RetryPolicy | None = None,
     on_model_retry: ModelRetrySink | None = None,
+    request_metadata: dict[str, Any] | None = None,
 ) -> tuple[str, int]:
     """Return the model's summary text and the number of source segments used."""
     summary_input_limit = (
@@ -119,6 +120,7 @@ async def summarize_context_messages(
             model_timeout_seconds=model_timeout_seconds,
             retry_policy=retry_policy,
             on_model_retry=on_model_retry,
+            request_metadata=request_metadata,
         )
         summaries.append(summary)
 
@@ -174,6 +176,7 @@ async def summarize_context_messages(
                     model_timeout_seconds=model_timeout_seconds,
                     retry_policy=retry_policy,
                     on_model_retry=on_model_retry,
+                    request_metadata=request_metadata,
                 )
             )
         summaries = merged
@@ -203,6 +206,7 @@ async def _summarize_compaction_chunk(
     model_timeout_seconds: float | None,
     retry_policy: RetryPolicy | None,
     on_model_retry: ModelRetrySink | None,
+    request_metadata: dict[str, Any] | None,
 ) -> str:
     content = ""
     emitted_delta = False
@@ -217,6 +221,7 @@ async def _summarize_compaction_chunk(
             temperature=0,
             max_tokens=output_tokens,
             timeout=timeout,
+            metadata=dict(request_metadata or {}),
         )
         request_tokens = estimate_message_tokens([message.to_dict() for message in summary_request.messages])
         if input_limit_tokens > 0 and request_tokens > input_limit_tokens:

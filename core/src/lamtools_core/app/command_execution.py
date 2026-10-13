@@ -227,6 +227,7 @@ async def compact_runtime_history(
         # truncated long summaries, and a truncated summary is rejected whole.
         model_output_tokens=reserved_output_tokens,
         safety_margin_tokens=safety_margin_tokens,
+        request_metadata={"_runtime_session_id": state.session_id},
     )
     measurement = controller.measure(messages, trigger_tokens=budget.trigger_tokens)
     execution = await controller.compact(
