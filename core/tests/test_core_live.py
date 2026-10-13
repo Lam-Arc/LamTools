@@ -25,12 +25,21 @@ from lamtools_core.app.event_store import AppEventInput, SqlAlchemyAppEventStore
 from lamtools_core.app.live_hub import CoreAppEventHub
 from lamtools_core.app.live_operations import (
     CoreLiveContext,
+    DEFAULT_THREAD_HISTORY_PAGE_BYTES,
+    MAX_INLINE_ARTIFACT_BYTES,
+    MAX_THREAD_HISTORY_PAGE_BYTES,
+    MIN_THREAD_HISTORY_PAGE_BYTES,
     _character_page_snapshot,
     _ensure_turn_terminal,
+    _history_byte_budget,
+    _history_cursor,
+    _resolve_turn_approval_policy,
     handle_queue_create_operation,
     handle_queue_delete_operation,
     handle_queue_guidance_operation,
     handle_queue_update_operation,
+    handle_thread_history_operation,
+    handle_thread_read_operation,
     handle_thread_resume_operation,
     handle_thread_start_operation,
     handle_turn_cancel_operation,
@@ -887,6 +896,95 @@ def _register_blocking_turn_start(context: CoreLiveContext) -> asyncio.Event:
 
     context.operations.register("turn.start", turn_start)
     return release
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["turn", "queue"])
+async def test_live_input_inherits_bound_project_when_request_omits_root(tmp_path, operation):
+    engine, context = await _context(tmp_path)
+    project_root = tmp_path / "ChatT"
+    record = build_session_record(
+        session_id="thread-project-root", member_id="core", title="Project",
+        metadata={"work_root": str(project_root)},
+    )
+
+    class Sessions:
+        async def get(self, thread_id):
+            return record if thread_id == record.id else None
+
+    context.host.session_store = Sessions()
+    release = _register_blocking_turn_start(context)
+    try:
+        params = {
+            "thread_id": record.id,
+            "client_message_id": f"project-root-{operation}",
+            "input": [{"type": "text", "text": "continue in this project"}],
+        }
+        if operation == "turn":
+            outcome = await handle_turn_start_operation(request_id=1, params=params, context=context)
+            assert outcome.runtime_start["work_root"] == str(project_root)
+            accepted = outcome.response["result"]["events"][0]
+        else:
+            outcome = await handle_queue_create_operation(request_id=1, params=params, context=context)
+            accepted = outcome.response["result"]["events"][0]
+        assert accepted["payload"]["work_root"] == str(project_root)
+        assert "work_root" not in params  # The caller's payload is not mutated.
+    finally:
+        release.set()
+        task = context.runtime_task_registry.task(record.id)
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_automatic_turn_inherits_latest_persisted_active_mode_only_when_implicit(tmp_path):
+    engine, context = await _context(tmp_path)
+    thread_id = "thread-active-mode-inheritance"
+    try:
+        async with context.session_factory() as db:
+            for turn_id, active_mode in (("turn-with-mode", "execute"), ("turn-without-mode", None)):
+                await context.persistence.append(
+                    db,
+                    AppEventInput(
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        method="turn/accepted",
+                        payload={
+                            "turn_id": turn_id,
+                            "status": "completed",
+                            "runtime_snapshot": {"active_mode": active_mode},
+                        },
+                    ),
+                )
+            await db.commit()
+
+        automatic = await _resolve_turn_approval_policy(
+            context=context,
+            params={"thread_id": thread_id, "origin": "member_wake"},
+        )
+        explicit = await _resolve_turn_approval_policy(
+            context=context,
+            params={"thread_id": thread_id, "origin": "member_wake", "active_mode": "consider"},
+        )
+        manual = await _resolve_turn_approval_policy(
+            context=context,
+            params={"thread_id": thread_id},
+        )
+        other_session = await _resolve_turn_approval_policy(
+            context=context,
+            params={"thread_id": "thread-without-mode", "origin": "member_wake"},
+        )
+
+        assert automatic["active_mode"] == "execute"
+        assert automatic["runtime_snapshot"]["active_mode"] == "execute"
+        assert explicit["active_mode"] == "consider"
+        assert explicit["runtime_snapshot"]["active_mode"] == "consider"
+        assert manual["active_mode"] is None
+        assert manual["runtime_snapshot"].get("active_mode") is None
+        assert other_session["active_mode"] is None
+    finally:
+        await engine.dispose()
 
 
 class BlockingCoreLLM:
@@ -3113,6 +3211,8 @@ def test_character_page_snapshot_contract():
     assert set(history) == {
         "char_limit",
         "character_count",
+        "byte_limit",
+        "byte_count",
         "turn_limit",
         "turn_count",
         "item_count",
@@ -3123,6 +3223,7 @@ def test_character_page_snapshot_contract():
     }
     assert history["char_limit"] == 200_000
     assert history["turn_limit"] == 10
+    assert history["byte_limit"] == DEFAULT_THREAD_HISTORY_PAGE_BYTES
     assert history["turn_count"] == 2
     assert history["item_count"] == 4
     assert history["total_items"] == 4
@@ -3140,6 +3241,17 @@ def test_character_page_snapshot_contract():
         )
     )
     assert history["character_count"] == expected_chars
+    # byte_count is the same items measured in UTF-8 bytes (the real size guard).
+    expected_bytes = sum(
+        len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        for item in (
+            snapshot["items"]["u1"],
+            snapshot["items"]["u2"],
+            snapshot["core"]["items"]["a1"],
+            snapshot["core"]["items"]["a2"],
+        )
+    )
+    assert history["byte_count"] == expected_bytes
 
     # Artifacts and seen ids never ride with a conversation page.
     assert page["core"]["artifacts"] == {}
@@ -3157,3 +3269,362 @@ def test_character_page_snapshot_contract():
     page["turns"]["extra"] = {"turn_id": "extra"}
     page["history_page"]["item_count"] = -1
     assert snapshot == baseline
+
+
+def _single_turn_snapshot(item_count: int, text_len: int) -> dict:
+    core_items = {
+        f"a{i}": {
+            "item_id": f"a{i}",
+            "turn_id": "turn-1",
+            "type": "agentMessage",
+            "seq": i + 1,
+            "payload": {"text": "x" * text_len},
+        }
+        for i in range(item_count)
+    }
+    order = list(core_items)
+    return {
+        "thread_id": "t-big",
+        "snapshot_seq": item_count + 1,
+        "items": {},
+        "item_order": [],
+        "turns": {},
+        "core": {
+            "items": core_items,
+            "item_order": order,
+            "turns": {"turn-1": {"turn_id": "turn-1", "status": "completed", "items": order}},
+        },
+    }
+
+
+def test_character_page_snapshot_bounds_pages_by_bytes_and_cuts_inside_a_turn():
+    """A large single turn is delivered as several byte-bounded pages, each of
+    which may end inside the turn, and walking them with the cursor reassembles
+    the whole unpaginated sequence."""
+    snapshot = _single_turn_snapshot(item_count=25, text_len=4000)
+    budget = 20_000
+
+    seen: list[str] = []
+    before_item_id: str | None = None
+    before_seq: int | None = None
+    pages = 0
+    while True:
+        page = _character_page_snapshot(
+            snapshot,
+            before_item_id=before_item_id,
+            before_seq=before_seq,
+            char_limit=200_000,
+            turn_limit=10,
+            byte_limit=budget,
+        )
+        history = page["history_page"]
+        assert history["byte_limit"] == budget
+        assert history["byte_count"] <= budget
+        # Every page ends inside the one turn (mid-turn cut), never on a turn edge.
+        assert history["turn_count"] == 1
+        seen = [str(item_id) for item_id in page["core"]["item_order"]] + seen
+        pages += 1
+        if not history["has_more"]:
+            break
+        before_item_id = history["next_before_item_id"]
+        before_seq = history["next_before_seq"]
+        assert pages < 100
+
+    assert pages > 1
+    # Reassembled page order equals the unpaginated order, with nothing lost.
+    assert seen == [f"a{i}" for i in range(25)]
+
+
+@pytest.mark.asyncio
+async def test_thread_read_then_history_loops_bounded_pages():
+    """The bytes are the bound on every live path: thread.read returns a bounded
+    first page, thread.history follows the same cursor, and the pages reassemble
+    to the whole session."""
+    from types import SimpleNamespace
+
+    snapshot = _single_turn_snapshot(item_count=30, text_len=4000)
+    budget = MIN_THREAD_HISTORY_PAGE_BYTES
+
+    class SessionFactory:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *args):
+            return None
+
+    class Persistence:
+        async def load(self, _db, thread_id: str):
+            return snapshot
+
+    class MemberHooks:
+        async def augment_thread_read(self, *, db, thread_id, result):
+            return {}
+
+    context = SimpleNamespace(
+        session_factory=SessionFactory,
+        persistence=Persistence(),
+        host=SimpleNamespace(session_store=None, member_hooks=MemberHooks()),
+    )
+
+    outcome = await handle_thread_read_operation(
+        request_id=0,
+        params={"thread_id": "t-big", "page_bytes": budget},
+        context=context,
+    )
+    page = outcome.response["result"]["snapshot"]
+    history = page["history_page"]
+    assert history["byte_limit"] == budget
+    assert history["byte_count"] <= budget
+    seen = [str(item_id) for item_id in page["core"]["item_order"]]
+
+    while history["has_more"]:
+        outcome = await handle_thread_history_operation(
+            request_id=1,
+            params={
+                "thread_id": "t-big",
+                "before_item_id": history["next_before_item_id"],
+                "before_seq": history["next_before_seq"],
+                "page_bytes": budget,
+            },
+            context=context,
+        )
+        page = outcome.response["result"]["snapshot_page"]
+        history = page["history_page"]
+        assert history["byte_limit"] == budget
+        assert history["byte_count"] <= budget
+        seen = [str(item_id) for item_id in page["core"]["item_order"]] + seen
+
+    assert seen == [f"a{i}" for i in range(30)]
+
+
+def test_history_byte_budget_and_cursor_are_explicit():
+    assert _history_byte_budget({}) == DEFAULT_THREAD_HISTORY_PAGE_BYTES
+    assert _history_byte_budget({"page_bytes": 10 ** 9}) == MAX_THREAD_HISTORY_PAGE_BYTES
+    assert _history_byte_budget({"pageBytes": 10}) == MIN_THREAD_HISTORY_PAGE_BYTES
+    assert _history_byte_budget({"page_bytes": 12_345}) == MIN_THREAD_HISTORY_PAGE_BYTES
+    assert _history_byte_budget({"page_bytes": 1_500_000}) == 1_500_000
+    assert _history_cursor({}) == (None, None)
+    assert _history_cursor({"before_item_id": "x", "before_seq": 5}) == ("x", 5)
+
+
+def _oversized_artifact_item(inline_len: int) -> tuple[dict, str]:
+    inline = "data:image/png;base64," + ("A" * inline_len)
+    artifact = {
+        "artifact_id": "artifact-4655a01f6392d376",
+        "kind": "file_read",
+        "name": "page.png",
+        "path": "video-notes/shots/page.png",
+        "uri": "video-notes/shots/page.png",
+        "content": "图片文件（5.5MB）。像素内容随本工具结果提供。",
+        "mime_type": None,
+        "size_bytes": None,
+        "metadata": {
+            "path": "video-notes/shots/page.png",
+            "size_bytes": 5761922,
+            "file_hash": "sha256:abc",
+            "image_data_url": inline,
+        },
+    }
+    item = {
+        "item_id": "a-big",
+        "turn_id": "turn-1",
+        "kind": "tool_result",
+        "seq": 40,
+        "payload": {"type": "dynamicToolCall", "tool_result": "ok"},
+        "artifacts": [artifact],
+    }
+    return item, inline
+
+
+def _single_item_snapshot(item: dict) -> dict:
+    item_id = str(item["item_id"])
+    return {
+        "thread_id": "t-artifact",
+        "snapshot_seq": 41,
+        "items": {},
+        "item_order": [],
+        "turns": {},
+        "core": {
+            "items": {item_id: item},
+            "item_order": [item_id],
+            "turns": {"turn-1": {"turn_id": "turn-1", "status": "completed", "items": [item_id]}},
+        },
+    }
+
+
+def test_page_references_oversized_artifact_without_mutating_durable_snapshot():
+    """The wire swap is the safety proof: the page carries an explicit reference,
+    and the durable snapshot still holds the inline body byte for byte."""
+    item, inline = _oversized_artifact_item(inline_len=400 * 1024)  # over MAX_INLINE_ARTIFACT_BYTES
+    assert len(inline) > MAX_INLINE_ARTIFACT_BYTES
+    snapshot = _single_item_snapshot(item)
+    baseline = json.loads(json.dumps(snapshot))
+
+    page = _character_page_snapshot(
+        snapshot,
+        before_item_id=None,
+        before_seq=None,
+        char_limit=200_000,
+        turn_limit=10,
+    )
+
+    page_item = page["core"]["items"]["a-big"]
+    reference = page_item["artifacts"][0]
+    # The marker is explicit: identifier, mime type, byte size, availability.
+    assert reference["artifact_id"] == "artifact-4655a01f6392d376"
+    assert reference["availability"] == "reference"
+    assert reference["mime_type"] == "image/png"
+    assert reference["size_bytes"] == 5761922  # the artifact's declared file size
+    assert reference["inline_bytes"] == len(inline)
+    # The bulky data URL is gone from the page; the small metadata survives.
+    assert "image_data_url" not in reference["metadata"]
+    assert reference["metadata"]["file_hash"] == "sha256:abc"
+    # A page holding the reference is small and finite.
+    assert len(json.dumps(page, ensure_ascii=False).encode("utf-8")) < 64 * 1024
+
+    # DURABLE COPY INTACT, byte for byte. This is the contract the design rests on.
+    assert snapshot == baseline
+    assert snapshot["core"]["items"]["a-big"]["artifacts"][0]["metadata"]["image_data_url"] == inline
+    # And the page item is a fresh object, not the durable one.
+    assert page_item is not item
+
+
+def test_pages_stay_bounded_when_a_session_holds_an_oversized_artifact():
+    """With the byte budget and the reference swap together, every emitted page is
+    bounded even though one item's inline body is far larger than the budget."""
+    big_item, _inline = _oversized_artifact_item(inline_len=3 * 1024 * 1024)  # ~3 MiB inline
+    core_items = {
+        f"s{i}": {
+            "item_id": f"s{i}",
+            "turn_id": "turn-1",
+            "kind": "message",
+            "seq": i + 1,
+            "payload": {"text": "x" * 4000},
+        }
+        for i in range(20)
+    }
+    order = [f"s{i}" for i in range(20)] + ["a-big"]
+    core_items["a-big"] = big_item
+    snapshot = {
+        "thread_id": "t-bounded",
+        "snapshot_seq": 41,
+        "items": {},
+        "item_order": [],
+        "turns": {},
+        "core": {
+            "items": core_items,
+            "item_order": order,
+            "turns": {"turn-1": {"turn_id": "turn-1", "status": "completed", "items": order}},
+        },
+    }
+    budget = 20_000
+    client_cap = 4 * 1024 * 1024
+
+    seen: list[str] = []
+    before_item_id: str | None = None
+    before_seq: int | None = None
+    pages = 0
+    while True:
+        page = _character_page_snapshot(
+            snapshot,
+            before_item_id=before_item_id,
+            before_seq=before_seq,
+            char_limit=200_000,
+            turn_limit=10,
+            byte_limit=budget,
+        )
+        history = page["history_page"]
+        assert history["byte_count"] <= budget
+        emitted = len(json.dumps(page, ensure_ascii=False).encode("utf-8"))
+        assert emitted <= budget + 32 * 1024  # page metadata headroom
+        assert emitted < client_cap
+        seen = [str(item_id) for item_id in page["core"]["item_order"]] + seen
+        pages += 1
+        if not history["has_more"]:
+            break
+        before_item_id = history["next_before_item_id"]
+        before_seq = history["next_before_seq"]
+        assert pages < 100
+
+    assert pages > 1
+    assert seen == order
+
+
+@pytest.mark.asyncio
+async def test_queue_create_survives_a_stale_revision_while_members_keep_appending(tmp_path):
+    """A message sent while a background sub-agent is active must not be rejected.
+
+    Reproduces the reported failure: the main turn is held open (waiting on a
+    background sub-agent), and the session revision keeps advancing as the
+    member's forwarded run items are persisted on the parent thread.  The
+    client's ``expected_revision`` is read before the RPC, so a member event
+    landing in between makes it stale and ``queue.create`` answers with a
+    "Revision conflict" the user cannot act on.  A queue creation is an
+    idempotent append keyed by ``queue_item_id``; it must not be rejected just
+    because the session progressed.
+    """
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    turn_id = ""
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-member",
+                "client_message_id": "client-member",
+                "input": [{"type": "text", "text": "delegate"}],
+            },
+            context=context,
+        )
+        accepted = started.response["result"]
+        turn_id = str(accepted["runtime_start"]["turn_id"])
+        # The revision the client last saw and will CAS with.
+        client_revision = int(accepted["snapshot"]["revision"])
+
+        # The background member's forwarded run item lands on the parent thread
+        # and advances the revision after the client read it.
+        async def write(db):
+            return await context.persistence.append_batch(
+                db,
+                run_item_events=[
+                    RunItemEvent(
+                        kind="tool_call",
+                        thread_id="thread-member",
+                        event_id="member:call:1",
+                        run_id=turn_id,
+                        turn_id=turn_id,
+                        item_id="thread-member:sub:worker:call-1:tool",
+                        status="running",
+                        payload={"type": "dynamicToolCall", "tool_name": "read_file"},
+                        metadata={"sub_agent": {"status": "running", "name": "worker"}},
+                    )
+                ],
+            )
+
+        await context.persistence.write(write)
+        async with context.session_factory() as db:
+            assert await context.persistence.current_revision(db, "thread-member") > client_revision
+
+        queued = await context.host.execute(
+            "queue.create",
+            request_id=2,
+            params={
+                "thread_id": "thread-member",
+                "client_message_id": "client-member-next",
+                "input": [{"type": "text", "text": "next message"}],
+                "expected_revision": client_revision,
+                "include_snapshot": False,
+            },
+            context=context,
+        )
+        assert "result" in queued.response, queued.response
+        assert queued.response["result"]["queue_item"]["status"] == "queued"
+    finally:
+        release.set()
+        task = context.runtime_task_registry.task("thread-member", run_id=turn_id) if turn_id else None
+        if task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=5)
+            except BaseException:
+                pass
+        await engine.dispose()

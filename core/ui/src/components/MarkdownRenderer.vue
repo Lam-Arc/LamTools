@@ -7,6 +7,8 @@
 </template>
 
 <script setup lang="ts">
+import { t, uiLanguage } from '../i18n/index'
+
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { marked, type Renderer } from 'marked'
 import DOMPurify from 'dompurify'
@@ -15,6 +17,7 @@ import 'katex/dist/katex.min.css'
 import { isExternalUrl, openExternalUrl } from '../helpers/openUrl'
 import { renderAutoMathPlot } from './mathAutoPlot'
 import { getCachedMarkdown, setCachedMarkdown } from './markdownRenderCache'
+import { fadeStreamingText, type StreamingTextFade } from './streamingTextFade'
 
 defineOptions({ name: 'MarkdownRenderer' })
 
@@ -45,7 +48,7 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
       image.setAttribute('loading', 'lazy')
       image.setAttribute('decoding', 'async')
       image.setAttribute('referrerpolicy', 'no-referrer')
-      if (!image.getAttribute('alt')?.trim()) image.setAttribute('alt', '教学配图')
+      if (!image.getAttribute('alt')?.trim()) image.setAttribute('alt', t("教学配图"))
     }
   }
 })
@@ -247,7 +250,7 @@ function sanitizeStudySvg(source: string): string | null {
   svg.setAttribute('role', 'img')
   if (!svg.getAttribute('aria-label')) {
     const title = svg.querySelector('title')?.textContent?.trim()
-    svg.setAttribute('aria-label', title || '教学示意图')
+    svg.setAttribute('aria-label', title || t("教学示意图"))
   }
   return new XMLSerializer().serializeToString(svg)
 }
@@ -261,7 +264,7 @@ function copyButtonHtml(source: string): string {
   // default allowlist. (Note: never write a literal closing-script tag in
   // this comment — the SFC parser treats it as the end of the script block.)
   return (
-    `<button type="button" class="code-copy" data-code-copy aria-label="复制代码" title="复制代码">${COPY_ICON}${DONE_ICON}</button>` +
+    `<button type="button" class="code-copy" data-code-copy aria-label="${escapeHtml(t('复制代码'))}" title="${escapeHtml(t('复制代码'))}">${COPY_ICON}${DONE_ICON}</button>` +
     `<span class="code-source" hidden>${escapeHtml(source)}</span>`
   )
 }
@@ -298,7 +301,7 @@ function createMermaidRenderer(heavy: boolean): Renderer {
   renderer.image = function ({ href, title, text }: { href: string; title?: string | null; text: string }): string {
     const remote = /^https?:\/\//i.test(href)
     if (remote && !props.autoPlotMath) {
-      return `<span class="markdown-image-fallback" role="status">远程图片仅在 Study 中显示：${escapeHtml(text || '配图')}</span>`
+      return `<span class="markdown-image-fallback" role="status">${escapeHtml(t('远程图片仅在 Study 中显示：{0}', { 0: text || t('配图') }))}</span>`
     }
     const titleAttr = title ? ` title="${escapeHtml(title)}"` : ''
     const studyAttr = /^https:\/\//i.test(href) ? ' data-study-remote-image="true"' : ''
@@ -475,6 +478,7 @@ const SEGMENT_CACHE_LIMIT = 200
 interface StreamedSegment {
   text: string
   nodes: ChildNode[]
+  fade: StreamingTextFade
 }
 
 let streamedSegments: StreamedSegment[] = []
@@ -482,6 +486,7 @@ let tailParseTimer: ReturnType<typeof setTimeout> | null = null
 let lastTailParseAt = Number.NEGATIVE_INFINITY
 let lastClosedCount = 0
 let lastStreamingLength = 0
+let streamingInitialized = false
 // Bumped whenever the streamed DOM is abandoned (unmount, session switch, a
 // finished render taking over) so a queued tail timer can never write into a
 // container that now belongs to something else.
@@ -499,7 +504,7 @@ const streamingStats = {
 }
 
 function cachedSegmentHtml(text: string): string {
-  const key = `${props.autoPlotMath ? 'p1' : 'p0'}:${text}`
+  const key = `${uiLanguage.value}:${props.autoPlotMath ? 'p1' : 'p0'}:${text}`
   const cached = streamedSegmentCache.get(key)
   if (cached !== undefined) {
     streamingStats.segmentCacheHits += 1
@@ -541,13 +546,15 @@ function cancelTailParse(): void {
   }
 }
 
-function parseTailSegment(index: number, text: string, container: HTMLElement): void {
+function parseTailSegment(index: number, text: string, container: HTMLElement, animate: boolean): void {
   cancelTailParse()
   const existing = streamedSegments[index]
   if (existing) disposeSegment(existing)
+  const nodes = appendSegmentNodes(container, cachedSegmentHtml(text))
   const segment: StreamedSegment = {
     text,
-    nodes: appendSegmentNodes(container, cachedSegmentHtml(text)),
+    nodes,
+    fade: fadeStreamingText(nodes, existing?.fade, animate),
   }
   streamingStats.tailParses += 1
   if (existing) streamedSegments[index] = segment
@@ -576,12 +583,15 @@ function clearStreamedSegments(): void {
   lastTailParseAt = Number.NEGATIVE_INFINITY
   lastClosedCount = 0
   lastStreamingLength = 0
+  streamingInitialized = false
 }
 
 function syncStreamingSegments(content: string, forceTail: boolean): void {
   const container = contentRoot.value
   if (!container) return
   const shrunk = content.length < lastStreamingLength
+  const animate = streamingInitialized && !shrunk
+  streamingInitialized = true
   lastStreamingLength = content.length
   const blocks = splitStreamingSegments(content)
   const closedCount = Math.max(blocks.length - 1, 0)
@@ -600,16 +610,22 @@ function syncStreamingSegments(content: string, forceTail: boolean): void {
   //    leaves the paragraph blank in between. Keeping it is only safe when
   //    nothing needs to be inserted in front of it.
   const keepStaleTail = reuse === closedCount && streamedSegments.length === closedCount + 1
+  // A tail can close and grow in the same tick. Carry its reveal timeline
+  // into the closed render rather than fading the whole paragraph again.
+  const previousTail = streamedSegments[reuse]?.fade
   const dropFrom = keepStaleTail ? closedCount + 1 : reuse
   while (streamedSegments.length > dropFrom) disposeSegment(streamedSegments.pop()!)
 
   // 3) Render the segments that just closed — exactly once each.
   while (streamedSegments.length < closedCount) {
     const text = blocks[streamedSegments.length]
+    const previousFade = streamedSegments.length === reuse ? previousTail : undefined
     streamingStats.closedParses += 1
+    const nodes = appendSegmentNodes(container, cachedSegmentHtml(text))
     streamedSegments.push({
       text,
-      nodes: appendSegmentNodes(container, cachedSegmentHtml(text)),
+      nodes,
+      fade: fadeStreamingText(nodes, previousFade, animate),
     })
   }
 
@@ -631,7 +647,7 @@ function syncStreamingSegments(content: string, forceTail: boolean): void {
     || shrunk
     || tailText.length < EAGER_TAIL_PARSE_LIMIT
     || Date.now() - lastTailParseAt >= TAIL_PARSE_INTERVAL_MS
-  if (due) parseTailSegment(closedCount, tailText, container)
+  if (due) parseTailSegment(closedCount, tailText, container, animate)
   else scheduleTailParse()
 }
 
@@ -647,7 +663,7 @@ const renderedHtml = computed(() => {
   // toggles and re-renders (part auto-collapse, process groups) re-run this
   // computed with unchanged content; re-parsing marked + sanitizing on every
   // toggle made those interactions produce ~60ms long tasks on large messages.
-  const cacheKey = `${props.mermaid ? 'm1' : 'm0'}:${props.autoPlotMath ? 'p1' : 'p0'}:${props.content}`
+  const cacheKey = `${uiLanguage.value}:${props.mermaid ? 'm1' : 'm0'}:${props.autoPlotMath ? 'p1' : 'p0'}:${props.content}`
   const cached = getCachedMarkdown(cacheKey)
   if (cached) {
     mermaidBlocks.length = 0
@@ -755,7 +771,7 @@ function enhanceTable(table: HTMLTableElement): void {
   scrollbar.className = 'markdown-table-scrollbar'
   scrollbar.tabIndex = 0
   scrollbar.setAttribute('role', 'region')
-  scrollbar.setAttribute('aria-label', '横向滚动表格')
+  scrollbar.setAttribute('aria-label', t("横向滚动表格"))
 
   const scrollTrack = document.createElement('div')
   scrollTrack.className = 'markdown-table-scroll-track'
@@ -835,6 +851,13 @@ watch(() => props.content, (value) => {
   if (props.streaming) syncStreamingSegments(value, false)
 }, { flush: 'post' })
 
+watch(uiLanguage, () => {
+  if (props.streaming && contentRoot.value) {
+    clearStreamedSegments()
+    syncStreamingSegments(props.content, true)
+  }
+}, { flush: 'post' })
+
 // Leaving streaming mode keeps the same content node and replaces only its
 // contents with the finished render; entering it (a message going live again)
 // starts from a clean segment list.
@@ -910,7 +933,7 @@ function onRootImageError(event: Event) {
   const fallback = document.createElement('span')
   fallback.className = 'markdown-image-fallback'
   fallback.setAttribute('role', 'status')
-  fallback.textContent = `图片加载失败：${image.alt || '教学配图'}`
+  fallback.textContent = t("图片加载失败：{0}", { 0: image.alt || t("教学配图") })
   image.after(fallback)
 }
 
@@ -936,6 +959,22 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 </script>
 
 <style scoped>
+.markdown-body :deep(.stream-text-fade) {
+  animation: stream-text-reveal var(--dur-base, 180ms) var(--ease-out, ease-out) both;
+  animation-delay: calc(-1 * var(--stream-fade-age, 0ms));
+}
+
+@keyframes stream-text-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body :deep(.stream-text-fade) {
+    animation: none;
+  }
+}
+
 .markdown-body {
   font-size: 14px;
   line-height: 1.5;

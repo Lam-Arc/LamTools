@@ -1,15 +1,15 @@
 <template>
   <section class="settings-panel plugins-root">
     <header class="settings-title">
-      <h1>插件</h1>
-      <p>插件 = 工具 / 技能 / Hooks / MCP 的统一安装单元。内置插件可禁用、不可卸载；每个插件按平台分类（通用 / 桌面端专用 / 移动端专用），本机只列出适用的部分。</p>
+      <h1>{{ t("插件") }}</h1>
+      <p>{{ t("插件 = 工具 / 技能 / Hooks / MCP 的统一安装单元。内置插件可禁用、不可卸载；每个插件按平台分类（通用 / 桌面端专用 / 移动端专用），本机只列出适用的部分。") }}</p>
     </header>
 
     <p v-if="error" class="skill-error" role="alert">{{ error }}</p>
 
     <!-- 安装区：拖拽 zip 直装 / 粘贴 Release URL -->
     <article class="setting-card install-card">
-      <h3>安装插件</h3>
+      <h3>{{ t("安装插件") }}</h3>
       <div
         class="install-dropzone"
         :class="{ 'is-drag': dragActive }"
@@ -18,22 +18,22 @@
         @dragleave.prevent="onDragLeave"
         @drop.prevent="onDrop"
       >
-        <p class="dropzone-hint">{{ dragActive ? '松开以安装' : '拖拽 .zip 文件到此处安装' }}</p>
-        <p class="dropzone-sub">或粘贴 GitHub Release URL：</p>
+        <p class="dropzone-hint">{{ dragActive ? t("松开以安装") : t("拖拽 .zip 文件到此处安装") }}</p>
+        <p class="dropzone-sub">{{ t("或粘贴 GitHub Release URL：") }}</p>
         <div class="install-form">
           <select v-model="installSource" class="field-input">
             <option value="url">GitHub Release URL</option>
-            <option value="local">本地目录</option>
-            <option value="zip">本地 zip 路径</option>
+            <option value="local">{{ t("本地目录") }}</option>
+            <option value="zip">{{ t("本地 zip 路径") }}</option>
           </select>
           <input
             v-model="installPath"
             class="field-input install-path"
             type="text"
-            :placeholder="installSource === 'url' ? 'https://github.com/{owner}/{repo}/releases/…/{asset}.zip' : '插件目录或 .zip 路径'"
+            :placeholder="installSource === 'url' ? 'https://github.com/{owner}/{repo}/releases/…/{asset}.zip' : t('插件目录或 .zip 路径')"
           />
           <button class="small-btn" type="button" :disabled="installing || !installPath.trim()" @click="doInstall">
-            {{ installing ? '安装中…' : '安装' }}
+            {{ installing ? t("安装中…") : t("安装") }}
           </button>
         </div>
       </div>
@@ -41,8 +41,8 @@
     </article>
 
     <div class="subhead">
-      <span class="muted">{{ loading ? '加载中…' : `共 ${plugins.length} 个 · 已启用 ${enabledCount}` }}</span>
-      <button class="text-btn" type="button" @click="fetchPlugins">刷新</button>
+      <span class="muted">{{ loading ? t("加载中…") : t('共 {0} 个 · 已启用 {1}', { 0: plugins.length, 1: enabledCount }) }}</span>
+      <button class="text-btn" type="button" @click="fetchPlugins">{{ t("刷新") }}</button>
     </div>
 
     <!-- 插件列表 -->
@@ -53,7 +53,7 @@
         <header class="provider-head">
           <div class="provider-identity">
             <strong>{{ group.label }}</strong>
-            <span>{{ group.plugins.length }} 个</span>
+            <span>{{ group.plugins.length }}{{ t("个") }}</span>
           </div>
         </header>
         <div class="model-list">
@@ -66,9 +66,9 @@
               <span>{{ plugin.description }}</span>
               <span class="plugin-meta">
                 <span class="hook-status" :class="depsClass(plugin)">{{ depsLabel(plugin) }}</span>
-                <span class="hook-status is-plugins-tools">{{ toolCount(plugin) }} 工具</span>
+                <span class="hook-status is-plugins-tools">{{ toolCount(plugin) }} {{ t("工具") }}</span>
                 <span v-if="plugin.tools_note" class="hook-status is-plugins-note">{{ plugin.tools_note }}</span>
-                <span v-if="isBundled(plugin)" class="hook-status is-bundled">内置</span>
+                <span v-if="isBundled(plugin)" class="hook-status is-bundled">{{ t("内置") }}</span>
               </span>
             </div>
             <div class="row-actions">
@@ -76,8 +76,8 @@
                 class="text-btn toggle-btn"
                 :class="{ 'is-on': plugin.enabled }"
                 type="button"
-                :aria-label="plugin.enabled ? `禁用插件 ${plugin.name}` : `启用插件 ${plugin.name}`"
-                :title="plugin.enabled ? '已启用' : '已禁用'"
+                :aria-label="plugin.enabled ? t('禁用插件 {0}', { 0: plugin.name }) : t('启用插件 {0}', { 0: plugin.name })"
+                :title="plugin.enabled ? t('已启用') : t('已禁用')"
                 @click="toggleEnabled(plugin)"
               >
                 <ToggleRight v-if="plugin.enabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -87,8 +87,8 @@
                 v-if="plugin.config_schema || plugin.dependencies.length || hasAssets(plugin)"
                 class="text-btn icon-btn"
                 type="button"
-                aria-label="配置"
-                title="配置"
+                :aria-label="t('配置')"
+                :title="t('配置')"
                 @click="openConfig(plugin)"
               >
                 <Settings :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -97,8 +97,8 @@
                 v-if="!isBundled(plugin)"
                 class="text-btn danger icon-btn"
                 type="button"
-                aria-label="卸载"
-                title="卸载"
+                :aria-label="t('卸载')"
+                :title="t('卸载')"
                 @click="doUninstall(plugin)"
               >
                 <Trash2 :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -119,7 +119,7 @@
         <p v-if="error" class="skill-error editor-error" role="alert">{{ error }}</p>
         <div class="editor-popover-head">
           <h3>{{ configPlugin.name }} <span class="plugin-version">{{ configPlugin.version }}</span></h3>
-          <button type="button" class="editor-popover-close" aria-label="关闭" @click="closeConfig">
+          <button type="button" class="editor-popover-close" :aria-label="t('关闭')" @click="closeConfig">
             <X :size="14" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </div>
@@ -128,7 +128,7 @@
 
         <!-- 工具列表 -->
         <div class="detail-block">
-          <h4>工具 <span class="asset-count">{{ allTools(configPlugin).length }}</span></h4>
+          <h4>{{ t("工具") }}<span class="asset-count">{{ allTools(configPlugin).length }}</span></h4>
           <div v-if="allTools(configPlugin).length" class="asset-list">
             <div v-for="tool in allTools(configPlugin)" :key="tool.name" class="asset-row">
               <span class="asset-name">{{ tool.name }}</span>
@@ -136,23 +136,23 @@
               <span v-if="tool.visibility === 'on_load'" class="asset-tag">on_load</span>
             </div>
           </div>
-          <p v-else class="muted">无工具</p>
+          <p v-else class="muted">{{ t("无工具") }}</p>
         </div>
 
         <!-- 技能列表 -->
         <div class="detail-block">
-          <h4>技能 <span class="asset-count">{{ configPlugin.skill_names.length }}</span></h4>
+          <h4>{{ t("技能") }}<span class="asset-count">{{ configPlugin.skill_names.length }}</span></h4>
           <div v-if="configPlugin.skill_names.length" class="asset-list">
             <div v-for="name in configPlugin.skill_names" :key="name" class="asset-row">
               <span class="asset-name">{{ name }}</span>
             </div>
           </div>
-          <p v-else class="muted">无技能</p>
+          <p v-else class="muted">{{ t("无技能") }}</p>
         </div>
 
         <!-- 钩子列表 -->
         <div class="detail-block">
-          <h4>钩子 <span class="asset-count">{{ configPlugin.hook_summary.length }}</span></h4>
+          <h4>{{ t("钩子") }}<span class="asset-count">{{ configPlugin.hook_summary.length }}</span></h4>
           <div v-if="configPlugin.hook_summary.length" class="asset-list">
             <div v-for="(hook, i) in configPlugin.hook_summary" :key="i" class="asset-row">
               <span class="asset-name">{{ hook.event }}</span>
@@ -160,13 +160,13 @@
               <span class="asset-tag">{{ hook.type }}</span>
             </div>
           </div>
-          <p v-else class="muted">无钩子</p>
+          <p v-else class="muted">{{ t("无钩子") }}</p>
         </div>
 
         <!-- 参数（configSchema 驱动，如生图 api_url/api_key） -->
         <div v-if="configPlugin.config_schema" class="detail-block">
-          <h4>参数</h4>
-          <div v-if="schemaLoading" class="muted">加载中…</div>
+          <h4>{{ t("参数") }}</h4>
+          <div v-if="schemaLoading" class="muted">{{ t("加载中…") }}</div>
           <div v-else class="config-form">
             <div v-for="prop in schemaProps" :key="prop.key" class="field" :class="{ 'field-boolean': prop.type === 'boolean' }">
               <span class="field-label">{{ prop.label }}<code v-if="prop.type" class="field-type">{{ prop.type }}</code></span>
@@ -176,26 +176,26 @@
               <template v-if="prop.xControl?.kind === 'path-list'">
                 <div v-if="prop.xControl.scan" class="scan-row">
                   <button class="small-btn" type="button" :disabled="scanning" @click="scanDirs(prop)">
-                    {{ scanning ? '扫描中…' : (prop.xControl.scan.label || '扫描目录') }}
+                    {{ scanning ? t("扫描中…") : (prop.xControl.scan.label || t("扫描目录")) }}
                   </button>
                   <span v-if="scanNotice[prop.key]" class="scan-notice">{{ scanNotice[prop.key] }}</span>
                 </div>
                 <div class="path-list">
                   <div v-for="(item, index) in arrayDraft[prop.key] || []" :key="index" class="path-row">
                     <input v-model="arrayDraft[prop.key][index]" class="field-input path-input" type="text" />
-                    <button class="small-btn" type="button" @click="browsePath(prop, index)">浏览</button>
-                    <button class="text-btn danger" type="button" @click="removePath(prop, index)">删除</button>
+                    <button class="small-btn" type="button" @click="browsePath(prop, index)">{{ t("浏览") }}</button>
+                    <button class="text-btn danger" type="button" @click="removePath(prop, index)">{{ t("删除") }}</button>
                   </div>
                   <div class="path-row">
                     <input
                       v-model="newPathDraft[prop.key]"
                       class="field-input path-input"
                       type="text"
-                      placeholder="目录路径（工作区相对或绝对）"
+                      :placeholder="t('目录路径（工作区相对或绝对）')"
                       @keyup.enter="addPath(prop)"
                     />
-                    <button class="small-btn" type="button" @click="addPath(prop)">添加</button>
-                    <button class="small-btn" type="button" @click="browsePath(prop)">浏览…</button>
+                    <button class="small-btn" type="button" @click="addPath(prop)">{{ t("添加") }}</button>
+                    <button class="small-btn" type="button" @click="browsePath(prop)">{{ t("浏览…") }}</button>
                   </div>
                 </div>
               </template>
@@ -209,7 +209,7 @@
                   class="field-input"
                   type="text"
                   :list="modelListId(prop)"
-                  placeholder="选择或输入模型 ID"
+                  :placeholder="t('选择或输入模型 ID')"
                 />
                 <datalist v-if="modelOptionsFor(prop).length" :id="modelListId(prop)">
                   <option v-for="m in modelOptionsFor(prop)" :key="m.id" :value="m.id">{{ m.display_name || m.model_id }}</option>
@@ -219,7 +219,7 @@
                   v-model="configDraft[prop.key]"
                   class="field-input"
                   type="text"
-                  :placeholder="modelLoadFailed ? '模型列表加载失败，可手动输入' : '暂无可用模型，可手动输入模型 ID'"
+                  :placeholder="modelLoadFailed ? t('模型列表加载失败，可手动输入') : t('暂无可用模型，可手动输入模型 ID')"
                 />
               </template>
 
@@ -231,7 +231,7 @@
                 type="button"
                 class="toggle-btn"
                 :class="{ 'is-on': !!configDraft[prop.key] }"
-                :aria-label="`${prop.label} 开关`"
+                :aria-label="t('{0} 开关', { 0: prop.label })"
                 @click="configDraft[prop.key] = !configDraft[prop.key]"
               >
                 <ToggleRight v-if="configDraft[prop.key]" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -248,13 +248,13 @@
                 v-model="arrayDraft[prop.key]"
                 class="field-input array-input"
                 rows="2"
-                placeholder="每行一个"
+                :placeholder="t('每行一个')"
               ></textarea>
               <input v-else v-model="configDraft[prop.key]" class="field-input" type="text" />
             </div>
             <div class="editor-actions">
               <button class="small-btn" type="button" :disabled="configSaving" @click="saveConfig">
-                {{ configSaving ? '保存中…' : '保存配置' }}
+                {{ configSaving ? t("保存中…") : t("保存配置") }}
               </button>
             </div>
           </div>
@@ -262,7 +262,7 @@
 
         <!-- 依赖 -->
         <div v-if="configPlugin.dependencies.length" class="detail-block">
-          <h4>依赖</h4>
+          <h4>{{ t("依赖") }}</h4>
           <p class="muted deps-line">{{ configPlugin.dependencies.join(' · ') }}</p>
           <button
             v-if="configPlugin.deps_status !== 'ok' && configPlugin.deps_status !== 'none'"
@@ -270,7 +270,7 @@
             type="button"
             :disabled="installingDeps"
             @click="installDeps(configPlugin)"
-          >{{ installingDeps ? '安装中…' : '安装依赖' }}</button>
+          >{{ installingDeps ? t("安装中…") : t("安装依赖") }}</button>
         </div>
       </div>
 
@@ -289,8 +289,8 @@
 
       <CoreConfirmDialog
         :open="Boolean(pendingUninstall)"
-        title="卸载插件及目录？"
-        :detail="pendingUninstall ? `${pendingUninstall.name}${pendingUninstall.dependencies.length ? ' · 依赖保留' : ''}` : ''"
+        :title="t('卸载插件及目录？')"
+        :detail="pendingUninstall ? t('{0}{1}', { 0: pendingUninstall.name, 1: pendingUninstall.dependencies.length ? t(' · 依赖保留') : '' }) : ''"
         @cancel="pendingUninstall = null"
         @confirm="confirmUninstall"
       />
@@ -299,6 +299,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, ref } from 'vue'
 import { Settings, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
 import FolderBrowserDialog from './FolderBrowserDialog.vue'
@@ -405,11 +407,11 @@ async function onDrop(e: DragEvent) {
   if (!file) return
   const p = (file as File & { path?: string }).path
   if (!p) {
-    installNotice.value = '当前环境不支持拖拽安装（请使用 Release URL 粘贴安装）'
+    installNotice.value = t("当前环境不支持拖拽安装（请使用 Release URL 粘贴安装）")
     return
   }
   if (!/\.zip$/i.test(p)) {
-    installNotice.value = `仅支持 .zip 安装包：${file.name}`
+    installNotice.value = t("仅支持 .zip 安装包：{0}", { 0: file.name })
     return
   }
   installNotice.value = ''
@@ -417,7 +419,7 @@ async function onDrop(e: DragEvent) {
   error.value = ''
   try {
     await props.requestRpc('plugin.install', { source: 'zip', path: p })
-    installNotice.value = `安装成功：${file.name}`
+    installNotice.value = t("安装成功：{0}", { 0: file.name })
     await fetchPlugins()
     emit('changed', false)
   } catch (err) {
@@ -452,9 +454,9 @@ const enabledCount = computed(() => plugins.value.filter((p) => p.enabled).lengt
 
 /** 分类分组与组标题；顺序即显示顺序。 */
 const PLATFORM_GROUPS: { platforms: string; label: string }[] = [
-  { platforms: 'universal', label: '通用' },
-  { platforms: 'desktop', label: '桌面端专用' },
-  { platforms: 'mobile', label: '移动端专用' },
+  { platforms: 'universal', get label() { return t("通用") } },
+  { platforms: 'desktop', get label() { return t("桌面端专用") } },
+  { platforms: 'mobile', get label() { return t("移动端专用") } },
 ]
 
 /**
@@ -498,11 +500,11 @@ function permClass(permission?: string): string {
 }
 
 function depsLabel(plugin: PluginItem): string {
-  if (!plugin.dependencies.length) return '无依赖'
-  if (plugin.deps_status === 'ok') return '依赖就绪'
-  if (plugin.deps_status === 'version_mismatch') return '版本不符'
-  if (plugin.deps_status === 'missing') return '依赖缺失'
-  return '依赖未知'
+  if (!plugin.dependencies.length) return t("无依赖")
+  if (plugin.deps_status === 'ok') return t("依赖就绪")
+  if (plugin.deps_status === 'version_mismatch') return t("版本不符")
+  if (plugin.deps_status === 'missing') return t("依赖缺失")
+  return t("依赖未知")
 }
 
 function depsClass(plugin: PluginItem): string {
@@ -546,7 +548,7 @@ async function doInstall() {
     if (installSource.value === 'url') payload.url = installPath.value.trim()
     else payload.path = installPath.value.trim()
     await props.requestRpc('plugin.install', payload)
-    installNotice.value = '安装成功'
+    installNotice.value = t("安装成功")
     installPath.value = ''
     await fetchPlugins()
     emit('changed', false)
@@ -773,10 +775,10 @@ async function browsePath(prop: SchemaProp, index?: number) {
     if (!arrayDraft.value[prop.key]) arrayDraft.value[prop.key] = []
     arrayDraft.value[prop.key][index] = value
   } else if (!appendPathValue(prop, value)) {
-    scanNotice.value[prop.key] = '该目录已在列表中'
+    scanNotice.value[prop.key] = t("该目录已在列表中")
   }
   if (converted?.outside) {
-    scanNotice.value[prop.key] = '所选目录在工作区之外，已保留绝对路径'
+    scanNotice.value[prop.key] = t("所选目录在工作区之外，已保留绝对路径")
   }
 }
 
@@ -805,9 +807,9 @@ async function scanDirs(prop: SchemaProp) {
       added += 1
     }
     const parts: string[] = []
-    if (added) parts.push(`已添加 ${added} 个目录`)
-    if (missing.length) parts.push(`未找到：${missing.join('、')}`)
-    if (!parts.length) parts.push('未发现新目录')
+    if (added) parts.push(t("已添加 {0} 个目录", { 0: added }))
+    if (missing.length) parts.push(t("未找到：{0}", { 0: missing.join('、') }))
+    if (!parts.length) parts.push(t("未发现新目录"))
     scanNotice.value[prop.key] = parts.join('；')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)

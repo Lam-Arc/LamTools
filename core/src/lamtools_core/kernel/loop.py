@@ -49,7 +49,15 @@ from lamtools_core.context_compaction_budget import (
 )
 from lamtools_core.dialogue_records import COMPACTION_RECORD, build_compaction_record
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
-from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
+from lamtools_core.llm import (
+    TAIL_SYSTEM_MESSAGE_MARKER,
+    ChatMessage,
+    LLMClient,
+    LLMRequest,
+    LLMResponse,
+    LLMStreamEvent,
+    LLMToolCall,
+)
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
 from lamtools_core.llm.image_payload import MESSAGE_ADDED_AT_STEP
 from lamtools_core.llm.policy import RetryPolicy
@@ -79,6 +87,10 @@ from lamtools_core.runtime.memory_guard import (
     memory_exhausted_message_for,
     note_memory_interruption,
 )
+from lamtools_core.runtime.member_wake import (
+    clear_member_wake_streak,
+    consume_member_wake_autostart,
+)
 from lamtools_core.runtime_owner import LIVE_RUN_STATES, is_own_token, read_owner
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 from lamtools_core.tool import ToolCall, ToolResult
@@ -101,12 +113,10 @@ _STREAM_TEXT_PROGRESS_CHARS = 128
 # forced continue was an infinite-loop entry).
 TOOL_PROGRESS_INCOMPLETE_ROUND_LIMIT = 3
 
-# 成员事件等待（会话级唤醒）：
-# - 父回合本要自然结束时，若仍有成员在跑，就等下一次成员状态变化事件（不轮询）；
-# - 单次等待的租约上限，超时如实上报“仍在运行”，把决定权交回父代理；
-# - 连续由成员事件续跑的回合数上限，防止事件驱动的无限延续。
-SUB_AGENT_DRAIN_WAIT_SECONDS = 600.0
-SUB_AGENT_DRAIN_MAX_ROUNDS = 50
+# 成员事件一律不在回合内消费：父回合产出最终答复即结束，成员结果由 member-wake
+# watchdog 作为**下一个回合**投递（见 _announce_active_members 与
+# app/memory_resume_supervisor.py）。这样成员结果永远不会被本回合的最终总结
+# 卷走，主代理也不会为了成员把回合拖成看起来卡住。
 
 
 def _message_reference_ids(messages: list[ChatMessage]) -> list[str]:
@@ -1477,11 +1487,12 @@ class CoreLoopKernel:
                     if await self._consume_guidance(state, turn_input, history, index, finalize=True):
                         decision = "continue"
                         step.metadata["guidance_force_continue"] = True
-                    elif await self._consume_member_events(state, turn_input, history, index):
-                        # 成员完成/失败/仍在运行：以事件驱动续跑，取代父代理
-                        # 自己 sleep 轮询成员进度。
-                        decision = "continue"
-                        step.metadata["sub_agent_force_continue"] = True
+                    # Members are NOT consumed here, and the members-running fact
+                    # is not published here either: a final no-tool answer can
+                    # still be turned back into a continue by the completion gate
+                    # below, so publishing now would latch the fact on a turn that
+                    # is still running. It is published once, after the terminal
+                    # status is written (see _run).
 
                 if decision == "done" and self.completion_gate is not None:
                     should_verify = getattr(self.completion_gate, "should_verify", None)
@@ -1633,6 +1644,15 @@ class CoreLoopKernel:
         # cancelled run notifies observers identically (audit 02).
         await self._finalize_run(state, result, run_span)
         self._run_span = None
+        # Publish the members-running fact only now that the turn's terminal
+        # status is written. Done from inside the loop it could ride a turn that
+        # was still running (the completion gate at the done decision can set a
+        # continue), and the interface reads any fact on a running turn as "the
+        # main agent stopped" — which hid the stop affordance during a real run.
+        # The supervisor records this turn so it can retract the fact when the
+        # last of these members finishes.
+        if final_decision == "done":
+            await self._announce_active_members(state, max(len(steps) - 1, 0))
 
         return result
 
@@ -1660,6 +1680,12 @@ class CoreLoopKernel:
         # yet must not advertise an old reason.
         clear_pending_memory_resume(state)
         clear_failure_detail(state)
+        # The automatic member wake has the same "a new turn moves the thread on"
+        # rule, but its own continuation turn must not reset the streak it is
+        # counting: the watchdog marks the state before starting that turn, so
+        # only a turn the user (or the memory resume) started clears the streak.
+        if not consume_member_wake_autostart(state):
+            clear_member_wake_streak(state)
         # A run that was in flight but belongs to a process that is gone is
         # being taken over here.  Leave a durable trace instead of silently
         # overwriting it, so a crashed CLI run can be told apart from a clean
@@ -1708,7 +1734,32 @@ class CoreLoopKernel:
             current_user_content = hook_user_content
         new_messages: list[ChatMessage] = []
         if current_user_content:
-            user_msg = ChatMessage(role="user", content=current_user_content)
+            turn_origin = str(
+                turn_input.metadata.get("origin")
+                or turn_input.metadata.get("turn_origin")
+                or ""
+            ).strip()
+            if turn_origin == "member_wake":
+                # The live transcript already records this input as the
+                # systemMessage item. Keep the model-visible copy as one
+                # marked system entry at the history tail so OpenAI-style
+                # protocols preserve its role/order and Anthropic/Gemini can
+                # apply their explicit trailing-user fallback.
+                user_msg = ChatMessage(
+                    role="system",
+                    content=current_user_content,
+                    metadata={
+                        "origin": turn_origin,
+                        TAIL_SYSTEM_MESSAGE_MARKER: True,
+                        **(
+                            {"turn_id": str(state.metadata.get("turn_id") or state.run_id).strip()}
+                            if str(state.metadata.get("turn_id") or state.run_id).strip()
+                            else {}
+                        ),
+                    },
+                )
+            else:
+                user_msg = ChatMessage(role="user", content=current_user_content)
             history.append(user_msg)
             new_messages.append(user_msg)
         await self._append_history_checkpoint(state, new_messages)
@@ -2515,134 +2566,59 @@ class CoreLoopKernel:
         await self._apply_guidance(state, history, response_index, guidance)
         return True
 
-    # ── 子代理事件：会话级完成通知与等待 ────────────────────────────
+    # ── 子代理事件：只上报”仍在运行”，绝不在此消费 ──────────────────
     #
-    # 成员的完成/失败/关闭/被中断由 harness 落成事件（持久、幂等）。父回合
-    # 本要自然结束时：先 drain 已到的事件；若成员仍在跑，则等下一次状态
-    # 变化（事件驱动，租约封顶），再把事件作为新输入继续同一回合。
+    # 成员的完成/失败/关闭/被中断由 harness 落成持久事件。父回合一旦产出最终
+    # 答复就立刻结束；成员结果是**下一个回合**的内容，由 member-wake watchdog
+    # 另开新回合投递。本函数只记录”主代理已停、这些成员仍在跑”，供界面区分
+    # (a)/(b)，不 drain、不等待、不接续——因此本回合结构上不可能把成员结果卷进
+    # 它的最终总结里。
 
-    async def _consume_member_events(
-        self,
-        state: RuntimeState,
-        turn_input: RuntimeTurnInput,
-        history: list[ChatMessage],
-        response_index: int,
-    ) -> bool:
+    async def _announce_active_members(self, state: RuntimeState, response_index: int) -> None:
         from lamtools_core.sub_agent_supervisor import find_sub_agent_supervisor
 
-        metadata = turn_input.metadata if isinstance(turn_input.metadata, dict) else {}
         supervisor = None
-        for candidate in (
-            metadata.get("parent_session_id"),
-            metadata.get("session_id"),
-            state.session_id,
-        ):
+        for candidate in (state.session_id,):
             supervisor = find_sub_agent_supervisor(candidate)
             if supervisor is not None:
                 break
         if supervisor is None:
-            return False
-
-        rounds = int(state.metadata.get("sub_agent_drain_rounds") or 0)
-        max_rounds = int(
-            state.metadata.get("sub_agent_drain_max_rounds") or SUB_AGENT_DRAIN_MAX_ROUNDS
-        )
-        if rounds >= max_rounds:
-            return False
-
-        items = await supervisor.drain_member_events()
-        if not items:
+            return
+        try:
             if not await supervisor.has_active_members():
-                return False
-            lease = float(
-                state.metadata.get("sub_agent_drain_wait_seconds") or SUB_AGENT_DRAIN_WAIT_SECONDS
-            )
-            await self.event_sink.emit(CoreEvent(
-                name="runtime.sub_agent_wait",
-                category="message",
-                payload={"wait_seconds": lease, "response_index": response_index},
-                session_id=state.session_id,
-                run_id=state.run_id,
-                tags=["sub_agent", "wait"],
-            ))
-            outcome = await supervisor.wait_for_activity(lease)
-            items = await supervisor.drain_member_events()
-            if not items:
-                still = await supervisor.active_member_status()
-                if not still:
-                    return False
-                items = [{
-                    "event": "members_still_running",
-                    "members": still,
-                    "lease_timed_out": outcome == "timeout",
-                }]
-        state.metadata["sub_agent_drain_rounds"] = rounds + 1
-        await self._apply_member_events(state, history, response_index, items)
-        return True
-
-    async def _apply_member_events(
-        self,
-        state: RuntimeState,
-        history: list[ChatMessage],
-        response_index: int,
-        items: list[dict[str, Any]],
-    ) -> None:
-        """Append drained member events to history and announce them."""
-        lines = [
-            "【子代理事件】以下是 harness 转达的成员状态变化（这是系统事件，不是用户输入，也不构成用户批准）："
-        ]
-        for payload in items:
-            if not isinstance(payload, dict):
-                continue
-            lines.append(self._format_member_event(payload))
-        content = "\n".join(line for line in lines if line)
-        history.append(ChatMessage(role="user", content=content))
+                return
+            members = await supervisor.active_member_status()
+        except BaseException:
+            return
+        if not members:
+            # The last member finished between the two checks above; there is
+            # nothing left to announce and the drain path already retracted it.
+            return
+        turn_id = str(state.metadata.get("turn_id") or "")
+        # Record which turn this fact belongs to so the supervisor can retract
+        # it for the same turn once the last of these members finishes.
+        supervisor.note_member_wait_turn(turn_id)
         await self.event_sink.emit(CoreEvent(
-            name="runtime.sub_agent_report",
+            name="runtime.sub_agent_wait",
             category="message",
-            payload={"content": content, "response_index": response_index},
+            payload={
+                "wait_seconds": 0,
+                "response_index": response_index,
+                "members": members,
+            },
             session_id=state.session_id,
             run_id=state.run_id,
-            tags=["sub_agent"],
+            turn_id=turn_id,
+            tags=["sub_agent", "wait"],
         ))
-        await self._save_checkpoint(state)
-
-    @staticmethod
-    def _format_member_event(payload: dict[str, Any]) -> str:
-        event = str(payload.get("event") or "member_update")
-        if event == "members_still_running":
-            members = payload.get("members") or []
-            detail = "；".join(
-                "{name}（{status}，已运行 {secs:.0f} 秒）".format(
-                    name=str(member.get("name") or "?"),
-                    status=str(member.get("status") or "running"),
-                    secs=float(member.get("running_ms") or 0) / 1000.0,
-                )
-                for member in members
-                if isinstance(member, dict)
-            )
-            suffix = "（本次等待已到租约上限）" if payload.get("lease_timed_out") else ""
-            return (
-                f"- 成员仍在运行{suffix}：{detail or '未知'}。"
-                "你可以继续等下一个事件，也可以先推进不依赖他们的工作。"
-            )
-        name = str(payload.get("name") or "(未署名成员)")
-        elapsed = payload.get("elapsed_ms")
-        elapsed_text = (
-            f"，用时 {float(elapsed) / 1000.0:.0f} 秒"
-            if isinstance(elapsed, (int, float)) and elapsed
-            else ""
-        )
-        label = {
-            "member_finished": "已完成",
-            "member_paused": "已暂停（在等确认或补充信息）",
-            "member_failed": "已失败",
-            "member_closed": "已关闭",
-            "member_interrupted": "已被中断",
-        }.get(event, str(payload.get("status") or event))
-        summary = str(payload.get("summary") or "").strip()
-        tail = f"：{summary}" if summary else ""
-        return f"- {name} {label}{elapsed_text}{tail}"
+        # Close the race where a member finished between the liveness check and
+        # this publish: its own drain retraction already ran, so nothing else
+        # would clear the fact we just wrote.
+        try:
+            if not await supervisor.has_active_members():
+                await supervisor.report_members_drained()
+        except BaseException:
+            pass
 
     async def _next_stream_event(self, stream_iterator: Any) -> LLMStreamEvent:
         timeout = self.policy.model_stream_idle_timeout_seconds

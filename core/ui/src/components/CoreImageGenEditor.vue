@@ -1,8 +1,8 @@
 <template>
   <section class="settings-panel">
     <header class="settings-title">
-      <h1>生图</h1>
-      <p>启用后 generate_image 工具才会上传工具集；未启用时调用会被拦截。</p>
+      <h1>{{ t("生图") }}</h1>
+      <p>{{ t("启用后 generate_image 工具才会上传工具集；未启用时调用会被拦截。") }}</p>
     </header>
 
     <p v-if="error" class="skill-error" role="alert">{{ error }}</p>
@@ -10,15 +10,15 @@
     <article class="setting-card agent-toggle">
       <div class="agent-toggle-row">
         <div>
-          <h3>启用 generate_image 工具</h3>
-          <p>关闭后工具从工具集移除；启用但 API 地址为空时，调用返回“未配置生图 API”。</p>
+          <h3>{{ t("启用 generate_image 工具") }}</h3>
+          <p>{{ t("关闭后工具从工具集移除；启用但 API 地址为空时，调用返回“未配置生图 API”。") }}</p>
         </div>
         <button
           class="text-btn toggle-btn"
           :class="{ 'is-on': form.enabled }"
           type="button"
-          aria-label="启用或关闭生图工具"
-          :title="form.enabled ? '已开启' : '已关闭'"
+          :aria-label="t('启用或关闭生图工具')"
+          :title="form.enabled ? t('已开启') : t('已关闭')"
           @click="toggleEnabled"
         >
           <ToggleRight v-if="form.enabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -29,15 +29,15 @@
 
     <article class="setting-card">
       <div class="subhead">
-        <span class="muted subhead-title">API 配置</span>
+        <span class="muted subhead-title">{{ t("API 配置") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading" @click="fetchConfig">刷新</button>
-          <button class="text-btn" type="button" :disabled="loading || saving" @click="saveConfig">保存</button>
+          <button class="text-btn" type="button" :disabled="loading" @click="fetchConfig">{{ t("刷新") }}</button>
+          <button class="text-btn" type="button" :disabled="loading || saving" @click="saveConfig">{{ t("保存") }}</button>
         </div>
       </div>
 
       <label class="field">
-        <span>API 地址 <em>必填</em></span>
+        <span>{{ t("API 地址") }}<em>{{ t("必填") }}</em></span>
         <input
           v-model="form.api_url"
           type="url"
@@ -53,31 +53,33 @@
           v-model="form.api_key"
           type="password"
           spellcheck="false"
-          :placeholder="hasApiKey ? '已配置（留空保持原密钥）' : 'sk-...'"
+          :placeholder="hasApiKey ? t('已配置（留空保持原密钥）') : 'sk-...'"
           autocomplete="off"
           :disabled="loading || saving"
         />
       </label>
 
       <label class="field">
-        <span>模型</span>
+        <span>{{ t("模型") }}</span>
         <input
           v-model="form.model"
           type="text"
           spellcheck="false"
-          placeholder="如 gpt-image-1 / flux 等，留空使用服务端默认"
+          :placeholder="t('如 gpt-image-1 / flux 等，留空使用服务端默认')"
           :disabled="loading || saving"
         />
       </label>
 
-      <p v-if="saved" class="hook-meta" role="status"><Check :size="12" :stroke-width="2.2" aria-hidden="true" /> 已保存</p>
+      <p v-if="saved" class="hook-meta" role="status"><Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
     </article>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { onMounted, reactive, ref } from 'vue'
-import { Check } from 'lucide-vue-next'
+import { Check, ToggleLeft, ToggleRight } from 'lucide-vue-next'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>

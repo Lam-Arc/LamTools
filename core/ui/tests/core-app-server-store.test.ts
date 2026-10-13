@@ -2,6 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { describe, expect, it, vi } from 'vitest'
 import {
   CoreSessionStateStore,
+  applyCoreAppEvent,
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
   hydrateSnapshot,
@@ -10,6 +11,7 @@ import {
   type CoreAppServerRuntimeClient,
   type CoreAppEvent,
   type CoreAppSnapshot,
+  type CoreSyncChangeNotification,
 } from '../src/appServer'
 import { TransportRpcError } from '../src/transport'
 
@@ -112,7 +114,7 @@ describe('core appServer runtime store', () => {
     expect(runtime.state?.core?.status).toBe('completed')
   })
 
-  it('reports a rejected guide instead of pretending it was accepted', async () => {
+  it('reports a rejected guide as an outcome instead of pretending it was accepted', async () => {
     const runtime = createCoreAppServerRuntimeState()
     const controller = createCoreAppServerRuntimeController(runtime, {
       createClient: () => fakeClient(async (method) => {
@@ -124,9 +126,32 @@ describe('core appServer runtime store', () => {
     })
     await controller.connect('thread-1')
 
-    // 后端明确拒绝（这一轮已经结束）：不能静默当成成功，否则界面会声称"引导已发送"
-    await expect(controller.steerTurn('thread-1', 'turn-1', '改成蓝色'))
-      .rejects.toThrow('这一轮已经结束，引导没有生效')
+    // 后端拒绝是"成功响应 + applied:false + reason"，不是错误：调用方据此落队列，
+    // 界面不会谎称"引导已发送"。
+    const outcome = await controller.steerTurn('thread-1', 'turn-1', '改成蓝色')
+    expect(outcome.applied).toBe(false)
+    expect(outcome.queued).toBe(false)
+    expect(outcome.reason).toBe('run_not_active')
+    expect(outcome.message).toBe('这一轮已经结束，引导没有生效')
+  })
+
+  it('marks a refused steer the runtime already queued so it is not queued twice', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method) => {
+        if (method === 'thread/resume') return { snapshot: snapshot(1, 'running') }
+        if (method === 'turn/steer') {
+          return { applied: false, queued: true, reason: 'native_turn_cannot_steer_live' }
+        }
+        return {}
+      }),
+      scheduleFrame: () => undefined,
+    })
+    await controller.connect('thread-1')
+
+    const outcome = await controller.steerTurn('thread-1', 'turn-1', '改成蓝色')
+    expect(outcome.applied).toBe(false)
+    expect(outcome.queued).toBe(true)
   })
 
   it('does not let an older snapshot or event roll a terminal turn back to running', async () => {
@@ -1439,6 +1464,299 @@ describe('core appServer runtime store', () => {
     expect(runtime.state).toBe(stateBefore)
     expect(runtime.state?.snapshot_seq).toBe(11)
   })
+
+  it('renders a non-terminal session from the persisted page without waiting for the live attach', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const calls: string[] = []
+    let resolveResume: ((value: Record<string, unknown>) => void) | null = null
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method) => {
+        calls.push(method)
+        if (method === 'thread/read') return { snapshot: snapshot(7, 'running') }
+        // The live attach never answers within this test: the session's turn is
+        // legitimately non-terminal, which used to hold first paint until the
+        // 60s request timeout.
+        if (method === 'thread/resume') {
+          return await new Promise<Record<string, unknown>>((resolve) => { resolveResume = resolve })
+        }
+        return {}
+      }),
+    })
+
+    await controller.connect('thread-1', { attachInBackground: true })
+
+    // connect() resolved even though thread/resume is still pending: the
+    // transcript came from the persisted page and is readable right away.
+    expect(calls).toContain('thread/read')
+    expect(calls).toContain('thread/resume')
+    expect(resolveResume).not.toBeNull()
+    expect(runtime.state?.snapshot_seq).toBe(7)
+    expect(runtime.state?.status).toBe('running')
+
+    // When the attach finally answers, it folds in on top of the visible thread.
+    resolveResume!({ snapshot: snapshot(9, 'completed') })
+    await delay(0)
+    expect(runtime.state?.snapshot_seq).toBe(9)
+    expect(runtime.state?.status).toBe('completed')
+  })
+
+  it('switches to another session from its persisted page with the attach in the background', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const calls: string[] = []
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method) => {
+        calls.push(method)
+        if (method === 'thread/read') return { snapshot: snapshot(7, 'running') }
+        return { snapshot: snapshot(3, 'completed') }
+      }),
+    })
+
+    await controller.connect('thread-1')
+    await controller.switchThread('thread-1', { preserveState: false, attachInBackground: true })
+
+    expect(calls.filter(call => call === 'thread/read')).toHaveLength(1)
+    expect(runtime.state?.snapshot_seq).toBe(7)
+    expect(runtime.state?.status).toBe('running')
+  })
+
+  it('reduces queue lifecycle events into the local queue with no snapshot', () => {
+    const base: CoreAppSnapshot = { ...snapshot(1, 'running'), queue: [] }
+    const accepted = applyCoreAppEvent(base, queueEvent('queue/itemAccepted', 'q1', {
+      input: [{ type: 'text', text: 'hi' }],
+      mode: 'next_turn',
+    }, 10))
+    expect(accepted.queue).toEqual([{
+      queue_item_id: 'q1',
+      input: [{ type: 'text', text: 'hi' }],
+      mode: 'next_turn',
+      status: 'queued',
+      seq: 10,
+      last_method: 'queue/itemAccepted',
+    }])
+
+    // updated replaces input/mode and keeps the row.
+    const updated = applyCoreAppEvent(accepted, queueEvent('queue/itemUpdated', 'q1', {
+      input: [{ type: 'text', text: 'edited' }],
+      mode: 'steer',
+    }, 11))
+    expect(updated.queue).toEqual([{
+      queue_item_id: 'q1',
+      input: [{ type: 'text', text: 'edited' }],
+      mode: 'steer',
+      status: 'queued',
+      seq: 11,
+      last_method: 'queue/itemUpdated',
+    }])
+
+    // updated without an input keeps the existing one.
+    const modeOnly = applyCoreAppEvent(updated, queueEvent('queue/itemUpdated', 'q1', { mode: 'next_turn' }, 12))
+    expect(modeOnly.queue?.[0]?.input).toEqual([{ type: 'text', text: 'edited' }])
+
+    // deleted and dispatched both remove the row.
+    expect(applyCoreAppEvent(modeOnly, queueEvent('queue/itemDeleted', 'q1', { status: 'deleted' }, 13)).queue).toEqual([])
+    expect(applyCoreAppEvent(modeOnly, queueEvent('queue/itemDispatched', 'q1', {}, 14)).queue).toEqual([])
+  })
+
+  it('drops the row for a queue mutation whose response carries only events', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    let nextId = 0
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method, params) => {
+        if (method === 'thread/read' || method === 'thread/resume') return { snapshot: snapshot(1, 'running') }
+        if (method === 'queue/create') {
+          const id = `q${nextId += 1}`
+          return { events: [queueEvent('queue/itemAccepted', id, {
+            input: params.input,
+            mode: params.mode || 'next_turn',
+          }, 10 + nextId)] }
+        }
+        if (method === 'queue/update') {
+          const id = String(params.queue_item_id)
+          return { events: [queueEvent('queue/itemUpdated', id, {
+            input: [{ type: 'text', text: String(params.text || '') }],
+            mode: params.mode,
+          }, 30 + nextId)] }
+        }
+        if (method === 'queue/delete') {
+          const id = String(params.queue_item_id)
+          return { events: [queueEvent('queue/itemDeleted', id, { status: 'deleted' }, 50 + nextId)] }
+        }
+        return {}
+      }),
+    })
+    await controller.connect('thread-1', { attachInBackground: true })
+
+    await controller.queueInput('thread-1', [{ type: 'text', text: 'first' }])
+    await controller.queueInput('thread-1', [{ type: 'text', text: 'second' }])
+    expect(runtime.state?.queue?.map(item => item.queue_item_id)).toEqual(['q1', 'q2'])
+
+    await controller.updateQueueInput('thread-1', 'q1', 'edited')
+    expect(runtime.state?.queue?.[0]).toMatchObject({
+      queue_item_id: 'q1',
+      input: [{ type: 'text', text: 'edited' }],
+    })
+
+    // The reported bug: the server deleted it, the response carried the event
+    // and no snapshot, and the row must disappear locally.
+    await controller.deleteQueueInput('thread-1', 'q1')
+    expect(runtime.state?.queue?.map(item => item.queue_item_id)).toEqual(['q2'])
+  })
+
+  it('applies a newer-content push even when the tracked CAS revision is ahead', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    let onSyncChange: ((change: CoreSyncChangeNotification) => void) | undefined
+    const withRow: CoreAppSnapshot = {
+      ...snapshot(5, 'running'),
+      queue: [{ queue_item_id: 'q1', status: 'queued', input: [{ type: 'text', text: 'old' }] }],
+    }
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onSyncChange = callbacks.onSyncChange
+        return fakeClient(async (method) => (
+          method === 'thread/read' || method === 'thread/resume' ? { snapshot: withRow } : {}
+        ))
+      },
+    })
+    await controller.connect('thread-1', { attachInBackground: true })
+    expect(runtime.state?.queue).toHaveLength(1)
+
+    // The CAS revision runs ahead of the projection out of band.
+    onSyncChange?.({ thread_id: 'thread-1', revision: 40 })
+
+    // Corrected push: content cursor newer (seq 6), revision tag lower (6).
+    controller.hydrate({
+      ...snapshot(6, 'running'),
+      revision: 6,
+      queue: [],
+    })
+    expect(runtime.state?.snapshot_seq).toBe(6)
+    expect(runtime.state?.queue).toEqual([])
+  })
+
+  it('advances the tracked revision through a coalesced burst and sends it on the next guarded call', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    const sent: Array<{ method: string; params: Record<string, unknown> }> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method, params) => {
+          if (method === 'thread/read' || method === 'thread/resume') return { snapshot: snapshot(1, 'running') }
+          sent.push({ method, params })
+          return {}
+        })
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('thread-1', { attachInBackground: true })
+
+    // A burst of deltas for the same item, each with the server's revision.
+    // Same-frame deltas coalesce into one event; the merged envelope must keep
+    // the last progress, not the first.
+    onEvent?.(runItemEvent('e1', 11, 11, 'a'))
+    onEvent?.(runItemEvent('e2', 12, 12, 'b'))
+    onEvent?.(runItemEvent('e3', 13, 13, 'c'))
+    expect(frames).toHaveLength(1)
+    frames[0]()
+
+    expect(runtime.state?.revision).toBe(13)
+    expect(runtime.state?.snapshot_seq).toBe(13)
+    expect(runtime.state?.core?.items?.['response-1']?.content).toBe('abc')
+
+    // The next guarded write must carry the revision the client just tracked.
+    await controller.updateQueueInput('thread-1', 'q1', 'edited')
+    const call = sent.find(entry => entry.method === 'queue/update')
+    expect(call?.params.expected_revision).toBe(13)
+  })
+
+  it('advances the tracked revision from a revision carried inside the event payload', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => (
+          method === 'thread/read' || method === 'thread/resume' ? { snapshot: snapshot(1, 'running') } : {}
+        ))
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('thread-1', { attachInBackground: true })
+
+    // No envelope revision: the payload's own value must still count.
+    const event = runItemDelta('e-payload-rev', 'x')
+    onEvent?.({ ...event, seq: 7, payload: { ...event.payload, revision: 7 } })
+    frames[0]()
+
+    expect(runtime.state?.revision).toBe(7)
+  })
+
+  it('applies an ordinary pushed snapshot and keeps its revision for the next call', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const sent: Array<{ method: string; params: Record<string, unknown> }> = []
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method, params) => {
+        if (method === 'thread/read' || method === 'thread/resume') {
+          return { snapshot: { ...snapshot(3, 'running'), revision: 3 } }
+        }
+        sent.push({ method, params })
+        return {}
+      }),
+    })
+    await controller.connect('thread-1', { attachInBackground: true })
+    expect(runtime.state?.revision).toBe(3)
+
+    // An ordinary push (no out-of-band revision bump) at a newer revision:
+    // applied, not silently discarded, and the tracked revision moves with it.
+    controller.hydrate({ ...snapshot(9, 'running'), revision: 9 })
+    expect(runtime.state?.snapshot_seq).toBe(9)
+    expect(runtime.state?.revision).toBe(9)
+
+    await controller.updateQueueInput('thread-1', 'q1', 'edited')
+    const call = sent.find(entry => entry.method === 'queue/update')
+    expect(call?.params.expected_revision).toBe(9)
+  })
+
+  it('brings the tracked revision back in line on a conflict refresh even when it was ahead', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+    let onSyncChange: ((change: CoreSyncChangeNotification) => void) | undefined
+    // The durable authority says 5; the tracked value will be pushed to 40 by an
+    // out-of-band sync/change, which the server never confirmed for a write.
+    const refreshed: CoreAppSnapshot = { ...snapshot(4, 'running'), revision: 5 }
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onSyncChange = callbacks.onSyncChange
+        return fakeClient(async (method, params) => {
+          calls.push({ method, params })
+          if (method === 'thread/read' || method === 'thread/resume') return { snapshot: refreshed }
+          if (method === 'turn/start') {
+            if (Number(params.expected_revision) !== 5) {
+              throw new TransportRpcError('REVISION_CONFLICT', 'stale revision')
+            }
+            return { events: [] }
+          }
+          return {}
+        })
+      },
+    })
+    await controller.connect('thread-1', { attachInBackground: true })
+
+    onSyncChange?.({ thread_id: 'thread-1', revision: 40 })
+    expect(runtime.state?.revision).toBe(40)
+
+    // turn/start conflicts, refreshes, and retries within the one call.
+    await controller.startTurn('thread-1', [{ type: 'text', text: 'hi' }])
+
+    const starts = calls.filter(entry => entry.method === 'turn/start')
+    expect(starts).toHaveLength(2)
+    expect(starts[0]?.params.expected_revision).toBe(40)
+    // The refresh clamped the tracker to the durable number, so the retry wins.
+    expect(starts[1]?.params.expected_revision).toBe(5)
+    expect(runtime.state?.revision).toBe(5)
+  })
 })
 
 function fakeClient(
@@ -1552,6 +1870,34 @@ function runItemDelta(eventId: string, delta: string): CoreAppEvent {
       status: 'running',
       payload: { type: 'agentMessage', delta },
     },
+  }
+}
+
+/** A persisted run-item delta carrying the server envelope's revision and seq. */
+function runItemEvent(eventId: string, revision: number, seq: number, delta: string): CoreAppEvent {
+  const event = runItemDelta(eventId, delta)
+  return {
+    ...event,
+    seq,
+    revision,
+    payload: { ...event.payload, revision },
+  }
+}
+
+function queueEvent(
+  method: string,
+  queueItemId: string,
+  payload: Record<string, unknown> = {},
+  seq = 10,
+): CoreAppEvent {
+  return {
+    event_id: `${method}:${queueItemId}:${seq}`,
+    thread_id: 'thread-1',
+    seq,
+    method,
+    created_at: '2026-10-12T00:00:00Z',
+    item_id: queueItemId,
+    payload: { queue_item_id: queueItemId, ...payload },
   }
 }
 

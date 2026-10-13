@@ -2,7 +2,7 @@
   <div class="full-area-column full-area-surface" :style="settingsThemeStyle">
     <SettingsShell
           :sections="sections"
-          title="插件"
+          :title="t('插件')"
           :initial-section="props.initialSection"
           :settings-theme-style="settingsThemeStyle"
           :hide-nav="props.hideNav"
@@ -35,6 +35,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * PluginsShell — 与设置（CoreSettings）同级的插件管理全屏页。
  *

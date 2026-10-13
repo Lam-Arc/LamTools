@@ -1,4 +1,5 @@
 import { shallowReactive } from 'vue'
+import { t } from '../../i18n'
 import { copyText } from '../../helpers/clipboard'
 import type { ContextMenuAnchor, ContextMenuEntry, ContextMenuAttributes, OpenContextMenuOptions } from './types'
 
@@ -25,7 +26,7 @@ export const contextMenuState = shallowReactive<ContextMenuState>({
   items: [],
   ownerId: undefined,
   panelAttributes: undefined,
-  ariaLabel: '上下文菜单',
+  ariaLabel: t('上下文菜单'),
 })
 
 const NATIVE_CONTEXT_TARGET_SELECTOR = [
@@ -172,13 +173,13 @@ function handleDocumentContextMenu(event: MouseEvent): void {
     // surfaces (study marks, note locks) append their own entries instead of
     // opening a second menu that would displace these two.
     const baseline: ContextMenuEntry[] = [
-      { id: 'copy-selection', label: '复制', action: () => copyText(selection.text) },
-      { id: 'select-all', label: '全选', action: selection.selectAll },
+      { id: 'copy-selection', get label() { return t('复制') }, action: () => copyText(selection.text) },
+      { id: 'select-all', get label() { return t('全选') }, action: selection.selectAll },
     ]
     const contributed = textSelectionContributedItems({ text: selection.text, target: event.target, event, selectAll: selection.selectAll })
     openContextMenu({
       event,
-      ariaLabel: '文本操作',
+      ariaLabel: t('文本操作'),
       panelAttributes: { 'data-text-selection-menu': true },
       items: contributed.length ? [...baseline, { type: 'separator' }, ...contributed] : baseline,
     })
@@ -498,7 +499,7 @@ export function openContextMenu(options: OpenContextMenuOptions): void {
   contextMenuState.items = options.items
   contextMenuState.ownerId = options.ownerId
   contextMenuState.panelAttributes = options.panelAttributes
-  contextMenuState.ariaLabel = options.ariaLabel || '上下文菜单'
+  contextMenuState.ariaLabel = options.ariaLabel || t('上下文菜单')
   installListeners()
 }
 

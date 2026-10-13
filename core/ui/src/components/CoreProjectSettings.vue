@@ -2,7 +2,7 @@
   <div class="full-area-column full-area-surface">
     <SettingsShell
       :sections="sections"
-      :title="`${project.name} · 项目设置`"
+      :title="t('{0} · 项目设置', { 0: project.name })"
       :settings-theme-style="settingsThemeStyle"
       :hide-nav="props.hideNav"
       :active-section="props.activeSection"
@@ -13,14 +13,14 @@
             <!-- 项目分区：即时保存的名称/外观 + work root + AGENTS.md -->
             <section v-if="activeSection === 'project'" class="settings-panel">
               <header class="settings-title">
-                <h1>项目</h1>
-                <p>项目作用域的元信息与 AGENTS.md 指令。</p>
+                <h1>{{ t("项目") }}</h1>
+                <p>{{ t("项目作用域的元信息与 AGENTS.md 指令。") }}</p>
               </header>
 
               <article class="setting-card">
                 <form class="core-project-rename" @submit.prevent="commitProjectName">
                   <label>
-                    <span>项目名称</span>
+                    <span>{{ t("项目名称") }}</span>
                     <input
                       v-model="projectNameInput"
                       class="field-input"
@@ -34,8 +34,8 @@
                 </form>
                 <div class="core-project-visual-settings">
                   <div class="core-project-visual-heading">
-                    <span>项目外观</span>
-                    <small>用于侧边栏中的项目辨识。</small>
+                    <span>{{ t("项目外观") }}</span>
+                    <small>{{ t("用于侧边栏中的项目辨识。") }}</small>
                   </div>
                   <ProjectVisualPicker
                     :icon-key="projectIconKey"
@@ -45,14 +45,14 @@
                     @update:color-key="selectProjectColor"
                   />
                 </div>
-                <p v-if="projectActionLoading" class="project-save-status" role="status">正在保存项目更改…</p>
-                <p v-if="project.workRoot" class="hook-meta">工作根目录：<code>{{ project.workRoot }}</code></p>
+                <p v-if="projectActionLoading" class="project-save-status" role="status">{{ t("正在保存项目更改…") }}</p>
+                <p v-if="project.workRoot" class="hook-meta">{{ t("工作根目录：") }}<code>{{ project.workRoot }}</code></p>
               </article>
 
               <article v-if="sessionId" class="setting-card project-session-card" data-project-session>
                 <div class="project-session-heading">
                   <div class="project-session-details">
-                    <span>当前会话</span>
+                    <span>{{ t("当前会话") }}</span>
                     <code data-project-session-id>#{{ sessionId.slice(0, 8) }}</code>
                   </div>
                   <button
@@ -61,26 +61,24 @@
                     type="button"
                     data-project-session-copy
                     :data-copied="copiedSessionId ? '' : undefined"
-                    :aria-label="copiedSessionId ? '已复制完整会话 ID' : '复制完整会话 ID'"
-                    :title="copiedSessionId ? '已复制完整会话 ID' : '复制完整会话 ID'"
+                    :aria-label="copiedSessionId ? t('已复制完整会话 ID') : t('复制完整会话 ID')"
+                    :title="copiedSessionId ? t('已复制完整会话 ID') : t('复制完整会话 ID')"
                     @click="copySessionId"
                   >
                     <Check v-if="copiedSessionId" :size="14" :stroke-width="1.8" aria-hidden="true" />
                     <Copy v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
-                    <span>{{ copiedSessionId ? '已复制' : '复制完整 ID' }}</span>
+                    <span>{{ copiedSessionId ? t("已复制") : t("复制完整 ID") }}</span>
                   </button>
                 </div>
               </article>
 
               <article class="setting-card">
                 <div class="subhead">
-                  <span class="muted subhead-title">
-                    项目规则
-                    <span class="subhead-sub">AGENTS.md</span>
+                  <span class="muted subhead-title">{{ t("项目规则") }}<span class="subhead-sub">AGENTS.md</span>
                   </span>
                   <div class="subhead-actions">
-                    <button class="text-btn" type="button" :disabled="agentsLoading" @click="emit('refresh-agents')">刷新</button>
-                    <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="emit('save-agents', agentsDraft)">保存</button>
+                    <button class="text-btn" type="button" :disabled="agentsLoading" @click="emit('refresh-agents')">{{ t("刷新") }}</button>
+                    <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="emit('save-agents', agentsDraft)">{{ t("保存") }}</button>
                   </div>
                 </div>
                 <textarea
@@ -88,11 +86,11 @@
                   class="guide-editor"
                   rows="14"
                   spellcheck="false"
-                  :placeholder="agentsLoading ? '加载中…' : '# 项目级约束\n项目专属指令，会叠加在全局约束之上…'"
+                  :placeholder="agentsLoading ? t('加载中…') : t('# 项目级约束\n项目专属指令，会叠加在全局约束之上…')"
                   :disabled="agentsLoading"
                 />
                 <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
-                <p class="hook-meta">保存到 <code>{{ project.workRoot || '(项目根)' }}/AGENTS.md</code>。注入顺序：先全局约束（.lam/core/config/AGENTS.md），再本文件，两者相加。全局约束在「设置 → 上下文」内编辑。</p>
+                <p class="hook-meta">{{ t("保存到") }}<code>{{ project.workRoot || t("(项目根)") }}/AGENTS.md</code>{{ t("。注入顺序：先全局约束（.lam/core/config/AGENTS.md），再本文件，两者相加。全局约束在「设置 → 上下文」内编辑。") }}</p>
               </article>
 
               <p v-if="projectActionError" class="skill-error" role="alert">{{ projectActionError }}</p>
@@ -102,7 +100,7 @@
             <section v-else-if="activeSection === 'subagent'" class="settings-panel">
               <header class="settings-title">
                 <h1>Sub agent</h1>
-                <p>项目作用域的 sub_agent 配置，会覆盖全局配置。留空保存可回退到继承的全局 / 内置默认。</p>
+                <p>{{ t("项目作用域的 sub_agent 配置，会覆盖全局配置。留空保存可回退到继承的全局 / 内置默认。") }}</p>
               </header>
               <CoreSubAgentEditor
                 :request-rpc="requestRpc"
@@ -118,6 +116,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Check, Copy } from 'lucide-vue-next'
 import {

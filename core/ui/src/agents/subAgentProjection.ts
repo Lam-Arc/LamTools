@@ -47,6 +47,80 @@ export function findCoreSubAgentRun(
 }
 
 export function selectCoreSubAgentRuns(messages: readonly CoreMessage[]): CoreSubAgentRun[] {
+  return projectCoreSubAgentRuns(messages, null)
+}
+
+/**
+ * Resolve one run without projecting the session's other runs.
+ *
+ * The pane used to call `selectCoreSubAgentRuns` and then pick the matching run,
+ * which meant every frame rebuilt the timeline of every run in the session
+ * (finished ones included) just to throw all but one away. This resolves the
+ * run's identity first with a cheap per-part probe, then projects only that
+ * run, so the open pane's cost is bounded by the one run it shows.
+ */
+export function selectCoreSubAgentRun(
+  messages: readonly CoreMessage[],
+  ref: CoreSubAgentRef | string,
+): CoreSubAgentRun | undefined {
+  const wanted = typeof ref === 'string'
+    ? { subSessionId: ref, name: '' }
+    : { subSessionId: String(ref.subSessionId || ''), name: String(ref.name || '') }
+  if (!wanted.subSessionId.trim() && !wanted.name.trim()) return undefined
+  const key = probeSubAgentRunKey(messages, wanted)
+  if (!key) return undefined
+  return projectCoreSubAgentRuns(messages, key)[0]
+}
+
+/**
+ * The run key the ref names. The durable session id wins, the agent name is the
+ * fallback — the same precedence `findCoreSubAgentRun` uses.
+ *
+ * A run is one delegation of a named agent, and its rows are only partly
+ * stamped with the durable `sub_session_id` (the backend assigns the child
+ * session after the first streamed events). Filtering the projection by the raw
+ * session id therefore dropped the rows of the very run being opened: the pane
+ * rendered an empty timeline and read its status from the parent call row
+ * alone. Probing the key first keeps the whole run, exactly as the full
+ * projection reports it.
+ */
+function probeSubAgentRunKey(messages: readonly CoreMessage[], wanted: CoreSubAgentRef): string {
+  const wantedSession = wanted.subSessionId.trim()
+  const wantedName = wanted.name.trim().toLowerCase()
+  if (wantedSession) {
+    const matched = findSubAgentPart(messages, (_name, subSessionId, key) => (
+      subSessionId === wantedSession || key === wantedSession
+    ))
+    if (matched) return subAgentRunKeyOf(matched)
+  }
+  if (!wantedName) return ''
+  const matched = findSubAgentPart(messages, name => name.trim().toLowerCase() === wantedName)
+  return matched ? subAgentRunKeyOf(matched) : ''
+}
+
+function findSubAgentPart(
+  messages: readonly CoreMessage[],
+  match: (name: string, subSessionId: string, key: string) => boolean,
+): MessagePart | null {
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (!isSubAgentPart(part)) continue
+      const name = subAgentName(part)
+      const subSessionId = subAgentSessionId(part)
+      if (match(name, subSessionId, subAgentRunKey(part, name, subSessionId))) return part
+    }
+  }
+  return null
+}
+
+function subAgentRunKeyOf(part: MessagePart): string {
+  return subAgentRunKey(part, subAgentName(part), subAgentSessionId(part))
+}
+
+function projectCoreSubAgentRuns(
+  messages: readonly CoreMessage[],
+  wantedKey: string | null,
+): CoreSubAgentRun[] {
   const runs = new Map<string, MutableSubAgentRun>()
   let order = 0
 
@@ -71,6 +145,11 @@ export function selectCoreSubAgentRuns(messages: readonly CoreMessage[]): CoreSu
       ) continue
       const name = subAgentName(part)
       const key = subAgentRunKey(part, name, subSessionId)
+      // Targeted lookup: keep only the wanted run's parts, dropping the other
+      // runs before the task read and the whole child-timeline projection. The
+      // comparison is on the run key, never the raw session id: the rows of one
+      // delegation do not all carry a durable session id.
+      if (wantedKey !== null && key !== wantedKey) continue
       const task = subAgentTask(part)
       const existing = runs.get(key)
       const run = existing ?? createRun(part, key, subSessionId, task, message.timestamp, order)
@@ -440,7 +519,7 @@ function subAgentPrompt(part: MessagePart): string {
   )
 }
 
-function normalizeSubAgentStatus(value: unknown): CoreSubAgentStatus {
+export function normalizeSubAgentStatus(value: unknown): CoreSubAgentStatus {
   const status = String(value || '').trim().toLowerCase()
   if (status === 'running' || status === 'active' || status === 'interrupting') return 'running'
   if (status === 'pending' || status === 'waiting' || status === 'queued') return 'pending'
@@ -534,6 +613,10 @@ function timelineMessage(
       liveStatus: role === 'assistant' ? subAgentStatusLabel(part.status) : undefined,
       subSessionId,
       sourcePartId: part.id,
+      ...(role === 'assistant' ? {
+        resourceCalls: record(part.metadata).resourceCalls,
+        contextMetrics: record(part.metadata).contextMetrics,
+      } : {}),
     },
   }
 }

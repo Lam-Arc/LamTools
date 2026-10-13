@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import inspect
+import json
+import logging
 import os
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -51,6 +54,8 @@ from ..usage import (
     UsageRecord,
 )
 from ..app.runtime_permissions import merge_session_runtime_preferences
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +224,12 @@ def create_core_router(
         service = require_export_service()
         mode = body.mode.strip().lower()
         output_format = body.format.strip().lower()
+        full_export = mode == "full" and output_format == "zip"
+        export_id = uuid.uuid4().hex[:8] if full_export else None
+        request_started_at = time.perf_counter()
+        stage = "validate"
+        if export_id is not None:
+            logger.info("full session export %s stage=request_started", export_id)
         try:
             if mode == "transcript":
                 exported = await service.transcript(session_id)
@@ -229,18 +240,53 @@ def create_core_router(
                 if output_format == "jsonl":
                     return Response(transcript_to_jsonl(exported), media_type="application/x-ndjson")
             elif mode == "full" and output_format == "zip":
-                exported = await service.full(session_id)
+                stage = "load_full_archive"
+                exported = await service.full(session_id, operation_id=export_id)
             elif mode == "handoff" and output_format == "json":
                 exported = await service.handoff(session_id)
             else:
                 raise HTTPException(status_code=422, detail="Unsupported export mode or format")
             if mode == "full" and output_format == "zip":
-                return Response(full_to_zip(exported), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{session_id}.zip"'})
+                stage = "serialize_zip"
+                zip_started_at = time.perf_counter()
+                archive = await asyncio.to_thread(full_to_zip, exported)
+                logger.info(
+                    "full session export %s stage=zip_ready duration_ms=%d bytes=%d",
+                    export_id,
+                    round((time.perf_counter() - zip_started_at) * 1000),
+                    len(archive),
+                )
+                stage = "prepare_response"
+                response = Response(archive, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{session_id}.zip"'})
+                logger.info(
+                    "full session export %s stage=response_ready total_ms=%d bytes=%d",
+                    export_id,
+                    round((time.perf_counter() - request_started_at) * 1000),
+                    len(archive),
+                )
+                return response
             if mode == "handoff":
                 return Response(handoff_to_json(exported), media_type="application/json")
             raise HTTPException(status_code=422, detail="Unsupported export mode or format")
         except LookupError as exc:
+            if export_id is not None:
+                logger.info(
+                    "full session export %s stage=failed at=%s error=not_found total_ms=%d",
+                    export_id,
+                    stage,
+                    round((time.perf_counter() - request_started_at) * 1000),
+                )
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            if export_id is not None:
+                logger.warning(
+                    "full session export %s stage=failed at=%s error_type=%s total_ms=%d",
+                    export_id,
+                    stage,
+                    type(exc).__name__,
+                    round((time.perf_counter() - request_started_at) * 1000),
+                )
+            raise
 
     # The public protocol calls sessions "threads"; retain both spellings
     # while the older session endpoints remain supported.

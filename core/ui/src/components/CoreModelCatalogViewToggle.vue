@@ -1,5 +1,5 @@
 <template>
-  <div class="model-catalog-view-toggle" role="group" aria-label="模型分类方式">
+  <div class="model-catalog-view-toggle" role="group" :aria-label="t('模型分类方式')">
     <button
       v-for="option in options"
       :key="option.value"
@@ -16,6 +16,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import type { CoreModelCatalogView } from '../composer/execution'
 
 defineProps<{
@@ -27,8 +29,8 @@ defineEmits<{
 }>()
 
 const options: Array<{ value: CoreModelCatalogView; label: string }> = [
-  { value: 'group', label: '按组' },
-  { value: 'provider', label: '按供应商' },
+  { value: 'group', get label() { return t("按组") } },
+  { value: 'provider', get label() { return t("按供应商") } },
 ]
 </script>
 

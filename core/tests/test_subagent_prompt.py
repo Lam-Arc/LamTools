@@ -213,6 +213,63 @@ def test_role_assignment_prompt_is_stable_and_empty_configuration_is_omitted(
         "- Task type: Research; type: consider; suggested model: model-a; suggested reasoning level: light–high"
     )
 
+
+def test_role_assignment_prompt_annotates_display_name_with_real_id(
+    tmp_path, isolated_config_root
+):
+    from lamtools_core.config.subagent_prompt import (
+        describe_model_reference,
+        resolve_model_reference_optional,
+    )
+
+    models_dir = isolated_config_root / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    (models_dir / "friendly.jsonc").write_text(
+        json.dumps(
+            {
+                "id": "friendly",
+                "model_id": "vendor/real-1",
+                "display_name": "Friendly Label",
+                "provider": "Prov Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    work = tmp_path / "work"
+    write_subagent_settings(
+        {"role_assignments": [_role("Research", model="Friendly Label")]},
+        scope="global",
+        work_root=work,
+    )
+
+    # The configured value is kept verbatim; the real id is added as a note.
+    assert describe_model_reference("Friendly Label", work_root=work) == "Friendly Label (vendor/real-1)"
+    assert resolve_model_reference_optional("Friendly Label", work_root=work) == "vendor/real-1"
+    rendered = render_role_assignments_prompt(work)
+    assert "suggested model: Friendly Label (vendor/real-1);" in rendered
+
+
+def test_role_assignment_prompt_keeps_unresolvable_model_verbatim(
+    tmp_path, isolated_config_root
+):
+    from lamtools_core.config.subagent_prompt import (
+        describe_model_reference,
+        resolve_model_reference_optional,
+    )
+
+    work = tmp_path / "work"
+    # Nothing resolves: the value is returned unchanged, without raising.
+    assert describe_model_reference("ghost-model", work_root=work) == "ghost-model"
+    assert resolve_model_reference_optional("ghost-model", work_root=work) == ""
+    write_subagent_settings(
+        {"role_assignments": [_role("Research", model="ghost-model")]},
+        scope="global",
+        work_root=work,
+    )
+    rendered = render_role_assignments_prompt(work)
+    assert "suggested model: ghost-model; suggested reasoning level:" in rendered
+    assert "(" not in rendered.split("suggested model:")[1].split(";")[0]
+
 def test_delegation_strategy_defaults_inherits_overrides_and_unsets(
     tmp_path, isolated_config_root
 ):
@@ -267,7 +324,31 @@ def test_delegation_strategy_validation_and_prompt_copy(tmp_path, isolated_confi
         "After confirmation, immediately create a highly centralized Checklist and use multiple "
         "sub-agents in parallel wherever possible. The main Agent remains responsible for decisions, "
         "direction, task assignment, dependency coordination, conflict resolution, integration, and final acceptance."
+        " Unless the user explicitly asks for another model, use the current model "
+        "and do not pick another model yourself."
     )
+
+
+def test_delegation_strategy_prompts_default_to_the_current_model(
+    tmp_path, isolated_config_root
+):
+    work = tmp_path / "work"
+    rule = "use the current model and do not pick another model yourself"
+    # Every strategy that permits delegation carries the default-model rule.
+    for strategy in ("low", "medium", "high"):
+        write_subagent_settings({"delegation_strategy": strategy}, scope="global", work_root=work)
+        rendered = render_delegation_strategy_prompt(work)
+        assert rendered.startswith(
+            "## Sub-agent Delegation Strategy\n"
+            "This strategy takes precedence over the general delegation guide and role suggestions.\n"
+        )
+        assert "Unless the user explicitly asks for another model" in rendered
+        assert rule in rendered
+    # "forbidden" never delegates, so it must not carry the rule.
+    write_subagent_settings({"delegation_strategy": "forbidden"}, scope="global", work_root=work)
+    forbidden = render_delegation_strategy_prompt(work)
+    assert forbidden.endswith("do not delegate to sub-agents.")
+    assert "the current model" not in forbidden
 
 # --- RPC operations -------------------------------------------------------
 
@@ -611,7 +692,9 @@ async def test_base_agent_appends_role_assignments_immediately_after_subagent_gu
         f"{DEFAULT_SUBAGENT_GUIDE}\n\n"
         "## Sub-agent Delegation Strategy\n"
         "This strategy takes precedence over the general delegation guide and role suggestions.\n"
-        "Current sub-agent delegation strategy: keep the current default delegation strategy.\n\n"
+        "Current sub-agent delegation strategy: keep the current default delegation strategy. "
+        "Unless the user explicitly asks for another model, use the current model "
+        "and do not pick another model yourself.\n\n"
         "## Sub-agent Role Assignments\n"
         "When a task type matches, prefer its assigned type, model, and reasoning level range; otherwise choose according to the task.\n"
         "- Task type: Research; type: consider; suggested model: model-a; suggested reasoning level: off–max"

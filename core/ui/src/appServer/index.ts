@@ -3,6 +3,7 @@ export {
   CoreAppServerClosedError,
   type CoreAppServerClientOptions,
   type CoreSyncChangeNotification,
+  type CoreThreadGapNotification,
   type JsonRpcClientResponse,
   type JsonRpcRequest,
   type JsonRpcResponse,
@@ -38,6 +39,23 @@ export {
   selectQueueTray,
   type CoreAppServerChatMessage,
 } from './selectors.ts'
+
+export {
+  countOutstandingSubAgents,
+  selectCoreSessionActivity,
+  type CoreSessionActivity,
+  type CoreSessionPhase,
+  type SelectCoreSessionActivityOptions,
+} from './sessionActivity.ts'
+
+export {
+  coreSystemEventForItem,
+  isCoreSystemEvent,
+  parseMemberWakeEntries,
+  type CoreSystemEvent,
+  type CoreSystemEventEntry,
+  type CoreSystemEventKind,
+} from './systemEvents.ts'
 
 export {
   coreAppItemInputPreview,
@@ -82,6 +100,7 @@ export {
   coreDecisionSubject,
   coreDecisionTitle,
   coreDecisionToolName,
+  collectDecisionParts,
   selectPendingCoreDecisions,
   type CoreDecisionChoice,
   type CoreDecisionFact,
@@ -99,6 +118,7 @@ export {
   type CoreAppServerRuntimeControllerOptions,
   type CoreAppServerRuntimeState,
   type CoreAppServerThreadSwitchOptions,
+  type CoreSteerOutcome,
 } from './store.ts'
 
 export {
@@ -118,6 +138,7 @@ export {
   coreComposerSubmissionEffects,
   isCoreActiveTurnStatus,
   isCoreGuidableTurnStatus,
+  isCoreSessionBusyError,
   normalizeCoreCommandCatalogItem,
   submitCoreComposerTask,
   type CoreComposerActionMode,
@@ -125,6 +146,8 @@ export {
   type CoreComposerSubmissionEffectPlan,
   type CoreDecisionSelectionPayload,
   type CoreDecisionSelectionPlan,
+  type CoreStartTurnOutcome,
+  type CoreSteerAttempt,
   type CoreWorkbenchTurnStatus,
   type SubmitCoreComposerTaskOptions,
   type SubmitCoreComposerTaskResult,

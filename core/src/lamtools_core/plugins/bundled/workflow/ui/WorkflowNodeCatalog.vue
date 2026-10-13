@@ -3,20 +3,20 @@
     class="wf-catalog"
     :class="{ 'wf-catalog-popover': variant === 'popover', 'optical-glass': variant === 'popover' }"
     data-workflow-node-catalog
-    aria-label="工作流节点目录"
+    :aria-label="t('工作流节点目录')"
   >
     <header class="wf-catalog-head">
       <div>
-        <h3>节点目录</h3>
-        <span class="wf-catalog-count">{{ filteredSchemas.length }} 个节点</span>
+        <h3>{{ t("节点目录") }}</h3>
+        <span class="wf-catalog-count">{{ filteredSchemas.length }}{{ t("个节点") }}</span>
       </div>
       <div class="wf-catalog-head-actions">
         <button
           v-if="variant !== 'popover' || search"
           class="wf-icon-btn"
           type="button"
-          aria-label="清除节点目录搜索"
-          title="清除搜索"
+          :aria-label="t('清除节点目录搜索')"
+          :title="t('清除搜索')"
           :disabled="!search"
           @click="search = ''"
         >
@@ -26,8 +26,8 @@
           v-if="closeable"
           class="wf-icon-btn wf-catalog-close"
           type="button"
-          aria-label="关闭节点目录"
-          title="关闭"
+          :aria-label="t('关闭节点目录')"
+          :title="t('关闭')"
           @click="emit('close')"
         >
           <X :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -35,10 +35,10 @@
       </div>
     </header>
     <label class="wf-catalog-search">
-      <span class="sr-only">搜索节点</span>
-      <input ref="searchInput" v-model="search" type="search" placeholder="搜索名称、分类或说明" autocomplete="off" />
+      <span class="sr-only">{{ t("搜索节点") }}</span>
+      <input ref="searchInput" v-model="search" type="search" :placeholder="t('搜索名称、分类或说明')" autocomplete="off" />
     </label>
-    <div class="wf-catalog-filters" role="toolbar" aria-label="节点目录筛选">
+    <div class="wf-catalog-filters" role="toolbar" :aria-label="t('节点目录筛选')">
       <button
         v-for="filter in filters"
         :key="filter.value"
@@ -49,7 +49,7 @@
         @click="scope = filter.value"
       >{{ filter.label }}</button>
     </div>
-    <div v-if="categories.length > 1" class="wf-catalog-categories" role="toolbar" aria-label="节点分类">
+    <div v-if="categories.length > 1" class="wf-catalog-categories" role="toolbar" :aria-label="t('节点分类')">
       <button
         v-for="category in categories"
         :key="category"
@@ -68,7 +68,7 @@
         <button
           type="button"
           class="wf-catalog-add"
-          :aria-label="`添加节点：${schemaLabel(schema)}`"
+          :aria-label="t('添加节点：{0}', { 0: schemaLabel(schema) })"
           :title="schemaDescription(schema) || schemaLabel(schema)"
           @click="addSchema(schema)"
           @keydown.enter.prevent="addSchema(schema)"
@@ -89,7 +89,7 @@
           type="button"
           class="wf-catalog-favorite"
           :class="{ active: isFavorite(schema) }"
-          :aria-label="isFavorite(schema) ? `取消收藏：${schemaLabel(schema)}` : `收藏：${schemaLabel(schema)}`"
+          :aria-label="isFavorite(schema) ? t('取消收藏：{0}', { 0: schemaLabel(schema) }) : t('收藏：{0}', { 0: schemaLabel(schema) })"
           :aria-pressed="isFavorite(schema)"
           @click="toggleFavorite(schema)"
         >
@@ -102,11 +102,13 @@
         </button>
       </li>
     </ul>
-    <p v-else class="wf-catalog-empty">没有匹配的节点</p>
+    <p v-else class="wf-catalog-empty">{{ t("没有匹配的节点") }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, onMounted, ref } from 'vue'
 import {
   ArrowDownToLine,
@@ -167,13 +169,13 @@ const emit = defineEmits<{
 type Scope = 'all' | 'recent' | 'favorites'
 const search = ref('')
 const scope = ref<Scope>('all')
-const categoryFilter = ref('全部')
+const categoryFilter = ref('__all__')
 const preferences = ref(readWorkflowCatalogPreferences())
 const searchInput = ref<HTMLInputElement | null>(null)
 const filters: Array<{ value: Scope; label: string }> = [
-  { value: 'all', label: '全部' },
-  { value: 'recent', label: '最近' },
-  { value: 'favorites', label: '收藏' },
+  { value: 'all', get label() { return t("全部") } },
+  { value: 'recent', get label() { return t("最近") } },
+  { value: 'favorites', get label() { return t("收藏") } },
 ]
 
 const NODE_ICONS: Readonly<Record<string, LucideIcon>> = {
@@ -208,7 +210,7 @@ const schemaList = computed(() => {
 
 const categories = computed(() => {
   const values = new Set(schemaList.value.map(({ schema }) => String(schema.category || 'workflow')))
-  return ['全部', ...[...values].sort((a, b) => a.localeCompare(b))]
+  return ['__all__', ...[...values].sort((a, b) => a.localeCompare(b))]
 })
 
 const filteredSchemas = computed(() => {
@@ -219,7 +221,7 @@ const filteredSchemas = computed(() => {
       if (scope.value === 'recent' && !preferences.value.recent.includes(id)) return false
       if (scope.value === 'favorites' && !preferences.value.favorites.includes(id)) return false
       const category = String(schema.category || 'workflow')
-      if (categoryFilter.value !== '全部' && category !== categoryFilter.value) return false
+      if (categoryFilter.value !== '__all__' && category !== categoryFilter.value) return false
       if (!query) return true
       return workflowSchemaSearchValues(schema, key)
         .some((value) => value.toLowerCase().includes(query))
@@ -251,12 +253,13 @@ function schemaDescription(schema: WorkflowNodeSchema): string {
 }
 
 function categoryLabel(category?: string): string {
+  if (category === '__all__') return t('全部')
   return workflowCategoryDisplayName(category)
 }
 
 function categoryIcon(category?: string): LucideIcon {
   const value = String(category || '').toLowerCase()
-  if (value === '全部') return Blocks
+  if (value === '__all__') return Blocks
   if (value.includes('ai') || value.includes('model') || value.includes('agent')) return Sparkles
   if (value.includes('runtime') || value.includes('command')) return Zap
   if (value.includes('data') || value.includes('input') || value.includes('output')) return Database

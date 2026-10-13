@@ -40,6 +40,26 @@ def _pdf_bytes_with_text(text: str) -> bytes:
     return output.getvalue()
 
 
+def _streaming_fake_client(fake):
+    """Keep parser fixtures behind the same streaming HTTPX API as production."""
+    async def respond(request):
+        kwargs = {
+            "params": {
+                key: int(value) if value.isdecimal() else value
+                for key, value in request.url.params.items()
+            },
+            "headers": request.headers,
+            "timeout": request.extensions["timeout"]["read"],
+        }
+        response = await fake.get(str(request.url), **kwargs)
+        return httpx.Response(
+            response.status_code, text=response.text,
+            headers=getattr(response, "headers", {}), request=request,
+        )
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(respond))
+
+
 @pytest.mark.asyncio
 async def test_web_search_returns_structured_metadata_and_artifact(monkeypatch):
     """新架构：web_search 走 tool/search 包，默认百度 tn=json 内核。
@@ -88,7 +108,7 @@ async def test_web_search_returns_structured_metadata_and_artifact(monkeypatch):
             return FakeResponse()
 
     async def fake_session(self):
-        return FakeClient()
+        return _streaming_fake_client(FakeClient())
 
     monkeypatch.setattr(search_baidu.BaiduSearchProvider, "_session", fake_session)
     tool = make_web_search_handler("")
@@ -133,7 +153,7 @@ async def test_web_search_image_results_include_https_image_and_source_page(monk
             return FakeResponse()
 
     async def fake_session(self):
-        return FakeClient()
+        return _streaming_fake_client(FakeClient())
 
     monkeypatch.setattr(search_bing.BingSearchProvider, "_session", fake_session)
     tool = make_web_search_handler("")
@@ -194,7 +214,7 @@ async def test_web_search_image_does_not_semantically_filter_provider_results(mo
             return FakeResponse()
 
     async def fake_session(self):
-        return FakeClient()
+        return _streaming_fake_client(FakeClient())
 
     monkeypatch.setattr(search_bing.BingSearchProvider, "_session", fake_session)
     tool = make_web_search_handler("")
@@ -234,7 +254,7 @@ async def test_web_search_image_returns_provider_results_for_model_judgment(monk
             return FakeResponse()
 
     async def fake_session(self):
-        return FakeClient()
+        return _streaming_fake_client(FakeClient())
 
     monkeypatch.setattr(search_bing.BingSearchProvider, "_session", fake_session)
     tool = make_web_search_handler("")
@@ -311,7 +331,7 @@ async def test_duckduckgo_image_search_extracts_source_images_without_semantic_f
             return FakeResponse()
 
     async def fake_session():
-        return FakeClient()
+        return _streaming_fake_client(FakeClient())
 
     monkeypatch.setattr(provider, "search", fake_search)
     monkeypatch.setattr(provider, "_session", fake_session)

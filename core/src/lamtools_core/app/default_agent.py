@@ -389,7 +389,7 @@ def create_core_agent_operations(
         ).strip()
         if not thread_id:
             return OperationResult(name=request.name, status="error", payload={"error": "thread_id is required"})
-        if not message:
+        if not message and not request.payload.get("attachment_ids"):
             return OperationResult(name=request.name, status="error", payload={"error": "message is required"})
         from lamtools_core.sub_agent_supervisor import (
             acknowledge_parent_mailbox,
@@ -429,7 +429,10 @@ def create_core_agent_operations(
                 )
             if goal.status == "blocked":
                 await goal_manager.update(goal.id, status="active", status_reason="")
-        runtime_work_root = _work_root_from_request(paths, request)
+        runtime_work_root = await _resolve_turn_work_root(
+            paths, request, thread_id=thread_id,
+            session_store=session_store, runtime_state_store=runtime_state_store,
+        )
         turn_spec = spec
         if _is_llm_client(model_provider):
             from lamtools_core.tool.default_toolbox import build_core_toolbox
@@ -666,6 +669,21 @@ def create_core_agent_operations(
                             **dict(request.payload.get("metadata") or {}),
                             "session_id": thread_id,
                             "session_metadata": session_metadata,
+                            **(
+                                {
+                                    "origin": str(
+                                        request.payload.get("origin")
+                                        or request.payload.get("turn_origin")
+                                        or ""
+                                    ).strip()
+                                }
+                                if str(
+                                    request.payload.get("origin")
+                                    or request.payload.get("turn_origin")
+                                    or ""
+                                ).strip()
+                                else {}
+                            ),
                             "goal_id": goal_id,
                             "data_dir": str(paths.data_dir),
                             "work_root": str(runtime_work_root),
@@ -2098,6 +2116,30 @@ def _work_root_from_request(paths: CoreAgentPaths, request: OperationRequest) ->
         or metadata.get("workRoot")
     )
     return Path(supplied or paths.work_root).expanduser().resolve()
+
+
+async def _resolve_turn_work_root(
+    paths: CoreAgentPaths, request: OperationRequest, *, thread_id: str,
+    session_store: Any, runtime_state_store: Any,
+) -> Path:
+    """Prefer the session's project to the process default when a caller omits it."""
+    payload = request.payload if isinstance(request.payload, dict) else {}
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    if payload.get("work_root") or payload.get("workRoot") or metadata.get("work_root") or metadata.get("workRoot"):
+        return _work_root_from_request(paths, request)
+    session = session_store.get(thread_id)
+    if inspect.isawaitable(session):
+        session = await session
+    bound_metadata = getattr(session, "metadata", None)
+    if isinstance(bound_metadata, dict) and bound_metadata.get("work_root"):
+        return Path(bound_metadata["work_root"]).expanduser().resolve()
+    # Low-level CLI callers may have a runtime session without a project
+    # catalog record. Keep their existing root rather than resetting it.
+    state = await runtime_state_store.get(thread_id)
+    state_metadata = getattr(state, "metadata", None)
+    if isinstance(state_metadata, dict) and state_metadata.get("work_root"):
+        return Path(state_metadata["work_root"]).expanduser().resolve()
+    return _work_root_from_request(paths, request)
 
 
 def _work_root_from_state(paths: CoreAgentPaths, state: Any) -> Path:

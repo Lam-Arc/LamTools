@@ -9,17 +9,17 @@
       <input
         v-model="query"
         type="search"
-        placeholder="搜索工作区索引"
-        aria-label="搜索工作区索引"
+        :placeholder="t('搜索工作区索引')"
+        :aria-label="t('搜索工作区索引')"
         :disabled="!requestRpc || searchLoading"
       />
-      <button type="submit" :disabled="!requestRpc || !query.trim() || searchLoading" aria-label="搜索">
+      <button type="submit" :disabled="!requestRpc || !query.trim() || searchLoading" :aria-label="t('搜索')">
         <LoaderCircle v-if="searchLoading" :size="14" :stroke-width="1.8" class="spinning" aria-hidden="true" />
         <Search v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </form>
     <p v-if="message" class="right-sidebar-rag-message" :data-state="indexState">{{ message }}</p>
-    <ul v-if="results.length" class="right-sidebar-rag-results" aria-label="搜索结果">
+    <ul v-if="results.length" class="right-sidebar-rag-results" :aria-label="t('搜索结果')">
       <li v-for="(result, index) in results" :key="`${result.key}:${index}`">
         <strong>{{ result.title }}</strong>
         <span v-if="result.detail">{{ result.detail }}</span>
@@ -29,6 +29,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, ref } from 'vue'
 import { LoaderCircle, Search } from 'lucide-vue-next'
 import { getPluginWidget } from '../plugins/api'
@@ -59,17 +61,17 @@ const searchLoading = ref(false)
 
 const indexLabel = computed(() => {
   switch (indexState.value) {
-    case 'available': return '索引可用'
-    case 'error': return '索引异常'
-    case 'unavailable': return 'RAG 不可用'
-    default: return '索引未检查'
+    case 'available': return t("索引可用")
+    case 'error': return t("索引异常")
+    case 'unavailable': return t("RAG 不可用")
+    default: return t("索引未检查")
   }
 })
 const countsLabel = computed(() => {
   if (!counts.value) return ''
   const parts: string[] = []
-  if (counts.value.documents) parts.push(`${counts.value.documents} 文档`)
-  if (counts.value.chunks) parts.push(`${counts.value.chunks} 分段`)
+  if (counts.value.documents) parts.push(t("{0} 文档", { 0: counts.value.documents }))
+  if (counts.value.chunks) parts.push(t("{0} 分段", { 0: counts.value.chunks }))
   return parts.join(' · ')
 })
 
@@ -108,7 +110,7 @@ async function loadStatus(): Promise<void> {
     // The repository does not ship a RAG provider.  Do not invent index
     // counts; the legacy search operation is attempted only on user action.
     indexState.value = 'unavailable'
-    message.value = '未安装 RAG 插件；可尝试兼容搜索'
+    message.value = t("未安装 RAG 插件；可尝试兼容搜索")
     return
   }
   try {
@@ -121,7 +123,7 @@ async function loadStatus(): Promise<void> {
     applySnapshot(readSnapshot(result))
   } catch (cause) {
     indexState.value = 'unavailable'
-    message.value = `暂不可用：${cause instanceof Error ? cause.message : String(cause)}`
+    message.value = t("暂不可用：{0}", { 0: cause instanceof Error ? cause.message : String(cause) })
   }
 }
 
@@ -156,10 +158,10 @@ async function search(): Promise<void> {
     })
     results.value = readResults(result)
     indexState.value = 'available'
-    message.value = results.value.length ? '' : '没有匹配结果'
+    message.value = results.value.length ? '' : t("没有匹配结果")
   } catch (cause) {
     indexState.value = 'unavailable'
-    message.value = `搜索不可用：${cause instanceof Error ? cause.message : String(cause)}`
+    message.value = t("搜索不可用：{0}", { 0: cause instanceof Error ? cause.message : String(cause) })
   } finally {
     searchLoading.value = false
   }

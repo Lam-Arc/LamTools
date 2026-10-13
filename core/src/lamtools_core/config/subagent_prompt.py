@@ -216,15 +216,30 @@ def load_global_delegation_strategy() -> str:
         return DEFAULT_DELEGATION_STRATEGY
 
 
+# Appended to the strategies that permit delegation (low/medium/high): without
+# an explicit user request for a different model, a sub-agent inherits the
+# current model.  "forbidden" never delegates, so it carries no such rule.
+_DEFAULT_MODEL_RULE = (
+    " Unless the user explicitly asks for another model, use the current model "
+    "and do not pick another model yourself."
+)
+
 _DELEGATION_STRATEGY_PROMPTS = {
     "forbidden": "Current sub-agent delegation strategy: do not delegate to sub-agents.",
-    "low": "Current sub-agent delegation strategy: delegate only for broad investigations or exploration.",
-    "medium": "Current sub-agent delegation strategy: keep the current default delegation strategy.",
+    "low": (
+        "Current sub-agent delegation strategy: delegate only for broad "
+        "investigations or exploration." + _DEFAULT_MODEL_RULE
+    ),
+    "medium": (
+        "Current sub-agent delegation strategy: keep the current default "
+        "delegation strategy." + _DEFAULT_MODEL_RULE
+    ),
     "high": (
         "Current sub-agent delegation strategy: first make a plan and obtain user confirmation. "
         "After confirmation, immediately create a highly centralized Checklist and use multiple "
         "sub-agents in parallel wherever possible. The main Agent remains responsible for decisions, "
         "direction, task assignment, dependency coordination, conflict resolution, integration, and final acceptance."
+        + _DEFAULT_MODEL_RULE
     ),
 }
 
@@ -372,6 +387,44 @@ def load_subagent_settings(work_root: str | Path | None = None) -> dict[str, obj
     return settings
 
 
+def resolve_model_reference_optional(
+    model_ref: object, *, work_root: str | Path | None = None
+) -> str:
+    """Canonical real ``model_id`` for a reference, or ``""`` when unresolved.
+
+    Never raises: an unknown or ambiguous reference simply yields an empty
+    string, so prompt rendering is never blocked by a bad configured value.
+    """
+    value = str(model_ref or "").strip()
+    if not value:
+        return ""
+    try:
+        from lamtools_core.sub_agent_supervisor import resolve_model_id
+
+        return resolve_model_id(value, work_root=work_root)
+    except Exception:
+        return ""
+
+
+def describe_model_reference(
+    model_ref: object, *, work_root: str | Path | None = None
+) -> str:
+    """Annotate a configured model value with its real ``model_id``.
+
+    The configured value is preserved verbatim; when it resolves to exactly one
+    model the canonical model_id is appended in parentheses as a note.  An
+    unresolvable or ambiguous value is returned unchanged — rendering must
+    neither fail nor block on a bad reference.
+    """
+    value = str(model_ref or "").strip()
+    if not value:
+        return ""
+    real_id = resolve_model_reference_optional(value, work_root=work_root)
+    if real_id and real_id != value:
+        return f"{value} ({real_id})"
+    return value
+
+
 def render_role_assignments_prompt(work_root: str | Path | None = None) -> str:
     """Render effective role assignments as a stable system-prompt section."""
     rules = load_effective_role_assignments(work_root)
@@ -382,9 +435,14 @@ def render_role_assignments_prompt(work_root: str | Path | None = None) -> str:
         "When a task type matches, prefer its assigned type, model, and reasoning level range; otherwise choose according to the task.",
     ]
     for rule in rules:
+        # The configured model value stays verbatim; its real model_id is added
+        # as a note so the model delegates with a value the resolver accepts.
+        suggested_model = describe_model_reference(rule["model"], work_root=work_root)
         lines.append(
             "- Task type: {task_type}; type: {type}; suggested model: {model}; "
-            "suggested reasoning level: {reasoning_min}–{reasoning_max}".format(**rule)
+            "suggested reasoning level: {reasoning_min}–{reasoning_max}".format(
+                **{**rule, "model": suggested_model}
+            )
         )
     return "\n".join(lines)
 
@@ -469,6 +527,8 @@ __all__ = [
     "render_role_assignments_prompt",
     "render_delegation_strategy_prompt",
     "resolve_default_multimodal_model",
+    "resolve_model_reference_optional",
+    "describe_model_reference",
     "resolve_subagent_guide_path",
     "resolve_subagent_settings_path",
     "settings_path_for_scope",

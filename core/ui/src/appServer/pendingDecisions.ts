@@ -60,6 +60,15 @@ export interface CorePendingDecision {
   submitting: boolean
   /** Free-form guidance can be submitted for this request. */
   canGuide: boolean
+  /**
+   * The sub-agent that asked, when the request is nested under a delegated
+   * run. Answering routes by `requestId`; this is what tells the user (and the
+   * panel) which sub-agent the request belongs to instead of silently
+   * attributing it to the main agent.
+   */
+  subAgentName: string
+  /** Durable child session id of the asking sub-agent, when known. */
+  subAgentSessionId: string
 }
 
 export interface SelectPendingCoreDecisionsOptions {
@@ -78,7 +87,7 @@ const DEFAULT_DETAIL_LIMIT = 240
  * the composer panel derives on every stream tick and must not re-walk the
  * whole thread.  WeakMap keeps the cache from outliving the messages.
  */
-const pendingPartsByMessage = new WeakMap<CoreMessage, MessagePart[]>()
+const pendingPartsByMessage = new WeakMap<CoreMessage, PendingDecisionEntry[]>()
 
 /**
  * Decisions that still need the user, oldest request first.
@@ -100,7 +109,8 @@ export function selectPendingCoreDecisions(
   // it, so the user drains it front to back.
   for (const message of messages) {
     if (!message || message.role !== 'assistant') continue
-    for (const part of pendingDecisionParts(message)) {
+    for (const entry of pendingDecisionParts(message)) {
+      const part = entry.part
       if (seenPartIds.has(part.id)) continue
       seenPartIds.add(part.id)
       const requestId = coreDecisionRequestId(part)
@@ -122,6 +132,8 @@ export function selectPendingCoreDecisions(
         submitting: part.status === 'running'
           || Boolean(requestId && submittingRequestIds?.has(requestId)),
         canGuide: part.status === 'pending',
+        subAgentName: entry.subAgentName,
+        subAgentSessionId: entry.subAgentSessionId,
       })
     }
   }
@@ -307,24 +319,89 @@ function coreDecisionLegacySubject(part: MessagePart): string {
   return firstString(args.title, args.question, meta.title, meta.question, part.label)
 }
 
-function pendingDecisionParts(message: CoreMessage): MessagePart[] {
+/** A pending part plus the sub-agent that owns it (empty for main-agent asks). */
+interface PendingDecisionEntry {
+  part: MessagePart
+  subAgentName: string
+  subAgentSessionId: string
+}
+
+function pendingDecisionParts(message: CoreMessage): PendingDecisionEntry[] {
   const cached = pendingPartsByMessage.get(message)
   if (cached) return cached
-  const found: MessagePart[] = []
+  const found: PendingDecisionEntry[] = []
   // Breadth-first over nested sub-agent lines, the same traversal order the
-  // approval controller uses for request lookup.
-  const queue: MessagePart[] = [...(message.parts || [])]
+  // approval controller uses for request lookup. Each nested level remembers
+  // the sub-agent it lives under, so an answer can be attributed (and the
+  // request routed) to that run rather than to the main agent.
+  const queue: Array<{ part: MessagePart; owner: PendingDecisionEntry | null }> = (
+    message.parts || []
+  ).map(part => ({ part, owner: null }))
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const { part, owner } = queue[cursor]
+    if (!part) continue
+    // The part that owns a nested level is itself a sub-agent row when it
+    // carries a child identity; otherwise the enclosing owner keeps applying.
+    const selfOwner = owner ?? subAgentOwnerOf(part)
+    if (coreDecisionIsUnanswered(part)) {
+      found.push({
+        part,
+        subAgentName: selfOwner?.subAgentName ?? '',
+        subAgentSessionId: selfOwner?.subAgentSessionId ?? '',
+      })
+    }
+    const nested = part.metadata?.subLineParts || part.metadata?.sub_line_parts
+    if (!Array.isArray(nested)) continue
+    for (const child of nested) {
+      if (isMessagePart(child)) queue.push({ part: child, owner: selfOwner })
+    }
+  }
+  pendingPartsByMessage.set(message, found)
+  return found
+}
+
+/** The sub-agent identity a part carries, if it is a delegated-run row. */
+function subAgentOwnerOf(part: MessagePart): PendingDecisionEntry | null {
+  const meta = (part.metadata || {}) as Record<string, unknown>
+  const args = asRecord(part.toolArgs) || {}
+  const name = firstString(
+    meta.agent_name,
+    meta.agentName,
+    meta.sub_agent_name,
+    args.agent_name,
+    args.agentName,
+    args.agent,
+    args.name,
+  )
+  const sessionId = firstString(
+    meta.sub_session_id,
+    meta.subSessionId,
+    args.sub_session_id,
+    args.subSessionId,
+  )
+  if (!name && !sessionId) return null
+  return { part, subAgentName: name, subAgentSessionId: sessionId }
+}
+
+/**
+ * Every decision part in a message tree, nested sub-agent lines included.
+ * Callers that only care about the parts themselves (e.g. the question
+ * auto-continue) use this instead of re-walking the tree, so a request that
+ * lives under a delegated run is never invisible to a decision surface.
+ */
+export function collectDecisionParts(parts: readonly MessagePart[]): MessagePart[] {
+  const found: MessagePart[] = []
+  const queue: MessagePart[] = [...parts]
   for (let cursor = 0; cursor < queue.length; cursor += 1) {
     const part = queue[cursor]
     if (!part) continue
-    if (coreDecisionIsUnanswered(part)) found.push(part)
+    if (part.partType === 'decision') found.push(part)
     const nested = part.metadata?.subLineParts || part.metadata?.sub_line_parts
     if (!Array.isArray(nested)) continue
     for (const child of nested) {
       if (isMessagePart(child)) queue.push(child)
     }
   }
-  pendingPartsByMessage.set(message, found)
   return found
 }
 

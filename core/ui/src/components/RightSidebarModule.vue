@@ -18,8 +18,8 @@
         class="right-sidebar-module-drag-handle"
         type="button"
         draggable="true"
-        :aria-label="`拖动 ${module.title} 模块排序`"
-        title="拖动排序"
+        :aria-label="t('拖动 {0} 模块排序', { 0: module.title })"
+        :title="t('拖动排序')"
         @dragstart="$emit('dragstart', $event)"
         @dragend="$emit('dragend', $event)"
       >
@@ -47,8 +47,8 @@
           class="right-sidebar-module-move"
           type="button"
           :disabled="!canMoveUp"
-          :aria-label="`上移 ${module.title}`"
-          title="上移"
+          :aria-label="t('上移 {0}', { 0: module.title })"
+          :title="t('上移')"
           @click="$emit('move', -1)"
         >
           <ArrowUp :size="13" :stroke-width="1.8" aria-hidden="true" />
@@ -58,8 +58,8 @@
           class="right-sidebar-module-move"
           type="button"
           :disabled="!canMoveDown"
-          :aria-label="`下移 ${module.title}`"
-          title="下移"
+          :aria-label="t('下移 {0}', { 0: module.title })"
+          :title="t('下移')"
           @click="$emit('move', 1)"
         >
           <ArrowDown :size="13" :stroke-width="1.8" aria-hidden="true" />
@@ -69,8 +69,8 @@
           type="button"
           :aria-expanded="!collapsed"
           :aria-controls="bodyId"
-          :aria-label="collapsed ? `展开 ${module.title}` : `折叠 ${module.title}`"
-          :title="collapsed ? '展开' : '折叠'"
+          :aria-label="collapsed ? t('展开 {0}', { 0: module.title }) : t('折叠 {0}', { 0: module.title })"
+          :title="collapsed ? t('展开') : t('折叠')"
           @click="$emit('toggle-collapsed')"
         >
           <ChevronRight v-if="collapsed" :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -95,11 +95,11 @@
         :aria-hidden="collapsed || undefined"
       >
         <div class="right-sidebar-module-body-content">
-          <div v-if="module.status === 'loading'" class="right-sidebar-module-state" role="status" aria-live="polite">正在加载…</div>
+          <div v-if="module.status === 'loading'" class="right-sidebar-module-state" role="status" aria-live="polite">{{ t("正在加载…") }}</div>
           <div v-else-if="module.status === 'error'" class="right-sidebar-module-state right-sidebar-module-state--error" role="alert">
-            {{ module.error || '此模块暂不可用' }}
+            {{ module.error || t("此模块暂不可用") }}
           </div>
-          <div v-else-if="isDisabled" class="right-sidebar-module-state">{{ module.disabledReason || '此模块未启用' }}</div>
+          <div v-else-if="isDisabled" class="right-sidebar-module-state">{{ module.disabledReason || t("此模块未启用") }}</div>
           <slot v-else />
         </div>
       </div>
@@ -108,6 +108,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { gsap } from 'gsap'
 import { computed, onMounted, onUnmounted, ref, useId } from 'vue'
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Circle, GripVertical } from 'lucide-vue-next'
@@ -144,9 +146,9 @@ const moduleElement = ref<HTMLElement | null>(null)
 const isDisabled = computed(() => props.module.status === 'disabled')
 const statusLabel = computed(() => {
   switch (props.module.status) {
-    case 'loading': return '加载中'
-    case 'error': return '不可用'
-    case 'disabled': return '未启用'
+    case 'loading': return t("加载中")
+    case 'error': return t("不可用")
+    case 'disabled': return t("未启用")
     default: return ''
   }
 })

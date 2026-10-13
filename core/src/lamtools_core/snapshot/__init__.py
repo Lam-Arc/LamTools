@@ -105,12 +105,29 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
         # in their own field so the UI can show context pressure without
         # poisoning provider-reported token usage.
         turn = _upsert_turn(state, event)
+        if turn is None:
+            return state
         if event.payload.get("replace") is True:
             if turn is not None and event.usage:
-                turn["context_metrics"] = dict(event.usage)
+                if event.parent_item_id:
+                    turn.setdefault("child_context_metrics", {})[event.parent_item_id] = dict(event.usage)
+                else:
+                    turn["context_metrics"] = dict(event.usage)
             return state
         if event.usage:
-            turn["usage"] = _merge_dict_values(turn.get("usage"), event.usage)
+            calls = turn.setdefault("usage_calls", [])
+            call = {"id": event.item_id or event.event_id, "seq": event.seq or state["snapshot_seq"],
+                    "parent_item_id": event.parent_item_id, "usage": dict(event.usage)}
+            existing = next((i for i, row in enumerate(calls) if row["id"] == call["id"]), None)
+            if existing is None:
+                calls.append(call)
+            else:
+                call["seq"] = calls[existing].get("seq", call["seq"])
+                calls[existing] = call
+            turn["usage"] = {}
+            for row in calls:
+                if not row.get("parent_item_id"):
+                    turn["usage"] = _merge_dict_values(turn["usage"], row["usage"])
         return state
 
     if event.kind == "artifact" or event.artifacts:
@@ -123,8 +140,15 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
         and str(existing_turn.get("status") or "") in TERMINAL_STATUSES
         else ""
     )
+    # A sub-agent's timeline outlives the parent turn that started it: the parent
+    # can end (the watchdog wakes it later) while the member keeps working. Such
+    # items carry a parent_item_id and belong to the member, so the ended turn
+    # must neither force them terminal nor re-open itself for them.
+    nested_child = bool(event.parent_item_id) or isinstance(
+        (event.payload or {}).get("sub_agent"), dict
+    )
     item = _upsert_item(state, event)
-    if terminal_turn_status:
+    if terminal_turn_status and not nested_child:
         item["status"] = terminal_turn_status
         turn = _upsert_turn(state, event)
         if event.item_id and turn is not None and event.item_id not in turn.setdefault("items", []):
@@ -154,7 +178,7 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
         item["status"] = event.status
     else:
         item["status"] = event.status
-        if event.turn_id:
+        if event.turn_id and not nested_child:
             state["status"] = "running"
 
     turn = _upsert_turn(state, event)
@@ -235,8 +259,44 @@ def _close_turn_items(state: dict[str, Any], turn: dict[str, Any], status: str) 
         item = items.get(item_id)
         if not isinstance(item, dict):
             continue
+        # A sub-agent's timeline outlives the parent turn that started it: the
+        # parent now ENDS while members still run (the watchdog wakes it later),
+        # so the member's in-flight rows must keep their own status. Blanket-
+        # completing them here would show a still-working member as finished,
+        # and a still-waiting card as answered.
+        if _is_sub_agent_child_item(item):
+            continue
         if str(item.get("status") or "") not in TERMINAL_STATUSES:
             item["status"] = status
+
+
+def _is_sub_agent_child_item(item: dict[str, Any]) -> bool:
+    """Whether an item belongs to a delegated member's timeline.
+
+    Provenance: nested items carry the parent's delegated tool row as
+    ``parent_item_id``; interactive requests additionally carry ``sub_agent`` in
+    the payload. Either mark means the parent turn's terminal transition must
+    leave the row alone.
+    """
+    if item.get("parent_item_id"):
+        return True
+    payload = item.get("payload")
+    return isinstance(payload, dict) and isinstance(payload.get("sub_agent"), dict)
+
+
+def _is_sub_agent_interaction_item(item: dict[str, Any]) -> bool:
+    """Whether an item is a sub-agent's open interactive request.
+
+    Provenance travels in the payload as ``sub_agent`` (the forwarding sink
+    stamps it); an ``approval_request`` carrying it belongs to a delegated
+    member, whose request lifecycle the parent turn's terminal transition must
+    leave alone.
+    """
+    payload = item.get("payload")
+    if not isinstance(payload, dict) or not isinstance(payload.get("sub_agent"), dict):
+        return False
+    kind = str(item.get("kind") or item.get("last_kind") or "")
+    return kind == "approval_request" and str(item.get("status") or "") not in TERMINAL_STATUSES
 
 
 def _is_turn_terminal_event(event: RunItemEvent) -> bool:
@@ -417,6 +477,12 @@ def reconcile_terminal_requests(state: dict[str, Any]) -> dict[str, Any]:
     for request_id, request in list(requests.items()):
         if not isinstance(request, dict) or request.get("status") != "open":
             continue
+        # A sub-agent's request is anchored to the parent turn for ordering, but
+        # its lifecycle belongs to the sub-agent. The parent turn going terminal
+        # must not close a card the child is still waiting on (the child's own
+        # approval_response, or its close/interrupt, closes it).
+        if isinstance(request.get("sub_agent"), dict):
+            continue
         terminal_status = terminal_statuses.get(str(request.get("turn_id") or ""))
         if not terminal_status:
             continue
@@ -463,10 +529,21 @@ def _recompute_thread_status(state: dict[str, Any]) -> None:
 def _merge_dict_values(current: Any, incoming: dict[str, Any]) -> dict[str, Any]:
     result = dict(current or {})
     for key, value in incoming.items():
+        if key == "cache_hit_rate":
+            continue
         if isinstance(value, (int, float)) and isinstance(result.get(key), (int, float)):
             result[key] += value
         else:
             result[key] = value
+    denominator = float(result.get("cache_reported_input_tokens") or 0)
+    if "cached_tokens" in incoming:
+        denominator += float(incoming.get("input_tokens") or incoming.get("prompt_tokens") or 0)
+    if "cached_tokens" in incoming or "cache_reported_input_tokens" in result:
+        result["cache_reported_input_tokens"] = denominator
+    if denominator > 0:
+        result["cache_hit_rate"] = min(1, float(result.get("cached_tokens") or 0) / denominator)
+    else:
+        result.pop("cache_hit_rate", None)
     return result
 
 

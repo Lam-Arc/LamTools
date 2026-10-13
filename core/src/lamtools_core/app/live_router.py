@@ -23,6 +23,7 @@ from .live_protocol import (
     METHOD_NOT_FOUND,
     PROTOCOL_VERSION,
     SERVER_ERROR,
+    THREAD_GAP_METHOD,
     InitializeParams,
     JsonRpcRequest,
     event_notification,
@@ -62,6 +63,18 @@ SNAPSHOT_TRIGGER_EVENTS = frozenset({
 # connection per interval — the next trigger (or thread/resume) delivers the
 # latest state anyway.
 SNAPSHOT_MIN_INTERVAL_SECONDS = 1.0
+
+# RPC replies and state notifications must not compete with the lossy stream
+# of high-volume runItem deltas. Both lanes are bounded; producers of control
+# messages apply backpressure while the sender drains them, whereas deltas may
+# be dropped and recovered from snapshots/resume.
+CONTROL_OUTBOUND_RUN_ITEM_KINDS = frozenset({"approval_request"})
+CONTROL_OUTBOUND_ENQUEUE_TIMEOUT_SECONDS = 5.0
+OUTBOUND_DROP_LOG_INTERVAL_SECONDS = 10.0
+# After the lossy lane drops frames, tell the client to resynchronize from its
+# own revision. Rate limited so a sustained overflow cannot flood the reliable
+# control lane (and throttle the resync storm rather than the drops).
+OUTBOUND_GAP_MIN_INTERVAL_SECONDS = 1.0
 
 # A snapshot page is delimited by complete turns, so a page on a long thread can
 # be tens of MB in one WebSocket message. Common client libraries cap a single
@@ -152,6 +165,8 @@ class CoreLiveConnection:
         *,
         context: Any,
         outbound_limit: int = 256,
+        control_outbound_limit: int = 64,
+        control_outbound_timeout_seconds: float = CONTROL_OUTBOUND_ENQUEUE_TIMEOUT_SECONDS,
         adapter: CoreLiveConnectionAdapter | None = None,
         browser_origin: str | None = None,
         max_message_bytes: int = 4 * 1024 * 1024,
@@ -170,7 +185,20 @@ class CoreLiveConnection:
         # Signalled when a subscription is active so _hub_reader can block
         # without busy-polling while idle. Cleared on unsubscribe.
         self._subscription_ready = asyncio.Event()
-        self.outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=outbound_limit)
+        # Ordinary event traffic is deliberately lossy and remains isolated
+        # from responses and recovery-critical notifications. In particular,
+        # filling the runItem lane must never make an RPC acknowledgement vanish.
+        self.outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max(1, outbound_limit))
+        self.control_outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
+            maxsize=max(1, control_outbound_limit),
+        )
+        self.control_outbound_timeout_seconds = max(0.001, control_outbound_timeout_seconds)
+        self._outbound_ready = asyncio.Event()
+        self._closing = False
+        self._outbound_dropped_count = 0
+        self._outbound_drops_since_log = 0
+        self._outbound_drop_last_log_at: float | None = None
+        self._outbound_gap_last_at: float | None = None
         self.request_tasks: set[asyncio.Task[None]] = set()
         self._last_snapshot_sent_at = 0.0
         # Per-item runItem delta coalescing window. Model streams can deliver
@@ -184,6 +212,14 @@ class CoreLiveConnection:
         self._run_item_buffer: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._run_item_flush_task: asyncio.Task[None] | None = None
         self._run_item_flush_interval: float = 0.02
+        # Index of replaceable runItem delta frames currently sitting in
+        # ``outbound``, keyed by (thread, item, kind). A later frame for a key
+        # that is still queued is merged into the pending frame in place rather
+        # than enqueued, so filling the lane loses only intermediate frames and
+        # the client still converges on the merged text (see _send). The key is
+        # removed when the frame leaves the queue (_take_outbound), so a sent
+        # frame is never mutated afterwards.
+        self._outbound_keys: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._request_methods: dict[str, str] = {}
 
     async def run(self) -> None:
@@ -220,17 +256,27 @@ class CoreLiveConnection:
                 self.request_tasks.add(task)
                 task.add_done_callback(self._request_task_done)
         finally:
+            self._closing = True
+            self._outbound_ready.set()
             sender.cancel()
             hub_reader.cancel()
+            background = [sender, hub_reader]
             if self._run_item_flush_task is not None:
                 self._run_item_flush_task.cancel()
+                background.append(self._run_item_flush_task)
                 self._run_item_flush_task = None
             pending = list(self.request_tasks)
             for task in pending:
                 task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.gather(*background, *pending, return_exceptions=True)
             self._unsubscribe()
+            if self._outbound_dropped_count:
+                _trace(
+                    "core.outbound_notifications_dropped",
+                    count=self._outbound_dropped_count,
+                    since_last_report=self._outbound_drops_since_log,
+                    thread_id=self.thread_id or "",
+                )
             _trace("core.connection_closed", thread_id=self.thread_id or "")
 
     def _request_task_done(self, task: asyncio.Task[None]) -> None:
@@ -246,7 +292,7 @@ class CoreLiveConnection:
 
     async def _sender(self) -> None:
         while True:
-            message = await self.outbound.get()
+            message = await self._next_outbound()
             # Serialize once here so the size is known exactly; starlette's
             # send_json produces this same text, so sending it ourselves is
             # byte-identical and avoids serializing a huge page a second time.
@@ -275,18 +321,184 @@ class CoreLiveConnection:
             else:
                 _trace_outbound_notification(message)
 
-    async def _send(self, message: dict[str, Any]) -> None:
+    async def _next_outbound(self) -> dict[str, Any]:
+        """Take control messages first, otherwise preserve notification FIFO."""
+        while True:
+            try:
+                return self.control_outbound.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                return self._take_outbound()
+            except asyncio.QueueEmpty:
+                pass
+
+            # No await occurs between clearing and checking the queues, so a
+            # producer cannot set the event in that interval and be missed.
+            self._outbound_ready.clear()
+            try:
+                return self.control_outbound.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                return self._take_outbound()
+            except asyncio.QueueEmpty:
+                pass
+            if self._closing:
+                raise asyncio.CancelledError
+            await self._outbound_ready.wait()
+
+    def _take_outbound(self) -> dict[str, Any]:
+        """Pop the next notification frame, retiring its replaceable key.
+
+        Popping the key in the same step the frame leaves the queue is what makes
+        the in-place merge in ``_send`` safe: once a frame is handed to the
+        sender it is no longer reachable through ``_outbound_keys`` and cannot be
+        mutated while it is being serialized.
+        """
+        message = self.outbound.get_nowait()
+        key = self._run_item_replace_key(message)
+        if key is not None:
+            self._outbound_keys.pop(key, None)
+        return message
+
+    async def _send(self, message: dict[str, Any], *, force_control: bool = False) -> None:
+        if self._closing:
+            return
+        if force_control or _is_control_outbound(message):
+            # Backpressure is intentional for bounded control traffic. The
+            # producer belongs to a request or reader task and is cancelled by
+            # run() when the peer disconnects; a bounded timeout also forces a
+            # reconnect if the socket stays open but its sender cannot drain.
+            try:
+                await asyncio.wait_for(
+                    self.control_outbound.put(message),
+                    timeout=self.control_outbound_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                # If even the reserved lane cannot drain, stop accepting work
+                # and ask the client to reconnect/resume. This puts a hard
+                # bound on blocked request tasks and lets the existing resume
+                # path recover persisted state.
+                self._closing = True
+                self._outbound_ready.set()
+                logger.error(
+                    "Core app-server control queue saturated; closing ws 1013 (thread=%s)",
+                    self.thread_id or "-",
+                )
+                try:
+                    await self.websocket.close(
+                        code=1013,
+                        reason="Control message queue saturated; reconnect to resume.",
+                    )
+                except Exception as exc:
+                    logger.debug("core-app-server saturated close failed: %s", exc)
+                return
+            self._outbound_ready.set()
+            return
+        key = self._run_item_replace_key(message)
+        if key is not None:
+            # A replaceable runItem delta. If a frame for the same item is still
+            # queued, merge into it in place: the pending frame already owns the
+            # slot, so the newer text never adds a second frame and nothing is
+            # dropped. Only intermediate frames are lost, and because the delta
+            # text is concatenated the client converges on the latest state.
+            pending = self._outbound_keys.get(key)
+            if pending is not None:
+                _merge_run_item_message(pending, message)
+                return
+            try:
+                self.outbound.put_nowait(message)
+            except asyncio.QueueFull:
+                self._record_outbound_drop()
+                return
+            self._outbound_keys[key] = message
+            self._outbound_ready.set()
+            return
         try:
             self.outbound.put_nowait(message)
         except asyncio.QueueFull:
-            # Never kill a live connection over outbound pressure: dropping the
-            # message is safe because clients re-sync via boundary snapshots and
-            # thread/resume. Closing with 1013 here turned transient overload
-            # into a reconnect storm (56MB snapshots x many events).
-            logger.warning(
-                "Core app-server outbound queue full; dropping message for thread %s",
-                self.thread_id or "(unsubscribed)",
-            )
+            self._record_outbound_drop()
+            return
+        self._outbound_ready.set()
+
+    def _run_item_replace_key(self, message: Mapping[str, Any]) -> tuple[str, str, str] | None:
+        """Return the replaceable key for a lossy runItem delta frame, else None.
+
+        Only non-control runItem frames carrying a live ``delta`` string are
+        replaceable; every state message (RPC reply, snapshot, approval, sync
+        change, non-delta runItem) is either control-lane or must keep every
+        frame, so it has no key and keeps the drop-on-full behaviour. The key
+        matches ``_enqueue_run_item`` so a frame flushed by the coalescer is
+        recognised against the one already queued.
+        """
+        if "id" in message or message.get("method") != CORE_RUN_ITEM_METHOD:
+            return None
+        params = message.get("params")
+        if not isinstance(params, Mapping):
+            return None
+        if _run_item_kind(params) in CONTROL_OUTBOUND_RUN_ITEM_KINDS:
+            return None
+        value = params.get("payload") if isinstance(params.get("payload"), Mapping) else params
+        inner = value.get("payload") if isinstance(value.get("payload"), Mapping) else {}
+        if not isinstance(inner.get("delta"), str):
+            return None
+        return (
+            str(value.get("thread_id") or params.get("thread_id") or self.thread_id or ""),
+            str(value.get("item_id") or params.get("item_id") or ""),
+            str(value.get("kind") or ""),
+        )
+
+    def _record_outbound_drop(self) -> None:
+        self._outbound_dropped_count += 1
+        self._outbound_drops_since_log += 1
+        now = time.monotonic()
+        self._schedule_outbound_gap(now)
+        last_log_at = self._outbound_drop_last_log_at
+        if last_log_at is not None and now - last_log_at < OUTBOUND_DROP_LOG_INTERVAL_SECONDS:
+            return
+        logger.warning(
+            "Core app-server outbound notification queue full; dropped=%d total_dropped=%d thread=%s",
+            self._outbound_drops_since_log,
+            self._outbound_dropped_count,
+            self.thread_id or "(unsubscribed)",
+        )
+        self._outbound_drops_since_log = 0
+        self._outbound_drop_last_log_at = now
+
+    def _schedule_outbound_gap(self, now: float) -> None:
+        """Tell the client it missed updates so it can resynchronize.
+
+        Mirrors the hub's ``CoreAppEventGap``: when the lossy lane drops frames,
+        the client must not wait for the next full snapshot to heal. A bounded,
+        rate-limited ``thread/gap`` travels on the reliable control lane, so it
+        cannot itself be dropped; the control lane's own saturation policy
+        (close 1013 while the client is unrecoverably slow) still bounds the
+        worst case. Scheduled rather than awaited because ``_send`` is on the
+        producer's hot path.
+        """
+        last = self._outbound_gap_last_at
+        if last is not None and now - last < OUTBOUND_GAP_MIN_INTERVAL_SECONDS:
+            return
+        self._outbound_gap_last_at = now
+        if self._closing:
+            return
+        task = asyncio.create_task(self._publish_outbound_gap())
+        self.request_tasks.add(task)
+        task.add_done_callback(self._request_task_done)
+
+    async def _publish_outbound_gap(self) -> None:
+        await self._send(
+            {
+                "method": THREAD_GAP_METHOD,
+                "params": {
+                    "thread_id": self.thread_id or "",
+                    "reason": "outbound_dropped",
+                    "dropped": self._outbound_dropped_count,
+                },
+            },
+            force_control=True,
+        )
 
     async def send(self, message: dict[str, Any]) -> None:
         await self._send(message)
@@ -354,7 +566,7 @@ class CoreLiveConnection:
                 continue
             # Non-runItem events must land after any buffered deltas so the
             # client never observes state out of order.
-            await self._flush_run_item_buffer()
+            await self._flush_run_item_buffer(control=True)
             await self._send(event_notification(event))
             if event_method in (CORE_RUN_ITEM_METHOD, "session/created", "session/updated"):
                 continue
@@ -388,7 +600,7 @@ class CoreLiveConnection:
             # Non-delta runItem events (tool_result, status, usage, full
             # content) carry completion/state — send immediately, ordered
             # after any buffered deltas for the same item.
-            await self._flush_run_item_buffer()
+            await self._flush_run_item_buffer(control=True)
             await self._send({"method": CORE_RUN_ITEM_METHOD, "params": params})
             return
         key = (
@@ -422,7 +634,7 @@ class CoreLiveConnection:
             self._run_item_flush_task = None
         await self._flush_run_item_buffer()
 
-    async def _flush_run_item_buffer(self) -> None:
+    async def _flush_run_item_buffer(self, *, control: bool = False) -> None:
         if self._run_item_flush_task is not None:
             self._run_item_flush_task.cancel()
             self._run_item_flush_task = None
@@ -430,7 +642,7 @@ class CoreLiveConnection:
             return
         buffer, self._run_item_buffer = self._run_item_buffer, {}
         for message in buffer.values():
-            await self._send(message)
+            await self._send(message, force_control=control)
 
     async def _send_snapshot(self, thread_id: str) -> None:
         async with self.context.session_factory() as db:
@@ -899,6 +1111,32 @@ def _run_item_kind(event: Any) -> str:
     return ""
 
 
+def _is_control_outbound(message: Mapping[str, Any]) -> bool:
+    """Return whether a message needs reliable, priority-lane delivery.
+
+    High-volume runItem text deltas can be recovered from a later snapshot or
+    resume. RPC responses and every state notification use the bounded control
+    lane; non-delta runItem updates and approvals are also reliable.
+    """
+    if "id" in message:
+        return True
+    method = message.get("method")
+    if method == CORE_RUN_ITEM_METHOD:
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return True
+        if _run_item_kind(params) in CONTROL_OUTBOUND_RUN_ITEM_KINDS:
+            return True
+        value = params.get("payload") if isinstance(params.get("payload"), dict) else params
+        inner = value.get("payload") if isinstance(value.get("payload"), dict) else {}
+        return not isinstance(inner.get("delta"), str)
+    # App-server state notifications are low-volume compared with runItem
+    # token deltas and need reliable delivery. Unknown notification methods
+    # stay on the control lane too so a newly added state event is safe by
+    # default.
+    return isinstance(method, str) and bool(method)
+
+
 def _copy_run_item_params(params: dict[str, Any]) -> dict[str, Any]:
     """Deep-copy the two payload levels of a runItem event.
 
@@ -918,6 +1156,43 @@ def _copy_run_item_params(params: dict[str, Any]) -> dict[str, Any]:
             },
         }
     return dict(params)
+
+
+def _merge_run_item_message(target: dict[str, Any], source: Mapping[str, Any]) -> None:
+    """Fold a newer runItem delta frame into the pending queued frame in place.
+
+    ``target`` is the frame already sitting in ``outbound`` (identity, item id and
+    event id are kept); ``source`` is the newer frame that would otherwise have
+    been dropped. The delta strings are concatenated so the client receives the
+    union of the streamed text, and every absorbed event id is recorded under
+    ``_coalesced_event_ids`` so the client marks them all seen and a later
+    snapshot never replays them.
+    """
+    target_params = target.get("params") if isinstance(target.get("params"), Mapping) else {}
+    source_params = source.get("params") if isinstance(source.get("params"), Mapping) else {}
+    target_value = target_params.get("payload") if isinstance(target_params.get("payload"), dict) else {}
+    source_value = source_params.get("payload") if isinstance(source_params.get("payload"), Mapping) else {}
+    target_inner = target_value.get("payload") if isinstance(target_value.get("payload"), dict) else {}
+    source_inner = source_value.get("payload") if isinstance(source_value.get("payload"), Mapping) else {}
+    target_delta = target_inner.get("delta")
+    source_delta = source_inner.get("delta")
+    if isinstance(target_delta, str) and isinstance(source_delta, str):
+        target_inner["delta"] = target_delta + source_delta
+    absorbed = target_value.get("_coalesced_event_ids")
+    if not isinstance(absorbed, list):
+        absorbed = target_value["_coalesced_event_ids"] = []
+    target_own = str(target_value.get("event_id") or target_params.get("event_id") or "")
+    if target_own and target_own not in absorbed:
+        absorbed.append(target_own)
+    source_ids = source_value.get("_coalesced_event_ids")
+    candidates: list[Any] = []
+    if isinstance(source_ids, list):
+        candidates.extend(source_ids)
+    candidates.append(source_value.get("event_id") or source_params.get("event_id"))
+    for candidate in candidates:
+        event_id = str(candidate or "")
+        if event_id and event_id not in absorbed:
+            absorbed.append(event_id)
 
 
 __all__ = ["CoreLiveConnection", "CoreLiveConnectionAdapter", "create_core_live_router"]

@@ -1,8 +1,8 @@
 <template>
-  <section class="artifact-panel" data-artifact-library aria-label="项目成果库">
+  <section class="artifact-panel" data-artifact-library :aria-label="t('项目成果库')">
     <header class="artifact-panel-head">
       <div class="artifact-panel-title">
-        <strong>成果库</strong>
+        <strong>{{ t("成果库") }}</strong>
         <span class="artifact-panel-count">{{ visibleArtifacts.length }} / {{ roleArtifacts.length }}</span>
       </div>
       <div class="artifact-actions">
@@ -10,19 +10,19 @@
           v-if="!cleanupMode"
           class="text-btn danger"
           type="button"
-          title="勾选后从成果库移除"
+          :title="t('勾选后从成果库移除')"
           @click="enterCleanup"
-        >移除</button>
+        >{{ t("移除") }}</button>
         <template v-else>
           <button
             class="text-btn danger"
             type="button"
             :disabled="!selected.length"
             @click="removeSelected"
-          >从成果库移除 ({{ selected.length }})</button>
-          <button class="text-btn" type="button" @click="exitCleanup">取消</button>
+          >{{ t("从成果库移除 (") }}{{ selected.length }})</button>
+          <button class="text-btn" type="button" @click="exitCleanup">{{ t("取消") }}</button>
         </template>
-        <button class="text-btn" type="button" title="刷新成果库" aria-label="刷新成果库" @click="fetchArtifacts">
+        <button class="text-btn" type="button" :title="t('刷新成果库')" :aria-label="t('刷新成果库')" @click="fetchArtifacts">
           <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
@@ -34,35 +34,35 @@
         v-model="searchText"
         class="artifact-search"
         type="search"
-        placeholder="搜索名称、路径或来源…"
-        aria-label="搜索成果库"
+        :placeholder="t('搜索名称、路径或来源…')"
+        :aria-label="t('搜索成果库')"
       />
       <button
         v-if="searchText"
         type="button"
         class="artifact-search-clear"
-        aria-label="清除搜索"
+        :aria-label="t('清除搜索')"
         @click="searchText = ''"
       >×</button>
     </div>
 
-    <div class="artifact-filters" aria-label="成果筛选">
+    <div class="artifact-filters" :aria-label="t('成果筛选')">
       <UiSelect
         :model-value="roleFilter"
         :options="roleOptions"
-        aria-label="按角色筛选"
+        :aria-label="t('按角色筛选')"
         @update:model-value="roleFilter = $event"
       />
       <UiSelect
         :model-value="kindFilter"
         :options="kindOptions"
-        aria-label="按类型筛选"
+        :aria-label="t('按类型筛选')"
         @update:model-value="kindFilter = $event"
       />
       <UiSelect
         :model-value="statusFilter"
         :options="statusOptions"
-        aria-label="按状态筛选"
+        :aria-label="t('按状态筛选')"
         @update:model-value="statusFilter = $event"
       />
       <button
@@ -71,24 +71,22 @@
         type="button"
         :aria-pressed="showRemoved"
         @click="showRemoved = !showRemoved"
-      >{{ showRemoved ? '隐藏已移除' : '显示已移除' }}</button>
+      >{{ showRemoved ? t("隐藏已移除") : t("显示已移除") }}</button>
     </div>
 
-    <p class="artifact-panel-hint">仅展示用户、中间产物与产物三类。移除只改变成果库状态，不删除文件。</p>
+    <p class="artifact-panel-hint">{{ t("仅展示用户、中间产物与产物三类。移除只改变成果库状态，不删除文件。") }}</p>
     <p v-if="error" class="artifact-error" role="alert">{{ error }}</p>
 
     <div v-if="loading" class="artifact-state" data-state="loading" role="status" aria-live="polite">
       <LoaderCircle class="artifact-state-spinner" :size="15" :stroke-width="1.8" aria-hidden="true" />
-      <span>正在加载成果库…</span>
+      <span>{{ t("正在加载成果库…") }}</span>
     </div>
-    <div v-else-if="!projectId" class="artifact-state" data-state="empty">
-      选择项目后查看成果库。
-    </div>
+    <div v-else-if="!projectId" class="artifact-state" data-state="empty">{{ t("选择项目后查看成果库。") }}</div>
     <div v-else-if="!visibleArtifacts.length" class="artifact-state" data-state="empty">
-      {{ showRemoved ? '暂无已移除的成果。' : '暂无符合筛选条件的成果。' }}
+      {{ showRemoved ? t("暂无已移除的成果。") : t("暂无符合筛选条件的成果。") }}
     </div>
 
-    <ul v-else class="artifact-list" aria-label="成果列表">
+    <ul v-else class="artifact-list" :aria-label="t('成果列表')">
       <li
         v-for="item in visibleArtifacts"
         :key="item.artifact_id"
@@ -106,7 +104,7 @@
         <button
           class="artifact-item-main"
           type="button"
-          :aria-label="`${item.deleted ? '已移除' : '打开'} ${item.name}`"
+          :aria-label="t('{0} {1}', { 0: item.deleted ? t('已移除') : t('打开'), 1: item.name })"
           @click="openArtifactInStage(item)"
         >
           <span class="artifact-kind" :title="kindLabel(item.kind)">
@@ -126,7 +124,7 @@
             <input
               type="checkbox"
               :checked="selectedSet.has(item.artifact_id)"
-              :aria-label="`选择 ${item.name}`"
+              :aria-label="t('选择 {0}', { 0: item.name })"
               @change="toggleSelected(item.artifact_id)"
             />
           </label>
@@ -134,8 +132,8 @@
             type="button"
             class="artifact-icon-button"
             :aria-expanded="selectedArtifact?.artifact_id === item.artifact_id"
-            :aria-label="`${selectedArtifact?.artifact_id === item.artifact_id ? '收起' : '查看'} ${item.name} 详情`"
-            title="详情"
+            :aria-label="t('{0} {1} 详情', { 0: selectedArtifact?.artifact_id === item.artifact_id ? t('收起') : t('查看'), 1: item.name })"
+            :title="t('详情')"
             @click.stop="toggleDetails(item)"
           >
             <Info :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -144,8 +142,8 @@
             v-if="item.deleted"
             type="button"
             class="artifact-icon-button artifact-icon-button--restore"
-            :aria-label="`恢复 ${item.name}`"
-            title="恢复到成果库"
+            :aria-label="t('恢复 {0}', { 0: item.name })"
+            :title="t('恢复到成果库')"
             @click.stop="restoreArtifact(item)"
           >
             <RotateCcw :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -154,8 +152,8 @@
             v-else
             type="button"
             class="artifact-icon-button artifact-icon-button--danger"
-            :aria-label="`从成果库移除 ${item.name}`"
-            title="从成果库移除"
+            :aria-label="t('从成果库移除 {0}', { 0: item.name })"
+            :title="t('从成果库移除')"
             @click.stop="removeArtifact(item)"
           >
             <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -164,28 +162,26 @@
       </li>
     </ul>
 
-    <section v-if="selectedArtifact" class="artifact-detail" :aria-label="`${selectedArtifact.name} 详情`">
+    <section v-if="selectedArtifact" class="artifact-detail" :aria-label="t('{0} 详情', { 0: selectedArtifact.name })">
       <header class="artifact-detail-head">
         <div>
           <strong>{{ selectedArtifact.name }}</strong>
           <span>{{ provenanceLabel(selectedArtifact) }}</span>
         </div>
         <button type="button" class="artifact-open-button" @click="openArtifactInStage(selectedArtifact)">
-          <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />
-          打开视窗
-        </button>
+          <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />{{ t("打开视窗") }}</button>
       </header>
       <dl class="artifact-meta">
-        <dt>角色</dt><dd>{{ roleLabel(selectedArtifact.role) }}</dd>
-        <dt>类型</dt><dd>{{ kindLabel(selectedArtifact.kind, selectedArtifact.name) }}</dd>
-        <dt>状态</dt><dd>{{ statusLabel(selectedArtifact) }}</dd>
-        <dt>来源</dt><dd>{{ provenanceLabel(selectedArtifact) }}</dd>
+        <dt>{{ t("角色") }}</dt><dd>{{ roleLabel(selectedArtifact.role) }}</dd>
+        <dt>{{ t("类型") }}</dt><dd>{{ kindLabel(selectedArtifact.kind, selectedArtifact.name) }}</dd>
+        <dt>{{ t("状态") }}</dt><dd>{{ statusLabel(selectedArtifact) }}</dd>
+        <dt>{{ t("来源") }}</dt><dd>{{ provenanceLabel(selectedArtifact) }}</dd>
         <template v-if="selectedArtifact.thread_id || selectedArtifact.turn_id || selectedArtifact.item_id">
-          <dt>运行链路</dt>
+          <dt>{{ t("运行链路") }}</dt>
           <dd>{{ [selectedArtifact.thread_id, selectedArtifact.turn_id, selectedArtifact.item_id].filter(Boolean).join(' · ') }}</dd>
         </template>
         <template v-if="selectedArtifact.path || selectedArtifact.uri">
-          <dt>路径</dt><dd :title="selectedArtifact.path || selectedArtifact.uri">{{ selectedArtifact.path || selectedArtifact.uri }}</dd>
+          <dt>{{ t("路径") }}</dt><dd :title="selectedArtifact.path || selectedArtifact.uri">{{ selectedArtifact.path || selectedArtifact.uri }}</dd>
         </template>
       </dl>
     </section>
@@ -194,7 +190,7 @@
 
   <CoreConfirmDialog
     :open="Boolean(pendingRemove)"
-    title="从成果库移除？"
+    :title="t('从成果库移除？')"
     :detail="pendingRemove?.detail || ''"
     @cancel="pendingRemove = null"
     @confirm="confirmRemove"
@@ -202,6 +198,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, ref, watch } from 'vue'
 import {
   Copy,
@@ -263,26 +261,26 @@ const selectedArtifact = ref<ProjectArtifact | null>(null)
 let fetchSeq = 0
 
 const roleOptions = [
-  { value: 'all', label: '全部角色' },
-  { value: 'input', label: '用户' },
-  { value: 'intermediate', label: '中间产物' },
-  { value: 'deliverable', label: '产物' },
+  { value: 'all', get label() { return t("全部角色") } },
+  { value: 'input', get label() { return t("用户") } },
+  { value: 'intermediate', get label() { return t("中间产物") } },
+  { value: 'deliverable', get label() { return t("产物") } },
 ]
 const kindOptions = computed(() => [
-  { value: 'all', label: '全部类型' },
+  { value: 'all', get label() { return t("全部类型") } },
   ...Array.from(new Set(artifacts.value.map(item => item.kind).filter(Boolean))).sort().map(kind => ({
     value: kind,
     label: kindLabel(kind),
   })),
 ])
 const statusOptions = [
-  { value: 'all', label: '全部状态' },
-  { value: 'ready', label: '就绪' },
-  { value: 'running', label: '处理中' },
-  { value: 'completed', label: '已完成' },
-  { value: 'failed', label: '失败' },
-  { value: 'missing', label: '文件缺失' },
-  { value: 'deleted', label: '已移除' },
+  { value: 'all', get label() { return t("全部状态") } },
+  { value: 'ready', get label() { return t("就绪") } },
+  { value: 'running', get label() { return t("处理中") } },
+  { value: 'completed', get label() { return t("已完成") } },
+  { value: 'failed', get label() { return t("失败") } },
+  { value: 'missing', get label() { return t("文件缺失") } },
+  { value: 'deleted', get label() { return t("已移除") } },
 ]
 
 const roleArtifacts = computed(() => artifacts.value.filter(item => ROLE_VALUES.includes(item.role as ArtifactRole)))
@@ -398,11 +396,11 @@ function kindIcon(kind: string, name = ''): LucideIcon {
 
 function kindLabel(kind: string, name = ''): string {
   const resolved = inferredKind(kind, name)
-  return ({ image: '图片', video: '视频', audio: '音频', pdf: 'PDF', document: '文档', code: '代码', spreadsheet: '表格', presentation: '演示文稿', file: '文件', file_change: '文件改动' } as Record<string, string>)[resolved] || resolved || '文件'
+  return ({ image: '图片', video: '视频', audio: '音频', pdf: 'PDF', document: '文档', code: '代码', spreadsheet: '表格', presentation: '演示文稿', file: '文件', file_change: '文件改动' } as Record<string, string>)[resolved] || resolved || t("文件")
 }
 
 function roleLabel(role?: string): string {
-  return ({ input: '用户', intermediate: '中间产物', deliverable: '产物' } as Record<string, string>)[role || ''] || '成果'
+  return ({ input: '用户', intermediate: '中间产物', deliverable: '产物' } as Record<string, string>)[role || ''] || t("成果")
 }
 
 function artifactStatus(item: ProjectArtifact): string {
@@ -423,9 +421,9 @@ function provenanceLabel(item: ProjectArtifact): string {
     const label = stringValue(provenance.label || provenance.name || provenance.source)
     if (label) return label
   }
-  if (item.source === 'user_upload' || item.source === 'user') return '用户上传'
-  if (item.source === 'agent_generated' || item.source === 'agent') return 'Agent 生成'
-  return item.source || '工作区'
+  if (item.source === 'user_upload' || item.source === 'user') return t("用户上传")
+  if (item.source === 'agent_generated' || item.source === 'agent') return t("Agent 生成")
+  return item.source || t("工作区")
 }
 
 function formatTime(value: string): string {
@@ -467,16 +465,16 @@ function onArtifactContextMenu(event: MouseEvent, item: ProjectArtifact): void {
   openContextMenu({
     event,
     items: [
-      { id: 'open', label: '打开视窗', icon: ExternalLink, action: () => openArtifactInStage(item) },
+      { id: 'open', get label() { return t("打开视窗") }, icon: ExternalLink, action: () => openArtifactInStage(item) },
       { type: 'separator', id: 'artifact-path-separator' },
-      { id: 'copy-path', label: '复制路径', icon: Copy, action: () => copyText(item.path || item.uri || '').catch(() => undefined) },
+      { id: 'copy-path', get label() { return t("复制路径") }, icon: Copy, action: () => copyText(item.path || item.uri || '').catch(() => undefined) },
       { type: 'separator', id: 'artifact-danger-separator' },
       item.deleted
-        ? { id: 'restore', label: '恢复到成果库', icon: RotateCcw, action: () => restoreArtifact(item) }
-        : { id: 'remove', label: '从成果库移除', icon: Trash2, destructive: true, action: () => removeArtifact(item) },
+        ? { id: 'restore', get label() { return t("恢复到成果库") }, icon: RotateCcw, action: () => restoreArtifact(item) }
+        : { id: 'remove', get label() { return t("从成果库移除") }, icon: Trash2, destructive: true, action: () => removeArtifact(item) },
     ],
     ownerId: `artifact:${item.artifact_id}`,
-    ariaLabel: `${item.name} 成果操作`,
+    ariaLabel: t("{0} 成果操作", { 0: item.name }),
     panelAttributes: { 'data-artifact-menu': item.artifact_id },
   })
 }
@@ -486,13 +484,13 @@ const pendingRemove = ref<{ detail: string; ids: string[]; after?: () => void } 
 
 function removeArtifact(item: ProjectArtifact): void {
   if (!props.projectId) return
-  pendingRemove.value = { detail: `${item.name} · 文件保留`, ids: [item.artifact_id] }
+  pendingRemove.value = { detail: t("{0} · 文件保留", { 0: item.name }), ids: [item.artifact_id] }
 }
 
 function removeSelected(): void {
   if (!selected.value.length || !props.projectId) return
   pendingRemove.value = {
-    detail: `${selected.value.length} 项 · 文件保留`,
+    detail: t("{0} 项 · 文件保留", { 0: selected.value.length }),
     ids: [...selected.value],
     after: () => {
       selectedArtifact.value = null

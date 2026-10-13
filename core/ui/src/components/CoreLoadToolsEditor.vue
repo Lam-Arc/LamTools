@@ -2,22 +2,20 @@
   <section class="settings-panel settings-panel--editor loadtools-panel">
     <header class="settings-title loadtools-title">
       <div class="loadtools-title-copy">
-        <h1>工具模式</h1>
-        <p>为不同工作模式配置模型可用的工具。</p>
+        <h1>{{ t("工具模式") }}</h1>
+        <p>{{ t("为不同工作模式配置模型可用的工具。") }}</p>
       </div>
 
       <div class="loadtools-title-actions">
         <span v-if="dirty" class="loadtools-dirty" role="status">
-          <span class="loadtools-dirty-dot" aria-hidden="true" />
-          有未保存的修改
-        </span>
+          <span class="loadtools-dirty-dot" aria-hidden="true" />{{ t("有未保存的修改") }}</span>
         <button class="text-btn loadtools-refresh" type="button" :disabled="loading || saving" @click="fetchModes">
           <RefreshCw :size="14" :stroke-width="1.9" aria-hidden="true" />
-          <span>刷新</span>
+          <span>{{ t("刷新") }}</span>
         </button>
         <button class="small-btn primary loadtools-save" type="button" :disabled="loading || saving || !dirty" @click="saveModes">
           <Save :size="15" :stroke-width="1.9" aria-hidden="true" />
-          <span>{{ saving ? '保存中…' : '保存' }}</span>
+          <span>{{ saving ? t("保存中…") : t("保存") }}</span>
         </button>
       </div>
     </header>
@@ -25,27 +23,25 @@
     <p v-if="error" class="skill-error" role="alert">{{ error }}</p>
 
     <div v-if="loading && !modes.length" class="settings-surface loadtools-loading" role="status">
-      <span class="loadtools-loading-dot" aria-hidden="true" />
-      正在加载工具模式…
-    </div>
+      <span class="loadtools-loading-dot" aria-hidden="true" />{{ t("正在加载工具模式…") }}</div>
 
     <div v-else class="settings-surface loadtools-workspace">
       <div class="loadtools-workspace-body">
-        <aside class="mode-rail" aria-label="工作模式列表">
+        <aside class="mode-rail" :aria-label="t('工作模式列表')">
           <div class="mode-rail-head">
             <div class="mode-rail-title">
-              <strong>模式</strong>
+              <strong>{{ t("模式") }}</strong>
               <span>{{ orderedModes.length }}</span>
             </div>
           </div>
 
           <label class="loadtools-search mode-search">
-            <span class="sr-only">搜索模式</span>
+            <span class="sr-only">{{ t("搜索模式") }}</span>
             <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-            <input v-model.trim="modeQuery" type="search" placeholder="搜索模式" />
+            <input v-model.trim="modeQuery" type="search" :placeholder="t('搜索模式')" />
           </label>
 
-          <div class="mode-picker" role="listbox" aria-label="选择工作模式">
+          <div class="mode-picker" role="listbox" :aria-label="t('选择工作模式')">
             <button
               v-for="mode in filteredModes"
               :key="mode.name"
@@ -67,41 +63,41 @@
             </button>
 
             <div v-if="!filteredModes.length" class="mode-rail-empty">
-              <strong>没有匹配的模式</strong>
-              <small>换个关键词试试</small>
+              <strong>{{ t("没有匹配的模式") }}</strong>
+              <small>{{ t("换个关键词试试") }}</small>
             </div>
           </div>
 
           <div class="mode-rail-footer">
             <button class="mode-create-btn" type="button" :disabled="loading || saving" @click="addMode">
               <Plus :size="15" :stroke-width="2" aria-hidden="true" />
-              <span>新增模式</span>
+              <span>{{ t("新增模式") }}</span>
             </button>
             <span class="mode-source">{{ sourceLabel }}</span>
           </div>
         </aside>
 
-        <section v-if="selectedMode" class="mode-detail" aria-label="工作模式详情">
+        <section v-if="selectedMode" class="mode-detail" :aria-label="t('工作模式详情')">
           <header class="mode-detail-head">
             <div class="mode-detail-identity">
-              <span class="mode-detail-context">当前模式</span>
+              <span class="mode-detail-context">{{ t("当前模式") }}</span>
               <div class="mode-name-line">
                 <input
                   v-model="selectedMode.name"
                   class="mode-name-input"
                   spellcheck="false"
-                  placeholder="模式名"
+                  :placeholder="t('模式名')"
                   :disabled="loading || saving"
                 />
                 <span class="mode-name-label">{{ modeTranslation(selectedMode.name) }}</span>
               </div>
               <label class="mode-description-field">
-                <span class="sr-only">模式说明</span>
+                <span class="sr-only">{{ t("模式说明") }}</span>
                 <input
                   v-model="selectedMode.description"
                   class="mode-description-input"
                   spellcheck="false"
-                  placeholder="添加一条简短说明"
+                  :placeholder="t('添加一条简短说明')"
                   :disabled="loading || saving"
                 />
               </label>
@@ -109,7 +105,7 @@
                 <span class="mode-access-state" :class="{ 'is-full': selectedMode.unlimited }">
                   <ShieldCheck v-if="!selectedMode.unlimited" :size="13" :stroke-width="2" aria-hidden="true" />
                   <Wrench v-else :size="13" :stroke-width="2" aria-hidden="true" />
-                  {{ selectedMode.unlimited ? '全部工具可用' : '按清单使用工具' }}
+                  {{ selectedMode.unlimited ? t("全部工具可用") : t("按清单使用工具") }}
                 </span>
                 <span class="mode-meta-separator" aria-hidden="true">·</span>
                 <span>{{ sourceLabel }}</span>
@@ -124,27 +120,27 @@
                 @click="removeMode(selectedMode)"
               >
                 <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-                <span>删除</span>
+                <span>{{ t("删除") }}</span>
               </button>
             </div>
           </header>
 
-          <section class="tool-section" aria-label="工具列表">
+          <section class="tool-section" :aria-label="t('工具列表')">
             <header class="tool-section-head">
               <div class="tool-section-title">
-                <h2>工具</h2>
+                <h2>{{ t("工具") }}</h2>
                 <span>{{ modeToolSummary(selectedMode) }}</span>
               </div>
 
               <div class="tool-section-actions">
                 <label v-if="!selectedMode.unlimited" class="loadtools-search tool-search">
-                  <span class="sr-only">搜索工具</span>
+                  <span class="sr-only">{{ t("搜索工具") }}</span>
                   <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-                  <input v-model.trim="toolQuery" type="search" placeholder="搜索工具" />
+                  <input v-model.trim="toolQuery" type="search" :placeholder="t('搜索工具')" />
                 </label>
                 <label class="unlimited-toggle">
                   <input v-model="selectedMode.unlimited" type="checkbox" :disabled="loading || saving" />
-                  <span>全部工具</span>
+                  <span>{{ t("全部工具") }}</span>
                 </label>
               </div>
             </header>
@@ -152,14 +148,14 @@
             <div v-if="selectedMode.unlimited" class="all-tools-note">
               <Wrench :size="17" :stroke-width="1.8" aria-hidden="true" />
               <div>
-                <strong>这个模式可以使用全部工具</strong>
-                <span>清除“全部工具”后，可以单独选择需要开放的工具。</span>
+                <strong>{{ t("这个模式可以使用全部工具") }}</strong>
+                <span>{{ t("清除“全部工具”后，可以单独选择需要开放的工具。") }}</span>
               </div>
             </div>
 
             <div v-else-if="!filteredCatalogGroups.length" class="tool-empty">
               <Search :size="17" :stroke-width="1.8" aria-hidden="true" />
-              <span>没有找到匹配的工具</span>
+              <span>{{ t("没有找到匹配的工具") }}</span>
             </div>
 
             <div v-else class="tool-list">
@@ -183,7 +179,7 @@
                     <strong>{{ toolLabel(tool.name) }}</strong>
                     <small>{{ tool.name }}</small>
                   </span>
-                  <span class="tool-row-state">{{ selectedMode.selected.includes(tool.name) ? '已启用' : '已停用' }}</span>
+                  <span class="tool-row-state">{{ selectedMode.selected.includes(tool.name) ? t("已启用") : t("已停用") }}</span>
                 </label>
               </section>
             </div>
@@ -192,11 +188,11 @@
 
         <section v-else class="mode-empty" aria-live="polite">
           <SlidersHorizontal :size="22" :stroke-width="1.7" aria-hidden="true" />
-          <strong>还没有工作模式</strong>
-          <span>新增一个模式后，就可以设置它能使用的工具。</span>
+          <strong>{{ t("还没有工作模式") }}</strong>
+          <span>{{ t("新增一个模式后，就可以设置它能使用的工具。") }}</span>
           <button class="small-btn primary" type="button" :disabled="loading || saving" @click="addMode">
             <Plus :size="15" :stroke-width="2" aria-hidden="true" />
-            <span>新增模式</span>
+            <span>{{ t("新增模式") }}</span>
           </button>
         </section>
       </div>
@@ -205,6 +201,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, reactive, ref, watch, type Component } from 'vue'
 import { BookOne, Receive } from '@icon-park/vue-next'
 import {
@@ -343,15 +341,15 @@ watch(modes, () => {
 }, { deep: true, flush: 'sync' })
 
 const sourceLabel = computed(() => (
-  source.value === 'config' ? '配置文件' : '内置默认'
+  source.value === 'config' ? t("配置文件") : t("内置默认")
 ))
 
 function modeTranslation(name: string): string {
-  return MODE_LABELS[name.trim()] || '自定义'
+  return MODE_LABELS[name.trim()] || t("自定义")
 }
 
 function modeToolSummary(mode: ModeDraft): string {
-  return mode.unlimited ? '全部工具' : `${mode.selected.length} 个工具`
+  return mode.unlimited ? t("全部工具") : t("{0} 个工具", { 0: mode.selected.length })
 }
 
 function toolLabel(name: string): string {
@@ -490,11 +488,11 @@ async function saveModes() {
     for (const mode of modes) {
       const name = mode.name.trim()
       if (!name) {
-        error.value = '模式名不能为空，已取消保存'
+        error.value = t("模式名不能为空，已取消保存")
         return
       }
       if (seen.has(name)) {
-        error.value = `模式名重复：${name}，已取消保存`
+        error.value = t("模式名重复：{0}，已取消保存", { 0: name })
         return
       }
       seen.add(name)

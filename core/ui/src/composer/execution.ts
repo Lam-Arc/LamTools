@@ -1,18 +1,20 @@
+
+import { t } from '../i18n/index'
 /** Product-level reasoning controls. Provider parameter names stay in Core's adapter profiles. */
 export type CoreThinkingMode = 'off' | 'light' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export type CorePermissionPreset = 'ask' | 'auto' | 'full_access'
 
 export const CORE_PERMISSION_PRESET_LABELS: Record<CorePermissionPreset, string> = {
-  ask: '询问',
-  auto: '自动',
-  full_access: '完全访问',
+  get ask() { return t('询问') },
+  get auto() { return t('自动') },
+  get full_access() { return t('完全访问') },
 }
 
 export const CORE_PERMISSION_PRESET_DESCRIPTIONS: Record<CorePermissionPreset, string> = {
-  ask: '工具执行前请求批准',
-  auto: '在当前能力范围内自动批准（工作目录外仍会确认）',
-  full_access: '完全编辑、自动批准，并允许访问工作目录外',
+  get ask() { return t("工具执行前请求批准") },
+  get auto() { return t("在当前能力范围内自动批准（工作目录外仍会确认）") },
+  get full_access() { return t("完全编辑、自动批准，并允许访问工作目录外") },
 }
 
 export function normalizeCorePermissionPreset(
@@ -79,12 +81,12 @@ export interface CoreThinkingPayload {
 export type CoreThinkingLabels = Record<CoreThinkingMode, string>
 
 export const CORE_THINKING_LABELS: CoreThinkingLabels = {
-  off: '关闭',
-  light: '轻',
-  medium: '中',
-  high: '高',
-  xhigh: '超高',
-  max: '极高',
+  get off() { return t('thinking.off') },
+  get light() { return t('轻') },
+  get medium() { return t('中') },
+  get high() { return t('高') },
+  get xhigh() { return t('超高') },
+  get max() { return t('极高') },
 }
 
 export const CORE_THINKING_BUDGETS: Record<Exclude<CoreThinkingMode, 'off'>, number> = {
@@ -199,7 +201,7 @@ export function coreModelSelectOptions<TModel extends CoreExecutionModelSource, 
         value: recordId,
         label,
         selectedLabel: label,
-        group: '未分组',
+        get group() { return t("未分组") },
         groupKey: 'group:__ungrouped__',
       })
     }

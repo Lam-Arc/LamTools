@@ -16,7 +16,7 @@
         <button
           class="core-update-card__dismiss"
           type="button"
-          :aria-label="installBusy ? '取消更新' : '关闭'"
+          :aria-label="installBusy ? t('取消更新') : t('关闭')"
           data-update-dismiss
           @click="requestCancel"
         >
@@ -25,9 +25,9 @@
       </header>
 
       <p class="core-update-card__versions" data-update-versions>
-        <span class="core-update-card__version">{{ currentVersion || '当前版本' }}</span>
+        <span class="core-update-card__version">{{ currentVersion || t("当前版本") }}</span>
         <ArrowRight class="core-update-card__arrow" :size="14" :stroke-width="2" aria-hidden="true" />
-        <span class="core-update-card__version core-update-card__version--next">{{ latestVersion || '最新版本' }}</span>
+        <span class="core-update-card__version core-update-card__version--next">{{ latestVersion || t("最新版本") }}</span>
       </p>
 
       <p v-if="notes" class="core-update-card__notes" data-update-notes>{{ notes }}</p>
@@ -63,6 +63,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * CoreUpdateCard — 应用内更新的卡片。
  *
@@ -122,27 +124,27 @@ const percent = computed(() => {
   return downloaded.value || installing.value ? 100 : 0
 })
 const percentLabel = computed(() => {
-  if (installBusy.value) return props.total > 0 ? `下载 ${percent.value}%` : '下载中'
-  if (downloaded.value || installing.value) return '下载完成 100%'
+  if (installBusy.value) return props.total > 0 ? t("下载 {0}%", { 0: percent.value }) : t("下载中")
+  if (downloaded.value || installing.value) return t("下载完成 100%")
   return ''
 })
 
 const headTitle = computed(() => {
-  if (installing.value || downloaded.value) return '正在安装更新'
-  if (installBusy.value) return '正在下载更新'
-  return `发现新版本 v${props.latestVersion || ''}`
+  if (installing.value || downloaded.value) return t("正在安装更新")
+  if (installBusy.value) return t("正在下载更新")
+  return t("发现新版本 v{0}", { 0: props.latestVersion || '' })
 })
 const statusLine = computed(() => {
-  if (installing.value || downloaded.value) return '安装完成后 Sunday 会自动重新打开。'
+  if (installing.value || downloaded.value) return t("安装完成后 Sunday 会自动重新打开。")
   if (installBusy.value) return props.progressLabel || ''
   return ''
 })
-const cancelLabel = computed(() => (installBusy.value ? '取消下载' : '取消'))
+const cancelLabel = computed(() => (installBusy.value ? t("取消下载") : t("取消")))
 const confirmLabel = computed(() => {
-  if (installing.value || downloaded.value) return '正在安装…'
-  if (installBusy.value) return props.progressLabel ? '下载中' : '下载中…'
-  if (props.state === 'failed') return '重试'
-  return '更新'
+  if (installing.value || downloaded.value) return t("正在安装…")
+  if (installBusy.value) return props.progressLabel ? t("下载中") : t("下载中…")
+  if (props.state === 'failed') return t("重试")
+  return t("更新")
 })
 const confirmDisabled = computed(() => installBusy.value || downloaded.value || installing.value)
 

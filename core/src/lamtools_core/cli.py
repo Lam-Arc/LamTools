@@ -1125,6 +1125,16 @@ def _model_ref_from_routing() -> str:
     return ""
 
 
+def configured_model_ref() -> str:
+    """The model the settings route as the default, or "" when none is set.
+
+    Public wrapper so boot code can tell "no global default is configured (which
+    is the normal state — the model is chosen per turn)" apart from "the
+    configured default exists but is unusable (a real misconfiguration)".
+    """
+    return _model_ref_from_routing()
+
+
 def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, Any]]:
     """List all jsonc model definitions with resolved provider info.
 
@@ -2034,7 +2044,7 @@ def build_parser(
 
     subagent = sub.add_parser("subagent", help="Manage sub-agent delegation guide")
     subagent_sub = subagent.add_subparsers(dest="subagent_command", required=True)
-    for command in ("list", "create", "close", "message"):
+    for command in ("list", "create", "close", "delete", "message"):
         lifecycle = subagent_sub.add_parser(command, help=f"{command.title()} session sub-agents")
         lifecycle.add_argument("thread_id")
         if command != "list":
@@ -2244,6 +2254,14 @@ def build_parser(
     network_set.add_argument("--no-proxy", dest="no_proxy", default=None, help="Comma-separated hosts that bypass the proxy")
     network_set.add_argument("--ca-cert", dest="ca_cert", default=None, help="PEM bundle path; empty string clears it")
     network_set.set_defaults(func=cmd_network_set)
+
+    language = sub.add_parser("language", help="Show or set the interface language")
+    language_sub = language.add_subparsers(dest="language_command", required=True)
+    language_get = language_sub.add_parser("get", help="Print the interface language")
+    language_get.set_defaults(func=cmd_language_get)
+    language_set = language_sub.add_parser("set", help="Save the interface language")
+    language_set.add_argument("locale", choices=("zh-CN", "zh-TW", "ja", "en"))
+    language_set.set_defaults(func=cmd_language_set)
 
     keep_awake = sub.add_parser("keep-awake", help="Show or set whether the app keeps the machine awake")
     keep_awake_sub = keep_awake.add_subparsers(dest="keep_awake_command", required=True)
@@ -5627,6 +5645,21 @@ async def cmd_network_set(args: argparse.Namespace) -> int:
         return 1
     set_setting(NETWORK_NAMESPACE, merged)
     print(json.dumps(merged, ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_language_get(args: argparse.Namespace) -> int:
+    from lamtools_core.config.language import language_status
+
+    print(json.dumps(language_status(), ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_language_set(args: argparse.Namespace) -> int:
+    from lamtools_core.config.language import LANGUAGE_NAMESPACE, merge_language, language_status
+
+    set_setting(LANGUAGE_NAMESPACE, merge_language({}, {"locale": args.locale}))
+    print(json.dumps(language_status(), ensure_ascii=False, indent=2), flush=True)
     return 0
 
 

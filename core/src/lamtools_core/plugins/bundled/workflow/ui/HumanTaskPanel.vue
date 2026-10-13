@@ -3,15 +3,15 @@
     <header class="wf-human-task-head">
       <div class="wf-human-task-heading">
         <ClipboardList :size="14" :stroke-width="1.8" aria-hidden="true" />
-        <h3 id="wf-human-task-title">人工任务</h3>
-        <span v-if="tasks.length" class="wf-human-task-count" aria-label="任务数量">{{ tasks.length }}</span>
+        <h3 id="wf-human-task-title">{{ t("人工任务") }}</h3>
+        <span v-if="tasks.length" class="wf-human-task-count" :aria-label="t('任务数量')">{{ tasks.length }}</span>
       </div>
       <button
         type="button"
         class="wf-human-task-icon-btn"
         :disabled="loading || busy"
-        aria-label="刷新人工任务"
-        title="刷新"
+        :aria-label="t('刷新人工任务')"
+        :title="t('刷新')"
         @click="refresh"
       >
         <RefreshCw :size="13" :stroke-width="1.8" aria-hidden="true" :class="{ 'is-spinning': loading }" />
@@ -19,8 +19,8 @@
     </header>
 
     <p v-if="error" class="wf-human-task-error" role="alert">{{ error }}</p>
-    <p v-else-if="loading && !tasks.length" class="wf-human-task-empty" aria-live="polite">读取中…</p>
-    <p v-else-if="!tasks.length" class="wf-human-task-empty">暂无待处理任务</p>
+    <p v-else-if="loading && !tasks.length" class="wf-human-task-empty" aria-live="polite">{{ t("读取中…") }}</p>
+    <p v-else-if="!tasks.length" class="wf-human-task-empty">{{ t("暂无待处理任务") }}</p>
     <ul v-else class="wf-human-task-list">
       <li v-for="task in tasks" :key="task.task_id" class="wf-human-task-item">
         <button
@@ -32,8 +32,8 @@
         >
           <span class="wf-human-task-state" :class="`status-${task.status}`" aria-hidden="true">●</span>
           <span class="wf-human-task-row-copy">
-            <strong>{{ task.title || task.node || '人工任务' }}</strong>
-            <small>{{ task.kind === 'approval' ? '审批' : '等待事件' }} · {{ task.event_type || 'event' }}</small>
+            <strong>{{ task.title || task.node || t("人工任务") }}</strong>
+            <small>{{ task.kind === 'approval' ? t("审批") : t("等待事件") }} · {{ task.event_type || 'event' }}</small>
           </span>
           <span v-if="task.due_at" class="wf-human-task-due">{{ formatDue(task.due_at) }}</span>
         </button>
@@ -43,7 +43,7 @@
     <div v-if="selectedTask" class="wf-human-task-detail">
       <div class="wf-human-task-detail-head">
         <div>
-          <strong>{{ selectedTask.title || selectedTask.node || '人工任务' }}</strong>
+          <strong>{{ selectedTask.title || selectedTask.node || t("人工任务") }}</strong>
           <small>{{ selectedTask.workflow_name || selectedTask.workflow || selectedTask.workflow_id }}</small>
         </div>
         <span class="wf-human-task-detail-status" :class="`status-${selectedTask.status}`">
@@ -51,17 +51,17 @@
         </span>
       </div>
       <dl class="wf-human-task-meta">
-        <div><dt>事件</dt><dd>{{ selectedTask.event_type || 'event' }}</dd></div>
-        <div v-if="selectedTask.assignee"><dt>负责人</dt><dd>{{ selectedTask.assignee }}</dd></div>
-        <div v-if="selectedTask.group"><dt>分组</dt><dd>{{ selectedTask.group }}</dd></div>
-        <div v-if="selectedTask.due_at"><dt>截止</dt><dd>{{ formatDue(selectedTask.due_at) }}</dd></div>
+        <div><dt>{{ t("事件") }}</dt><dd>{{ selectedTask.event_type || 'event' }}</dd></div>
+        <div v-if="selectedTask.assignee"><dt>{{ t("负责人") }}</dt><dd>{{ selectedTask.assignee }}</dd></div>
+        <div v-if="selectedTask.group"><dt>{{ t("分组") }}</dt><dd>{{ selectedTask.group }}</dd></div>
+        <div v-if="selectedTask.due_at"><dt>{{ t("截止") }}</dt><dd>{{ formatDue(selectedTask.due_at) }}</dd></div>
       </dl>
       <details v-if="hasForm" class="wf-human-task-form-preview">
-        <summary>表单说明</summary>
+        <summary>{{ t("表单说明") }}</summary>
         <pre>{{ formatValue(selectedTask.form) }}</pre>
       </details>
       <template v-if="selectedTask.status === 'pending'">
-        <label class="wf-human-task-payload-label" for="wf-human-task-payload">提交数据（JSON）</label>
+        <label class="wf-human-task-payload-label" for="wf-human-task-payload">{{ t("提交数据（JSON）") }}</label>
         <textarea
           id="wf-human-task-payload"
           v-model="payloadText"
@@ -80,8 +80,7 @@
             :disabled="busy"
             @click="complete('reject')"
           >
-            <X :size="13" :stroke-width="2" aria-hidden="true" />拒绝
-          </button>
+            <X :size="13" :stroke-width="2" aria-hidden="true" />{{ t("拒绝") }}</button>
           <button
             type="button"
             class="wf-human-task-action primary"
@@ -89,12 +88,12 @@
             @click="complete(selectedTask.kind === 'approval' ? 'approve' : '')"
           >
             <Check :size="13" :stroke-width="2" aria-hidden="true" />
-            {{ busy ? '提交中…' : selectedTask.kind === 'approval' ? '批准' : '提交' }}
+            {{ busy ? t("提交中…") : selectedTask.kind === 'approval' ? t("批准") : t("提交") }}
           </button>
         </div>
       </template>
       <details v-if="selectedTask.audit?.length" class="wf-human-task-audit">
-        <summary>事件审计（{{ selectedTask.audit.length }}）</summary>
+        <summary>{{ t("事件审计（") }}{{ selectedTask.audit.length }}）</summary>
         <ul>
           <li v-for="event in selectedTask.audit" :key="event.event_id || `${event.sequence}-${event.kind}`">
             <span>{{ event.kind }}</span><small>{{ formatDue(event.occurred_at) }}</small>
@@ -106,6 +105,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, ref, watch } from 'vue'
 import { Check, ClipboardList, RefreshCw, X } from 'lucide-vue-next'
 import type { WorkflowHumanTask } from './types'
@@ -162,11 +163,11 @@ function complete(decision: string): void {
   try {
     payload = JSON.parse(payloadText.value || '{}')
   } catch {
-    parseError.value = '提交数据必须是有效 JSON'
+    parseError.value = t("提交数据必须是有效 JSON")
     return
   }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    parseError.value = '提交数据必须是 JSON 对象'
+    parseError.value = t("提交数据必须是 JSON 对象")
     return
   }
   const task = props.selectedTask
@@ -176,11 +177,11 @@ function complete(decision: string): void {
 }
 
 function statusLabel(status: string): string {
-  if (status === 'pending') return '待处理'
-  if (status === 'completed') return '已完成'
-  if (status === 'cancelled') return '已取消'
-  if (status === 'failed') return '失败'
-  return status || '未知'
+  if (status === 'pending') return t("待处理")
+  if (status === 'completed') return t("已完成")
+  if (status === 'cancelled') return t("已取消")
+  if (status === 'failed') return t("失败")
+  return status || t("未知")
 }
 
 function formatDue(value: string | null | undefined): string {

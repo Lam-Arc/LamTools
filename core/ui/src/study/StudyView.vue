@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, defineAsyncComponent, markRaw, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { Node, ViewportTransform } from '@vue-flow/core'
 import { ArrowLeft, ChevronRight } from 'lucide-vue-next'
@@ -93,10 +95,10 @@ const graphScope = computed(() => `${page.value}:${path.value.at(-1)?.id || ''}:
 function report(cause: unknown): void { error.value = cause instanceof Error ? cause.message : String(cause) }
 function isGroup(item: KnowledgeItem): boolean { return item.entity === 'course' || !item.learnable }
 function statusFor(item: KnowledgeItem): { label: string; icon: 'check' | 'circle' } {
-  if (item.progressRole === 'aggregate' && item.assessment === 'unassessed') return { label: '范围进度，尚未独立评估', icon: 'circle' }
-  if (item.assessment === 'pass') return { label: `已通过，掌握${item.mastery === 'low' ? '低' : item.mastery === 'medium' ? '中' : item.mastery === 'high' ? '高' : '待评定'}`, icon: 'check' }
-  if (item.assessment === 'fail') return { label: '已评估但未通过', icon: 'circle' }
-  return { label: '尚未评估', icon: 'circle' }
+  if (item.progressRole === 'aggregate' && item.assessment === 'unassessed') return { get label() { return t("范围进度，尚未独立评估") }, icon: 'circle' }
+  if (item.assessment === 'pass') return { label: t("已通过，掌握{0}", { 0: item.mastery === 'low' ? t("低") : item.mastery === 'medium' ? t("中") : item.mastery === 'high' ? t("高") : t("待评定") }), icon: 'check' }
+  if (item.assessment === 'fail') return { get label() { return t("已评估但未通过") }, icon: 'circle' }
+  return { get label() { return t("尚未评估") }, icon: 'circle' }
 }
 
 async function ensureBinding(subject: StudySubject, replacePrimary = false): Promise<SessionBinding | null> {
@@ -152,7 +154,7 @@ function restoreDraft(binding: SessionBinding, node: KnowledgeItem | null): void
   }
   if (node && !prefillWasIssued(binding.sessionId)) {
     rememberPrefill(binding.sessionId)
-    ctx.composerText.value = `我想学${node.name}，给我讲一下`
+    ctx.composerText.value = t("我想学{0}，给我讲一下", { 0: node.name })
   } else {
     ctx.composerText.value = ''
   }
@@ -341,7 +343,7 @@ async function leaveNotes(): Promise<void> {
     await requestNoteNavigation(async () => {
       await saveLayout()
       const binding = await ensureMapBinding()
-      if (!binding) throw new Error('无法打开学习会话，请重试')
+      if (!binding) throw new Error(t("无法打开学习会话，请重试"))
       saveDraftForSession(currentBinding.value?.sessionId || ctx.activeSessionId.value)
       // Commit the page change only after the learning session is available.
       // A notes binding would otherwise keep the file tree active in chat.
@@ -389,7 +391,7 @@ const unregister = usePluginModeRuntime().register(`${props.pluginId}:${props.mo
   // shared history loader. Later Study switches stay on Core's thread surface
   // and use its canonical loader without remounting the message tree.
   useCoreThread: computed(() => page.value === 'chat' && ready.value && !error.value),
-  composerPlaceholder: computed(() => currentBinding.value?.subject.kind === 'notes' ? '想如何整理笔记…' : '想学什么…'),
+  composerPlaceholder: computed(() => currentBinding.value?.subject.kind === 'notes' ? t("想如何整理笔记…") : t("想学什么…")),
   // The composer stays usable while a turn runs, like the rest of the app:
   // typing queues the next message and the guided-send path stays available, so
   // a long study turn no longer leaves the user with nothing to do.  Only an
@@ -428,7 +430,7 @@ const unregister = usePluginModeRuntime().register(`${props.pluginId}:${props.mo
   rightSidebar: computed(() => noteWorkspaceActive.value || currentBinding.value?.subject.kind === 'notes'
     ? [{
         id: 'study-note-graph',
-        title: '笔记关系图',
+        get title() { return t("笔记关系图") },
         component: markRaw(StudyNoteRelationGraph),
         componentProps: {
           graph: noteGraph.value,
@@ -438,7 +440,7 @@ const unregister = usePluginModeRuntime().register(`${props.pluginId}:${props.mo
           onOpenNote: openNoteFromGraph,
         },
       }]
-    : [{ id: 'study-marks', title: '标记', component: markRaw(MarksPanel) }]),
+    : [{ id: 'study-marks', get title() { return t("标记") }, component: markRaw(MarksPanel) }]),
 })
 
 function setGraphViewport(next: ViewportTransform): void { viewport.value = { ...next } }
@@ -507,7 +509,7 @@ async function loadGraph(restore = true): Promise<void> {
       // stable node contract.
       return item.entity === 'course' ? { ...normalized, progressPassed: Number(item.passed) } : normalized
     })
-    if (items.length > STUDY_LAYOUT_LIMITS.maxInteractiveNodes || (result.relations || []).length > STUDY_LAYOUT_LIMITS.maxInteractiveEdges) layoutNotice.value = `局部图超过建议范围（${STUDY_LAYOUT_LIMITS.maxInteractiveNodes} 节点 / ${STUDY_LAYOUT_LIMITS.maxInteractiveEdges} 条关系），已保持分页；当前布局在主线程分层计算。`
+    if (items.length > STUDY_LAYOUT_LIMITS.maxInteractiveNodes || (result.relations || []).length > STUDY_LAYOUT_LIMITS.maxInteractiveEdges) layoutNotice.value = t("局部图超过建议范围（{0} 节点 / {1} 条关系），已保持分页；当前布局在主线程分层计算。", { 0: STUDY_LAYOUT_LIMITS.maxInteractiveNodes, 1: STUDY_LAYOUT_LIMITS.maxInteractiveEdges })
     const previous = Object.fromEntries(nodes.value.map(node => [node.id, node.position])) as Record<string, StudyLayoutPosition>
     const preserved: Record<string, StudyLayoutPosition> = {}
     items.forEach(item => {
@@ -734,7 +736,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="study-view" aria-label="Study">
-    <p v-if="error" class="study-error" role="alert">{{ error }} <button class="text-btn" :disabled="initializing" @click="ready ? (inGraph ? loadGraph() : initialize()) : initialize()">重试</button></p>
+    <p v-if="error" class="study-error" role="alert">{{ error }} <button class="text-btn" :disabled="initializing" @click="ready ? (inGraph ? loadGraph() : initialize()) : initialize()">{{ t("重试") }}</button></p>
     <HistoryLoadingIndicator v-if="page === 'chat'" :active="preSessionLoading" />
     <div v-if="page === 'chat'" data-study-core-thread-host aria-hidden="true"></div>
     <NotesManager
@@ -778,18 +780,18 @@ onBeforeUnmount(() => {
         @sync-viewport="syncGraphViewport($event).catch(report)"
         @report="report"
       />
-      <footer v-if="net.total > 50" class="study-toolbar"><button class="text-btn" :disabled="offset === 0" @click="saveLayout().then(() => { offset -= 50; return loadGraph() }).catch(report)">上页</button><span>{{ offset + 1 }}–{{ Math.min(offset + 50, net.total) }} / {{ net.total }}</span><button class="text-btn" :disabled="offset + 50 >= net.total" @click="saveLayout().then(() => { offset += 50; return loadGraph() }).catch(report)">下页</button></footer>
+      <footer v-if="net.total > 50" class="study-toolbar"><button class="text-btn" :disabled="offset === 0" @click="saveLayout().then(() => { offset -= 50; return loadGraph() }).catch(report)">{{ t("上页") }}</button><span>{{ offset + 1 }}–{{ Math.min(offset + 50, net.total) }} / {{ net.total }}</span><button class="text-btn" :disabled="offset + 50 >= net.total" @click="saveLayout().then(() => { offset += 50; return loadGraph() }).catch(report)">{{ t("下页") }}</button></footer>
     </div>
   </section>
   <Teleport defer to=".workspace-plugin-header">
     <header class="study-toolbar study-header" data-study-header>
-      <button v-if="page !== 'chat' || notesReturnPending" class="text-btn" @click="back"><ArrowLeft :size="16" />返回</button>
-      <button v-else class="text-btn" @click="resumeGraph">知识图谱</button>
-      <h1 class="study-header-title">{{ page === 'chat' ? (selected?.name || (currentBinding?.subject.kind === 'notes' ? '笔记助手' : '学习')) : page === 'notes' ? (selectedNote?.title || '笔记') : (path.at(-1)?.name || net.course?.name || '图谱') }}</h1>
-      <button v-if="page === 'notes'" class="text-btn study-note-header-chat" type="button" @click="openNotesChat">对话</button>
+      <button v-if="page !== 'chat' || notesReturnPending" class="text-btn" @click="back"><ArrowLeft :size="16" />{{ t("返回") }}</button>
+      <button v-else class="text-btn" @click="resumeGraph">{{ t("知识图谱") }}</button>
+      <h1 class="study-header-title">{{ page === 'chat' ? (selected?.name || (currentBinding?.subject.kind === 'notes' ? t("笔记助手") : t("学习"))) : page === 'notes' ? (selectedNote?.title || t("笔记")) : (path.at(-1)?.name || net.course?.name || t("图谱")) }}</h1>
+      <button v-if="page === 'notes'" class="text-btn study-note-header-chat" type="button" @click="openNotesChat">{{ t("对话") }}</button>
       <span v-if="page === 'notes' && selectedNote" class="study-note-header-path">{{ selectedNote.path }}</span>
-      <nav v-if="inGraph" class="study-breadcrumbs" aria-label="知识层级"><button class="text-btn" @click="collapse(0)">{{ net.course?.name || '图谱' }}</button><template v-for="(item, index) in path" :key="item.id"><ChevronRight :size="12" /><button class="text-btn" @click="collapse(index + 1)">{{ item.name }}</button></template></nav>
-      <span v-if="loading" class="study-header-loading" role="status">加载中…</span>
+      <nav v-if="inGraph" class="study-breadcrumbs" :aria-label="t('知识层级')"><button class="text-btn" @click="collapse(0)">{{ net.course?.name || t("图谱") }}</button><template v-for="(item, index) in path" :key="item.id"><ChevronRight :size="12" /><button class="text-btn" @click="collapse(index + 1)">{{ item.name }}</button></template></nav>
+      <span v-if="loading" class="study-header-loading" role="status">{{ t("加载中…") }}</span>
     </header>
   </Teleport>
 </template>

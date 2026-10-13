@@ -3,6 +3,7 @@ import type {
   CoreAppCommandCatalogItem,
   CoreAppEvent,
   CoreAppInputItem,
+  CoreAppQueueItem,
   CoreAppRequestState,
   CoreAppSnapshot,
   CoreRuntimeItem,
@@ -10,10 +11,10 @@ import type {
   CoreAppThreadStatus,
 } from './protocol.ts'
 import { TransportRpcError } from '../transport'
-import type { CoreSyncChangeNotification } from './client.ts'
+import type { CoreSyncChangeNotification, CoreThreadGapNotification } from './client.ts'
 import {
-  compareSnapshotVersion,
   CoreSessionStateStore,
+  isStaleSnapshot,
   snapshotRevision as sessionSnapshotRevision,
   snapshotSequence,
 } from './sessionState.ts'
@@ -29,6 +30,30 @@ export interface CoreAppServerThreadSwitchOptions {
   lastSeenSeq?: number
   includeSnapshot?: boolean
   preserveState?: boolean
+  /**
+   * Render the persisted transcript from `thread/read` first and run the live
+   * attach (`thread/resume`) in the background. A session whose turn is
+   * legitimately non-terminal (the main agent holding the turn open for
+   * background members) must not gate first paint on the resume signal: without
+   * this the client waited on the resume response until its 60s timeout and the
+   * thread stayed blank for that whole minute.
+   */
+  attachInBackground?: boolean
+}
+
+/**
+ * Result of a steer (`turn/steer`) attempt. The runtime answers a refusal with a
+ * success response carrying `applied: false` and a reason, not an error, so the
+ * caller decides what to do with the message. `queued` means the runtime itself
+ * already filed it for the next turn (`native_turn_cannot_steer_live`), so it
+ * must not be queued a second time.
+ */
+export interface CoreSteerOutcome {
+  applied: boolean
+  queued: boolean
+  reason: string
+  /** Human-readable failure text (empty when applied). */
+  message: string
 }
 
 export interface CoreAppServerRuntimeState<
@@ -101,22 +126,25 @@ export function createCoreAppServerRuntimeController<
   // events" without forcing a full state replacement (and full re-render) for
   // snapshots that carry nothing new.
   const receivedEventIds = new Set<string>()
+  // Threads with a gap-driven resume in flight. Non-reactive on purpose: it
+  // only guards the reaction, never the rendered state.
+  const gapResyncs = new Set<string>()
   let threadSwitchQueue: Promise<void> = Promise.resolve()
   let threadSelectionGeneration = 0
 
-  async function connect(threadId?: string) {
+  async function connect(threadId?: string, switchOptions: CoreAppServerThreadSwitchOptions = {}) {
     clearReconnectTimer()
     // A live App Server client is connection-scoped, not thread-scoped. A
     // session switch must only move the server subscription and resume the
     // selected thread; closing the client here cancels every in-flight RPC
     // on the shared tunnel.
     if (threadId && runtime.client && runtime.connectionState === 'open') {
-      await switchThread(threadId)
+      await switchThread(threadId, switchOptions)
       return
     }
     runtime.activeThreadId = threadId || ''
     runtime.reconnectAttempt = 0
-    await openClient(threadId)
+    await openClient(threadId, switchOptions)
   }
 
   function switchThread(
@@ -159,7 +187,16 @@ export function createCoreAppServerRuntimeController<
     if (!client || runtime.connectionState !== 'open') {
       // The physical connection generation is owned by openClient(). This
       // branch only hands the selected thread to that connection lifecycle.
-      await connect(threadId)
+      await connect(threadId, switchOptions)
+      return
+    }
+
+    const isCurrent = () => threadSelectionGeneration === generation && runtime.client === client
+    if (switchOptions.attachInBackground) {
+      // Persisted content first (fast, bounded), live attach second (may wait
+      // on a non-terminal turn). First paint no longer depends on the resume.
+      await loadPersistedThread(client, threadId, isCurrent)
+      startBackgroundAttach(client, threadId, isCurrent, switchOptions)
       return
     }
 
@@ -172,11 +209,98 @@ export function createCoreAppServerRuntimeController<
       },
       60_000,
     )
-    if (threadSelectionGeneration !== generation || runtime.client !== client) return
+    if (!isCurrent()) return
     applyResponse(response)
   }
 
-  async function openClient(threadId?: string) {
+  /**
+   * Persisted transcript only: the durable snapshot page, without the live
+   * journal. It never waits on the turn's liveness, so a non-terminal session
+   * paints immediately instead of blocking until the resume signal arrives.
+   */
+  async function loadPersistedThread(
+    client: Client,
+    threadId: string,
+    isCurrent: () => boolean,
+  ): Promise<boolean> {
+    try {
+      const response = await client.request('thread/read', { thread_id: threadId }, 60_000)
+      if (!isCurrent()) return false
+      applyResponse(response)
+      return true
+    } catch (error) {
+      if (isCurrent()) runtime.lastError = error instanceof Error ? error.message : String(error)
+      return false
+    }
+  }
+
+  /**
+   * Live attach in the background: moves the subscription and folds the journal
+   * in when the server answers. A slow or withheld resume only delays live
+   * updates, never the transcript that is already on screen.
+   */
+  function startBackgroundAttach(
+    client: Client,
+    threadId: string,
+    isCurrent: () => boolean,
+    switchOptions: CoreAppServerThreadSwitchOptions,
+  ): void {
+    void (async () => {
+      try {
+        const response = await client.request('thread/resume', {
+          thread_id: threadId,
+          last_seen_seq: switchOptions.lastSeenSeq ?? 0,
+        }, 60_000)
+        if (!isCurrent()) return
+        applyResponse(response)
+      } catch (error) {
+        if (!isCurrent()) return
+        runtime.lastError = error instanceof Error ? error.message : String(error)
+      }
+    })()
+  }
+
+  /**
+   * Resynchronize after the server reported dropped outbound frames.
+   *
+   * The reaction mirrors the backend's reference client: resume from the
+   * sequence we have actually applied, so the frames the lossy lane dropped are
+   * redelivered and the thread converges without waiting for the next full
+   * snapshot. Coalesced per thread: the server rate-limits its gap notice, and
+   * a burst that lands inside one in-flight resume must not stack duplicates
+   * (the running resume already covers everything up to the newest sequence).
+   */
+  function scheduleGapResync(gap: CoreThreadGapNotification): void {
+    const threadId = runtime.activeThreadId
+    const client = runtime.client
+    if (!threadId || !client) return
+    const announced = typeof gap?.thread_id === 'string' ? gap.thread_id : ''
+    // A gap can only concern the thread we are subscribed to; a report about
+    // another thread says nothing about the one on screen. An empty id (the
+    // server publishes one when it has no subscription) still means "resume".
+    if (announced && announced !== threadId) return
+    if (gapResyncs.has(threadId)) return
+    const generation = threadSelectionGeneration
+    const isCurrent = () => threadSelectionGeneration === generation && runtime.client === client
+    gapResyncs.add(threadId)
+    void (async () => {
+      try {
+        const response = await client.request('thread/resume', {
+          thread_id: threadId,
+          last_seen_seq: lastSeenSeq(),
+        }, 60_000)
+        if (!isCurrent()) return
+        applyResponse(response)
+      } catch (error) {
+        if (!isCurrent()) return
+        runtime.lastError = error instanceof Error ? error.message : String(error)
+      } finally {
+        gapResyncs.delete(threadId)
+      }
+    })()
+  }
+
+  async function openClient(threadId?: string, switchOptions: CoreAppServerThreadSwitchOptions = {}) {
     const generation = ++runtime.connectionGeneration
     runtime.client?.close()
     const client = await options.createClient({
@@ -192,11 +316,20 @@ export function createCoreAppServerRuntimeController<
       },
     })
     runtime.client = client
-    await client.connect({ threadId, lastSeenSeq: lastSeenSeq() })
+    // `runtime` is reactive, so the stored client is a proxy: keep the attached
+    // reference for identity checks instead of comparing against the raw one.
+    const attached = runtime.client
+    await attached.connect({ threadId, lastSeenSeq: lastSeenSeq() })
     if (threadId) {
-      const response = await client.request('thread/resume', { thread_id: threadId, last_seen_seq: lastSeenSeq() }, 60_000)
-      if (runtime.connectionGeneration !== generation) return
-      applyResponse(response)
+      const isCurrent = () => runtime.connectionGeneration === generation && runtime.client === attached
+      if (switchOptions.attachInBackground) {
+        await loadPersistedThread(attached, threadId, isCurrent)
+        startBackgroundAttach(attached, threadId, isCurrent, switchOptions)
+      } else {
+        const response = await attached.request('thread/resume', { thread_id: threadId, last_seen_seq: lastSeenSeq() }, 60_000)
+        if (!isCurrent()) return
+        applyResponse(response)
+      }
     }
     runtime.reconnectAttempt = 0
     runtime.lastError = ''
@@ -263,8 +396,10 @@ export function createCoreAppServerRuntimeController<
       snapshotSeq: snapshotSequence(incoming),
     }
     // A delayed cache/snapshot must never roll a completed turn back to
-    // running, even when it contains different content.
-    if (currentState && compareSnapshotVersion(incomingVersion, currentState) < 0) return
+    // running, even when it contains different content. The CAS revision is not
+    // a pure content cursor (see `isStaleSnapshot`), so a snapshot with a newer
+    // content cursor is never treated as stale.
+    if (currentState && isStaleSnapshot(incomingVersion, currentState)) return
     // The guard must see the received set BEFORE this snapshot's ids are
     // recorded, otherwise "unseen event" would always be satisfied (an
     // incoming snapshot's own ids would count as received).
@@ -342,6 +477,13 @@ export function createCoreAppServerRuntimeController<
   }
 
   function enqueueEvent(event: CoreAppEvent) {
+    // `thread/gap` is a control signal from the server's reliable lane, not an
+    // event: it must never enter the event queue or the projection, it only
+    // triggers a resync from our own last applied sequence.
+    if (event.method === 'thread/gap') {
+      scheduleGapResync(event as unknown as CoreThreadGapNotification)
+      return
+    }
     const eventId = runItemEventId(event)
     if (eventId) receivedEventIds.add(eventId)
     if (event.method === 'session/created') {
@@ -460,15 +602,18 @@ export function createCoreAppServerRuntimeController<
     input: string | InputItem[],
     workRoot?: string,
     turnOptions: Record<string, unknown> = {},
+    clientMessageId?: string,
   ) {
     await ensureClient()
     const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
     // The message id is the server-side idempotency key. It stays unchanged
     // if the first CAS check races with a terminal event and we retry once.
-    const clientMessageId = crypto.randomUUID()
+    // A caller may supply it so a send and its queue fallback share one
+    // identity: the runtime dedupes both write paths on it.
+    const messageId = clientMessageId || crypto.randomUUID()
     const response = await requestMutation('turn/start', {
       thread_id: threadId,
-      client_message_id: clientMessageId,
+      client_message_id: messageId,
       input: inputItems,
       work_root: workRoot,
       // The turn/accepted + item/started events already carry everything the
@@ -484,12 +629,15 @@ export function createCoreAppServerRuntimeController<
     threadId: string,
     input: string | InputItem[],
     turnOptions: Record<string, unknown> = {},
+    clientMessageId?: string,
   ) {
     await ensureClient()
     const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
     const response = await requestMutation('queue/create', {
       thread_id: threadId,
-      client_message_id: crypto.randomUUID(),
+      // Same identity rule as turn/start: reused by the send's busy fallback so
+      // a repeated queue write dedupes instead of double-adding the message.
+      client_message_id: clientMessageId || crypto.randomUUID(),
       input: inputItems,
       // 事件已携带全部状态变化与修订号；响应里的整包会话快照在大线程上是
       // 纯延迟（48MB 级解析），一律不要。
@@ -564,7 +712,11 @@ export function createCoreAppServerRuntimeController<
       : {}
   }
 
-  async function steerTurn(threadId: string, turnId: string, input: string | InputItem[]) {
+  async function steerTurn(
+    threadId: string,
+    turnId: string,
+    input: string | InputItem[],
+  ): Promise<CoreSteerOutcome> {
     await ensureClient()
     const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
     const response = await requestMutation('turn/steer', {
@@ -576,19 +728,23 @@ export function createCoreAppServerRuntimeController<
       include_snapshot: false,
     }, threadId)
     applyResponse(response)
-    // 后端明确拒绝时不能当成已接受：调用方据此决定是否显示"已发送引导"与待生效
-    // 气泡，否则用户会以为指令进去了。
-    if (response.applied !== true) {
-      const reason = String(response.reason || '')
-      // 本机（手机原生宿主）不支持运行中引导：它把这条降级成"本轮结束后发送"，
-      // 内容没有丢，但这一轮确实看不到它——要如实说，不能报成功。
-      if (response.queued === true || reason === 'native_turn_cannot_steer_live') {
-        throw new Error('本机不支持运行中引导，已改为这一轮结束后发送')
-      }
-      if (reason === 'run_not_active') throw new Error('这一轮已经结束，引导没有生效')
-      if (reason === 'active_turn_mismatch') throw new Error('当前轮次已经变化，引导没有生效')
-      throw new Error('引导没有生效')
+    // 后端拒绝时返回的是成功响应 + applied:false + reason，不是错误。调用方据此
+    // 决定是否显示"已发送引导"，并把无处可引导的这条落到队列（不丢文本、不报错）。
+    if (response.applied === true) {
+      return { applied: true, queued: false, reason: '', message: '' }
     }
+    const reason = String(response.reason || '')
+    // 本机（手机原生宿主）不支持运行中引导：它把这条降级成"本轮结束后发送"。
+    // 内容已经在队列里，调用方不能再写一份。
+    if (response.queued === true || reason === 'native_turn_cannot_steer_live') {
+      return { applied: false, queued: true, reason, message: '本机不支持运行中引导，已改为这一轮结束后发送' }
+    }
+    const message = reason === 'run_not_active'
+      ? '这一轮已经结束，引导没有生效'
+      : reason === 'active_turn_mismatch'
+        ? '当前轮次已经变化，引导没有生效'
+        : '引导没有生效'
+    return { applied: false, queued: false, reason, message }
   }
 
   async function interruptTurn(threadId: string, turnId?: string) {
@@ -665,6 +821,19 @@ export function createCoreAppServerRuntimeController<
     try {
       const response = await runtime.client.request('thread/read', { thread_id: threadId }, 60_000)
       applyResponse(response)
+      // The refreshed snapshot is the durable authority for this thread's
+      // revision. Adopt its number even when the locally tracked value was
+      // higher: a value the server never confirmed can never satisfy the
+      // expected-revision check, so a retry built on it loses again. Content
+      // was already applied above; this only realigns the tracker.
+      const refreshed = response.snapshot
+      if (isCoreAppSnapshot(refreshed)) {
+        const revision = sessionSnapshotRevision(hydrateSnapshot(refreshed as Snapshot) as CoreAppSnapshot)
+        if (sessionStateStore.alignRevision(threadId, revision)) {
+          const next = sessionStateStore.get(threadId)
+          if (next && runtime.state?.thread_id === threadId) runtime.state = next.snapshot as Snapshot
+        }
+      }
     } catch {
       // Preserve the original structured conflict for the UI. A secondary
       // refresh failure must not hide the actionable error that caused it.
@@ -768,6 +937,22 @@ function coalesceRunItemEvents(events: CoreAppEvent[]): CoreAppEvent[] {
 
     if (delta !== undefined && eventId !== undefined && mergeable && lastValue && lastInner) {
       lastInner.delta = `${lastInner.delta}${delta}`
+      // Progress must survive the merge. The tracked CAS revision and the
+      // content cursor are read off the event envelopes, so keeping the first
+      // envelope's numbers left the client's revision behind the server's while
+      // a turn streamed (every later write then failed as REVISION_CONFLICT).
+      const nextRevision = Number(event.revision)
+      if (Number.isFinite(nextRevision) && nextRevision > Number(last.revision ?? 0)) {
+        last.revision = nextRevision
+      }
+      const nextSeq = Number(event.seq)
+      if (Number.isFinite(nextSeq) && nextSeq > Number(last.seq ?? 0)) {
+        last.seq = nextSeq
+      }
+      const innerRevision = Number(value.revision)
+      if (Number.isFinite(innerRevision) && innerRevision > Number(lastValue.revision ?? 0)) {
+        lastValue.revision = innerRevision
+      }
       const coalesced = Array.isArray(lastValue._coalesced_event_ids)
         ? lastValue._coalesced_event_ids
         : [lastValue.event_id ?? last.event_id].filter((id): id is string => typeof id === 'string')
@@ -920,9 +1105,17 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
       if (runPayload.replace === true) {
         // `runtime.metrics` is a replace-style context snapshot, not a
         // per-call provider usage delta. Keep it visible, but out of usage.
-        turns[turnId] = { ...turn, context_metrics: { ...usage } }
+        turns[turnId] = value.parent_item_id
+          ? { ...turn, child_context_metrics: { ...turn.child_context_metrics, [String(value.parent_item_id)]: { ...usage } } }
+          : { ...turn, context_metrics: { ...usage } }
       } else {
-        turns[turnId] = { ...turn, usage: mergeUsageMetrics(turn.usage, usage) }
+        const id = String(value.item_id || value.event_id)
+        const calls = [...(turn.usage_calls ?? [])]
+        const call = { id, seq: Number(value.seq ?? 0), parent_item_id: typeof value.parent_item_id === 'string' ? value.parent_item_id : null, usage }
+        const index = calls.findIndex(row => row.id === id)
+        if (index < 0) calls.push(call)
+        else calls[index] = { ...call, seq: calls[index].seq }
+        turns[turnId] = { ...turn, usage_calls: calls, usage: calls.filter(row => !row.parent_item_id).reduce<Record<string, unknown>>((sum, row) => mergeUsageMetrics(sum, row.usage), {}) }
       }
     }
     return { ...snapshot, core: { ...currentCore, seen_event_ids: seen, turns } }
@@ -1096,6 +1289,9 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
       created_at: typeof event.created_at === 'string' ? event.created_at : turn.created_at,
       input: input ?? turn.input,
       work_root: payload.work_root || payload.workRoot || turn.work_root || '',
+      // The runtime's own turns carry the origin marker; the snapshot exposes it
+      // and the live path must too.
+      ...(typeof payload.origin === 'string' ? { origin: payload.origin } : {}),
       ...(isRecord(payload.runtime_snapshot)
         ? { runtime_snapshot: payload.runtime_snapshot }
         : {}),
@@ -1116,6 +1312,11 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
       type: typeof payload.type === 'string' ? payload.type : item.type ?? 'item',
       status: typeof payload.status === 'string' ? payload.status : item.status ?? 'running',
       content: payload.content ?? item.content ?? '',
+      // The snapshot carries the whole item payload; the live path used to copy
+      // only a fixed set, so a machine-authored row (role/origin) was only
+      // recognisable after the next snapshot arrived.
+      ...(typeof payload.role === 'string' ? { role: payload.role } : {}),
+      ...(typeof payload.origin === 'string' ? { origin: payload.origin } : {}),
     }
     const itemOrder = [...(snapshot.item_order ?? [])]
     if (!itemOrder.includes(itemId)) itemOrder.push(itemId)
@@ -1129,7 +1330,62 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
     return { ...snapshot, items, item_order: itemOrder, turns }
   }
 
+  // Queue lifecycle events. Queue mutations are sent with `include_snapshot`
+  // false, so the response carries events only: without reducing them here the
+  // client depends entirely on a pushed snapshot, and a delete whose push is
+  // dropped (or delayed) leaves a phantom row that looks like a failed delete.
+  // Semantics mirror the server projector (`snapshot_store._apply_queue_item`
+  // and `_delete_queue_item`).
+  if (event.method === 'queue/itemAccepted') return applyQueueItemEvent(snapshot, event, 'queued')
+  if (event.method === 'queue/itemUpdated') return applyQueueItemEvent(snapshot, event, null)
+  if (event.method === 'queue/itemDispatched') return applyQueueItemEvent(snapshot, event, 'dispatched')
+  if (event.method === 'queue/itemDeleted') return removeQueueItem(snapshot, event)
+
   return snapshot
+}
+
+/** Queue entries the server projector removes instead of keeping. */
+const QUEUE_TERMINAL_STATUSES = new Set(['cancelled', 'deleted', 'dispatched', 'sent'])
+
+function queueItemIdFromEvent(event: CoreAppEvent, payload: Record<string, unknown>): string {
+  return String(event.item_id || payload.queue_item_id || payload.queueItemId || '').trim()
+}
+
+function applyQueueItemEvent(
+  snapshot: CoreAppSnapshot,
+  event: CoreAppEvent,
+  forcedStatus: string | null,
+): CoreAppSnapshot {
+  const payload = isRecord(event.payload) ? event.payload : {}
+  const queueItemId = queueItemIdFromEvent(event, payload)
+  if (!queueItemId) return snapshot
+  const queue = [...(snapshot.queue ?? [])]
+  const index = queue.findIndex(item => isRecord(item) && item.queue_item_id === queueItemId)
+  const current: Record<string, unknown> = {
+    ...(index >= 0 ? queue[index] : { queue_item_id: queueItemId }),
+  }
+  Object.assign(current, payload)
+  current.queue_item_id = queueItemId
+  current.status = forcedStatus || String(payload.status || current.status || 'queued')
+  current.mode = String(payload.mode || current.mode || 'next_turn')
+  if (Object.prototype.hasOwnProperty.call(payload, 'input')) current.input = payload.input
+  current.seq = event.seq
+  current.last_method = event.method
+  if (QUEUE_TERMINAL_STATUSES.has(String(current.status))) {
+    return { ...snapshot, queue: queue.filter(item => !isRecord(item) || item.queue_item_id !== queueItemId) }
+  }
+  if (index >= 0) queue[index] = current as CoreAppQueueItem
+  else queue.push(current as CoreAppQueueItem)
+  return { ...snapshot, queue }
+}
+
+function removeQueueItem(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppSnapshot {
+  const payload = isRecord(event.payload) ? event.payload : {}
+  const queueItemId = queueItemIdFromEvent(event, payload)
+  if (!queueItemId) return snapshot
+  const queue = snapshot.queue ?? []
+  const next = queue.filter(item => !isRecord(item) || item.queue_item_id !== queueItemId)
+  return next.length === queue.length ? snapshot : { ...snapshot, queue: next }
 }
 
 function emptyCoreSnapshot(threadId: string): CoreRuntimeSnapshot {
@@ -1356,7 +1612,6 @@ function mergeUsageMetrics(
 ): Record<string, unknown> {
   if (!prev) return { ...next }
   const merged: Record<string, unknown> = { ...prev, ...next }
-  let inputTokens = 0
   let cachedTokens: number | undefined
   for (const field of SUM_USAGE_FIELDS) {
     const a = numericField(prev[field])
@@ -1364,11 +1619,13 @@ function mergeUsageMetrics(
     if (a === undefined && b === undefined) continue
     const sum = (a ?? 0) + (b ?? 0)
     merged[field] = sum
-    if (field === 'input_tokens') inputTokens = sum
     if (field === 'cached_tokens') cachedTokens = sum
   }
-  if (inputTokens > 0 && cachedTokens !== undefined) {
-    merged.cache_hit_rate = cachedTokens / inputTokens
+  const cacheInput = (numericField(prev.cache_reported_input_tokens) ?? (numericField(prev.cached_tokens) !== undefined ? numericField(prev.input_tokens) ?? 0 : 0))
+    + (numericField(next.cached_tokens) !== undefined ? numericField(next.input_tokens) ?? 0 : 0)
+  if (cacheInput > 0 && cachedTokens !== undefined) {
+    merged.cache_reported_input_tokens = cacheInput
+    merged.cache_hit_rate = Math.min(1, cachedTokens / cacheInput)
   } else {
     delete merged.cache_hit_rate
   }

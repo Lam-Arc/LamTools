@@ -549,3 +549,72 @@ async def test_verification_rejects_a_changed_event_row(
     session = next(item for item in report.sessions if item.thread_id == THREAD_ID)
     assert session.verified is False
 
+
+
+def test_backup_snapshots_a_live_write_connection_without_exclusive_access(
+    tmp_path: Path,
+) -> None:
+    """The backup must work while another connection holds the DB open for writing.
+
+    This is the running-app case: the app keeps the database open for writing, so
+    its ``-wal``/``-shm`` sidecars stay locked. The previous filesystem copy
+    could not read the ``-shm`` (Windows) and, when it "succeeded", mixed a
+    ``core.db`` and a ``-wal`` captured at different instants into a torn file.
+    The engine-level snapshot must need no exclusive access, be complete, and be
+    a valid, independently queryable database.
+    """
+    db_path = tmp_path / "core.db"
+    holder = sqlite3.connect(str(db_path))
+    try:
+        holder.execute("PRAGMA journal_mode=WAL")
+        holder.execute("CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT)")
+        holder.execute("INSERT INTO items(name) VALUES ('kept')")
+        holder.commit()
+        # A write-capable connection stays open across the backup, so the source
+        # lock state is exactly the one that broke the file copy.
+        assert Path(str(db_path) + "-wal").exists()
+        assert Path(str(db_path) + "-shm").exists()
+
+        record = backup_database_files(
+            db_path, backup_root=tmp_path / "backups", timestamp="20260101T000000Z"
+        )
+    finally:
+        holder.close()
+
+    backup_dir = Path(record.directory)
+    # One self-contained database file; no sidecars were copied.
+    assert {path.name for path in backup_dir.iterdir()} == {"core.db", "manifest.json"}
+    snapshot = backup_dir / "core.db"
+    assert snapshot.is_file() and snapshot.stat().st_size > 0
+
+    check = sqlite3.connect(str(snapshot))
+    try:
+        assert check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert check.execute("SELECT name FROM items").fetchall() == [("kept",)]
+    finally:
+        check.close()
+
+
+def test_backup_failure_aborts_and_removes_the_partial_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused backup must abort and leave nothing behind.
+
+    The backup is taken before any write, so if it cannot be produced the whole
+    operation must stop; and it must not leave the partial, unrestorable
+    directory the old file copy left when it failed midway.
+    """
+
+    def boom(_db_path: Path, _snapshot: Path) -> None:
+        raise RuntimeError("snapshot failed")
+
+    monkeypatch.setattr(maintenance, "_snapshot_database", boom)
+
+    with pytest.raises(RuntimeError, match="snapshot failed"):
+        backup_database_files(
+            tmp_path / "core.db",
+            backup_root=tmp_path / "backups",
+            timestamp="20260101T000000Z",
+        )
+
+    assert list((tmp_path / "backups").iterdir()) == []

@@ -8,8 +8,8 @@
       <button
         type="button"
         class="core-process-panel__refresh"
-        :aria-label="loading ? '正在刷新进程列表' : '刷新进程列表'"
-        :title="loading ? '刷新中…' : '刷新'"
+        :aria-label="loading ? t('正在刷新进程列表') : t('刷新进程列表')"
+        :title="loading ? t('刷新中…') : t('刷新')"
         @click="fetchProcesses()"
       >
         <RotateCw :size="13" :stroke-width="1.8" :class="{ 'is-spinning': loading }" aria-hidden="true" />
@@ -19,9 +19,7 @@
     <div class="core-process-panel__list">
       <p v-if="errorText" class="core-process-panel__notice is-error" role="alert">{{ errorText }}</p>
       <p v-else-if="actionError" class="core-process-panel__notice is-error" role="alert">{{ actionError }}</p>
-      <p v-else-if="loading && processes.length === 0" class="core-process-panel__notice" role="status">
-        正在读取后台进程…
-      </p>
+      <p v-else-if="loading && processes.length === 0" class="core-process-panel__notice" role="status">{{ t("正在读取后台进程…") }}</p>
 
       <div v-for="process in processes" :key="process.pid" class="core-process-panel__item" :data-process-pid="process.pid">
         <div class="core-process-panel__row">
@@ -33,7 +31,7 @@
           >
             <span class="core-process-panel__dot" :class="'is-' + stateOf(process)" aria-hidden="true" />
             <span class="core-process-panel__pid">#{{ process.pid }}</span>
-            <span class="core-process-panel__command" :title="process.command || ''">{{ process.command || '未知命令' }}</span>
+            <span class="core-process-panel__command" :title="process.command || ''">{{ process.command || t("未知命令") }}</span>
             <span class="core-process-panel__elapsed">{{ elapsedLabel(process) }}</span>
             <span class="core-process-panel__state" :data-state="stateOf(process)">{{ stateText(process) }}</span>
           </button>
@@ -42,8 +40,8 @@
             type="button"
             class="core-process-panel__action is-danger"
             :disabled="pendingPid === process.pid"
-            :aria-label="'终止进程 ' + process.pid"
-            title="终止进程"
+            :aria-label="t('终止进程 ') + process.pid"
+            :title="t('终止进程')"
             @click="killProcess(process)"
           >
             <Square :size="12" :stroke-width="2" aria-hidden="true" />
@@ -53,8 +51,8 @@
             type="button"
             class="core-process-panel__action"
             :disabled="pendingPid === process.pid"
-            :aria-label="'移除进程 ' + process.pid + ' 的记录'"
-            title="移除记录"
+            :aria-label="t('移除进程 ') + process.pid + t(' 的记录')"
+            :title="t('移除记录')"
             @click="forgetProcess(process)"
           >
             <X :size="13" :stroke-width="1.8" aria-hidden="true" />
@@ -65,38 +63,38 @@
           <div v-if="expandedPid === process.pid" class="core-process-panel__detail">
             <p class="core-process-panel__meta">
               <span>PID {{ process.pid }}</span>
-              <span v-if="process.persistent">长期驻留（轮次结束后继续运行）</span>
-              <span v-else>随轮次结束清理</span>
+              <span v-if="process.persistent">{{ t("长期驻留（轮次结束后继续运行）") }}</span>
+              <span v-else>{{ t("随轮次结束清理") }}</span>
             </p>
-            <div class="core-process-panel__log-tabs" role="tablist" aria-label="进程日志">
+            <div class="core-process-panel__log-tabs" role="tablist" :aria-label="t('进程日志')">
               <button
                 type="button"
                 role="tab"
                 :aria-selected="logStream === 'stdout'"
                 :class="{ active: logStream === 'stdout' }"
                 @click="selectLogStream('stdout')"
-              >标准输出</button>
+              >{{ t("标准输出") }}</button>
               <button
                 type="button"
                 role="tab"
                 :aria-selected="logStream === 'stderr'"
                 :class="{ active: logStream === 'stderr' }"
                 @click="selectLogStream('stderr')"
-              >错误输出</button>
+              >{{ t("错误输出") }}</button>
             </div>
             <pre class="core-process-panel__log" role="status">{{ logText }}</pre>
           </div>
         </Transition>
       </div>
 
-      <p v-if="processes.length === 0 && !loading && !errorText" class="core-process-panel__empty">
-        没有正在登记的后台进程
-      </p>
+      <p v-if="processes.length === 0 && !loading && !errorText" class="core-process-panel__empty">{{ t("没有正在登记的后台进程") }}</p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { RotateCw, Square, X } from 'lucide-vue-next'
 import type { RightSidebarRpc } from '../right-sidebar/types'
@@ -146,18 +144,18 @@ let actionErrorTimer: ReturnType<typeof setTimeout> | null = null
 let signalFetchAt = 0
 
 const summaryText = computed(() => {
-  if (errorText.value) return '读取失败'
+  if (errorText.value) return t("读取失败")
   const running = processes.value.filter((process) => process.alive).length
-  if (processes.value.length > 0) return `${processes.value.length} 个进程 · ${running} 个运行中`
-  if (loading.value) return '读取中'
-  return '没有长期后台进程'
+  if (processes.value.length > 0) return t("{0} 个进程 · {1} 个运行中", { 0: processes.value.length, 1: running })
+  if (loading.value) return t("读取中")
+  return t("没有长期后台进程")
 })
 
 const logText = computed(() => {
-  if (logState.value.missing) return '（暂无日志输出）'
+  if (logState.value.missing) return t("（暂无日志输出）")
   let text = logState.value.content
-  if (logState.value.truncated) text = '[…截断，仅显示尾部…]\n' + text
-  return text || '（日志为空）'
+  if (logState.value.truncated) text = t("[…截断，仅显示尾部…]\n") + text
+  return text || t("（日志为空）")
 })
 
 async function fetchProcesses(): Promise<void> {
@@ -212,9 +210,9 @@ function stateOf(process: BackgroundProcessItem): 'running' | 'lost' | 'exited' 
 
 function stateText(process: BackgroundProcessItem): string {
   const state = stateOf(process)
-  if (state === 'running') return '运行中'
-  if (state === 'lost') return '已失联'
-  return '已退出'
+  if (state === 'running') return t("运行中")
+  if (state === 'lost') return t("已失联")
+  return t("已退出")
 }
 
 function elapsedLabel(process: BackgroundProcessItem): string {

@@ -132,12 +132,27 @@ def normalize_usage(raw: Any) -> LLMUsage | None:
     total_tokens = _usage_int(raw, "total_tokens")
     cached_tokens = _cached_tokens_from_usage(raw)
     cache_creation_tokens = _cache_creation_tokens_from_usage(raw)
+    # Native Anthropic input_tokens excludes cache read/write. OpenAI and
+    # LiteLLM prompt_tokens already include them and must not be added again.
+    if isinstance(raw, dict) and "prompt_tokens" not in raw and "input_tokens" in raw and (
+        "cache_read_input_tokens" in raw or "cache_creation_input_tokens" in raw
+    ):
+        prompt_tokens += cached_tokens + cache_creation_tokens
+        total_tokens = prompt_tokens + completion_tokens
+    cache_reported = isinstance(raw, dict) and (
+        any(key in raw for key in ("cached_tokens", "cache_read_input_tokens", "prompt_cache_hit_tokens", "cache_read_tokens"))
+        or any(isinstance(raw.get(key), dict) and any(alias in raw[key] for alias in ("cached_tokens", "cache_read_input_tokens", "prompt_cache_hit_tokens"))
+               for key in ("prompt_tokens_details", "input_tokens_details"))
+        or any(isinstance(container, dict) and isinstance(container.get("cache"), dict) and "read" in container["cache"]
+               for container in (raw.get("tokens"), raw))
+    )
     return LLMUsage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
         cached_tokens=cached_tokens,
         cache_creation_tokens=cache_creation_tokens,
+        cache_usage_reported=cache_reported,
     )
 
 

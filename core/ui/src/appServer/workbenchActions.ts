@@ -5,6 +5,22 @@ import { parseComposerInput, resolveComposerCommandKind } from '../composer/synt
 export type CoreComposerActionMode = 'send' | 'stop'
 export type CoreWorkbenchTurnStatus = 'idle' | 'running' | 'waiting' | 'interrupting' | 'completed' | 'failed' | string
 
+/** Outcome of a start-turn attempt. `busy` marks the runtime's "session has an
+ *  active turn" refusal, which the composer turns into a queue fallback instead
+ *  of a user-visible error. */
+export interface CoreStartTurnOutcome {
+  ok: boolean
+  busy?: boolean
+}
+
+/** Outcome of a steer attempt. `queued` marks the refusals where the runtime
+ *  already put the message into the queue for the next turn, so the composer
+ *  reports it as queued without issuing a second queue write. */
+export interface CoreSteerAttempt {
+  ok: boolean
+  queued?: boolean
+}
+
 export interface SubmitCoreComposerTaskOptions {
   threadId: string
   activeTurnId?: string
@@ -13,12 +29,27 @@ export interface SubmitCoreComposerTaskOptions {
   commandCatalog?: CoreCommandCatalogItem[]
   attachments?: CoreInputItem[]
   executeCommand?: (command: string, argumentsText?: string) => Promise<boolean>
-  steerTurn?: (threadId: string, turnId: string, inputItems: CoreInputItem[]) => Promise<void>
-  queueInput: (threadId: string, inputItems: CoreInputItem[], turnOptions?: Record<string, unknown>) => Promise<void>
-  startTurn: (threadId: string, inputItems: CoreInputItem[], workRoot?: string, turnOptions?: Record<string, unknown>) => Promise<boolean>
+  steerTurn?: (threadId: string, turnId: string, inputItems: CoreInputItem[]) => Promise<boolean | CoreSteerAttempt>
+  queueInput: (
+    threadId: string,
+    inputItems: CoreInputItem[],
+    turnOptions?: Record<string, unknown>,
+    clientMessageId?: string,
+  ) => Promise<void>
+  startTurn: (
+    threadId: string,
+    inputItems: CoreInputItem[],
+    workRoot?: string,
+    turnOptions?: Record<string, unknown>,
+    clientMessageId?: string,
+  ) => Promise<boolean | CoreStartTurnOutcome>
   workRoot?: string
   turnOptions?: Record<string, unknown>
   forceGuide?: boolean
+  /** One identity for the whole submission: the start attempt and its queue
+   *  fallback carry it, so a repeated write dedupes on the server instead of
+   *  sending the message twice. */
+  clientMessageId?: string
 }
 
 export type SubmitCoreComposerTaskResult =
@@ -95,19 +126,62 @@ export async function submitCoreComposerTask(
     return { status: 'command', command: parsed.name, arguments: parsed.arguments, ok: ok === true }
   }
 
-  if (isCoreActiveTurnStatus(options.status)) {
-    const inputItems = buildCoreComposerInputItems(cleaned, attachments, commandCatalog)
-    if (options.forceGuide && attachments.length === 0 && options.activeTurnId && options.steerTurn) {
-      await options.steerTurn(options.threadId, options.activeTurnId, inputItems)
-      return { status: 'guided', inputItems }
+  // Guidance mode reaches for the live turn first; every refusal ends in the
+  // queue rather than in a dropped message.
+  const guideOrQueue = async (inputItems: CoreInputItem[]): Promise<SubmitCoreComposerTaskResult> => {
+    if (!options.forceGuide || attachments.length > 0 || !options.activeTurnId || !options.steerTurn) {
+      await options.queueInput(options.threadId, inputItems, options.turnOptions, options.clientMessageId)
+      return { status: 'queued', inputItems }
     }
-    await options.queueInput(options.threadId, inputItems, options.turnOptions)
+    const steered = await options.steerTurn(options.threadId, options.activeTurnId, inputItems)
+    const steerOutcome = typeof steered === 'boolean' ? { ok: steered } : steered
+    if (steerOutcome.ok) return { status: 'guided', inputItems }
+    // A refusal is a success response with `applied: false` (or a failed call).
+    // There is no live run to steer in that moment, so the message waits in the
+    // queue for the next turn. If the runtime already queued it, do not write a
+    // second copy.
+    if (!steerOutcome.queued) {
+      await options.queueInput(options.threadId, inputItems, options.turnOptions, options.clientMessageId)
+    }
     return { status: 'queued', inputItems }
   }
 
+  if (isCoreActiveTurnStatus(options.status)) {
+    return await guideOrQueue(buildCoreComposerInputItems(cleaned, attachments, commandCatalog))
+  }
+
   const inputItems = buildCoreComposerInputItems(cleaned, attachments, commandCatalog)
-  const ok = await options.startTurn(options.threadId, inputItems, options.workRoot, options.turnOptions)
-  return { status: 'started', inputItems, ok }
+  const started = await options.startTurn(
+    options.threadId,
+    inputItems,
+    options.workRoot,
+    options.turnOptions,
+    options.clientMessageId,
+  )
+  const outcome = typeof started === 'boolean' ? { ok: started } : started
+  if (!outcome.ok && outcome.busy) {
+    // The runtime still considers a turn active even though this client thinks
+    // it is over (a short window after the main agent stops, or any transient
+    // busy). A new turn would be refused: fall back to the mode-appropriate
+    // path instead of showing an error. The shared client message id keeps a
+    // repeat from double-sending.
+    return await guideOrQueue(inputItems)
+  }
+  return { status: 'started', inputItems, ok: outcome.ok }
+}
+
+/**
+ * The runtime's refusal when a turn is already active for the session
+ * (`SESSION_BUSY` / "session has an active turn"). The composer falls back to
+ * the queue path for this and never surfaces it as a failure.
+ */
+export function isCoreSessionBusyError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const record = error as { code?: unknown; data?: unknown; message?: unknown }
+  if (record.code === 'SESSION_BUSY') return true
+  const data = isRecord(record.data) ? record.data : null
+  if (data?.code === 'SESSION_BUSY' || data?.reason === 'active_turn_exists') return true
+  return typeof record.message === 'string' && /session has an active turn/i.test(record.message)
 }
 
 export function coreComposerSubmissionEffects(

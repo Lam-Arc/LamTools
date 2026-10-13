@@ -156,6 +156,40 @@ class ScriptedApprovalLLM:
         yield LLMStreamEvent(kind="done")
 
 
+class ScriptedApprovalFailureLLM:
+    """Asks for an edit whose context does not match, then reports that it saw
+    the failure.  Used to prove an approved-but-failed tool is handed back to
+    the model instead of ending the turn."""
+
+    def __init__(self) -> None:
+        self.requests: list[LLMRequest] = []
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("core agent operation should use streaming when available")
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            yield LLMStreamEvent(
+                kind="done",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-edit",
+                        name="edit_file",
+                        arguments={
+                            "path": "note.md",
+                            "old_string": "beta",
+                            "new_string": "gamma",
+                            "before_context": "wrong:",
+                        },
+                    ),
+                ],
+            )
+            return
+        yield LLMStreamEvent(kind="content_delta", content="The edit failed; retrying differently.")
+        yield LLMStreamEvent(kind="done")
+
+
 class ScriptedRejectedLegacySubAgentLLM:
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
@@ -1358,6 +1392,43 @@ async def test_core_agent_approval_respond_executes_pending_tool_and_continues(t
     assert {item["turn_id"] for item in approved.payload["run_items"]} == {waiting.payload["turn_id"]}
     assert (work_root / "approved.md").read_text(encoding="utf-8") == "approved content\n"
     assert len(llm.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_approved_tool_failure_is_returned_to_the_model_and_turn_continues(tmp_path):
+    """Regression: an approved tool that ran and failed must come back as a
+    normal tool result (the model corrects it), not end the whole turn."""
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    (work_root / "note.md").write_text("alpha\nbeta\n", encoding="utf-8")
+    llm = ScriptedApprovalFailureLLM()
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
+        model_provider=llm,
+    )
+
+    waiting = await catalog.execute(
+        "turn.start", {"thread_id": "thread-edit-failure", "message": "edit note.md"}
+    )
+    assert waiting.payload["decision"] == "wait"
+
+    approved = await catalog.execute(
+        "approval.respond", {"thread_id": "thread-edit-failure", "action": "approve"}
+    )
+
+    assert approved.status == "ok"
+    assert approved.payload["decision"] == "done"
+    assert approved.payload["message"] == "The edit failed; retrying differently."
+    assert approved.payload["run_id"] == waiting.payload["run_id"]
+    assert len(llm.requests) == 2
+    continuation_messages = llm.requests[1].messages
+    tool_messages = [message for message in continuation_messages if message.role == "tool"]
+    assert tool_messages
+    assert "Context did not match" in str(tool_messages[-1].content)
+    assert any("error_code: context_mismatch" in str(message.content) for message in continuation_messages)
+    # The failing edit left the file untouched.
+    assert (work_root / "note.md").read_text(encoding="utf-8") == "alpha\nbeta\n"
 
 
 @pytest.mark.asyncio

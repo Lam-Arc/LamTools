@@ -4,7 +4,7 @@
     ref="rootEl"
     class="message-attachment-deck"
     :class="`message-attachment-deck--${side}`"
-    :aria-label="ariaLabel"
+    :aria-label="defaultUiText(ariaLabel, '附件')"
   >
     <div v-if="heading" class="message-attachment-deck__heading">{{ heading }}</div>
     <div
@@ -16,7 +16,7 @@
         type="button"
         class="message-attachment-deck__nav message-attachment-deck__nav--previous"
         :disabled="pageIndex === 0"
-        aria-label="上一页附件"
+        :aria-label="t('上一页附件')"
         @click="changePage(pageIndex - 1)"
       >
         <ChevronLeft :size="16" :stroke-width="2" aria-hidden="true" />
@@ -50,7 +50,7 @@
             type="button"
             class="message-attachment-deck__preview"
             :aria-expanded="activeKey === item.key"
-            :aria-label="`${item.displayKind === 'text' ? '双击文本预览' : '双击打开'} ${item.name}`"
+            :aria-label="t('{0} {1}', { 0: item.displayKind === 'text' ? t('双击文本预览') : t('双击打开'), 1: item.name })"
             @click="releasePointerFocus"
             @dblclick.stop="openDeckItem(item)"
             @keydown.enter.prevent="openDeckItem(item)"
@@ -90,7 +90,7 @@
         type="button"
         class="message-attachment-deck__nav message-attachment-deck__nav--next"
         :disabled="pageIndex >= pageCount - 1"
-        aria-label="下一页附件"
+        :aria-label="t('下一页附件')"
         @click="changePage(pageIndex + 1)"
       >
         <ChevronRight :size="16" :stroke-width="2" aria-hidden="true" />
@@ -100,8 +100,8 @@
     <CoreConfirmDialog
       v-if="pendingOpenItem"
       :open="true"
-      title="使用默认应用打开？"
-      description="此文件将交给系统默认应用处理。"
+      :title="t('使用默认应用打开？')"
+      :description="t('此文件将交给系统默认应用处理。')"
       :detail="pendingOpenItem?.name"
       :loading="Boolean(openingKey)"
       :error="openError"
@@ -121,7 +121,7 @@
           class="message-attachment-deck__text-dialog"
           role="dialog"
           aria-modal="true"
-          :aria-label="`${textPreviewItem.name} 文本预览`"
+          :aria-label="t('{0} 文本预览', { 0: textPreviewItem.name })"
           tabindex="-1"
           @keydown.esc.prevent="closeTextPreview"
         >
@@ -129,13 +129,13 @@
             <span class="message-attachment-deck__text-title">
               <FileText :size="16" :stroke-width="1.8" aria-hidden="true" />
               <strong>{{ textPreviewItem.name }}</strong>
-              <span>纯文本</span>
+              <span>{{ t("纯文本") }}</span>
             </span>
-            <button type="button" aria-label="关闭文本预览" title="关闭" @click="closeTextPreview">
+            <button type="button" :aria-label="t('关闭文本预览')" :title="t('关闭')" @click="closeTextPreview">
               <X :size="16" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </header>
-          <div v-if="textPreviewLoading" class="message-attachment-deck__text-state">正在读取文本…</div>
+          <div v-if="textPreviewLoading" class="message-attachment-deck__text-state">{{ t("正在读取文本…") }}</div>
           <div v-else-if="textPreviewError" class="message-attachment-deck__text-state message-attachment-deck__text-state--error" role="alert">{{ textPreviewError }}</div>
           <pre v-else class="message-attachment-deck__text-content">{{ textPreviewContent }}</pre>
         </section>
@@ -145,6 +145,10 @@
 </template>
 
 <script setup lang="ts">
+import { defaultUiText } from '../i18n/index'
+
+import { t } from '../i18n/index'
+
 import { Flip } from 'gsap/Flip'
 import { gsap } from 'gsap'
 import {
@@ -295,7 +299,21 @@ function displayDescriptor(name: string, mimeType: string, previewType = ''): Pi
 }
 
 function artifactKey(artifact: ArtifactLike, index: number): string {
-  return String(artifact.artifact_id || artifact.uri || artifact.metadata?.image_data_url || `artifact-${index}`)
+  // 身份优先用注册表标识；再退到 uri / path。内联 data URL 只是"有没有内联正文"
+  // 的标记——大图被后端换成引用后它就没有了，键不能靠它（否则同一张图会画两遍，
+  // 或两张不同的图并成一项）。
+  return String(
+    artifact.artifact_id
+    || artifact.uri
+    || artifact.path
+    || artifact.metadata?.path
+    || artifact.metadata?.image_data_url
+    || `artifact-${index}`,
+  )
+}
+
+function isArtifactReference(artifact: ArtifactLike): boolean {
+  return String(artifact.availability || '').trim().toLowerCase() === 'reference'
 }
 
 const deckItems = computed<DeckItem[]>(() => {
@@ -315,7 +333,7 @@ const deckItems = computed<DeckItem[]>(() => {
       mimeType,
       size,
       ...descriptor,
-      meta: [action === 'create' ? '新建' : action ? '已修改' : '产物', ext.toUpperCase(), humanSize(size)].filter(Boolean).join(' · '),
+      meta: [action === 'create' ? t("新建") : action ? t("已修改") : t("产物"), ext.toUpperCase(), humanSize(size)].filter(Boolean).join(' · '),
       preview: compactPreview(artifact.content),
       artifact,
     }
@@ -332,7 +350,7 @@ const deckItems = computed<DeckItem[]>(() => {
       mimeType: attachment.mime_type || '',
       size: attachment.size || 0,
       ...descriptor,
-      meta: [ext.toUpperCase() || '文件', humanSize(attachment.size || 0)].filter(Boolean).join(' · '),
+      meta: [ext.toUpperCase() || t("文件"), humanSize(attachment.size || 0)].filter(Boolean).join(' · '),
       preview: textPreviews[`attachment:${attachment.id}`] || '',
       attachment,
     }
@@ -498,10 +516,10 @@ async function openTextPreview(item: DeckItem): Promise<void> {
     } else if (typeof item.artifact?.content === 'string') {
       textPreviewContent.value = item.artifact.content
     } else {
-      throw new Error('缺少可读取的文本路径')
+      throw new Error(t("缺少可读取的文本路径"))
     }
   } catch (error) {
-    textPreviewError.value = `无法读取文本：${error instanceof Error ? error.message : String(error)}`
+    textPreviewError.value = t("无法读取文本：{0}", { 0: error instanceof Error ? error.message : String(error) })
   } finally {
     textPreviewLoading.value = false
   }
@@ -546,12 +564,12 @@ async function confirmOpen(): Promise<void> {
         },
       })
     } else {
-      throw new Error('缺少可打开的附件标识')
+      throw new Error(t("缺少可打开的附件标识"))
     }
     pendingOpenItem.value = null
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    openError.value = `无法打开：${detail}`
+    openError.value = t("无法打开：{0}", { 0: detail })
   } finally {
     openingKey.value = ''
   }
@@ -616,9 +634,11 @@ function artifactRequestPath(artifact: ArtifactLike): string {
 }
 
 function directArtifactImage(artifact: ArtifactLike): string {
-  const dataUrl = artifact.metadata?.image_data_url
+  // 引用条目不再带内联正文：不要把 src 绑到一个已经不存在（或已作废）的 data URL，
+  // 落到下面的 uri/path 按需取字节。
+  const dataUrl = isArtifactReference(artifact) ? undefined : artifact.metadata?.image_data_url
   if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image')) return dataUrl
-  let path = String(artifact.uri || artifact.metadata?.path || '')
+  let path = String(artifact.uri || artifact.path || artifact.metadata?.path || '')
   if (path.startsWith('data:image') || /^https?:\/\//i.test(path)) return path
   if (path.startsWith('workspace://')) path = path.slice('workspace://'.length)
   const localFileSrc = (window as { __LAMTOOLS_FILE_SRC__?: (value: string) => string }).__LAMTOOLS_FILE_SRC__

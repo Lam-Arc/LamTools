@@ -11,12 +11,12 @@
     v-else-if="component"
     :mode-props="modeProps"
   />
-  <section v-else class="plugin-mode-host plugin-mode-host--empty">
-    插件功能不可用
-  </section>
+  <section v-else class="plugin-mode-host plugin-mode-host--empty">{{ t("插件功能不可用") }}</section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { defineComponent, h, onBeforeUnmount, provide, ref, shallowRef, watch, type PropType } from 'vue'
 import type { Component } from 'vue'
 import { getMode } from '../plugins/registry'
@@ -71,7 +71,7 @@ async function loadMode(): Promise<void> {
     component.value = 'default' in loaded ? loaded.default : loaded
   } catch (cause) {
     if (revision !== loadRevision) return
-    error.value = `加载 ${mode.title} 失败：${cause instanceof Error ? cause.message : String(cause)}`
+    error.value = t("加载 {0} 失败：{1}", { 0: mode.title, 1: cause instanceof Error ? cause.message : String(cause) })
   } finally {
     if (revision === loadRevision) loading.value = false
   }

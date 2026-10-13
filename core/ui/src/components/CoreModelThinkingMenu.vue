@@ -16,7 +16,7 @@
     </button>
 
     <div v-if="open" class="core-model-thinking-menu__panel" :style="viewportStyle" role="menu">
-      <section ref="parameterCard" class="core-model-thinking-menu__card core-model-thinking-menu__card--parameters" aria-label="模型与思考参数">
+      <section ref="parameterCard" class="core-model-thinking-menu__card core-model-thinking-menu__card--parameters" :aria-label="t('模型与思考参数')">
         <button
           class="core-model-thinking-menu__option core-model-thinking-menu__parameter"
           type="button"
@@ -28,7 +28,7 @@
           @focus="activateSection('model')"
           @click="activateSection('model')"
         >
-          <span class="core-model-thinking-menu__parameter-label">模型</span>
+          <span class="core-model-thinking-menu__parameter-label">{{ t("模型") }}</span>
           <span class="core-model-thinking-menu__parameter-value">{{ modelLabel }}</span>
           <ChevronRight class="core-model-thinking-menu__parameter-chevron" :size="15" :stroke-width="2" aria-hidden="true" />
         </button>
@@ -43,7 +43,7 @@
           @focus="activateSection('thinking')"
           @click="activateSection('thinking')"
         >
-          <span class="core-model-thinking-menu__parameter-label">思考等级</span>
+          <span class="core-model-thinking-menu__parameter-label">{{ t("思考等级") }}</span>
           <span class="core-model-thinking-menu__parameter-value">{{ thinkingLabel }}</span>
           <ChevronRight class="core-model-thinking-menu__parameter-chevron" :size="15" :stroke-width="2" aria-hidden="true" />
         </button>
@@ -55,7 +55,7 @@
         class="core-model-thinking-menu__card core-model-thinking-menu__card--submenu"
         :class="'core-model-thinking-menu__card--submenu-' + submenuSide"
         role="menu"
-        aria-label="模型选项"
+        :aria-label="t('模型选项')"
         data-model-thinking-submenu="model"
       >
         <CoreModelCatalogViewToggle
@@ -63,7 +63,7 @@
           :model-value="catalogView"
           @update:model-value="$emit('update:catalogView', $event)"
         />
-        <div class="core-model-thinking-menu__model-list" :aria-label="catalogView === 'group' ? '按组分类的模型' : '按供应商分类的模型'">
+        <div class="core-model-thinking-menu__model-list" :aria-label="catalogView === 'group' ? t('按组分类的模型') : t('按供应商分类的模型')">
           <section
             v-for="group in modelOptionGroups"
             :key="group.key"
@@ -108,7 +108,7 @@
             </Transition>
           </section>
         </div>
-        <div v-if="modelOptions.length === 0" class="core-model-thinking-menu__empty">暂无可用模型</div>
+        <div v-if="modelOptions.length === 0" class="core-model-thinking-menu__empty">{{ t("暂无可用模型") }}</div>
       </section>
 
       <section
@@ -117,10 +117,10 @@
         class="core-model-thinking-menu__card core-model-thinking-menu__card--submenu"
         :class="'core-model-thinking-menu__card--submenu-' + submenuSide"
         role="menu"
-        aria-label="思考等级选项"
+        :aria-label="t('思考等级选项')"
         data-model-thinking-submenu="thinking"
       >
-        <div class="core-model-thinking-menu__heading">思考等级</div>
+        <div class="core-model-thinking-menu__heading">{{ t("思考等级") }}</div>
         <button
           v-for="option in thinkingModeOptions"
           :key="option.value"
@@ -141,6 +141,10 @@
 </template>
 
 <script setup lang="ts">
+import { defaultUiText } from '../i18n/index'
+
+import { t } from '../i18n/index'
+
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { Brain, ChevronDown, ChevronRight } from 'lucide-vue-next'
 import { coreModelDisplayLabel, normalizeCoreThinkingMode, type CoreModelCatalogView, type CoreSelectOption, type CoreThinkingMode, type CoreThinkingModeOption } from '../composer/execution'
@@ -191,13 +195,13 @@ const collapsedCatalogSections = ref<Record<string, boolean>>(readCollapsedCatal
 
 const modelLabel = computed(() => {
   const option = props.modelOptions.find((item) => item.value === props.modelValue)
-  return option?.selectedLabel || option?.label || props.modelAriaLabel
+  return option?.selectedLabel || option?.label || defaultUiText(props.modelAriaLabel, "模型")
 })
 
 const modelOptionGroups = computed(() => {
   const groups = new Map<string, { key: string; label: string; options: CoreSelectOption[] }>()
   for (const option of props.modelOptions) {
-    const label = option.group?.trim() || '默认模型'
+    const label = option.group?.trim() || t("默认模型")
     const key = option.groupKey?.trim() || `label:${label}`
     const options = groups.get(key)?.options || []
     options.push(option)
@@ -209,11 +213,11 @@ const modelOptionGroups = computed(() => {
 const thinkingLabel = computed(() => {
   const option = props.thinkingModeOptions.find((item) => item.value === props.thinkingMode)
   return option?.label || (normalizeCoreThinkingMode(props.thinkingMode, 'off') === 'off'
-    ? props.thinkingAriaLabel
+    ? defaultUiText(props.thinkingAriaLabel, "思考模式")
     : normalizeCoreThinkingMode(props.thinkingMode, 'off'))
 })
 
-const ariaLabel = computed(() => `模型与思考强度：${modelLabel.value} ${thinkingLabel.value}`)
+const ariaLabel = computed(() => t("模型与思考强度：{0} {1}", { 0: modelLabel.value, 1: thinkingLabel.value }))
 
 function toggle(): void {
   if (props.disabled) return

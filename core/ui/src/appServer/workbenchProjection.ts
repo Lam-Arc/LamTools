@@ -50,6 +50,7 @@ interface ProjectionPartCacheEntry {
   sourceCoreItem: CoreRuntimeItem | undefined
   sourceRequest: CoreAppRequestState | null | undefined
   sourceSubmitting: boolean
+  sourceResourceCalls: unknown[] | undefined
   /** Identity of the sub-agent children array attached to the item. The
    * parent card's core item reference is stable while its sub-agent streams,
    * so without this the cached part (with frozen sub-line children) would be
@@ -315,7 +316,12 @@ function messageFingerprint(
     shallowThinkingPending === true,
     meta.live === true,
     meta.initialWaiting === true,
+    // A machine-authored row renders as a system event instead of a bubble; the
+    // flag is part of what the cached message must match (boolean, not the object
+    // identity, which is rebuilt on every projection pass).
+    Boolean(meta.systemEvent),
     meta.processMetrics,
+    meta.resourceCalls,
     meta.duration_ms,
     meta.runtime_model_id,
     message.timestamp,
@@ -345,6 +351,7 @@ function buildOrGetPart(
     : false
   const sourceCoreItem = snapshot.core?.items?.[item.item_id]
   const itemMetadata = isRecord(item.metadata) ? item.metadata : {}
+  const sourceResourceCalls = Array.isArray(itemMetadata.resourceCalls) ? itemMetadata.resourceCalls : undefined
   // Raw reference identity (not a filtered copy — a fresh array every frame
   // would defeat the cache check below).
   const rawSubLineItems = Array.isArray(itemMetadata.subLineItems) ? itemMetadata.subLineItems : undefined
@@ -355,6 +362,7 @@ function buildOrGetPart(
       && entry.sourceCoreItem === sourceCoreItem
       && entry.sourceRequest === requestState
       && entry.sourceSubmitting === sourceSubmitting
+      && entry.sourceResourceCalls === sourceResourceCalls
       && entry.sourceSubLineItems === rawSubLineItems
     ) {
       return entry.part
@@ -366,6 +374,7 @@ function buildOrGetPart(
       sourceCoreItem,
       sourceRequest: requestState,
       sourceSubmitting,
+      sourceResourceCalls,
       sourceSubLineItems: rawSubLineItems,
       part,
     })

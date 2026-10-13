@@ -1,10 +1,10 @@
 <template>
-  <nav v-show="available && !hidden" ref="root" class="mobile-top-bar" aria-label="移动端快捷操作">
+  <nav v-show="available && !hidden" ref="root" class="mobile-top-bar" :aria-label="t('移动端快捷操作')">
     <button
       class="mobile-top-bar__button mobile-top-bar__sidebar-button"
       type="button"
-      aria-label="打开左侧会话栏"
-      title="会话与项目"
+      :aria-label="t('打开左侧会话栏')"
+      :title="t('会话与项目')"
       data-mobile-sidebar-button
       @click="emit('open-sidebar')"
     >
@@ -20,7 +20,7 @@
       <span ref="syncIcon" class="mobile-top-bar__sync-icon" aria-hidden="true">
         <RefreshCw :size="14" :stroke-width="1.9" />
       </span>
-      <span>正在同步</span>
+      <span>{{ t("正在同步") }}</span>
     </div>
 
     <div
@@ -41,8 +41,8 @@
         type="button"
         :aria-expanded="panelOpen"
         aria-controls="mobile-command-panel"
-        :aria-label="`打开快捷操作，当前模式 ${activeModeLabel}`"
-        title="快捷操作"
+        :aria-label="t('打开快捷操作，当前模式 {0}', { 0: activeModeLabel })"
+        :title="t('快捷操作')"
         data-mobile-command-button
         @click="togglePanel"
       >
@@ -54,13 +54,13 @@
         ref="panel"
         v-show="panelOpen"
         class="mobile-command-dock__panel optical-glass optical-glass--low-trans"
-        aria-label="快捷操作"
+        :aria-label="t('快捷操作')"
         data-mobile-command-panel
       >
         <div class="mobile-command-dock__heading">
-          <span>切换模式</span>
+          <span>{{ t("切换模式") }}</span>
         </div>
-        <div class="mobile-command-dock__modes" role="listbox" aria-label="可用模式">
+        <div class="mobile-command-dock__modes" role="listbox" :aria-label="t('可用模式')">
           <button
             v-for="option in modeOptions"
             :key="option.id"
@@ -81,27 +81,27 @@
         <div class="mobile-command-dock__actions">
           <button type="button" data-mobile-search-button @click="runAction('open-search')">
             <Search :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <span>搜索</span>
+            <span>{{ t("搜索") }}</span>
           </button>
           <button type="button" data-mobile-settings-button @click="runAction('open-settings')">
             <Settings :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <span>设置</span>
+            <span>{{ t("设置") }}</span>
           </button>
           <button type="button" data-mobile-plugins-button @click="runAction('open-plugins')">
             <Plug :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <span>插件</span>
+            <span>{{ t("插件") }}</span>
           </button>
           <button type="button" data-mobile-library-button @click="runAction('open-library')">
             <Library :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <span>资料库</span>
+            <span>{{ t("资料库") }}</span>
           </button>
           <button type="button" data-mobile-arrange-button @click="runAction('open-arrange')">
             <Clock :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <span>定时任务</span>
+            <span>{{ t("定时任务") }}</span>
           </button>
           <button type="button" data-mobile-account-button @click="runAction('open-account')">
             <UserRound :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <span>{{ accountLabel }}</span>
+            <span>{{ defaultUiText(accountLabel, '登录 / 账号') }}</span>
           </button>
         </div>
       </section>
@@ -110,6 +110,10 @@
 </template>
 
 <script setup lang="ts">
+import { defaultUiText } from '../i18n/index'
+
+import { t } from '../i18n/index'
+
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Blocks, Check, Clock, Library, PanelLeft, Plug, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'
 import { gsap } from 'gsap'
@@ -161,7 +165,7 @@ let syncTween: gsap.core.Tween | null = null
 let panelTween: gsap.core.Tween | null = null
 let motionAllowed = false
 const activeModeLabel = computed(() => (
-  props.modeOptions.find((option) => option.id === props.activeModeId)?.label || '默认'
+  props.modeOptions.find((option) => option.id === props.activeModeId)?.label || t("默认")
 ))
 
 function updatePanelDirection(): void {

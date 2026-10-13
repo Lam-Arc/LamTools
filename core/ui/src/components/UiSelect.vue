@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 defineOptions({ name: 'UiSelect' })
@@ -202,7 +204,7 @@ watch(
 
 const selectedLabel = computed(() => {
   const option = props.options.find((item) => item.value === props.modelValue)
-  return option?.selectedLabel || option?.label?.replace(/^\s*-\s*/, '') || props.placeholder || '未指定'
+  return option?.selectedLabel || option?.label?.replace(/^\s*-\s*/, '') || props.placeholder || t("未指定")
 })
 
 /** 触发器的状态类：强制侧与非强制侧（打开时按视口定）都如实反映。 */
@@ -266,7 +268,7 @@ onUnmounted(() => {
       class="ui-select-trigger"
       type="button"
       :disabled="disabled"
-      :aria-label="ariaLabel || `当前选择：${selectedLabel}`"
+      :aria-label="ariaLabel || t('当前选择：{0}', { 0: selectedLabel })"
       :aria-expanded="open"
       @click="toggle"
     >

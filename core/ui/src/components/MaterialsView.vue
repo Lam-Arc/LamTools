@@ -8,26 +8,26 @@
   >
     <!-- ── 大标题 + 右侧一整条工具 ── -->
     <header class="materials-head">
-      <h1 class="materials-title">资料库</h1>
+      <h1 class="materials-title">{{ t("资料库") }}</h1>
       <div class="materials-tools">
         <button class="icon-button" type="button" :aria-label="sortLabel" :title="sortLabel" data-materials-sort @click="toggleSort">
           <ArrowDownWideNarrow :size="16" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <div class="library-view-toggle" role="group" aria-label="视图切换" data-materials-view-toggle>
-          <button type="button" :class="{ active: view === 'grid' }" :aria-pressed="view === 'grid'" aria-label="网格视图" title="网格视图" @click="view = 'grid'">
+        <div class="library-view-toggle" role="group" :aria-label="t('视图切换')" data-materials-view-toggle>
+          <button type="button" :class="{ active: view === 'grid' }" :aria-pressed="view === 'grid'" :aria-label="t('网格视图')" :title="t('网格视图')" @click="view = 'grid'">
             <LayoutGrid :size="14" :stroke-width="1.8" aria-hidden="true" />
           </button>
-          <button type="button" :class="{ active: view === 'list' }" :aria-pressed="view === 'list'" aria-label="列表视图" title="列表视图" @click="view = 'list'">
+          <button type="button" :class="{ active: view === 'list' }" :aria-pressed="view === 'list'" :aria-label="t('列表视图')" :title="t('列表视图')" @click="view = 'list'">
             <List :size="14" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </div>
         <div class="library-search materials-search">
           <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-          <input v-model="query" type="search" placeholder="搜索资料库" aria-label="搜索资料库" data-materials-search />
+          <input v-model="query" type="search" :placeholder="t('搜索资料库')" :aria-label="t('搜索资料库')" data-materials-search />
         </div>
         <button class="library-button library-button--primary materials-new" type="button" :disabled="!projectId || uploading" data-materials-new @click="uploadHere">
           <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
-          {{ uploading ? '上传中…' : '新建' }}
+          {{ uploading ? t("上传中…") : t("新建") }}
         </button>
       </div>
     </header>
@@ -39,11 +39,11 @@
 
     <!-- 打开失败这类动作错误：就近提示，不顶掉整面墙。 -->
     <p v-if="actionError" class="full-area-note full-area-note--error" role="alert" data-materials-action-error>
-      {{ actionError }}<button class="library-link" type="button" @click="actionError = ''">知道了</button>
+      {{ actionError }}<button class="library-link" type="button" @click="actionError = ''">{{ t("知道了") }}</button>
     </p>
 
     <!-- ── 药丸筛选页签 ── -->
-    <div class="filter-tabs" role="group" aria-label="筛选资料" data-materials-tabs>
+    <div class="filter-tabs" role="group" :aria-label="t('筛选资料')" data-materials-tabs>
       <button
         v-for="tab in TABS"
         :key="tab.id"
@@ -56,8 +56,8 @@
     </div>
 
     <!-- ── 文件夹里：面包屑 + 这一层的内容 ── -->
-    <nav v-if="openFolder" class="library-crumb materials-crumb" data-materials-crumb aria-label="位置">
-      <button type="button" class="crumb-link" @click="goToFolder('')">资料库</button>
+    <nav v-if="openFolder" class="library-crumb materials-crumb" data-materials-crumb :aria-label="t('位置')">
+      <button type="button" class="crumb-link" @click="goToFolder('')">{{ t("资料库") }}</button>
       <template v-for="(step, index) in folderTrail" :key="step.dir">
         <span class="crumb-sep" aria-hidden="true">›</span>
         <button
@@ -75,7 +75,7 @@
       v-if="openFolder && activeTab === 'folders' && childFolders.length"
       class="folder-chips"
       data-materials-subfolders
-      aria-label="子层"
+      :aria-label="t('子层')"
     >
       <button
         v-for="folder in childFolders"
@@ -91,10 +91,10 @@
       </button>
     </nav>
 
-    <p v-if="!projectId" class="full-area-note">先在左侧选择一个项目 — 资料库跟随项目。</p>
-    <p v-else-if="loading && !items.length" class="full-area-note" role="status">正在读取资料库…</p>
+    <p v-if="!projectId" class="full-area-note">{{ t("先在左侧选择一个项目 — 资料库跟随项目。") }}</p>
+    <p v-else-if="loading && !items.length" class="full-area-note" role="status">{{ t("正在读取资料库…") }}</p>
     <p v-else-if="error" class="full-area-note full-area-note--error" role="alert">
-      {{ error }}<button class="library-link" type="button" @click="reload">重试</button>
+      {{ error }}<button class="library-link" type="button" @click="reload">{{ t("重试") }}</button>
     </p>
 
     <template v-else>
@@ -106,26 +106,24 @@
           class="folder-card"
           role="listitem"
           tabindex="0"
-          :aria-label="`打开文件夹 ${folder.name}`"
+          :aria-label="t('打开文件夹 {0}', { 0: folder.name })"
           :data-materials-folder="folder.path"
           @click="goToFolder(folder.path)"
           @keydown.enter.prevent="goToFolder(folder.path)"
         >
           <span class="folder-card-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.6" /></span>
           <span class="folder-card-name">{{ folder.name }}</span>
-          <span class="folder-card-count">{{ folder.count }} 个文件</span>
+          <span class="folder-card-count">{{ folder.count }} {{ t("个文件") }}</span>
         </article>
       </div>
-      <p v-else-if="activeTab === 'folders' && !childFolders.length && !openFolder" class="full-area-note tab-empty" data-materials-folders-empty>
-        还没有归档 — 在文件卡片的菜单里「归到文件夹」就会出现在这里。
-      </p>
+      <p v-else-if="activeTab === 'folders' && !childFolders.length && !openFolder" class="full-area-note tab-empty" data-materials-folders-empty>{{ t("还没有归档 — 在文件卡片的菜单里「归到文件夹」就会出现在这里。") }}</p>
 
       <!-- 空态：只有这一层既没有直属文件、也没有子层时才算空 -->
       <div v-else-if="!visible.length && !childFolders.length" class="full-area-empty" data-materials-empty>
         <span class="full-area-empty-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.8" /></span>
-        <h2 class="full-area-empty-title">{{ openFolder ? '这一层还没有文件' : '资料库还是空的' }}</h2>
-        <p class="full-area-empty-hint">上传文件，或让助手把要留存的产出归入资料库。</p>
-        <button class="library-button library-button--primary" type="button" data-materials-empty-upload @click="uploadHere">上传文件</button>
+        <h2 class="full-area-empty-title">{{ openFolder ? t("这一层还没有文件") : t("资料库还是空的") }}</h2>
+        <p class="full-area-empty-hint">{{ t("上传文件，或让助手把要留存的产出归入资料库。") }}</p>
+        <button class="library-button library-button--primary" type="button" data-materials-empty-upload @click="uploadHere">{{ t("上传文件") }}</button>
       </div>
 
       <!-- 卡片墙（网格 = 多列瀑布流，贴近参考图里的错落；列表 = 行式） -->
@@ -137,7 +135,7 @@
           :class="{ 'material-card--selected': selectedSet.has(item.artifact_id) }"
           role="listitem"
           tabindex="0"
-          :aria-label="`打开 ${item.name}`"
+          :aria-label="t('打开 {0}', { 0: item.name })"
           :data-material="item.artifact_id"
           @click="open(item)"
           @keydown.enter.prevent="open(item)"
@@ -161,13 +159,13 @@
             <button
               class="material-check"
               type="button"
-              :aria-label="selectedSet.has(item.artifact_id) ? `取消选择 ${item.name}` : `选择 ${item.name}`"
+              :aria-label="selectedSet.has(item.artifact_id) ? t('取消选择 {0}', { 0: item.name }) : t('选择 {0}', { 0: item.name })"
               :aria-pressed="selectedSet.has(item.artifact_id)"
               :data-material-check="item.artifact_id"
               @click.stop="toggleSelected(item.artifact_id)"
             ><Check v-if="selectedSet.has(item.artifact_id)" :size="12" :stroke-width="2.4" aria-hidden="true" /></button>
           </div>
-          <button class="card-menu-btn" type="button" :aria-label="`${item.name} 的操作`" @click.stop="openMenu($event, item)">
+          <button class="card-menu-btn" type="button" :aria-label="t('{0} 的操作', { 0: item.name })" @click.stop="openMenu($event, item)">
             <MoreHorizontal :size="15" :stroke-width="1.8" aria-hidden="true" />
           </button>
           <h4 class="material-name" :title="displayPath(item) || item.name">{{ item.name }}</h4>
@@ -176,11 +174,11 @@
               v-if="item.favorite"
               class="material-star"
               type="button"
-              aria-label="取消收藏"
+              :aria-label="t('取消收藏')"
               data-material-star
               @click.stop="setFavorite(item, false)"
             ><Star :size="12" :stroke-width="1.8" aria-hidden="true" /></button>
-            <span>修改于 {{ shortDate(item.updated_at) }}</span>
+            <span>{{ t("修改于") }}{{ shortDate(item.updated_at) }}</span>
           </p>
         </article>
       </div>
@@ -198,14 +196,14 @@
           >
             <div class="library-item-top">
               <span class="library-item-title">{{ item.name }}</span>
-              <Star v-if="item.favorite" :size="12" :stroke-width="1.8" aria-label="已收藏" class="plan-card-star" />
+              <Star v-if="item.favorite" :size="12" :stroke-width="1.8" :aria-label="t('已收藏')" class="plan-card-star" />
               <span class="library-status" :data-artifact-status="artifactStatus(item)">{{ statusLabel(item) }}</span>
             </div>
             <div class="library-item-bottom">
               <span class="library-item-summary">{{ kindLabel(item.kind, item.name) }} · {{ roleLabel(item.role) }}</span>
-              <span class="library-item-time">修改于 {{ shortDate(item.updated_at) }}</span>
+              <span class="library-item-time">{{ t("修改于") }}{{ shortDate(item.updated_at) }}</span>
             </div>
-            <button class="card-menu-btn" type="button" :aria-label="`${item.name} 的操作`" @click.stop="openMenu($event, item)">
+            <button class="card-menu-btn" type="button" :aria-label="t('{0} 的操作', { 0: item.name })" @click.stop="openMenu($event, item)">
               <MoreHorizontal :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </div>
@@ -214,27 +212,25 @@
 
       <!-- 选中若干件时的批量动作 -->
       <div v-if="selectedSet.size" class="materials-selection" data-materials-selection>
-        <span>已选 {{ selectedSet.size }} 项</span>
-        <button class="library-button" type="button" @click="clearSelection">取消</button>
-        <button class="library-button" type="button" data-materials-favorite-selected @click="favoriteSelected(true)">收藏</button>
-        <button class="library-button" type="button" @click="favoriteSelected(false)">取消收藏</button>
-        <button class="library-button library-button--danger" type="button" data-materials-remove-selected @click="pendingRemove = selectedItems">移除</button>
+        <span>{{ t("已选") }}{{ selectedSet.size }}{{ t("项") }}</span>
+        <button class="library-button" type="button" @click="clearSelection">{{ t("取消") }}</button>
+        <button class="library-button" type="button" data-materials-favorite-selected @click="favoriteSelected(true)">{{ t("收藏") }}</button>
+        <button class="library-button" type="button" @click="favoriteSelected(false)">{{ t("取消收藏") }}</button>
+        <button class="library-button library-button--danger" type="button" data-materials-remove-selected @click="pendingRemove = selectedItems">{{ t("移除") }}</button>
       </div>
     </template>
 
     <!-- ── 移除确认：只改资料库状态，不删文件（沿用成果库既有语义） ── -->
     <Transition name="library-dialog">
       <div v-if="pendingRemove" class="dialog-dimmer" @click.self="pendingRemove = null">
-        <div class="dialog-card" role="dialog" aria-modal="true" aria-label="确认移除" data-materials-confirm>
+        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('确认移除')" data-materials-confirm>
           <div class="dialog-body">
-            <h3 class="dialog-title">从资料库移除</h3>
-            <p class="dialog-text">
-              将移除此处的 {{ pendingRemove.length }} 项；文件本身不会被删除。
-            </p>
+            <h3 class="dialog-title">{{ t("从资料库移除") }}</h3>
+            <p class="dialog-text">{{ t("将移除此处的") }}{{ pendingRemove.length }}{{ t("项；文件本身不会被删除。") }}</p>
           </div>
           <div class="dialog-actions">
-            <button class="library-button" type="button" @click="pendingRemove = null">取消</button>
-            <button class="library-button library-button--danger" type="button" data-materials-confirm-remove @click="confirmRemove">移除</button>
+            <button class="library-button" type="button" @click="pendingRemove = null">{{ t("取消") }}</button>
+            <button class="library-button library-button--danger" type="button" data-materials-confirm-remove @click="confirmRemove">{{ t("移除") }}</button>
           </div>
         </div>
       </div>
@@ -242,10 +238,10 @@
 
     <CoreConfirmDialog
       :open="Boolean(pendingFolderName)"
-      title="归到文件夹"
+      :title="t('归到文件夹')"
       input
       :input-value="folderNameDraft"
-      input-placeholder="文件夹名"
+      :input-placeholder="t('文件夹名')"
       @cancel="pendingFolderName = null"
       @update:input-value="folderNameDraft = $event"
       @confirm="confirmFolderName"
@@ -254,6 +250,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * MaterialsView — 资料库的「资料」分区：项目里进出的文件（用户 / 中间产物 / 产物）。
  *
@@ -307,8 +305,8 @@ import {
 } from '../artifacts/model'
 
 // 文件卡右键菜单的语义分组：组头可折叠，折叠状态按这两个稳定 id 记忆。
-const MATERIALS_FILE_GROUP: ContextMenuGroupMeta = { id: 'materials.file', label: '文件' }
-const MATERIALS_ORGANIZE_GROUP: ContextMenuGroupMeta = { id: 'materials.organize', label: '整理' }
+const MATERIALS_FILE_GROUP: ContextMenuGroupMeta = { id: 'materials.file', get label() { return t("文件") } }
+const MATERIALS_ORGANIZE_GROUP: ContextMenuGroupMeta = { id: 'materials.organize', get label() { return t("整理") } }
 
 const props = defineProps<{
   projectId?: string | null
@@ -323,13 +321,13 @@ const props = defineProps<{
 }>()
 
 const TABS = [
-  { id: 'all', label: '全部' },
-  { id: 'image', label: '图片' },
-  { id: 'document', label: '文档' },
-  { id: 'spreadsheet', label: '表格' },
-  { id: 'media', label: '音视频' },
-  { id: 'favorite', label: '收藏' },
-  { id: 'folders', label: '文件夹' },
+  { id: 'all', get label() { return t("全部") } },
+  { id: 'image', get label() { return t("图片") } },
+  { id: 'document', get label() { return t("文档") } },
+  { id: 'spreadsheet', get label() { return t("表格") } },
+  { id: 'media', get label() { return t("音视频") } },
+  { id: 'favorite', get label() { return t("收藏") } },
+  { id: 'folders', get label() { return t("文件夹") } },
 ] as const
 type TabId = (typeof TABS)[number]['id']
 
@@ -356,7 +354,7 @@ const MAX_POSTER_BYTES = 48 * 1024 * 1024
 /* ---- 卡片墙缩放：Ctrl+滚轮增减，资料与方案共用一档 ---- */
 const { zoom, onZoomWheel } = useLibraryZoom()
 
-const sortLabel = computed(() => (sort.value === 'updated' ? '按修改时间（新到旧）' : '按名称'))
+const sortLabel = computed(() => (sort.value === 'updated' ? t("按修改时间（新到旧）") : t("按名称")))
 
 function toggleSort(): void {
   sort.value = sort.value === 'updated' ? 'name' : 'updated'
@@ -541,8 +539,8 @@ const visible = computed(() => {
 
 const statsLine = computed(() => {
   const count = stats.value.count
-  const label = `${count} 个文件 · ${formatBytes(stats.value.bytes)}`
-  return count ? label : '资料库还是空的'
+  const label = t("{0} 个文件 · {1}", { 0: count, 1: formatBytes(stats.value.bytes) })
+  return count ? label : t("资料库还是空的")
 })
 
 function formatBytes(bytes: number): string {
@@ -694,7 +692,7 @@ async function uploadHere(): Promise<void> {
 
 function openMenu(event: MouseEvent, item: ProjectArtifact): void {
   const children: ContextMenuEntry[] = [
-    { id: 'folder-root', label: '不归档', disabled: !folderOf(item), action: () => void moveToFolder(item, '') },
+    { id: 'folder-root', get label() { return t("不归档") }, disabled: !folderOf(item), action: () => void moveToFolder(item, '') },
     ...folders.value.map(folder => ({
       id: `folder-${folder}`,
       label: `　`.repeat(folder.split('/').length - 1) + folderName(folder),
@@ -703,7 +701,7 @@ function openMenu(event: MouseEvent, item: ProjectArtifact): void {
     })),
     {
       id: 'folder-new',
-      label: '新建文件夹…',
+      get label() { return t("新建文件夹…") },
       action: () => {
         folderNameDraft.value = ''
         pendingFolderName.value = item
@@ -715,20 +713,20 @@ function openMenu(event: MouseEvent, item: ProjectArtifact): void {
     items: [
       // 语义分组：文件级操作与整理操作各成一组（组头可折叠、状态有记忆）；
       // 危险操作不入组，始终裸露在菜单尾部，不能被折叠藏起来。
-      { id: 'open', label: '打开', group: MATERIALS_FILE_GROUP, action: () => void openWithSystem(item) },
-      { id: 'copy', label: '复制路径', group: MATERIALS_FILE_GROUP, action: () => void copyText(displayPath(item)) },
+      { id: 'open', get label() { return t("打开") }, group: MATERIALS_FILE_GROUP, action: () => void openWithSystem(item) },
+      { id: 'copy', get label() { return t("复制路径") }, group: MATERIALS_FILE_GROUP, action: () => void copyText(displayPath(item)) },
       {
         id: 'favorite',
-        label: item.favorite ? '取消收藏' : '添加到收藏',
+        label: item.favorite ? t("取消收藏") : t("添加到收藏"),
         group: MATERIALS_ORGANIZE_GROUP,
         action: () => void setFavorite(item, !item.favorite),
       },
-      { id: 'folder', type: 'submenu', label: '归到文件夹', group: MATERIALS_ORGANIZE_GROUP, children },
+      { id: 'folder', type: 'submenu', get label() { return t("归到文件夹") }, group: MATERIALS_ORGANIZE_GROUP, children },
       { type: 'separator' as const, id: 'sep-danger' },
-      { id: 'remove', label: '从资料库移除', destructive: true, action: () => { pendingRemove.value = [item] } },
+      { id: 'remove', get label() { return t("从资料库移除") }, destructive: true, action: () => { pendingRemove.value = [item] } },
     ],
     ownerId: `material:${item.artifact_id}`,
-    ariaLabel: `${item.name} 的操作`,
+    ariaLabel: t("{0} 的操作", { 0: item.name }),
     panelAttributes: { 'data-materials-menu': item.artifact_id },
   })
 }

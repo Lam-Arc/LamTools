@@ -48,7 +48,8 @@
      都按这个内缩自行变窄——输入栏不需要知道分屏的存在，它只是容器窄了。
      `.workspace-shell--sub-agent-split` 打开时把这条宽度加进 --main-right。 */
   --sub-agent-pane-width: clamp(340px, 34vw, 620px);
-  --sub-agent-split-gap: var(--space-3);
+  /* 面板与聊天区之间只留 2px：这道缝就是面板宽度把手的位置（见 CoreSubAgentPane）。 */
+  --sub-agent-split-gap: 2px;
   --main-right-base: var(--right-peek);
   --main-right: calc(var(--main-right-base) + var(--sub-agent-split-extra, 0px));
   --right-reveal: calc(var(--right-drawer-width) - var(--right-overlap));
@@ -322,9 +323,7 @@
   border: 0;
   border-radius: var(--radius);
   background: transparent;
-  /* 用不透明色画图标：颜色里带 alpha 时，同一段路径被画两遍会叠深
-     （IconPark 的 book-one 就把书脊那条线画了两遍），未选中态会冒出一条更黑的线。
-     层次的区分交给背景（hover / pressed），不再靠颜色里的透明度。 */
+  /* 图标始终使用不透明色，避免重叠路径逐笔合成后变亮。 */
   color: var(--theme-backdrop-text);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
@@ -332,6 +331,15 @@
 
 .app-rail__button:hover {
   background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+}
+
+.app-rail__button[data-rail-entry][aria-pressed='false'] {
+  color: var(--sidebar-icon-muted-solid);
+}
+
+.app-rail__button[data-rail-entry][aria-pressed='false']:hover,
+.app-rail__button[data-rail-entry][aria-pressed='false']:focus-visible {
+  color: var(--sidebar-icon-hover-solid);
 }
 
 .app-rail__button[aria-pressed='true'] {

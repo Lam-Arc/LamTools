@@ -13,14 +13,14 @@ SearXNG、openserp 等）一律**不内置、不 import**，LamTools 只把它�
 
 from __future__ import annotations
 
-import asyncio
 import json
-import sys
 
 import httpx
 from lamtools_core.config.network import httpx_client_kwargs, subprocess_env
 
 from .protocol import SearchResult
+from .http_requests import bounded_request
+from .process import SearchProcessError, run_search_process
 
 DEFAULT_CONFIG: dict = {
     "timeout": 30,
@@ -63,20 +63,16 @@ class ExternalSearchProvider:
         if not self.command:
             raise ExternalSearchError("subprocess 内核未配置 command")
         # 把 JSON 作为 argv 尾参传入（避免 Windows 跨进程 stdin 编码问题）
-        proc = await asyncio.create_subprocess_exec(
-            *(list(self.command) + [json.dumps(payload, ensure_ascii=False)]),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=subprocess_env(),
-        )
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise ExternalSearchError(f"外部搜索工具超时（>{self.timeout}s）")
-        if proc.returncode != 0:
+            returncode, out, err = await run_search_process(
+                list(self.command) + [json.dumps(payload, ensure_ascii=False)],
+                timeout=self.timeout, env=subprocess_env(),
+            )
+        except (SearchProcessError, OSError) as exc:
+            raise ExternalSearchError(f"外部搜索工具失败: {exc}") from exc
+        if returncode != 0:
             raise ExternalSearchError(
-                f"外部搜索工具退出码 {proc.returncode}: {err.decode(errors='replace')[:200]}"
+                f"外部搜索工具退出码 {returncode}: {err.decode(errors='replace')[:200]}"
             )
         return self._parse_output(out.decode(errors="replace"))
 
@@ -88,7 +84,9 @@ class ExternalSearchProvider:
                 timeout=httpx.Timeout(self.timeout),
                 **httpx_client_kwargs(self.url),
             ) as client:
-                resp = await client.post(self.url, json=payload)
+                resp = await bounded_request(
+                    client, "POST", self.url, total_timeout=self.timeout, json=payload
+                )
         except httpx.HTTPError as exc:
             raise ExternalSearchError(f"外部搜索服务请求失败: {exc}") from exc
         if resp.status_code != 200:

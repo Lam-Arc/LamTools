@@ -1,9 +1,9 @@
 <template>
-  <section class="wf-trigger-panel" data-workflow-trigger-panel aria-label="工作流触发器与激活">
+  <section class="wf-trigger-panel" data-workflow-trigger-panel :aria-label="t('工作流触发器与激活')">
     <header class="wf-trigger-head">
       <div>
-        <h3>触发器</h3>
-        <span>{{ triggers.length }} 个 · 工作流 revision {{ workflowRevisionLabel }}</span>
+        <h3>{{ t("触发器") }}</h3>
+        <span>{{ triggers.length }}{{ t("个 · 工作流 revision") }}{{ workflowRevisionLabel }}</span>
       </div>
       <div class="wf-trigger-head-actions">
         <button
@@ -11,8 +11,8 @@
           class="small-btn quiet"
           data-trigger-refresh
           :disabled="activationsLoading || activationBusy"
-          aria-label="刷新激活状态"
-          title="刷新激活状态"
+          :aria-label="t('刷新激活状态')"
+          :title="t('刷新激活状态')"
           @click="refreshActivations"
         >
           <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -22,8 +22,8 @@
           class="small-btn primary"
           data-trigger-add
           :disabled="activationBusy || !workflowDefinition"
-          aria-label="新增触发器"
-          title="新增触发器"
+          :aria-label="t('新增触发器')"
+          :title="t('新增触发器')"
           @click="addTrigger"
         >
           <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -31,7 +31,7 @@
       </div>
     </header>
 
-    <ul v-if="triggers.length" class="wf-trigger-list" aria-label="触发器列表">
+    <ul v-if="triggers.length" class="wf-trigger-list" :aria-label="t('触发器列表')">
       <li v-for="trigger in triggers" :key="trigger.id" class="wf-trigger-row" :class="{ selected: trigger.id === selectedTriggerId }">
         <button
           type="button"
@@ -51,111 +51,111 @@
         </button>
       </li>
     </ul>
-    <p v-else class="wf-trigger-empty">暂无触发器。新增后可配置手动或定时入口。</p>
+    <p v-else class="wf-trigger-empty">{{ t("暂无触发器。新增后可配置手动或定时入口。") }}</p>
 
     <form v-if="draft" class="wf-trigger-editor" data-trigger-editor @submit.prevent="saveDraft">
       <div class="wf-trigger-editor-head">
         <strong>{{ draft.name || triggerTypeLabel(draft.type) }}</strong>
-        <button type="button" class="text-btn danger" data-trigger-delete :disabled="activationBusy" @click="deleteTrigger">删除</button>
+        <button type="button" class="text-btn danger" data-trigger-delete :disabled="activationBusy" @click="deleteTrigger">{{ t("删除") }}</button>
       </div>
 
       <div class="wf-trigger-fields wf-trigger-fields-meta">
         <label>
-          <span>名称</span>
-          <input v-model="draft.name" type="text" placeholder="例如：每日同步" autocomplete="off" />
+          <span>{{ t("名称") }}</span>
+          <input v-model="draft.name" type="text" :placeholder="t('例如：每日同步')" autocomplete="off" />
         </label>
         <label>
           <span>ID</span>
           <input v-model="draft.id" type="text" placeholder="trigger_1" autocomplete="off" />
         </label>
         <label>
-          <span>类型</span>
+          <span>{{ t("类型") }}</span>
           <UiSelect
             :model-value="draft.type"
             :options="triggerTypeOptions"
-            aria-label="触发器类型"
+            :aria-label="t('触发器类型')"
             data-trigger-type
             @update:model-value="changeType"
           />
         </label>
         <label class="wf-trigger-checkbox">
-          <span>启用</span>
+          <span>{{ t("启用") }}</span>
           <span class="wf-trigger-checkbox-control">
             <input v-model="draft.enabled" type="checkbox" />
-            <small>{{ draft.enabled ? '会参与激活' : '停用' }}</small>
+            <small>{{ draft.enabled ? t("会参与激活") : t("停用") }}</small>
           </span>
         </label>
       </div>
 
       <div v-if="draft.type === 'once'" class="wf-trigger-fields">
         <label class="wf-trigger-field-wide">
-          <span>at（ISO 时间）</span>
+          <span>{{ t("at（ISO 时间）") }}</span>
           <input v-model="draft.at" type="text" placeholder="2026-09-14T09:00:00+08:00" autocomplete="off" />
         </label>
       </div>
 
       <div v-else-if="draft.type === 'interval'" class="wf-trigger-fields">
         <label>
-          <span>每隔（秒）</span>
+          <span>{{ t("每隔（秒）") }}</span>
           <input v-model="draft.every_seconds" type="number" min="0.001" step="any" placeholder="3600" />
         </label>
         <label>
-          <span>开始时间（可选）</span>
-          <input v-model="draft.start_at" type="text" placeholder="ISO 时间" autocomplete="off" />
+          <span>{{ t("开始时间（可选）") }}</span>
+          <input v-model="draft.start_at" type="text" :placeholder="t('ISO 时间')" autocomplete="off" />
         </label>
       </div>
 
       <div v-else-if="draft.type === 'calendar'" class="wf-trigger-fields">
         <label>
-          <span>频率</span>
-          <UiSelect :model-value="draft.frequency || 'daily'" :options="calendarFrequencyOptions" aria-label="日历频率" @update:model-value="changeFrequency" />
+          <span>{{ t("频率") }}</span>
+          <UiSelect :model-value="draft.frequency || 'daily'" :options="calendarFrequencyOptions" :aria-label="t('日历频率')" @update:model-value="changeFrequency" />
         </label>
         <label>
-          <span>时间</span>
+          <span>{{ t("时间") }}</span>
           <input v-model="draft.time" type="time" placeholder="09:00" />
         </label>
         <label>
-          <span>时区</span>
+          <span>{{ t("时区") }}</span>
           <input v-model="draft.timezone" type="text" placeholder="Asia/Shanghai" autocomplete="off" />
         </label>
         <label v-if="draft.frequency === 'monthly'">
-          <span>每月第几天</span>
+          <span>{{ t("每月第几天") }}</span>
           <input v-model="draft.day" type="number" min="1" max="31" step="1" placeholder="1" />
         </label>
       </div>
 
       <div v-else-if="draft.type === 'event'" class="wf-trigger-fields">
         <label class="wf-trigger-field-wide">
-          <span>事件类型</span>
-          <input v-model="draft.event_type" type="text" placeholder="例如：invoice.created" autocomplete="off" />
+          <span>{{ t("事件类型") }}</span>
+          <input v-model="draft.event_type" type="text" :placeholder="t('例如：invoice.created')" autocomplete="off" />
         </label>
       </div>
 
       <div v-if="draft.type !== 'once'" class="wf-trigger-fields">
         <label>
-          <span>最大运行次数（可选）</span>
-          <input v-model="draft.max_runs" type="number" min="1" step="1" placeholder="不限" />
+          <span>{{ t("最大运行次数（可选）") }}</span>
+          <input v-model="draft.max_runs" type="number" min="1" step="1" :placeholder="t('不限')" />
         </label>
       </div>
 
       <label class="wf-trigger-inputs">
-        <span>运行输入（JSON，可选）</span>
+        <span>{{ t("运行输入（JSON，可选）") }}</span>
         <AutoTextarea v-model="inputsDraft" :min-rows="2" :max-rows="4" placeholder='{"key": "value"}' />
       </label>
 
       <p v-if="error" class="wf-trigger-error" role="alert">{{ error }}</p>
       <p v-if="message" class="wf-trigger-message" role="status">{{ message }}</p>
       <div class="wf-trigger-editor-actions">
-        <button type="submit" class="small-btn primary" data-trigger-save :disabled="activationBusy">保存触发器</button>
+        <button type="submit" class="small-btn primary" data-trigger-save :disabled="activationBusy">{{ t("保存触发器") }}</button>
       </div>
     </form>
 
-    <section v-if="selectedTrigger" class="wf-activation-section" aria-label="触发器激活">
+    <section v-if="selectedTrigger" class="wf-activation-section" :aria-label="t('触发器激活')">
       <header class="wf-activation-head">
         <div>
-          <h4>激活</h4>
-          <span v-if="activationsLoading">正在读取…</span>
-          <span v-else>{{ selectedTrigger.type === 'manual' ? '手动触发无需排程' : '激活会固定当前工作流 revision' }}</span>
+          <h4>{{ t("激活") }}</h4>
+          <span v-if="activationsLoading">{{ t("正在读取…") }}</span>
+          <span v-else>{{ selectedTrigger.type === 'manual' ? t("手动触发无需排程") : t("激活会固定当前工作流 revision") }}</span>
         </div>
         <span v-if="selectedActivationRows.length" class="wf-activation-count">{{ selectedActivationRows.length }}</span>
       </header>
@@ -163,8 +163,8 @@
         <li v-for="activation in selectedActivationRows" :key="activation.id" class="wf-activation-row">
           <div class="wf-activation-copy">
             <strong :class="`status-${activation.status}`">{{ activationStatusLabel(activation.status) }}</strong>
-            <span>固定 revision {{ activation.workflow_revision || '—' }}</span>
-            <small>下次 {{ formatTimestamp(activation.next_run_at) }} · 运行 {{ activation.run_count }}</small>
+            <span>{{ t("固定 revision") }}{{ activation.workflow_revision || '—' }}</span>
+            <small>{{ t("下次") }}{{ formatTimestamp(activation.next_run_at) }}{{ t("· 运行") }}{{ activation.run_count }}</small>
             <small v-if="activation.last_error" class="wf-trigger-error">{{ activation.last_error }}</small>
           </div>
           <button
@@ -174,10 +174,10 @@
             :data-activation-id="activation.id"
             :disabled="activationBusy"
             @click="deactivateTrigger"
-          >停用</button>
+          >{{ t("停用") }}</button>
         </li>
       </ul>
-      <p v-else class="wf-activation-empty">未激活</p>
+      <p v-else class="wf-activation-empty">{{ t("未激活") }}</p>
       <div v-if="selectedTrigger.type !== 'manual'" class="wf-activation-actions">
         <button
           type="button"
@@ -185,22 +185,24 @@
           data-trigger-activate
           :disabled="activationBusy || !selectedTrigger.enabled"
           @click="activateTrigger(false)"
-        >激活</button>
+        >{{ t("激活") }}</button>
         <button
           v-if="selectedActivationRows.length"
           type="button"
           class="small-btn quiet"
           data-trigger-replace
           :disabled="activationBusy || !selectedTrigger.enabled"
-          title="显式替换现有激活，并固定到当前 revision"
+          :title="t('显式替换现有激活，并固定到当前 revision')"
           @click="activateTrigger(true)"
-        >替换并激活</button>
+        >{{ t("替换并激活") }}</button>
       </div>
     </section>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, ref, watch } from 'vue'
 import { Plus, RefreshCw } from 'lucide-vue-next'
 import UiSelect from '../../../../../../ui/src/components/UiSelect.vue'
@@ -240,15 +242,15 @@ const props = withDefaults(defineProps<{
 })
 
 const triggerTypeOptions = [
-  { value: 'manual', label: '手动' },
-  { value: 'once', label: '一次性' },
-  { value: 'interval', label: '间隔' },
-  { value: 'calendar', label: '日历' },
-  { value: 'event', label: '事件' },
+  { value: 'manual', get label() { return t("手动") } },
+  { value: 'once', get label() { return t("一次性") } },
+  { value: 'interval', get label() { return t("间隔") } },
+  { value: 'calendar', get label() { return t("日历") } },
+  { value: 'event', get label() { return t("事件") } },
 ]
 const calendarFrequencyOptions = [
-  { value: 'daily', label: '每天' },
-  { value: 'monthly', label: '每月' },
+  { value: 'daily', get label() { return t("每天") } },
+  { value: 'monthly', get label() { return t("每月") } },
 ]
 
 const selectedTriggerId = ref('')
@@ -301,11 +303,11 @@ function triggerTypeLabel(type: TriggerType | string): string {
 
 function triggerSummary(trigger: WorkflowTrigger): string {
   const raw = trigger as WorkflowTrigger & Record<string, unknown>
-  if (trigger.type === 'once') return String(raw.at || '未设置时间')
-  if (trigger.type === 'interval') return `每 ${raw.every_seconds || '—'} 秒`
-  if (trigger.type === 'calendar') return `${raw.frequency === 'monthly' ? '每月' : '每天'} ${raw.time || '—'} ${raw.timezone || ''}`.trim()
-  if (trigger.type === 'event') return String(raw.event_type || '未设置事件')
-  return trigger.enabled ? '手动运行' : '已停用'
+  if (trigger.type === 'once') return String(raw.at || t("未设置时间"))
+  if (trigger.type === 'interval') return t("每 {0} 秒", { 0: raw.every_seconds || '—' })
+  if (trigger.type === 'calendar') return t("{0} {1} {2}", { 0: raw.frequency === 'monthly' ? t("每月") : t("每天"), 1: raw.time || '—', 2: raw.timezone || '' }).trim()
+  if (trigger.type === 'event') return String(raw.event_type || t("未设置事件"))
+  return trigger.enabled ? t("手动运行") : t("已停用")
 }
 
 function selectTrigger(id: string): void {
@@ -321,12 +323,12 @@ function addTrigger(): void {
   let serial = triggers.value.length + 1
   let id = `trigger_${serial}`
   while (existing.has(id)) id = `trigger_${++serial}`
-  const trigger: WorkflowTrigger = { id, type: 'manual', enabled: true, name: `触发器 ${serial}`, inputs: {} }
+  const trigger: WorkflowTrigger = { id, type: 'manual', enabled: true, name: t("触发器 {0}", { 0: serial }), inputs: {} }
   const next = [...triggers.value, trigger]
   props.onUpdateDefinition?.({ ...definition, triggers: next })
   selectedTriggerId.value = id
   syncDraft()
-  message.value = '已新增触发器，请填写配置后保存。'
+  message.value = t("已新增触发器，请填写配置后保存。")
 }
 
 function changeType(value: string): void {
@@ -353,7 +355,7 @@ function parsePositiveNumber(value: unknown, label: string): number | undefined 
   if (value === undefined || value === null || String(value).trim() === '') return undefined
   const parsed = Number(value)
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    error.value = `${label}必须是正数`
+    error.value = t("{0}必须是正数", { 0: label })
     return undefined
   }
   return parsed
@@ -363,9 +365,9 @@ function buildCanonicalDraft(): WorkflowTrigger | null {
   const value = draft.value
   if (!value) return null
   const id = String(value.id || '').trim()
-  if (!id) { error.value = '触发器 ID 不能为空'; return null }
+  if (!id) { error.value = t("触发器 ID 不能为空"); return null }
   if (triggers.value.some((trigger) => trigger.id === id && trigger.id !== selectedTriggerId.value)) {
-    error.value = `触发器 ID 已存在：${id}`
+    error.value = t("触发器 ID 已存在：{0}", { 0: id })
     return null
   }
   let inputs: Record<string, unknown> = {}
@@ -375,7 +377,7 @@ function buildCanonicalDraft(): WorkflowTrigger | null {
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('object')
       inputs = parsed as Record<string, unknown>
     } catch {
-      error.value = '运行输入必须是 JSON 对象'
+      error.value = t("运行输入必须是 JSON 对象")
       return null
     }
   }
@@ -388,33 +390,33 @@ function buildCanonicalDraft(): WorkflowTrigger | null {
   }
   if (value.type === 'once') {
     const at = String(value.at || '').trim()
-    if (!at) { error.value = '一次性触发器需要 at 时间'; return null }
+    if (!at) { error.value = t("一次性触发器需要 at 时间"); return null }
     return { ...base, at, max_runs: 1 }
   }
-  const maxRuns = parsePositiveNumber(value.max_runs, '最大运行次数')
+  const maxRuns = parsePositiveNumber(value.max_runs, t("最大运行次数"))
   if (error.value) return null
   if (maxRuns !== undefined) base.max_runs = Math.floor(maxRuns)
   if (value.type === 'interval') {
-    const everySeconds = parsePositiveNumber(value.every_seconds, '间隔秒数')
-    if (everySeconds === undefined) { if (!error.value) error.value = '间隔触发器需要 every_seconds'; return null }
+    const everySeconds = parsePositiveNumber(value.every_seconds, t("间隔秒数"))
+    if (everySeconds === undefined) { if (!error.value) error.value = t("间隔触发器需要 every_seconds"); return null }
     base.every_seconds = everySeconds
     const startAt = String(value.start_at || '').trim()
     if (startAt) base.start_at = startAt
   } else if (value.type === 'calendar') {
     const frequency = value.frequency === 'monthly' ? 'monthly' : 'daily'
     const time = String(value.time || '').trim()
-    if (!time) { error.value = '日历触发器需要时间'; return null }
+    if (!time) { error.value = t("日历触发器需要时间"); return null }
     base.frequency = frequency
     base.time = time
     base.timezone = String(value.timezone || 'Asia/Shanghai').trim() || 'Asia/Shanghai'
     if (frequency === 'monthly') {
       const day = Number(value.day)
-      if (!Number.isInteger(day) || day < 1 || day > 31) { error.value = '每月日期必须是 1 到 31'; return null }
+      if (!Number.isInteger(day) || day < 1 || day > 31) { error.value = t("每月日期必须是 1 到 31"); return null }
       base.day = day
     }
   } else if (value.type === 'event') {
     const eventType = String(value.event_type || '').trim()
-    if (!eventType) { error.value = '事件触发器需要 event_type'; return null }
+    if (!eventType) { error.value = t("事件触发器需要 event_type"); return null }
     base.event_type = eventType
   }
   return base
@@ -431,7 +433,7 @@ function saveDraft(): void {
   selectedTriggerId.value = canonical.id
   draft.value = clone(canonical) as TriggerDraft
   inputsDraft.value = formatInputs(canonical.inputs)
-  message.value = '触发器已保存。'
+  message.value = t("触发器已保存。")
 }
 
 function deleteTrigger(): void {
@@ -453,7 +455,7 @@ function hasActiveActivation(triggerId: string): boolean {
 }
 
 function activationStatusLabel(status: string): string {
-  return ({ scheduled: '已排程', waiting: '等待中', running: '运行中', paused: '已暂停', completed: '已完成', failed: '失败', cancelled: '已停用' } as Record<string, string>)[status] || status || '未知'
+  return ({ scheduled: '已排程', waiting: '等待中', running: '运行中', paused: '已暂停', completed: '已完成', failed: '失败', cancelled: '已停用' } as Record<string, string>)[status] || status || t("未知")
 }
 
 function formatTimestamp(value: string | null | undefined): string {
@@ -471,7 +473,7 @@ async function activateTrigger(replace: boolean): Promise<void> {
   message.value = ''
   try {
     await props.onActivate?.(trigger.id, replace)
-    message.value = replace ? '已替换并激活。' : '已激活。'
+    message.value = replace ? t("已替换并激活。") : t("已激活。")
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   }
@@ -484,7 +486,7 @@ async function deactivateTrigger(): Promise<void> {
   message.value = ''
   try {
     await props.onDeactivate?.(trigger.id)
-    message.value = '已停用。'
+    message.value = t("已停用。")
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   }

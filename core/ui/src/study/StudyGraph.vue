@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, ref, watch } from 'vue'
 import { VueFlow, Handle, Position, MarkerType, type Node, type ViewportTransform, type VueFlowStore } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
@@ -72,20 +74,20 @@ function courseProgress(item: KnowledgeItem): number {
 }
 
 function courseProgressTitle(item: KnowledgeItem): string {
-  return `${item.name} 学习进度 ${courseProgress(item)}%`
+  return t("{0} 学习进度 {1}%", { 0: item.name, 1: courseProgress(item) })
 }
 
 function statusFor(item: KnowledgeItem): { label: string; icon: 'check' | 'circle' } {
-  if (item.progressRole === 'aggregate' && item.assessment === 'unassessed') return { label: '范围进度，尚未独立评估', icon: 'circle' }
-  if (item.assessment === 'pass') return { label: `已通过，掌握${item.mastery === 'low' ? '低' : item.mastery === 'medium' ? '中' : item.mastery === 'high' ? '高' : '待评定'}`, icon: 'check' }
-  if (item.assessment === 'fail') return { label: '已评估但未通过', icon: 'circle' }
-  return { label: '尚未评估', icon: 'circle' }
+  if (item.progressRole === 'aggregate' && item.assessment === 'unassessed') return { get label() { return t("范围进度，尚未独立评估") }, icon: 'circle' }
+  if (item.assessment === 'pass') return { label: t("已通过，掌握{0}", { 0: item.mastery === 'low' ? t("低") : item.mastery === 'medium' ? t("中") : item.mastery === 'high' ? t("高") : t("待评定") }), icon: 'check' }
+  if (item.assessment === 'fail') return { get label() { return t("已评估但未通过") }, icon: 'circle' }
+  return { get label() { return t("尚未评估") }, icon: 'circle' }
 }
 
 function neighborLabel(id: string): string {
   const relation = props.inspected?.relations.find(candidate => candidate.source === id || candidate.target === id)
-  if (!relation) return '关联'
-  if (relation.type === 'prerequisite' || relation.type === 'advanced' || relation.type === 'advances') return relation.source === id ? '前置' : '进阶'
+  if (!relation) return t("关联")
+  if (relation.type === 'prerequisite' || relation.type === 'advanced' || relation.type === 'advances') return relation.source === id ? t("前置") : t("进阶")
   return relationLabels[relation.type] || relation.type
 }
 
@@ -102,22 +104,22 @@ watch(() => props.viewport, viewport => {
 
 <template>
   <div class="study-graph">
-    <div class="study-graph-meta" aria-live="polite"><span>{{ nodes.length }} 个节点</span><span>{{ edges.length }} 条关系</span><span v-if="layoutNotice" :title="layoutNotice">分层</span></div>
+    <div class="study-graph-meta" aria-live="polite"><span>{{ nodes.length }} {{ t("个节点") }}</span><span>{{ edges.length }} {{ t("条关系") }}</span><span v-if="layoutNotice" :title="layoutNotice">{{ t("分层") }}</span></div>
     <div class="study-graph-controls">
-      <button class="text-btn" title="缩小" aria-label="缩小" @click="setGraphViewport({ ...viewport, zoom: Math.max(.25, viewport.zoom / 1.2) })"><Minus :size="15" /></button>
-      <button class="text-btn" title="放大" aria-label="放大" @click="setGraphViewport({ ...viewport, zoom: Math.min(2, viewport.zoom * 1.2) })"><Plus :size="15" /></button>
-      <button class="text-btn" title="复位" aria-label="复位" @click="setGraphViewport({ x: 24, y: 24, zoom: 1 })"><Maximize2 :size="15" /></button>
+      <button class="text-btn" :title="t('缩小')" :aria-label="t('缩小')" @click="setGraphViewport({ ...viewport, zoom: Math.max(.25, viewport.zoom / 1.2) })"><Minus :size="15" /></button>
+      <button class="text-btn" :title="t('放大')" :aria-label="t('放大')" @click="setGraphViewport({ ...viewport, zoom: Math.min(2, viewport.zoom * 1.2) })"><Plus :size="15" /></button>
+      <button class="text-btn" :title="t('复位')" :aria-label="t('复位')" @click="setGraphViewport({ x: 24, y: 24, zoom: 1 })"><Maximize2 :size="15" /></button>
     </div>
-    <aside v-if="relationLegend.length" class="study-graph-legend" aria-label="关系图例"><strong>关系</strong><span v-for="relation in relationLegend" :key="relation.type" class="study-graph-legend-item"><i :class="['study-edge-swatch', `study-edge-swatch--${relation.type}`]" aria-hidden="true"></i>{{ relation.label }}</span></aside>
-    <p v-if="!nodes.length && !loading" class="study-empty">这里还没有可显示的知识点；先在学习会话中让 AI 建立知识网。</p>
-    <VueFlow v-model:nodes="graphNodes" :edges="edges" data-study-layout="layered" aria-label="知识图谱" :min-zoom=".25" :max-zoom="2" :nodes-connectable="false" @init="bindGraphViewport" @node-click="openGraphNode($event.node.data)" @node-drag-stop="emit('save-layout')" @move-end="syncGraphViewport($event)">
+    <aside v-if="relationLegend.length" class="study-graph-legend" :aria-label="t('关系图例')"><strong>{{ t("关系") }}</strong><span v-for="relation in relationLegend" :key="relation.type" class="study-graph-legend-item"><i :class="['study-edge-swatch', `study-edge-swatch--${relation.type}`]" aria-hidden="true"></i>{{ relation.label }}</span></aside>
+    <p v-if="!nodes.length && !loading" class="study-empty">{{ t("这里还没有可显示的知识点；先在学习会话中让 AI 建立知识网。") }}</p>
+    <VueFlow v-model:nodes="graphNodes" :edges="edges" data-study-layout="layered" :aria-label="t('知识图谱')" :min-zoom=".25" :max-zoom="2" :nodes-connectable="false" @init="bindGraphViewport" @node-click="openGraphNode($event.node.data)" @node-drag-stop="emit('save-layout')" @move-end="syncGraphViewport($event)">
       <template #node-knowledge="{ data, selected: nodeSelected }">
         <Handle type="target" :position="Position.Left" />
         <button
           :class="['study-node', isCourse(data) ? 'study-node--course' : isGroup(data) ? 'study-node--module' : 'study-node--knowledge', !isCourse(data) && data.assessment === 'pass' ? 'study-node--passed' : '', !isCourse(data) && data.assessment !== 'pass' ? 'study-node--incomplete' : '', !isCourse(data) && data.assessment === 'pass' && data.mastery ? `study-node--mastery-${data.mastery}` : '', { 'is-focused': graphFocusId === data.id, 'is-selected': nodeSelected || graphSelectedId === data.id }]"
           :data-study-node="data.id"
           :title="isCourse(data) ? courseProgressTitle(data) : statusFor(data).label"
-          :aria-label="isCourse(data) ? courseProgressTitle(data) : data.name + (isGroup(data) ? ' 分组' : ' ' + statusFor(data).label)"
+          :aria-label="isCourse(data) ? courseProgressTitle(data) : data.name + (isGroup(data) ? t(' 分组') : ' ' + statusFor(data).label)"
           @mouseenter="focusGraphNode(data)" @mouseleave="blurGraphNode(data)" @focus="focusGraphNode(data)" @blur="blurGraphNode(data)" @keydown.enter.stop="emit('open-node', data)"
         >
           <template v-if="isCourse(data)">
@@ -138,6 +140,6 @@ watch(() => props.viewport, viewport => {
         <Handle type="source" :position="Position.Right" />
       </template>
     </VueFlow>
-    <aside v-if="inspected?.relations.length" class="study-related" aria-label="知识关系"><strong>{{ inspected.node.name }}</strong><button v-for="neighbor in inspected.neighbors.filter(n => n.id !== inspected?.node.id)" :key="neighbor.id" class="text-btn" @click="emit('open-node', neighbor)"><span>{{ neighborLabel(neighbor.id) }}</span>{{ neighbor.name }}</button></aside>
+    <aside v-if="inspected?.relations.length" class="study-related" :aria-label="t('知识关系')"><strong>{{ inspected.node.name }}</strong><button v-for="neighbor in inspected.neighbors.filter(n => n.id !== inspected?.node.id)" :key="neighbor.id" class="text-btn" @click="emit('open-node', neighbor)"><span>{{ neighborLabel(neighbor.id) }}</span>{{ neighbor.name }}</button></aside>
   </div>
 </template>

@@ -22,6 +22,9 @@ export interface UseCoreWorkbenchProjectionControllerOptions {
   snapshot: Readonly<Ref<CoreAppSnapshot | null | undefined>>
   activeThreadId: Readonly<Ref<string | null>>
   status: Readonly<Ref<string>>
+  /** 主代理已停、只有成员还在跑（状态 b）：这一态不把最后一条回复标成实时，
+   *  否则界面读起来仍像主代理在流式输出。回合是否结束仍按 status 判定。 */
+  awaitingSubAgents?: Readonly<Ref<boolean>>
   /** 当前活动 turn id。停止后要把这一轮的过程留在展开态，需要它来认出这一轮
    *  的消息（消息 id 里带 turn id）。 */
   activeTurnId?: Readonly<Ref<string>>
@@ -95,13 +98,16 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
       const change = { threadId: threadId || '', status, rawStatus, previousStatus }
       if (threadId && status !== previousStatus) options.onStatusChange?.(change)
 
-      const active = isCoreActiveTurnStatus(rawStatus)
+      const active = isCoreActiveTurnStatus(rawStatus) && options.awaitingSubAgents?.value !== true
+      const rawActive = isCoreActiveTurnStatus(rawStatus)
       const finished = Boolean(snapshotMatchesActiveThread && previousTurnWasActive && isTerminalStatus(rawStatus))
       if (finished) {
         options.onTurnFinished?.(change)
       }
       previousStatus = status
-      if (snapshotMatchesActiveThread) previousTurnWasActive = active
+      // The turn-end detection tracks the raw status: a member wait suppresses
+      // live marking without ever counting as "the turn finished".
+      if (snapshotMatchesActiveThread) previousTurnWasActive = rawActive
 
       if (!snapshotMatchesActiveThread || !snapshot) {
         messages.value = systemMessages
@@ -111,7 +117,9 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
 
       const projected = selectCoreWorkbenchMessagesWindow(snapshot, {
         source: options.source,
-        active: isCoreGuidableTurnStatus(rawStatus),
+        // Same suppression as `active`: the projection must not mark the last
+        // reply live while only members are running.
+        active: isCoreGuidableTurnStatus(rawStatus) && options.awaitingSubAgents?.value !== true,
         shallowThinkingPending: options.shallowThinkingPending.value,
         submittingApprovalRequestIds: options.submittingApprovalRequestIds.value,
         pendingGuidance: options.pendingGuidance?.value,
@@ -171,6 +179,7 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
       options.submittingApprovalRequestIds,
       options.shallowThinkingPending,
       historyTurnTail,
+      ...(options.awaitingSubAgents ? [options.awaitingSubAgents] : []),
     ],
     syncProjection,
     { immediate: true },

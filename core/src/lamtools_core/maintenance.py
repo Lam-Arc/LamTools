@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -117,11 +118,14 @@ class BackupRecord:
         }
 
 
-# SQLite keeps a database in several sibling files; copying them together is
-# the file-level backup a restore actually needs. Other entries in the data
-# directory (checkpoints/, multi-GB residue from past manual fixes) are not
-# touched by the strip, so they are not copied.
-_SQLITE_FILE_SUFFIXES = ("", "-wal", "-shm", "-journal")
+# The backup is an engine-level snapshot, not a filesystem copy. SQLite keeps a
+# live database in several sibling files (``-wal``/``-shm``) locked by whoever
+# has it open, so a plain file copy of a running database is both impossible
+# (the ``-shm`` mapping cannot be read from another process on Windows) and,
+# when it "succeeds", a torn snapshot of a database whose sidecar was captured
+# at a different instant. ``VACUUM INTO`` reads through the engine and writes a
+# fresh, self-contained database file instead — complete, restorable, consistent,
+# and requiring no exclusive access.
 
 
 def _sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
@@ -135,6 +139,24 @@ def _sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
     return digest.hexdigest()
 
 
+def _snapshot_database(db_path: Path, snapshot: Path) -> None:
+    """Write a complete, consistent snapshot of ``db_path`` to ``snapshot``.
+
+    ``VACUUM INTO`` takes an ordinary read snapshot of the source and writes a
+    fresh database file; it never reads or writes the source's ``-wal``/``-shm``
+    sidecars directly and never takes the source's write lock, so the source may
+    be open for writing by another process (the running app) at the same time.
+    The source itself is never modified.
+    """
+    if snapshot.exists():
+        snapshot.unlink()
+    connection = sqlite3.connect(str(db_path), timeout=30.0)
+    try:
+        connection.execute("VACUUM INTO ?", (str(snapshot),))
+    finally:
+        connection.close()
+
+
 def backup_database_files(
     db_path: Path | str,
     *,
@@ -143,14 +165,21 @@ def backup_database_files(
     label: str = "strip-snapshot-images",
     purpose: str = "file-level backup taken before the migration",
 ) -> BackupRecord:
-    """Copy a SQLite database and its journal siblings into a new backup dir.
+    """Take a complete, restorable snapshot of the database into a new dir.
 
-    The backup is written before any row is modified, so a failed or refused
-    migration always leaves a restorable copy next to the data. Each run gets
-    its own timestamped directory, so repeated runs never overwrite an earlier
-    backup. ``label`` names the run (its own subdirectory) and ``purpose`` is
-    recorded in the manifest, so several maintenance passes share this helper
-    without sharing a directory.
+    The snapshot is written before any row is modified, so a failed or refused
+    migration always leaves a restorable copy next to the data. It is produced
+    by the database engine (``VACUUM INTO``), not by copying files, so it needs
+    no exclusive access and can be taken while the running app holds the database
+    open for writing — the normal case, which the previous file-copy approach
+    could not handle and which produced a torn copy on a live database.
+
+    Each run gets its own timestamped directory, so repeated runs never overwrite
+    an earlier backup. If the snapshot cannot be taken the run aborts and the
+    partially written directory is removed, so a refused backup never leaves an
+    unrestorable artifact behind. ``label`` names the run (its own subdirectory)
+    and ``purpose`` is recorded in the manifest, so several maintenance passes
+    share this helper without sharing a directory.
     """
     db_path = Path(db_path)
     root = Path(backup_root) if backup_root is not None else db_path.parent / "backups"
@@ -162,31 +191,33 @@ def backup_database_files(
         target = root / f"{label}-{stamp}-{suffix}"
     target.mkdir(parents=True)
 
-    files: list[BackupFile] = []
-    for extra in _SQLITE_FILE_SUFFIXES:
-        source = db_path.with_name(db_path.name + extra)
-        if not source.is_file():
-            continue
-        destination = target / source.name
-        shutil.copy2(source, destination)
-        files.append(
+    try:
+        snapshot = target / db_path.name
+        _snapshot_database(db_path, snapshot)
+        files = (
             BackupFile(
-                name=source.name,
-                bytes=destination.stat().st_size,
-                sha256=_sha256_file(destination),
-            )
+                name=db_path.name,
+                bytes=snapshot.stat().st_size,
+                sha256=_sha256_file(snapshot),
+            ),
         )
-    manifest = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "source_db": str(db_path),
-        "purpose": purpose,
-        "files": [item.to_dict() for item in files],
-    }
-    (target / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return BackupRecord(directory=str(target), files=tuple(files))
+        manifest = {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "source_db": str(db_path),
+            "purpose": purpose,
+            "method": "vacuum-into",
+            "files": [item.to_dict() for item in files],
+        }
+        (target / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return BackupRecord(directory=str(target), files=files)
+    except BaseException:
+        # Never leave a partial, unrestorable directory behind: a refused backup
+        # must consume no space and must not confuse a later restore.
+        shutil.rmtree(target, ignore_errors=True)
+        raise
 
 
 # --------------------------------------------------------------------------- #

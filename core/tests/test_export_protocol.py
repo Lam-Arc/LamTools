@@ -6,9 +6,10 @@ from io import BytesIO
 import json
 from zipfile import ZipFile
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from lamtools_core.app.core_db import (
     CoreCheckpoint,
@@ -29,6 +30,7 @@ from lamtools_core.app.core_db import (
 )
 from lamtools_core.app.core_session_store import delete_session_records
 from lamtools_core.export import ConversationExportService, build_handoff_context
+from lamtools_core.export.service import _session_family_ids
 from lamtools_core.export.serializers import full_to_zip, transcript_to_jsonl, transcript_to_markdown, transcript_to_text
 from lamtools_core.http import create_core_router
 from lamtools_core.llm import ChatMessage, LLMRequest, LLMToolCall
@@ -44,6 +46,44 @@ def _factory(tmp_path):
 
     asyncio.run(setup())
     return engine, factory
+
+
+def test_session_family_lookup_filters_and_escapes_literal_glob_characters(tmp_path):
+    engine, factory = _factory(tmp_path)
+    root = "root*?[]"
+    target = f"{root}:sub:target"
+    sibling = f"{root}:sub:sibling"
+    statements = []
+
+    async def seed():
+        async with factory() as db:
+            db.add_all([
+                CoreRuntimeSession(thread_id=root),
+                CoreRuntimeSession(thread_id=target),
+                CoreRuntimeSession(thread_id=sibling),
+                CoreRuntimeSession(thread_id=f"{root}extra:sub:outside"),
+                CoreRuntimeSession(thread_id=f"{root}:submarine:outside"),
+            ])
+            await db.commit()
+
+    asyncio.run(seed())
+
+    def record_query(_connection, _cursor, statement, parameters, _context, _executemany):
+        statements.append((statement, parameters))
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record_query)
+
+    async def read_family():
+        async with factory() as db:
+            return await _session_family_ids(db, target)
+
+    owned = asyncio.run(read_family())
+
+    assert owned == {root, target, sibling}
+    assert len(statements) == 14
+    assert all("where " in statement.lower() and " glob " in statement.lower() for statement, _ in statements)
+    assert any("root[*][?][[]]:sub:*" in parameters for _, parameters in statements)
+    asyncio.run(engine.dispose())
 
 
 def test_transcript_uses_history_facts_and_excludes_internal_messages(tmp_path):

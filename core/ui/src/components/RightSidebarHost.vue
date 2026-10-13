@@ -1,7 +1,7 @@
 <template>
   <section
     class="right-sidebar-host"
-    aria-label="右侧工具栏"
+    :aria-label="t('右侧工具栏')"
     data-right-sidebar-host
   >
     <!-- 卡片挂在页面最外层：嵌在同样带玻璃的抽屉里时，内层的模糊采样不到
@@ -11,28 +11,11 @@
         v-if="activeModule"
         :key="activeModule.id"
         class="right-sidebar-card optical-glass optical-glass--low-trans"
-        :class="{ 'right-sidebar-card--resizing': cardResizing }"
         data-right-sidebar-card
-        :style="[railSpanStyle, cardWidthStyle]"
+        :style="railSpanStyle"
         @mouseenter="onCardEnter"
         @mouseleave="onCardLeave"
       >
-        <div
-          class="right-sidebar-card-resize"
-          role="separator"
-          tabindex="0"
-          aria-orientation="vertical"
-          aria-label="调整右侧栏宽度"
-          :aria-valuenow="cardWidth"
-          :aria-valuemin="CARD_WIDTH_MIN"
-          :aria-valuemax="cardMaxWidth()"
-          data-right-sidebar-resize
-          @pointerdown="onCardResizePointerdown"
-          @pointermove="onCardResizePointermove"
-          @pointerup="onCardResizePointerup"
-          @pointercancel="onCardResizePointerup"
-          @keydown="onCardResizeKeydown"
-        ></div>
         <div class="right-sidebar-card-body">
           <component
             :is="activeModule.component"
@@ -55,7 +38,7 @@
     <nav
       ref="railRef"
       class="right-sidebar-rail"
-      aria-label="右侧工具"
+      :aria-label="t('右侧工具')"
       @mouseenter="onRailEnter"
       @mouseleave="onRailLeave"
     >
@@ -79,6 +62,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { Bot, BookOpen, Gauge, Globe, ListChecks, ListTodo } from 'lucide-vue-next'
 import RightSidebarChecklist from './RightSidebarChecklist.vue'
@@ -88,6 +73,7 @@ import RightSidebarProcesses from './RightSidebarProcesses.vue'
 import CoreResourceStats from './CoreResourceStats.vue'
 import CoreSubAgentPanel from './CoreSubAgentPanel.vue'
 import { selectCoreSubAgentRuns } from '../agents/subAgentProjection'
+import { subAgentRunIdentity } from '../agents/subAgentDisplay'
 import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
 import type {
   RightSidebarPluginContribution,
@@ -111,6 +97,8 @@ const props = defineProps<{
   activePluginId?: string | null
   activeModeId?: string | null
   pluginContributions?: RightSidebarPluginContribution[]
+  /** 已删除（后端删掉监督者记录）的子代理身份：列表不再为它们占位。 */
+  hiddenSubAgentIdentities?: readonly string[]
 }>()
 
 const emit = defineEmits<{
@@ -118,6 +106,8 @@ const emit = defineEmits<{
   'hover-change': [occupied: boolean]
   /** 面板里点了某个子代理：交给壳层打开右侧子代理分屏。 */
   'open-sub-agent': [run: CoreSubAgentRun]
+  /** 面板里删除了某个已结束的子代理：那一次调用由壳层发，列表不直接发 RPC。 */
+  'delete-sub-agent': [run: CoreSubAgentRun]
 }>()
 
 interface RailModule {
@@ -148,8 +138,6 @@ function cancelHide(): void {
 }
 
 function scheduleHide(): void {
-  // 拖宽卡片期间指针可能滑出卡片与竖栏，收起计时一律不发。
-  if (cardResizing.value) return
   cancelHide()
   hideTimer = setTimeout(() => {
     hideTimer = null
@@ -162,66 +150,6 @@ function revealModule(id: string): void {
   cancelHide()
   hoverModuleId.value = id
   cardVisible.value = true
-}
-
-// ── 卡宽拖拽：卡片左缘就是主界面与右栏之间的分界线，横向拖动即调卡宽。──
-// 下限保住卡内内容可读（统计网格与子代理行在更窄处换行破碎），上限防止
-// 一张卡盖满主界面；宽度只在本组件存活期内有效，是否记住上次宽度另行决策。
-const CARD_WIDTH_DEFAULT = 285
-const CARD_WIDTH_MIN = 240
-const CARD_WIDTH_MAX = 480
-const cardWidth = ref(CARD_WIDTH_DEFAULT)
-const cardResizing = ref(false)
-let cardResizeState: { pointerId: number; startX: number; startWidth: number } | null = null
-
-const cardWidthStyle = computed(() => ({ width: `${cardWidth.value}px` }))
-
-function cardMaxWidth(): number {
-  const viewport = typeof window === 'undefined' ? 1024 : window.innerWidth
-  return Math.min(CARD_WIDTH_MAX, Math.max(CARD_WIDTH_MIN, Math.round(viewport * 0.6)))
-}
-
-function onCardResizePointerdown(event: PointerEvent): void {
-  if (!event.isPrimary) return
-  // 合成/测试事件可能不带 button；真实 pointerdown 主键恒为 0。
-  if (event.button !== undefined && event.button !== 0) return
-  cardResizeState = { pointerId: event.pointerId, startX: event.clientX, startWidth: cardWidth.value }
-  cardResizing.value = true
-  cancelHide()
-  // 捕获到拖拽柄上：指针滑出卡片拖动仍连续，松手前的收起判定也全部失效。
-  const handle = event.currentTarget
-  if (handle instanceof HTMLElement && handle.setPointerCapture) {
-    try { handle.setPointerCapture(event.pointerId) } catch { /* 合成指针可能不支持捕获 */ }
-  }
-}
-
-function onCardResizePointermove(event: PointerEvent): void {
-  const state = cardResizeState
-  if (!state || state.pointerId !== event.pointerId) return
-  // 卡片贴右缘：向左拖 = 加宽。
-  const next = state.startWidth + (state.startX - event.clientX)
-  cardWidth.value = Math.round(Math.min(cardMaxWidth(), Math.max(CARD_WIDTH_MIN, next)))
-}
-
-function onCardResizePointerup(event: PointerEvent): void {
-  if (!cardResizeState || cardResizeState.pointerId !== event.pointerId) return
-  const handle = event.currentTarget
-  if (handle instanceof HTMLElement && handle.hasPointerCapture?.(event.pointerId)) {
-    handle.releasePointerCapture(event.pointerId)
-  }
-  cardResizeState = null
-  cardResizing.value = false
-}
-
-function onCardResizeKeydown(event: KeyboardEvent): void {
-  // 与鼠标方向一致：向左（箭头左）= 加宽；Shift 步进更大。
-  const step = event.shiftKey ? 32 : 12
-  let next: number | null = null
-  if (event.key === 'ArrowLeft') next = cardWidth.value + step
-  else if (event.key === 'ArrowRight') next = cardWidth.value - step
-  if (next === null) return
-  event.preventDefault()
-  cardWidth.value = Math.round(Math.min(cardMaxWidth(), Math.max(CARD_WIDTH_MIN, next)))
 }
 
 function onRailEnter(): void {
@@ -273,7 +201,13 @@ onBeforeUnmount(() => {
 
 watch(cardVisible, (visible) => emit('hover-change', visible))
 
-const subAgentRuns = computed(() => selectCoreSubAgentRuns(props.messages ?? []))
+const subAgentRuns = computed(() => {
+  const hidden = props.hiddenSubAgentIdentities ?? []
+  const runs = selectCoreSubAgentRuns(props.messages ?? [])
+  if (hidden.length === 0) return runs
+  const dismissed = new Set(hidden)
+  return runs.filter(run => !dismissed.has(subAgentRunIdentity(run)))
+})
 const checklistGroups = computed(() => buildCurrentTurnChecklistGroups(props.messages ?? []))
 
 function openSubAgent(subSessionId: string): void {
@@ -283,14 +217,20 @@ function openSubAgent(subSessionId: string): void {
   emit('open-sub-agent', run)
 }
 
+function deleteSubAgent(run: CoreSubAgentRun): void {
+  emit('delete-sub-agent', run)
+}
+
 const railModules = computed<RailModule[]>(() => [
   {
     id: 'checklist',
     title: 'Checklist',
     icon: ListChecks,
     component: RightSidebarChecklist,
-    componentProps: {
-      stepGroups: checklistGroups.value,
+    // 步骤组与运行组合同样按消息全量扫描；用 getter 让它们在卡真正挂载时才求值，
+    // 竖栏图标列表每帧读 railModules 不会再带着这些扫描一起跑。
+    get componentProps() {
+      return { stepGroups: checklistGroups.value }
     },
   },
   {
@@ -308,12 +248,17 @@ const railModules = computed<RailModule[]>(() => [
     title: 'Sub Agents',
     icon: Bot,
     component: CoreSubAgentPanel,
-    componentProps: {
-      runs: subAgentRuns.value,
-      activeSubAgentId: '',
-      loading: false,
-      errorText: '',
-      onOpen: openSubAgent,
+    // 隐藏时不应重跑子代理投影：getter 只在卡片可见（v-bind 展开时）求值，
+    // 关闭状态下的每帧全量 selectCoreSubAgentRuns 因此消失。
+    get componentProps() {
+      return {
+        runs: subAgentRuns.value,
+        activeSubAgentId: '',
+        loading: false,
+        errorText: '',
+        onOpen: openSubAgent,
+        onDelete: deleteSubAgent,
+      }
     },
   },
   {
@@ -395,13 +340,16 @@ const activeModule = computed<RailModule | null>(() => (
    不上 transform（transform 会另开 backdrop root，模糊同样会失效）。 */
 .right-sidebar-card {
   position: fixed;
-  top: 0;
-  bottom: 0;
+  /* 竖直居中收在窗口标题栏与底部内缩之间：无论窗口多矮、内容多长，卡片都不
+     越过顶部标题区（原先 top: 0 居中时，矮窗口会把卡片顶进标题区）。 */
+  top: var(--titlebar-offset, 0px);
+  bottom: var(--shell-bottom-inset, 6px);
   right: calc(var(--right-rail-width, 46px) + var(--space-2));
   margin-block: auto;
   height: fit-content;
-  width: 285px;
-  max-height: 505px;
+  /* 宽度上限给主区（含它的标题带）留出最小可读宽度：窗口再窄也不会横跨过去。 */
+  width: min(285px, calc(100vw - var(--right-rail-width, 46px) - var(--space-2) - var(--right-card-main-min, 240px)));
+  max-height: min(505px, calc(100dvh - var(--titlebar-offset, 0px) - var(--shell-bottom-inset, 6px) - var(--right-card-vertical-gap, 24px)));
   z-index: var(--z-popover);
   display: flex;
   flex-direction: column;
@@ -419,26 +367,6 @@ const activeModule = computed<RailModule | null>(() => (
    在缝隙上铺一层不可见的搭桥层（右端压住卡片边缘、左端压进竖栏内缘，不覆盖任何
    图标按钮），指针横穿或停在缝里都仍算悬停在卡片区，卡片不会中途消失。
    它是与卡片同级的一层：玻璃面 overflow: hidden，挂在卡片内部会被裁掉。 */
-/* 卡片左缘拖拽柄：主界面与右栏的分界。透明命中条贴玻璃内缘，悬停轻微增亮
-   提示可拖；不引入描线（玻璃禁令）。拖动中整个卡片锁光标并禁选中。 */
-.right-sidebar-card-resize {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 7px;
-  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
-  cursor: col-resize;
-  touch-action: none;
-}
-.right-sidebar-card-resize:hover,
-.right-sidebar-card-resize:focus-visible {
-  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
-}
-.right-sidebar-card--resizing {
-  cursor: col-resize;
-  user-select: none;
-}
 .right-sidebar-card-bridge {
   position: fixed;
   top: 0;

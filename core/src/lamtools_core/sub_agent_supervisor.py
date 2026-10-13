@@ -14,7 +14,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal
 
 from lamtools_core.config.model_store import ModelStore
 from lamtools_core.llm import REASONING_LEVELS
@@ -59,7 +59,7 @@ class SubAgentOperationResult:
     """Transient lifecycle semantics paired with a durable sub-agent record."""
 
     record: SubAgentRecord
-    lifecycle_action: Literal["created", "enabled", "closed"]
+    lifecycle_action: Literal["created", "enabled", "closed", "deleted"]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -90,20 +90,94 @@ def validate_reasoning(value: object) -> str:
     return candidate
 
 
+def _display_keys(model: Any) -> set[str]:
+    """Case-folded human-facing labels a model may be referred to by.
+
+    The label the running agent actually sees is the ``<provider>/<display_name>``
+    form rendered by the desktop model-display resolver, so the bare display
+    name, the provider-prefixed label and the provider_id-prefixed label are all
+    accepted as display references.  Labels are compared case-insensitively
+    because models commonly echo them lower-cased; uniqueness still decides
+    between a single hit and an ambiguous rejection.
+    """
+    display = (model.display_name or "").strip()
+    if not display:
+        return set()
+    keys = {display}
+    provider = (model.provider or "").strip()
+    if provider:
+        keys.add(f"{provider}/{display}")
+    provider_id = (model.provider_id or "").strip()
+    if provider_id:
+        keys.add(f"{provider_id}/{display}")
+    return {key.casefold() for key in keys}
+
+
+def _model_option_label(model: Any) -> str:
+    """Render one selectable model as ``"<real model_id>" (<display label>)``.
+
+    The real model id leads because that is the value the caller should use;
+    the display label is kept only as a human-readable note.
+    """
+    real_id = model.model_id or model.id
+    display = (model.display_name or "").strip()
+    provider = (model.provider or model.provider_id or "").strip()
+    label = f"{provider}/{display}" if provider and display else display
+    if label and label != real_id:
+        return f'"{real_id}" ({label})'
+    return f'"{real_id}"'
+
+
+def _available_models_hint(models: list[Any], *, limit: int = 50) -> str:
+    """Comma-separated selectable model ids (display labels in parentheses)."""
+    options = [_model_option_label(model) for model in models[:limit]]
+    text = ", ".join(options)
+    if len(models) > limit:
+        text += f", …(+{len(models) - limit} more)"
+    return text
+
+
 def resolve_model_id(value: object, *, work_root: str | Path | None = None) -> str:
-    ref = str(value or "")
+    """Resolve a model reference to the canonical real ``model_id``.
+
+    Order: an exact real model id (upstream ``model_id`` or record id) wins; a
+    human-readable display label matches only when it identifies exactly one
+    model.  An ambiguous label or an unknown reference fails with a message
+    that lists the real model ids, so the caller can correct itself in one step
+    instead of guessing again.
+    """
+    ref = str(value or "").strip()
     if not ref:
         raise ValueError("model is required")
     models = ModelStore().list_sync(work_root=str(work_root) if work_root else None)
-    exact = [model for model in models if model.model_id == ref]
-    if exact:
+    if not models:
+        raise ValueError("model is required: no models are configured")
+    # 1) Exact real model id (upstream model_id or the record id) — highest priority.
+    exact = [model for model in models if ref == model.model_id or ref == model.id]
+    if len(exact) == 1:
         return exact[0].model_id
-    display = [model for model in models if model.display_name == ref]
+    if len(exact) > 1:
+        raise ValueError(
+            f"model reference is ambiguous: {ref!r} matches "
+            f"{len(exact)} models ({_available_models_hint(exact)}); "
+            "use a unique model_id"
+        )
+    # 2) A display label may match (case-insensitively), but only when it is
+    #    unambiguous; 3) a duplicated label is rejected with every colliding
+    #    candidate listed.
+    display = [model for model in models if ref.casefold() in _display_keys(model)]
     if len(display) == 1:
         return display[0].model_id
     if len(display) > 1:
-        raise ValueError(f"model display_name is ambiguous: {ref}")
-    raise ValueError(f"unknown model: {ref}")
+        raise ValueError(
+            f"model display label is ambiguous: {ref!r} matches "
+            f"{len(display)} models ({_available_models_hint(display)}); "
+            "use an exact model_id"
+        )
+    # 4) Nothing matched — hand back the selectable real model ids.
+    raise ValueError(
+        f"unknown model: {ref}. Available model IDs: {_available_models_hint(models)}"
+    )
 
 
 def _result_status(result: Any) -> str:
@@ -140,6 +214,11 @@ class SubAgentSupervisor:
         # Session-scoped activity signal: set on every member state change that a
         # parent run may be waiting for (completion, failure, close, orphan).
         self._activity = asyncio.Event()
+        # The turn whose "members still running" fact is currently published
+        # (recorded by the kernel loop when it publishes it at a turn terminal),
+        # so the fact can be retracted for that same turn once the last member
+        # it named finishes. Empty when no such fact is outstanding.
+        self._member_wait_turn_id = ""
         self._init_db()
 
     def update_runner(self, runner: Any) -> None:
@@ -238,7 +317,7 @@ class SubAgentSupervisor:
                         interrupted.append(SubAgentRecord(**payload))
         # 事件写入放在连接释放之后：独立连接不会与外层写事务互相锁住。
         for record in interrupted:
-            self._write_member_event(record, "member_interrupted", detail="进程重启时该成员仍在运行")
+            await self._record_member_event(record, "member_interrupted", detail="进程重启时该成员仍在运行")
 
     async def create(self, *, type: object, name: object, model: object,
                      reasoning_level: object, source_ids: dict[str, str] | None = None) -> SubAgentRecord:
@@ -393,10 +472,97 @@ class SubAgentSupervisor:
             task = self._tasks.pop(child_name, None)
             if task and not task.done():
                 task.cancel()
-            self._write_member_event(record, "member_closed")
+            await self._record_member_event(record, "member_closed")
         if task:
             await asyncio.gather(task, return_exceptions=True)
         return SubAgentOperationResult(record, "closed")
+
+    async def delete(self, *, name: object) -> dict[str, Any]:
+        return await self.delete_operation(name=name)
+
+    async def delete_operation(self, *, name: object) -> dict[str, Any]:
+        """Remove one sub-agent and everything that belongs to it alone.
+
+        Scope is explicit. Removed: the member's own record, its lifecycle
+        events and its mailbox in the sub-agent database, and its own session
+        family in the application database — its runtime state, its full
+        internal transcript, and any attachment it uploaded that no live library
+        entry references. Protected (never candidates): the session's own
+        conversation and summary, the parent session's checkpoints, the library,
+        and every other member. The session's conversation and checkpoints live
+        under the parent thread id, not the member's sub-session id, so they are
+        outside the purge by construction.
+
+        A running member is refused rather than cancelled: it may be producing
+        the user's results, and ``close`` already exists as the explicit stop.
+        Deleting rows out from under a live task is exactly the half-deleted
+        state to avoid, so the caller stops the member first and then deletes.
+        """
+        child_name = validate_name(name)
+        async with self._lock:
+            record = self._load(child_name)
+            if record is None:
+                raise ValueError(f"sub-agent not found: {child_name}")
+            task = self._tasks.get(child_name)
+            if (
+                record.status == "running"
+                or (task is not None and not task.done())
+                or child_name in self._pending_prompts
+            ):
+                raise ValueError(
+                    f"sub-agent '{child_name}' is running; stop it first with "
+                    "sub_agent close, then delete"
+                )
+            # Purge the member's own session family before the durable record is
+            # removed: a failure here leaves the record in place for a retry
+            # instead of orphaning rows nothing can find again.
+            freed = await self._purge_sub_session(record)
+            with self._connection() as db:
+                db.execute(
+                    "DELETE FROM sub_agents WHERE parent_thread_id=? AND name=?",
+                    (self.parent_thread_id, child_name),
+                )
+                db.execute(
+                    "DELETE FROM sub_agent_events WHERE parent_thread_id=? AND name=?",
+                    (self.parent_thread_id, child_name),
+                )
+                db.execute(
+                    "DELETE FROM sub_agent_mailbox WHERE parent_thread_id=? AND name=?",
+                    (self.parent_thread_id, child_name),
+                )
+            self._pending_prompts.pop(child_name, None)
+            self._tasks.pop(child_name, None)
+            self._guidance.pop(child_name, None)
+            return {
+                **record.to_dict(),
+                "lifecycle_action": "deleted",
+                "freed_sub_session": freed,
+            }
+
+    async def _purge_sub_session(self, record: SubAgentRecord) -> bool:
+        """Delete the member's own session family from the application database.
+
+        Reuses the project's session-deletion cascade, which owns the library
+        protection: an attachment referenced by a live library entry survives
+        even though it belongs to the member's session. The parent thread's rows
+        carry a different session id and are never in scope.
+        """
+        session_id = str(record.sub_session_id or "")
+        if not session_id:
+            return False
+        store = getattr(self.runner, "state_store", None)
+        coordinator = getattr(store, "write_coordinator", None)
+        if coordinator is None:
+            # No application database reachable through this runner (an
+            # in-memory/legacy store), so there are no such rows to remove.
+            return False
+        from .app.core_session_store import delete_session_records
+
+        async def purge(db: Any) -> None:
+            await delete_session_records(db, [session_id])
+
+        await coordinator.run(purge)
+        return True
 
     async def message(self, *, type: object, name: object, prompt: object,
                       source_ids: dict[str, str] | None = None) -> dict[str, Any]:
@@ -427,6 +593,7 @@ class SubAgentSupervisor:
             task = self._tasks.get(child_name)
             if task is not None and not task.done():
                 self._guidance.setdefault(child_name, []).append(body)
+                publish_running = False
             else:
                 record.status = "running"
                 record.started_at = time.time()
@@ -437,6 +604,11 @@ class SubAgentSupervisor:
                 self._tasks[child_name] = asyncio.create_task(
                     self._drive(child_name), name=f"sub-agent:{self.parent_thread_id}:{child_name}"
                 )
+                publish_running = True
+        if publish_running:
+            # The member's own "running" transition, published while the parent
+            # turn is still open (one event per transition).
+            await self._publish_member_status(record, event="member_running")
         return {
             "accepted": True,
             "deduplicated": False,
@@ -450,20 +622,26 @@ class SubAgentSupervisor:
             while True:
                 async with self._lock:
                     prompt = self._pending_prompts.pop(name, "")
-                    if not prompt:
+                    if prompt:
+                        record = self._required(name)
+                        if record.status == "closed":
+                            stop_driving = True
+                        else:
+                            stop_driving = False
+                            record.status = "running"
+                            record.started_at = record.started_at or time.time()
+                            record.completed_at = None
+                            record.elapsed_ms = None
+                            self._save(record)
+                    else:
                         record = self._required(name)
                         if record.status == "running":
                             record.status = "idle"
                             self._save(record)
-                        return
-                    record = self._required(name)
-                    if record.status == "closed":
-                        return
-                    record.status = "running"
-                    record.started_at = record.started_at or time.time()
-                    record.completed_at = None
-                    record.elapsed_ms = None
-                    self._save(record)
+                        stop_driving = True
+                if stop_driving:
+                    await self._maybe_report_members_drained(exclude=name)
+                    return
                 run_runner = self._owned_runner
                 if run_runner is None:
                     factory = getattr(self.runner, "create_supervisor_runner", None)
@@ -508,12 +686,14 @@ class SubAgentSupervisor:
                     leftover = self.consume_guidance(name)
                     if leftover and current.status not in {"paused", "failed", "closed"}:
                         self._pending_prompts[name] = "\n\n".join(leftover)
-                    self._write_member_event(
+                    await self._record_member_event(
                         current,
                         "member_finished" if current.status == "idle" else f"member_{current.status}",
                     )
-                    if current.status in {"paused", "failed", "closed"}:
-                        return
+                    terminal_member = current.status in {"paused", "failed", "closed"}
+                if terminal_member:
+                    await self._maybe_report_members_drained(exclude=name)
+                    return
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
@@ -524,7 +704,8 @@ class SubAgentSupervisor:
                     record.summary = str(exc)[:1000]
                     record.completed_at = time.time()
                     self._save(record)
-                    self._write_member_event(record, "member_failed", detail=str(exc))
+                    await self._record_member_event(record, "member_failed", detail=str(exc))
+            await self._maybe_report_members_drained(exclude=name)
 
     @staticmethod
     def _late_context(record: SubAgentRecord) -> str:
@@ -664,7 +845,8 @@ class SubAgentSupervisor:
                 "name": record.name,
                 "type": record.type,
                 "status": record.status,
-                "summary": (record.summary or detail or "")[:500],
+                "summary": (record.summary or "")[:500],
+                "detail": str(detail or "")[:500],
                 "elapsed_ms": record.elapsed_ms,
                 "occurred_at": record.completed_at or time.time(),
             },
@@ -681,6 +863,45 @@ class SubAgentSupervisor:
             # A failed event write must never break the member's lifecycle.
             pass
         self._notify_activity()
+        _notify_member_event()
+
+    async def _record_member_event(self, record: SubAgentRecord, event: str, *, detail: str = "") -> None:
+        """Persist a member state change and publish it to the open session.
+
+        The durable row is written by ``_write_member_event``; the publish pushes
+        the member's own status onto the parent's live stream so the interface
+        can show it while the turn is still open. Bounded by construction: one
+        event per lifecycle transition, never per streamed child event.
+        """
+        self._write_member_event(record, event, detail=detail)
+        await self._publish_member_status(record, event=event)
+
+    async def _publish_member_status(self, record: SubAgentRecord, *, event: str) -> None:
+        """Publish one member's durable status onto the parent's live stream.
+
+        Driven by the member's own lifecycle (started / finished / failed /
+        paused / closed / interrupted), not by the parent's tool-call row, so a
+        member that finishes mid-turn reads as finished immediately instead of
+        staying "running" until the turn ends or the periodic record poll runs.
+        Best-effort: an absent or failing sink never affects the member.
+        """
+        sink = getattr(self.runner, "parent_event_sink", None)
+        if sink is None:
+            return
+        from lamtools_core.event import CoreEvent
+
+        try:
+            await sink.emit(CoreEvent(
+                name="runtime.sub_agent_status",
+                category="message",
+                payload={"event": event, "sub_agent": record.to_dict()},
+                session_id=self.parent_thread_id,
+                run_id=str(record.source_run_id or ""),
+                turn_id=str(record.source_turn_id or ""),
+                tags=["sub_agent", "status"],
+            ))
+        except BaseException:
+            return
 
     async def drain_member_events(self) -> list[dict[str, Any]]:
         """Deliver (once) every pending member state-change event."""
@@ -712,16 +933,87 @@ class SubAgentSupervisor:
                 return True
             return any(not task.done() for task in self._tasks.values())
 
+    def note_member_wait_turn(self, turn_id: object) -> None:
+        """Record the turn whose members-running fact is currently published.
+
+        Called by the kernel loop when it publishes the fact at a turn terminal,
+        so the supervisor can retract it for that same turn once the last member
+        it named finishes.
+        """
+        self._member_wait_turn_id = str(turn_id or "")
+
+    def _no_members_remain(self, *, exclude: str = "") -> bool:
+        """True when nothing is queued and no member other than ``exclude`` runs.
+
+        ``exclude`` is the member whose own drive loop is finishing: its task is
+        still alive while it emits this check, so it must not count itself.
+        """
+        if self._pending_prompts:
+            return False
+        return all(task.done() for name, task in self._tasks.items() if name != exclude)
+
+    async def report_members_drained(self) -> bool:
+        """Retract the members-running fact once nothing is left to run.
+
+        Publishes ``runtime.sub_agent_report`` (``waiting_on_members`` false) to
+        the parent thread for the turn recorded by ``note_member_wait_turn``, so
+        an ended turn stops advertising members that have since finished. The
+        recorded turn is consumed, so one drain publishes one retraction.
+        """
+        turn_id = self._member_wait_turn_id
+        if not turn_id:
+            return False
+        sink = getattr(self.runner, "parent_event_sink", None)
+        if sink is None:
+            return False
+        from lamtools_core.event import CoreEvent
+
+        try:
+            await sink.emit(CoreEvent(
+                name="runtime.sub_agent_report",
+                category="message",
+                payload={"waiting_on_members": False, "members": []},
+                session_id=self.parent_thread_id,
+                turn_id=turn_id,
+                tags=["sub_agent", "report"],
+            ))
+        except BaseException:
+            return False
+        self._member_wait_turn_id = ""
+        return True
+
+    async def _maybe_report_members_drained(self, *, exclude: str = "") -> None:
+        """Retract the published fact when the last of its members just ended."""
+        if not self._member_wait_turn_id or not self._no_members_remain(exclude=exclude):
+            return
+        try:
+            await self.report_members_drained()
+        except BaseException:
+            return
+
     async def active_member_status(self) -> list[dict[str, Any]]:
-        """Snapshot of members still running (for lease-timeout reporting)."""
+        """Snapshot of members still running (for lease-timeout reporting).
+
+        One query for every running member: this runs at the end of a turn that
+        still has members, so it must not cost one connection per member.
+        """
         async with self._lock:
             names = [name for name, task in self._tasks.items() if not task.done()]
-        out: list[dict[str, Any]] = []
+        if not names:
+            return []
+        placeholders = ",".join("?" for _ in names)
+        try:
+            with self._connection() as db:
+                rows = db.execute(
+                    f"SELECT payload FROM sub_agents WHERE parent_thread_id=? AND name IN ({placeholders})",
+                    (self.parent_thread_id, *names),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return []
         now = time.time()
-        for name in names:
-            record = self._load(name)
-            if record is None:
-                continue
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            record = SubAgentRecord(**json.loads(row["payload"]))
             out.append(
                 {
                     "name": record.name,
@@ -731,6 +1023,7 @@ class SubAgentSupervisor:
                     "summary": (record.summary or "")[:200],
                 }
             )
+        out.sort(key=lambda item: item["name"])
         return out
 
     async def wait_for_activity(self, timeout: float) -> str:
@@ -765,7 +1058,7 @@ class SubAgentSupervisor:
                     record.status = "interrupted"
                     record.completed_at = time.time()
                     self._save(record)
-                    self._write_member_event(
+                    await self._record_member_event(
                         record, "member_interrupted", detail="进程关闭时该成员仍在运行"
                     )
             self._tasks.clear()
@@ -920,6 +1213,11 @@ def register_sub_agent_lifecycle_operations(
                     source_ids=source_ids,
                 )
                 return OperationResult(request.name, payload=result.to_dict())
+            if request.name == "sub_agent.delete":
+                return OperationResult(
+                    request.name,
+                    payload=await supervisor.delete_operation(name=payload.get("name")),
+                )
             accepted = await supervisor.message(
                 type=payload.get("type"),
                 name=payload.get("name"),
@@ -934,6 +1232,7 @@ def register_sub_agent_lifecycle_operations(
         "sub_agent.list",
         "sub_agent.create",
         "sub_agent.close",
+        "sub_agent.delete",
         "sub_agent.message",
     ):
         if not catalog.has(operation_name):
@@ -999,6 +1298,199 @@ def acknowledge_parent_mailbox(
         )
 
 
+# ── Waking an idle parent: durable member lifecycle events ──────────────────
+#
+# `sub_agent_events` already carries the member lifecycle facts and their
+# delivery state. The kernel drains them while a parent turn is alive; when the
+# turn has already ended there is nobody to drain them, so the watchdog in
+# `app/memory_resume_supervisor.py` uses these helpers to find the threads that
+# need waking and to claim the rows it delivers (dedupe is `delivered_at`).
+#
+# Only completion and failure wake a session on their own. A paused member is a
+# human boundary (a question or approval is waiting for a person), and closing
+# one is a user action. An interruption is reported alongside a completion or
+# failure, but never starts a parent turn by itself.
+MEMBER_WAKE_EVENTS = ("member_finished", "member_failed")
+# When a completion/failure causes a turn, also report recover/shutdown
+# interruptions from the same pending batch. An interruption alone does not
+# restart a parent session; it remains durable until a suitable report occurs.
+MEMBER_WAKE_REPORT_EVENTS = (*MEMBER_WAKE_EVENTS, "member_interrupted")
+
+
+def member_event_payload(item: dict[str, Any]) -> dict[str, Any]:
+    raw = item.get("payload")
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        raw = item.get("payload_json")
+    try:
+        parsed = json.loads(str(raw or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def member_event_triggers_wake(payload: dict[str, Any]) -> bool:
+    return str(payload.get("event") or "") in MEMBER_WAKE_EVENTS
+
+
+def member_event_is_reportable(payload: dict[str, Any]) -> bool:
+    return str(payload.get("event") or "") in MEMBER_WAKE_REPORT_EVENTS
+
+
+def format_member_event(payload: dict[str, Any]) -> str:
+    """One human line per member state change, shared by every consumer."""
+    event = str(payload.get("event") or "member_update")
+    if event == "members_still_running":
+        members = payload.get("members") or []
+        detail = "；".join(
+            "{name}（{status}，已运行 {secs:.0f} 秒）".format(
+                name=str(member.get("name") or "?"),
+                status=str(member.get("status") or "running"),
+                secs=float(member.get("running_ms") or 0) / 1000.0,
+            )
+            for member in members
+            if isinstance(member, dict)
+        )
+        suffix = "（本次等待已到租约上限）" if payload.get("lease_timed_out") else ""
+        return (
+            f"- 成员仍在运行{suffix}：{detail or '未知'}。"
+            "你可以继续等下一个事件，也可以先推进不依赖他们的工作。"
+        )
+    name = str(payload.get("name") or "(未署名成员)")
+    elapsed = payload.get("elapsed_ms")
+    elapsed_text = (
+        f"，用时 {float(elapsed) / 1000.0:.0f} 秒"
+        if isinstance(elapsed, (int, float)) and elapsed
+        else ""
+    )
+    label = {
+        "member_finished": "已完成",
+        "member_paused": "已暂停（在等确认或补充信息）",
+        "member_failed": "已失败",
+        "member_closed": "已关闭",
+        "member_interrupted": "已被中断",
+    }.get(event, str(payload.get("status") or event))
+    summary = str(payload.get("summary") or "").strip()
+    detail = str(payload.get("detail") or "").strip()
+    tail = f"：{summary}" if summary else ""
+    if detail and detail != summary:
+        tail += f"（原因：{detail}）"
+    return f"- {name} {label}{elapsed_text}{tail}"
+
+
+def list_threads_with_pending_member_wakes(
+    database_path: str | Path,
+    *,
+    events: tuple[str, ...] = MEMBER_WAKE_EVENTS,
+) -> list[str]:
+    """Parent threads with an undelivered event that justifies a wake."""
+    path = Path(database_path)
+    if not path.is_file() or not events:
+        return []
+    clauses = " OR ".join("event_key LIKE ?" for _ in events)
+    params = [f"{name}:%" for name in events]
+    try:
+        with sqlite3.connect(path) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute(
+                f"SELECT DISTINCT parent_thread_id FROM sub_agent_events "
+                f"WHERE delivered_at IS NULL AND ({clauses})",
+                params,
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [str(row["parent_thread_id"]) for row in rows if row["parent_thread_id"]]
+
+
+def peek_member_events(
+    database_path: str | Path,
+    parent_thread_id: str,
+) -> list[dict[str, Any]]:
+    """Every undelivered member event for one thread, without claiming it."""
+    path = Path(database_path)
+    if not path.is_file():
+        return []
+    try:
+        with sqlite3.connect(path) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute(
+                "SELECT id,payload,event_key FROM sub_agent_events "
+                "WHERE parent_thread_id=? AND delivered_at IS NULL ORDER BY created_at,id",
+                (str(parent_thread_id),),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [
+        {
+            "id": str(row["id"]),
+            "event_key": str(row["event_key"]),
+            "payload": member_event_payload({"payload": row["payload"]}),
+        }
+        for row in rows
+    ]
+
+
+def mark_member_events_delivered(database_path: str | Path, ids: list[str]) -> None:
+    """Claim rows already handed to a started turn.
+
+    Claiming only after the turn started is what keeps the wake path from
+    losing an event when a start is refused: nothing is marked and the row is
+    retried on the next tick. The `delivered_at IS NULL` predicate is the
+    cross-path dedupe, so the kernel can never deliver a row this claimed.
+    """
+    clean = [str(item) for item in ids if str(item)]
+    path = Path(database_path)
+    if not clean or not path.is_file():
+        return
+    placeholders = ",".join("?" for _ in clean)
+    try:
+        with sqlite3.connect(path) as db:
+            db.execute(
+                f"UPDATE sub_agent_events SET delivered_at=? "
+                f"WHERE delivered_at IS NULL AND id IN ({placeholders})",
+                (time.time(), *clean),
+            )
+    except sqlite3.OperationalError:
+        return
+
+
+def member_wake_prompt(events: list[dict[str, Any]]) -> str:
+    """One short system line per reportable member event. No coaching.
+
+    The event itself is the input; the model is not told what to do with it, and
+    every line is built from the stored event's name, state, and recorded detail.
+    Interruption reasons survive process recovery and shutdown as report text.
+    """
+    lines: list[str] = []
+    for item in events:
+        if not isinstance(item, dict):
+            continue
+        payload = member_event_payload(item)
+        name = str(payload.get("name") or "子代理")
+        event = str(payload.get("event") or "")
+        if event == "member_finished":
+            line = f"子代理 {name} 已完成"
+        elif event == "member_failed":
+            line = f"子代理 {name} 已失败"
+        elif event == "member_interrupted":
+            line = f"子代理 {name} 已中断"
+            detail = str(payload.get("detail") or "").strip()
+            summary = str(payload.get("summary") or "").strip()
+            suffixes: list[str] = []
+            if detail:
+                suffixes.append(f"原因：{detail}")
+            if summary and summary != detail:
+                suffixes.append(f"已保存摘要：{summary}")
+            lines.append(f"{line}，{'；'.join(suffixes)}。" if suffixes else f"{line}。")
+            continue
+        else:
+            continue
+        summary = str(payload.get("summary") or "").strip()
+        lines.append(f"{line}：{summary}" if summary else f"{line}。")
+    return "\n".join(lines)
+
+
 def current_child_identity() -> tuple[SubAgentSupervisor, str, str] | None:
     return _child_identity.get()
 
@@ -1022,9 +1514,35 @@ def bound_child_identity(
         supervisor._provider_messages_by_invocation.pop(invocation_id, None)
 
 
+# 成员事件落库后唤醒 member-wake watchdog 的回调。回合内不再消费成员事件，
+# 续跑完全靠唤醒路径，所以事件一落库就立刻唤醒（由 watchdog 去抖合并），
+# 而不是等下一次轮询。
+_MEMBER_EVENT_NOTIFIER: Callable[[], None] | None = None
+
+
+def set_member_event_notifier(notifier: Callable[[], None] | None) -> None:
+    global _MEMBER_EVENT_NOTIFIER
+    _MEMBER_EVENT_NOTIFIER = notifier
+
+
+def _notify_member_event() -> None:
+    notifier = _MEMBER_EVENT_NOTIFIER
+    if notifier is None:
+        return
+    try:
+        notifier()
+    except Exception:  # noqa: BLE001 - a wake hint must never break the member
+        pass
+
+
 __all__ = [
+    "MEMBER_WAKE_EVENTS",
+    "MEMBER_WAKE_REPORT_EVENTS",
     "SUB_AGENT_TYPES", "SubAgentOperationResult", "SubAgentRecord", "SubAgentSupervisor", "acknowledge_parent_mailbox", "bound_child_identity", "current_child_identity", "drain_parent_mailbox",
-    "get_sub_agent_supervisor", "register_sub_agent_lifecycle_operations", "resolve_model_id",
+    "format_member_event", "get_sub_agent_supervisor", "list_threads_with_pending_member_wakes",
+    "mark_member_events_delivered", "member_event_is_reportable", "member_event_payload", "member_event_triggers_wake",
+    "member_wake_prompt", "peek_member_events", "register_sub_agent_lifecycle_operations",
+    "resolve_model_id", "set_member_event_notifier",
     "shutdown_parent_sub_agents", "shutdown_sub_agent_supervisors",
     "validate_name", "validate_reasoning", "validate_type",
 ]

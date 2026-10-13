@@ -1,5 +1,11 @@
 # Core UI 流式性能优化（UI 卡顿调查与修复计划）
 
+## Streaming text fade-in (2026-10-13)
+
+- `MarkdownRenderer.vue` and `components/streamingTextFade.ts` reveal newly rendered streaming text with a restrained opacity fade using `--dur-base` (180ms) and `--ease-out`. Reduced-motion preferences disable the animation.
+- Initial mounted content and shortened replacement snapshots appear immediately. Tail rebuilds carry the timestamps of recent text ranges, including when a tail becomes a closed segment; older text does not replay. Closed segment DOM reuse and the existing tail parse throttle remain intact. Copy controls and generated math/SVG are excluded. The finished render removes the reveal spans.
+- Verification: 44 focused Markdown/rendering/performance checks passed; the additional tail-closure/Unicode regression then passed with all 15 streaming tests. UI typecheck passed. Tauri visual confirmation remains pending; no GUI inspection was performed.
+
 > 状态：快速见效包已完成（2026-08-07）；结构包已完成（2026-08-07）；part 级 v-memo 隔离已完成（2026-08-07）。
 > 发送/进会话延迟优化包已完成（2026-08-07，见文末）。
 > 本文档是 Core UI 卡顿问题的唯一权威记录，任何后续会话先读这里。

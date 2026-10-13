@@ -3,29 +3,29 @@
     ref="canvasRoot"
     class="wf-canvas"
     role="region"
-    aria-label="工作流画布"
+    :aria-label="t('工作流画布')"
     tabindex="0"
     @contextmenu="onContextMenu"
   >
-    <div class="wf-canvas-toolbar" role="toolbar" aria-label="画布布局工具">
+    <div class="wf-canvas-toolbar" role="toolbar" :aria-label="t('画布布局工具')">
       <slot name="controls" />
       <span v-if="$slots.controls" class="wf-canvas-toolbar-divider" aria-hidden="true" />
-      <button type="button" class="wf-canvas-tool" :class="{ active: gridEnabled }" data-workflow-action="toggle-grid" :aria-pressed="gridEnabled ? 'true' : 'false'" :aria-label="gridEnabled ? '关闭网格吸附' : '开启网格吸附'" :title="gridEnabled ? '关闭网格吸附' : '开启网格吸附'" @click="toggleGrid">
+      <button type="button" class="wf-canvas-tool" :class="{ active: gridEnabled }" data-workflow-action="toggle-grid" :aria-pressed="gridEnabled ? 'true' : 'false'" :aria-label="gridEnabled ? t('关闭网格吸附') : t('开启网格吸附')" :title="gridEnabled ? t('关闭网格吸附') : t('开启网格吸附')" @click="toggleGrid">
         <Grid2x2 :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
-      <button type="button" class="wf-canvas-tool" data-workflow-action="align-left" :disabled="layoutSelectionCount < 2 || locked" aria-label="左对齐" title="左对齐" @click="alignSelection('left')">
+      <button type="button" class="wf-canvas-tool" data-workflow-action="align-left" :disabled="layoutSelectionCount < 2 || locked" :aria-label="t('左对齐')" :title="t('左对齐')" @click="alignSelection('left')">
         <AlignHorizontalJustifyStart :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
-      <button type="button" class="wf-canvas-tool" data-workflow-action="align-top" :disabled="layoutSelectionCount < 2 || locked" aria-label="顶对齐" title="顶对齐" @click="alignSelection('top')">
+      <button type="button" class="wf-canvas-tool" data-workflow-action="align-top" :disabled="layoutSelectionCount < 2 || locked" :aria-label="t('顶对齐')" :title="t('顶对齐')" @click="alignSelection('top')">
         <AlignVerticalJustifyStart :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
-      <button type="button" class="wf-canvas-tool" data-workflow-action="distribute-horizontal" :disabled="layoutSelectionCount < 3 || locked" aria-label="横向分布" title="横向分布" @click="distributeSelection('horizontal')">
+      <button type="button" class="wf-canvas-tool" data-workflow-action="distribute-horizontal" :disabled="layoutSelectionCount < 3 || locked" :aria-label="t('横向分布')" :title="t('横向分布')" @click="distributeSelection('horizontal')">
         <AlignHorizontalSpaceBetween :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
-      <button type="button" class="wf-canvas-tool" data-workflow-action="focus-selected" :disabled="!selectedNodeIds.size && !selectedCanvasElementIds.size" aria-label="聚焦选中" title="聚焦选中" @click="focusSelected">
+      <button type="button" class="wf-canvas-tool" data-workflow-action="focus-selected" :disabled="!selectedNodeIds.size && !selectedCanvasElementIds.size" :aria-label="t('聚焦选中')" :title="t('聚焦选中')" @click="focusSelected">
         <Focus :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
-      <button type="button" class="wf-canvas-tool" data-workflow-action="fit-view" aria-label="适应画布" title="适应画布" @click="fitCanvas">
+      <button type="button" class="wf-canvas-tool" data-workflow-action="fit-view" :aria-label="t('适应画布')" :title="t('适应画布')" @click="fitCanvas">
         <Maximize2 :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </div>
@@ -53,7 +53,7 @@
       @node-drag-start="handleCanvasInteraction"
     >
       <Background :gap="22" :size="1" pattern-color="transparent" />
-      <MiniMap position="bottom-right" :pannable="true" :zoomable="true" aria-label="工作流缩略图" />
+      <MiniMap position="bottom-right" :pannable="true" :zoomable="true" :aria-label="t('工作流缩略图')" />
     </VueFlow>
 
     <!-- The pane menu opens the same registry-backed catalog used by the
@@ -95,7 +95,7 @@
     />
     <CoreConfirmDialog
       :open="bulkDeleteConfirmOpen"
-      title="删除容器及其内容"
+      :title="t('删除容器及其内容')"
       :description="bulkDeleteDescription"
       :detail="bulkDeleteDetail"
       :confirm-label="bulkDeleteConfirmLabel"
@@ -109,6 +109,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, markRaw, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type Edge } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -494,17 +496,17 @@ const bulkDeleteContents = computed(() => bulkDeleteTarget.value
   ? workflowCanvasElementContents(props.definition, bulkDeleteTarget.value.id)
   : { nodeIds: [], canvasElementIds: [] })
 const bulkDeleteDescription = computed(() => {
-  const title = bulkDeleteTarget.value?.title || bulkDeleteTarget.value?.id || '此容器'
+  const title = bulkDeleteTarget.value?.title || bulkDeleteTarget.value?.id || t("此容器")
   const count = bulkDeleteContents.value.nodeIds.length + bulkDeleteContents.value.canvasElementIds.length
-  return `确定删除“${title}”及其内部 ${count} 个元素？此操作不可撤销。`
+  return t("确定删除“{0}”及其内部 {1} 个元素？此操作不可撤销。", { 0: title, 1: count })
 })
 const bulkDeleteDetail = computed(() => {
   const { nodeIds, canvasElementIds } = bulkDeleteContents.value
-  return `节点 ${nodeIds.length} · 画布元素 ${canvasElementIds.length}`
+  return t("节点 {0} · 画布元素 {1}", { 0: nodeIds.length, 1: canvasElementIds.length })
 })
 const bulkDeleteConfirmLabel = computed(() => bulkDeleteCountdown.value > 0
-  ? `确认（${bulkDeleteCountdown.value}秒）`
-  : '确认删除')
+  ? t("确认（{0}秒）", { 0: bulkDeleteCountdown.value })
+  : t("确认删除"))
 let bulkDeleteTimer: number | null = null
 
 function clearBulkDeleteTimer(): void {
@@ -580,27 +582,27 @@ function handlePaneClick(): void {
 function buildPaneMenu(pos: MenuPos): ContextMenuEntry[] {
   const selectedCount = selectedNodeIds.value.size + selectedCanvasElementIds.value.size
   return [
-    { type: 'label', label: '新建节点' },
-    { id: 'add-node-catalog', label: '添加节点…', icon: Plus, action: () => openNodePicker(pos) },
+    { type: 'label', get label() { return t("新建节点") } },
+    { id: 'add-node-catalog', get label() { return t("添加节点…") }, icon: Plus, action: () => openNodePicker(pos) },
     { type: 'separator', id: 'decoration-separator' },
-    { type: 'label', label: '画布元素' },
-    { id: 'frame', label: '框架', action: () => addCanvasElementAt('frame', pos) },
-    { id: 'group', label: '分组', action: () => addCanvasElementAt('group', pos) },
-    { id: 'note', label: '便签', action: () => addCanvasElementAt('note', pos) },
-    { id: 'comment', label: '注释', action: () => addCanvasElementAt('comment', pos) },
-    { id: 'reroute', label: '中继点', action: () => addCanvasElementAt('reroute', pos) },
+    { type: 'label', get label() { return t("画布元素") } },
+    { id: 'frame', get label() { return t("框架") }, action: () => addCanvasElementAt('frame', pos) },
+    { id: 'group', get label() { return t("分组") }, action: () => addCanvasElementAt('group', pos) },
+    { id: 'note', get label() { return t("便签") }, action: () => addCanvasElementAt('note', pos) },
+    { id: 'comment', get label() { return t("注释") }, action: () => addCanvasElementAt('comment', pos) },
+    { id: 'reroute', get label() { return t("中继点") }, action: () => addCanvasElementAt('reroute', pos) },
     { type: 'separator', id: 'paste-separator' },
-    { id: 'paste', label: '粘贴', shortcut: '⌘/Ctrl V', disabled: !clipboardAvailable.value, action: () => pasteAt(pos) },
+    { id: 'paste', get label() { return t("粘贴") }, shortcut: '⌘/Ctrl V', disabled: !clipboardAvailable.value, action: () => pasteAt(pos) },
     ...(selectedCount > 0 ? [
       { type: 'separator' as const, id: 'selection-separator' },
-      { id: 'delete-selection', label: `删除选中元素（${selectedCount}）`, icon: Trash2, destructive: true, disabled: props.locked === true, action: deleteSelectedNodes },
-      { type: 'submenu' as const, id: 'layout', label: '布局', children: [
-        { id: 'align-left', label: '左对齐', disabled: selectedNodeIds.value.size < 2, action: () => alignSelection('left') },
-        { id: 'align-center', label: '水平居中', disabled: selectedNodeIds.value.size < 2, action: () => alignSelection('center') },
-        { id: 'align-top', label: '顶对齐', disabled: selectedNodeIds.value.size < 2, action: () => alignSelection('top') },
-        { id: 'distribute-horizontal', label: '横向分布', disabled: selectedNodeIds.value.size < 3, action: () => distributeSelection('horizontal') },
-        { id: 'distribute-vertical', label: '纵向分布', disabled: selectedNodeIds.value.size < 3, action: () => distributeSelection('vertical') },
-        { id: 'focus-selected', label: '聚焦选中', action: focusSelected },
+      { id: 'delete-selection', label: t("删除选中元素（{0}）", { 0: selectedCount }), icon: Trash2, destructive: true, disabled: props.locked === true, action: deleteSelectedNodes },
+      { type: 'submenu' as const, id: 'layout', get label() { return t("布局") }, children: [
+        { id: 'align-left', get label() { return t("左对齐") }, disabled: selectedNodeIds.value.size < 2, action: () => alignSelection('left') },
+        { id: 'align-center', get label() { return t("水平居中") }, disabled: selectedNodeIds.value.size < 2, action: () => alignSelection('center') },
+        { id: 'align-top', get label() { return t("顶对齐") }, disabled: selectedNodeIds.value.size < 2, action: () => alignSelection('top') },
+        { id: 'distribute-horizontal', get label() { return t("横向分布") }, disabled: selectedNodeIds.value.size < 3, action: () => distributeSelection('horizontal') },
+        { id: 'distribute-vertical', get label() { return t("纵向分布") }, disabled: selectedNodeIds.value.size < 3, action: () => distributeSelection('vertical') },
+        { id: 'focus-selected', get label() { return t("聚焦选中") }, action: focusSelected },
       ] },
     ] : []),
   ]
@@ -608,18 +610,18 @@ function buildPaneMenu(pos: MenuPos): ContextMenuEntry[] {
 
 function buildNodeMenu(id: string): ContextMenuEntry[] {
   return [
-    { type: 'label', label: '运行' },
-    { id: 'run-from', label: '从此节点运行', icon: Play, action: () => runFromNode(id) },
-    { id: 'run-node', label: '运行此节点', icon: Play, action: () => runNode(id) },
+    { type: 'label', get label() { return t("运行") } },
+    { id: 'run-from', get label() { return t("从此节点运行") }, icon: Play, action: () => runFromNode(id) },
+    { id: 'run-node', get label() { return t("运行此节点") }, icon: Play, action: () => runNode(id) },
     { type: 'separator', id: 'node-config-separator' },
-    { id: 'configure', label: '配置', icon: Settings, action: () => configNode(id) },
-    { id: 'copy', label: '复制', shortcut: '⌘/Ctrl C', icon: Copy, action: () => copyNode(id) },
-    { id: 'cut', label: '剪切', icon: Scissors, action: () => cutNode(id) },
+    { id: 'configure', get label() { return t("配置") }, icon: Settings, action: () => configNode(id) },
+    { id: 'copy', get label() { return t("复制") }, shortcut: '⌘/Ctrl C', icon: Copy, action: () => copyNode(id) },
+    { id: 'cut', get label() { return t("剪切") }, icon: Scissors, action: () => cutNode(id) },
     { type: 'separator', id: 'node-port-separator' },
-    { id: 'add-input', label: '+ 输入端口', icon: Plus, action: () => addPort(id, 'in') },
-    { id: 'add-output', label: '+ 输出端口', icon: Plus, action: () => addPort(id, 'out') },
+    { id: 'add-input', get label() { return t("+ 输入端口") }, icon: Plus, action: () => addPort(id, 'in') },
+    { id: 'add-output', get label() { return t("+ 输出端口") }, icon: Plus, action: () => addPort(id, 'out') },
     { type: 'separator', id: 'node-danger-separator' },
-    { id: 'delete', label: '删除', icon: Trash2, destructive: true, action: () => deleteNode(id) },
+    { id: 'delete', get label() { return t("删除") }, icon: Trash2, destructive: true, action: () => deleteNode(id) },
   ]
 }
 
@@ -627,20 +629,20 @@ function buildCanvasElementMenu(id: string): ContextMenuEntry[] {
   const element = (props.definition.canvas_elements ?? []).find((item) => item.id === id)
   if (isWorkflowCanvasContainer(element)) {
     return [
-      { id: 'select-contents', label: '全选', action: () => selectCanvasElementContents(id) },
+      { id: 'select-contents', get label() { return t("全选") }, action: () => selectCanvasElementContents(id) },
       { type: 'separator', id: 'element-copy-separator' },
-      { id: 'copy', label: '复制', shortcut: '⌘/Ctrl C', icon: Copy, action: () => copyCanvasElement(id) },
-      { id: 'cut', label: '剪切', shortcut: '⌘/Ctrl X', icon: Scissors, action: () => cutCanvasElement(id) },
+      { id: 'copy', get label() { return t("复制") }, shortcut: '⌘/Ctrl C', icon: Copy, action: () => copyCanvasElement(id) },
+      { id: 'cut', get label() { return t("剪切") }, shortcut: '⌘/Ctrl X', icon: Scissors, action: () => cutCanvasElement(id) },
       { type: 'separator', id: 'element-danger-separator' },
-      { id: 'delete', label: '删除', icon: Trash2, destructive: true, disabled: props.locked === true, action: () => deleteCanvasElements(new Set([id])) },
-      { id: 'delete-all', label: '全部删除', icon: Trash2, destructive: true, disabled: props.locked === true, action: () => requestDeleteAllCanvasElement(id) },
+      { id: 'delete', get label() { return t("删除") }, icon: Trash2, destructive: true, disabled: props.locked === true, action: () => deleteCanvasElements(new Set([id])) },
+      { id: 'delete-all', get label() { return t("全部删除") }, icon: Trash2, destructive: true, disabled: props.locked === true, action: () => requestDeleteAllCanvasElement(id) },
     ]
   }
   return [
-    { id: 'copy', label: '复制', shortcut: '⌘/Ctrl C', icon: Copy, action: () => copyCanvasElement(id) },
-    { id: 'cut', label: '剪切', shortcut: '⌘/Ctrl X', icon: Scissors, action: () => cutCanvasElement(id) },
+    { id: 'copy', get label() { return t("复制") }, shortcut: '⌘/Ctrl C', icon: Copy, action: () => copyCanvasElement(id) },
+    { id: 'cut', get label() { return t("剪切") }, shortcut: '⌘/Ctrl X', icon: Scissors, action: () => cutCanvasElement(id) },
     { type: 'separator', id: 'element-danger-separator' },
-    { id: 'delete', label: '删除', icon: Trash2, destructive: true, disabled: props.locked === true, action: () => deleteCanvasElements(new Set([id])) },
+    { id: 'delete', get label() { return t("删除") }, icon: Trash2, destructive: true, disabled: props.locked === true, action: () => deleteCanvasElements(new Set([id])) },
   ]
 }
 
@@ -652,9 +654,9 @@ function editEdgeCondition(id: string, anchor: MenuPos): void {
 
 function buildEdgeMenu(id: string, anchor: MenuPos): ContextMenuEntry[] {
   return [
-    { id: 'condition', label: '编辑条件', icon: Pencil, action: () => editEdgeCondition(id, anchor) },
+    { id: 'condition', get label() { return t("编辑条件") }, icon: Pencil, action: () => editEdgeCondition(id, anchor) },
     { type: 'separator', id: 'edge-danger-separator' },
-    { id: 'delete', label: '删除连线', icon: Trash2, destructive: true, action: () => deleteEdge(id) },
+    { id: 'delete', get label() { return t("删除连线") }, icon: Trash2, destructive: true, action: () => deleteEdge(id) },
   ]
 }
 
@@ -690,8 +692,8 @@ function selectCanvasElementContents(elementId: string, includeContainer = false
   setSelection([...(includeContainer ? [elementId] : []), ...contents.nodeIds, ...contents.canvasElementIds])
   const count = contents.nodeIds.length + contents.canvasElementIds.length
   canvasLiveMessage.value = includeContainer
-    ? (count ? `已选中容器及其 ${count} 个内部元素` : '已选中容器')
-    : (count ? `已全选 ${count} 个内部元素` : '容器内没有可选元素')
+    ? (count ? `已选中容器及其 ${count} 个内部元素` : t("已选中容器"))
+    : (count ? `已全选 ${count} 个内部元素` : t("容器内没有可选元素"))
 }
 
 function onContextMenu(evt: MouseEvent) {
@@ -740,7 +742,7 @@ function onContextMenu(evt: MouseEvent) {
     event: evt,
     items,
     ownerId,
-    ariaLabel: menuKind === 'pane' ? '工作流画布操作' : menuKind === 'node' ? '工作流节点操作' : menuKind === 'edge' ? '工作流连线操作' : '画布元素操作',
+    ariaLabel: menuKind === 'pane' ? t("工作流画布操作") : menuKind === 'node' ? t("工作流节点操作") : menuKind === 'edge' ? t("工作流连线操作") : t("画布元素操作"),
     panelAttributes: workflowMenuAttributes(menuKind, menuKind === 'pane' ? '' : menuKind === 'node' ? nodeId : menuKind === 'edge' ? edgeId : canvasElementId),
   })
 }
@@ -807,7 +809,7 @@ function saveEdgeCondition(value: string): void {
 // connection; it does NOT auto-create an edge, so we add it here.
 function onConnect(params: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }) {
   if (!connectionIsValid(params)) {
-    canvasLiveMessage.value = '无法连接：端口类型不兼容或端口不存在'
+    canvasLiveMessage.value = t("无法连接：端口类型不兼容或端口不存在")
     return
   }
   const sourceHandle = params.sourceHandle ?? ''
@@ -836,7 +838,7 @@ function onEdgeUpdate(params: any): void {
   const edgeId = String(params?.edge?.id || '')
   const connection = params?.connection
   if (!edgeId || !connection || !connectionIsValid(connection)) {
-    canvasLiveMessage.value = '无法更新连线：端口类型不兼容或端口不存在'
+    canvasLiveMessage.value = t("无法更新连线：端口类型不兼容或端口不存在")
     return
   }
   if (vfEdges.value.some((edge) => edge.id !== edgeId
@@ -844,7 +846,7 @@ function onEdgeUpdate(params: any): void {
     && edge.sourceHandle === connection.sourceHandle
     && edge.target === connection.target
     && edge.targetHandle === connection.targetHandle)) {
-    canvasLiveMessage.value = '该连线已经存在'
+    canvasLiveMessage.value = t("该连线已经存在")
     return
   }
   const updatedEdges: Edge[] = []
@@ -858,7 +860,7 @@ function onEdgeUpdate(params: any): void {
     } : edge) as unknown as Edge)
   }
   vfEdges.value = updatedEdges
-  canvasLiveMessage.value = '连线已更新'
+  canvasLiveMessage.value = t("连线已更新")
 }
 
 function connectionIsValid(params: { source?: string | null; target?: string | null; sourceHandle?: string | null; targetHandle?: string | null }): boolean {
@@ -939,7 +941,7 @@ function addNodeFromSchema(schema: WorkflowNodeSchema, pos: MenuPos): void {
   }
   emit('update:definition', { ...props.definition, nodes: [...props.definition.nodes, node] })
   setSelection([node.id])
-  canvasLiveMessage.value = `已添加节点：${node.title}`
+  canvasLiveMessage.value = t("已添加节点：{0}", { 0: node.title })
   closeNodePicker()
   closeContextMenu()
 }
@@ -949,11 +951,11 @@ function addCanvasElementAt(kind: WorkflowCanvasElementKind, pos: MenuPos): void
   const flowPos = safeScreenToFlow(pos)
   const count = (props.definition.canvas_elements ?? []).filter((element) => element.kind === kind).length + 1
   const defaults: Record<WorkflowCanvasElementKind, { width: number; height: number; title: string }> = {
-    group: { width: 420, height: 260, title: `分组.${count}` },
-    frame: { width: 420, height: 260, title: `框架.${count}` },
-    reroute: { width: 28, height: 28, title: `中继.${count}` },
-    note: { width: 240, height: 130, title: `便签.${count}` },
-    comment: { width: 280, height: 110, title: `注释.${count}` },
+    group: { width: 420, height: 260, title: t("分组.{0}", { 0: count }) },
+    frame: { width: 420, height: 260, title: t("框架.{0}", { 0: count }) },
+    reroute: { width: 28, height: 28, title: t("中继.{0}", { 0: count }) },
+    note: { width: 240, height: 130, title: t("便签.{0}", { 0: count }) },
+    comment: { width: 280, height: 110, title: t("注释.{0}", { 0: count }) },
   }
   const id = `${kind}-${newIdSuffix()}`
   const preset = defaults[kind]
@@ -984,7 +986,7 @@ function alignSelection(alignment: WorkflowNodeAlignment): void {
   const aligned = alignWorkflowNodes(selected, alignment)
   const positions = new Map(aligned.map((node) => [node.id, node.position]))
   emit('update:definition', { ...props.definition, nodes: props.definition.nodes.map((node) => ({ ...node, position: positions.get(node.id) ?? node.position })) })
-  canvasLiveMessage.value = '节点已对齐'
+  canvasLiveMessage.value = t("节点已对齐")
   closeContextMenu()
 }
 
@@ -994,7 +996,7 @@ function distributeSelection(direction: WorkflowNodeDistribution): void {
   const distributed = distributeWorkflowNodes(selected, direction)
   const positions = new Map(distributed.map((node) => [node.id, node.position]))
   emit('update:definition', { ...props.definition, nodes: props.definition.nodes.map((node) => ({ ...node, position: positions.get(node.id) ?? node.position })) })
-  canvasLiveMessage.value = direction === 'horizontal' ? '节点已横向分布' : '节点已纵向分布'
+  canvasLiveMessage.value = direction === 'horizontal' ? t("节点已横向分布") : t("节点已纵向分布")
   closeContextMenu()
 }
 
@@ -1047,8 +1049,8 @@ function scaffoldScript(_title: string, ports: WorkflowPort[]): string {
   const inNames = inPorts.map((p) => safeId(p.name))
   const outNames = outPorts.map((p) => safeId(p.name))
   const lines = [
-    `# 输入：${inNames.length ? inNames.join(', ') : '（无）'}`,
-    `# 输出：${outNames.length ? outNames.join(', ') : '（无）'}`,
+    t("# 输入：{0}", { 0: inNames.length ? inNames.join(', ') : t("（无）") }),
+    t("# 输出：{0}", { 0: outNames.length ? outNames.join(', ') : t("（无）") }),
     '',
   ]
   for (const name of outNames) lines.push(`${name} = None`)
@@ -1201,7 +1203,7 @@ async function copySelection(singleId?: string): Promise<void> {
   if (!payload.nodes.length && !payload.canvas_elements.length) return
   clipboard.value = payload
   await writeWorkflowClipboardPayload(payload)
-  canvasLiveMessage.value = `已复制 ${payload.nodes.length + payload.canvas_elements.length} 个元素`
+  canvasLiveMessage.value = t("已复制 {0} 个元素", { 0: payload.nodes.length + payload.canvas_elements.length })
   closeContextMenu()
 }
 async function pasteAt(pos?: MenuPos): Promise<void> {
@@ -1223,7 +1225,7 @@ async function pasteAt(pos?: MenuPos): Promise<void> {
     canvas_elements: [...(props.definition.canvas_elements ?? []), ...pasted.canvas_elements],
   })
   setSelection([...pasted.nodes.map((node) => node.id), ...pasted.canvas_elements.map((element) => element.id)])
-  canvasLiveMessage.value = `已粘贴 ${pasted.nodes.length + pasted.canvas_elements.length} 个元素`
+  canvasLiveMessage.value = t("已粘贴 {0} 个元素", { 0: pasted.nodes.length + pasted.canvas_elements.length })
   closeContextMenu()
 }
 
@@ -1251,7 +1253,7 @@ function fitCanvas(): void {
 
 function toggleGrid(): void {
   gridEnabled.value = !gridEnabled.value
-  canvasLiveMessage.value = gridEnabled.value ? '网格吸附已开启' : '网格吸附已关闭'
+  canvasLiveMessage.value = gridEnabled.value ? t("网格吸附已开启") : t("网格吸附已关闭")
 }
 
 function nudgeSelection(dx: number, dy: number): void {

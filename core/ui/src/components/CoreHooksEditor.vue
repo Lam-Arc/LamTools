@@ -1,28 +1,28 @@
 <template>
   <section class="settings-panel">
     <header class="settings-title">
-      <h1>钩子</h1>
-      <p>管理事件钩子。未信任的 Hook 不会执行，需在此审核后启用。</p>
+      <h1>{{ t("钩子") }}</h1>
+      <p>{{ t("管理事件钩子。未信任的 Hook 不会执行，需在此审核后启用。") }}</p>
     </header>
 
     <p v-if="error" class="hook-error">{{ error }}</p>
 
     <div class="subhead">
-      <span class="muted">{{ loading ? '加载中…' : `共 ${totalCount} 个 · 已信任 ${trustedCount}${trustableCount ? ` · 待审核 ${trustableCount}` : ''}` }}</span>
+      <span class="muted">{{ loading ? t("加载中…") : t('共 {0} 个 · 已信任 {1}{2}', { 0: totalCount, 1: trustedCount, 2: trustableCount ? t(' · 待审核 {0}', { 0: trustableCount }) : '' }) }}</span>
       <div class="row-actions">
         <button
           v-if="!showHookForm && !showConfig"
           class="small-btn primary"
           type="button"
           @click="openHookForm"
-        >新增 Hook</button>
+        >{{ t("新增 Hook") }}</button>
         <button
           class="text-btn"
           type="button"
           @click="toggleConfigView"
         >
           <ChevronLeft v-if="showConfig" :size="13" :stroke-width="1.8" aria-hidden="true" />
-          {{ showConfig ? '返回列表' : '原始配置' }}
+          {{ showConfig ? t("返回列表") : t("原始配置") }}
         </button>
       </div>
     </div>
@@ -30,41 +30,36 @@
     <!-- Hook creation form -->
     <section v-if="showHookForm" class="settings-editor hook-form">
       <div class="subhead">
-        <h3>新增 Hook</h3>
+        <h3>{{ t("新增 Hook") }}</h3>
       </div>
       <form class="config-form" @submit.prevent="saveHookForm">
-        <label class="field">事件
-          <UiSelect
+        <label class="field">{{ t("事件") }}<UiSelect
             :model-value="hookForm.event"
             :options="hookEventOptions"
-            aria-label="事件"
+            :aria-label="t('事件')"
             @update:model-value="hookForm.event = $event"
           />
         </label>
-        <label class="field">匹配器
-          <input
+        <label class="field">{{ t("匹配器") }}<input
             v-model.trim="hookForm.matcher"
-            placeholder="* 或工具名，多个用 | 分隔"
+            :placeholder="t('* 或工具名，多个用 | 分隔')"
           />
         </label>
-        <label class="field">处理器类型
-          <UiSelect
+        <label class="field">{{ t("处理器类型") }}<UiSelect
             :model-value="hookForm.handlerType"
             :options="handlerTypeOptions"
-            aria-label="处理器类型"
+            :aria-label="t('处理器类型')"
             @update:model-value="hookForm.handlerType = $event"
           />
         </label>
-        <label class="field">超时 (秒)
-          <input
+        <label class="field">{{ t("超时 (秒)") }}<input
             v-model.number="hookForm.timeout"
             type="number"
             min="1"
             max="300"
           />
         </label>
-        <label v-if="hookForm.handlerType === 'command'" class="field field-wide">命令
-          <textarea
+        <label v-if="hookForm.handlerType === 'command'" class="field field-wide">{{ t("命令") }}<textarea
             v-model="hookForm.command"
             rows="3"
             spellcheck="false"
@@ -78,33 +73,30 @@
             placeholder="https://example.com/hook"
           />
         </label>
-        <label v-if="hookForm.handlerType === 'mcp'" class="field field-wide">MCP 工具名
-          <input
+        <label v-if="hookForm.handlerType === 'mcp'" class="field field-wide">{{ t("MCP 工具名") }}<input
             v-model.trim="hookForm.tool"
             placeholder="mcp_server_tool_name"
           />
         </label>
-        <label v-if="hookForm.handlerType === 'prompt'" class="field field-wide">提示文本
-          <textarea
+        <label v-if="hookForm.handlerType === 'prompt'" class="field field-wide">{{ t("提示文本") }}<textarea
             v-model="hookForm.prompt"
             rows="3"
             spellcheck="false"
-            placeholder="注入到上下文的提示文本"
+            :placeholder="t('注入到上下文的提示文本')"
           />
         </label>
-        <label class="field field-wide">状态消息 (可选)
-          <input
+        <label class="field field-wide">{{ t("状态消息 (可选)") }}<input
             v-model.trim="hookForm.statusMessage"
-            placeholder="执行前显示给用户的状态文字"
+            :placeholder="t('执行前显示给用户的状态文字')"
           />
         </label>
         <div class="field field-wide checkbox-inline">
-          <span>hook 失败时阻断执行</span>
+          <span>{{ t("hook 失败时阻断执行") }}</span>
           <button
             type="button"
             class="toggle-btn"
             :class="{ 'is-on': hookForm.required }"
-            aria-label="hook 失败时阻断执行"
+            :aria-label="t('hook 失败时阻断执行')"
             @click="hookForm.required = !hookForm.required"
           >
             <ToggleRight v-if="hookForm.required" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -112,9 +104,9 @@
           </button>
         </div>
         <div class="editor-actions field-wide">
-          <button type="button" class="small-btn quiet" @click="showHookForm = false">取消</button>
+          <button type="button" class="small-btn quiet" @click="showHookForm = false">{{ t("取消") }}</button>
           <button class="small-btn primary" type="submit" :disabled="hookFormSaving">
-            {{ hookFormSaving ? '保存中…' : '添加' }}
+            {{ hookFormSaving ? t("保存中…") : t("添加") }}
           </button>
         </div>
       </form>
@@ -127,26 +119,26 @@
         v-model="configDraft"
         class="hook-config-textarea"
         spellcheck="false"
-        aria-label="hooks.json 内容"
+        :aria-label="t('hooks.json 内容')"
         :disabled="configSaving"
       />
       <div class="subhead">
-        <span class="muted" :class="{ 'hook-config-error': configError }">{{ configMessage || '修改后需重启后端生效。' }}</span>
+        <span class="muted" :class="{ 'hook-config-error': configError }">{{ configMessage || t("修改后需重启后端生效。") }}</span>
         <div class="row-actions">
-          <button class="text-btn" type="button" @click="revertConfig">还原</button>
+          <button class="text-btn" type="button" @click="revertConfig">{{ t("还原") }}</button>
           <button
             class="small-btn"
             type="button"
             :disabled="configSaving"
             @click="saveConfig"
-          >{{ configSaving ? '保存中…' : '保存' }}</button>
+          >{{ configSaving ? t("保存中…") : t("保存") }}</button>
         </div>
       </div>
     </article>
 
     <!-- Empty state -->
     <article v-else-if="!loading && !hooks.length && !showHookForm" class="setting-card">
-      <p>未发现任何 Hook。点击「新增 Hook」创建事件钩子，或切换到「原始配置」手写 JSON。</p>
+      <p>{{ t("未发现任何 Hook。点击「新增 Hook」创建事件钩子，或切换到「原始配置」手写 JSON。") }}</p>
     </article>
 
     <!-- Hook list -->
@@ -159,7 +151,7 @@
         <header class="provider-head">
           <div class="provider-identity">
             <strong>{{ eventLabel(event) }}</strong>
-            <span>{{ group.length }} 个</span>
+            <span>{{ group.length }}{{ t("个") }}</span>
           </div>
         </header>
 
@@ -171,30 +163,30 @@
             :class="{ 'is-pending': !hook.trusted }"
           >
             <div class="model-identity">
-              <strong>{{ hook.matcher === '*' ? '全部工具' : hook.matcher }}</strong>
+              <strong>{{ hook.matcher === '*' ? t("全部工具") : hook.matcher }}</strong>
               <span class="hook-meta">{{ hook.handler_type }} · {{ hook.source_name || hook.source }}</span>
               <span v-if="hook.command" class="skill-path">{{ hook.command }}</span>
             </div>
             <div class="row-actions">
-              <span class="hook-status" :class="hook.trusted ? 'is-trusted' : 'is-pending-text'">{{ hook.trusted ? '已信任' : '待审核' }}</span>
+              <span class="hook-status" :class="hook.trusted ? 'is-trusted' : 'is-pending-text'">{{ hook.trusted ? t("已信任") : t("待审核") }}</span>
               <button
                 v-if="!hook.trusted"
                 class="text-btn is-on"
                 type="button"
                 @click="trustHook(hook.id)"
-              >信任</button>
+              >{{ t("信任") }}</button>
               <button
                 v-else
                 class="text-btn"
                 type="button"
                 @click="untrustHook(hook.id)"
-              >取消</button>
+              >{{ t("取消") }}</button>
               <button
                 v-if="canDelete(hook)"
                 class="text-btn danger"
                 type="button"
                 @click="deleteHook(hook.id)"
-              >删除</button>
+              >{{ t("删除") }}</button>
             </div>
           </div>
         </div>
@@ -203,7 +195,7 @@
 
     <CoreConfirmDialog
       :open="Boolean(pendingDeleteHook)"
-      title="删除 Hook？"
+      :title="t('删除 Hook？')"
       :detail="pendingDeleteHook?.label || ''"
       @cancel="pendingDeleteHook = null"
       @confirm="confirmDeleteHook"
@@ -212,8 +204,10 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, ref } from 'vue'
-import { ChevronLeft } from 'lucide-vue-next'
+import { ChevronLeft, ToggleLeft, ToggleRight } from 'lucide-vue-next'
 import UiSelect from './UiSelect.vue'
 import CoreConfirmDialog from './CoreConfirmDialog.vue'
 import type { CoreHookItem, CoreHookListPayload } from '../types'
@@ -281,10 +275,10 @@ const hookEventOptions = computed(() =>
   eventOrder.map(ev => ({ value: ev, label: `${eventLabel(ev)} (${ev})` })),
 )
 const handlerTypeOptions = [
-  { value: 'command', label: 'command (Shell 命令)' },
-  { value: 'http', label: 'http (HTTP 请求)' },
-  { value: 'mcp', label: 'mcp (MCP 工具)' },
-  { value: 'prompt', label: 'prompt (内联提示)' },
+  { value: 'command', get label() { return t("command (Shell 命令)") } },
+  { value: 'http', get label() { return t("http (HTTP 请求)") } },
+  { value: 'mcp', get label() { return t("mcp (MCP 工具)") } },
+  { value: 'prompt', get label() { return t("prompt (内联提示)") } },
 ]
 
 const groupedHooks = computed(() => {
@@ -404,16 +398,16 @@ async function saveHookForm() {
   if (f.statusMessage) handler.statusMessage = f.statusMessage
   if (f.required) handler.required = true
   if (f.handlerType === 'command') {
-    if (!f.command.trim()) { error.value = 'command 不能为空'; return }
+    if (!f.command.trim()) { error.value = t("command 不能为空"); return }
     handler.command = f.command
   } else if (f.handlerType === 'http') {
-    if (!f.url.trim()) { error.value = 'URL 不能为空'; return }
+    if (!f.url.trim()) { error.value = t("URL 不能为空"); return }
     handler.url = f.url
   } else if (f.handlerType === 'mcp') {
-    if (!f.tool.trim()) { error.value = 'MCP 工具名不能为空'; return }
+    if (!f.tool.trim()) { error.value = t("MCP 工具名不能为空"); return }
     handler.tool = f.tool
   } else if (f.handlerType === 'prompt') {
-    if (!f.prompt.trim()) { error.value = '提示文本不能为空'; return }
+    if (!f.prompt.trim()) { error.value = t("提示文本不能为空"); return }
     handler.prompt = f.prompt
   }
 
@@ -423,7 +417,7 @@ async function saveHookForm() {
     // 1. Read current config
     const getResult = await props.requestRpc('hook.config.get')
     const rawContent = typeof getResult.content === 'string' ? getResult.content : '{}'
-    const unparsable = 'hooks.json 当前无法解析（不是合法 JSON），已取消保存。请先到「原始配置」视图修复后再添加 Hook。'
+    const unparsable = t("hooks.json 当前无法解析（不是合法 JSON），已取消保存。请先到「原始配置」视图修复后再添加 Hook。")
     let config: Record<string, unknown>
     try {
       config = JSON.parse(rawContent) || {}
@@ -511,7 +505,7 @@ async function saveConfig() {
   try {
     await props.requestRpc('hook.config.update', { content: configDraft.value })
     configOriginal.value = configDraft.value
-    configMessage.value = '已保存，重启后端后生效。'
+    configMessage.value = t("已保存，重启后端后生效。")
     await fetchHooks()
   } catch (e) {
     configMessage.value = e instanceof Error ? e.message : String(e)

@@ -1,7 +1,7 @@
 <template>
   <div class="library-surface full-area-view library-home">
     <!-- ── 三大项：资料 / 记忆 / 方案 ── -->
-    <div class="library-sections" role="tablist" aria-label="资料库分区" data-library-sections>
+    <div class="library-sections" role="tablist" :aria-label="t('资料库分区')" data-library-sections>
       <button
         v-for="item in SECTIONS"
         :key="item.id"
@@ -27,7 +27,7 @@
     <MemoryView
       v-else-if="section === 'memory'"
       ref="sectionRef"
-      root-label="记忆"
+      :root-label="t('记忆')"
       :request-rpc="requestRpc"
       :client="client"
       :platform="platform"
@@ -38,7 +38,7 @@
     <PlanLibraryView
       v-else
       ref="sectionRef"
-      root-label="方案"
+      :root-label="t('方案')"
       :client="client"
       :project-id="projectId"
       :refresh-signal="refreshSignal"
@@ -51,6 +51,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * LibraryHomeView — 资料库的壳：一个入口，三个分区。
  *
@@ -104,9 +106,9 @@ const emit = defineEmits<{
 
 type SectionId = 'materials' | 'memory' | 'plans'
 const SECTIONS: Array<{ id: SectionId; label: string }> = [
-  { id: 'materials', label: '资料' },
-  { id: 'memory', label: '记忆' },
-  { id: 'plans', label: '方案' },
+  { id: 'materials', get label() { return t("资料") } },
+  { id: 'memory', get label() { return t("记忆") } },
+  { id: 'plans', get label() { return t("方案") } },
 ]
 
 const section = ref<SectionId>('materials')
@@ -133,12 +135,12 @@ function onChildHeading(payload: { title: string; subtitle: string }): void {
 /** 顶栏动作条与标题都归当前分区；标题再统一挂到「资料库」下面。 */
 const heading = computed<{ title: string; subtitle: string }>(() => {
   if (section.value === 'materials') {
-    return { title: '资料库 › 资料', subtitle: '项目里进出的文件 — 用户上传、中间产物与最终产物。' }
+    return { get title() { return t("资料库 › 资料") }, get subtitle() { return t("项目里进出的文件 — 用户上传、中间产物与最终产物。") } }
   }
   const label = SECTIONS.find(item => item.id === section.value)?.label ?? ''
   const child = childHeading.value
-  if (!child) return { title: `资料库 › ${label}`, subtitle: '' }
-  return { title: `资料库 › ${child.title}`, subtitle: child.subtitle }
+  if (!child) return { title: t("资料库 › {0}", { 0: label }), subtitle: '' }
+  return { title: t("资料库 › {0}", { 0: child.title }), subtitle: child.subtitle }
 })
 watch(heading, (value) => emit('heading', { ...value }), { immediate: true })
 

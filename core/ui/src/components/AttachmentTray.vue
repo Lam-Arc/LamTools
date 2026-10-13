@@ -1,5 +1,5 @@
 <template>
-  <div v-if="attachments.length" class="attachment-tray" aria-label="附件">
+  <div v-if="attachments.length" class="attachment-tray" :aria-label="t('附件')">
     <article
       v-for="item in attachments"
       :key="item.id"
@@ -16,7 +16,7 @@
         :class="{ 'attachment-preview--image': isDisplayImage(item) }"
         :disabled="item.status === 'failed'"
         :data-attachment-preview="item.id"
-        :aria-label="`预览 ${item.label || item.filename}`"
+        :aria-label="t('预览 {0}', { 0: item.label || item.filename })"
         @click="$emit('preview', item.id)"
       >
         <span class="attachment-visual" :class="`attachment-visual--${kindTone(item)}`">
@@ -42,21 +42,19 @@
         </span>
       </button>
 
-      <span v-if="item.status === 'failed'" class="attachment-error">{{ item.error || '上传失败' }}</span>
+      <span v-if="item.status === 'failed'" class="attachment-error">{{ item.error || t("上传失败") }}</span>
       <button
         v-if="item.status === 'failed'"
         type="button"
         class="attachment-retry"
         :data-attachment-retry="item.id"
         @click="$emit('retry', item.id)"
-      >
-        重试
-      </button>
+      >{{ t("重试") }}</button>
       <button
         type="button"
         class="attachment-remove"
         :data-attachment-remove="item.id"
-        :aria-label="`移除 ${item.label || item.filename}`"
+        :aria-label="t('移除 {0}', { 0: item.label || item.filename })"
         @click="$emit('remove', item.id)"
       >
         <X :size="14" :stroke-width="2" aria-hidden="true" />
@@ -66,6 +64,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { reactive, watch, type Component } from 'vue';
 import {
   File,
@@ -102,21 +102,21 @@ function onContextMenu(event: MouseEvent, item: CoreAttachment): void {
   const failed = item.status === 'failed'
   const items: ContextMenuEntry[] = failed
     ? [
-        { id: 'retry', label: '重试', icon: RotateCcw, action: () => emit('retry', item.id) },
+        { id: 'retry', get label() { return t("重试") }, icon: RotateCcw, action: () => emit('retry', item.id) },
         { type: 'separator', id: 'attachment-danger-separator' },
-        { id: 'remove', label: '移除', icon: Trash2, destructive: true, action: () => emit('remove', item.id) },
+        { id: 'remove', get label() { return t("移除") }, icon: Trash2, destructive: true, action: () => emit('remove', item.id) },
       ]
     : [
-        { id: 'preview', label: '预览', icon: Eye, action: () => emit('preview', item.id) },
-        { id: 'open', label: '系统打开', icon: ExternalLink, action: () => emit('open', item.id) },
+        { id: 'preview', get label() { return t("预览") }, icon: Eye, action: () => emit('preview', item.id) },
+        { id: 'open', get label() { return t("系统打开") }, icon: ExternalLink, action: () => emit('open', item.id) },
         { type: 'separator', id: 'attachment-danger-separator' },
-        { id: 'remove', label: '移除', icon: Trash2, destructive: true, action: () => emit('remove', item.id) },
+        { id: 'remove', get label() { return t("移除") }, icon: Trash2, destructive: true, action: () => emit('remove', item.id) },
       ];
   openContextMenu({
     event,
     items,
     ownerId: `attachment:${item.id}`,
-    ariaLabel: `${item.label || item.filename} 附件操作`,
+    ariaLabel: t("{0} 附件操作", { 0: item.label || item.filename }),
     panelAttributes: { 'data-attachment-menu': item.id },
   });
 }
@@ -126,11 +126,11 @@ function extension(item: CoreAttachment): string {
 }
 
 function kindLabel(item: CoreAttachment): string {
-  if (item.status === 'failed') return '上传失败';
+  if (item.status === 'failed') return t("上传失败");
   const ext = extension(item);
   if (ext) return ext.toUpperCase();
   const previewType = String(item.preview_type || '').toLowerCase();
-  return previewType && previewType !== 'external' ? previewType.toUpperCase() : '文件';
+  return previewType && previewType !== 'external' ? previewType.toUpperCase() : t("文件");
 }
 
 function kindTone(item: CoreAttachment): string {

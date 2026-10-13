@@ -1,18 +1,18 @@
 <template>
   <div class="wf-control-bar">
-    <button v-if="!running" class="small-btn primary" type="button" aria-label="运行整个工作流" title="运行整个工作流" @click="$emit('run')">
+    <button v-if="!running" class="small-btn primary" type="button" :aria-label="t('运行整个工作流')" :title="t('运行整个工作流')" @click="$emit('run')">
       <Play :size="15" :stroke-width="1.8" aria-hidden="true" />
     </button>
-    <button v-else class="small-btn danger" type="button" aria-label="停止工作流" title="停止工作流" @click="$emit('cancel')">
+    <button v-else class="small-btn danger" type="button" :aria-label="t('停止工作流')" :title="t('停止工作流')" @click="$emit('cancel')">
       <Square :size="14" :stroke-width="1.8" aria-hidden="true" />
     </button>
-    <button class="small-btn" type="button" :disabled="running" aria-label="单步调试" title="单步调试" @click="$emit('step')">
+    <button class="small-btn" type="button" :disabled="running" :aria-label="t('单步调试')" :title="t('单步调试')" @click="$emit('step')">
       <StepForward :size="15" :stroke-width="1.8" aria-hidden="true" />
     </button>
-    <button class="small-btn quiet" type="button" :disabled="running || !canUndo" title="撤销（Ctrl/Cmd+Z）" aria-label="撤销" @click="$emit('undo')">
+    <button class="small-btn quiet" type="button" :disabled="running || !canUndo" :title="t('撤销（Ctrl/Cmd+Z）')" :aria-label="t('撤销')" @click="$emit('undo')">
       <Undo2 :size="15" :stroke-width="1.8" aria-hidden="true" />
     </button>
-    <button class="small-btn quiet" type="button" :disabled="running || !canRedo" title="重做（Ctrl/Cmd+Shift+Z）" aria-label="重做" @click="$emit('redo')">
+    <button class="small-btn quiet" type="button" :disabled="running || !canRedo" :title="t('重做（Ctrl/Cmd+Shift+Z）')" :aria-label="t('重做')" @click="$emit('redo')">
       <Redo2 :size="15" :stroke-width="1.8" aria-hidden="true" />
     </button>
     <button
@@ -20,14 +20,14 @@
       type="button"
       :class="{ 'is-dirty': dirty }"
       :disabled="running"
-      :title="dirty ? '保存工作流（有未保存修改）' : '保存工作流'"
-      :aria-label="dirty ? '保存工作流（有未保存修改）' : '保存工作流'"
+      :title="dirty ? t('保存工作流（有未保存修改）') : t('保存工作流')"
+      :aria-label="dirty ? t('保存工作流（有未保存修改）') : t('保存工作流')"
       :data-dirty="dirty ? 'true' : 'false'"
       @click="$emit('save')"
     >
       <Save :size="15" :stroke-width="1.8" aria-hidden="true" />
     </button>
-    <span v-if="dirty" class="wf-control-status wf-control-dirty" title="有未保存修改" aria-label="有未保存修改">●</span>
+    <span v-if="dirty" class="wf-control-status wf-control-dirty" :title="t('有未保存修改')" :aria-label="t('有未保存修改')">●</span>
     <span v-if="saveError" class="wf-control-status wf-control-error" role="alert" :title="saveError" :aria-label="saveError">
       <CircleAlert :size="15" :stroke-width="1.8" aria-hidden="true" />
     </span>
@@ -35,10 +35,10 @@
       <GitCompareArrows :size="15" :stroke-width="1.8" aria-hidden="true" />
     </span>
     <template v-if="conflict">
-      <button class="small-btn quiet wf-conflict-action" type="button" :disabled="running" aria-label="采用远端版本" title="放弃本地修改并采用远端版本" @click="$emit('accept-remote')">
+      <button class="small-btn quiet wf-conflict-action" type="button" :disabled="running" :aria-label="t('采用远端版本')" :title="t('放弃本地修改并采用远端版本')" @click="$emit('accept-remote')">
         <CloudDownload :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
-      <button class="small-btn quiet wf-conflict-action" type="button" :disabled="running" aria-label="保留本地并重试" title="保留本地修改并用远端版本号重试保存" @click="$emit('keep-local')">
+      <button class="small-btn quiet wf-conflict-action" type="button" :disabled="running" :aria-label="t('保留本地并重试')" :title="t('保留本地修改并用远端版本号重试保存')" @click="$emit('keep-local')">
         <CloudUpload :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </template>
@@ -49,6 +49,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { Activity, CircleAlert, CloudDownload, CloudUpload, GitCompareArrows, Play, Redo2, Save, Square, StepForward, Undo2 } from 'lucide-vue-next'
 
 defineProps<{

@@ -119,6 +119,8 @@
   --sidebar-text-project: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 62%, var(--theme-backdrop-background, #3A3B3F));
   --sidebar-text-secondary: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 72%, transparent);
   --sidebar-text-muted: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 46%, transparent);
+  --sidebar-icon-muted-solid: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 46%, var(--theme-backdrop-solid, var(--bg)));
+  --sidebar-icon-hover-solid: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 65%, var(--theme-backdrop-solid, var(--bg)));
   --sidebar-text-disabled: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 28%, transparent);
   --sidebar-hover: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 5%, transparent);
   --sidebar-selected: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 8%, transparent);

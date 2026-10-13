@@ -318,4 +318,37 @@ describe('useCoreWorkbenchProjectionController', () => {
     await nextTick()
     expect([...fixture.controller.processExpandedIds.value]).toEqual([])
   })
+
+  it('keeps the last reply out of the live state while the main agent waits on members', async () => {
+    const currentSnapshot = ref<CoreAppSnapshot | null>(snapshot('thread-a', 'running', { includeTool: true }))
+    const status = ref('running')
+    const awaitingSubAgents = ref(false)
+    const finished: string[] = []
+    const controller = useCoreWorkbenchProjectionController({
+      snapshot: currentSnapshot,
+      activeThreadId: ref<string | null>('thread-a'),
+      status,
+      awaitingSubAgents,
+      activeTurnId: ref('turn-1'),
+      submittingApprovalRequestIds: ref(new Set<string>()),
+      shallowThinkingPending: ref(false),
+      onTurnFinished: () => finished.push(status.value),
+    })
+    await nextTick()
+
+    // Normal running turn: the last reply is the live one.
+    expect(controller.messages.value.at(-1)?.metadata?.live).toBe(true)
+
+    // Main agent stops, members keep running: the turn is still open, but the
+    // transcript must not read as streaming.
+    awaitingSubAgents.value = true
+    await nextTick()
+    expect(controller.messages.value.at(-1)?.metadata?.live).toBeFalsy()
+
+    // The turn-end detection still tracks the real status.
+    status.value = 'completed'
+    currentSnapshot.value = snapshot('thread-a', 'completed', { includeTool: true, snapshotSeq: 2 })
+    await nextTick()
+    expect(finished).toEqual(['completed'])
+  })
 })

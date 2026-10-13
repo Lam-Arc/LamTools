@@ -82,97 +82,420 @@ current operating system and shell.
 <!-- codex-workflow-managed-end -->
 
 <!-- codex-workflow-project-personalization-start -->
+## User Preferences
+
+- Answer only what is asked. Keep communication concise, direct, and efficient.
+- For exploration tasks, use six Luna sub-agents with high or maximum reasoning
+  effort. Respect platform concurrency limits by scheduling them in batches.
+- Do not use Computer Use unless explicitly requested. Limit verification to
+  code-based methods. Record any unperformed installer or visual acceptance
+  gates as pending rather than claiming they passed.
 <!-- codex-workflow-project-personalization-end -->
 
 <!-- codex-workflow-project-local-instructions-start -->
-# LamTools
+# LamTools Project Instructions
 
-## 沟通方式（强制）
+These instructions define project behavior and override workflow defaults where
+applicable. Follow higher-priority instructions and the user's explicit request.
+Paths in this section are repository-relative unless stated otherwise.
 
-- 面向用户的回复只讲业务：发生了什么（用户能观察到的现象）、现象之间的差别、以及需要用户拍板的业务决策及其影响。
-- 不出现代码路径、函数名、变量名、日志片段、协议或接口名等实现层词汇；实现方案与取舍由 agent 自行决定，不向用户汇报。
-- 仅当用户明确要求技术细节（看代码、代码审查、排查细节）时，才按要求的粒度展开。
+## 1. Communication and Decisions
 
-## Setup 后置验收
+- Answer only what the user asked. Keep replies simple, direct, and efficient.
+- Describe observable behavior, outcomes, and business decisions with their
+  consequences. Include implementation details only when the user explicitly
+  requests code inspection, review, or diagnostic detail.
+- Own implementation choices and technical tradeoffs. Do not ask the user to
+  choose function names, code organization, or equivalent technical details.
+- Reach agreement with the user on the plan before implementation. An explicit
+  request or previously approved plan supplies agreement for that scope; do not
+  repeatedly ask for the same approval.
+- If requirements, intended behavior, scope, or a business decision remain
+  uncertain, clarify them before implementing the affected work.
 
-- 每次完成 Core Windows Inno Setup 构建（`core/desktop/installer/Sunday.iss`）或 setup 版本更新后，使用项目技能
-  `.agents/skills/lamtools-setup-install`，将对应版本安装到
-  `E:\setuptest\<版本号>`，启动并校验主程序与后端进程；不要改用开发模式启动代替。
+## 2. Product and Change Boundaries
 
-## 项目结构
+LamTools is a general-purpose, all-in-one AI application. Workflows support many
+AI scenarios. AI animated comics are one application scenario, not the product's
+positioning.
 
-- **Core** (`core/`)：Agent 基座，一个基础独立可用的 Agent。当前唯一活跃产品。
-- **Website** (`website/`)：官网（Vue 3 + Vite + anime.js）。独立构建，但展示区通过 alias 复用 `core/ui/src` 与 `core/ui/node_modules`，构建前需先 `cd core/ui && npm ci`。
-- **Archive** (`archive/members/`)：已归档的 member 产品（Writer / Sage / Imager），保留历史可追溯，不再维护。
+| Area | Role | Change policy |
+| --- | --- | --- |
+| `core/` | Standalone agent foundation; the only active product | Default implementation scope |
+| `website/` | Official website; reuses the real Core UI | Change for website work or required release synchronization |
+| `archive/members/` | Archived Writer, Sage, and Imager products | Retain for historical traceability; do not maintain |
 
-## 核心规则
+Keep product development in `core/`. Explicitly requested repository instruction
+edits and required website release updates are within their respective scope.
+Every GUI capability must have a corresponding CLI capability.
 
-- **产品定位：LamTools 的目标是通用的一站式 AI 应用；工作流是支撑多种 AI 场景的基础能力，AI 漫剧只是其中一个应用场景，不是产品定位。**
-- **任何计划都必须先与用户全方面达成共识之后才能实现；如有任何不确定之处，请先询问用户。**
-- 当前聚焦 Core 建设，所有改动在 `core/` 内进行。
-- 任何 GUI 能力必须有对应的 CLI。
-- PowerShell 涉及中文必须使用 UTF-8。
-- **观测环境只有 Tauri**（`core/desktop`），一切 UI 验证以 Tauri 窗口为准，不折腾浏览器/dev.ps1 体系。
-- **默认只做代码级检查**：开发与修复过程中不主动用浏览器或任何 GUI 工具查看界面；要看渲染效果必须先得到用户明确许可。UI 的实际观感由用户在 Tauri 窗口里确认。
+## 3. Verification Policy
 
-## 移动端发布节奏
+- Define acceptance criteria before implementation and use checks appropriate to
+  the change. Preserve coverage, assertions, and failure visibility.
+- Default to code-level verification. Do not use computer-use tools, browsers,
+  or GUI inspection unless the user explicitly requests or authorizes them.
+- Tauri (`core/desktop`) is the only environment for visual UI acceptance.
+  The user confirms appearance in the Tauri window. Do not replace this with
+  browser previews or a dev.ps1-based observation setup.
+- Required installer launch/process checks remain release acceptance gates.
+  They do not authorize additional visual inspection.
+- Report only completed verification as passed. Distinguish code checks from
+  installer checks, public-deployment checks, and user visual confirmation.
 
-- **0.1.x 就是移动端测试通道**：每完成一次修复，补丁号直接 +1（0.1.9 → 0.1.10 → 0.1.11 …），出包并上传，供真机验证；不需要每次再问是否发版。
-- 版本号 8 处同步：`core/mobile/package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（`sunday-mobile`）、`gen/android/app/build.gradle.kts`（versionCode/versionName 默认值）、`gen/android/app/tauri.properties`、`update-manifest.json`，以及官网 `website/src/components/Download.vue` 的 `VITE_SUNDAY_MOBILE_VERSION` 默认值。
-- Android versionCode = major*1000000 + minor*1000 + patch（0.1.9 → 1009）；`scripts/package-mobile.ps1` 会校验它。
-- 发布流程与审计沿用 `core/mobile/artifacts/release-0NN/`：出包 → 独立校验 APK → 上传 APK 与官网 → 公开校验。注意 `package-mobile.ps1` 的 stdout 会被 Gradle daemon 持有，管道读取会等不到 EOF（表现为"卡住"），应改为重定向到文件并轮询产物。
+### Required contextual guidance
 
-## 官网（website/）
+- For Core UI components, CSS, tokens, or design decisions, use the project skill
+  `.agents/skills/lam-design-spec`. Existing interface decisions follow that
+  design language; use Impeccable for new designs as directed by the skill.
+- Before work related to Core UI streaming performance, read
+  `docs/core-ui-streaming-perf.md`. It is the sole authoritative record for
+  investigation, implementation, and continuation across sessions.
+- After every Core Windows Inno Setup build or setup version update, use
+  `.agents/skills/lamtools-setup-install` as specified in Section 8.
 
-- 技术栈：Vue 3.5 + Vite 8 + TS 6 + anime.js v4（动效）+ lucide-vue-next（图标）。
-- **产品展示区 = 真实 UI（iframe 预览）**：`preview.html` + `src/preview-main.ts` 在同一站点内挂载真实的 `core/ui` `LamToolsApp`（含内置 Workflow UI），`Showcase.vue` 用一个常驻 iframe 承载它并用 postMessage 同步主题（换 URL 会让宿主页面滚动）；真实组件与 CSS 仍来自 `core/ui/src`，模拟数据按真实 `CoreMessage/MessagePart` 形状驱动。改 UI 前先看这里，勿手写仿造。
-- 关键坑：① vue 必须 alias 到 website 自己的单例（否则 core/ui 组件加载第二份 vue 白屏）；② ChatThread 消息列表 `v-memo` 依赖消息对象引用——原地改 parts 不重渲染，每次变更要提交**新消息对象**（`commitMsg`）；③ 答案 part 用 `model_text`，`msg.content` 存最终全文（真实数据模型）；④ 覆盖真实组件 DOM 的样式要放全局（如 `preview.html` 里的 `.core-preview-document .thread` 贴底呈现——scoped 属性选择器匹配不到 WorkspaceShell 渲染的节点）；⑤ `@vue-flow/*` 等依赖由 vite alias 指向 `core/ui/node_modules`，构建前必须先装 core/ui。
-- 开发：`cd website && npm run dev`（5199，不碰 5172/5173）；构建 `npm run build`（纯 vite build，因 core/ui 跨项目类型检查噪音大未挂 vue-tsc）；产物 `website/dist/`。
-- 版本引用：`Download.vue` 的 `VITE_SUNDAY_VERSION`（桌面）与 `VITE_SUNDAY_MOBILE_VERSION`（移动端）默认值随发布更新，`.env.example` 与 `src/mock/runtime.ts` 里的预览版本同步跟着走。
-- 文案不再使用 `TODO(文案)` 占位标记；下载区安装包路径指向站点 `downloads/`（`Sunday-latest-x64-setup.exe` 与版本化文件都在站点上）。
-- **公网 `ainarit.com` 用的是另外两份副本，发布必须同步**：站点发布只重指 `/var/www/lamtools/site`（`47.114.43.99.nip.io`），而注册域名另有 `/var/www/ainarit/sunday.html`（下载区版本标签与 Linux 链接写死在页面里）与 `/var/www/ainarit-preview`（`/preview/` 内嵌的产品界面）。发布后执行 `scripts/sync-public-site.sh`（服务器上已装到 `/usr/local/bin/`）：它按刚发布的两个 manifest 打版本标签、用已发布的站点包重建 `/preview/`、并回访公网确认；`--check` 只读，脱节时退出码 1，可作验收关卡。历史上漏掉这一步导致页面停在 0.3.10 且两条 Linux 链接 404，详见 `core/desktop/artifacts/release-0.3.15/public-site-sync.md`。
+## 4. Development Environment
 
-## 开发启动
+Use UTF-8 whenever PowerShell reads, writes, or passes Chinese text.
+
+| Tool | Location / requirement |
+| --- | --- |
+| Android SDK | `E:\Environment\AndroidSDK`; system `ANDROID_HOME` is configured |
+| ADB | `E:\Environment\AndroidSDK\platform-tools\adb.exe` |
+| Android Gradle JDK | JDK 21 at `C:\Users\Administrator\AppData\Roaming\.minecraft\runtime\java-runtime-delta` |
+
+Before an Android Gradle build, set `JAVA_HOME` in the current PowerShell process
+to the JDK 21 directory. Do not use the existing Java 8 or JDK 17 installations.
+
+### Tauri lifecycle
+
+- Tauri dev is independent of `scripts/dev.ps1` and `scripts/restart.ps1`.
+  Never use those scripts to manage Tauri: terminating port 5173 kills its Vite
+  server and breaks the window's loading chain.
+- The desktop Vite server runs from `core/desktop`; the Tauri devUrl is fixed
+  at `127.0.0.1:5173`. Before starting it, ensure that another Vite instance is
+  not occupying 5173. A fallback to 5174 leaves the window loading the wrong
+  server on 5173.
+- Rust chooses an available backend port and launches
+  `py -3.14 -m lamtools_core.cli serve --port <port>` with cwd `core/`.
+  **Never add `--reload`.** On Windows, uvicorn's reloader can leave child
+  processes that escape `stop_backend` and retain database locks.
+- Rust supplies `__LAMTOOLS_API_BASE__` through `get_api_base`. Tauri does not
+  use the dev.ps1 backend port 5172 or its proxy.
+- Backend changes require a full application exit and restart with
+  `npm run tauri dev` from `core/desktop`.
+- UI changes use HMR: the desktop `src/main.ts` imports
+  `../../ui/src/app/LamToolsApp.vue`. Packaged `tauri build` output has no HMR.
+
+### Separate development scripts
+
+These commands describe the separate development system. They are not Tauri
+restart commands or UI acceptance tools.
 
 ```powershell
-.\scripts\dev.ps1 core              # Core 前后端 (5172 / 5173)
-.\scripts\dev.ps1 all               # 同上（Core-only）
-.\scripts\restart.ps1               # 重启 Core 前后端（仅 dev.ps1 体系）
+.\scripts\dev.ps1 core  # Core backend/frontend on 5172 / 5173
+.\scripts\dev.ps1 all   # Same Core-only startup
+.\scripts\restart.ps1  # Restart only the dev.ps1 system
 ```
 
-## 本地开发工具
+## 5. Persistent Data and Configuration
 
-- Android SDK / ADB：`E:\Environment\AndroidSDK`；`adb.exe` 位于其 `platform-tools`，系统已配置 `ANDROID_HOME`。
-- Android Gradle 使用 JDK 21：`C:\Users\Administrator\AppData\Roaming\.minecraft\runtime\java-runtime-delta`；构建 `core/mobile/android` 前将本次 PowerShell 进程的 `JAVA_HOME` 指向该目录，不要使用现有 Java 8 或 JDK 17。
+Core conversations and runtime state use `data/core.db`. Models, providers, and
+settings use JSONC files, not a configuration database.
 
-## Tauri（唯一观测环境）
+| Configuration | Location under `.lam/core/config/` |
+| --- | --- |
+| Models | `models/<model_id>.jsonc` |
+| Providers | `providers/<id>.jsonc` |
+| Settings | `settings.jsonc` |
+| Model retries | `model_retry.jsonc` |
 
-- **不要用 `restart.ps1` / dev.ps1 管 Tauri**：`restart.ps1` 杀 5173 会误杀 Tauri dev 的 vite，破坏其加载链（Tauri 窗口 devUrl 写死 `127.0.0.1:5173`，前端由 `core/desktop` 的 vite 服务）。
-- Tauri dev 是独立体系：Rust 自己选随机空闲端口拉起后端（`py -3.14 -m lamtools_core.cli serve --port 随机 --reload`，cwd=`core/`，同一份 `data/core.db`），前端 `__LAMTOOLS_API_BASE__` 由 Rust `get_api_base` 下发，不走 5172/代理。
-- **Tauri 前后端重启 = 完全退出后在 `core/desktop` 下重新 `npm run tauri dev`**。重启前先确认 5173 没有别的 vite 占着（否则 desktop vite 抢不到端口挪到 5174，窗口仍加载 5173 会拿到错误页面）。
-- UI 改动经 HMR 即时生效（desktop 入口 `src/main.ts` 直接 import `../../ui/src/app/LamToolsApp.vue`，`core/ui/src` 全部在依赖链上）；打包产物（`tauri build`）无热更新。
+`LAMTOOLS_CORE_CONFIG_ROOT` can override the configuration root. Do not
+reintroduce the `llm_providers`, `llm_models`, or `app_settings` tables or the
+`LAMTOOLS_LLM_CONFIG_DB` environment variable.
 
-## 数据库与配置
+### Retry configuration and provider credentials
 
-| 组件 | 路径 |
-|------|------|
-| Core 会话/运行时 | `data/core.db` |
+- Read attempt count, per-attempt timeout, streaming idle timeout,
+  empty-response retries, `retry_delays_seconds`, and jitter from
+  `model_retry.jsonc`; use built-in defaults for missing values.
+- Assembly points are `default_agent.create_kernel`, `cli.py`, and
+  `tool/sub_agent_runner.py`. Explicit arguments take precedence over files.
+- Provider `api_key` values are plaintext in `providers/*.jsonc`. RPC list
+  responses mask them as `********`. Masked or empty write-back values must
+  preserve the existing key.
 
-- **模型 / 供应商 / 设置只有 jsonc，无 config DB**：模型 `models/<model_id>.jsonc`、供应商 `providers/<id>.jsonc`、设置 `settings.jsonc`、模型重试 `model_retry.jsonc`，统一在 `.lam/core/config/`（`LAMTOOLS_CORE_CONFIG_ROOT` 可覆盖）。禁止再引入 `llm_providers` / `llm_models` / `app_settings` 表或 `LAMTOOLS_LLM_CONFIG_DB` 环境变量。
-- 模型重试参数（次数/单次超时/流式空闲超时/空响应重试/每次重试间隔 `retry_delays_seconds`/抖动）读 `model_retry.jsonc`，缺省即代码内默认值；装配点 `default_agent.create_kernel`、`cli.py`、`tool/sub_agent_runner.py` 读取，显式传参优先于配置文件。
-- 供应商 api_key 明文存于 `providers/*.jsonc`；RPC 列表接口返回打码 `********`，写回时打码/空值不覆盖原 key。
-- **默认配置播种**（`config/defaults.py` 的 `ensure_default_config_files`，幂等不覆盖）：loadtools/access_tools/hooks/mcp/README 从 `core/config/resources/` 复制，AGENTS.md/load_context/model_retry/subagent 由代码内默认写入，并创建全局记忆库目录 `memory/`。安装器**不打包 `.lam`**（曾打包过，NSIS 覆盖语义会抹掉用户配置——已移除），新增默认文件一律放 `core/config/resources/` 并注册到播种清单。
-- **记忆 = 两档目录 + 工具驱动**（`mem/library.py`）：项目档 `<work_root>/.lam/memory/`、全局档 `.lam/core/config/memory/`；目录结构即索引，每档的 `INDEX.md` 由目录结构全自动生成、注入每个会话（优先级 15 / 20），模型通过内置 `memory` 工具（`tool/memory_tools.py`，auto_allow）读写。人工入口：资料库 → 记忆（浏览/编辑，项目档先列项目这一层）；设置与项目设置不再有记忆分区。`memory.reveal` RPC / `core memory reveal`（`--global` 切全局）仍可调起系统文件资源管理器打开对应文件夹；`memory.*` RPC 与 `core memory tree/read/write/append/edit/delete/rename/mkdir` 供模型与脚本读写。`INDEX.md` 是保留名，任何入口都不可写/改名/删除。旧的做梦（dreaming）、结构化记忆库（`core_memories` 表）与 `memory.md` / `MEMORY.md` 注入已整体移除，不再兼容。
-- **出站网络路由 = 设置 → 通用**（`settings.jsonc` 的 `core.network`：`proxy` / `no_proxy` / `ca_cert`，装配点 `config/network.py`）：**全应用出口**——模型（含生图）、MCP、命令工具（含 Workflow 命令节点、钩子、观察者）、网页抓取与搜索内核、插件安装、软件更新检查与下载——都只按这三项决定，**不读系统环境变量**；留空即直连，子进程内一律清掉继承来的 `*_PROXY`。本机地址（localhost / 127.0.0.1 / ::1 / `[::1]`）始终直连，`no_proxy` 支持 `.corp.com`、`*.corp.com`、`host` 与 `*`；DuckDuckGo 内核自带 `proxy_port` 时优先于全局设置。`ca_cert` 既是 httpx 请求的信任根，也以 `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` / `NODE_EXTRA_CA_CERTS` 注入子进程（WSL 侧自动转成 `/mnt/<盘>/...`）；应用渲染层（WebView2）跟随系统代理。CLI：`core network get` / `core network set --proxy/--no-proxy/--ca-cert`。WSL 例外：未配置时 `wsl.exe` 保持继承环境（仅 `WSLENV` 转发），配置后路由变量经 `WSLENV` 进入 WSL。
-- **保持电脑运行 = 设置 → 通用**（`settings.jsonc` 的 `core.keepAwake`，装配点 `runtime/power.py`）：开启后阻止系统空闲休眠（长任务不被中断），Windows 用 `SetThreadExecutionState(ES_CONTINUOUS|ES_SYSTEM_REQUIRED)` 实现，**必须在事件循环线程上调用**（该请求绑线程生命周期），后端启动时应用一次、每次设置写入后立即重应用；非 Windows 平台记为不支持（设置可存但不生效，UI 在非 Windows 隐藏该开关）。CLI：`core keep-awake get` / `core keep-awake set on|off`。
-- **提问自动继续 = 设置 → 通用**（`settings.jsonc` 的 `core.askAutoContinue`，后端校验 `config/automation.py`，计时在桌面端 `ui/src/composables/useCoreAskAutoContinue.ts`）：开启后**只**处理模型的提问卡（`question` 工具），满 5 分钟无人回答就以 `other_guidance` 回传「用户跳过回答：等待 5 分钟未响应，未收集到用户答案。」（措辞与 question 工具无用户输入时的既有约定一致），本轮继续。**权限审批卡绝不自动处理**——审批是安全边界，超时不代表同意，只有人能放行（这是明确的产品约定）。计时器在出现待答复提问卡时才读一次偏好，答复失败重新计时而不是放弃，用户手动答复后随即撤销计时。CLI：`core ask-auto-continue get` / `core ask-auto-continue set on|off`。
-- **内存中断自动续跑 = 设置 → 通用**（`settings.jsonc` 的 `core.memoryResume`，装配点 `runtime/memory_guard.py` + `app/memory_resume_supervisor.py`，看门狗随后端起停）：机器内存不足把一轮打断时，**必须当场说明原因**并把阈值写进提示（「可用内存（物理内存 + 页面文件）大于 X GB 时 Sunday 会自动继续」）；中断原因以 `failure_code=host_memory_exhausted` + 文案留在运行时状态上，前端在实时路径也要留下这条终态项（`appServer/store.ts` 的 status 分支），否则界面会一直停在「正在创建文件…」而没有任何解释。恢复判定口径是**可用物理内存 + 页面文件**（Windows `GlobalMemoryStatusEx` 的可用提交量，非「空闲物理内存」），默认阈值 4 GB、可在设置里改；达标后由看门狗在**同一会话**发起新的一轮接着做（提示词见 `memory_resume_continuation_prompt`），最多连续 3 次，用户自己发了新消息则放弃自动续跑。**终态记录必须写得下去**：终态事件与整线程快照装载拆成两步（快照装载失败不得回滚已提交的终态），整批写不进去时退化为只写终态那条；提示"可以续跑"之前不允许出现"运行中"的假象——`reconcile_terminal_turns`（启动 + 每 15 秒）把「状态已终态、快照仍 running」的回合收尾，判据只看已记录的终态，**不看"多久没动静"**（正常的长时间工具与死掉的回合从外部看是一样的）。CLI：`core memory-resume get` / `core memory-resume set on|off [--threshold-gb N]`；非 Windows/Linux 记为不支持，UI 隐藏该卡。
-- **软件更新 = 检测 + 应用内下载校验 + 交给系统安装程序**：`update.check` RPC / CLI `lamtools_core.cli update check` → 后端 `update/checker.py` 先读官网清单（`downloads/desktop-update.json`）、再回退 GitHub `releases/latest`，与 `lamtools_core.__version__` 比较。有新版本时，左侧竖栏（账号上方）出现一枚柔和圆角的更新图标；点它，图标平移放大成屏幕中央的更新卡片：卡片写明当前版本 → 最新版本、更新摘要（有则显示）、下载百分比，并提供「取消」与「更新」。点「更新」后下载（`update.download`，逐块校验摘要；`update.cancel` 可中途取消）→ 校验通过即自动安装（`update.install`，`/SILENT` + `/AUTORESTART=1`）→ **Windows 上应用先自行退出再运行安装包**（安装程序以脱离后端作业对象 `JOB_OBJECT_LIMIT_BREAKAWAY_OK` 的方式启动）→ **装完由安装程序自动把应用重新打开**；Linux/macOS 只打开安装包所在文件夹且不退出（`quit: false`）。发布流程必须跑 `scripts/verify-update-install.ps1`（公网下载 + 摘要一致 + 静默安装 + 应用自动回来），CI 侧由 `verify-desktop-lifecycle.ps1` 覆盖同一契约。**版本号 5 处必须同步**（tauri.conf.json / Cargo.toml / desktop package.json / pyproject.toml / `__init__.py`），统一用 `scripts/bump-version.ps1`，打 tag `vX.Y.Z` 后 `release.yml` 自动出包。不做 updater 插件/签名（详见 `core/desktop/PACKAGING.md`）。
+### Default seeding
 
-## 持续事项
+`ensure_default_config_files` in `config/defaults.py` is idempotent and must not
+overwrite existing configuration.
 
-- Core UI 流式性能优化（卡顿调查、各包实施记录）的唯一权威文档：`docs/core-ui-streaming-perf.md`。每次相关改动或新会话必须先读它。
-  - 快速见效包（delta 合并 / 滚动合并 / goal 节流 / watcher 裁剪）已完成。
-  - 结构包（MessageView 组件化 + 投影增量更新 + Markdown 增量分段渲染）已完成（2026-08-07）。
-  - part 级 v-memo 隔离（5 处 part 循环元素级 v-for + v-memo）已完成（2026-08-07）。
+- Copy loadtools/access_tools/hooks/mcp/README from `core/config/resources/`.
+- Generate AGENTS.md/load_context/model_retry/subagent from built-in defaults.
+- Create the global memory library directory `memory/`.
+- Put new resource-backed defaults in `core/config/resources/` and register
+  them in the seeding list.
+- **Never bundle `.lam` in installers.** Earlier NSIS overwrite behavior erased
+  user configuration; that packaging behavior was removed.
+
+## 6. Runtime Behavior Contracts
+
+Implementation references below are relative to `core/src/lamtools_core/` for
+Python modules and `core/ui/src/` for frontend modules.
+
+### Memory library
+
+Implementation: `mem/library.py` and `tool/memory_tools.py`.
+
+- Project scope: `<work_root>/.lam/memory/`. Global scope:
+  `.lam/core/config/memory/`.
+- Directory structure is the index. Generate each scope's `INDEX.md`
+  automatically and inject it into every conversation at priorities 15 and 20
+  for project and global memory respectively.
+- Models access memory through the built-in `memory` tool with `auto_allow`.
+- Manual access is Library → Memory, with projects listed first for project
+  memory. Do not restore memory sections in settings or project settings.
+- `INDEX.md` is reserved: no entry point may write, rename, or delete it.
+- Do not restore legacy dreaming, the `core_memories` table, or
+  `memory.md` / `MEMORY.md` injection; compatibility was removed.
+
+Access: `memory.*` RPCs and
+`core memory tree/read/write/append/edit/delete/rename/mkdir`.
+`memory.reveal` / `core memory reveal` opens the corresponding system folder;
+`--global` selects global memory.
+
+### Outbound network routing
+
+Setting: `core.network` in `settings.jsonc`; implementation: `config/network.py`.
+User entry: Settings → General.
+
+- `proxy`, `no_proxy`, and `ca_cert` govern application outbound traffic:
+  models including image generation, MCP, command tools, Workflow command
+  nodes, hooks, observers, fetching, search engines, plugin installation, and
+  update checks/downloads.
+- Do not derive routing from system environment variables. Empty settings mean
+  direct connections; clear inherited `*_PROXY` variables in subprocesses.
+- Localhost, 127.0.0.1, ::1, and `[::1]` always connect directly.
+  `no_proxy` supports `.corp.com`, `*.corp.com`, `host`, and `*`.
+- A DuckDuckGo engine's explicit `proxy_port` overrides the global proxy.
+- Use `ca_cert` as the httpx trust root and inject it into subprocesses through
+  `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, and
+  `NODE_EXTRA_CA_CERTS`. Convert WSL paths to `/mnt/<drive>/...`.
+- WebView2 follows the system proxy; it is a rendering-layer exception.
+- WSL exception: unconfigured `wsl.exe` retains its inherited environment with
+  `WSLENV` forwarding. Configured routing variables enter WSL through `WSLENV`.
+
+CLI: `core network get` / `core network set --proxy/--no-proxy/--ca-cert`.
+
+### Keep awake
+
+Setting: `core.keepAwake`; implementation: `runtime/power.py`.
+User entry: Settings → General.
+
+- Prevent idle system sleep during long tasks when enabled.
+- On Windows, call
+  `SetThreadExecutionState(ES_CONTINUOUS|ES_SYSTEM_REQUIRED)` **on the event-loop
+  thread**; the request is tied to that thread's lifetime.
+- Apply once at backend startup and immediately after every settings write.
+- On other platforms, store the preference but mark it unsupported and hide
+  the switch; it has no effect.
+
+CLI: `core keep-awake get` / `core keep-awake set on|off`.
+
+### Automatic continuation for questions
+
+Setting: `core.askAutoContinue`; validation: `config/automation.py`;
+timer: `composables/useCoreAskAutoContinue.ts`.
+User entry: Settings → General.
+
+- Handle only pending model question cards from the `question` tool.
+- After five minutes without an answer, submit `other_guidance` using the
+  existing no-answer wording: the user skipped answering, five minutes elapsed
+  without a response, and no user answer was collected. Continue the turn.
+  Preserve the existing product message; this English guide does not authorize
+  translating application copy.
+- **Never automatically handle permission approval cards.** A timeout is not
+  consent; only a human may approve.
+- Read the preference once when a pending question appears. Restart the timer
+  if submission fails. Cancel it immediately after a manual answer.
+
+CLI: `core ask-auto-continue get` / `core ask-auto-continue set on|off`.
+
+### Automatic resumption after memory interruption
+
+Setting: `core.memoryResume`; implementations: `runtime/memory_guard.py` and
+`app/memory_resume_supervisor.py`. User entry: Settings → General.
+
+- Start and stop the watchdog with the backend.
+- Immediately explain a low-memory interruption and state the recovery
+  threshold: Sunday will continue when available memory exceeds X GB.
+- Available memory means **physical memory + page file**. On Windows use
+  available commit capacity from `GlobalMemoryStatusEx`, not free physical
+  memory alone. The configurable default threshold is 4 GB.
+- Persist `failure_code=host_memory_exhausted` and the explanation in runtime
+  state. Retain the terminal item in the live frontend status path
+  (`appServer/store.ts`); do not leave an unexplained "Creating file..." state.
+- After recovery, start a new turn in the **same conversation** using
+  `memory_resume_continuation_prompt`, with at most three consecutive automatic
+  resumptions. Cancel automatic resumption if the user sends a new message.
+- Persist terminal events separately from loading the full thread snapshot.
+  Snapshot failure must not roll back an already committed terminal event.
+  If batch persistence fails, fall back to writing the terminal event alone.
+- `reconcile_terminal_turns` runs at startup and every 15 seconds to close
+  turns with recorded terminal status but a running snapshot. Use recorded
+  terminal status, **never elapsed inactivity**, as the criterion. Normal
+  long-running tools and dead turns can look identical externally.
+- Do not show a false running state while reporting that resumption is
+  available. Hide the setting on unsupported platforms (outside Windows/Linux).
+
+CLI: `core memory-resume get` /
+`core memory-resume set on|off [--threshold-gb N]`.
+
+## 7. Website and Real-UI Preview
+
+Stack: Vue 3.5, Vite 8, TypeScript 6, anime.js v4, and lucide-vue-next.
+Website implementation rules apply when website work is in scope; they do not
+authorize browser-based UI verification.
+
+### Build and development
+
+- Install `core/ui` dependencies first: `cd core/ui` then `npm ci`.
+- From `website/`, run `npm run build`. Output is `website/dist/`.
+  The script uses Vite without vue-tsc because cross-project Core UI type
+  checking produces excessive noise.
+- The separate website dev command is `npm run dev`, using port 5199.
+  Do not interfere with ports 5172 or 5173.
+
+### Showcase contract
+
+The showcase mounts the actual `core/ui` `LamToolsApp`, including Workflow UI,
+through `preview.html` and `src/preview-main.ts`. Read the preview implementation
+before changing showcase behavior. Do not hand-build an imitation.
+
+- Keep one persistent iframe in `Showcase.vue`; synchronize themes with
+  postMessage. Changing its URL can scroll the host page.
+- Reuse components and CSS from `core/ui/src`. Mock data must follow the real
+  `CoreMessage/MessagePart` shape.
+- Alias Vue to the website's own singleton. A second Vue instance can produce
+  a blank screen.
+- ChatThread `v-memo` depends on message identity. Use a new message object for
+  every update (`commitMsg`); mutating parts in place does not rerender.
+- Use `model_text` for answer parts and `msg.content` for final full text.
+- Put DOM overrides in global styles. Scoped selectors cannot reach nodes
+  rendered by WorkspaceShell; for example, `.core-preview-document .thread`
+  in `preview.html` controls bottom alignment.
+- Alias dependencies such as `@vue-flow/*` to `core/ui/node_modules`.
+
+### Release references and public copies
+
+- Keep `VITE_SUNDAY_VERSION` and `VITE_SUNDAY_MOBILE_VERSION` defaults in
+  `website/src/components/Download.vue` synchronized with releases. Also update
+  `.env.example` and preview versions in `src/mock/runtime.ts`.
+- Do not use legacy TODO copy placeholders. Download links use the site's
+  `downloads/` directory, including `Sunday-latest-x64-setup.exe` and
+  versioned installers.
+- Publishing `/var/www/lamtools/site` (`47.114.43.99.nip.io`) does not update
+  all copies served by `ainarit.com`. Synchronize both
+  `/var/www/ainarit/sunday.html` (hard-coded versions and Linux links) and
+  `/var/www/ainarit-preview` (the embedded `/preview/` UI).
+- After publication, run `scripts/sync-public-site.sh`, installed on the
+  server under `/usr/local/bin/`. It reads the two published manifests,
+  updates version labels, rebuilds `/preview/` from the published site package,
+  and verifies the public site. `--check` is read-only and exits 1 on drift.
+- Historical evidence:
+  `core/desktop/artifacts/release-0.3.15/public-site-sync.md`. Missing this step
+  previously left version 0.3.10 visible and both Linux links returning 404.
+
+## 8. Desktop Updates and Release Acceptance
+
+### Update behavior
+
+Implementation: `core/src/lamtools_core/update/checker.py`.
+Entry points: `update.check` RPC / `lamtools_core.cli update check` CLI.
+
+1. Read `downloads/desktop-update.json` from the official website, falling back
+   to GitHub `releases/latest`. Compare with `lamtools_core.__version__`.
+2. Show a softly rounded update icon above the account in the left sidebar.
+   Clicking it moves and enlarges it into a centered card showing current and
+   latest versions, an optional summary, download percentage, and Cancel/Update.
+3. Download with `update.download`, verifying the digest as chunks arrive.
+   Support cancellation through `update.cancel`.
+4. After successful verification, invoke `update.install` with `/SILENT` and
+   `/AUTORESTART=1`.
+5. On Windows, exit the application before launching the installer. Start it
+   outside the backend job object using `JOB_OBJECT_LIMIT_BREAKAWAY_OK`.
+   The installer must reopen the application after installation.
+6. On Linux/macOS, open the installer folder without exiting (`quit: false`).
+
+Do not introduce an updater plugin or signing. Follow
+`core/desktop/PACKAGING.md`.
+
+### Version synchronization
+
+Use `scripts/bump-version.ps1` to synchronize all five desktop version sources:
+
+- `core/desktop/src-tauri/tauri.conf.json`
+- `core/desktop/src-tauri/Cargo.toml`
+- `core/desktop/package.json`
+- `core/pyproject.toml`
+- `core/src/lamtools_core/__init__.py`
+
+Tagging `vX.Y.Z` triggers packaging through `release.yml`. Apply the website
+version synchronization in Section 7 as part of publication.
+
+### Required acceptance gates
+
+- After every build of `core/desktop/installer/Sunday.iss` or setup version
+  update, apply `.agents/skills/lamtools-setup-install`: install the matching
+  version into `E:\setuptest\<version>`, launch it, and verify the application
+  and backend processes. Development-mode startup is not a substitute.
+- Releases must run `scripts/verify-update-install.ps1` to verify public
+  download, matching digest, silent installation, and automatic application
+  restart. CI verifies the same contract with
+  `scripts/verify-desktop-lifecycle.ps1`.
+- Complete the public-site synchronization and checks from Section 7.
+
+## 9. Mobile Test Releases
+
+**0.1.x is the mobile testing channel.** After each completed mobile fix,
+increment the patch version by one, build, and upload for physical-device
+verification. This cadence is already authorized; do not ask again each time.
+
+Synchronize all eight version sources:
+
+| Source | Required value |
+| --- | --- |
+| `core/mobile/package.json` | Package version |
+| `core/mobile/src-tauri/tauri.conf.json` | Application version |
+| `core/mobile/src-tauri/Cargo.toml` | Crate version |
+| `core/mobile/src-tauri/Cargo.lock` | `sunday-mobile` version |
+| `core/mobile/src-tauri/gen/android/app/build.gradle.kts` | Default versionCode/versionName |
+| `core/mobile/src-tauri/gen/android/app/tauri.properties` | Android version properties |
+| `core/mobile/update-manifest.json` | Update version |
+| `website/src/components/Download.vue` | `VITE_SUNDAY_MOBILE_VERSION` default |
+
+Android versionCode = `major * 1000000 + minor * 1000 + patch`
+(for example, 0.1.9 → 1009). `scripts/package-mobile.ps1` validates it.
+
+Keep release audit evidence in `core/mobile/artifacts/release-0NN/` and execute:
+
+1. Build the package.
+2. Independently verify the APK.
+3. Upload the APK and website.
+4. Verify public availability and synchronize the public-site copies.
+
+Redirect `package-mobile.ps1` output to a file and poll artifacts. The Gradle
+daemon can keep stdout open, so piped reads may never receive EOF and appear
+stuck. Use the JDK 21 environment from Section 4.
+
+## 10. Streaming Performance Baseline
+
+Read `docs/core-ui-streaming-perf.md` before related work in every session.
+The following work is recorded as complete; consult that document for evidence
+and continuation rather than treating these items as new implementation tasks:
+
+- Delta coalescing, scroll coalescing, goal throttling, and watcher pruning.
+- MessageView componentization, incremental projection updates, and incremental
+  segmented Markdown rendering (2026-08-07).
+- Element-level `v-for` + `v-memo` isolation in five part loops (2026-08-07).
 <!-- codex-workflow-project-local-instructions-end -->

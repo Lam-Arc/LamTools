@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -7,6 +8,11 @@ import pytest
 import lamtools_core.app.base_agent as base_agent
 import lamtools_core.config.subagent_prompt as subagent_prompt
 from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
+from lamtools_core.llm import (
+    HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER,
+    TAIL_SYSTEM_MESSAGE_MARKER,
+    ChatMessage,
+)
 from lamtools_core.member import VerificationPolicy
 from lamtools_core.prompt import PromptContext
 from lamtools_core.runtime import RuntimeState
@@ -66,6 +72,106 @@ async def test_main_host_prompt_is_english_and_keeps_tool_contract(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_member_wake_tail_stays_after_mutable_runtime_context(monkeypatch, tmp_path):
+    kit = _isolated_kit(
+        monkeypatch,
+        tmp_path,
+        config=CoreBaseAgentConfig(request_local_late_context="late child context"),
+    )
+    wake = ChatMessage(
+        role="system",
+        content="子代理 worker 已完成。",
+        metadata={
+            "origin": "member_wake",
+            "turn_id": "turn-current",
+            TAIL_SYSTEM_MESSAGE_MARKER: True,
+        },
+    )
+    request = await kit.build_model_request(
+        RuntimeState(
+            session_id="session-1",
+            metadata={"work_root": str(tmp_path), "turn_id": "turn-current"},
+        ),
+        PromptContext(
+            session_id="session-1",
+            history=[ChatMessage(role="user", content="durable task"), wake],
+        ),
+    )
+
+    assert request.messages[-1] is wake
+    assert request.messages[-1].role == "system"
+    assert request.messages[-2].content == "late child context"
+    assert [message.content for message in request.messages].count(wake.content) == 1
+
+
+@pytest.mark.asyncio
+async def test_prior_wake_stays_in_history_for_manual_turn_and_current_wake_tails_after_tool_round(
+    monkeypatch, tmp_path
+):
+    kit = _isolated_kit(
+        monkeypatch,
+        tmp_path,
+        config=CoreBaseAgentConfig(request_local_late_context="late child context"),
+    )
+    prior_wake = ChatMessage(
+        role="system",
+        content="旧唤醒",
+        metadata={
+            "origin": "member_wake",
+            "turn_id": "turn-first-wake",
+            TAIL_SYSTEM_MESSAGE_MARKER: True,
+        },
+    )
+    current_wake = ChatMessage(
+        role="system",
+        content="新唤醒",
+        metadata={
+            "origin": "member_wake",
+            "turn_id": "turn-second-wake",
+            TAIL_SYSTEM_MESSAGE_MARKER: True,
+        },
+    )
+    manual_request = await kit.build_model_request(
+        RuntimeState(
+            session_id="session-1",
+            metadata={"work_root": str(tmp_path), "turn_id": "turn-manual"},
+        ),
+        PromptContext(
+            session_id="session-1",
+            history=[prior_wake, ChatMessage(role="user", content="手动继续")],
+        ),
+    )
+    manual_contents = [str(message.content) for message in manual_request.messages]
+    assert manual_contents.index("旧唤醒") < manual_contents.index("手动继续")
+    assert manual_contents[-1] == "late child context"
+
+    history = [
+        prior_wake,
+        ChatMessage(role="user", content="手动继续"),
+        ChatMessage(role="assistant", content="准备执行"),
+        current_wake,
+        ChatMessage(role="assistant", content="工具调用"),
+        ChatMessage(role="tool", content="工具结果"),
+    ]
+    request = await kit.build_model_request(
+        RuntimeState(
+            session_id="session-1",
+            metadata={"work_root": str(tmp_path), "turn_id": "turn-second-wake"},
+        ),
+        PromptContext(session_id="session-1", history=history),
+    )
+
+    contents = [str(message.content) for message in request.messages]
+    assert contents.index("旧唤醒") < contents.index("手动继续")
+    assert contents.index("新唤醒") > contents.index("工具结果")
+    assert request.messages[-2].content == "late child context"
+    assert request.messages[-1] is current_wake
+    old = request.messages[contents.index("旧唤醒")]
+    assert old.role == "system"
+    assert old.metadata[HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER] is True
+
+
+@pytest.mark.asyncio
 async def test_study_host_prompt_is_english_and_omits_coding_delivery_rules(monkeypatch, tmp_path):
     monkeypatch.setattr(base_agent, "_bundled_study_system_prompt", lambda: "You are Study.")
     kit = _isolated_kit(
@@ -88,6 +194,94 @@ async def test_study_host_prompt_is_english_and_omits_coding_delivery_rules(monk
     # Study loads no memory index, so it must not carry the memory recall rule.
     assert "long-term memory index" not in prompt
     assert not re.search(r"[\u4e00-\u9fff]", prompt)
+
+
+@pytest.mark.asyncio
+async def test_current_model_line_leads_with_real_id_and_notes_display_label(monkeypatch, tmp_path):
+    kit = _isolated_kit(
+        monkeypatch,
+        tmp_path,
+        config=CoreBaseAgentConfig(
+            model_id="deepseek/deepseek-v4.1-flash",
+            model_display_name="Command Code/DeepSeek V4.1 Flash",
+        ),
+    )
+    state = RuntimeState(session_id="session-1", metadata={"work_root": str(tmp_path)})
+
+    request = await kit.build_model_request(state, PromptContext(session_id="session-1"))
+    prompt = str(request.messages[0].content)
+
+    # The value the agent echoes into a sub-agent's model argument must lead
+    # with the real id; the human-readable label stays as a note only.
+    assert "current model: deepseek/deepseek-v4.1-flash (Command Code/DeepSeek V4.1 Flash)" in prompt
+    assert "current model: Command Code/DeepSeek V4.1 Flash" not in prompt
+
+
+def test_current_model_reference_falls_back_without_a_display_label(tmp_path):
+    kit = CoreBaseAgentKit(
+        work_root=tmp_path,
+        config=CoreBaseAgentConfig(model_id="vendor/only-1"),
+        toolbox=_PromptToolbox(),  # type: ignore[arg-type]
+    )
+    assert kit._current_model_reference() == "vendor/only-1"
+
+    same = CoreBaseAgentKit(
+        work_root=tmp_path,
+        config=CoreBaseAgentConfig(model_id="vendor/only-1", model_display_name="vendor/only-1"),
+        toolbox=_PromptToolbox(),  # type: ignore[arg-type]
+    )
+    assert same._current_model_reference() == "vendor/only-1"
+
+
+@pytest.mark.asyncio
+async def test_delegation_hint_annotates_configured_model_with_real_id(
+    monkeypatch, tmp_path, isolated_config_root
+):
+    models_dir = isolated_config_root / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    (models_dir / "friendly.jsonc").write_text(
+        json.dumps(
+            {
+                "id": "friendly",
+                "model_id": "vendor/real-1",
+                "display_name": "Friendly Label",
+                "provider": "Prov Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings_dir = isolated_config_root / "subagent"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"default_multimodal_model": "Friendly Label"}), encoding="utf-8"
+    )
+    kit = _isolated_kit(monkeypatch, tmp_path, config=CoreBaseAgentConfig(capability="text"))
+
+    hint = kit._capability_prompt_line(["attachment-1"])
+
+    # Configured value kept verbatim, real id added as a note.
+    assert 'set model to "Friendly Label (vendor/real-1)"' in hint
+    # The example command uses the real id directly so it is immediately usable.
+    assert 'model="vendor/real-1")' in hint
+
+
+@pytest.mark.asyncio
+async def test_delegation_hint_keeps_unresolvable_model_verbatim(
+    monkeypatch, tmp_path, isolated_config_root
+):
+    settings_dir = isolated_config_root / "subagent"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"default_multimodal_model": "ghost-model"}), encoding="utf-8"
+    )
+    kit = _isolated_kit(monkeypatch, tmp_path, config=CoreBaseAgentConfig(capability="text"))
+
+    hint = kit._capability_prompt_line(["attachment-1"])
+
+    # Unresolvable: unchanged, no annotation, no failure/block.
+    assert 'set model to "ghost-model"' in hint
+    assert 'model="ghost-model")' in hint
+    assert "ghost-model (" not in hint
 
 
 @pytest.mark.asyncio

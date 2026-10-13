@@ -31,7 +31,7 @@
         <button
           class="rail-action__info"
           type="button"
-          :aria-label="`${label}说明`"
+          :aria-label="t('{0}说明', { 0: label })"
           :aria-expanded="infoOpen"
           :data-rail-action-info="actionId"
           @mouseenter="infoOpen = true"
@@ -47,6 +47,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * RailAction — one icon-only entry in the left rail (the top toolbar row and the
  * bottom footer row).

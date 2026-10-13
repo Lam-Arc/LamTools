@@ -203,6 +203,8 @@ class TestNormalizeUsage:
             "cache_creation_input_tokens": 200,
         })
         assert usage is not None
+        assert usage.prompt_tokens == 2500
+        assert usage.total_tokens == 2580
         assert usage.cached_tokens == 1100
         assert usage.cache_creation_tokens == 200
 
@@ -1025,3 +1027,12 @@ class TestStreamToolCallCompletion:
         }
         # No parse error
         assert not result[0].metadata.get("arguments_parse_error")
+
+def test_zero_reported_cache_survives_normalization():
+    usage = normalize_usage({"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 0}})
+    assert usage.to_dict()["cached_tokens"] == 0
+
+
+def test_openai_inclusive_cache_is_not_double_counted():
+    usage = normalize_usage({"prompt_tokens": 1200, "cache_read_input_tokens": 1100})
+    assert usage.prompt_tokens == 1200

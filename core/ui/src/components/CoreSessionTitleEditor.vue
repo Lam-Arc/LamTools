@@ -5,7 +5,7 @@
         ref="inputEl"
         v-model="draft"
         class="core-session-title-input"
-        aria-label="会话标题"
+        :aria-label="t('会话标题')"
         spellcheck="false"
         :disabled="saving"
         @focus="editing = true"
@@ -19,6 +19,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { ref, watch } from 'vue'
 
 const props = defineProps<{

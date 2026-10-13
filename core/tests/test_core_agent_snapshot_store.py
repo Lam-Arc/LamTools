@@ -969,3 +969,79 @@ async def test_natural_write_slims_legacy_registry_inline_image(tmp_path):
             assert item_row.item_json["artifacts"][0]["metadata"]["image_data_url"] == data_url
     finally:
         await engine.dispose()
+
+
+def test_projector_lifts_member_wait_onto_the_turn():
+    """The (a)/(b) distinction is a property of the turn, not of one row.
+
+    A client must be able to read whether the active turn is held open for
+    background members without scanning for a private item id, so the projector
+    lifts ``waiting_on_members`` onto ``turns[turn_id]`` (and names the members
+    still running). The report clears it.
+    """
+    projector = CoreAppSnapshotProjector(member_defaults={"queue": []})
+
+    def wait_item(seq: int, *, waiting: bool, members=None) -> RunItemEvent:
+        return RunItemEvent(
+            event_id=f"sub-agent-wait-{seq}",
+            kind="status",
+            thread_id="thread-1",
+            run_id="turn-1",
+            turn_id="turn-1",
+            item_id="turn-1:sub-agent-wait",
+            seq=0,
+            status="running",
+            payload={
+                "type": "subAgents",
+                "status": "running",
+                "waiting_on_members": waiting,
+                "members": list(members or []),
+            },
+        )
+
+    state = projector.apply(
+        None,
+        _envelope(1, wait_item(1, waiting=True, members=[{"name": "worker", "status": "running"}]).to_dict()),
+    )
+    turn = state["turns"]["turn-1"]
+    assert turn["waiting_on_members"] is True
+    assert turn["running_members"] == ["worker"]
+
+    state = projector.apply(state, _envelope(2, wait_item(2, waiting=False).to_dict()))
+    turn = state["turns"]["turn-1"]
+    assert turn["waiting_on_members"] is False
+    assert turn["running_members"] == []
+
+
+class ResourceEventRow(Base):
+    __tablename__ = "test_resource_events"
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(64))
+    seq: Mapped[int] = mapped_column(Integer)
+    method: Mapped[str] = mapped_column(String(100))
+    payload_json: Mapped[dict] = mapped_column(JSON)
+
+
+@pytest.mark.asyncio
+async def test_legacy_resource_history_recovers_from_usage_journal(tmp_path):
+    engine, factory = await _session_factory(tmp_path)
+    try:
+        async with factory() as db:
+            db.add(ThreadSnapshotRow(thread_id="thread-1", snapshot_seq=2, snapshot_json={
+                "core": {"turns": {"turn": {"turn_id": "turn", "usage": {"input_tokens": 1000}}}},
+            }))
+            for seq, parent, tokens in [(1, None, 100), (2, "delegate", 900)]:
+                db.add(ResourceEventRow(event_id=f"resource-{seq}", thread_id="thread-1", seq=seq, method="core/runItem", payload_json={
+                    "kind": "usage", "thread_id": "thread-1", "turn_id": "turn", "event_id": f"resource-{seq}",
+                    "item_id": f"call-{seq}", "parent_item_id": parent, "usage": {"llm_calls": 1, "input_tokens": tokens, "cached_tokens": 0},
+                }))
+            await db.commit()
+            store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow, event_model=ResourceEventRow)
+            state = await store.load_metadata(db, "thread-1")
+            turn = state["core"]["turns"]["turn"]
+            assert turn["usage"]["input_tokens"] == 100
+            assert turn["usage"]["llm_calls"] == 1
+            assert len(turn["usage_calls"]) == 2
+            assert turn["usage_calls"][1]["parent_item_id"] == "delegate"
+    finally:
+        await engine.dispose()

@@ -12,13 +12,13 @@
         :aria-busy="loading"
       >
         <header class="core-project-dialog-header">
-          <h2 id="core-project-dialog-title">新建项目</h2>
-          <p>{{ localOnly ? '项目将保存在当前设备。' : '选择一个工作目录，系统会为项目准备基础配置。' }}</p>
+          <h2 id="core-project-dialog-title">{{ t("新建项目") }}</h2>
+          <p>{{ localOnly ? t("项目将保存在当前设备。") : t("选择一个工作目录，系统会为项目准备基础配置。") }}</p>
         </header>
 
         <form class="core-project-create" @keydown.esc.prevent="cancel" @submit.prevent="submit">
           <label v-if="!localOnly" class="core-project-field core-project-root-label">
-            <span>项目地址</span>
+            <span>{{ t("项目地址") }}</span>
             <div class="core-project-root-field">
               <input
                 ref="workRootInput"
@@ -26,7 +26,7 @@
                 data-project-root
                 class="core-project-input"
                 autocomplete="off"
-                placeholder="选择或填写项目地址"
+                :placeholder="t('选择或填写项目地址')"
                 required
                 :disabled="loading"
               />
@@ -35,8 +35,8 @@
                 class="core-project-browse"
                 data-project-browse
                 :disabled="loading"
-                aria-label="选择项目目录"
-                title="选择项目目录"
+                :aria-label="t('选择项目目录')"
+                :title="t('选择项目目录')"
                 @click="openBrowser"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -44,24 +44,24 @@
                 </svg>
               </button>
             </div>
-            <small>项目文件和自动生成的 AGENTS.md 将存放在此目录。</small>
+            <small>{{ t("项目文件和自动生成的 AGENTS.md 将存放在此目录。") }}</small>
           </label>
 
           <label class="core-project-field">
-            <span>项目名称 <em v-if="!localOnly">选填</em></span>
+            <span>{{ t("项目名称") }}<em v-if="!localOnly">{{ t("选填") }}</em></span>
             <input
               v-model="name"
               data-project-name
               class="core-project-input"
               autocomplete="off"
-              :placeholder="localOnly ? '例如：手机项目' : '留空时使用目录名称'"
+              :placeholder="localOnly ? t('例如：手机项目') : t('留空时使用目录名称')"
               :required="localOnly"
               :disabled="loading"
             />
           </label>
 
           <fieldset class="core-project-visual-field">
-            <legend>项目外观 <em>选填</em></legend>
+            <legend>{{ t("项目外观") }}<em>{{ t("选填") }}</em></legend>
             <ProjectVisualPicker
               v-model:icon-key="iconKey"
               v-model:color-key="colorKey"
@@ -72,9 +72,9 @@
           <p v-if="error" class="core-project-error" role="alert">{{ error }}</p>
 
           <footer class="core-project-actions">
-            <button type="button" class="core-project-cancel" data-project-cancel :disabled="loading" @click="cancel">取消</button>
+            <button type="button" class="core-project-cancel" data-project-cancel :disabled="loading" @click="cancel">{{ t("取消") }}</button>
             <button type="submit" class="core-project-submit" data-project-submit :disabled="loading || (localOnly ? !name.trim() : !workRoot.trim())">
-              {{ loading ? '创建中' : '创建项目' }}
+              {{ loading ? t("创建中") : t("创建项目") }}
             </button>
           </footer>
 </form>
@@ -91,6 +91,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { nextTick, onMounted, ref } from 'vue'
 import FolderBrowserDialog from './FolderBrowserDialog.vue'
 import ProjectVisualPicker from './ProjectVisualPicker.vue'

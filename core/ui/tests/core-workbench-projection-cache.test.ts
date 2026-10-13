@@ -114,6 +114,73 @@ describe('incremental workbench projection cache', () => {
     }
   })
 
+  it('reuses usage-call projections by array identity and refreshes only when the turn replaces that array', () => {
+    const cache = createCoreWorkbenchProjectionCache()
+    const options = { source: 'core_app_server', active: false }
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-usage-calls',
+      snapshot_seq: 1,
+      core: {
+        thread_id: 'thread-usage-calls',
+        snapshot_seq: 1,
+        status: 'completed',
+        item_order: ['member-parent'],
+        turns: {
+          'turn-usage-calls': {
+            turn_id: 'turn-usage-calls',
+            status: 'completed',
+            items: ['member-parent'],
+            usage_calls: [
+              { id: 'main-call', seq: 1, parent_item_id: null, usage: { total_tokens: 10 } },
+              { id: 'member-call', seq: 2, parent_item_id: 'member-parent', usage: { total_tokens: 4 } },
+            ],
+          },
+        },
+        items: {
+          'member-parent': {
+            item_id: 'member-parent',
+            turn_id: 'turn-usage-calls',
+            kind: 'tool_call',
+            status: 'completed',
+            payload: { type: 'dynamicToolCall', tool_name: 'sub_agent_message' },
+          },
+        },
+      },
+    })
+
+    const first = selectCoreWorkbenchMessages(snapshot, options, cache)
+    const sameSnapshot = selectCoreWorkbenchMessages(snapshot, options, cache)
+    expect(messageById(sameSnapshot, 'assistant:turn-usage-calls')).toBe(messageById(first, 'assistant:turn-usage-calls'))
+    expect(messageById(sameSnapshot, 'assistant:turn-usage-calls').parts?.[0]).toBe(messageById(first, 'assistant:turn-usage-calls').parts?.[0])
+    expect(messageById(first, 'assistant:turn-usage-calls').parts?.[0].metadata?.resourceCalls).toHaveLength(1)
+
+    const core = snapshot.core!
+    const turn = core.turns!['turn-usage-calls']
+    const nextSnapshot: CoreAppSnapshot = {
+      ...snapshot,
+      snapshot_seq: snapshot.snapshot_seq + 1,
+      core: {
+        ...core,
+        snapshot_seq: (core.snapshot_seq || 0) + 1,
+        turns: {
+          ...core.turns,
+          'turn-usage-calls': {
+            ...turn,
+            usage_calls: [
+              ...turn.usage_calls!,
+              { id: 'member-call-2', seq: 3, parent_item_id: 'member-parent', usage: { total_tokens: 6 } },
+            ],
+          },
+        },
+      },
+    }
+    const updated = selectCoreWorkbenchMessages(nextSnapshot, options, cache)
+    const updatedMessage = messageById(updated, 'assistant:turn-usage-calls')
+    expect(updatedMessage).not.toBe(messageById(first, 'assistant:turn-usage-calls'))
+    expect(updatedMessage.parts?.[0]).not.toBe(messageById(first, 'assistant:turn-usage-calls').parts?.[0])
+    expect(updatedMessage.parts?.[0].metadata?.resourceCalls).toHaveLength(2)
+  })
+
   it('rebuilds only the changed message when one item updates; untouched messages keep identity', () => {
     const cache = createCoreWorkbenchProjectionCache()
     const options = { source: 'core_app_server', active: false }

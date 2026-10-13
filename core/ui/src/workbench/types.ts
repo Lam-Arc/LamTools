@@ -3,6 +3,9 @@ import type {
   CoreAppEvent,
   CoreAppServerRuntimeClient,
   CoreAppSnapshot,
+  CoreSessionActivity,
+  CoreSessionPhase,
+  CoreSteerOutcome,
   CoreSyncChangeNotification,
 } from '../appServer'
 import type { CoreCommandCatalogItem, CoreInputItem, CoreMessage, CoreSessionListItem } from '../types'
@@ -82,6 +85,9 @@ export interface WorkbenchRuntime {
   turnState: ComputedRef<string>
   activeTurnId: ComputedRef<string>
   turnActive: ComputedRef<boolean>
+  /** Derived session activity: main agent running vs awaiting sub-agents. */
+  sessionActivity: ComputedRef<CoreSessionActivity>
+  sessionPhase: ComputedRef<CoreSessionPhase>
   composerText: Ref<string>
   composerCursor: Ref<number>
   attachments: Ref<CoreInputItem[]>
@@ -121,10 +127,16 @@ export interface WorkbenchRuntime {
   setTurnOptionsProvider(provider: () => Record<string, unknown> | Promise<Record<string, unknown>>): void
   setShallowThinking(value: boolean): void
   setComposerCallbacks(callbacks: WorkbenchComposerCallbacks): void
-  startTurn(threadId: string, input: CoreInputItem[], workRoot?: string, options?: Record<string, unknown>): Promise<void>
+  startTurn(
+    threadId: string,
+    input: CoreInputItem[],
+    workRoot?: string,
+    options?: Record<string, unknown>,
+    clientMessageId?: string,
+  ): Promise<void>
   interruptTurn(threadId: string, turnId?: string): Promise<void>
   forceResetTurn(threadId: string, turnId?: string): Promise<void>
-  steerTurn(threadId: string, turnId: string, input: CoreInputItem[]): Promise<void>
+  steerTurn(threadId: string, turnId: string, input: CoreInputItem[]): Promise<CoreSteerOutcome>
   updateQueueInput(threadId: string, itemId: string, text: string): Promise<void>
   deleteQueueInput(threadId: string, itemId: string): Promise<void>
   guideQueueInput(threadId: string, turnId: string, itemId: string, text?: string): Promise<{ applied: boolean; reason: string }>

@@ -66,8 +66,8 @@ describe('CoreGeneralEditor', () => {
     const { wrapper } = await mountEditor()
     expect(wrapper.get('h1').text()).toBe('通用')
     const titles = wrapper.findAll('.subhead-title').map((node) => node.text())
-    expect(titles).toEqual(['HTTP 代理', '不使用代理的地址', '自定义证书', '提问自动继续'])
-    expect(wrapper.findAll('.setting-card')).toHaveLength(4)
+    expect(titles).toEqual(['界面语言', 'HTTP 代理', '不使用代理的地址', '自定义证书', '提问自动继续'])
+    expect(wrapper.findAll('.setting-card')).toHaveLength(5)
   })
 
   it('loads the stored routing settings into the fields', async () => {
@@ -127,7 +127,7 @@ describe('CoreGeneralEditor', () => {
 
     const { wrapper: onWindows } = await mountEditor({}, { platform: 'windows' })
     expect(onWindows.text()).toContain('保持电脑运行')
-    expect(onWindows.findAll('.setting-card')).toHaveLength(6)
+    expect(onWindows.findAll('.setting-card')).toHaveLength(7)
   })
 
   it('persists the keep-awake toggle', async () => {

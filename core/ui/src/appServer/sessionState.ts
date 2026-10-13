@@ -53,6 +53,27 @@ export function compareSnapshotVersion(
   return left.snapshotSeq - right.snapshotSeq
 }
 
+/**
+ * Whether an incoming snapshot is stale relative to the tracked one and must be
+ * dropped.
+ *
+ * The CAS `revision` is not a pure content cursor: `advanceRevision` moves it
+ * forward out of band from `sync/change` notifications without touching content,
+ * so the tracked revision can legitimately sit above the revision a later
+ * projection push carries. Comparing the revision first would then discard a
+ * genuinely newer snapshot (for example the corrected push after a queue
+ * delete), leaving local state behind. A snapshot whose content cursor
+ * (`snapshot_seq`) is strictly newer is therefore never stale; otherwise the
+ * version comparison decides (a delayed older push is still dropped).
+ */
+export function isStaleSnapshot(
+  incoming: Pick<CoreSessionState, 'revision' | 'snapshotSeq'>,
+  current: Pick<CoreSessionState, 'revision' | 'snapshotSeq'>,
+): boolean {
+  if (incoming.snapshotSeq > current.snapshotSeq) return false
+  return compareSnapshotVersion(incoming, current) < 0
+}
+
 export interface SessionStateEventResult {
   applied: boolean
   state: CoreSessionState | null
@@ -99,7 +120,7 @@ export class CoreSessionStateStore {
     if (!threadId) return false
     const incoming = this.fromSnapshot(snapshot)
     const current = this.states.get(threadId)
-    if (current && compareSnapshotVersion(incoming, current) < 0) return false
+    if (current && isStaleSnapshot(incoming, current)) return false
     this.states.set(threadId, incoming)
     return true
   }
@@ -120,6 +141,31 @@ export class CoreSessionStateStore {
     // would rebuild every item through the projection cache.
     current.revision = revision
     current.snapshot.revision = revision
+    return true
+  }
+
+  /**
+   * Clamp the tracked revision to the value the server has just reported on an
+   * authoritative refresh, moving it DOWN when the local value was ahead.
+   * `advanceRevision` only ever raises the tracker, so a value the server never
+   * confirmed could keep the client ahead of the durable number and every
+   * guarded write would carry a value the server can never match. A conflict
+   * refresh is the moment the durable number is known, so adopt it. Content is
+   * untouched; a lower tracked value never lowers `snapshot_seq`.
+   */
+  alignRevision(threadId: string, revision: number): boolean {
+    const current = this.states.get(threadId)
+    if (!current || !Number.isFinite(revision) || revision <= 0) return false
+    const coreRevision = current.snapshot.core?.revision
+    const alreadyAligned = current.revision === revision
+      && current.snapshot.revision === revision
+      && coreRevision === revision
+    if (alreadyAligned) return false
+    current.revision = revision
+    current.snapshot.revision = revision
+    if (current.snapshot.core) {
+      current.snapshot.core = { ...current.snapshot.core, revision }
+    }
     return true
   }
 

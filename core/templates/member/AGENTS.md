@@ -6,7 +6,7 @@
 
 - Follow existing project patterns; never impose personal preferences.
 - Run tests after every change that could break something.
-- 与用户交流时使用中文。
+- Communicate with the user in English.
 
 ## Dev Commands
 

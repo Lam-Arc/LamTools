@@ -21,6 +21,7 @@ import httpx
 from lamtools_core.config.network import httpx_client_kwargs
 
 from .protocol import SearchResult
+from .http_requests import bounded_request
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -92,8 +93,8 @@ class BingSearchProvider:
         if domains:
             search_query = f"{query} " + " ".join(f"site:{d}" for d in domains)
 
-        resp = await client.get(
-            self.endpoint,
+        resp = await bounded_request(
+            client, "GET", self.endpoint, total_timeout=self.timeout,
             params={"q": search_query, "mkt": self.market, "setlang": "zh-hans"},
         )
         if resp.status_code != 200:
@@ -169,8 +170,8 @@ class BingSearchProvider:
             search_query = f"{query} " + " ".join(f"site:{d}" for d in domains)
         has_cjk = bool(re.search(r"[\u3400-\u9fff]", query))
         image_market = self.market if has_cjk else "en-US"
-        resp = await client.get(
-            self.image_endpoint,
+        resp = await bounded_request(
+            client, "GET", self.image_endpoint, total_timeout=self.timeout,
             params={
                 "q": search_query,
                 "mkt": image_market,

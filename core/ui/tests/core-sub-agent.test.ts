@@ -293,11 +293,76 @@ describe('CoreSubAgentPanel', () => {
     await wrapper.get('.core-sub-agent-panel__more').trigger('click')
     await wrapper.setProps({ runs: [...runs].reverse() })
 
+    // 展开状态保持：仍然 6 行。行序按状态分组（运行中的 sub-1 排最前），
+    // 同一组内保持投影给出的相对顺序（这里是反过来的 sub-6..sub-2）。
     expect(wrapper.findAll('[data-sub-agent-id]')).toHaveLength(6)
     expect(wrapper.findAll('[data-sub-agent-id]').map(row => row.attributes('data-sub-agent-id')))
-      .toEqual(['sub-6', 'sub-5', 'sub-4', 'sub-3', 'sub-2', 'sub-1'])
+      .toEqual(['sub-1', 'sub-6', 'sub-5', 'sub-4', 'sub-3', 'sub-2'])
     expect(wrapper.get('.core-sub-agent-panel__more').text()).toContain('收起')
     wrapper.unmount()
+  })
+
+  it('groups runs by status, active first, with a quiet labelled header', () => {
+    const runs = [
+      { ...fakeRun(1), status: 'completed' as const, name: 'writer' },
+      { ...fakeRun(2), status: 'running' as const, name: 'renderer' },
+      { ...fakeRun(3), status: 'error' as const, name: 'tester' },
+    ]
+    const wrapper = mount(CoreSubAgentPanel, { props: { runs } })
+
+    // 组头按状态顺序出现：在跑的最前，出错次之，已完成的最后。
+    const groups = wrapper.findAll('[data-sub-agent-group]')
+    expect(groups.map(group => group.attributes('data-sub-agent-group'))).toEqual(['running', 'error', 'completed'])
+    expect(groups[0].text()).toContain('运行中')
+    expect(groups[0].text()).toContain('1')
+    expect(groups[2].text()).toContain('已完成')
+
+    // 行序就是分组顺序：先运行中的，再出错，最后已完成。
+    expect(wrapper.findAll('[data-sub-agent-id]').map(row => row.attributes('data-sub-agent-id')))
+      .toEqual(['sub-2', 'sub-3', 'sub-1'])
+    wrapper.unmount()
+  })
+
+  it('shows the real agent name as the primary label', () => {
+    const runs = [
+      { ...fakeRun(1), name: 'renderer_dev' },
+      { ...fakeRun(2), name: '' },
+    ]
+    const wrapper = mount(CoreSubAgentPanel, { props: { runs } })
+
+    expect(wrapper.get('[data-sub-agent-id="sub-1"] .core-sub-agent-panel__name').text()).toBe('renderer_dev')
+    // 记录里没有名字时兜底，不留空白标签。
+    expect(wrapper.get('[data-sub-agent-id="sub-2"] .core-sub-agent-panel__name').text()).toBe('Sub Agent')
+    wrapper.unmount()
+  })
+
+  it('offers delete only for finished runs and hands the run to the host', async () => {
+    const runs = [
+      { ...fakeRun(1), status: 'running' as const, name: 'renderer' },
+      { ...fakeRun(2), status: 'completed' as const, name: 'writer' },
+    ]
+    const wrapper = mount(CoreSubAgentPanel, { props: { runs } })
+
+    // 运行中的成员没有删除入口（那一行根本不渲染按钮）。
+    expect(wrapper.get('[data-sub-agent-item="sub-1"]').find('.core-sub-agent-panel__delete').exists()).toBe(false)
+    const button = wrapper.get('[data-sub-agent-item="sub-2"] .core-sub-agent-panel__delete')
+    expect(button.attributes('aria-label')).toBe('删除子代理 writer')
+
+    await button.trigger('click')
+    // 面板只发事件：那一次调用在壳体里（唯一一处），列表不直接发 RPC。
+    expect(wrapper.emitted('delete')).toHaveLength(1)
+    expect((wrapper.emitted('delete')![0][0] as CoreSubAgentRun).name).toBe('writer')
+    // 点删除不得同时被当成"打开子代理"。
+    expect(wrapper.emitted('open')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('keeps the single delete call gated in the shell', () => {
+    const appSource = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
+    const calls = appSource.match(/sub_agent\.delete/g) ?? []
+    expect(calls).toHaveLength(1)
+    expect(appSource).toContain("requestConfigOperation('sub_agent.delete', { thread_id: threadId, name })")
+    expect(appSource).toContain("if (run.status === 'running' || run.status === 'pending') return")
   })
 
   it('keeps the stable named row and overflow state when a reused agent gets a new child session', async () => {
@@ -394,11 +459,13 @@ describe('CoreSubAgentPanel', () => {
     const shellCss = readFileSync(resolve(process.cwd(), 'src/styles/workspace-shell.css'), 'utf8')
     const paneSource = readFileSync(resolve(process.cwd(), 'src/components/CoreSubAgentPane.vue'), 'utf8')
 
-    // 主线程与右栏都汇到同一条打开路径，壳体只按身份解析运行。
+    // 主线程与右栏都汇到同一条打开路径，壳体只按身份解析运行；
+    // 解析走定点查找，分屏打开期间不再每帧整会话扫描。
     expect(appSource).toContain('@open-sub-agent="openSubAgentPane"')
     expect(appSource).toContain("'workspace-shell--sub-agent-split': Boolean(openSubAgentRun)")
     expect(appSource).toContain('<CoreSubAgentPane')
-    expect(appSource).toContain('findCoreSubAgentRun(selectCoreSubAgentRuns(messages.value), ref)')
+    expect(appSource).toContain('selectCoreSubAgentRun(messages.value, ref)')
+    expect(appSource).not.toContain('findCoreSubAgentRun(selectCoreSubAgentRuns')
     // 续跑过的子代理以监督者记录为准（状态/耗时在消息投影里看不到）。
     expect(appSource).toContain("'sub_agent.list'")
     expect(appSource).toContain(':durable-record=')

@@ -5,7 +5,7 @@
       :style="overlayStyle"
       role="dialog"
       aria-modal="true"
-      aria-label="首次使用引导"
+      :aria-label="t('首次使用引导')"
     >
       <div class="onboarding-card">
         <!-- Step 0: 欢迎 -->
@@ -14,55 +14,47 @@
           <div class="welcome-art" aria-hidden="true">
             <span class="welcome-art-mark" aria-hidden="true"><Sparkles :size="36" :stroke-width="1.2" /></span>
           </div>
-          <h1 class="onboarding-title">欢迎使用 Sunday</h1>
-          <p class="onboarding-subtitle">
-            一个本地优先的 Agent 工作台：管理会话、记忆与自动化任务，
-            你的数据与配置都留在本机。
-          </p>
-          <p class="onboarding-hint">开始前需要配置一个模型供应商，让 Agent 能思考与回复。</p>
+          <h1 class="onboarding-title">{{ t("欢迎使用 Sunday") }}</h1>
+          <p class="onboarding-subtitle">{{ t("一个本地优先的 Agent 工作台：管理会话、记忆与自动化任务， 你的数据与配置都留在本机。") }}</p>
+          <p class="onboarding-hint">{{ t("开始前需要配置一个模型供应商，让 Agent 能思考与回复。") }}</p>
           <div class="onboarding-actions">
-            <button class="btn primary" type="button" data-onboarding-start @click="step = 1">开始配置 <ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
-            <button class="btn quiet" type="button" data-onboarding-skip @click="emit('skip')">跳过</button>
+            <button class="btn primary" type="button" data-onboarding-start @click="step = 1">{{ t("开始配置") }}<ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
+            <button class="btn quiet" type="button" data-onboarding-skip @click="emit('skip')">{{ t("跳过") }}</button>
           </div>
         </section>
 
         <!-- Step 1: 配置供应商 -->
         <section v-else-if="step === 1" class="onboarding-step">
-          <h2 class="onboarding-title">配置模型供应商</h2>
-          <p class="onboarding-subtitle">选择官方模板，或手动填写服务信息。</p>
-          <p class="onboarding-hint">
-            选择模板后，按官方页面申请 API key；免费模型通常有额度或容量限制。
-            <template v-if="selectedPreset?.apiKeyUrl">
-              <a class="onboarding-link" href="#" @click.prevent="openPresetUrl(selectedPreset.apiKeyUrl)">点此申请 API key</a>
+          <h2 class="onboarding-title">{{ t("配置模型供应商") }}</h2>
+          <p class="onboarding-subtitle">{{ t("选择官方模板，或手动填写服务信息。") }}</p>
+          <p class="onboarding-hint">{{ t("选择模板后，按官方页面申请 API key；免费模型通常有额度或容量限制。") }}<template v-if="selectedPreset?.apiKeyUrl">
+              <a class="onboarding-link" href="#" @click.prevent="openPresetUrl(selectedPreset.apiKeyUrl)">{{ t("点此申请 API key") }}</a>
             </template>
             <template v-if="selectedPreset?.docsUrl">
-              <a class="onboarding-link" href="#" @click.prevent="openPresetUrl(selectedPreset.docsUrl)">查看官方文档</a>
+              <a class="onboarding-link" href="#" @click.prevent="openPresetUrl(selectedPreset.docsUrl)">{{ t("查看官方文档") }}</a>
             </template>
           </p>
 
           <form class="onboarding-form" @submit.prevent="submitProvider">
-            <label class="field">官方模板
-              <UiSelect
+            <label class="field">{{ t("官方模板") }}<UiSelect
                 :model-value="presetId"
                 :options="onboardingPresetOptions"
                 data-onboarding-preset
-                placeholder="自定义"
-                aria-label="官方模板"
+                :placeholder="t('自定义')"
+                :aria-label="t('官方模板')"
                 @update:model-value="onPresetChange"
               />
             </label>
 
             <div v-if="presetId && !selectedPreset?.baseUrlEditable" class="preset-summary">
               <strong>{{ providerName }}</strong>
-              <span>{{ providerBaseUrl }} · 将自动添加模板内模型</span>
+              <span>{{ providerBaseUrl }}{{ t("· 将自动添加模板内模型") }}</span>
             </div>
 
             <template v-if="!presetId || selectedPreset?.baseUrlEditable">
-              <label class="field">名称
-                <input v-model.trim="providerName" data-onboarding-provider-name type="text" required :placeholder="presetId ? selectedPreset?.name : '如：我的 DeepSeek'" />
+              <label class="field">{{ t("名称") }}<input v-model.trim="providerName" data-onboarding-provider-name type="text" required :placeholder="presetId ? selectedPreset?.name : t('如：我的 DeepSeek')" />
               </label>
-              <label class="field">服务地址
-                <input v-model.trim="providerBaseUrl" data-onboarding-provider-base-url type="url" required :placeholder="selectedPreset?.baseUrl || 'https://api.deepseek.com'" />
+              <label class="field">{{ t("服务地址") }}<input v-model.trim="providerBaseUrl" data-onboarding-provider-base-url type="url" required :placeholder="selectedPreset?.baseUrl || 'https://api.deepseek.com'" />
               </label>
             </template>
 
@@ -80,9 +72,9 @@
             <p v-if="error" class="onboarding-error" role="alert">{{ error }}</p>
 
             <div class="onboarding-actions">
-              <button class="btn quiet" type="button" :disabled="loading" @click="step = 0"><ArrowLeft :size="14" :stroke-width="2" aria-hidden="true" /> 上一步</button>
+              <button class="btn quiet" type="button" :disabled="loading" @click="step = 0"><ArrowLeft :size="14" :stroke-width="2" aria-hidden="true" />{{ t("上一步") }}</button>
               <button class="btn primary" type="submit" data-onboarding-submit :disabled="loading || !canSubmit">
-                {{ loading ? '保存中…' : '保存并继续' }} <ArrowRight :size="14" :stroke-width="2" aria-hidden="true" />
+                {{ loading ? t("保存中…") : t("保存并继续") }} <ArrowRight :size="14" :stroke-width="2" aria-hidden="true" />
               </button>
             </div>
           </form>
@@ -91,20 +83,20 @@
         <!-- Step 2: 完成 -->
         <section v-else class="onboarding-step">
           <div class="done-mark" aria-hidden="true"><Check :size="28" :stroke-width="2.2" /></div>
-          <h2 class="onboarding-title">配置完成</h2>
+          <h2 class="onboarding-title">{{ t("配置完成") }}</h2>
           <ul class="done-summary">
-            <li><span>供应商</span><strong>{{ createdProviderName || primaryProviderName }}</strong></li>
-            <li><span>模型数量</span><strong>{{ models.length }} 个</strong></li>
-            <li><span>默认模型</span><strong>{{ defaultModelName || '未设置（可在设置中调整）' }}</strong></li>
+            <li><span>{{ t("供应商") }}</span><strong>{{ createdProviderName || primaryProviderName }}</strong></li>
+            <li><span>{{ t("模型数量") }}</span><strong>{{ models.length }}{{ t("个") }}</strong></li>
+            <li><span>{{ t("默认模型") }}</span><strong>{{ defaultModelName || t("未设置（可在设置中调整）") }}</strong></li>
           </ul>
-          <p class="onboarding-hint">之后可在 Sunday 设置中继续添加供应商、模型或调整权限模式。</p>
+          <p class="onboarding-hint">{{ t("之后可在 Sunday 设置中继续添加供应商、模型或调整权限模式。") }}</p>
           <div class="onboarding-actions">
-            <button class="btn primary" type="button" data-onboarding-finish @click="emit('finish')">开始使用 <ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
+            <button class="btn primary" type="button" data-onboarding-finish @click="emit('finish')">{{ t("开始使用") }}<ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
           </div>
         </section>
 
         <footer class="onboarding-footer">
-          <div class="step-dots" aria-label="步骤">
+          <div class="step-dots" :aria-label="t('步骤')">
             <span
               v-for="i in 3"
               :key="i"
@@ -113,7 +105,7 @@
               aria-hidden="true"
             ></span>
           </div>
-          <button v-if="step !== 2" class="text-skip" type="button" @click="emit('skip')">跳过</button>
+          <button v-if="step !== 2" class="text-skip" type="button" @click="emit('skip')">{{ t("跳过") }}</button>
         </footer>
       </div>
     </div>
@@ -121,6 +113,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, Check, Sparkles } from 'lucide-vue-next'
 import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '../data/provider-presets'
@@ -155,7 +149,7 @@ const createdProviderName = ref('')
 const providerPresets = PROVIDER_PRESETS
 
 const onboardingPresetOptions = computed(() => [
-  { value: '', label: '自定义' },
+  { value: '', get label() { return t("自定义") } },
   ...PROVIDER_PRESETS.map(preset => ({
     value: preset.id,
     label: preset.label,

@@ -3,9 +3,10 @@
 use std::{
     collections::{HashMap, HashSet},
     env,
-    io::{Read, Write},
+    fs::{self, File, OpenOptions},
+    io::{self, Read, Write},
     net::{TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -23,6 +24,7 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE},
+    Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH},
     System::{
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
@@ -78,6 +80,7 @@ const MAX_DESKTOP_DROP_FILE_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_DESKTOP_DROP_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
 const DESKTOP_PLUGIN_DOCK_THRESHOLD: i32 = 40;
 static NEXT_DESKTOP_DROP_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_SESSION_EXPORT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "linux")]
 const PR_SET_PDEATHSIG: i32 = 1;
@@ -95,6 +98,7 @@ unsafe extern "C" {
 
 struct BackendState {
     api_base: Mutex<Option<String>>,
+    startup_error: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
     #[cfg(windows)]
     backend_job: Mutex<Option<usize>>,
@@ -357,6 +361,17 @@ fn default_window_margin() -> f64 {
 
 #[tauri::command]
 fn get_api_base(state: tauri::State<'_, BackendState>) -> Result<String, String> {
+    if state.quitting.load(Ordering::SeqCst) {
+        return Err("app is quitting".into());
+    }
+    if let Some(error) = state
+        .startup_error
+        .lock()
+        .map_err(|_| "backend state lock failed")?
+        .clone()
+    {
+        return Err(error);
+    }
     state
         .api_base
         .lock()
@@ -1164,6 +1179,225 @@ fn pick_directory() -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+async fn export_session_archive(
+    state: tauri::State<'_, BackendState>,
+    session_id: String,
+    suggested_filename: String,
+) -> Result<Option<String>, String> {
+    if session_id.trim().is_empty() {
+        return Err("会话编号为空，无法导出完整归档".to_string());
+    }
+    let api_base = state
+        .api_base
+        .lock()
+        .map_err(|_| "本地后端地址读取失败".to_string())?
+        .clone()
+        .ok_or_else(|| "本地后端尚未就绪".to_string())?;
+    validate_loopback_api_base(&api_base)?;
+
+    let suggested_filename = sanitize_export_filename(&suggested_filename);
+    let Some(file) = rfd::AsyncFileDialog::new()
+        .set_title("保存完整归档")
+        .add_filter("ZIP 归档", &["zip"])
+        .set_file_name(suggested_filename)
+        .save_file()
+        .await
+    else {
+        return Ok(None);
+    };
+
+    let destination = with_zip_extension(file.path());
+    let session_id = session_id.trim().to_string();
+    let saved_path = tauri::async_runtime::spawn_blocking(move || {
+        save_session_archive_from_local_core(&api_base, &session_id, &destination)
+    })
+    .await
+    .map_err(|error| format!("完整归档保存任务失败：{error}"))??;
+    Ok(Some(saved_path))
+}
+
+fn validate_loopback_api_base(api_base: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(api_base).map_err(|_| "本地后端地址无效".to_string())?;
+    if parsed.scheme() != "http" || parsed.host_str() != Some("127.0.0.1") {
+        return Err("完整归档只允许通过本机 Sunday 后端导出".to_string());
+    }
+    Ok(())
+}
+
+fn sanitize_export_filename(filename: &str) -> String {
+    let mut clean = filename
+        .chars()
+        .map(|ch| {
+            if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect::<String>();
+    clean = clean.trim().trim_end_matches(['.', ' ']).to_string();
+    if clean.is_empty() || clean == "." || clean == ".." {
+        clean = "Sunday-session-archive".to_string();
+    }
+    if !clean.to_ascii_lowercase().ends_with(".zip") {
+        clean.push_str(".zip");
+    }
+    clean
+}
+
+fn with_zip_extension(path: &Path) -> PathBuf {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+    {
+        return path.to_path_buf();
+    }
+    let mut filename = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    filename.push(".zip");
+    path.with_file_name(filename)
+}
+
+fn save_session_archive_from_local_core(
+    api_base: &str,
+    session_id: &str,
+    destination: &Path,
+) -> Result<String, String> {
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !destination.is_absolute() {
+        return Err("保存位置必须是绝对路径".to_string());
+    }
+    if !parent.is_dir() {
+        return Err("所选保存目录不存在".to_string());
+    }
+
+    let (temporary_path, mut temporary_file) = create_session_export_temp(destination)?;
+    let result = (|| -> Result<(), String> {
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .proxy(None)
+                .http_status_as_error(false)
+                .timeout_global(Some(Duration::from_secs(120)))
+                .build(),
+        );
+        let encoded_session_id = urlencoding::encode(session_id);
+        let endpoint = format!("{api_base}/api/core/sessions/{encoded_session_id}/export");
+        let mut response = agent
+            .post(&endpoint)
+            .header("Accept", "application/zip")
+            .send_json(serde_json::json!({"mode": "full", "format": "zip"}))
+            .map_err(|error| format!("请求完整归档失败：{error}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.body_mut().read_to_string().unwrap_or_default();
+            let detail = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("detail")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .filter(|detail| !detail.trim().is_empty())
+                .unwrap_or_else(|| body.trim().to_string());
+            return Err(if detail.is_empty() {
+                format!("完整归档导出失败（HTTP {status}）")
+            } else {
+                format!("完整归档导出失败（HTTP {status}）：{detail}")
+            });
+        }
+
+        let mut response_body = response.body_mut().as_reader();
+        io::copy(&mut response_body, &mut temporary_file)
+            .map_err(|error| format!("写入完整归档失败：{error}"))?;
+        temporary_file
+            .sync_all()
+            .map_err(|error| format!("完整归档写入磁盘失败：{error}"))?;
+        Ok(())
+    })();
+    drop(temporary_file);
+
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(error);
+    }
+    if let Err(error) = replace_file_atomically(&temporary_path, destination) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(format!("归档已生成，但无法保存到所选位置：{error}"));
+    }
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+fn create_session_export_temp(destination: &Path) -> Result<(PathBuf, File), String> {
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let filename = destination
+        .file_name()
+        .ok_or_else(|| "所选保存位置不是文件".to_string())?
+        .to_string_lossy();
+    for _ in 0..32 {
+        let sequence = NEXT_SESSION_EXPORT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let temp_path = parent.join(format!(
+            ".{filename}.{}.{}.part",
+            std::process::id(),
+            sequence
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => return Ok((temp_path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("无法创建归档临时文件：{error}")),
+        }
+    }
+    Err("无法分配归档临时文件名".to_string())
+}
+
+#[cfg(windows)]
+fn replace_file_atomically(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::{iter::once, os::windows::ffi::OsStrExt};
+
+    let source_wide = source
+        .as_os_str()
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<_>>();
+    let destination_wide = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomically(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(source, destination)
+}
+
 /// Open an external URL in the OS default browser.
 ///
 /// The Tauri webview has no navigation policy by default, so a plain
@@ -1285,6 +1519,36 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn install_taskbar_icon(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use windows_sys::Win32::{
+        System::LibraryLoader::GetModuleHandleW,
+        UI::WindowsAndMessaging::{LoadImageW, SendMessageW, IMAGE_ICON, LR_SHARED, WM_SETICON},
+    };
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window missing")?;
+    let hwnd = window.hwnd()?.0 as windows_sys::Win32::Foundation::HWND;
+    // Shared resource icons live for the process lifetime; never destroy them.
+    let icon = unsafe {
+        LoadImageW(
+            GetModuleHandleW(std::ptr::null()),
+            32512usize as *const u16,
+            IMAGE_ICON,
+            0,
+            0,
+            LR_SHARED,
+        )
+    };
+    if icon.is_null() {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    unsafe {
+        SendMessageW(hwnd, WM_SETICON, 1, icon as isize);
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
@@ -1298,6 +1562,7 @@ fn main() {
 
     let state = BackendState {
         api_base: Mutex::new(None),
+        startup_error: Mutex::new(None),
         child: Mutex::new(None),
         #[cfg(windows)]
         backend_job: Mutex::new(None),
@@ -1327,69 +1592,94 @@ fn main() {
                     .map_err(|error| format!("system close handler setup failed: {error}"))?;
             }
 
-            let state = app.state::<BackendState>();
-            match start_backend(app, state.inner()) {
-                Ok(api_base) => {
-                    *state
-                        .api_base
-                        .lock()
-                        .map_err(|_| "backend state lock failed")? = Some(api_base.clone());
-                    match start_local_control_server(state.remote_gateway.clone(), api_base.clone())
-                    {
-                        Ok(server) => {
-                            if let Ok(mut slot) = state.control_server.lock() {
-                                slot.replace(server);
+            setup_tray(app)?;
+            #[cfg(windows)]
+            install_taskbar_icon(app)?;
+            // Setup runs before the native event loop. Never wait for Python
+            // or network services here: Windows would mark the window hung.
+            let app = app.handle().clone();
+            thread::spawn(move || {
+                let state = app.state::<BackendState>();
+                match start_backend(&app, state.inner()) {
+                    Ok(api_base) => {
+                        if state.quitting.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        let Ok(mut api_slot) = state.api_base.lock() else {
+                            eprintln!("[lamcore] backend state lock failed");
+                            return;
+                        };
+                        *api_slot = Some(api_base.clone());
+                        drop(api_slot);
+                        match start_local_control_server(
+                            state.remote_gateway.clone(),
+                            api_base.clone(),
+                        ) {
+                            Ok(server) => {
+                                if let Ok(mut slot) = state.control_server.lock() {
+                                    slot.replace(server);
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!("[lamcore] remote CLI control server failed: {error}")
                             }
                         }
-                        Err(error) => {
-                            eprintln!("[lamcore] remote CLI control server failed: {error}")
+                        if state.remote_gateway.auto_start_enabled().unwrap_or(false) {
+                            if let Err(error) = state
+                                .remote_gateway
+                                .start(&api_base, GatewayStartOptions::default())
+                            {
+                                eprintln!("[lamcore] remote gateway auto-start failed: {error}");
+                            }
                         }
+                        // Watch the backend process: if it dies mid-run (panic,
+                        // fatal Python exception) the frontend gets an event and
+                        // can show a recovery banner instead of silently failing
+                        // every request (audit 20 S3).
+                        let app_handle = app.clone();
+                        spawn_backend_watcher(app_handle);
+                        ()
                     }
-                    if state.remote_gateway.auto_start_enabled().unwrap_or(false) {
-                        if let Err(error) = state
-                            .remote_gateway
-                            .start(&api_base, GatewayStartOptions::default())
+                    Err(e) => {
+                        if state.quitting.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        if let Ok(mut error) = state.startup_error.lock() {
+                            *error = Some(format!("Sunday 后端启动失败：{e}"));
+                        }
+                        stop_backend(state.inner());
+                        let msg = format!("Sunday 后端启动失败：\n\n{}", e);
+                        eprintln!("{}", msg);
+                        #[cfg(windows)]
                         {
-                            eprintln!("[lamcore] remote gateway auto-start failed: {error}");
+                            let msg_wide: Vec<u16> =
+                                msg.encode_utf16().chain(std::iter::once(0)).collect();
+                            extern "system" {
+                                fn MessageBoxW(
+                                    hwnd: isize,
+                                    text: *const u16,
+                                    caption: *const u16,
+                                    utype: u32,
+                                ) -> i32;
+                            }
+                            let caption: Vec<u16> = "Sunday 启动错误"
+                                .encode_utf16()
+                                .chain(std::iter::once(0))
+                                .collect();
+                            unsafe {
+                                MessageBoxW(0, msg_wide.as_ptr(), caption.as_ptr(), 0x00000010)
+                            };
                         }
+                        app.exit(1);
                     }
-                    setup_tray(app)?;
-                    // Watch the backend process: if it dies mid-run (panic,
-                    // fatal Python exception) the frontend gets an event and
-                    // can show a recovery banner instead of silently failing
-                    // every request (audit 20 S3).
-                    let app_handle = app.handle().clone();
-                    spawn_backend_watcher(app_handle);
-                    Ok(())
                 }
-                Err(e) => {
-                    let msg = format!("Sunday 后端启动失败：\n\n{}", e);
-                    eprintln!("{}", msg);
-                    #[cfg(windows)]
-                    {
-                        let msg_wide: Vec<u16> =
-                            msg.encode_utf16().chain(std::iter::once(0)).collect();
-                        extern "system" {
-                            fn MessageBoxW(
-                                hwnd: isize,
-                                text: *const u16,
-                                caption: *const u16,
-                                utype: u32,
-                            ) -> i32;
-                        }
-                        let caption: Vec<u16> = "Sunday 启动错误"
-                            .encode_utf16()
-                            .chain(std::iter::once(0))
-                            .collect();
-                        unsafe { MessageBoxW(0, msg_wide.as_ptr(), caption.as_ptr(), 0x00000010) };
-                    }
-                    Err(e)
-                }
-            }
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_api_base,
             enable_startup_glass,
+            export_session_archive,
             minimize_window,
             toggle_maximize_window,
             set_maximize_button_bounds,
@@ -1480,7 +1770,7 @@ fn main() {
 // ---------------------------------------------------------------------------
 
 fn start_backend(
-    app: &tauri::App,
+    app: &tauri::AppHandle,
     state: &BackendState,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let started_at = Instant::now();
@@ -1494,6 +1784,15 @@ fn start_backend(
     };
     configure_backend_process(&mut cmd)?;
 
+    // Serialize spawn/registration with shutdown so quitting during startup
+    // cannot leave a late-spawned backend behind.
+    let mut child_slot = state
+        .child
+        .lock()
+        .map_err(|_| "backend state lock failed")?;
+    if state.quitting.load(Ordering::SeqCst) {
+        return Err("app is quitting".into());
+    }
     let child = cmd.spawn()?;
     #[cfg(windows)]
     match create_backend_job(child.id()) {
@@ -1509,12 +1808,10 @@ fn start_backend(
             eprintln!("[lamcore] backend process-tree guard unavailable: {error}");
         }
     }
-    *state
-        .child
-        .lock()
-        .map_err(|_| "backend state lock failed")? = Some(child);
+    *child_slot = Some(child);
+    drop(child_slot);
 
-    wait_for_health(port)?;
+    wait_for_health(port, state)?;
     eprintln!(
         "[lamcore] backend ready in {} ms",
         started_at.elapsed().as_millis()
@@ -1583,7 +1880,7 @@ fn dev_python_executable() -> Result<PathBuf, Box<dyn std::error::Error>> {
 }
 
 fn prod_backend_command(
-    app: &tauri::App,
+    app: &tauri::AppHandle,
     port: u16,
 ) -> Result<Command, Box<dyn std::error::Error>> {
     // The PyInstaller output is bundled as a resource at dist/LamCore/.
@@ -1665,7 +1962,7 @@ fn backend_executable_names(windows: bool) -> &'static [&'static str] {
     }
 }
 
-fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn find_backend_exe(app: &tauri::AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let executable_names = backend_executable_names(cfg!(windows));
     // 1) Tauri resource directory (bundled flat)
     let resource = app.path().resource_dir()?.join("lamcore-backend");
@@ -1711,12 +2008,15 @@ fn pick_free_port() -> Result<u16, Box<dyn std::error::Error>> {
     Ok(listener.local_addr()?.port())
 }
 
-fn wait_for_health(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+fn wait_for_health(port: u16, state: &BackendState) -> Result<(), Box<dyn std::error::Error>> {
     // Generous timeout: on a loaded dev machine the backend can take a while
     // to start (uvicorn --reload + stale-turn recovery), and failing here
     // blocks the whole app on an error dialog for no reason.
     let deadline = Instant::now() + Duration::from_secs(90);
     while Instant::now() < deadline {
+        if state.quitting.load(Ordering::SeqCst) {
+            return Err("app is quitting".into());
+        }
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
             let request =
@@ -1742,8 +2042,8 @@ fn stop_local_control_server(state: &BackendState) {
 }
 
 fn stop_backend(state: &BackendState) {
-    close_backend_job(state);
     if let Ok(mut guard) = state.child.lock() {
+        close_backend_job(state);
         if let Some(mut child) = guard.take() {
             #[cfg(target_os = "linux")]
             {

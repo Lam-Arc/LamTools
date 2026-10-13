@@ -319,7 +319,7 @@ describe('CoreSettings 关于与更新 section (source contract)', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/CoreSettings.vue'), 'utf8')
     // 分区清单集中在 settingsSections.ts（会话栏导航与内置导航共用一份）。
     const sections = readFileSync(resolve(process.cwd(), 'src/components/settingsSections.ts'), 'utf8')
-    expect(sections).toContain("{ id: 'about', label: '关于与更新', icon: 'info' }")
+    expect(sections).toContain('{ id: \'about\', get label() { return t("关于与更新") }, icon: \'info\' }')
     expect(source).toContain("activeSection === 'about'")
     expect(source).toContain('data-current-version')
     expect(source).toContain('data-check-updates')

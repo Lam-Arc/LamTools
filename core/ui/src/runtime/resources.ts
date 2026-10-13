@@ -1,3 +1,5 @@
+
+import { t } from '../i18n/index'
 import type { CoreMessage, MessagePart } from '../types'
 import { assistantSegmentTurnId } from '../appServer/selectors'
 
@@ -120,7 +122,7 @@ export function buildCoreResourceSummary(
     if (input >= 0) { inputTokens += input; hasInput = true }
     if (output >= 0) { outputTokens += output; hasOutput = true }
     if (cached >= 0) {
-      cachedTokens += cached
+      if (input > 0) cachedTokens += Math.min(cached, input)
       // A provider that omits its cache field has reported an unknown cache
       // result, not a cache miss. Keep its input out of this denominator.
       if (input >= 0) cacheReportedInputTokens += input
@@ -136,7 +138,7 @@ export function buildCoreResourceSummary(
   // `cached_tokens` field means "unknown", not zero; including that call's
   // input in the denominator would turn a valid 92.8% hit rate into a false
   // 46% rate when one of two calls did not expose cache metrics.
-  const directRate = firstNumber(...providerRecords.map(r => firstNumber(r.cache_hit_rate, r.cacheHitRate)))
+  const directRate = providerRecords.length === 1 ? firstNumber(providerRecords[0].cache_hit_rate, providerRecords[0].cacheHitRate) : -1
   const cacheHitRate = hasCache && cacheReportedInputTokens > 0
     ? cachedTokens / cacheReportedInputTokens
     : directRate >= 0
@@ -148,28 +150,28 @@ export function buildCoreResourceSummary(
   // Say where the number comes from: the provider's count for the last request
   // it received, the local estimate, or the post-compaction figure.
   const contextSourceLabel = contextSource === 'provider'
-    ? '实测'
+    ? t("实测")
     : contextSource === 'compacted'
-      ? '压缩后'
-      : '估算'
+      ? t("压缩后")
+      : t("估算")
 
   return {
     currentPct,
     thresholdPct,
     contextLabel: hasContext
       ? `${formatTokenCompact(current)} / ${formatTokenCompact(max)} · ${contextSourceLabel}`
-      : '暂无上下文',
+      : t("暂无上下文"),
     percentLabel: hasContext ? `${currentPct}%` : '--',
-    statusLabel: contextCompacted ? '已压缩' : (hasContext && currentPct >= thresholdPct ? '需压缩' : '正常'),
+    statusLabel: contextCompacted ? t("已压缩") : (hasContext && currentPct >= thresholdPct ? t("需压缩") : t("正常")),
     currentRatio,
     thresholdRatio,
     hasContext,
-    usageStatusLabel: hasProviderRecord && usageReported ? '已获取' : '未获取',
+    usageStatusLabel: hasProviderRecord && usageReported ? t("已获取") : t("未获取"),
     callItems: [
-      { label: '调用', value: hasCalls ? String(calls) : '--' },
-      { label: '输入', value: hasInput ? formatCompactNumber(inputTokens) : '--' },
-      { label: '输出', value: hasOutput ? formatCompactNumber(outputTokens) : '--' },
-      ...(cacheHitRate >= 0 ? [{ label: '缓存', value: formatPercent(cacheHitRate) }] : []),
+      { get label() { return t("调用") }, value: hasCalls ? String(calls) : '--' },
+      { get label() { return t("输入") }, value: hasInput ? formatCompactNumber(inputTokens) : '--' },
+      { get label() { return t("输出") }, value: hasOutput ? formatCompactNumber(outputTokens) : '--' },
+      ...(cacheHitRate >= 0 ? [{ get label() { return t("缓存") }, value: formatPercent(cacheHitRate) }] : []),
     ],
   }
 }
@@ -177,17 +179,17 @@ export function buildCoreResourceSummary(
 export interface CoreCacheTrendPoint {
   /** 累计模型调用次数（横坐标）。 */
   calls: number
-  /** 该回合的缓存命中率，已收敛到 0..1（纵坐标）。 */
+  /** 单次调用命中率 0..1；保留未知调用时用 -1 表示未上报。 */
   rate: number
 }
 
 /**
- * 按时间顺序给出缓存命中率趋势：横坐标是累计调用次数，纵坐标是回合命中率。
- * 每个回合一个点；回合未上报缓存字段时只推进调用计数、不产出点——缺失的
- * 缓存字段是"未知"而不是"未命中"，与汇总命中率的口径一致。
+ * 按真实调用顺序取最近 200 次。默认只返回已知命中率；图表可保留未知调用
+ * 的位置，避免挤掉它后横轴序号与柱形错位。旧快照只有回合汇总时不伪造单次值。
  */
 export function buildCacheTrend(
   messages: Array<Pick<CoreMessage, 'metadata' | 'id'>>,
+  includeUnknown = false,
 ): CoreCacheTrendPoint[] {
   const points: CoreCacheTrendPoint[] = []
   let calls = 0
@@ -197,17 +199,16 @@ export function buildCacheTrend(
     const callCount = reported >= 0 ? reported : 1
     if (callCount > 0) calls += callCount
     const rate = recordCacheHitRate(record)
-    if (callCount > 0 && rate >= 0) points.push({ calls, rate: clampRatio(rate) })
+    if (callCount > 0 && (rate >= 0 || includeUnknown)) points.push({ calls, rate: rate >= 0 ? clampRatio(rate) : -1 })
   }
-  return points
+  return points.filter(point => point.calls > calls - 200)
 }
 
 function recordCacheHitRate(record: Record<string, unknown>): number {
-  const direct = firstNumber(record.cache_hit_rate, record.cacheHitRate)
-  if (direct >= 0) return direct
   const cached = cacheReadTokens(record)
   const input = firstNumber(record.input_tokens, record.inputTokens, record.prompt_tokens, record.promptTokens)
-  return cached >= 0 && input > 0 ? cached / input : -1
+  if (cached >= 0) return input > 0 ? cached / input : -1
+  return firstNumber(record.cache_hit_rate, record.cacheHitRate)
 }
 
 function collectMetricRecords(
@@ -216,8 +217,19 @@ function collectMetricRecords(
 ): Array<Record<string, unknown>> {
   const records: Array<Record<string, unknown>> = []
   const countedTurns = new Set<string>()
+  const countedCalls = new Set<string>()
   for (const message of messages) {
     const metadata = message.metadata
+    if (kind === 'usageMetrics' && Array.isArray(metadata?.resourceCalls)) {
+      for (const raw of [...metadata.resourceCalls].sort((a, b) => Number(a?.seq ?? 0) - Number(b?.seq ?? 0))) {
+        if (!raw || typeof raw !== 'object') continue
+        const call = raw as { id?: string; usage?: Record<string, unknown> }
+        if (!call.id || !call.usage || countedCalls.has(call.id)) continue
+        countedCalls.add(call.id)
+        records.push({ llm_calls: 1, ...call.usage })
+      }
+      continue
+    }
     const direct = metadata?.[kind]
     const legacy = metadata?.processMetrics
     const directRecord = direct && typeof direct === 'object' && !Array.isArray(direct)
@@ -237,7 +249,7 @@ function collectMetricRecords(
     const metrics = directRecord
       ?? (kind === 'contextMetrics' || !hasDedicatedContext ? legacyRecord : null)
     if (!metrics) continue
-    const turnId = typeof message.id === 'string' ? assistantSegmentTurnId(message.id) : ''
+    const turnId = String(metadata?.sourcePartId || (typeof message.id === 'string' ? assistantSegmentTurnId(message.id) : ''))
     if (turnId) {
       if (countedTurns.has(turnId)) continue
       countedTurns.add(turnId)
@@ -262,6 +274,7 @@ function latestCompletedCompactionTokens(parts?: MessagePart[]): number {
 
 function firstNumber(...values: unknown[]): number {
   for (const value of values) {
+    if (value === null || value === undefined || value === '' || typeof value === 'boolean') continue
     const metric = Number(value)
     if (Number.isFinite(metric) && metric >= 0) return metric
   }

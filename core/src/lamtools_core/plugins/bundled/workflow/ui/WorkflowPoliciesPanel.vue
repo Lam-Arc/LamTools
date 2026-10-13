@@ -1,13 +1,13 @@
 <template>
   <details class="wf-policy-panel wf-inspector-section">
     <summary>
-      <span>运行策略</span>
+      <span>{{ t("运行策略") }}</span>
       <span class="wf-policy-summary">{{ summary }}</span>
     </summary>
 
     <div class="wf-policy-body">
       <label class="wf-policy-field wf-policy-priority">
-        <span>队列优先级</span>
+        <span>{{ t("队列优先级") }}</span>
         <input
           type="number"
           step="1"
@@ -20,15 +20,15 @@
       <fieldset class="wf-policy-group">
         <label class="wf-policy-toggle">
           <input type="checkbox" :checked="Boolean(policies.concurrency)" :disabled="disabled || !workflowDefinition" @change="toggleConcurrency" />
-          <span>并发上限</span>
+          <span>{{ t("并发上限") }}</span>
         </label>
         <div v-if="policies.concurrency" class="wf-policy-grid">
           <label class="wf-policy-field">
-            <span>分组键</span>
+            <span>{{ t("分组键") }}</span>
             <input type="text" :value="policies.concurrency.key" :disabled="disabled" @change="setConcurrencyKey" />
           </label>
           <label class="wf-policy-field">
-            <span>最大并发</span>
+            <span>{{ t("最大并发") }}</span>
             <input type="number" min="1" step="1" :value="policies.concurrency.max" :disabled="disabled" @change="setConcurrencyMax" />
           </label>
         </div>
@@ -37,15 +37,15 @@
       <fieldset class="wf-policy-group">
         <label class="wf-policy-toggle">
           <input type="checkbox" :checked="Boolean(policies.rate_limit)" :disabled="disabled || !workflowDefinition" @change="toggleRateLimit" />
-          <span>速率限制</span>
+          <span>{{ t("速率限制") }}</span>
         </label>
         <div v-if="policies.rate_limit" class="wf-policy-grid">
           <label class="wf-policy-field">
-            <span>次数</span>
+            <span>{{ t("次数") }}</span>
             <input type="number" min="1" step="1" :value="policies.rate_limit.count" :disabled="disabled" @change="setRateCount" />
           </label>
           <label class="wf-policy-field">
-            <span>窗口（秒）</span>
+            <span>{{ t("窗口（秒）") }}</span>
             <input type="number" min="0.1" step="0.1" :value="policies.rate_limit.window_seconds" :disabled="disabled" @change="setRateWindow" />
           </label>
         </div>
@@ -54,10 +54,10 @@
       <fieldset class="wf-policy-group">
         <label class="wf-policy-toggle">
           <input type="checkbox" :checked="Boolean(policies.throttle)" :disabled="disabled || !workflowDefinition" @change="toggleThrottle" />
-          <span>节流</span>
+          <span>{{ t("节流") }}</span>
         </label>
         <label v-if="policies.throttle" class="wf-policy-field">
-          <span>最小间隔（秒）</span>
+          <span>{{ t("最小间隔（秒）") }}</span>
           <input type="number" min="0.1" step="0.1" :value="policies.throttle.min_interval_seconds" :disabled="disabled" @change="setThrottleInterval" />
         </label>
       </fieldset>
@@ -65,19 +65,19 @@
       <fieldset class="wf-policy-group">
         <label class="wf-policy-toggle">
           <input type="checkbox" :checked="Boolean(policies.debounce)" :disabled="disabled || !workflowDefinition" @change="toggleDebounce" />
-          <span>防抖</span>
+          <span>{{ t("防抖") }}</span>
         </label>
         <div v-if="policies.debounce" class="wf-policy-grid">
           <label class="wf-policy-field">
-            <span>窗口（秒）</span>
+            <span>{{ t("窗口（秒）") }}</span>
             <input type="number" min="0.1" step="0.1" :value="policies.debounce.window_seconds" :disabled="disabled" @change="setDebounceWindow" />
           </label>
           <label class="wf-policy-field">
-            <span>模式</span>
+            <span>{{ t("模式") }}</span>
             <UiSelect
               :model-value="policies.debounce.mode"
               :options="debounceModes"
-              aria-label="防抖模式"
+              :aria-label="t('防抖模式')"
               :disabled="disabled"
               @update:model-value="setDebounceMode"
             />
@@ -85,12 +85,14 @@
         </div>
       </fieldset>
 
-      <p class="wf-policy-help">策略作用于工作流运行；被限制的运行会进入可重试暂停态，不占用执行槽。</p>
+      <p class="wf-policy-help">{{ t("策略作用于工作流运行；被限制的运行会进入可重试暂停态，不占用执行槽。") }}</p>
     </div>
   </details>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed } from 'vue'
 import UiSelect from '../../../../../../ui/src/components/UiSelect.vue'
 import type { WorkflowDef, WorkflowPolicies } from './types'
@@ -106,21 +108,21 @@ const props = withDefaults(defineProps<{
 })
 
 const debounceModes = [
-  { value: 'leading', label: '首个执行' },
-  { value: 'trailing', label: '最后一个' },
+  { value: 'leading', get label() { return t("首个执行") } },
+  { value: 'trailing', get label() { return t("最后一个") } },
 ]
 
 const policies = computed<WorkflowPolicies>(() => props.workflowDefinition?.policies || {})
 const priority = computed(() => integer(policies.value.priority, 0))
 const summary = computed(() => {
   const enabled = [
-    policies.value.concurrency && `并发 ${policies.value.concurrency.max}`,
-    policies.value.rate_limit && `限速 ${policies.value.rate_limit.count}/${policies.value.rate_limit.window_seconds}s`,
-    policies.value.throttle && `节流 ${policies.value.throttle.min_interval_seconds}s`,
-    policies.value.debounce && `防抖 ${policies.value.debounce.window_seconds}s`,
-    priority.value !== 0 && `优先级 ${priority.value}`,
+    policies.value.concurrency && t("并发 {0}", { 0: policies.value.concurrency.max }),
+    policies.value.rate_limit && t("限速 {0}/{1}s", { 0: policies.value.rate_limit.count, 1: policies.value.rate_limit.window_seconds }),
+    policies.value.throttle && t("节流 {0}s", { 0: policies.value.throttle.min_interval_seconds }),
+    policies.value.debounce && t("防抖 {0}s", { 0: policies.value.debounce.window_seconds }),
+    priority.value !== 0 && t("优先级 {0}", { 0: priority.value }),
   ].filter(Boolean)
-  return enabled.join(' · ') || '默认'
+  return enabled.join(' · ') || t("默认")
 })
 
 function number(value: unknown, fallback: number, minimum = 0.1): number {

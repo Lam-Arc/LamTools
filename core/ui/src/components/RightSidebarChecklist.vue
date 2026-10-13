@@ -27,11 +27,13 @@
         <span class="right-sidebar-checklist__step-status">{{ statusLabel(step.status) }}</span>
       </div>
     </section>
-    <p v-if="!stepGroups.length" class="right-sidebar-checklist__empty">当前没有 checklist</p>
+    <p v-if="!stepGroups.length" class="right-sidebar-checklist__empty">{{ t("当前没有 checklist") }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import type { CoreRuntimeStepGroup, CoreRuntimeStepStatus } from '../types'
 
 withDefaults(defineProps<{

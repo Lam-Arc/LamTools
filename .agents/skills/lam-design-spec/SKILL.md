@@ -1,149 +1,162 @@
 ---
 name: lam-design-spec
-description: 当在 core/ui 或 member 前端编写/修改 Vue 组件、CSS、scoped style、设计 token，或需要确定 LamTools 配色与设计决策时使用。强制遵循 LamTools 设计语言——主题 area 关联、token、组件配方、配色语义、状态、密度与动效。impeccable 仅在从零的新设计时介入；既有界面的一切设计决策与配色以本 skill 为准。
+description: Use when writing or changing Vue components, CSS, scoped styles, or design tokens in core/ui or member frontends, or when making LamTools color and design decisions. Follow the LamTools design language for theme-area mapping, tokens, component recipes, color semantics, states, density, and motion. Use Impeccable only when creating a new design from scratch; this skill governs design decisions and colors for existing interfaces.
 version: 0.1.0
 ---
 
-# LamTools 设计语言规范
+# LamTools Design Language Specification
 
-本 skill 是 LamTools 设计语言的**唯一真源**：管规范、管约束、管配色与设计决策。核心目的是**防止每次写组件都另起一套样式**。`impeccable` skill 仅在"从零的新设计"时介入决定观感；既有界面的一切设计决策、配色、token、组件、状态以本 skill 为准。
+This skill is the **single source of truth** for the LamTools design language: its rules, constraints, colors, and design decisions. Its main purpose is to **prevent every component from inventing a new visual style**. The `impeccable` skill guides visual direction only for a design created from scratch. This skill governs design decisions, colors, tokens, components, and states in existing interfaces.
 
-不另建 DESIGN.md（避免双源漂移）。
+Do not create a separate DESIGN.md; that would create competing sources of truth.
 
-## 核心铁律
+## Core rules
 
-1. **优先用 token**，字面量值必须落在标尺上；标尺外值须先提议 token，不得随手硬编码。
-2. **每类控件只有一种配方**；禁止新建平行实现（第二个下拉、第二套 `--fb-*` 命名空间）。
-3. **hover↔active alpha 增量恒为 +4pp**（`--alpha-hover` 8% → `--alpha-active` 12%）；中性强交互用 `--alpha-*` token，不得再发明 5/6/7/9/10/14%。
+1. **Prefer tokens.** Literal values must follow the scale. Propose a token before using an off-scale value; never hard-code one casually.
+2. **Use one recipe for each control type.** Do not create parallel implementations (a second dropdown or another `--fb-*` namespace).
+3. **Keep the hover-to-active alpha increase at exactly +4 percentage points** (`--alpha-hover` 8% → `--alpha-active` 12%). For neutral interactions, use `--alpha-*` tokens; do not invent 5%, 6%, 7%, 9%, 10%, or 14% values.
 
-## 主题 area 关联（最重要）
+## Theme-area mapping (most important)
 
-4 个 theme area，每个有 `-background`（渐变）/ `-text` / 派生变量。组件须引用**所在 area** 的变量，并在本地 `--text: var(--theme-{area}-text)` 重映射，再用 `color-mix(in srgb, var(--text) X%, transparent)` 派生 hover/边框/次要文字。语义色 `--green/--blue/--orange/--red/--purple` 不随主题变。
+There are four theme areas. Each has `-background` (a gradient), `-text`, and derived variables. A component must reference the variables for its area, remap locally with `--text: var(--theme-{area}-text)`, and derive hover, border, and secondary text with `color-mix(in srgb, var(--text) X%, transparent)`. Semantic colors `--green`, `--blue`, `--orange`, `--red`, and `--purple` do not change with the theme.
 
-| area | 背景变量 | 文字变量 | 派生 | 用于 |
-|------|---------|---------|------|------|
-| backdrop | `--theme-backdrop-background` | `--theme-backdrop-text` | — | 外壳、侧栏、会话列表、项目菜单 |
-| main | `--theme-main-background` | `--theme-main-text` | `-soft-background` / `-subtle-background` / `-sunken-background` / `-border` | 主卡片、内容区、设置页 |
-| composer | `--theme-composer-background` | `--theme-composer-text` | `-soft-background` | 底部输入栏、文本输入框、composer 菜单 |
-| control | `--theme-control-background` | `--theme-control-text` | `-soft-background` | 按钮、下拉、select、徽章、原生非文本控件（checkbox/radio/range/color/file；不含文本输入框） |
+| Area | Background variable | Text variable | Derived variables | Used for |
+|---|---|---|---|---|
+| backdrop | `--theme-backdrop-background` | `--theme-backdrop-text` | — | App shell, sidebar, conversation list, project menu |
+| main | `--theme-main-background` | `--theme-main-text` | `-soft-background` / `-subtle-background` / `-sunken-background` / `-border` | Main cards, content area, settings pages |
+| composer | `--theme-composer-background` | `--theme-composer-text` | `-soft-background` | Bottom input bar, text inputs, composer menus |
+| control | `--theme-control-background` | `--theme-control-text` | `-soft-background` | Buttons, dropdowns, selects, badges, native non-text controls (checkbox/radio/range/color/file; not text inputs) |
 
-**最常见错误**：control 控件误用 `--theme-main-text`，或直接用静态 `--panel/--line/--text` 绕过主题——主题切换时该组件不变色。
+**Most common mistake:** control components use `--theme-main-text`, or bypass the theme with static `--panel`, `--line`, or `--text`. Those components then fail to change color when the theme changes.
 
-## Token 真源
+## Token source of truth
 
-来源：`core/ui/src/styles/variables.css`（基色 + 圆角 + 字体）+ 本次新增（间距 / 阴影分级 / 状态 alpha / 行渐隐）。
+Source: `core/ui/src/styles/variables.css` (base colors, radii, and fonts), plus the spacing, shadow scale, state alpha, and row-fade tokens added by this specification.
 
-- **语义色**：`--green #32d17d` · `--blue #79bcff` · `--orange #ff9142` · `--red #f5555d` · `--purple #bd8cff`（不挂 area，不随主题变）
-- **圆角**：`--radius-sm 6px`（输入/按钮/item）· `--radius 12px`（卡片/菜单）· `--radius-lg 18px`（大面板）· `--radius-xl 22px`（主应用卡）
-- **间距**：`--space-1..6` = 4 / 8 / 12 / 16 / 24 / 32 px
-- **阴影**：`--shadow-sm`（悬浮/hover 抬升）· `--shadow-md`（卡片/下拉/popover）· `--shadow-lg`（模态/遮罩）；`--shadow` 旧别名指向 `--shadow-lg`
-- **状态 alpha**：`--alpha-hover 8%` · `--alpha-active 12%` · `--alpha-press 16%`
-- **行渐隐**：`--row-fade 20%`（选项行左右两侧渐隐宽度，相对行宽）
-- **z-index**：`--z-background-info 10` · `--z-stage 15` · `--z-main-surface 20` · `--z-edge-trigger 35` · `--z-composer 40` · `--z-popover 60` · `--z-modal 80` · `--z-toast 90`（来自 layout.css）
-- **字体**：`--font-sans`（Inter + CJK 回退栈）· `--font-mono`（JetBrains Mono + 回退栈）· `--font` = `--font-sans`
+- **Semantic colors:** `--green #32d17d` · `--blue #79bcff` · `--orange #ff9142` · `--red #f5555d` · `--purple #bd8cff` (not tied to an area and do not change with the theme).
+- **Radii:** `--radius-sm 6px` (inputs/buttons/items) · `--radius 12px` (cards/menus) · `--radius-lg 18px` (large panels) · `--radius-xl 22px` (main app card).
+- **Spacing:** `--space-1..6` = 4 / 8 / 12 / 16 / 24 / 32 px.
+- **Shadows:** `--shadow-sm` (lift on hover/floating) · `--shadow-md` (cards/dropdowns/popovers) · `--shadow-lg` (modals/overlays); legacy `--shadow` aliases `--shadow-lg`.
+- **State alpha:** `--alpha-hover 8%` · `--alpha-active 12%` · `--alpha-press 16%`.
+- **Row fade:** `--row-fade 20%` (fade width on each side of an option row, relative to row width).
+- **z-index:** `--z-background-info 10` · `--z-stage 15` · `--z-main-surface 20` · `--z-edge-trigger 35` · `--z-composer 40` · `--z-popover 60` · `--z-modal 80` · `--z-toast 90` (from `layout.css`).
+- **Fonts:** `--font-sans` (Inter plus CJK fallback stack) · `--font-mono` (JetBrains Mono plus fallback stack) · `--font` aliases `--font-sans`.
 
-## 配色语义
+## Color semantics
 
-- **任务状态**：运行中=spinner 转圈（点色=控件色）；等待=`--orange` 70% + 控件色 30%；失败=`--red` 70% + 控件色 30%；完成=静止纯控件色。状态须有非色觉指示（动画/文字），非仅靠颜色。
-- **文字层级**：`--text`（正文）> `color-mix(--text 65%)`（次要说明）> `color-mix(--text 45%)`（占位/禁用辅助）。次要/占位由当前 area 的 `--text` 派生，非静态 muted。
-- **面板层级**：`--bg`（最底）< `--panel-2`（输入/凹陷）< `--panel`（卡片）< `--panel-3`（凸起/激活）。
-- **暗色唯一**：默认暗色；浅色预设（纸白/审阅灰）由 `--theme-*` 控制，不得另建配色体系。静态 token（`--bg`/`--panel-*`/`--line`/`--muted`/`--faint`）不随主题，组件背景/文字不得直接引用。
+- **Task states:** Running = animated spinner (control color for the dot); waiting = 70% `--orange` + 30% control color; failed = 70% `--red` + 30% control color; complete = static, pure control color. Every state must also have a non-color cue (animation or text); color alone is insufficient.
+- **Text hierarchy:** `--text` (body) > `color-mix(--text 65%)` (secondary help) > `color-mix(--text 45%)` (placeholder/disabled help). Derive secondary and placeholder text from the current area's `--text`, not from a static muted color.
+- **Panel hierarchy:** `--bg` (deepest) < `--panel-2` (input/recessed) < `--panel` (card) < `--panel-3` (raised/active).
+- **Dark theme is the only base palette:** default to dark. Light presets (paper white/review gray) are controlled by `--theme-*`; do not create another color system. Static tokens (`--bg`, `--panel-*`, `--line`, `--muted`, `--faint`) do not follow the theme; components must not use them directly for backgrounds or text.
 
-## 设计决策
+## Design decisions
 
-- **视觉密度**：密集工作台、低视觉噪音；间距取标尺较紧一档，不堆叠大留白。
-- **视觉层级**：task state first——运行/等待/失败/完成须一眼可辨。
-- **动效**：克制 ease-out；禁止 bounce/elastic；所有动效须有 `prefers-reduced-motion` 回退。动画以后再细化。
-- **中性原则**（来自 AGENTS.md/PRODUCT.md）：core 中性，member 差异只走 slot/label，不走分歧样式。
-- **工具铁律**（来自 AGENTS.md）：任何 GUI 能力须有对应 CLI。
+- **Visual density:** dense workbench with low visual noise. Prefer the tighter spacing values; avoid large amounts of empty space.
+- **Hierarchy:** task state comes first. Running, waiting, failed, and complete states must be immediately distinguishable.
+- **Motion:** restrained ease-out; no bounce or elastic motion. Every animation must honor `prefers-reduced-motion`. Motion details can be refined later.
+- **Neutrality:** from AGENTS.md/PRODUCT.md, Core remains neutral. Member differences use slots or labels, not divergent styling.
+- **Tooling rule:** from AGENTS.md, every GUI capability must have a corresponding CLI capability.
 
-## 组件配方
+## Component recipes
 
-每类组件只有一种配方。改组件前先查本表。
+Use one recipe per component type. Check this table before changing a component.
 
-### 卡片 / 面板（main area）
-`--radius` · `--space-3` 内边距 · `1px solid var(--theme-main-border)` · `--shadow-md` · 背景 `--theme-main-background`。内部层级用派生 `--theme-main-soft-background` / `-subtle-background` 表达，**禁止嵌套实色卡**；凹陷面（终端/过程详情等下沉面板）用 `--theme-main-sunken-background`（暗色 rgba(0,0,0,.32) / 浅色 rgba(31,31,31,.06)）。
+### Cards and panels (main area)
 
-### 询问 / 审批（决策面）
-**一份决策，两个面，同一条配方**：会话内的决策卡（main area，`MessageView.vue` 渲染 + `ChatThread.vue` 样式）与输入区接管的确认面板（composer area，`CorePendingDecisionPanel.vue`）。改一侧必须同步另一侧。
-- **面**：圆角卡片（`--radius`）。会话内用 `--theme-main-soft-background` + `main-text 10%` 边，等待态边框再混 `--decision-attention`（`#b49a60` 派生，等待语义）；确认面板本身在 composer 卡内，**不再叠一层卡**。
-- **头**：`CircleHelp`（等待态 `--decision-attention`；composer 侧 `--orange 70%`）+ 类别（审批 / 提问，`text 58%`），右侧放状态或队列页码。
-- **选项 = 编号行**：`[序号 auto] [标签 fit-content(50%)] [后果 minmax(0,1fr)]`，`align-items: baseline`。序号与后果都在按钮之外——点击只有标签生效，误读不产生动作；标签按钮 `--radius-sm`、无边框，hover/active 走 `--alpha-*`（恒 +4pp）；批准 / 拒绝只染文字（`--green` / `--red`），不做彩色描边。
-- **自由回答行**紧接选项之后并延续同一编号，提交按钮是该面唯一的填充按钮（primary 配方）。该字段**一行起高**（`rows="1"`，`autoGrowTextarea` 随输入增高到 5 行后内部滚动）——它是应答位而非多行编辑器，两个面同此，不套「小字输入 2 行起步」。
-- **≤640px**：后果落到标签下一行（`grid-column: 2`），提交按钮占满整行。
-- 多请求队列用编号条：当前项写明「待你选择」，其余「待处理」。
+Use `--radius`, `--space-3` padding, `1px solid var(--theme-main-border)`, `--shadow-md`, and `--theme-main-background`. Express internal hierarchy with `--theme-main-soft-background` / `-subtle-background`; **do not nest solid-color cards**. For recessed surfaces (terminal or process-detail panels), use `--theme-main-sunken-background` (dark: `rgba(0,0,0,.32)`; light: `rgba(31,31,31,.06)`).
 
-### 输入框 — 三类
-1. **标题输入**（main area）：无边框纯文字。`border:0` / `outline:0` / `background:transparent`，focus 也保持无边框（光标闪动即聚焦指示）。重字重（760）、极小内边距（`2px 0`）。取自 `CoreSessionTitleEditor.vue`。
-2. **小字输入**（composer area）：2 行行高起步，随输入增高到最高 5 行，超出 5 行后 `overflow:auto` 滚动；`resize:none`（不可拖拽）；`width:100%`（不横向拓宽）；`white-space:pre-wrap` 自动换行。背景 `color-mix(--theme-composer-background 70%)`，文字 `--theme-composer-text`，边框 `composer-text 12%`。
-3. **常规输入框**（composer area）：单行表单控件，同小字输入的背景/文字/边框配方。
+### Questions and approvals (decision surface)
 
-**输入框不做聚焦态**：光标闪动即聚焦指示，不加边框/outline（覆盖全局 `:focus-visible`）。
+**One decision, two surfaces, one shared recipe:** the in-conversation decision card (main area, rendered by `MessageView.vue` and styled in `ChatThread.vue`) and the confirmation panel that takes over the input area (composer area, `CorePendingDecisionPanel.vue`). Any change to one side must be applied to the other.
 
-### 下拉 / select / popover（control area）
-单一配方：触发器 `--radius-sm`、菜单 `--radius`、item `--radius-sm`、`--z-popover`、`--shadow-md`。`UiSelect` 为唯一可复用原语，`WfSelect`/composer-menu 须收敛至此。
+- **Surface:** rounded card (`--radius`). The in-conversation card uses `--theme-main-soft-background` and a border mixed with 10% main text; the waiting border also mixes in `--decision-attention` (`#b49a60`, the waiting semantic color). The confirmation panel sits inside the composer card and must not add another nested card.
+- **Header:** `CircleHelp` (waiting state uses `--decision-attention`; composer version uses 70% `--orange`) plus category (approval/question, 58% text); place status or queue page number on the right.
+- **Choices are numbered rows:** `[number auto] [label fit-content(50%)] [consequence minmax(0,1fr)]`, `align-items: baseline`. Keep the number and consequence outside the button so only clicking the label acts; reading the row must not trigger an action. The label button uses `--radius-sm`, no border, and `--alpha-*` hover/active (always +4 percentage points). Approve/reject tint text only (`--green` / `--red`); do not add colored outlines.
+- The **free-response row** follows the choices and continues the same numbering. Its submit button is the only filled button on that surface and uses the primary recipe. The field starts at one line (`rows="1"`); `autoGrowTextarea` grows it to five lines, then scrolls internally. This is a response field, not a multiline editor; both surfaces use this recipe instead of the two-line minimum for small-text inputs.
+- **At 640px and below:** move consequences to the line below the label (`grid-column: 2`) and make the submit button full width.
+- For queued requests, use numbered tabs: label the current item “Waiting for your choice” and the rest “Pending”.
 
-**选项行高亮 = 行式**：无圆角遮罩（`border-radius:0`），hover/active 背景层用 `::before` 伪元素 + `mask` 左右渐隐（`--row-fade`，两端 alpha 0.2），行间 `gap: var(--space-1)` 留间距。只有 hover/active 的背景层渐隐，文字始终完整。**键盘聚焦沿用同一行高亮，不叠加焦点环**：菜单打开即把焦点交给第一项，再加蓝框会让鼠标打开的菜单看起来像有选中态。
+### Three input types
 
-### 按钮（control area）
-统一变体 primary / secondary / ghost / danger × sm / md。`--radius-sm` · disabled `opacity:.45`。hover 机制：中性变体（secondary/ghost）用 `--alpha-*`；彩色填充按钮（primary/danger）用 `filter: brightness(.94)`，不混用。
-- **primary**：填充 `--theme-control-background`、文字 `--theme-control-text`（跟主题联动，不用 `--blue`）。
-- **danger**：`--red` 语义色（固定）。
+1. **Title input (main area):** unbordered plain text. `border: 0`, `outline: 0`, `background: transparent`; keep it unbordered on focus (the blinking caret indicates focus). Heavy font weight (760) and minimal padding (`2px 0`). Reference: `CoreSessionTitleEditor.vue`.
+2. **Small-text input (composer area):** starts at two lines, grows to a maximum of five, then scrolls with `overflow: auto`; `resize: none`; `width: 100%`; wraps with `white-space: pre-wrap`. Use a background mixed from `--theme-composer-background` at 70%, text `--theme-composer-text`, and a border mixed from composer text at 12%.
+3. **Standard input (composer area):** single-line form control using the same background/text/border recipe as the small-text input.
 
-**Composer send/stop action exception**：`CoreSendStopButton` is a composer-area action surface even though it is a button. Its outer key surface uses `--theme-composer-text`; its paper-plane/stop glyph and motion trail use `--theme-composer-background`. Send and stop share this inversion. This explicit recipe supersedes the generic control-area button colors for this component; do not introduce control tokens or semantic red for its action colors.
+**Inputs have no focus style:** the blinking caret indicates focus. Do not add a border or outline; override the global `:focus-visible` rule.
 
-### 光学液态玻璃（true glass surface）
-统一复用 `core/ui/src/styles/optical-glass.css` 的 `.optical-glass`，不得另建 `.liquid-glass` 或在消费者中重复 `backdrop-filter`、主体背景和悬浮阴影。材质 token 位于 `variables.css`：blur 8px、saturate 1.14、brightness 1.02；主体使用所在 theme area 的 `--text` 以约 16% 透明度混合，保持高透射，不用组件级 `opacity`。
+### Dropdowns, selects, and popovers (control area)
 
-透射分两档，均为原语语义 modifier，不得在消费者里自调 tint：**高透**（默认，tint 16%）只用于右侧栏等大面积承载面；**低透**（`.optical-glass--low-trans`，tint 由 `--optical-glass-low-trans-tint` 控制）用于浮层与菜单——上下文菜单、附件来源菜单、goal 区、回到最新按钮、outline 预览、Study selection card、移动端顶栏。低透的意义：小模糊下背后亮色文字会透成可辨认的亮斑，浮层需要重着色压住。
+Use one recipe: trigger `--radius-sm`, menu `--radius`, item `--radius-sm`, `--z-popover`, and `--shadow-md`. `UiSelect` is the only reusable primitive; consolidate `WfSelect` and composer menus into it.
 
-玻璃边缘由原语统一提供 2px 纯中性灰物理边：浅色模式使用浅灰，深色模式使用深灰，边框自身不得叠加镜面、透明或渐变效果。玻璃内部不得有任何 inset 描线——左右 1px 边缘过渡线、顶部高光线都在禁止之列，描线会与 2px 物理边在圆角处形成肉眼可见的第二道边线；玻璃内部只保留灰绿色下缘折射（弥散渐变，非描线）与短的双层阴影。消费者只负责几何、`--text` area 映射和语义 modifier；交互玻璃 hover 只可轻微增亮，active 使用 0.97–0.98 缩放。原语必须同时提供 `-webkit-backdrop-filter`、不支持 backdrop 时的半透明 fallback，并在 `prefers-reduced-motion: reduce` 下不引入持续运动。
+**Option-row highlight is a row treatment:** no rounded mask (`border-radius: 0`). Use a `::before` pseudo-element for the hover/active background and fade it at each side with a `mask` using `--row-fade` (alpha 0.2 at both ends). Keep `gap: var(--space-1)` between rows. Fade only the hover/active background; keep text fully visible. **Keyboard focus uses the same row highlight without an extra focus ring.** Opening the menu transfers focus to the first item; an additional blue outline makes a menu opened by mouse look selected.
 
-true glass surface 清单：右侧 rail、上下文菜单 root/submenu、Study selection card、Workflow catalog popover/runtime dock、回到最新按钮、移动端顶栏按钮/同步状态、goal 区。模态 dimmer、opaque panel、左侧 drawer、Workflow node card 不得套用该原语。
+### Buttons (control area)
 
-### 悬停 / 选中态
-统一规则 + `--alpha-*` token，hover → active 恒 +4pp。部分组件（settings-nav）当前把 hover 与 active 合并为同值——规范后须区分。
+Use the shared `primary` / `secondary` / `ghost` / `danger` variants and `sm` / `md` sizes. Use `--radius-sm` and disabled opacity `.45`. Neutral variants (`secondary`/`ghost`) use `--alpha-*` for hover; filled color buttons (`primary`/`danger`) use `filter: brightness(.94)`. Do not mix the two hover mechanisms.
 
-### 滚动条
-复用 `base.css` 全局样式，不另做：`*::-webkit-scrollbar` 8px、透明轨道、thumb `color-mix(--theme-main-text 18%)` + `border-radius:999px` + `background-clip:content-box`、hover 加深到 34%。
+- **Primary:** fill `--theme-control-background`, text `--theme-control-text`; follow the theme and do not use `--blue`.
+- **Danger:** use fixed semantic color `--red`.
 
-### 确认 / 输入（CoreConfirmDialog，唯一弹窗原语）
-一行胶囊，不再有标题+正文+分隔条+底部操作栏：`border-radius: 999px` · `--shadow-lg` · 背景 `--theme-main-background` · `--z-modal` · 遮罩 `color-mix(--theme-backdrop-text 20%)`（只用底色压暗，不做模糊）。从左到右：标题（13px/680）；一格说明位（对象名，出错时换成 `--red` 的错误文本）；需要输入时在同一行内嵌一个 999px 输入格（`color-mix(--text var(--alpha-hover))` 底）；两个胶囊按钮——取消纯文字（`--theme-control-text` 65%，hover `--alpha-*`）、确认填 `--theme-control-background`/`--theme-control-text`（hover `brightness(.94)`）。动作入口一律走它：不得回到 `window.confirm/alert/prompt`，这类调用会顶着 "127.0.0.1:5173 显示" 的地址标题且观感与应用无关；失败提示走应用内提示条，不弹窗。
+**Composer send/stop action exception:** `CoreSendStopButton` is an action surface in the composer area even though it is a button. Its outer key surface uses `--theme-composer-text`; its paper-plane/stop glyph and motion trail use `--theme-composer-background`. Send and stop share this inversion. This explicit recipe takes precedence over generic control-area button colors for this component; do not introduce control tokens or semantic red for its action colors.
 
-## 硬禁令
+### Optical liquid glass (true glass surface)
 
-- 禁止全屏遮罩做 backdrop 模糊（引导、预览、资料库弹层、工作流建卡、确认框一律只用底色压暗）
-- 禁止使用 `window.confirm/alert/prompt`（用 `CoreConfirmDialog` 胶囊或应用内提示条）
-- 禁止 control 控件误用 `--theme-main-text` 而非 `--theme-control-text`
-- 禁止直接用静态 `--panel/--line/--text` 绕过主题层
-- 禁止 hardcode 主题色值（如 `#2c2c2b`）而非引用 `--theme-*-background`
-- 禁止新建本地命名空间（如 `--fb-*` / `--xxx-radius`）平行于主题层
-- 禁止语义色挂到 theme area（应保持固定）
-- 禁止 off-scale 圆角（5/7/9/10/11/14px），必须用 `--radius-*`
-- 禁止硬编码 z-index（180/200/100 等），必须用 `--z-*`
-- 禁止第二个下拉 / button 原语
-- 禁止覆盖输入框 focus 为 outline:none 之外的聚焦态（输入框无聚焦态，光标即可）
-- 禁止动效无 `prefers-reduced-motion` 回退
-- 禁止给玻璃加任何 inset 描线或高光（上缘亮线、左上 specular 径向光、左右 1px 边缘过渡线等——描线在圆角处形成第二道边）
+Reuse `.optical-glass` from `core/ui/src/styles/optical-glass.css`. Do not create `.liquid-glass` or repeat `backdrop-filter`, the main surface background, or floating shadow in consumers. Material tokens are in `variables.css`: blur 8px, saturate 1.14, brightness 1.02. Mix the current theme area's `--text` into the surface at about 16% opacity for high light transmission; do not use component-level `opacity`.
 
-## 审计
+There are two transmission levels. Both are semantic modifiers of the primitive; consumers must not tune the tint themselves. **High transmission** (default, tint 16%) is for large carrying surfaces such as the right rail. **Low transmission** (`.optical-glass--low-trans`, tint controlled by `--optical-glass-low-trans-tint`) is for overlays and menus: context menus, attachment-source menus, goal area, back-to-latest button, outline preview, Study selection card, and mobile top bar. Low transmission prevents bright text behind small-blur overlays from showing through as legible bright spots.
 
-审计存量碎片化：运行 `node .agents/skills/lam-design-spec/scripts/audit.mjs`。脚本扫描 `core/ui/src/styles/*.css` 与 `core/ui/src/components/*.vue`，报告 off-scale 值与违例。**不自动改代码**，供手动逐项收敛。
+The primitive provides a uniform 2px solid neutral-gray physical edge: light gray in light mode and dark gray in dark mode. Do not add mirror, transparency, or gradients to the edge itself. Do not add inset outlines anywhere inside the glass. This includes 1px side transition lines and top highlight lines; they form a visibly doubled border at rounded corners beside the 2px physical edge. Keep only the diffused gray-green refraction along the lower edge (a gradient, not an outline) and the short, layered shadow. Consumers control geometry, `--text` area mapping, and semantic modifier only. Interactive glass may brighten slightly on hover and scale to 0.97–0.98 on active. The primitive must provide `-webkit-backdrop-filter`, a translucent fallback when backdrop filtering is unsupported, and no continuous motion under `prefers-reduced-motion: reduce`.
 
-### 最严重存量违例（优先收敛）
-- `FolderBrowserDialog.vue` 的 `--fb-*` 本地命名空间（平行主题层）+ `z-index: calc(var(--z-modal-backdrop,80)+3)`
-- `UiSelect.vue` 与 `WfSelect.vue` 双下拉原语（须收敛为单一配方）
-- `FloatingApprovalCard.vue` 的 bespoke shadow + `z-index:200`（忽略 z 标尺）
-- `archive/members/writer/frontend/src/styles/components.css` 孤儿文件（引用不存在的子目录，且未被 import；member 已归档，此项不再需要收敛）
+True glass surfaces: right rail; context-menu root and submenus; Study selection card; Workflow catalog popover/runtime dock; back-to-latest button; mobile top-bar buttons/sync status; goal area. Do not use this primitive for modal dimmers, opaque panels, the left drawer, or Workflow node cards.
 
-### 值→token 映射（收敛时参考）
-- `6px` → `var(--radius-sm)` · `12px` → `var(--radius)` · `18px` → `var(--radius-lg)` · `22px` → `var(--radius-xl)`
-- `8px` hover → `var(--alpha-hover)` · `12%` active → `var(--alpha-active)`
-- `z-index:180` → `var(--z-popover)` · `z-index:200` → `var(--z-modal)` 或 `--z-toast`
-- bespoke shadow → `var(--shadow-sm/md/lg)` 按场景选
+### Hover and selected states
 
-## 与 impeccable 分工
+Use the shared rules and `--alpha-*` tokens; active alpha must be exactly 4 percentage points above hover. Some components (such as settings navigation) currently merge hover and active into the same value; separate them to match this rule.
 
-- `impeccable` = 通用的"如何设计/审计/打磨"引擎，动作导向（craft/shape/audit/polish），读 `PRODUCT.md`。仅在从零的新设计时介入。
-- `lam-design-spec` = LamTools 设计语言的唯一真源（what，非 how），约束导向。
-- 二者可同时触发：新组件设计时 impeccable 定方向，本 skill 约束落在 token 与配方内。
+### Scrollbars
+
+Reuse the global `base.css` styling. Do not add another scrollbar recipe: `*::-webkit-scrollbar` is 8px; the track is transparent; the thumb uses `color-mix(--theme-main-text 18%)`, `border-radius: 999px`, and `background-clip: content-box`; hover darkens it to 34%.
+
+### Confirmation and input (`CoreConfirmDialog`, the only dialog primitive)
+
+Use a single capsule row, not a title/body/divider/footer layout: `border-radius: 999px`, `--shadow-lg`, `--theme-main-background`, `--z-modal`, and a dimmer of `color-mix(--theme-backdrop-text 20%)` (darken with a solid color only; no blur). From left to right: title (13px/680); one description cell (object name, or error text in `--red`); when input is needed, an inline 999px input cell with a `color-mix(--text var(--alpha-hover))` background; then two pill buttons—Cancel as text only (`--theme-control-text` at 65%, `--alpha-*` hover) and Confirm filled with `--theme-control-background` / `--theme-control-text` (`brightness(.94)` hover). Route every action through this component: do not restore `window.confirm`, `window.alert`, or `window.prompt`; browser dialogs display an unrelated `127.0.0.1:5173 says` title. Show failure messages in the in-app notice bar instead of a dialog.
+
+## Prohibitions
+
+- Do not blur full-screen overlays (onboarding, previews, library overlays, workflow-card creation, and confirmation dialogs use a solid dimmer only).
+- Do not use `window.confirm`, `window.alert`, or `window.prompt`; use the `CoreConfirmDialog` capsule or the in-app notice bar.
+- Do not use `--theme-main-text` for control components; use `--theme-control-text`.
+- Do not bypass the theme with static `--panel`, `--line`, or `--text`.
+- Do not hard-code theme colors (for example, `#2c2c2b`) instead of using `--theme-*-background`.
+- Do not add local namespaces (such as `--fb-*` or `--xxx-radius`) parallel to the theme system.
+- Do not attach semantic colors to theme areas; they remain fixed.
+- Do not use off-scale radii (5/7/9/10/11/14px); use `--radius-*`.
+- Do not hard-code z-index values (180/200/100, etc.); use `--z-*`.
+- Do not create a second dropdown or button primitive.
+- Do not give inputs a focus style beyond no outline; the caret is sufficient.
+- Do not add motion without a `prefers-reduced-motion` fallback.
+- Do not add inset outlines or highlights to glass (top highlight, upper-left specular radial light, 1px side transition lines, or similar); they form a doubled border at rounded corners.
+
+## Audit
+
+To audit existing fragmentation, run `node .agents/skills/lam-design-spec/scripts/audit.mjs`. It scans `core/ui/src/styles/*.css` and `core/ui/src/components/*.vue` and reports off-scale values and violations. It does **not** edit code; use its output to consolidate issues manually.
+
+### Most severe existing violations (prioritize these)
+
+- `FolderBrowserDialog.vue`: local `--fb-*` namespace parallel to the theme, plus `z-index: calc(var(--z-modal-backdrop,80)+3)`.
+- `UiSelect.vue` and `WfSelect.vue`: duplicate dropdown primitives; consolidate to one recipe.
+- `FloatingApprovalCard.vue`: bespoke shadow and `z-index: 200`, outside the z-index scale.
+- `archive/members/writer/frontend/src/styles/components.css`: orphaned file referencing a missing subdirectory and not imported. The member product is archived, so no further consolidation is needed here.
+
+### Value-to-token mapping for consolidation
+
+- `6px` → `var(--radius-sm)` · `12px` → `var(--radius)` · `18px` → `var(--radius-lg)` · `22px` → `var(--radius-xl)`.
+- `8px` hover → `var(--alpha-hover)` · `12%` active → `var(--alpha-active)`.
+- `z-index: 180` → `var(--z-popover)` · `z-index: 200` → `var(--z-modal)` or `--z-toast`.
+- Bespoke shadows → `var(--shadow-sm/md/lg)`, chosen for the use case.
+
+## Relationship with Impeccable
+
+- `impeccable` is the general-purpose engine for how to design, audit, and refine (craft/shape/audit/polish); it reads `PRODUCT.md`. Use it only for a design from scratch.
+- `lam-design-spec` is the single source of truth for what the LamTools design language is; it is constraint-oriented.
+- Both can apply to a new component: Impeccable sets visual direction, and this skill keeps the result within LamTools tokens and recipes.

@@ -4,6 +4,8 @@
  */
 
 // Types
+export { UI_LANGUAGES, LANGUAGE_NAMESPACE, uiLanguage, setUiLanguage, loadUiLanguage, saveUiLanguage, t, defaultUiText } from './i18n'
+export type { UiLanguage } from './i18n'
 export type {
   ProductFeatureId,
   ProductAdapter,
@@ -63,7 +65,7 @@ export {
   type CoreResourceSummary,
 } from './runtime/resources';
 export { buildCurrentTurnChecklistGroups } from './runtime/checklist';
-export { selectCoreSubAgentRuns } from './agents/subAgentProjection';
+export { selectCoreSubAgentRun, selectCoreSubAgentRuns } from './agents/subAgentProjection';
 
 // Components
 export { default as WorkspaceShell } from './components/WorkspaceShell.vue';
@@ -436,6 +438,8 @@ export {
   selectCoreWorkbenchMessages,
   selectLatestTurnStatus,
   selectLatestActiveTurnId,
+  countOutstandingSubAgents,
+  selectCoreSessionActivity,
   updateCoreSessionListStatus,
   selectQueueTray,
   selectPendingCoreDecisions,
@@ -500,6 +504,9 @@ export {
   type CoreDecisionOption,
   type CorePendingDecision,
   type SelectPendingCoreDecisionsOptions,
+  type CoreSessionActivity,
+  type CoreSessionPhase,
+  type SelectCoreSessionActivityOptions,
 } from './appServer';
 
 // Transport

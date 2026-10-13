@@ -1,12 +1,12 @@
 <template>
   <div class="full-area-column full-area-surface account-view" :style="settingsThemeStyle">
         <header class="account-head">
-          <button class="account-back" type="button" aria-label="返回会话" title="返回会话" @click="$emit('close')">
+          <button class="account-back" type="button" :aria-label="t('返回会话')" :title="t('返回会话')" @click="$emit('close')">
             <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
           </button>
-          <span class="account-head-title">账号</span>
-          <span v-if="accountStatus" class="account-head-state">已登录</span>
-          <span v-else class="account-head-state is-off">未登录</span>
+          <span class="account-head-title">{{ t("账号") }}</span>
+          <span v-if="accountStatus" class="account-head-state">{{ t("已登录") }}</span>
+          <span v-else class="account-head-state is-off">{{ t("未登录") }}</span>
           <button
             v-if="onRefresh"
             class="account-action"
@@ -14,7 +14,7 @@
             :disabled="loading"
             @click="onRefresh()"
           >
-            {{ loading ? '刷新中…' : '刷新' }}
+            {{ loading ? t("刷新中…") : t("刷新") }}
           </button>
         </header>
 
@@ -23,15 +23,15 @@
 
           <section class="account-section">
             <div class="account-row">
-              <span class="account-row-label">当前账号</span>
-              <span class="account-row-value">{{ accountStatus?.username || '未登录' }}</span>
+              <span class="account-row-label">{{ t("当前账号") }}</span>
+              <span class="account-row-value">{{ accountStatus?.username || t("未登录") }}</span>
             </div>
             <div v-if="accountStatus" class="account-row">
-              <span class="account-row-label">节点</span>
+              <span class="account-row-label">{{ t("节点") }}</span>
               <span class="account-row-value is-mono">{{ accountStatus.nodeId }}</span>
             </div>
             <div v-if="accountStatus?.baseUrl" class="account-row">
-              <span class="account-row-label">服务器</span>
+              <span class="account-row-label">{{ t("服务器") }}</span>
               <span class="account-row-value is-mono">{{ accountStatus.baseUrl }}</span>
             </div>
             <div class="account-actions">
@@ -41,52 +41,41 @@
                 type="button"
                 :disabled="loading"
                 @click="onLogout()"
-              >
-                退出账号
-              </button>
-              <button v-else class="account-btn is-primary" type="button" @click="onOpenSettings()">
-                去登录
-              </button>
+              >{{ t("退出账号") }}</button>
+              <button v-else class="account-btn is-primary" type="button" @click="onOpenSettings()">{{ t("去登录") }}</button>
             </div>
           </section>
 
           <section class="account-section">
-            <div class="account-section-title">
-              设备
-              <span class="account-section-note">{{ devices.length ? `${onlineCount}/${devices.length} 在线` : '暂无' }}</span>
+            <div class="account-section-title">{{ t("设备") }}<span class="account-section-note">{{ devices.length ? t('{0}/{1} 在线', { 0: onlineCount, 1: devices.length }) : t("暂无") }}</span>
             </div>
             <ul v-if="devices.length" class="account-devices">
               <li v-for="device in devices" :key="device.nodeId" class="account-device">
                 <span class="account-device-dot" :class="{ online: device.online }" aria-hidden="true"></span>
                 <span class="account-device-label">{{ device.label }}</span>
-                <span v-if="device.current" class="account-device-badge">本机</span>
+                <span v-if="device.current" class="account-device-badge">{{ t("本机") }}</span>
                 <span class="account-device-detail">{{ device.detail }}</span>
               </li>
             </ul>
-            <p v-else class="account-empty">登录后在手机上配对，这里会列出已配对的设备。</p>
+            <p v-else class="account-empty">{{ t("登录后在手机上配对，这里会列出已配对的设备。") }}</p>
           </section>
 
           <section class="account-section">
-            <div class="account-section-title">
-              方案传输
-              <span class="account-section-note">待接入</span>
+            <div class="account-section-title">{{ t("方案传输") }}<span class="account-section-note">{{ t("待接入") }}</span>
             </div>
-            <p class="account-empty">
-              手机做方案，电脑开工：方案先存在手机上，桌面端导入后即可核对并开始执行。
-              自动送达（账号直传）尚未接入，先用导出／导入这一步。
-            </p>
+            <p class="account-empty">{{ t("手机做方案，电脑开工：方案先存在手机上，桌面端导入后即可核对并开始执行。 自动送达（账号直传）尚未接入，先用导出／导入这一步。") }}</p>
           </section>
         </main>
 
         <footer class="account-foot">
-          <button class="account-link" type="button" @click="onOpenSettings()">
-            打开完整设置（账号与设备）
-          </button>
+          <button class="account-link" type="button" @click="onOpenSettings()">{{ t("打开完整设置（账号与设备）") }}</button>
         </footer>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * AccountShell — 账号的独立界面。
  *

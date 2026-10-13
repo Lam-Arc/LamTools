@@ -1,22 +1,22 @@
 # LamWriter — AI Engineering & Writing Companion
 
-> 当前架构：CoreLoopKernel + WriterKit + Slot
+> Current architecture: CoreLoopKernel + WriterKit + Slot
 
 - Architecture: CoreLoopKernel + WriterKit → WriterTurn → WriterAction → WriterPart events → MEM writeback
-- Persona一切以处理实际任务为目的
+- The persona exists to accomplish practical tasks.
 - Entry: After P4 Core SDK extraction (Phase 6 in PLAN.md)
 
-## Doc Index
+## Documentation Index
 
 | Topic | File |
 |-------|------|
-| Writer 完整架构 | `docs/2026-05-20-writer-architecture.md` |
-| ArchitectureAgent 图节点路线 | `docs/architecture-agent-graph-roadmap.md` |
+| Complete Writer architecture | `docs/2026-05-20-writer-architecture.md` |
+| ArchitectureAgent graph-node roadmap | `docs/architecture-agent-graph-roadmap.md` |
 | Writer PER | `docs/writer-per-v1.md` |
-| PER/CON/MEM 心智模型 | `docs/mental-model.md` |
-| LamTools 生态 | `docs/lamtools-ecosystem.md` |
-| P3/P4 路线 | `docs/ROADMAP.md` |
-| 总控计划 | `docs/PLAN.md` |
+| PER/CON/MEM mental model | `docs/mental-model.md` |
+| LamTools ecosystem | `docs/lamtools-ecosystem.md` |
+| P3/P4 roadmap | `docs/ROADMAP.md` |
+| Master plan | `docs/PLAN.md` |
 
 ## Key Architecture
 
@@ -29,7 +29,7 @@ CoreLoopKernel (shared loop) + WriterKit (Writer adapter)
 ```
 
 - **Part-based messages**: ToolPart state machine pending→running→completed/error.
-- **Permission**: 3-tier (auto-allow / ask-user / hard-block). File ops bounded to work_root.
+- **Permission**: 3-tier (auto-allow / ask-user / hard-block). File operations are bounded to work_root.
 - **Git**: Per-task branching `writer/{category}/{slug}`, conventional commits.
 - **9 interaction modes**: EXECUTE, TEACH, DISCUSS, PROTOTYPE, REVIEW, BRAINSTORM, PAIR, DECISION, COMFORT.
 - **Domain-aware Hot CON matching**: different recall for code/prose/email/teaching tasks.
@@ -58,7 +58,7 @@ E:\LamTools\members\writer\
 └── AGENTS.md
 ```
 
-## Dev Commands
+## Development Commands
 
 ```bash
 cd backend && py -3.14 -m uvicorn app.main:app --reload --port 6173
@@ -67,13 +67,13 @@ cd frontend && npm run dev
 
 ## Rules
 
-- No emoji, Lucide SVG only. Black/white/gray UI.
-- LamTwo does NOT influence Writer runtime. Writer is shaped by own PER/CON/history.
-- Writer persona stays minimal regardless of task type.
+- No emoji; use Lucide SVG only. Use a black/white/gray UI.
+- LamTwo does NOT influence Writer runtime. Writer is shaped by its own PER/CON/history.
+- Keep the Writer persona minimal regardless of task type.
 - Follow existing project patterns; never impose personal preferences.
 - Run tests after every change that could break something.
-- **不得使用任何 mock 测试**（包括但不限于 unittest.mock、pytest-mock、Monkeypatch），除非用户明确要求使用 mock。所有测试必须针对真实实现编写。
-- **与用户交流时使用中文。**
-- **遇到任何问题，先查阅 OpenCode 和 Claude Code 源码寻找解决方案，评估能否直接使用或参考借鉴，再决定自行实现。**
-- Git: `writer/{category}/{slug}` branches; `type: description` commits.
-- **Writer 和 OpenCode 使用同一个 GLM5.1 模型**（Xunfei astron-code-latest），模型能力不是瓶颈。差距在 Writer 架构层面。
+- **Do not use any mock-based tests** (including but not limited to `unittest.mock`, `pytest-mock`, or Monkeypatch) unless the user explicitly requests mocks. All tests must exercise the real implementation.
+- **Communicate with the user in English.**
+- **When a problem occurs, first inspect the OpenCode and Claude Code source code for solutions. Assess whether they can be used directly or adapted before deciding to implement a solution independently.**
+- Git: use `writer/{category}/{slug}` branches and `type: description` commits.
+- **Writer and OpenCode use the same GLM5.1 model** (Xunfei astron-code-latest); model capability is not the bottleneck. The gap is in Writer's architecture.

@@ -74,6 +74,56 @@ afterEach(() => {
 })
 
 describe('MarkdownRenderer incremental streaming', () => {
+  it('fades new text without replaying old text and carries the fade across tail rebuilds', async () => {
+    vi.useFakeTimers()
+    const wrapper = await mountStreaming('Earlier text')
+    expect(wrapper.find('.stream-text-fade').exists()).toBe(false)
+
+    await wrapper.setProps({ content: 'Earlier text arrives' })
+    expect(wrapper.findAll('.stream-text-fade').map(span => span.text())).toEqual(['arrives'])
+    await vi.advanceTimersByTimeAsync(60)
+    await wrapper.setProps({ content: 'Earlier text arrives **smoothly**' })
+    const fading = wrapper.findAll('.stream-text-fade')
+    expect(fading.map(span => span.text())).toEqual(['arrives', 'smoothly'])
+    expect(fading[0].attributes('style')).toContain('--stream-fade-age: 60ms')
+    expect(wrapper.find('strong .stream-text-fade').text()).toBe('smoothly')
+
+    await vi.advanceTimersByTimeAsync(180)
+    await wrapper.setProps({ content: 'Earlier text arrives **smoothly**.\n\nNext paragraph' })
+    expect(wrapper.findAll('.stream-text-fade').map(span => span.text())).toEqual(['.', 'Next paragraph'])
+    expect(wrapper.text()).toContain('Earlier text arrives smoothly.')
+    await wrapper.setProps({ streaming: false })
+    expect(wrapper.find('.stream-text-fade').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('does not animate replacement snapshots or code copy controls', async () => {
+    const wrapper = await mountStreaming('')
+    await wrapper.setProps({ content: '```js\nconst answer = 42' })
+    expect(wrapper.find('code .stream-text-fade').exists()).toBe(true)
+    expect(wrapper.find('button .stream-text-fade').exists()).toBe(false)
+    await wrapper.setProps({ content: 'Reset' })
+    expect(wrapper.find('.stream-text-fade').exists()).toBe(false)
+    expect(wrapper.text()).toBe('Reset')
+    wrapper.unmount()
+  })
+
+  it('keeps an active reveal timeline when the tail closes and preserves Unicode text', async () => {
+    vi.useFakeTimers()
+    const wrapper = await mountStreaming('Read')
+    await wrapper.setProps({ content: 'Read 😀' })
+    await vi.advanceTimersByTimeAsync(60)
+    await wrapper.setProps({ content: 'Read 😀 now\n\nNext' })
+    const first = wrapper.find('p')
+    expect(first.text()).toBe('Read 😀 now')
+    expect(first.findAll('.stream-text-fade').map(span => span.text())).toEqual(['😀', 'now'])
+    expect(first.find('.stream-text-fade').attributes('style')).toContain('--stream-fade-age: 60ms')
+    const closed = first.element
+    await wrapper.setProps({ content: 'Read 😀 now\n\nNext update' })
+    expect(wrapper.find('p').element).toBe(closed)
+    wrapper.unmount()
+  })
+
   it('produces DOM identical to the shared segment reference renderer, tick by tick', async () => {
     const steps = [
       '第一段',

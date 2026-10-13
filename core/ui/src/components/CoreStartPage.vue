@@ -5,14 +5,14 @@
     :data-state="hasProject ? 'project-no-session' : 'no-project'"
     data-core-start-page
   >
-    <div class="core-start-page-backdrop" aria-hidden="true">准备开干！</div>
+    <div class="core-start-page-backdrop" aria-hidden="true">{{ t("准备开干！") }}</div>
     <div class="core-start-page-content">
       <p class="core-start-page-kicker">Sunday</p>
-      <h1>{{ hasProject ? '从一个新会话开始' : '先选一个工作目录' }}</h1>
+      <h1>{{ hasProject ? t("从一个新会话开始") : t("先选一个工作目录") }}</h1>
       <p class="core-start-page-description">
         {{ hasProject
-          ? '当前项目还没有可用会话。新建会话后即可开始工作。'
-          : '项目保存工作目录、会话和运行配置。你也可以打开已使用过的目录。' }}
+          ? t("当前项目还没有可用会话。新建会话后即可开始工作。")
+          : t("项目保存工作目录、会话和运行配置。你也可以打开已使用过的目录。") }}
       </p>
 
       <div class="core-start-page-actions">
@@ -22,26 +22,26 @@
           type="button"
           data-start-new-session
           @click="emit('new-session')"
-        >新建会话</button>
+        >{{ t("新建会话") }}</button>
         <button
           v-else
           class="core-start-page-action primary"
           type="button"
           data-start-new-project
           @click="emit('new-project')"
-        >新建项目</button>
+        >{{ t("新建项目") }}</button>
         <button
           class="core-start-page-action secondary"
           type="button"
           data-start-select-project
           :disabled="!hasProject"
-          :title="hasProject ? '选择已登记项目' : '暂无已登记项目'"
+          :title="hasProject ? t('选择已登记项目') : t('暂无已登记项目')"
           @click="emit('select-project')"
-        >选择项目</button>
+        >{{ t("选择项目") }}</button>
       </div>
 
       <section v-if="recentProjects.length" class="core-start-page-recent" aria-labelledby="core-start-page-recent-title">
-        <h2 id="core-start-page-recent-title">最近项目</h2>
+        <h2 id="core-start-page-recent-title">{{ t("最近项目") }}</h2>
         <div class="core-start-page-recent-list">
           <button
             v-for="project in recentProjects"
@@ -49,7 +49,7 @@
             class="core-start-page-recent-item"
             type="button"
             :title="project.workRoot"
-            :aria-label="`打开项目 ${project.name}`"
+            :aria-label="t('打开项目 {0}', { 0: project.name })"
             :data-recent-project="project.id"
             @click="emit('open-recent-project', project.id)"
           >
@@ -66,6 +66,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 export interface CoreRecentProject {
   id: string
   name: string
@@ -90,12 +92,12 @@ const emit = defineEmits<{
 
 function formatOpenedAt(value: string): string {
   const date = new Date(value)
-  if (Number.isNaN(date.valueOf())) return '最近打开'
+  if (Number.isNaN(date.valueOf())) return t("最近打开")
   const elapsed = Date.now() - date.valueOf()
-  if (elapsed >= 0 && elapsed < 60_000) return '刚刚打开'
-  if (elapsed >= 0 && elapsed < 3_600_000) return `${Math.max(1, Math.floor(elapsed / 60_000))} 分钟前`
-  if (elapsed >= 0 && elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`
-  if (elapsed >= 0 && elapsed < 7 * 86_400_000) return `${Math.floor(elapsed / 86_400_000)} 天前`
+  if (elapsed >= 0 && elapsed < 60_000) return t("刚刚打开")
+  if (elapsed >= 0 && elapsed < 3_600_000) return t("{0} 分钟前", { 0: Math.max(1, Math.floor(elapsed / 60_000)) })
+  if (elapsed >= 0 && elapsed < 86_400_000) return t("{0} 小时前", { 0: Math.floor(elapsed / 3_600_000) })
+  if (elapsed >= 0 && elapsed < 7 * 86_400_000) return t("{0} 天前", { 0: Math.floor(elapsed / 86_400_000) })
   return new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(date)
 }
 </script>

@@ -1,28 +1,28 @@
 <template>
-  <section class="wf-queue-panel" aria-label="工作流队列与历史">
+  <section class="wf-queue-panel" :aria-label="t('工作流队列与历史')">
     <header class="wf-queue-head">
       <div>
-        <h3>队列与历史</h3>
-        <span class="wf-queue-summary">排队 {{ items.length }} · 历史 {{ history.length }}</span>
+        <h3>{{ t("队列与历史") }}</h3>
+        <span class="wf-queue-summary">{{ t("排队") }}{{ items.length }}{{ t("· 历史") }}{{ history.length }}</span>
       </div>
-      <button type="button" class="wf-queue-refresh" :disabled="loading" aria-label="刷新队列" title="刷新" @click="refresh">
+      <button type="button" class="wf-queue-refresh" :disabled="loading" :aria-label="t('刷新队列')" :title="t('刷新')" @click="refresh">
         <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </header>
-    <div class="wf-queue-tabs" role="tablist" aria-label="队列视图">
-      <button type="button" role="tab" :aria-selected="tab === 'queue'" :class="{ active: tab === 'queue' }" @click="tab = 'queue'">当前队列</button>
-      <button type="button" role="tab" :aria-selected="tab === 'history'" :class="{ active: tab === 'history' }" @click="tab = 'history'">运行历史</button>
+    <div class="wf-queue-tabs" role="tablist" :aria-label="t('队列视图')">
+      <button type="button" role="tab" :aria-selected="tab === 'queue'" :class="{ active: tab === 'queue' }" @click="tab = 'queue'">{{ t("当前队列") }}</button>
+      <button type="button" role="tab" :aria-selected="tab === 'history'" :class="{ active: tab === 'history' }" @click="tab = 'history'">{{ t("运行历史") }}</button>
     </div>
     <div class="wf-queue-actions">
-      <button type="button" class="wf-queue-primary" :disabled="loading || disabled" @click="enqueue">加入队列</button>
-      <button type="button" class="wf-queue-danger" :disabled="loading || !history.length" @click="requestClear(false)">清理历史</button>
-      <button type="button" class="wf-queue-danger wf-queue-danger-muted" :disabled="loading || (!items.length && !history.length)" @click="requestClear(true)">清空全部</button>
+      <button type="button" class="wf-queue-primary" :disabled="loading || disabled" @click="enqueue">{{ t("加入队列") }}</button>
+      <button type="button" class="wf-queue-danger" :disabled="loading || !history.length" @click="requestClear(false)">{{ t("清理历史") }}</button>
+      <button type="button" class="wf-queue-danger wf-queue-danger-muted" :disabled="loading || (!items.length && !history.length)" @click="requestClear(true)">{{ t("清空全部") }}</button>
     </div>
-    <div v-if="pendingClear !== null" class="wf-queue-confirm" role="alertdialog" aria-label="确认清理队列">
-      <p>此操作不可撤销，将{{ pendingClear ? '删除全部队列项和历史' : '删除已结束历史' }}。</p>
+    <div v-if="pendingClear !== null" class="wf-queue-confirm" role="alertdialog" :aria-label="t('确认清理队列')">
+      <p>{{ t("此操作不可撤销，将") }}{{ pendingClear ? t("删除全部队列项和历史") : t("删除已结束历史") }}。</p>
       <div>
-        <button type="button" @click="pendingClear = null">取消</button>
-        <button type="button" class="wf-queue-danger" @click="confirmClear">确认清理</button>
+        <button type="button" @click="pendingClear = null">{{ t("取消") }}</button>
+        <button type="button" class="wf-queue-danger" @click="confirmClear">{{ t("确认清理") }}</button>
       </div>
     </div>
     <ul v-if="visibleItems.length" class="wf-queue-list" aria-live="polite">
@@ -30,41 +30,41 @@
         <button type="button" class="wf-queue-item-main" @click="inspect(item)">
           <span class="wf-queue-status" :class="`status-${item.status}`" aria-hidden="true"></span>
           <span class="wf-queue-item-copy">
-            <strong>{{ item.run_id || item.queue_id || '未命名运行' }}</strong>
-            <small>{{ statusLabel(item.status) }} · 优先级 {{ item.priority }} · {{ formatTimestamp(item.created_at) }}</small>
+            <strong>{{ item.run_id || item.queue_id || t("未命名运行") }}</strong>
+            <small>{{ statusLabel(item.status) }}{{ t("· 优先级") }}{{ item.priority }} · {{ formatTimestamp(item.created_at) }}</small>
           </span>
           <span class="wf-queue-chevron" aria-hidden="true">
             <ChevronRight :size="14" :stroke-width="1.8" />
           </span>
         </button>
-        <button v-if="canCancel(item)" type="button" class="wf-queue-cancel" :aria-label="`取消运行 ${item.run_id || item.queue_id}`" @click="cancel(item)">取消</button>
+        <button v-if="canCancel(item)" type="button" class="wf-queue-cancel" :aria-label="t('取消运行 {0}', { 0: item.run_id || item.queue_id })" @click="cancel(item)">{{ t("取消") }}</button>
       </li>
     </ul>
-    <p v-else class="wf-queue-empty">{{ tab === 'queue' ? '当前没有排队运行' : '还没有运行历史' }}</p>
-    <article v-if="selected" class="wf-queue-detail" aria-label="队列运行详情">
+    <p v-else class="wf-queue-empty">{{ tab === 'queue' ? t("当前没有排队运行") : t("还没有运行历史") }}</p>
+    <article v-if="selected" class="wf-queue-detail" :aria-label="t('队列运行详情')">
       <header>
-        <strong>运行详情</strong>
-        <button type="button" class="wf-queue-close" aria-label="关闭详情" @click="selectedId = ''">
+        <strong>{{ t("运行详情") }}</strong>
+        <button type="button" class="wf-queue-close" :aria-label="t('关闭详情')" @click="selectedId = ''">
           <X :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </header>
       <dl>
-        <div><dt>状态</dt><dd :class="`status-text-${selected.status}`">{{ statusLabel(selected.status) }}</dd></div>
-        <div><dt>队列 ID</dt><dd><code>{{ selected.queue_id || '—' }}</code></dd></div>
-        <div><dt>运行 ID</dt><dd><code>{{ selected.run_id || '—' }}</code></dd></div>
-        <div><dt>优先级</dt><dd>{{ selected.priority ?? 0 }}</dd></div>
-        <div><dt>开始</dt><dd>{{ formatTimestamp(selected.started_at) }}</dd></div>
-        <div><dt>结束</dt><dd>{{ formatTimestamp(selected.finished_at) }}</dd></div>
+        <div><dt>{{ t("状态") }}</dt><dd :class="`status-text-${selected.status}`">{{ statusLabel(selected.status) }}</dd></div>
+        <div><dt>{{ t("队列 ID") }}</dt><dd><code>{{ selected.queue_id || '—' }}</code></dd></div>
+        <div><dt>{{ t("运行 ID") }}</dt><dd><code>{{ selected.run_id || '—' }}</code></dd></div>
+        <div><dt>{{ t("优先级") }}</dt><dd>{{ selected.priority ?? 0 }}</dd></div>
+        <div><dt>{{ t("开始") }}</dt><dd>{{ formatTimestamp(selected.started_at) }}</dd></div>
+        <div><dt>{{ t("结束") }}</dt><dd>{{ formatTimestamp(selected.finished_at) }}</dd></div>
       </dl>
       <p v-if="selected.error" class="wf-queue-error" role="alert">{{ selected.error }}</p>
       <details v-if="cacheEntries.length" open>
-        <summary>缓存（{{ cacheEntries.length }}）</summary>
+        <summary>{{ t("缓存（") }}{{ cacheEntries.length }}）</summary>
         <ul class="wf-queue-cache-list">
           <li v-for="entry in cacheEntries" :key="entry.nodeId"><span>{{ entry.nodeId }}</span><strong :class="`cache-${entry.status}`">{{ entry.status }}</strong><code>{{ entry.key || '—' }}</code></li>
         </ul>
       </details>
       <details v-if="selected.result" open>
-        <summary>运行结果</summary>
+        <summary>{{ t("运行结果") }}</summary>
         <pre>{{ formatValue(selected.result.output) }}</pre>
       </details>
     </article>
@@ -72,6 +72,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, ref } from 'vue'
 import { ChevronRight, RefreshCw, X } from 'lucide-vue-next'
 import type { WorkflowCacheFact, WorkflowQueueItem, WorkflowQueueStatus } from './types'
@@ -115,7 +117,7 @@ function statusLabel(status: WorkflowQueueStatus): string {
 }
 function cacheLabel(fact: WorkflowCacheFact): string {
   const value = String(fact.status || (fact.hit ? 'hit' : fact.miss ? 'miss' : 'bypass')).toLowerCase()
-  return value === 'hit' ? '命中' : value === 'miss' ? '未命中' : value === 'bypass' ? '跳过' : '未知'
+  return value === 'hit' ? t("命中") : value === 'miss' ? t("未命中") : value === 'bypass' ? t("跳过") : t("未知")
 }
 function formatValue(value: unknown): string {
   if (value === undefined || value === null) return '—'

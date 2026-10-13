@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, defineComponent, h, ref, type PropType, type VNode } from 'vue'
 import { ArrowLeft, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, RefreshCw } from 'lucide-vue-next'
 import type { StudyNoteTreeNode } from './types'
@@ -64,19 +66,19 @@ const TreeRows = defineComponent({
 </script>
 
 <template>
-  <nav class="study-note-tree" aria-label="笔记文件树">
+  <nav class="study-note-tree" :aria-label="t('笔记文件树')">
     <button v-if="onBack" class="study-note-tree-row study-note-tree-back" type="button" @click="onBack">
-      <ArrowLeft :size="16" aria-hidden="true" /><span>返回学习</span>
+      <ArrowLeft :size="16" aria-hidden="true" /><span>{{ t("返回学习") }}</span>
     </button>
     <header class="study-note-tree-head">
-      <span class="study-note-tree-title">笔记库</span>
-      <button v-if="onRefresh" class="study-sidebar-icon-button" type="button" aria-label="刷新笔记文件树" title="刷新" :disabled="loading" @click="onRefresh">
+      <span class="study-note-tree-title">{{ t("笔记库") }}</span>
+      <button v-if="onRefresh" class="study-sidebar-icon-button" type="button" :aria-label="t('刷新笔记文件树')" :title="t('刷新')" :disabled="loading" @click="onRefresh">
         <RefreshCw :size="14" aria-hidden="true" />
       </button>
     </header>
     <p v-if="error" class="study-note-tree-error" role="alert">{{ error }}</p>
-    <p v-else-if="loading && !tree.length" class="study-note-tree-status" role="status">加载中…</p>
-    <p v-else-if="!tree.length" class="study-note-tree-status">还没有 Markdown 笔记。</p>
+    <p v-else-if="loading && !tree.length" class="study-note-tree-status" role="status">{{ t("加载中…") }}</p>
+    <p v-else-if="!tree.length" class="study-note-tree-status">{{ t("还没有 Markdown 笔记。") }}</p>
     <TreeRows v-else :nodes="roots" />
   </nav>
 </template>

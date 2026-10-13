@@ -4,10 +4,15 @@ import type {
   CoreAppRequestState,
   CoreAppSnapshot,
   CoreRuntimeItem,
+  CoreRuntimeTurn,
 } from './protocol.ts'
+import { coreSystemEventForItem } from './systemEvents.ts'
 
 const RENDERABLE_ITEM_TYPES = new Set([
   'userMessage',
+  // The runtime injects its own turns (member wake, memory resume) as system
+  // messages; the projection turns them into system rows, never user bubbles.
+  'systemMessage',
   'agentMessage',
   'reasoning',
   'dynamicToolCall',
@@ -25,6 +30,41 @@ const RENDERABLE_ITEM_TYPES = new Set([
   'status',
   'agent_summary',
 ])
+
+type CoreUsageCall = NonNullable<CoreRuntimeTurn['usage_calls']>[number]
+
+interface CoreUsageCallIndex {
+  main: CoreUsageCall[]
+  byParentItemId: Map<string, CoreUsageCall[]>
+}
+
+// Usage events replace a turn's `usage_calls` array in the snapshot reducer.
+// Index each immutable array once so every projection frame does O(calls)
+// work per changed turn instead of filtering the same turn once per parent
+// item. Weak keys keep each index tied to its source array's lifetime.
+const usageCallIndexes = new WeakMap<CoreUsageCall[], CoreUsageCallIndex>()
+const EMPTY_USAGE_CALLS: CoreUsageCall[] = []
+
+function indexUsageCalls(calls: CoreUsageCall[]): CoreUsageCallIndex {
+  const cached = usageCallIndexes.get(calls)
+  if (cached) return cached
+
+  const main: CoreUsageCall[] = []
+  const byParentItemId = new Map<string, CoreUsageCall[]>()
+  for (const call of calls) {
+    if (!call.parent_item_id) {
+      main.push(call)
+      continue
+    }
+    const parentCalls = byParentItemId.get(call.parent_item_id)
+    if (parentCalls) parentCalls.push(call)
+    else byParentItemId.set(call.parent_item_id, [call])
+  }
+
+  const index = { main, byParentItemId }
+  usageCallIndexes.set(calls, index)
+  return index
+}
 
 export interface CoreAppServerChatMessage {
   id: string
@@ -46,9 +86,42 @@ export interface CoreAppServerChatMessage {
 }
 
 export function selectLatestTurnStatus(state: CoreAppSnapshot): 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' {
+  // A turn the server reports as active wins. The thread-level status is not a
+  // reliable "is a turn running" signal: right after a turn is accepted it can
+  // still read the previous turn's terminal value (turn/accepted updates the
+  // turn map and the top-level status, not `core.status`), which hid the stop
+  // affordance and made the composer try to start a new turn during a run.
+  const activeTurnStatus = latestActiveTurnStatus(state)
+  if (activeTurnStatus) return activeTurnStatus
   const coreStatus = state.core?.status
   if (coreStatus && coreStatus !== 'idle') return coreStatus
   return state.status ?? 'idle'
+}
+
+/**
+ * The status of the newest turn the server reports as active, or null when none
+ * is. Deliberately reads the turn map (`snapshot.turns` and
+ * `snapshot.core.turns`), which is where a turn's own status lives.
+ */
+function latestActiveTurnStatus(state: CoreAppSnapshot): 'running' | 'waiting' | null {
+  const turns = {
+    ...(state.turns || {}),
+    ...(state.core?.turns || {}),
+  }
+  const active: Array<{ status: 'running' | 'waiting'; seq: number; id: string }> = []
+  for (const [turnId, turn] of Object.entries(turns)) {
+    const status = String(turn?.status || '')
+    // `interrupting` is active too; it reports as running (the public status
+    // union has no separate value for it).
+    if (status !== 'running' && status !== 'interrupting' && status !== 'waiting') continue
+    active.push({
+      status: status === 'waiting' ? 'waiting' : 'running',
+      seq: Number(turn?.last_seq ?? turn?.seq ?? 0),
+      id: String(turn?.turn_id || turnId),
+    })
+  }
+  active.sort((a, b) => b.seq - a.seq || a.id.localeCompare(b.id))
+  return active[0]?.status ?? null
 }
 
 export function selectQueueTray(state: CoreAppSnapshot): CoreAppQueueItem[] {
@@ -121,6 +194,7 @@ export function selectChatMessages(
     const contextMetrics = coreTurn && isRecord(coreTurn.context_metrics)
       ? coreTurn.context_metrics
       : providerUsage
+    const usageCallIndex = coreTurn?.usage_calls ? indexUsageCalls(coreTurn.usage_calls) : undefined
     const runtimeModelId = runtimeModelIdForTurn(appTurn, coreTurn)
     const timestamp = runtimeTimestampForTurn(appTurn, coreTurn)
     const durationMs = runtimeDurationMsForTurn(appTurn, coreTurn)
@@ -145,6 +219,7 @@ export function selectChatMessages(
           contextMetrics,
         } : {}),
         ...(providerUsage ? { usageMetrics: providerUsage } : {}),
+        ...(usageCallIndex ? { resourceCalls: usageCallIndex.main } : {}),
         ...(runtimeModelId ? { runtime_model_id: runtimeModelId } : {}),
         ...(durationMs !== null ? { duration_ms: durationMs } : {}),
       },
@@ -155,14 +230,23 @@ export function selectChatMessages(
     if (suppressedItemIds.has(itemId) || nestedChildItemIds.has(itemId)) continue
     const rawItem = canonicalItemForId(state, itemId, itemCache) ?? outerProductItemForId(state, itemId)
     const itemWithArtifacts = rawItem ? withItemArtifacts(rawItem, artifactsByItem.get(itemId)) : undefined
-    const item = itemWithArtifacts
+    let item = itemWithArtifacts
       ? withSubAgentChildren(itemWithArtifacts, subAgentChildren.get(itemId))
       : undefined
     if (!item) continue
+    if (isSubAgentParentItem(item)) {
+      const turn = state.core?.turns?.[String(item.turn_id || '')]
+      const usageCallIndex = turn?.usage_calls ? indexUsageCalls(turn.usage_calls) : undefined
+      item = { ...item, metadata: { ...(isRecord(item.metadata) ? item.metadata : {}),
+        ...(usageCallIndex ? { resourceCalls: usageCallIndex.byParentItemId.get(itemId) ?? EMPTY_USAGE_CALLS } : {}),
+        ...(turn?.child_context_metrics?.[itemId] ? { contextMetrics: turn.child_context_metrics[itemId] } : {}),
+      } }
+    }
+    if (isMemberWaitSignalItem(item)) continue
     if (!isRenderableItem(item)) continue
     const resolvedTurnId = itemTurnId(state, item)
-    if (item.type === 'userMessage') {
-      if (isGuidanceMessageId(item.item_id)) {
+    if (item.type === 'userMessage' || item.type === 'systemMessage') {
+      if (item.type === 'userMessage' && isGuidanceMessageId(item.item_id)) {
         // Guidance is part of the running turn, not a new turn's opening
         // message: it rides the segment's process timeline at its own point in
         // time, so collapsing the process hides it with everything else.
@@ -170,13 +254,18 @@ export function selectChatMessages(
         assistant.parts.push({ ...item, type: 'guidance', content: inputToText(item.content) })
         continue
       }
+      const text = inputToText(item.content)
+      const systemEvent = coreSystemEventForItem(item, text, turnOriginForId(state, resolvedTurnId))
       messages.push({
         id: item.item_id,
         ...(resolvedTurnId ? { turnId: resolvedTurnId } : {}),
         role: 'user',
-        content: inputToText(item.content),
+        content: text,
         parts: [],
         attachments: inputAttachments(item.content),
+        // A machine-authored row reads as a system event instead of a bubble the
+        // user typed. The check lives in systemEvents.ts.
+        ...(systemEvent ? { metadata: { systemEvent } } : {}),
       })
       continue
     }
@@ -400,6 +489,13 @@ function itemTurnId(state: CoreAppSnapshot, item: CoreAppItem): string {
     if (match) return String(match[1].turn_id || match[0])
   }
   return ''
+}
+
+/** The turn's own origin marker (`member_wake` / `memory_resume`), when set. */
+function turnOriginForId(state: CoreAppSnapshot, turnId: string): string {
+  if (!turnId) return ''
+  const turn = state.turns?.[turnId] ?? state.core?.turns?.[turnId] as { origin?: unknown } | undefined
+  return typeof turn?.origin === 'string' ? turn.origin : ''
 }
 
 function runtimeModelIdForTurn(
@@ -639,7 +735,7 @@ function canonicalItemForId(
 
 function outerProductItemForId(state: CoreAppSnapshot, itemId: string): CoreAppItem | undefined {
   const item = state.items?.[itemId]
-  if (!item || item.type !== 'userMessage') return undefined
+  if (!item || (item.type !== 'userMessage' && item.type !== 'systemMessage')) return undefined
   return item
 }
 
@@ -817,6 +913,16 @@ function isRenderableItem(item: CoreAppItem): boolean {
   const type = String(item.type || '')
   if (!RENDERABLE_ITEM_TYPES.has(type)) return false
   return true
+}
+
+/**
+ * The member-wait status row (`<turn>:sub-agent-wait`, payload type
+ * `subAgents`) is a machine signal: `selectCoreSessionActivity` reads it for
+ * the "main stopped, members still running" state. It is not conversation
+ * content, so it must not render as a stray status row in the transcript.
+ */
+function isMemberWaitSignalItem(item: CoreAppItem): boolean {
+  return typeof item.item_id === 'string' && item.item_id.endsWith(':sub-agent-wait')
 }
 
 function inputToText(value: unknown): string {

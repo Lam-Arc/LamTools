@@ -1,18 +1,18 @@
 <template>
   <div v-if="node" class="wf-edit-card" :style="cardStyle" @pointerdown.stop @click.stop>
     <header class="wf-edit-head">
-      <span class="wf-edit-title">编辑节点</span>
-      <button class="text-btn" type="button" aria-label="关闭" @click="$emit('close')">
+      <span class="wf-edit-title">{{ t("编辑节点") }}</span>
+      <button class="text-btn" type="button" :aria-label="t('关闭')" @click="$emit('close')">
         <X :size="14" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </header>
     <div class="wf-edit-body">
       <label class="field">
-        <span class="field-label">标题</span>
-        <input v-model="title" type="text" placeholder="节点标题" />
+        <span class="field-label">{{ t("标题") }}</span>
+        <input v-model="title" type="text" :placeholder="t('节点标题')" />
       </label>
       <label class="field">
-        <span class="field-label">类型</span>
+        <span class="field-label">{{ t("类型") }}</span>
         <span class="field-value wf-node-type-label">{{ node.type_id || node.kind }}</span>
       </label>
 
@@ -29,14 +29,14 @@
       <!-- Port editor (common to all kinds) -->
       <div class="port-editor">
         <div class="port-section">
-          <span class="field-label">输入端口</span>
+          <span class="field-label">{{ t("输入端口") }}</span>
           <div v-for="(p, i) in inputPorts" :key="'in'+i" class="port-row">
-            <input v-model="p.name" type="text" placeholder="名称" class="port-name" />
+            <input v-model="p.name" type="text" :placeholder="t('名称')" class="port-name" />
             <UiSelect
               class="port-type"
               :model-value="p.type"
               :options="portTypeOptions"
-              aria-label="输入端口类型"
+              :aria-label="t('输入端口类型')"
               menu-align="right"
               :menu-width="132"
               :menu-max-height="260"
@@ -46,142 +46,144 @@
               <X :size="11" :stroke-width="2" aria-hidden="true" />
             </button>
           </div>
-          <button class="port-add" type="button" @click="inputPorts.push({ name: '', type: 'string' })">+ 添加输入</button>
+          <button class="port-add" type="button" @click="inputPorts.push({ name: '', type: 'string' })">{{ t("+ 添加输入") }}</button>
         </div>
         <div class="port-section">
-          <span class="field-label">输出端口</span>
+          <span class="field-label">{{ t("输出端口") }}</span>
           <div v-for="(p, i) in outputPorts" :key="'out'+i" class="port-row">
-            <input v-model="p.name" type="text" placeholder="名称" class="port-name" />
+            <input v-model="p.name" type="text" :placeholder="t('名称')" class="port-name" />
             <UiSelect
               class="port-type"
               :model-value="p.type"
               :options="portTypeOptions"
               direction="up"
-              aria-label="输出端口类型"
+              :aria-label="t('输出端口类型')"
               menu-align="right"
               :menu-width="132"
               :menu-max-height="260"
               @update:model-value="p.type = $event"
             />
-            <AutoTextarea v-if="node.kind === 'content' || node.kind === 'constant'" v-model="p.value" :min-rows="2" :max-rows="4" placeholder="常量值" />
+            <AutoTextarea v-if="node.kind === 'content' || node.kind === 'constant'" v-model="p.value" :min-rows="2" :max-rows="4" :placeholder="t('常量值')" />
             <button class="port-del" type="button" @click="outputPorts.splice(i, 1)">
               <X :size="11" :stroke-width="2" aria-hidden="true" />
             </button>
           </div>
-          <button class="port-add" type="button" @click="outputPorts.push({ name: '', type: 'string', value: '' })">+ 添加输出</button>
+          <button class="port-add" type="button" @click="outputPorts.push({ name: '', type: 'string', value: '' })">{{ t("+ 添加输出") }}</button>
         </div>
       </div>
 
       <!-- AI remains a compatibility editor. Canonical Model and Agent share
            the stable instruction/model fields but do not use AI's mode switch. -->
       <template v-if="['ai', 'model', 'agent'].includes(node.kind)">
-        <p v-if="outputPorts.length" class="hint">输出端口 = JSON 字段（强制 JSON 输出）</p>
+        <p v-if="outputPorts.length" class="hint">{{ t("输出端口 = JSON 字段（强制 JSON 输出）") }}</p>
         <label v-if="node.kind === 'ai'" class="field">
-          <span class="field-label">模式</span>
+          <span class="field-label">{{ t("模式") }}</span>
           <UiSelect :model-value="mode" :options="modeOptions" @update:model-value="mode = $event" />
         </label>
         <label v-if="node.kind === 'ai' && mode === 'loop'" class="field">
-          <span class="field-label">最大迭代</span>
+          <span class="field-label">{{ t("最大迭代") }}</span>
           <input v-model.number="loopMax" type="number" min="1" />
         </label>
         <label class="field field-wide">
-          <span class="field-label">{{ node.kind === 'agent' ? '目标' : '指令' }}（支持 {{ interpHint }} 插值）</span>
-          <AutoTextarea v-model="instruction" :min-rows="2" :max-rows="4" :placeholder="node.kind === 'agent' ? '让 agent 完成的目标…' : '系统提示词…'" />
+          <span class="field-label">{{ node.kind === 'agent' ? t("目标") : t("指令") }}{{ t("（支持") }}{{ interpHint }}{{ t("插值）") }}</span>
+          <AutoTextarea v-model="instruction" :min-rows="2" :max-rows="4" :placeholder="node.kind === 'agent' ? t('让 agent 完成的目标…') : t('系统提示词…')" />
         </label>
         <label v-if="node.kind === 'ai'" class="field field-wide">
-          <span class="field-label">输出格式（文本说明，可选）</span>
-          <AutoTextarea v-model="outputFormatText" :min-rows="2" :max-rows="4" placeholder="可选：自然语言格式说明" />
+          <span class="field-label">{{ t("输出格式（文本说明，可选）") }}</span>
+          <AutoTextarea v-model="outputFormatText" :min-rows="2" :max-rows="4" :placeholder="t('可选：自然语言格式说明')" />
         </label>
         <label v-if="node.kind === 'agent'" class="field field-wide">
-          <span class="field-label">工具集</span>
+          <span class="field-label">{{ t("工具集") }}</span>
           <div class="wf-tool-checklist">
             <label v-for="t in toolList" :key="t.name" class="wf-tool-check">
               <input type="checkbox" :checked="selectedTools.includes(t.name)" @change="toggleTool(t.name)" />
               <span class="wf-tool-name" :title="t.description">{{ t.name }}</span>
             </label>
-            <p v-if="!toolList.length" class="wf-tool-empty">暂无可用工具</p>
+            <p v-if="!toolList.length" class="wf-tool-empty">{{ t("暂无可用工具") }}</p>
           </div>
         </label>
         <details class="settings-advanced">
-          <summary>高级设置</summary>
-          <label class="field"><span class="field-label">模型</span><AutoTextarea v-model="modelId" :min-rows="1" :max-rows="4" placeholder="provider/model" /></label>
-          <label class="field"><span class="field-label">温度</span><input v-model.number="temperature" type="number" step="0.1" /></label>
-          <label class="field"><span class="field-label">思考等级</span>
+          <summary>{{ t("高级设置") }}</summary>
+          <label class="field"><span class="field-label">{{ t("模型") }}</span><AutoTextarea v-model="modelId" :min-rows="1" :max-rows="4" placeholder="provider/model" /></label>
+          <label class="field"><span class="field-label">{{ t("温度") }}</span><input v-model.number="temperature" type="number" step="0.1" /></label>
+          <label class="field"><span class="field-label">{{ t("思考等级") }}</span>
             <UiSelect :model-value="reasoningEffort" :options="effortOptions" @update:model-value="reasoningEffort = $event" />
           </label>
           <label class="field"><span class="field-label">max_tokens</span><input v-model.number="maxTokens" type="number" /></label>
           <label class="field"><span class="field-label">top_p</span><input v-model.number="topP" type="number" step="0.05" /></label>
-          <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
+          <label class="field"><span class="field-label">{{ t("重试次数") }}</span><input v-model.number="retries" type="number" min="0" /></label>
         </details>
       </template>
 
       <!-- Command: shell -->
       <template v-else-if="node.kind === 'command'">
-        <p v-if="outputPorts.length" class="hint">输出端口 = JSON 键名（stdout 是 JSON 时自动拆分）</p>
-        <label class="field field-wide"><span class="field-label">命令</span><AutoTextarea v-model="command" :min-rows="2" :max-rows="4" placeholder='curl -s https://… | jq …' /></label>
-        <label class="field"><span class="field-label">工作目录</span><AutoTextarea v-model="cwd" :min-rows="1" :max-rows="4" placeholder="（默认 work_root）" /></label>
+        <p v-if="outputPorts.length" class="hint">{{ t("输出端口 = JSON 键名（stdout 是 JSON 时自动拆分）") }}</p>
+        <label class="field field-wide"><span class="field-label">{{ t("命令") }}</span><AutoTextarea v-model="command" :min-rows="2" :max-rows="4" placeholder='curl -s https://… | jq …' /></label>
+        <label class="field"><span class="field-label">{{ t("工作目录") }}</span><AutoTextarea v-model="cwd" :min-rows="1" :max-rows="4" :placeholder="t('（默认 work_root）')" /></label>
         <details class="settings-advanced">
-          <summary>高级设置</summary>
-          <label class="field"><span class="field-label">超时（秒）</span><input v-model.number="timeout" type="number" min="0" /></label>
-          <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
+          <summary>{{ t("高级设置") }}</summary>
+          <label class="field"><span class="field-label">{{ t("超时（秒）") }}</span><input v-model.number="timeout" type="number" min="0" /></label>
+          <label class="field"><span class="field-label">{{ t("重试次数") }}</span><input v-model.number="retries" type="number" min="0" /></label>
         </details>
       </template>
 
       <!-- Script: Python binder -->
       <template v-else-if="node.kind === 'script' || node.kind === 'python'">
-        <p v-if="outputPorts.length" class="hint">输出端口 = 给同名变量赋值</p>
-        <label class="field field-wide"><span class="field-label">Python 脚本</span><AutoTextarea v-model="command" :min-rows="2" :max-rows="4" placeholder="y = x * 2" /></label>
+        <p v-if="outputPorts.length" class="hint">{{ t("输出端口 = 给同名变量赋值") }}</p>
+        <label class="field field-wide"><span class="field-label">{{ t("Python 脚本") }}</span><AutoTextarea v-model="command" :min-rows="2" :max-rows="4" placeholder="y = x * 2" /></label>
         <p class="field-hint">{{ scriptContractHint }}</p>
         <details class="settings-advanced">
-          <summary>高级设置</summary>
-          <label class="field"><span class="field-label">超时（秒）</span><input v-model.number="timeout" type="number" min="0" /></label>
-          <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
+          <summary>{{ t("高级设置") }}</summary>
+          <label class="field"><span class="field-label">{{ t("超时（秒）") }}</span><input v-model.number="timeout" type="number" min="0" /></label>
+          <label class="field"><span class="field-label">{{ t("重试次数") }}</span><input v-model.number="retries" type="number" min="0" /></label>
         </details>
       </template>
 
       <!-- Subgraph (merges loop + map + subworkflow, iterate selects mode) -->
       <template v-else-if="node.kind === 'subgraph'">
-        <p class="hint">引用外部工作流，iterate 控制执行模式</p>
+        <p class="hint">{{ t("引用外部工作流，iterate 控制执行模式") }}</p>
         <label class="field">
-          <span class="field-label">工作流名称</span>
+          <span class="field-label">{{ t("工作流名称") }}</span>
           <AutoTextarea v-model="subworkflowName" :min-rows="1" :max-rows="4" placeholder="my_sub_workflow" />
         </label>
         <label class="field">
-          <span class="field-label">迭代模式</span>
+          <span class="field-label">{{ t("迭代模式") }}</span>
           <UiSelect :model-value="subIterate" :options="iterateOptions" @update:model-value="subIterate = $event" />
         </label>
         <template v-if="subIterate === 'loop'">
-          <label class="field"><span class="field-label">最大迭代</span><input v-model.number="loopMaxIter" type="number" min="1" /></label>
+          <label class="field"><span class="field-label">{{ t("最大迭代") }}</span><input v-model.number="loopMaxIter" type="number" min="1" /></label>
           <label class="field field-wide">
-            <span class="field-label">退出条件（Python 表达式）</span>
+            <span class="field-label">{{ t("退出条件（Python 表达式）") }}</span>
             <AutoTextarea v-model="subLoopCondition" :min-rows="1" :max-rows="4" placeholder="quality >= 0.8" />
           </label>
         </template>
-        <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
+        <label class="field"><span class="field-label">{{ t("重试次数") }}</span><input v-model.number="retries" type="number" min="0" /></label>
       </template>
 
       <!-- Error handling (common, collapsible) -->
       <details v-if="canConfigureExecution" class="settings-advanced">
-        <summary>错误处理</summary>
+        <summary>{{ t("错误处理") }}</summary>
         <label class="field">
-          <span class="field-label">策略</span>
+          <span class="field-label">{{ t("策略") }}</span>
           <UiSelect :model-value="onErrorStrategy" :options="onErrorOptions" @update:model-value="onErrorStrategy = $event" />
         </label>
         <template v-if="onErrorStrategy === 'fallback'">
-          <label class="field"><span class="field-label">降级输出端口</span><AutoTextarea v-model="onErrorFallbackPort" :min-rows="1" :max-rows="4" placeholder="out" /></label>
-          <label class="field"><span class="field-label">降级默认值</span><AutoTextarea v-model="onErrorValue" :min-rows="2" :max-rows="4" placeholder="默认值（空=哨兵跳过）" /></label>
+          <label class="field"><span class="field-label">{{ t("降级输出端口") }}</span><AutoTextarea v-model="onErrorFallbackPort" :min-rows="1" :max-rows="4" placeholder="out" /></label>
+          <label class="field"><span class="field-label">{{ t("降级默认值") }}</span><AutoTextarea v-model="onErrorValue" :min-rows="2" :max-rows="4" :placeholder="t('默认值（空=哨兵跳过）')" /></label>
         </template>
       </details>
 
       <!-- Content: no extra config needed — values are in the port editor -->
     </div>
     <footer class="wf-edit-foot">
-      <button class="small-btn primary" type="button" @click="apply">应用</button>
+      <button class="small-btn primary" type="button" @click="apply">{{ t("应用") }}</button>
     </footer>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import UiSelect from '../../../../../../ui/src/components/UiSelect.vue'
@@ -214,12 +216,12 @@ const cardStyle = computed(() => {
 })
 
 const modeOptions: SelectOption[] = [
-  { value: 'single', label: '单次 (single)' },
-  { value: 'loop', label: '自迭代 (loop)' },
-  { value: 'agent', label: '子代理 (agent)' },
+  { value: 'single', get label() { return t("单次 (single)") } },
+  { value: 'loop', get label() { return t("自迭代 (loop)") } },
+  { value: 'agent', get label() { return t("子代理 (agent)") } },
 ]
 const effortOptions: SelectOption[] = [
-  { value: '', label: '默认' },
+  { value: '', get label() { return t("默认") } },
   { value: 'minimal', label: 'minimal' },
   { value: 'low', label: 'low' },
   { value: 'medium', label: 'medium' },
@@ -231,14 +233,14 @@ const typeOptions = ['string', 'number', 'boolean', 'object', 'array', 'any']
 const portTypeOptions = typeOptions.map(t => ({ value: t, label: t }))
 const opOptions = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'regex', 'exists']
 const onErrorOptions: SelectOption[] = [
-  { value: 'abort', label: '中止（默认）' },
-  { value: 'fallback', label: '降级输出' },
-  { value: 'skip', label: '跳过' },
+  { value: 'abort', get label() { return t("中止（默认）") } },
+  { value: 'fallback', get label() { return t("降级输出") } },
+  { value: 'skip', get label() { return t("跳过") } },
 ]
 const iterateOptions: SelectOption[] = [
-  { value: 'none', label: '调用一次 (none)' },
-  { value: 'loop', label: '循环 (loop)' },
-  { value: 'map', label: '遍历数组 (map)' },
+  { value: 'none', get label() { return t("调用一次 (none)") } },
+  { value: 'loop', get label() { return t("循环 (loop)") } },
+  { value: 'map', get label() { return t("遍历数组 (map)") } },
 ]
 // Plain string shown in hints (kept in script to avoid Vue template {{ }} conflicts).
 const interpHint = '{{端口名}}'
@@ -388,7 +390,7 @@ function apply() {
     const lines = script.split('\n')
     const appended: string[] = []
     for (const n of inNames) {
-      if (!script.includes(n)) appended.push(`# 输入：${n}`)
+      if (!script.includes(n)) appended.push(t("# 输入：{0}", { 0: n }))
     }
     for (const n of outNames) {
       if (!lines.some((l) => l.trim().startsWith(`${n} =`))) appended.push(`${n} = None`)

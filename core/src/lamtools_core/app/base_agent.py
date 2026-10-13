@@ -22,7 +22,13 @@ from lamtools_core.event import (
     RuntimeProjectionInput,
 )
 from lamtools_core.kernel.state import KernelStep, KernelTurn, VerificationResult
-from lamtools_core.llm import ChatMessage, LLMRequest, LLMResponse
+from lamtools_core.llm import (
+    HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER,
+    TAIL_SYSTEM_MESSAGE_MARKER,
+    ChatMessage,
+    LLMRequest,
+    LLMResponse,
+)
 from lamtools_core.llm.image_payload import (
     degrade_stale_message_images as _messages_with_degraded_stale_images,
 )
@@ -373,10 +379,21 @@ class CoreBaseAgentKit:
                 return base
             # Resolve the default multimodal model from sub-agent settings,
             # falling back to the first multimodal model in the store.
-            from lamtools_core.config.subagent_prompt import resolve_default_multimodal_model
+            from lamtools_core.config.subagent_prompt import (
+                describe_model_reference,
+                resolve_default_multimodal_model,
+                resolve_model_reference_optional,
+            )
             delegate_model = resolve_default_multimodal_model(self.work_root)
-            if delegate_model:
-                model_hint = f' (set model to "{delegate_model}")'
+            # The configured value stays verbatim; its real model_id is added as
+            # a note so the model delegates with a value the resolver accepts.
+            delegate_note = describe_model_reference(delegate_model, work_root=self.work_root)
+            delegate_arg = (
+                resolve_model_reference_optional(delegate_model, work_root=self.work_root)
+                or delegate_model
+            )
+            if delegate_note:
+                model_hint = f' (set model to "{delegate_note}")'
             else:
                 model_hint = " (set model to a model that supports images)"
             base = (
@@ -391,7 +408,7 @@ class CoreBaseAgentKit:
             )
             if deferred_attachments:
                 ids = ", ".join(f'"{i}"' for i in deferred_attachments)
-                model_arg = f', model="{delegate_model}"' if delegate_model else ""
+                model_arg = f', model="{delegate_arg}"' if delegate_arg else ""
                 base += (
                     f"\nYou cannot view the following attachments directly (id: {ids}). "
                     "If their content must be understood, immediately delegate with "
@@ -461,6 +478,19 @@ class CoreBaseAgentKit:
         )
         return loader.to_prompt_parts(self.work_root)
 
+    def _current_model_reference(self) -> str:
+        """Real model id first, human-readable label only as a note.
+
+        The running agent echoes this value into a sub-agent's ``model``
+        argument, so it must lead with the real id the model resolver accepts;
+        the provider/display label is kept only as a parenthetical note.
+        """
+        model_id = str(self.config.model_id or "").strip()
+        display = str(self.config.model_display_name or "").strip()
+        if model_id and display and display != model_id:
+            return f"{model_id} ({display})"
+        return model_id or display
+
     async def build_model_request(self, state: RuntimeState, context: PromptContext) -> LLMRequest:
         study_mode = self.config.active_mode == "study:study"
         effective_instructions = self.config.instructions
@@ -477,7 +507,7 @@ class CoreBaseAgentKit:
             # file-oriented delivery summaries for a learning conversation.
             system_lines = [
                 effective_instructions,
-                f"Current session: {state.session_id}, current model: {self.config.model_display_name or self.config.model_id}",
+                f"Current session: {state.session_id}, current model: {self._current_model_reference()}",
                 *_STUDY_TOOL_PROTOCOL,
                 "When the task is complete, reply directly with the learning results, what was actually recorded, and any matters requiring user confirmation.",
             ]
@@ -487,7 +517,7 @@ class CoreBaseAgentKit:
             )
             system_lines = [
                 effective_instructions,
-                f"Current project: {state.metadata.get('work_root', '')}, current session: {state.session_id}, current model: {self.config.model_display_name or self.config.model_id}",
+                f"Current project: {state.metadata.get('work_root', '')}, current session: {state.session_id}, current model: {self._current_model_reference()}",
                 command_shell_prompt(),
                 "Do not damage the structure or tidiness of the project directory while working.",
                 *_COMMON_TOOL_PROTOCOL,
@@ -575,15 +605,47 @@ class CoreBaseAgentKit:
         if empty_stop_retry and isinstance(empty_stop_retry, str):
             runtime_context_lines.extend(["", str(empty_stop_retry)])
         system_lines.extend(["", _IMAGE_FIDELITY_GUIDANCE])
+        history_messages = _messages_with_degraded_stale_images(
+            list(context.history),
+            current_step=int(getattr(state, "turn_count", 0) or 0),
+        )
+        # The current wake is durable history, but mutable runtime context is
+        # appended after history. Move only the wake belonging to this turn
+        # after that context. Older wakes stay in their historical position;
+        # native adapters lower those copies to user messages there, while
+        # OpenAI-style protocols keep their original system role.
+        current_turn_id = str((state.metadata or {}).get("turn_id") or "").strip()
+        tail_system_messages: list[ChatMessage] = []
+        ordered_history: list[ChatMessage] = []
+        for message in history_messages:
+            metadata = message.metadata if isinstance(message.metadata, dict) else {}
+            is_marked_wake = (
+                message.role == "system"
+                and bool(metadata.get(TAIL_SYSTEM_MESSAGE_MARKER))
+            )
+            message_turn_id = str(metadata.get("turn_id") or "").strip()
+            if is_marked_wake and current_turn_id and message_turn_id == current_turn_id:
+                tail_system_messages.append(message)
+                continue
+            if is_marked_wake:
+                ordered_history.append(
+                    replace(
+                        message,
+                        metadata={
+                            **metadata,
+                            HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER: True,
+                        },
+                    )
+                )
+                continue
+            ordered_history.append(message)
+        history_messages = ordered_history
         messages = [
             ChatMessage(
                 role="system",
                 content="\n".join(system_lines),
             ),
-            *_messages_with_degraded_stale_images(
-                list(context.history),
-                current_step=int(getattr(state, "turn_count", 0) or 0),
-            ),
+            *history_messages,
         ]
         if runtime_context_lines:
             messages.append(
@@ -605,6 +667,7 @@ class CoreBaseAgentKit:
                     metadata={"key": "request_local_late_context", "internal": True},
                 )
             )
+        messages.extend(tail_system_messages)
         return LLMRequest(
             messages=messages,
             model=self.config.model_id,

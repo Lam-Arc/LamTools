@@ -774,3 +774,97 @@ def test_guidance_user_item_without_text_leaves_content_empty():
 
     assert item["content"] == ""
     assert item["payload"]["content"] == [{"type": "attachment", "attachment_id": "a-1"}]
+
+
+def test_sub_agent_interactive_request_survives_the_main_turn_terminal_transition():
+    """A sub-agent's question/approval card must stay answerable.
+
+    The main turn can finish while a delegated sub-agent is still paused on a
+    question or an approval (the supervising kernel reports the member as paused
+    and ends the parent turn).  The sub-agent's request is anchored to the parent
+    turn, so the parent turn's terminal transition used to close it: the request
+    was marked resolved and its item forced completed, leaving the interface
+    with no answerable card even though the child was still waiting (and
+    `approval.respond` would still resume it).  The request belongs to the
+    sub-agent's lifecycle, so the parent turn's ending must leave it open.
+    """
+    running = RunItemEvent(
+        kind="status",
+        thread_id="thread-1",
+        event_id="turn-running",
+        turn_id="turn-1",
+        item_id="turn-1:running",
+        status="running",
+        payload={"type": "turn", "status": "running"},
+    )
+    child_question = RunItemEvent(
+        kind="approval_request",
+        thread_id="thread-1",
+        event_id="child-question",
+        run_id="turn-1",
+        turn_id="turn-1",
+        item_id="thread-1:sub:worker:call-9:tool",
+        status="waiting",
+        parent_item_id="thread-1:turn-1:call-0:tool",
+        payload={
+            "type": "serverRequest",
+            "request_id": "call-9",
+            "kind": "permission",
+            "tool_name": "question",
+            "message": "哪个颜色？",
+            "options": [],
+            "sub_agent": {"name": "worker", "type": "execute", "sub_session_id": "thread-1:sub:worker"},
+        },
+    )
+    parent_terminal = RunItemEvent(
+        kind="status",
+        thread_id="thread-1",
+        event_id="turn-terminal",
+        turn_id="turn-1",
+        item_id="turn-1:terminal",
+        status="completed",
+        payload={"type": "turn", "status": "completed"},
+    )
+
+    snapshot = reduce_run_item_events(
+        "thread-1", [running, child_question, parent_terminal]
+    )
+
+    assert snapshot["turns"]["turn-1"]["status"] == "completed"
+    # The main turn is over, but the sub-agent's card is still waiting.
+    assert snapshot["requests"]["call-9"]["status"] == "open"
+    assert snapshot["requests"]["call-9"]["sub_agent"]["name"] == "worker"
+    assert snapshot["items"]["thread-1:sub:worker:call-9:tool"]["status"] == "waiting"
+
+    # The sub-agent's own response closes it, not the parent turn.
+    child_response = RunItemEvent(
+        kind="approval_response",
+        thread_id="thread-1",
+        event_id="child-response",
+        run_id="turn-1",
+        turn_id="turn-1",
+        status="completed",
+        payload={"request_id": "call-9", "approved": True, "sub_agent": {"name": "worker"}},
+    )
+    resolved = apply_run_item_event(snapshot, child_response)
+    assert resolved["requests"]["call-9"]["status"] == "resolved"
+
+
+def test_resource_calls_isolate_children_and_replace_same_call_id():
+    events = [
+        RunItemEvent(kind="usage", thread_id="t", turn_id="turn", item_id="main", event_id="e1", seq=1,
+                     usage={"llm_calls": 1, "input_tokens": 100, "cached_tokens": 80}),
+        RunItemEvent(kind="usage", thread_id="t", turn_id="turn", item_id="child", parent_item_id="delegate", event_id="e2", seq=2,
+                     usage={"llm_calls": 1, "input_tokens": 900, "cached_tokens": 0}),
+        RunItemEvent(kind="usage", thread_id="t", turn_id="turn", item_id="main", event_id="e3", seq=3,
+                     usage={"llm_calls": 1, "input_tokens": 200, "cached_tokens": 100}),
+        RunItemEvent(kind="usage", thread_id="t", turn_id="turn", item_id="child-context", parent_item_id="delegate", event_id="e4", seq=4,
+                     payload={"replace": True}, usage={"estimated_prompt_tokens": 700, "context_window_tokens": 1000}),
+    ]
+    turn = reduce_run_item_events("t", events)["turns"]["turn"]
+    assert turn["usage"]["llm_calls"] == 1
+    assert turn["usage"]["input_tokens"] == 200
+    assert turn["usage"]["cache_hit_rate"] == 0.5
+    assert len(turn["usage_calls"]) == 2
+    assert turn["child_context_metrics"]["delegate"]["context_window_tokens"] == 1000
+    assert "context_metrics" not in turn

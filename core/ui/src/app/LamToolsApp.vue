@@ -18,7 +18,7 @@
     @mobile-pairing-create="createRemotePairing"
   />
   <div v-if="backendCrashed" class="core-status-banner" role="alert" data-backend-crashed-banner>
-    <span class="core-status-banner-text">后端进程已停止响应（可能已崩溃）。请重启应用以恢复。</span>
+    <span class="core-status-banner-text">{{ t("后端进程已停止响应（可能已崩溃）。请重启应用以恢复。") }}</span>
   </div>
 
 
@@ -40,6 +40,7 @@
     product-name="Sunday"
     sidebar-title="Sunday"
     :class="{ 'workspace-shell--sub-agent-split': Boolean(openSubAgentRun) }"
+    :style="subAgentPaneWidthStyle"
     :storage-key="settingsStorageKey"
     :density="density"
     :theme="theme"
@@ -61,6 +62,7 @@
     :composer-send-disabled="composerSendDisabled"
     :composer-placeholder="composerPlaceholder"
     :composer-action-mode="composerActionMode"
+    :composer-stop-title="composerStopTitle"
     :hide-composer="shouldHideComposer"
     :empty-session="isEmptySession"
     :composer-session-key="activeSessionId"
@@ -117,8 +119,8 @@
             class="core-sidebar-mode"
             type="button"
             data-sidebar-mode-trigger
-            :aria-label="`切换模式，当前 ${activeAppMode.title}`"
-            :title="`切换模式，当前 ${activeAppMode.title}`"
+            :aria-label="t('切换模式，当前 {0}', { 0: activeAppMode.title })"
+            :title="t('切换模式，当前 {0}', { 0: activeAppMode.title })"
             @click="openModeMenu"
           >
             <span class="core-sidebar-mode__label">{{ activeAppMode.title }}</span>
@@ -129,8 +131,8 @@
             class="core-sidebar-search-entry"
             type="button"
             data-sidebar-search-entry
-            aria-label="搜索"
-            title="搜索"
+            :aria-label="t('搜索')"
+            :title="t('搜索')"
             @click="openSearch"
           >
             <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -152,8 +154,8 @@
             v-if="appRuntime.platform === 'mobile' && !activePluginMode"
             class="sidebar-sync-project"
             type="button"
-            title="同步项目"
-            aria-label="同步项目"
+            :title="t('同步项目')"
+            :aria-label="t('同步项目')"
             data-sidebar-sync-project
             @click="emit('sync-request')"
           ><MonitorSmartphone :size="17" :stroke-width="1.9" aria-hidden="true" /></button>
@@ -181,21 +183,21 @@
         v-if="sidebarNavView === 'settings'"
         :sections="CORE_SETTINGS_SECTIONS"
         :active-id="settingsSection"
-        aria-label="设置分区"
+        :aria-label="t('设置分区')"
         @select="settingsSection = $event"
       />
       <FullAreaSidebarNav
         v-else-if="sidebarNavView === 'plugins'"
         :sections="PLUGIN_SHELL_SECTIONS"
         :active-id="pluginsSection"
-        aria-label="插件分区"
+        :aria-label="t('插件分区')"
         @select="pluginsSection = $event"
       />
       <FullAreaSidebarNav
         v-else-if="sidebarNavView === 'project'"
         :sections="PROJECT_SETTINGS_SECTIONS"
         :active-id="projectSettingsSection"
-        aria-label="项目设置分区"
+        :aria-label="t('项目设置分区')"
         @select="projectSettingsSection = $event"
       />
       <component
@@ -231,7 +233,7 @@
       >
         <template #empty>
           <div class="sidebar-empty-projects" data-sidebar-empty-projects>
-            <div v-if="!activePluginMode" class="sidebar-empty-backdrop" aria-hidden="true">暂无</div>
+            <div v-if="!activePluginMode" class="sidebar-empty-backdrop" aria-hidden="true">{{ t("暂无") }}</div>
           </div>
         </template>
         <!-- 桌面：全局搜索、资料库、定时任务、插件并作一排同规格图标。 -->
@@ -255,13 +257,13 @@
           <span>{{ option.label }}</span>
         </button>
         <button class="sidebar-action" type="button" data-mobile-footer-account @click="emit('open-account')">
-          <span aria-hidden="true"><UserRound :size="14" :stroke-width="1.8" /></span><span>登录 / 账号</span>
+          <span aria-hidden="true"><UserRound :size="14" :stroke-width="1.8" /></span><span>{{ t("登录 / 账号") }}</span>
         </button>
         <button class="sidebar-action" type="button" data-mobile-footer-library @click="openLibrary">
-          <span aria-hidden="true"><Library :size="14" :stroke-width="1.8" /></span><span>资料库</span>
+          <span aria-hidden="true"><Library :size="14" :stroke-width="1.8" /></span><span>{{ t("资料库") }}</span>
         </button>
         <button class="sidebar-action" type="button" data-mobile-footer-arrange @click="openArrange">
-          <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>定时任务</span>
+          <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>{{ t("定时任务") }}</span>
         </button>
       </div>
     </template>
@@ -279,8 +281,8 @@
           <button
             type="button"
             class="full-area-back"
-            title="返回会话（Esc）"
-            aria-label="返回会话"
+            :title="t('返回会话（Esc）')"
+            :aria-label="t('返回会话')"
             data-full-area-back
             @click="onFullAreaBack"
           >
@@ -535,7 +537,7 @@
               aria-live="polite"
             >
               <LoaderCircle class="thread-history-cap-icon" :size="14" :stroke-width="1.8" aria-hidden="true" />
-              <span>正在加载更早消息</span>
+              <span>{{ t("正在加载更早消息") }}</span>
             </div>
           </Transition>
         </div>
@@ -560,6 +562,7 @@
           :work-root="activePluginMode ? undefined : activeProject?.workRoot"
           :active-turn-id="activeTurnId"
           :turn-active="activeTurnRunning"
+          :turn-status="latestStatus"
           :locked-message-ids="lockedMessageIds"
           :auto-plot-math="activeAppModeKey === 'study:study'"
           @toggle-process="toggleProcess"
@@ -579,8 +582,8 @@
             v-if="!isEmptySession && !threadScroll.autoFollow.value"
             type="button"
             class="thread-jump-latest optical-glass optical-glass--low-trans"
-            aria-label="回到最新消息"
-            title="回到最新消息"
+            :aria-label="t('回到最新消息')"
+            :title="t('回到最新消息')"
             @click="threadScroll.scrollToBottom(true)"
           >
             <span
@@ -607,7 +610,14 @@
           :run="openSubAgentRun"
           :transport="transport"
           :durable-record="subAgentDurableRecords[openSubAgentRun.name] ?? null"
+          :width="subAgentPaneWidth"
+          :member-wait-known="sessionActivity.memberWaitKnown"
+          :running-member-names="sessionActivity.runningMemberNames"
+          :main-running="activeTurnRunning"
+          :member-statuses="sessionActivity.memberStatuses"
           @close="closeSubAgentPane"
+          @resize="subAgentPaneWidth = $event"
+          @decision-select="handlePendingDecisionSelect"
         />
       </template>
     </template>
@@ -620,34 +630,20 @@
       <RuntimeChecklistCard v-if="!activePluginMode" :step-groups="stepGroups" />
     </template>
 
-    <template #composer-preamble>
-      <div v-if="activeGoal" class="core-goal-area optical-glass optical-glass--low-trans" :data-status="activeGoal.status">
-        <CoreGoalStrip :goal="activeGoal" @cancel="handleCancelGoal" />
-        <CoreQueuedInputTray
-          v-model:draft="queuedInputDraft"
-          :items="queuedInputs"
-          :editing-id="editingQueuedInputId"
-          :can-guide="canGuideQueuedInput"
-          :submitting-ids="queueController.submittingItemIds.value"
-          @edit="(item) => queueController.beginEdit(item as CoreQueuedInput)"
-          @save="(item) => queueController.save(item as CoreQueuedInput)"
-          @cancel="queueController.cancelEdit"
-          @delete="(item) => queueController.remove(item as CoreQueuedInput)"
-          @guide="(item) => queueController.guide(item as CoreQueuedInput)"
-        />
-      </div>
+    <template #composer-queue-panel>
       <CoreQueuedInputTray
-        v-else
+        :goal="activeGoal || undefined"
         v-model:draft="queuedInputDraft"
         :items="queuedInputs"
         :editing-id="editingQueuedInputId"
         :can-guide="canGuideQueuedInput"
         :submitting-ids="queueController.submittingItemIds.value"
-        @edit="(item) => queueController.beginEdit(item as CoreQueuedInput)"
+        @edit="(item) => handleQueuedInputEdit(item as CoreQueuedInput)"
         @save="(item) => queueController.save(item as CoreQueuedInput)"
         @cancel="queueController.cancelEdit"
         @delete="(item) => queueController.remove(item as CoreQueuedInput)"
         @guide="(item) => queueController.guide(item as CoreQueuedInput)"
+        @cancel-goal="handleCancelGoal"
       />
     </template>
 
@@ -722,6 +718,12 @@
             @select="chooseAttachments"
           />
         </template>
+        <template #runtime-indicator>
+          <CoreSubAgentActivityIndicator
+            :active="awaitingSubAgents"
+            :names="pendingSubAgentNames"
+          />
+        </template>
         <template #after-runtime>
           <CoreWorkspaceMenu
             v-if="appRuntime.platform === 'mobile' && appRuntime.workspaceControl"
@@ -746,7 +748,9 @@
         :active-plugin-id="activePluginMode?.pluginId || null"
         :active-mode-id="activePluginMode?.id || null"
         :plugin-contributions="activePluginSidebarContributions"
+        :hidden-sub-agent-identities="dismissedSubAgentIdentities"
         @open-sub-agent="openSubAgentPane"
+        @delete-sub-agent="deleteSubAgentRun"
         @hover-change="rightSidebarHold = $event"
       />
     </template>
@@ -783,13 +787,16 @@
   >
     <div class="attachment-drop-card">
       <Upload class="attachment-drop-icon" :size="28" aria-hidden="true" />
-      <p class="attachment-drop-title">松开鼠标上传附件</p>
-      <p class="attachment-drop-hint">添加到当前会话</p>
+      <p class="attachment-drop-title">{{ t("松开鼠标上传附件") }}</p>
+      <p class="attachment-drop-hint">{{ t("添加到当前会话") }}</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
+import { loadUiLanguage } from '../i18n'
 import {
   computed,
   defineAsyncComponent,
@@ -812,6 +819,7 @@ import {
   ClipboardPaste,
   Copy,
   FolderOpen,
+  Library,
   LoaderCircle,
   MonitorPlay,
   MonitorSmartphone,
@@ -829,6 +837,7 @@ import type {
   CoreAttachment,
   CoreSessionListItem,
   CoreSubAgentDurableRecord,
+  CoreSubAgentRun,
 } from '../types'
 import { isInternalSession, isPluginOwnedSession } from '../sessions/visibility'
 import { createModeSessionState } from '../sessions/mode-state'
@@ -879,7 +888,6 @@ import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
 import CoreConfirmDialog from '../components/CoreConfirmDialog.vue'
 import CorePendingDecisionPanel from '../components/CorePendingDecisionPanel.vue'
 import CoreArrangeManager from '../components/CoreArrangeManager.vue'
-import CoreGoalStrip from '../components/CoreGoalStrip.vue'
 import HistoryLoadingIndicator from '../components/HistoryLoadingIndicator.vue'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreProjectPicker from '../components/CoreProjectPicker.vue'
@@ -919,7 +927,9 @@ import SessionSidebar, { type SessionExportFormat } from '../components/SessionS
 import WorkspaceShell from '../components/WorkspaceShell.vue'
 import RightSidebarHost from '../components/RightSidebarHost.vue'
 import CoreSubAgentPane from '../components/CoreSubAgentPane.vue'
-import { findCoreSubAgentRun, selectCoreSubAgentRuns, type CoreSubAgentRef } from '../agents/subAgentProjection'
+import CoreSubAgentActivityIndicator from '../components/CoreSubAgentActivityIndicator.vue'
+import { selectCoreSubAgentRun, type CoreSubAgentRef } from '../agents/subAgentProjection'
+import { subAgentRunIdentity } from '../agents/subAgentDisplay'
 import TitleBar from '../components/TitleBar.vue'
 import PluginModeHost from '../components/PluginModeHost.vue'
 import { refreshPluginUIModes } from '../plugins/api'
@@ -1008,6 +1018,9 @@ function onLeftDrawerChange(value: boolean): void {
   emit('left-drawer-change', value)
 }
 const appRuntime = props.runtime
+// Load the shared preference for desktop, mobile and the real-UI showcase.
+// An unavailable backend keeps the existing Simplified Chinese default.
+void loadUiLanguage(appRuntime.requestRpc).catch(() => undefined)
 const showMobileFooterFallback = computed(() => appRuntime.platform === 'mobile' && props.mobileCommandDockAvailable !== true)
 const showSidebarFooter = computed(() => showMobileFooterFallback.value)
 const commandShellPlatform = (() => {
@@ -1084,7 +1097,7 @@ function readRecentProjectOpenings(): CoreRecentProject[] {
       && typeof entry.openedAt === 'string'
         ? [{
             id: entry.id,
-            name: typeof entry.name === 'string' ? entry.name : '未命名项目',
+            name: typeof entry.name === 'string' ? entry.name : t("未命名项目"),
             workRoot: typeof entry.workRoot === 'string' ? entry.workRoot : '',
             openedAt: entry.openedAt,
           }]
@@ -1160,11 +1173,11 @@ const sidebarNavView = computed<'settings' | 'plugins' | 'project' | null>(() =>
 const sidebarNavTitle = computed(() => {
   switch (sidebarNavView.value) {
     case 'settings':
-      return '设置'
+      return t("设置")
     case 'plugins':
-      return '插件'
+      return t("插件")
     case 'project':
-      return '项目'
+      return t("项目")
     default:
       return ''
   }
@@ -1185,19 +1198,19 @@ watch(showLibrary, (active) => {
 const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
   switch (fullAreaView.value) {
     case 'search':
-      return { title: '搜索', subtitle: '跨项目查找会话、消息、方案与文件。' }
+      return { get title() { return t("搜索") }, get subtitle() { return t("跨项目查找会话、消息、方案与文件。") } }
     case 'library':
-      return libraryHeading.value ?? { title: '资料库', subtitle: '资料 / 记忆 / 方案 — 一个入口三块内容。' }
+      return libraryHeading.value ?? { get title() { return t("资料库") }, get subtitle() { return t("资料 / 记忆 / 方案 — 一个入口三块内容。") } }
     case 'arrange':
-      return arrangeHeading.value ?? { title: '定时任务', subtitle: '按计划运行任务，或在需要时随时执行。' }
+      return arrangeHeading.value ?? { get title() { return t("定时任务") }, get subtitle() { return t("按计划运行任务，或在需要时随时执行。") } }
     case 'settings':
-      return { title: '设置', subtitle: '模型与供应商、外观主题、工具权限等应用配置。' }
+      return { get title() { return t("设置") }, get subtitle() { return t("模型与供应商、外观主题、工具权限等应用配置。") } }
     case 'plugins':
-      return { title: '插件', subtitle: '管理已安装的插件，开关它们带来的界面与工具。' }
+      return { get title() { return t("插件") }, get subtitle() { return t("管理已安装的插件，开关它们带来的界面与工具。") } }
     case 'account':
-      return { title: '账号', subtitle: '登录状态与已配对的设备。' }
+      return { get title() { return t("账号") }, get subtitle() { return t("登录状态与已配对的设备。") } }
     case 'project':
-      return { title: '项目', subtitle: '项目作用域的元信息与 AGENTS.md 指令。' }
+      return { get title() { return t("项目") }, get subtitle() { return t("项目作用域的元信息与 AGENTS.md 指令。") } }
     default:
       return { title: '', subtitle: '' }
   }
@@ -1238,9 +1251,9 @@ function onRailOpen(view: AppRailView): void {
 // 侧栏顶部的模式下拉（Codex 里产品名的位置）：Agent / Study / Workflow。
 // 菜单锚在触发按钮下方（不跟鼠标点走），每项带一句小字说明。
 const MODE_DESCRIPTIONS: Record<string, string> = {
-  agent: '处理您的日常任务',
-  study: '学习、探索、温习',
-  workflow: '构建稳定的工作流程',
+  get agent() { return t("处理您的日常任务") },
+  get study() { return t("学习、探索、温习") },
+  get workflow() { return t("构建稳定的工作流程") },
 }
 function openModeMenu(event: MouseEvent): void {
   const trigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
@@ -1283,7 +1296,7 @@ const effectiveAccountDevices = computed<MobileControlAccountDevice[]>(() => {
     devices.push({
       nodeId: remoteAccountStatus.value.nodeId,
       label: 'LamTools Desktop',
-      detail: '当前桌面工作环境',
+      get detail() { return t("当前桌面工作环境") },
       platform: 'desktop',
       online: Boolean(remoteGatewayStatus.value?.relayConnected),
       current: true,
@@ -1293,7 +1306,7 @@ const effectiveAccountDevices = computed<MobileControlAccountDevice[]>(() => {
     devices.push({
       nodeId: device.deviceId,
       label: device.name || device.deviceId,
-      detail: '已配对移动设备',
+      get detail() { return t("已配对移动设备") },
       platform: device.platform || 'mobile',
       online: Boolean(device.lastSeenMs && Date.now() - device.lastSeenMs < 60_000),
     })
@@ -1353,7 +1366,7 @@ async function saveRemoteAccount(payload: MobileControlAccountPayload): Promise<
       { username: payload.username.trim(), password: payload.password },
     )
     const authTokens = parseRemoteAccountTokens(auth)
-    if (!authTokens) throw new Error('服务器返回了无效的登录凭据')
+    if (!authTokens) throw new Error(t("服务器返回了无效的登录凭据"))
     const identity = await identityCall({ serverId: authTokens.serverId, username: payload.username.trim() })
     remoteAccountIdentity.value = identity
     const registration = await requestRemoteAccountJson(
@@ -1369,7 +1382,7 @@ async function saveRemoteAccount(payload: MobileControlAccountPayload): Promise<
       authTokens.accessToken,
     )
     const node = parseRemoteAccountNode(registration.node)
-    if (!node) throw new Error('服务器未返回有效的桌面 Node')
+    if (!node) throw new Error(t("服务器未返回有效的桌面 Node"))
     const boundTokens = parseRemoteAccountTokens(registration.tokens) || authTokens
     const saved = await save({
       baseUrl,
@@ -1445,14 +1458,14 @@ async function requestRemoteAccountJson(
       cache: 'no-store',
     })
   } catch (error) {
-    throw new Error(`无法连接服务器：${messageFromError(error)}`)
+    throw new Error(t("无法连接服务器：{0}", { 0: messageFromError(error) }))
   }
   const payload = await response.json().catch(() => null) as unknown
   const record = isRecordValue(payload) ? payload : {}
   if (!response.ok) {
     const message = typeof record.message === 'string'
       ? record.message
-      : typeof record.error === 'string' ? record.error : `服务器请求失败（${response.status}）`
+      : typeof record.error === 'string' ? record.error : t("服务器请求失败（{0}）", { 0: response.status })
     throw new Error(message)
   }
   return record
@@ -1463,9 +1476,9 @@ function normalizeRemoteServerBaseUrl(raw: string): string {
   try {
     url = new URL(raw.trim())
   } catch {
-    throw new Error('服务器地址格式无效')
+    throw new Error(t("服务器地址格式无效"))
   }
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('服务器地址必须使用 HTTP 或 HTTPS')
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error(t("服务器地址必须使用 HTTP 或 HTTPS"))
   const marker = url.pathname.indexOf('/v1/')
   url.pathname = (marker >= 0 ? url.pathname.slice(0, marker) : url.pathname).replace(/\/+$/, '') || '/'
   url.search = ''
@@ -1558,9 +1571,9 @@ async function createRemotePairing(): Promise<void> {
   try {
     if (!remoteGatewayStatus.value?.enabled) {
       const start = (window as any).__LAMTOOLS_REMOTE_START__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-      if (!start) throw new Error('手机控制命令将在桌面 Tauri 运行时启用')
+      if (!start) throw new Error(t("手机控制命令将在桌面 Tauri 运行时启用"))
       remoteGatewayStatus.value = await start()
-      if (!remoteGatewayStatus.value?.enabled) throw new Error('手机控制未能启动')
+      if (!remoteGatewayStatus.value?.enabled) throw new Error(t("手机控制未能启动"))
     }
     remotePairing.value = await create()
   } catch (error) {
@@ -1667,9 +1680,9 @@ const activePluginSidebarContributions = computed(() => (
 ))
 const nextAppModeTitle = computed(() => {
   const modes = appModes.value
-  if (modes.length < 2) return '没有可切换的插件模式'
+  if (modes.length < 2) return t("没有可切换的插件模式")
   const index = modes.findIndex((mode) => mode.pluginId + ':' + mode.id === activeAppModeKey.value)
-  return '切换到 ' + (modes[(index + 1) % modes.length]?.title || '下一个模式')
+  return t("切换到 ") + (modes[(index + 1) % modes.length]?.title || t("下一个模式"))
 })
 
 function modeKey(mode: PluginMode): string {
@@ -1682,8 +1695,8 @@ function isActivePluginSession(): boolean {
 
 const composerPlaceholder = computed(() => (
   activePluginMode.value
-    ? readPluginSurface(activePluginSurface.value?.composerPlaceholder, '输入内容…')
-    : '给 Sunday 发送任务...'
+    ? readPluginSurface(activePluginSurface.value?.composerPlaceholder, t("输入内容…"))
+    : t("给 Sunday 发送任务...")
 ))
 
 /**
@@ -1768,16 +1781,16 @@ function buildPlanLibraryExecutionPrompt(plan: PlanLibraryEntry, sourceProjectId
   if (sameProject) {
     return [
       `执行方案《${plan.title}》（${plan.path}）。`,
-      '先用 read_file 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；',
-      '然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。',
+      t("先用 read_file 读回这份方案，对照仓库现状核对需求与步骤，有出入的地方先记下结论并更新方案文件；"),
+      t("然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工。"),
     ].join('')
   }
   const source = projects.value.find((project) => project.id === sourceProjectId)
   const absolutePath = absoluteArtifactPath({ path: plan.path, uri: '' }, source?.workRoot)
   return [
     `执行方案《${plan.title}》。这份方案属于项目「${source?.name || sourceProjectId}」，存放在 ${absolutePath}。`,
-    '先用 read_file 读回这份方案（它在当前项目之外，读到它需要你先申请访问批准），对照仓库现状核对需求与步骤，有出入的地方先记下结论；',
-    '然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工；方案文件的更新写回它原来的位置。',
+    t("先用 read_file 读回这份方案（它在当前项目之外，读到它需要你先申请访问批准），对照仓库现状核对需求与步骤，有出入的地方先记下结论；"),
+    t("然后按 execute-plan 的流程把目标与步骤装进当前会话的清单，再逐步开工；方案文件的更新写回它原来的位置。"),
   ].join('')
 }
 
@@ -1788,9 +1801,9 @@ function buildPlanLibraryExecutionPrompt(plan: PlanLibraryEntry, sourceProjectId
  */
 async function uploadArtifactFiles(folder: string): Promise<void> {
   const projectId = activeProjectId.value
-  if (!projectId) throw new Error('先在左侧选择一个项目')
+  if (!projectId) throw new Error(t("先在左侧选择一个项目"))
   const picker = appRuntime.capabilities.files
-  if (!picker) throw new Error('当前环境不支持文件选择')
+  if (!picker) throw new Error(t("当前环境不支持文件选择"))
   const files = await picker.pick({ source: 'file', multiple: true })
   if (!files?.length) return
   const query = folder ? `?folder=${encodeURIComponent(folder)}` : ''
@@ -1812,7 +1825,7 @@ async function uploadArtifactFiles(folder: string): Promise<void> {
       failures.push(`${file.name}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  if (failures.length) throw new Error(`上传失败 ${failures.length} 个 — ${failures[0]}`)
+  if (failures.length) throw new Error(t("上传失败 {0} 个 — {1}", { 0: failures.length, 1: failures[0] }))
 }
 
 const uiPreferences = useCoreUiPreferences('lamtools.core.ui.preferences')
@@ -2012,7 +2025,7 @@ const executionControls = useCoreExecutionControlsState({
       const model = availableModels.value.find((item) => item.id === id)
       return String(model?.display_name || model?.model_id || id || '')
     }
-    showToast('notice', `原模型「${label(fromModelId)}」已不可用，已改用「${label(toModelId)}」`, 8000)
+    showToast('notice', t("原模型「{0}」已不可用，已改用「{1}」", { 0: label(fromModelId), 1: label(toModelId) }), 8000)
   },
 })
 const {
@@ -2028,8 +2041,8 @@ const {
 
 const modeOptions = computed(() =>
   activePluginMode.value ? [] : [
-    { value: 'consider', label: '思索' },
-    { value: 'execute', label: '执行' },
+    { value: 'consider', get label() { return t("思索") } },
+    { value: 'execute', get label() { return t("执行") } },
   ]
 )
 const assistantModelLabels = computed<Record<string, string>>(() => {
@@ -2047,12 +2060,23 @@ const runtimeModeLabel = computed(() => (
   activePluginMode.value?.title
     || modeOptions.value.find((option) => option.value === activeMode.value)?.label
     || activeMode.value
-    || '模式'
+    || t("模式")
 ))
 
 const latestStatus = workbench.turnState
 const activeTurnId = workbench.activeTurnId
-const activeTurnRunning = workbench.turnActive
+// 会话活动的唯一派生源：mainRunning = 主代理在工作（状态 a）；
+// awaitingSubAgents = 主代理已结束、但本会话派出的子代理仍在运行（状态 b）。
+// 所有"忙碌/禁用"判断都读这两个值，不再各处直接看 status。
+const sessionActivity = workbench.sessionActivity
+const activeTurnRunning = computed(() => sessionActivity.value.mainRunning)
+const awaitingSubAgents = computed(() => sessionActivity.value.awaitingSubAgents)
+const pendingSubAgentNames = computed(() => sessionActivity.value.pendingSubAgentNames)
+// 成员在跑只改停止按钮的说明文案，绝不把这一格改成发送或取消：只要服务端说这一轮
+// 还在跑，停止就必须一直可用。
+const composerStopTitle = computed(() => (
+  awaitingSubAgents.value ? t("停止运行（子代理仍在运行）") : t("停止运行")
+))
 
 // 助手刚写完方案时，打开着的资料库自动刷新列表（回合收束即为信号）。
 watch(activeTurnRunning, (running, previous) => {
@@ -2144,7 +2168,7 @@ const sidebarActiveSessionId = computed(() => {
 })
 const sidebarNewSessionLabel = computed(() => {
   const sidebar = activePluginSurface.value?.sidebar
-  return sidebar ? readPluginSurface(sidebar.newSessionLabel, '新建') : '新建会话'
+  return sidebar ? readPluginSurface(sidebar.newSessionLabel, t("新建")) : t("新建会话")
 })
 const sidebarAllowProjectNewSession = computed(() => {
   const sidebar = activePluginSurface.value?.sidebar
@@ -2173,7 +2197,7 @@ const sidebarAllowSessionContextMenu = computed(() => {
 const sidebarPrimaryActionLabel = computed(() => (
   activePluginSurface.value?.sidebar
     ? readPluginSurface(activePluginSurface.value.sidebar.primaryActionLabel, '')
-    : '新建项目'
+    : t("新建项目")
 ))
 const activeSessionTitle = computed(() => (
   sessions.value.find((session) => session.id === activeSessionId.value)?.title || 'Session'
@@ -2291,16 +2315,53 @@ const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value
 // 只记身份，不存运行快照：每次消息更新都从当前投影重新解析，所以子代理运行中
 // 这一屏会跟着流式更新；分屏关闭时不做任何投影计算。
 const openSubAgentRef = ref<CoreSubAgentRef | null>(null)
+/** 子代理面板宽度（px）：拖过之后由这一层持有，聊天区按它让位；未拖过时为 null，
+ *  CSS 的 clamp 默认值生效。不跨会话记忆（是否记住用户拖过的宽度另行决策）。 */
+const subAgentPaneWidth = ref<number | null>(null)
+const subAgentPaneWidthStyle = computed(() => (
+  subAgentPaneWidth.value ? { '--sub-agent-pane-width': `${Math.round(subAgentPaneWidth.value)}px` } : undefined
+))
+
 const openSubAgentRun = computed(() => {
   const ref = openSubAgentRef.value
   if (!ref || (!ref.subSessionId && !ref.name)) return undefined
-  return findCoreSubAgentRun(selectCoreSubAgentRuns(messages.value), ref)
+  // 定点解析：分屏打开期间每帧只投影这一个运行，不再把整个会话的所有运行
+  // （含已完成的）重建一遍再丢掉。
+  return selectCoreSubAgentRun(messages.value, ref)
 })
 
 // 监督者的持久记录：续跑过的子代理，其运行边界（状态/耗时/完成时间）只在
 // 监督者库里，消息投影上看不出来。分屏开着时拉取并低频刷新。
 const subAgentDurableRecords = ref<Record<string, CoreSubAgentDurableRecord>>({})
 let subAgentRecordsTimer: ReturnType<typeof setInterval> | null = null
+// 拉取/刷新只认"打开的是哪个子代理"，不认运行快照对象：openSubAgentRun 每次消息
+// 更新都会重建一个新对象（时间线跟着流式变），直接 watch 它会让下面的 RPC 与计时器
+// 每条事件都重建一次——面板一开就成了每帧一次请求，整机卡顿。
+const openSubAgentIdentity = computed(() => subAgentRunIdentity(openSubAgentRun.value))
+
+/** 已删除的子代理身份（右栏列表的过滤依据）。删除是"这次会话里不再为它占位"：
+ *  按身份而不是名字记，避免同名的新一轮委派被上一次的删除顺手隐藏。 */
+const dismissedSubAgentIdentities = ref<string[]>([])
+
+/**
+ * 删除一个已结束的子代理：唯一一次调用，参数按后端契约（payload.name）。
+ * 运行中 / 等待中的成员没有删除入口，这里再挡一次；失败只提示，不假装已删除。
+ */
+async function deleteSubAgentRun(run: CoreSubAgentRun): Promise<void> {
+  const name = String(run?.name || '').trim()
+  const identity = subAgentRunIdentity(run)
+  if (!name || !identity) return
+  if (run.status === 'running' || run.status === 'pending') return
+  const threadId = String(activeSessionId.value || '').trim()
+  try {
+    await requestConfigOperation('sub_agent.delete', { thread_id: threadId, name })
+    dismissedSubAgentIdentities.value = [...dismissedSubAgentIdentities.value, identity]
+    if (openSubAgentIdentity.value === identity) closeSubAgentPane()
+    void refreshSubAgentRecords()
+  } catch (error) {
+    setRuntimeStatus(error instanceof Error ? error.message : String(error))
+  }
+}
 
 async function refreshSubAgentRecords(): Promise<void> {
   const threadId = String(activeSessionId.value || '').trim()
@@ -2332,7 +2393,7 @@ function syncSubAgentRecordsPolling(): void {
   subAgentRecordsTimer = setInterval(() => { void refreshSubAgentRecords() }, 10_000)
 }
 
-watch(openSubAgentRun, () => syncSubAgentRecordsPolling(), { immediate: true })
+watch(openSubAgentIdentity, () => syncSubAgentRecordsPolling(), { immediate: true })
 onBeforeUnmount(() => {
   if (subAgentRecordsTimer) clearInterval(subAgentRecordsTimer)
   subAgentRecordsTimer = null
@@ -2349,10 +2410,14 @@ function closeSubAgentPane(): void {
 }
 
 // 解析不到就收起：换会话、历史分页把该子代理卸载、记录被清理时都会走到这里。
-watch(openSubAgentRun, (run) => {
-  if (!run && openSubAgentRef.value) openSubAgentRef.value = null
+watch(openSubAgentIdentity, (identity) => {
+  if (!identity && openSubAgentRef.value) openSubAgentRef.value = null
 })
-watch(activeSessionId, () => closeSubAgentPane())
+watch(activeSessionId, () => {
+  closeSubAgentPane()
+  // 删除只对当前会话生效：换会话后由新会话自己的记录决定列表内容。
+  dismissedSubAgentIdentities.value = []
+})
 watch(fullAreaView, (view) => {
   if (view) closeSubAgentPane()
 })
@@ -2420,6 +2485,26 @@ const queuedInputs = workbench.queuedInputs
 const editingQueuedInputId = queueController.editingId
 const queuedInputDraft = queueController.draft
 const canGuideQueuedInput = queueController.canGuide
+
+async function handleQueuedInputEdit(item: CoreQueuedInput): Promise<void> {
+  if (composerText.value.trim() || pendingAttachments.value.length > 0) {
+    await queueController.beginEdit(item)
+    return
+  }
+
+  // Move the queued item out before placing it in the composer, so a normal
+  // send creates exactly one fresh queue entry instead of duplicating it.
+  if (!await queueController.remove(item)) {
+    await queueController.beginEdit(item)
+    return
+  }
+
+  const existingText = composerText.value
+  composerText.value = existingText.trim()
+    ? `${item.text}\n${existingText}`
+    : item.text
+  focusComposer(composerText.value.length)
+}
 
 async function loadInitialData() {
   try {
@@ -2587,7 +2672,7 @@ function deleteProject(projectId: string) {
   const project = projects.value.find((item) => item.id === projectId)
   if (!project) return
   askConfirm({
-    title: '删除项目及会话记录？',
+    get title() { return t("删除项目及会话记录？") },
     detail: project.name,
     action: () => performDeleteProject(project),
   })
@@ -2633,7 +2718,7 @@ async function saveAgents(content: string) {
   try {
     const agents = await projectWorkspace.writeAgents(projectId, content)
     agentsContent.value = agents.content
-    setRuntimeStatus('AGENTS.md 已保存')
+    setRuntimeStatus(t("AGENTS.md 已保存"))
   } catch (error) {
     agentsError.value = messageFromError(error)
   } finally {
@@ -2670,7 +2755,7 @@ async function updateProjectVisual(iconKey: CoreProjectIconKey, colorKey: CorePr
 async function renameSessionFromSidebar(sessionId: string, title: string): Promise<void> {
   try {
     await renameSession(sessionId, title)
-    setRuntimeStatus('会话已重命名')
+    setRuntimeStatus(t("会话已重命名"))
   } catch (error) {
     composerErrorText.value = messageFromError(error)
   }
@@ -2702,31 +2787,52 @@ function localDateStamp(date = new Date()): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
+const activeSessionExports = new Set<string>()
+
 async function exportSession(sessionId: string, format: SessionExportFormat): Promise<void> {
+  const exportKey = `${sessionId}:${format}`
+  if (activeSessionExports.has(exportKey)) {
+    if (format === 'zip') setRuntimeStatus(t("完整归档正在准备中，请稍候。"))
+    return
+  }
+  activeSessionExports.add(exportKey)
   const session = sessions.value.find((item) => item.id === sessionId)
   const title = session?.title || `Session ${sessionId.slice(0, 8)}`
   const mode = format === 'zip' ? 'full' : format === 'handoff' ? 'handoff' : 'transcript'
   const outputFormat = format === 'zip' ? 'zip' : format === 'handoff' ? 'json' : format
+  const extension = sessionExportExtension(format)
+  const suffix = format === 'handoff' ? '-handoff' : ''
+  const filename = `${exportFileStem(title, sessionId)}-${localDateStamp()}${suffix}.${extension}`
 
   try {
+    if (format === 'zip' && appRuntime.capabilities.sessionExports?.saveFullArchive) {
+      setRuntimeStatus(t("请选择完整归档的保存位置…"))
+      const savedPath = await appRuntime.capabilities.sessionExports.saveFullArchive(sessionId, filename)
+      if (savedPath) {
+        setRuntimeStatus(t("完整归档已保存：{0}", { 0: savedPath }), 10_000)
+      } else {
+        setRuntimeStatus(t("已取消完整归档导出。"))
+      }
+      return
+    }
+
+    if (format === 'zip') setRuntimeStatus(t("正在准备完整归档，请稍候…"))
     const response = await appRuntime.request({
       kind: 'http',
       method: 'POST',
       path: `/sessions/${encodeURIComponent(sessionId)}/export`,
       headers: { 'Content-Type': 'application/json' },
       body: new TextEncoder().encode(JSON.stringify({ mode, format: outputFormat })),
+      timeoutMs: format === 'zip' ? 120_000 : undefined,
     })
     if (response.status < 200 || response.status >= 300) {
       const errorText = new TextDecoder().decode(response.body)
-      throw new Error(errorText || `导出失败（${response.status}）`)
+      throw new Error(errorText || t("导出失败（{0}）", { 0: response.status }))
     }
 
     const blob = new Blob([Uint8Array.from(response.body)], {
       type: response.headers['content-type'] || 'application/octet-stream',
     })
-    const extension = sessionExportExtension(format)
-    const suffix = format === 'handoff' ? '-handoff' : ''
-    const filename = `${exportFileStem(title, sessionId)}-${localDateStamp()}${suffix}.${extension}`
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
@@ -2736,9 +2842,12 @@ async function exportSession(sessionId: string, format: SessionExportFormat): Pr
     link.click()
     link.remove()
     window.setTimeout(() => URL.revokeObjectURL(url), 0)
-    setRuntimeStatus(`已导出：${filename}`)
+    setRuntimeStatus(t("已导出：{0}", { 0: filename }))
   } catch (error) {
-    composerErrorText.value = messageFromError(error)
+    const message = messageFromError(error)
+    composerErrorText.value = format === 'zip' ? t("完整归档导出失败：{0}", { 0: message }) : message
+  } finally {
+    activeSessionExports.delete(exportKey)
   }
 }
 
@@ -2746,7 +2855,7 @@ function deleteSession(sessionId: string) {
   const session = sessions.value.find((item) => item.id === sessionId)
   const title = session?.title || `Session ${sessionId.slice(0, 8)}`
   askConfirm({
-    title: '删除会话及历史？',
+    get title() { return t("删除会话及历史？") },
     detail: title,
     action: () => performDeleteSession(sessionId),
   })
@@ -2835,7 +2944,7 @@ function isStudyOwnedSessionId(sessionId: string): boolean {
 async function jumpToStudyMark(anchor: MarkAnchor): Promise<void> {
   if (anchor.session_id && isStudyOwnedSessionId(anchor.session_id)) {
     const mode = appModes.value.find(m => m.pluginId === 'study')
-    if (!mode) throw new Error('Study 未启用')
+    if (!mode) throw new Error(t("Study 未启用"))
     await selectAppMode(mode)
     await nextTick()
     selectionEvents.dispatchEvent(new Event('study-chat'))
@@ -2875,7 +2984,7 @@ async function locateMessage(messageId: string): Promise<void> {
     }
     break
   }
-  showToast('error', '未找到该消息（可能已被删除或属于子会话）', 5000)
+  showToast('error', t("未找到该消息（可能已被删除或属于子会话）"), 5000)
 }
 
 // Session-scoped model memory: each session remembers its own model choice,
@@ -2905,11 +3014,11 @@ async function refreshAfterRollback() {
 async function handleForkMessage(payload: { turnId: string; content: string }) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
-    composerErrorText.value = '当前没有可分叉的会话'
+    composerErrorText.value = t("当前没有可分叉的会话")
     return
   }
   if (rollbackActiveTurn.value) {
-    composerErrorText.value = '任务运行中，请先停止任务再分叉'
+    composerErrorText.value = t("任务运行中，请先停止任务再分叉")
     return
   }
   try {
@@ -2920,7 +3029,7 @@ async function handleForkMessage(payload: { turnId: string; content: string }) {
     const forkedSessionId = String(result?.session_id || '')
     await refreshSessions()
     if (forkedSessionId) await selectSession(forkedSessionId)
-    showToast('notice', '已从此处创建分叉会话；仅复制对话历史，未复制工作区或运行时状态。')
+    showToast('notice', t("已从此处创建分叉会话；仅复制对话历史，未复制工作区或运行时状态。"))
   } catch (error) {
     composerErrorText.value = error instanceof Error ? error.message : String(error)
   }
@@ -2929,16 +3038,16 @@ async function handleForkMessage(payload: { turnId: string; content: string }) {
 function handleRollbackMessage(payload: { turnId: string; content: string }) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
-    composerErrorText.value = '当前没有可回退的会话'
+    composerErrorText.value = t("当前没有可回退的会话")
     return
   }
   if (rollbackActiveTurn.value) {
-    composerErrorText.value = '任务运行中，请先停止任务再回退'
+    composerErrorText.value = t("任务运行中，请先停止任务再回退")
     return
   }
   // 用应用内确认框，不用系统弹窗：原生 confirm 会顶着 "127.0.0.1:5173 显示"
   // 这样的地址标题，且观感与应用无关。
-  askConfirm({ title: '撤回', action: () => rollbackTurn(sessionId, payload.turnId) })
+  askConfirm({ get title() { return t("撤回") }, action: () => rollbackTurn(sessionId, payload.turnId) })
 }
 
 async function rollbackTurn(sessionId: string, turnId: string): Promise<void> {
@@ -2948,7 +3057,7 @@ async function rollbackTurn(sessionId: string, turnId: string): Promise<void> {
       turn_id: turnId,
     })
     await refreshAfterRollback()
-    showToast('notice', '已删除此轮及之后的对话；文件与成果保持不变。')
+    showToast('notice', t("已删除此轮及之后的对话；文件与成果保持不变。"))
   } catch (error) {
     composerErrorText.value = error instanceof Error ? error.message : String(error)
   }
@@ -2957,15 +3066,15 @@ async function rollbackTurn(sessionId: string, turnId: string): Promise<void> {
 async function handleEditMessage(payload: { turnId: string; content: string; attachments?: CoreAttachment[] }) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
-    composerErrorText.value = '当前没有可编辑的会话'
+    composerErrorText.value = t("当前没有可编辑的会话")
     return
   }
   if (rollbackActiveTurn.value) {
-    composerErrorText.value = '任务运行中，请先停止任务再编辑'
+    composerErrorText.value = t("任务运行中，请先停止任务再编辑")
     return
   }
   if (!payload.turnId) {
-    composerErrorText.value = '这条消息没有可用的回合'
+    composerErrorText.value = t("这条消息没有可用的回合")
     return
   }
   try {
@@ -3025,7 +3134,7 @@ async function submitComposer() {
   // No model to inherit and none configured: fail with an explicit prompt
   // instead of sending a turn that would be silently routed to some default.
   if (!activePluginMode.value && availableModels.value.length === 0) {
-    showToast('error', '请先添加供应商/模型（设置 → 模型与供应商）', 8000)
+    showToast('error', t("请先添加供应商/模型（设置 → 模型与供应商）"), 8000)
     return
   }
 
@@ -3044,7 +3153,7 @@ async function submitComposer() {
 async function uploadFiles(files: FileList | File[]) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
-    composerErrorText.value = '请先选择会话'
+    composerErrorText.value = t("请先选择会话")
     return
   }
   for (const file of Array.from(files)) {
@@ -3062,12 +3171,12 @@ async function uploadFiles(files: FileList | File[]) {
         body: multipart.body,
       })
       if (response.status < 200 || response.status >= 300) {
-        throw new Error(new TextDecoder().decode(response.body) || '上传失败')
+        throw new Error(new TextDecoder().decode(response.body) || t("上传失败"))
       }
       addUploaded(JSON.parse(new TextDecoder().decode(response.body)) as CoreAttachment)
     } catch (error) {
       markFailed(failedId, file.name, messageFromError(error))
-      composerErrorText.value = `附件上传失败：${file.name}`
+      composerErrorText.value = t("附件上传失败：{0}", { 0: file.name })
     }
   }
 }
@@ -3075,7 +3184,7 @@ async function uploadFiles(files: FileList | File[]) {
 async function chooseAttachments(source: RuntimeFileSource = 'file') {
   const picker = appRuntime.capabilities.files
   if (!picker) {
-    composerErrorText.value = '当前环境不支持附件选择'
+    composerErrorText.value = t("当前环境不支持附件选择")
     return
   }
   try {
@@ -3089,7 +3198,7 @@ async function chooseAttachments(source: RuntimeFileSource = 'file') {
     const message = messageFromError(error)
     composerErrorText.value = message === '设备拒绝了您的请求'
       ? message
-      : `打开附件选择器失败：${message}`
+      : t("打开附件选择器失败：{0}", { 0: message })
   }
 }
 
@@ -3155,7 +3264,7 @@ async function previewPendingAttachment(id: string) {
     method: 'GET',
     path: `/attachments/${encodeURIComponent(id)}/preview`,
   })
-  setRuntimeStatus(response.status >= 200 && response.status < 300 ? '附件预览已读取' : '附件预览失败')
+  setRuntimeStatus(response.status >= 200 && response.status < 300 ? t("附件预览已读取") : t("附件预览失败"))
 }
 
 async function openPendingAttachment(id: string) {
@@ -3165,7 +3274,7 @@ async function openPendingAttachment(id: string) {
     method: 'POST',
     path: `/attachments/${encodeURIComponent(id)}/open`,
   })
-  if (response.status < 200 || response.status >= 300) setRuntimeStatus('打开附件失败')
+  if (response.status < 200 || response.status >= 300) setRuntimeStatus(t("打开附件失败"))
 }
 
 async function handleComposerKeydown(event: KeyboardEvent) {
@@ -3228,7 +3337,7 @@ async function copyComposerSelection(selection: ComposerSelection): Promise<bool
     restoreComposerSelection(selection)
     return true
   } catch {
-    showToast('error', '复制失败：当前环境无法访问剪贴板')
+    showToast('error', t("复制失败：当前环境无法访问剪贴板"))
     return false
   }
 }
@@ -3245,7 +3354,7 @@ async function pasteIntoComposer(selection: ComposerSelection): Promise<void> {
     const clipboardText = await navigator.clipboard.readText()
     replaceComposerSelection(selection, clipboardText)
   } catch {
-    showToast('error', '粘贴失败：当前环境无法读取剪贴板')
+    showToast('error', t("粘贴失败：当前环境无法读取剪贴板"))
   }
 }
 
@@ -3271,7 +3380,7 @@ function openComposerContextMenu(event: MouseEvent): void {
   const items: ContextMenuEntry[] = [
     {
       id: 'composer-cut',
-      label: '剪切',
+      get label() { return t("剪切") },
       icon: Scissors,
       shortcut: 'Ctrl+X',
       disabled: composerInputDisabled.value || !hasSelection,
@@ -3279,7 +3388,7 @@ function openComposerContextMenu(event: MouseEvent): void {
     },
     {
       id: 'composer-copy',
-      label: '复制',
+      get label() { return t("复制") },
       icon: Copy,
       shortcut: 'Ctrl+C',
       disabled: !hasSelection,
@@ -3287,7 +3396,7 @@ function openComposerContextMenu(event: MouseEvent): void {
     },
     {
       id: 'composer-paste',
-      label: '粘贴',
+      get label() { return t("粘贴") },
       icon: ClipboardPaste,
       shortcut: 'Ctrl+V',
       disabled: composerInputDisabled.value,
@@ -3296,7 +3405,7 @@ function openComposerContextMenu(event: MouseEvent): void {
     { type: 'separator', id: 'composer-edit-separator' },
     {
       id: 'composer-select-all',
-      label: '全选',
+      get label() { return t("全选") },
       icon: TextSelect,
       shortcut: 'Ctrl+A',
       disabled: !selection.value,
@@ -3350,7 +3459,7 @@ async function createProvider(payload: CoreSettingsProviderPayload) {
     const result = await requestConfigOperation('config.provider.create', payload as unknown as Record<string, unknown>)
     await loadModelOptions()
     if (payload.model_group_name) await ensureCreatedModelsInGroup(payload.model_group_name, result)
-    setRuntimeStatus('供应商已添加')
+    setRuntimeStatus(t("供应商已添加"))
   } catch (error) {
     setLoadError(error instanceof Error ? error.message : String(error))
   }
@@ -3401,7 +3510,7 @@ async function onboardingCreateProvider(payload: CoreSettingsProviderPayload) {
     const result = await requestConfigOperation('config.provider.create', payload as unknown as Record<string, unknown>)
     await loadModelOptions()
     if (payload.model_group_name) await ensureCreatedModelsInGroup(payload.model_group_name, result)
-    setRuntimeStatus('供应商已添加')
+    setRuntimeStatus(t("供应商已添加"))
   } catch (error) {
     wizardError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -3434,37 +3543,37 @@ async function reopenOnboarding() {
 }
 
 async function updateProvider(payload: CoreSettingsProviderPayload) {
-  await mutateConfig('config.provider.update', payload, '供应商已更新')
+  await mutateConfig('config.provider.update', payload, t("供应商已更新"))
 }
 
 function deleteProvider(providerId: string) {
   const provider = availableProviders.value.find((item) => item.id === providerId)
   askConfirm({
-    title: '删除供应商及其模型配置？',
+    get title() { return t("删除供应商及其模型配置？") },
     detail: provider?.name || providerId,
-    action: () => mutateConfig('config.provider.delete', { provider_id: providerId }, '供应商已删除'),
+    action: () => mutateConfig('config.provider.delete', { provider_id: providerId }, t("供应商已删除")),
   })
 }
 
 async function createModel(payload: CoreSettingsModelPayload) {
-  await mutateConfig('config.models.upsert', { scope: 'global', ...payload }, '模型已添加')
+  await mutateConfig('config.models.upsert', { scope: 'global', ...payload }, t("模型已添加"))
 }
 
 async function updateModel(payload: CoreSettingsModelPayload) {
-  await mutateConfig('config.models.upsert', { scope: 'global', ...payload }, '模型已更新')
+  await mutateConfig('config.models.upsert', { scope: 'global', ...payload }, t("模型已更新"))
 }
 
 function deleteModel(modelRecordId: string) {
   const model = availableModels.value.find((item) => item.id === modelRecordId)
   askConfirm({
-    title: '删除模型配置？',
+    get title() { return t("删除模型配置？") },
     detail: model?.display_name || model?.model_id || modelRecordId,
-    action: () => mutateConfig('config.models.delete', { scope: 'global', model_id: modelRecordId }, '模型已删除'),
+    action: () => mutateConfig('config.models.delete', { scope: 'global', model_id: modelRecordId }, t("模型已删除")),
   })
 }
 
 async function setDefaultModel(modelId: string) {
-  await mutateConfig('config.models.set_default', { scope: 'global', model_id: modelId }, '已设为默认模型')
+  await mutateConfig('config.models.set_default', { scope: 'global', model_id: modelId }, t("已设为默认模型"))
 }
 
 async function ensureCreatedModelsInGroup(groupName: string, result: Record<string, unknown>) {
@@ -3485,7 +3594,7 @@ async function ensureCreatedModelsInGroup(groupName: string, result: Record<stri
     await loadModelGroups()
     group = modelGroups.value.find(item => item.name.toLocaleLowerCase() === groupName.toLocaleLowerCase())
   }
-  if (!group) throw new Error(`无法创建模型组 ${groupName}`)
+  if (!group) throw new Error(t("无法创建模型组 {0}", { 0: groupName }))
   await requestConfigOperation('config.model_group.members.set', {
     group_id: group.id,
     model_ids: [...new Set([...group.model_ids, ...createdIds])],
@@ -3498,25 +3607,25 @@ async function createModelGroup(payload: { name: string }) {
   await mutateModelCatalog('config.model_group.create', {
     ...payload,
     ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
-  }, '模型组已创建')
+  }, t("模型组已创建"))
 }
 
 async function updateModelGroup(payload: { group_id: string; name: string }) {
   await mutateModelCatalog('config.model_group.update', {
     ...payload,
     ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
-  }, '模型组已更新')
+  }, t("模型组已更新"))
 }
 
 function deleteModelGroup(groupId: string) {
   const group = modelGroups.value.find((item) => item.id === groupId)
   askConfirm({
-    title: '删除模型组（模型保留）？',
+    get title() { return t("删除模型组（模型保留）？") },
     detail: group?.name || groupId,
     action: () => mutateModelCatalog('config.model_group.delete', {
       group_id: groupId,
       ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
-    }, '模型组已删除'),
+    }, t("模型组已删除")),
   })
 }
 
@@ -3524,14 +3633,14 @@ async function setModelGroupMembers(payload: { group_id: string; model_ids: stri
   await mutateModelCatalog('config.model_group.members.set', {
     ...payload,
     ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
-  }, '模型组成员已更新')
+  }, t("模型组成员已更新"))
 }
 
 async function createModelWithProvider(payload: Record<string, unknown>) {
   await mutateModelCatalog('config.model.create_with_provider', {
     ...payload,
     ...(modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
-  }, '模型已创建并加入分组')
+  }, t("模型已创建并加入分组"))
 }
 
 async function mutateModelCatalog(method: string, params: object, successText: string) {
@@ -3569,7 +3678,7 @@ async function updateModelCatalogView(value: CoreModelCatalogView) {
   } catch (error) {
     modelCatalogView.value = previous
     const message = error instanceof Error ? error.message : String(error)
-    showToast('error', `模型分类方式保存失败，已回滚：${message}`)
+    showToast('error', t("模型分类方式保存失败，已回滚：{0}", { 0: message }))
   }
 }
 
@@ -3610,7 +3719,7 @@ async function updatePermissionMode(mode: 'read_only' | 'limited_edit' | 'full_e
     // mode that the backend did not persist (audit 17 S3).
     permissionMode.value = previous
     const message = e instanceof Error ? e.message : String(e)
-    showToast('error', `权限模式保存失败，已回滚：${message}`)
+    showToast('error', t("权限模式保存失败，已回滚：{0}", { 0: message }))
   }
 }
 
@@ -3625,7 +3734,7 @@ async function updateAllowAccessOutsideWorkdir(value: boolean) {
   } catch (e) {
     allowAccessOutsideWorkdir.value = previous
     const message = e instanceof Error ? e.message : String(e)
-    showToast('error', `工作目录外访问设置保存失败，已回滚：${message}`)
+    showToast('error', t("工作目录外访问设置保存失败，已回滚：{0}", { 0: message }))
   }
 }
 
@@ -3656,7 +3765,7 @@ async function requestConfigOperation(method: string, params: Record<string, unk
       throw lastError
     }
   }
-  throw lastError ?? new Error('Core App Server 连接失败')
+  throw lastError ?? new Error(t("Core App Server 连接失败"))
 }
 
 // ── 软件更新（设置 → 关于与更新；启动时静默自动检查）──
@@ -3687,15 +3796,15 @@ const updateRailAction = computed<'download' | 'install'>(
 const updateRailLabel = computed(() => {
   const version = updateLatestVersion.value
   if (updateInstallState.value === 'downloading') {
-    return updateInstallProgressLabel.value || `正在下载 v${version}…`
+    return updateInstallProgressLabel.value || t("正在下载 v{0}…", { 0: version })
   }
   if (updateInstallState.value === 'downloaded') {
-    return `更新 v${version} 已下载并校验，点击安装`
+    return t("更新 v{0} 已下载并校验，点击安装", { 0: version })
   }
   if (!updateInstallSupported.value) {
-    return `发现新版本 v${version}，点击打开下载页`
+    return t("发现新版本 v{0}，点击打开下载页", { 0: version })
   }
-  return `发现新版本 v${version}，点击下载`
+  return t("发现新版本 v{0}，点击下载", { 0: version })
 })
 function startUpdateDownload() {
   if (updateInstallSupported.value) {
@@ -3768,7 +3877,7 @@ async function updatePermissionPreset(preset: CorePermissionPreset) {
   } catch (e) {
     defaultPermissionPreset.value = previous
     const message = e instanceof Error ? e.message : String(e)
-    showToast('error', `默认审批策略保存失败，已回滚：${message}`)
+    showToast('error', t("默认审批策略保存失败，已回滚：{0}", { 0: message }))
   }
 }
 
@@ -3810,7 +3919,7 @@ function persistSessionPermissionPreset(preset: CorePermissionPreset): Promise<v
       // Keep the chain usable for a later selection and surface the failed
       // session write without touching global runtimeControls.
       if (generation === permissionPersistenceGeneration) {
-        composerErrorText.value = `权限偏好保存失败：${messageFromError(error)}`
+        composerErrorText.value = t("权限偏好保存失败：{0}", { 0: messageFromError(error) })
       }
     }
   })
@@ -3860,14 +3969,14 @@ async function applyCommandEffects(result: Record<string, unknown>): Promise<voi
     if (!rawEffect || typeof rawEffect !== 'object') continue
     const effect = rawEffect as Record<string, unknown>
     if (effect.type !== 'desktop_plugin' || effect.action !== 'show') {
-      throw new Error('命令返回了当前版本不支持的界面操作')
+      throw new Error(t("命令返回了当前版本不支持的界面操作"))
     }
     const pluginId = String(effect.plugin_id || '').trim()
     const showDesktopPlugin = (window as {
       __LAMTOOLS_SHOW_DESKTOP_PLUGIN__?: (pluginId: string) => Promise<void>
     }).__LAMTOOLS_SHOW_DESKTOP_PLUGIN__
     if (!pluginId || !showDesktopPlugin) {
-      throw new Error('桌宠命令仅能在 LamTools 桌面端执行')
+      throw new Error(t("桌宠命令仅能在 LamTools 桌面端执行"))
     }
     try {
       await showDesktopPlugin(pluginId)
@@ -3987,7 +4096,7 @@ function openSettings(section?: string): void {
 /** Rail account entry: show the account state, and open settings on it. */
 const accountLabel = computed(() => {
   const username = remoteAccountStatus.value?.username?.trim()
-  return username || '登录 / 账号'
+  return username || t("登录 / 账号")
 })
 
 /** The account screen is its own surface; the settings section keeps the forms. */
@@ -4045,9 +4154,9 @@ function openSessionFromSearch(sessionId: string): void {
  */
 async function openFileFromSearch(hit: { path: string; line?: number }): Promise<void> {
   const path = String(hit.path || '').trim()
-  if (!path) throw new Error('这一行没有可打开的文件路径')
+  if (!path) throw new Error(t("这一行没有可打开的文件路径"))
   const projectId = activeProjectId.value ?? selectedProjectId.value
-  if (!projectId) throw new Error('当前没有可用的项目，无法打开文件')
+  if (!projectId) throw new Error(t("当前没有可用的项目，无法打开文件"))
   await appRuntime.requestRpc('artifact.open', { project_id: projectId, path })
 }
 
@@ -4058,15 +4167,15 @@ async function openFileFromSearch(hit: { path: string; line?: number }): Promise
  */
 const searchCommands = computed<SearchCommand[]>(() => {
   const commands: SearchCommand[] = [
-    { id: 'new-task', label: '新任务', group: '建议', shortcut: 'Ctrl+N', icon: Plus, run: () => void createStartPageSession() },
-    { id: 'open-workspace', label: '打开工作区', group: '建议', shortcut: 'Ctrl+O', icon: FolderOpen, run: () => { showProjectPicker.value = true } },
-    { id: 'settings', label: '设置', group: '建议', icon: Settings, run: () => openSettings() },
-    { id: 'toggle-sidebar', label: '切换侧栏', group: '面板', shortcut: 'Ctrl+B', icon: PanelLeft, run: () => toggleLeftPinned() },
+    { id: 'new-task', get label() { return t("新任务") }, group: '建议', shortcut: 'Ctrl+N', icon: Plus, run: () => void createStartPageSession() },
+    { id: 'open-workspace', get label() { return t("打开工作区") }, group: '建议', shortcut: 'Ctrl+O', icon: FolderOpen, run: () => { showProjectPicker.value = true } },
+    { id: 'settings', get label() { return t("设置") }, group: '建议', icon: Settings, run: () => openSettings() },
+    { id: 'toggle-sidebar', get label() { return t("切换侧栏") }, group: '面板', shortcut: 'Ctrl+B', icon: PanelLeft, run: () => toggleLeftPinned() },
   ]
   if (appRuntime.platform !== 'mobile') {
     commands.push(
       
-      { id: 'toggle-right-panel', label: '切换右侧栏', group: '面板', icon: PanelRight, run: () => toggleRightPinned() },
+      { id: 'toggle-right-panel', get label() { return t("切换右侧栏") }, group: '面板', icon: PanelRight, run: () => toggleRightPinned() },
     )
   }
   return commands

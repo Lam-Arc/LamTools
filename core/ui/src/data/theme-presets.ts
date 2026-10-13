@@ -1,3 +1,5 @@
+
+import { t } from '../i18n/index'
 /** Shared, low-saturation theme presets. */
 import {
   SUNDAY_DARK_THEME,
@@ -95,25 +97,25 @@ const morningMistLightTheme = {
 
 export const THEME_PRESETS: ThemePreset[] = [
   {
-    id: 'sunday', group: 'theme', name: 'Sunday', note: '象牙白与石墨灰的纯色主题。',
-    method: '浅色使用象牙白承载石墨标记，暗色反转为石墨底与象牙标记。', rationale: '纯色层级更安静，并以清晰实线边界维持长期工作的可读性。',
+    id: 'sunday', group: 'theme', name: 'Sunday', get note() { return t("象牙白与石墨灰的纯色主题。") },
+    get method() { return t("浅色使用象牙白承载石墨标记，暗色反转为石墨底与象牙标记。") }, get rationale() { return t("纯色层级更安静，并以清晰实线边界维持长期工作的可读性。") },
     theme: SUNDAY_DARK_THEME, lightTheme: SUNDAY_LIGHT_THEME, darkTheme: SUNDAY_DARK_THEME,
   },
   {
-    id: 'default', group: 'theme', name: '默认', note: '克制的中性灰阶。',
-    method: '工作区域保持纯色，颜色只用于控件层级。', rationale: '适合长时间处理任务与配置。',
+    id: 'default', group: 'theme', get name() { return t("默认") }, get note() { return t("克制的中性灰阶。") },
+    get method() { return t("工作区域保持纯色，颜色只用于控件层级。") }, get rationale() { return t("适合长时间处理任务与配置。") },
     theme: neutralDark, lightTheme: neutralLight, darkTheme: neutralDark,
   },
   {
-    id: 'berry-teal', group: 'theme', name: '浮梦', note: '莓紫、灰蓝与青绿的横向渐变。',
-    method: '只改变背景板，聊天区、输入栏和控件保持中性。', rationale: '先提供背景方向，其他区域可继续单独调整。',
+    id: 'berry-teal', group: 'theme', get name() { return t("浮梦") }, get note() { return t("莓紫、灰蓝与青绿的横向渐变。") },
+    get method() { return t("只改变背景板，聊天区、输入栏和控件保持中性。") }, get rationale() { return t("先提供背景方向，其他区域可继续单独调整。") },
     theme: { ...neutralDark, ...berryTealBackdrop },
     lightTheme: { ...neutralLight, ...berryTealLightBackdrop },
     darkTheme: { ...neutralDark, ...berryTealBackdrop },
   },
   {
-    id: 'morning-mist', group: 'theme', name: '晨宵', note: '雾蓝到奶油白的浅色渐变。',
-    method: '浅色使用雾蓝到奶油白，暗色使用墨绿到蓝黑背景，其他界面层保持中性。', rationale: '同一主题在两种模式下保持不同的明暗气质。',
+    id: 'morning-mist', group: 'theme', get name() { return t("晨宵") }, get note() { return t("雾蓝到奶油白的浅色渐变。") },
+    get method() { return t("浅色使用雾蓝到奶油白，暗色使用墨绿到蓝黑背景，其他界面层保持中性。") }, get rationale() { return t("同一主题在两种模式下保持不同的明暗气质。") },
     theme: neutralDark,
     lightTheme: morningMistLightTheme,
     darkTheme: morningMistDarkTheme,
@@ -121,5 +123,5 @@ export const THEME_PRESETS: ThemePreset[] = [
 ]
 
 export const THEME_PRESET_GROUPS: Array<{ id: ThemePreset['group']; label: string }> = [
-  { id: 'theme', label: '主题预设' },
+  { id: 'theme', get label() { return t("主题预设") } },
 ]

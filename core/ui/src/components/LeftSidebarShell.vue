@@ -9,13 +9,13 @@
     @mouseleave="emit('mouseleave', $event)"
   >
     <header v-if="props.showSidebarHeader" class="drawer-head sidebar-header">
-      <div class="sidebar-title sidebar-label">{{ props.title || '项目' }}</div>
+      <div class="sidebar-title sidebar-label">{{ props.title || t("项目") }}</div>
       <button
         class="sidebar-pin-button"
         :class="{ 'is-active': props.pinned }"
         type="button"
-        :title="props.pinned ? '取消固定左侧栏' : '固定左侧栏'"
-        :aria-label="props.pinned ? '取消固定左侧栏' : '固定左侧栏'"
+        :title="props.pinned ? t('取消固定左侧栏') : t('固定左侧栏')"
+        :aria-label="props.pinned ? t('取消固定左侧栏') : t('固定左侧栏')"
         :aria-pressed="props.pinned"
         @click="togglePinned"
       >
@@ -30,8 +30,8 @@
             v-if="props.showDefaultHeaderAction"
             class="icon-btn"
             type="button"
-            title="新建"
-            aria-label="新建会话"
+            :title="t('新建')"
+            :aria-label="t('新建会话')"
             @click="emit('new-session')"
           >+</button>
         </slot>
@@ -61,7 +61,7 @@
         :class="{ 'is-visible': scrollbar.visible, 'is-dragging': dragging }"
         data-sidebar-scrollbar
         role="scrollbar"
-        aria-label="侧栏滚动条"
+        :aria-label="t('侧栏滚动条')"
         aria-orientation="vertical"
         :aria-controls="`${props.id}-body`"
         :aria-valuemin="0"
@@ -88,8 +88,8 @@
         <RailAction
           v-if="props.showSearchAction"
           action-id="search"
-          label="搜索"
-          description="全局搜索：跨项目查找会话、消息与学习资料。"
+          :label="t('搜索')"
+          :description="t('全局搜索：跨项目查找会话、消息与学习资料。')"
           @click="emit('search')"
         >
           <Search :size="14" :stroke-width="1.8" />
@@ -97,8 +97,8 @@
         <RailAction
           v-if="props.showPluginsAction"
           action-id="plugins"
-          label="插件"
-          description="管理已安装的插件，开关它们带来的界面与工具。"
+          :label="t('插件')"
+          :description="t('管理已安装的插件，开关它们带来的界面与工具。')"
           @click="emit('plugins')"
         >
           <Puzzle :size="14" :stroke-width="1.8" />
@@ -106,8 +106,8 @@
         <RailAction
           v-if="props.showSettingsAction"
           action-id="settings"
-          label="设置"
-          description="模型与供应商、外观主题、工具权限等应用配置。"
+          :label="t('设置')"
+          :description="t('模型与供应商、外观主题、工具权限等应用配置。')"
           @click="emit('settings')"
         >
           <Settings :size="14" :stroke-width="1.8" />
@@ -119,6 +119,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Pin, Puzzle, Search, Settings } from 'lucide-vue-next'
 import RailAction from './RailAction.vue'

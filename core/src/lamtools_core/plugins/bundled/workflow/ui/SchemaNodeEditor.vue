@@ -1,15 +1,15 @@
 <template>
-  <section v-if="hasMeaningfulEditor" class="wf-schema-editor" aria-label="节点参数">
+  <section v-if="hasMeaningfulEditor" class="wf-schema-editor" :aria-label="t('节点参数')">
     <header class="wf-schema-editor-head">
       <div>
-        <h4>节点参数</h4>
+        <h4>{{ t("节点参数") }}</h4>
         <p v-if="schemaDescription">{{ schemaDescription }}</p>
       </div>
       <span v-if="schema" class="wf-schema-type" :title="schema.type_id || schema.name">{{ schemaDisplayName }}</span>
     </header>
     <div v-if="fields.length" class="wf-schema-fields">
       <label v-for="field in fields" :key="field.name" class="wf-schema-field">
-        <span class="wf-schema-label">{{ fieldLabel(field) }}<em v-if="field.required">必填</em></span>
+        <span class="wf-schema-label">{{ fieldLabel(field) }}<em v-if="field.required">{{ t("必填") }}</em></span>
         <small v-if="fieldDescription(field)">{{ fieldDescription(field) }}</small>
         <UiSelect
           v-if="field.enum?.length"
@@ -20,7 +20,7 @@
         />
         <label v-else-if="field.type === 'boolean'" class="wf-schema-toggle">
           <input type="checkbox" :checked="Boolean(fieldValue(field.name))" @change="setField(field, ($event.target as HTMLInputElement).checked)" />
-          <span>{{ Boolean(fieldValue(field.name)) ? '开启' : '关闭' }}</span>
+          <span>{{ Boolean(fieldValue(field.name)) ? t("开启") : t("关闭") }}</span>
         </label>
         <input
           v-else-if="field.type === 'number'"
@@ -46,13 +46,14 @@
         />
       </label>
     </div>
-    <button v-if="portsNeedSync" type="button" class="wf-schema-sync" @click="syncPorts">
-      补齐缺少的端口（{{ missingPortCount }}）
+    <button v-if="portsNeedSync" type="button" class="wf-schema-sync" @click="syncPorts">{{ t("补齐缺少的端口（") }}{{ missingPortCount }}）
     </button>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, ref, watch } from 'vue'
 import UiSelect from '../../../../../../ui/src/components/UiSelect.vue'
 import AutoTextarea from '../../../../../../ui/src/components/AutoTextarea.vue'
@@ -90,7 +91,7 @@ const schemaDescription = computed(() => {
     ?? props.schema?.description
   return typeof value === 'string' ? value.trim() : ''
 })
-const schemaDisplayName = computed(() => workflowNodeDisplayName(props.schema, '节点'))
+const schemaDisplayName = computed(() => workflowNodeDisplayName(props.schema, t("节点")))
 // Descriptive schema copy belongs in the catalog/inspector summary.  Do not
 // render a "节点参数" shell when the node has neither editable parameters nor
 // missing ports; that was the empty, single-word configuration UI users hit
@@ -99,7 +100,7 @@ const hasMeaningfulEditor = computed(() => fields.value.length > 0 || portsNeedS
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
   prompt: '提示词', instruction: '指令', model_id: '模型', mode: '模式', command: '命令', script: '脚本',
-  value: '值', workflow_name: '工作流', iterate: '迭代方式', event_type: '事件类型', title: '标题',
+  value: '值', workflow_name: '工作流', iterate: '迭代方式', event_type: '事件类型', get title() { return t("标题") },
 }
 
 function fieldValue(name: string): unknown { return values.value[name] }

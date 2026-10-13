@@ -14,7 +14,7 @@
         <button
           class="pin-btn"
           :class="{ active: props.leftPinned }"
-          :title="props.leftPinned ? '取消固定左侧栏' : '固定左侧栏'"
+          :title="props.leftPinned ? t('取消固定左侧栏') : t('固定左侧栏')"
           @click="$emit('toggleLeftPinned')"
         >
           <svg viewBox="0 0 14 14" class="pin-icon pin-left">
@@ -25,7 +25,7 @@
         <button
           class="pin-btn"
           :class="{ active: props.rightPinned }"
-          :title="props.rightPinned ? '取消固定右侧栏' : '固定右侧栏'"
+          :title="props.rightPinned ? t('取消固定右侧栏') : t('固定右侧栏')"
           @click="$emit('toggleRightPinned')"
         >
           <svg viewBox="0 0 14 14" class="pin-icon pin-right">
@@ -40,8 +40,8 @@
           class="pin-btn mobile-pairing-trigger"
           :class="{ active: mobilePairingOpen, ready: Boolean(props.mobilePairingCode) }"
           type="button"
-          title="账号与设备"
-          aria-label="打开账号与设备"
+          :title="t('账号与设备')"
+          :aria-label="t('打开账号与设备')"
           :aria-expanded="mobilePairingOpen ? 'true' : 'false'"
           @click.stop="toggleMobilePairing"
         >
@@ -53,38 +53,38 @@
           v-if="mobilePairingOpen"
           class="mobile-pairing-card"
           role="dialog"
-          aria-label="手机配对"
+          :aria-label="t('手机配对')"
           @click.stop
         >
           <div class="mobile-pairing-card-header">
             <div>
-              <strong>账号与设备</strong>
-              <small v-if="accountStatus">{{ accountStatus.username }} · 已登录</small>
-              <small v-else>尚未登录服务器账号</small>
+              <strong>{{ t("账号与设备") }}</strong>
+              <small v-if="accountStatus">{{ accountStatus.username }}{{ t("· 已登录") }}</small>
+              <small v-else>{{ t("尚未登录服务器账号") }}</small>
             </div>
-            <button class="mobile-pairing-close" type="button" aria-label="关闭配对码" @click="mobilePairingOpen = false">×</button>
+            <button class="mobile-pairing-close" type="button" :aria-label="t('关闭配对码')" @click="mobilePairingOpen = false">×</button>
           </div>
 
-          <section v-if="accountStatus" class="mobile-account-devices" aria-label="归属此账号的设备">
+          <section v-if="accountStatus" class="mobile-account-devices" :aria-label="t('归属此账号的设备')">
             <div v-for="device in accountDevices" :key="device.nodeId" class="mobile-account-device">
               <span><strong>{{ device.label }}</strong><small>{{ device.detail }}</small></span>
-              <span class="mobile-account-device-state" :class="{ offline: !device.online }"><i aria-hidden="true" />{{ device.online ? '在线' : '离线' }}</span>
+              <span class="mobile-account-device-state" :class="{ offline: !device.online }"><i aria-hidden="true" />{{ device.online ? t("在线") : t("离线") }}</span>
             </div>
-            <p v-if="!accountDevices?.length" class="mobile-pairing-empty">这个账号还没有已登记设备。</p>
+            <p v-if="!accountDevices?.length" class="mobile-pairing-empty">{{ t("这个账号还没有已登记设备。") }}</p>
           </section>
 
           <details class="mobile-account-more">
-            <summary>更多</summary>
+            <summary>{{ t("更多") }}</summary>
             <div v-if="props.mobilePairingCode" class="mobile-pairing-code-block">
-              <span>当前配对码</span>
-              <strong class="mobile-pairing-code" aria-label="当前六位配对码">{{ props.mobilePairingCode }}</strong>
-              <small v-if="mobilePairingExpiresLabel">有效期至 {{ mobilePairingExpiresLabel }}</small>
+              <span>{{ t("当前配对码") }}</span>
+              <strong class="mobile-pairing-code" :aria-label="t('当前六位配对码')">{{ props.mobilePairingCode }}</strong>
+              <small v-if="mobilePairingExpiresLabel">{{ t("有效期至") }}{{ mobilePairingExpiresLabel }}</small>
               <button class="text-btn mobile-pairing-copy" type="button" @click="copyPairingCode">{{ copyLabel }}</button>
             </div>
-            <p v-else-if="props.mobilePairingLoading" class="mobile-pairing-empty" role="status">正在生成配对码…</p>
+            <p v-else-if="props.mobilePairingLoading" class="mobile-pairing-empty" role="status">{{ t("正在生成配对码…") }}</p>
             <div v-else class="mobile-pairing-empty">
-              <p>尚未生成配对码。</p>
-              <button class="text-btn mobile-pairing-action" type="button" @click="$emit('mobilePairingCreate')">生成配对码</button>
+              <p>{{ t("尚未生成配对码。") }}</p>
+              <button class="text-btn mobile-pairing-action" type="button" @click="$emit('mobilePairingCreate')">{{ t("生成配对码") }}</button>
             </div>
           </details>
         </div>
@@ -92,19 +92,19 @@
 
       <!-- window controls -->
       <div class="window-controls">
-        <button class="ctrl-btn" title="最小化" @click="onMinimize">
+        <button class="ctrl-btn" :title="t('最小化')" @click="onMinimize">
           <svg viewBox="0 0 14 14"><rect x="2" y="6" width="10" height="1.5" rx="0.75" /></svg>
         </button>
         <button
           ref="maximizeButton"
           class="ctrl-btn"
           :class="{ 'native-hover': maximizeNativeHover, 'native-active': maximizeNativeActive }"
-          title="最大化"
+          :title="t('最大化')"
           @click="onMaximize"
         >
           <svg viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5" /></svg>
         </button>
-        <button class="ctrl-btn close" title="关闭" @click="onClose">
+        <button class="ctrl-btn close" :title="t('关闭')" @click="onClose">
           <svg viewBox="0 0 14 14"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg>
         </button>
       </div>
@@ -113,6 +113,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { Smartphone } from 'lucide-vue-next'
 import type { MobileControlAccountDevice, MobileControlAccountStatus } from './MobileControlPanel.vue'
@@ -172,10 +174,10 @@ async function copyPairingCode(): Promise<void> {
   if (!props.mobilePairingCode || !navigator.clipboard) return
   try {
     await navigator.clipboard.writeText(props.mobilePairingCode)
-    copyLabel.value = '已复制'
-    window.setTimeout(() => { copyLabel.value = '复制数字码' }, 1600)
+    copyLabel.value = t("已复制")
+    window.setTimeout(() => { copyLabel.value = t("复制数字码") }, 1600)
   } catch {
-    copyLabel.value = '复制失败'
+    copyLabel.value = t("复制失败")
   }
 }
 

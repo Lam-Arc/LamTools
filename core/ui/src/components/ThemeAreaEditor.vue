@@ -29,17 +29,17 @@
           type="button"
           :disabled="stops.length <= 1"
           @click="$emit('remove-stop', index)"
-        >删</button>
+        >{{ t("删") }}</button>
       </div>
       <button
         class="small-btn"
         type="button"
         :disabled="stops.length >= 8"
         @click="$emit('add-stop')"
-      >+ 添加节点</button>
+      >{{ t("+ 添加节点") }}</button>
     </div>
     <label class="field width-field">
-      <span>渐变角度 <em>{{ angle }}deg</em></span>
+      <span>{{ t("渐变角度") }}<em>{{ angle }}deg</em></span>
       <div class="width-control">
         <input
           v-model.number="angleModel"
@@ -58,7 +58,7 @@
       </div>
     </label>
     <label v-if="showOpacity" class="field width-field">
-      <span>透明度 <em>{{ opacityPct }}</em></span>
+      <span>{{ t("透明度") }}<em>{{ opacityPct }}</em></span>
       <div class="width-control">
         <input
           v-model.number="opacityModel"
@@ -76,8 +76,7 @@
         />
       </div>
     </label>
-    <label class="field color-field">文本颜色
-      <span>
+    <label class="field color-field">{{ t("文本颜色") }}<span>
         <input
           v-model="textColorModel"
           type="color"
@@ -93,6 +92,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * ThemeAreaEditor — single theme area (backdrop/main/composer/control) editor
  *

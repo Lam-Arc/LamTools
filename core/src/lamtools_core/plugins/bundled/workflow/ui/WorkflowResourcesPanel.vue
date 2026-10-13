@@ -1,22 +1,22 @@
 <template>
-  <section class="wf-resources" aria-label="工作流资源">
+  <section class="wf-resources" :aria-label="t('工作流资源')">
     <header class="wf-resources-head">
       <div>
-        <h3>工作流资源</h3>
-        <span>JSON 文件与模板</span>
+        <h3>{{ t("工作流资源") }}</h3>
+        <span>{{ t("JSON 文件与模板") }}</span>
       </div>
       <span class="wf-resource-format">JSON</span>
     </header>
     <div class="wf-resource-actions">
-      <button type="button" @click="openImport">导入 JSON</button>
+      <button type="button" @click="openImport">{{ t("导入 JSON") }}</button>
       <button type="button" :disabled="!workflow || exporting" @click="exportCurrent('native-v2')">Sunday V2</button>
       <button type="button" :disabled="!workflow || exporting" @click="exportCurrent('comfyui-v1')">ComfyUI v1</button>
       <button type="button" :disabled="!workflow || exporting" @click="exportCurrent('comfyui-v0.4')">ComfyUI 0.4</button>
-      <input ref="fileInput" class="wf-file-input" type="file" accept="application/json,.json" aria-label="选择工作流 JSON 文件" @change="importFile" />
+      <input ref="fileInput" class="wf-file-input" type="file" accept="application/json,.json" :aria-label="t('选择工作流 JSON 文件')" @change="importFile" />
     </div>
     <p v-if="message" class="wf-resource-message" :class="{ error: messageKind === 'error' }" :role="messageKind === 'error' ? 'alert' : 'status'">{{ message }}</p>
     <div v-if="templates.length" class="wf-templates">
-      <h4>模板入口</h4>
+      <h4>{{ t("模板入口") }}</h4>
       <button v-for="template in templates" :key="template.id" type="button" class="wf-template" :title="template.description" @click="useTemplate(template)">
         <span>{{ template.name }}</span><small>{{ template.description }}</small>
       </button>
@@ -25,6 +25,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { ref } from 'vue'
 import {
   parseWorkflowImport,
@@ -55,10 +57,10 @@ async function exportCurrent(format: WorkflowExportFormat): Promise<void> {
   try {
     const ok = props.onExport ? await props.onExport(format) : false
     messageKind.value = ok === false ? 'error' : 'ok'
-    message.value = ok === false ? '当前环境不支持文件导出' : '已导出工作流 JSON'
+    message.value = ok === false ? t("当前环境不支持文件导出") : t("已导出工作流 JSON")
   } catch (error) {
     messageKind.value = 'error'
-    message.value = `导出失败：${error instanceof Error ? error.message : String(error)}`
+    message.value = t("导出失败：{0}", { 0: error instanceof Error ? error.message : String(error) })
   } finally {
     exporting.value = false
   }
@@ -74,10 +76,10 @@ async function importFile(event: Event): Promise<void> {
     const source = parseWorkflowImport(JSON.parse(await file.text()), file.name.replace(/\.json$/i, ''))
     await props.onImport?.(source)
     messageKind.value = 'ok'
-    message.value = `已读取：${source.name}`
+    message.value = t("已读取：{0}", { 0: source.name })
   } catch (error) {
     messageKind.value = 'error'
-    message.value = `导入失败：${error instanceof Error ? error.message : String(error)}`
+    message.value = t("导入失败：{0}", { 0: error instanceof Error ? error.message : String(error) })
   }
 }
 

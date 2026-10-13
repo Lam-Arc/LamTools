@@ -23,7 +23,7 @@
             </span>
           </Transition>
         </div>
-        <button ref="closeButton" type="button" class="core-sub-agent-dialog__close" aria-label="关闭 Sub Agent" @click="requestClose">
+        <button ref="closeButton" type="button" class="core-sub-agent-dialog__close" :aria-label="t('关闭 Sub Agent')" @click="requestClose">
           <X :size="15" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </header>
@@ -31,7 +31,7 @@
       <section
         ref="timelineElement"
         class="core-sub-agent-dialog__timeline"
-        :aria-label="run.name + ' 时间线'"
+        :aria-label="run.name + t(' 时间线')"
         tabindex="0"
         @wheel.passive="timelineScroll.handleWheel"
         @scroll.passive="timelineScroll.handleScroll"
@@ -45,7 +45,7 @@
           @decision-select="$emit('decision-select', $event)"
         >
           <template #empty>
-            <slot name="empty">暂无可显示的 Sub Agent 事件。</slot>
+            <slot name="empty">{{ t("暂无可显示的 Sub Agent 事件。") }}</slot>
           </template>
         </ChatThread>
       </section>
@@ -55,7 +55,7 @@
           variant="embedded"
           :model-value="draft"
           :placeholder="placeholder"
-          :textarea-aria-label="run.name + ' 输入框'"
+          :textarea-aria-label="run.name + t(' 输入框')"
           :disabled="disabled"
           :action-mode="actionMode"
           :send-label="sendLabel"
@@ -74,8 +74,8 @@
               :shallow-thinking-enabled="shallowThinkingEnabled"
               :model-options="modelOptions"
               :thinking-mode-options="thinkingModeOptions"
-              model-aria-label="Sub Agent 模型"
-              thinking-aria-label="Sub Agent 思考模式"
+              :model-aria-label="t('Sub Agent 模型')"
+              :thinking-aria-label="t('Sub Agent 思考模式')"
               @update:model-value="$emit('update:selectedModelId', $event)"
               @update:thinking-mode="$emit('update:thinkingMode', $event)"
               @update:shallow-thinking-enabled="$emit('update:shallowThinkingEnabled', $event)"
@@ -88,6 +88,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import type { CoreSubAgentRun, CoreSubAgentStatus } from '../types'
@@ -122,7 +124,7 @@ const props = withDefaults(defineProps<{
   dialogId: '',
   teleportTo: '.workspace-shell',
   draft: '',
-  placeholder: '向 Sub Agent 发送消息...',
+  get placeholder() { return t("向 Sub Agent 发送消息...") },
   disabled: false,
   actionMode: 'send',
   sendLabel: 'send',
@@ -131,7 +133,7 @@ const props = withDefaults(defineProps<{
   thinkingMode: 'off',
   shallowThinkingEnabled: false,
   modelOptions: () => [],
-  thinkingModeOptions: () => [{ value: 'off', label: '关闭' }],
+  thinkingModeOptions: () => [{ value: 'off', get label() { return t("关闭") } }],
   errorText: '',
 })
 

@@ -3,18 +3,18 @@
     <section ref="dialogEl" class="theme-editor-dialog theme-editor-dialog--inline" aria-labelledby="theme-editor-title">
           <header class="theme-editor-head">
             <div>
-              <h2 id="theme-editor-title">主题</h2>
+              <h2 id="theme-editor-title">{{ t("主题") }}</h2>
             </div>
-            <button class="small-btn quiet" type="button" @click="$emit('reset-theme')">恢复默认</button>
+            <button class="small-btn quiet" type="button" @click="$emit('reset-theme')">{{ t("恢复默认") }}</button>
           </header>
 
           <div class="theme-editor-scroll">
             <section class="theme-editor-section">
               <div class="theme-section-copy">
-                <strong>外观</strong>
-                <span>选择主题随系统变化、固定在一个模式，或按时段自动切换。</span>
+                <strong>{{ t("外观") }}</strong>
+                <span>{{ t("选择主题随系统变化、固定在一个模式，或按时段自动切换。") }}</span>
               </div>
-              <div class="theme-mode-options" role="radiogroup" aria-label="外观模式">
+              <div class="theme-mode-options" role="radiogroup" :aria-label="t('外观模式')">
                 <button
                   v-for="mode in appearanceModes"
                   :key="mode.value"
@@ -32,33 +32,33 @@
               </div>
               <div v-if="themeMode === 'scheduled'" class="theme-schedule-options" data-theme-schedule>
                 <label class="field">
-                  <span>浅色从</span>
+                  <span>{{ t("浅色从") }}</span>
                   <input
                     type="time"
                     :value="themeSchedule.lightFrom"
-                    aria-label="浅色开始时间"
+                    :aria-label="t('浅色开始时间')"
                     data-theme-schedule-light
                     @change="updateThemeSchedule('lightFrom', ($event.target as HTMLInputElement).value)"
                   />
                 </label>
                 <label class="field">
-                  <span>深色从</span>
+                  <span>{{ t("深色从") }}</span>
                   <input
                     type="time"
                     :value="themeSchedule.darkFrom"
-                    aria-label="深色开始时间"
+                    :aria-label="t('深色开始时间')"
                     data-theme-schedule-dark
                     @change="updateThemeSchedule('darkFrom', ($event.target as HTMLInputElement).value)"
                   />
                 </label>
-                <p class="theme-schedule-hint">其余时间用另一个模式；跨天时段同样有效。</p>
+                <p class="theme-schedule-hint">{{ t("其余时间用另一个模式；跨天时段同样有效。") }}</p>
               </div>
             </section>
 
             <section class="theme-editor-section">
               <div class="theme-section-copy">
-                <strong>预设颜色</strong>
-                <span>当前显示{{ effectiveThemeMode === 'dark' ? '深色' : '浅色' }}版本；切换后立即生效。</span>
+                <strong>{{ t("预设颜色") }}</strong>
+                <span>{{ t("当前显示") }}{{ effectiveThemeMode === 'dark' ? t("深色") : t("浅色") }}{{ t("版本；切换后立即生效。") }}</span>
               </div>
               <div class="theme-preset-list" role="list">
                 <button
@@ -76,15 +76,15 @@
                     <b :style="presetControlStyle(preset)" />
                   </span>
                   <span>{{ preset.name }}</span>
-                  <em v-if="isPresetActive(preset)" aria-label="当前主题">✓</em>
+                  <em v-if="isPresetActive(preset)" :aria-label="t('当前主题')">✓</em>
                 </button>
               </div>
             </section>
 
             <section class="theme-editor-section theme-editor-preview-section">
               <div class="theme-section-copy">
-                <strong>实时预览</strong>
-                <span>主题会即时同步到当前 Sunday 界面。</span>
+                <strong>{{ t("实时预览") }}</strong>
+                <span>{{ t("主题会即时同步到当前 Sunday 界面。") }}</span>
               </div>
               <ThemePreview
                 ref="previewEl"
@@ -93,7 +93,7 @@
                 :composer-style="themePreviewComposerStyle"
                 :control-style="themePreviewControlStyle"
                 :product-name="productName"
-                :content-description="contentDescription"
+                :content-description="defaultUiText(contentDescription, 'Sunday 工作区')"
                 :area-stops="previewAreaStops"
                 interactive
                 @select-area="openAreaPopover"
@@ -103,17 +103,17 @@
             <details class="theme-advanced">
               <summary>
                 <span>
-                  <strong>高级调整</strong>
-                  <small>颜色节点、透明度与界面密度</small>
+                  <strong>{{ t("高级调整") }}</strong>
+                  <small>{{ t("颜色节点、透明度与界面密度") }}</small>
                 </span>
               </summary>
               <div class="theme-advanced-content">
                 <section class="theme-density-section">
                   <div class="theme-section-copy">
-                    <strong>界面密度</strong>
-                    <span>调整内容区的信息密度。</span>
+                    <strong>{{ t("界面密度") }}</strong>
+                    <span>{{ t("调整内容区的信息密度。") }}</span>
                   </div>
-                  <div class="density-options" role="group" aria-label="界面密度">
+                  <div class="density-options" role="group" :aria-label="t('界面密度')">
                     <button
                       v-for="option in densityOptions"
                       :key="option.value"
@@ -123,8 +123,7 @@
                       @click="$emit('update:density', option.value)"
                     >{{ option.label }}</button>
                   </div>
-                  <label v-if="contentWidth" class="field theme-width-field">内容宽度
-                    <input
+                  <label v-if="contentWidth" class="field theme-width-field">{{ t("内容宽度") }}<input
                       :value="contentWidth"
                       type="range"
                       min="560"
@@ -136,8 +135,8 @@
                 </section>
                 <section class="theme-process-icon-section">
                   <div class="theme-section-copy">
-                    <strong>图标色彩</strong>
-                    <span>控制过程行前的常规、运行与完成图标；等待和错误仍使用状态色。</span>
+                    <strong>{{ t("图标色彩") }}</strong>
+                    <span>{{ t("控制过程行前的常规、运行与完成图标；等待和错误仍使用状态色。") }}</span>
                   </div>
                   <label class="field color-field theme-process-icon-field">
                     <span class="theme-process-icon-sample" :style="{ color: processIconColor }" aria-hidden="true">
@@ -147,13 +146,13 @@
                       <input
                         :value="processIconColor"
                         type="color"
-                        aria-label="过程图标颜色"
+                        :aria-label="t('过程图标颜色')"
                         data-theme-process-icon-color
                         @change="$emit('update:process-icon-color', ($event.target as HTMLInputElement).value)"
                       />
                       <input
                         :value="processIconColor"
-                        aria-label="过程图标颜色十六进制值"
+                        :aria-label="t('过程图标颜色十六进制值')"
                         @change="$emit('update:process-icon-color', ($event.target as HTMLInputElement).value)"
                       />
                     </span>
@@ -170,7 +169,7 @@
                       @click="openAreaPopover(area.key)"
                     >
                       <span class="theme-area-summary-name">{{ area.label }}</span>
-                      <span class="theme-area-nodes" :aria-label="`${area.label}颜色节点`">
+                      <span class="theme-area-nodes" :aria-label="t('{0}颜色节点', { 0: area.label })">
                         <span v-for="(stop, index) in getStops(area.key)" :key="`${stop.color}-${index}`" class="theme-area-node">
                           <i :style="{ background: stop.color }" />
                         </span>
@@ -189,10 +188,10 @@
           <section ref="areaPopoverEl" class="theme-area-popover" role="dialog" aria-modal="true" :aria-labelledby="`theme-area-popover-${activeArea}`">
             <header class="theme-area-popover-head">
               <div>
-                <span>详细调整</span>
+                <span>{{ t("详细调整") }}</span>
                 <h3 :id="`theme-area-popover-${activeArea}`">{{ activeAreaConfig.label }}</h3>
               </div>
-              <button class="theme-area-popover-close" type="button" data-theme-area-popover-close aria-label="关闭详细调整" @click="closeAreaPopover">×</button>
+              <button class="theme-area-popover-close" type="button" data-theme-area-popover-close :aria-label="t('关闭详细调整')" @click="closeAreaPopover">×</button>
             </header>
             <ThemeAreaEditor
               :label="activeAreaConfig.label"
@@ -217,6 +216,10 @@
 </template>
 
 <script setup lang="ts">
+import { defaultUiText } from '../i18n/index'
+
+import { t } from '../i18n/index'
+
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import ThemeAreaEditor from './ThemeAreaEditor.vue'
@@ -270,16 +273,16 @@ const emit = defineEmits<{
 }>()
 
 const areas: Array<{ key: ThemeArea; label: string; showOpacity: boolean }> = [
-  { key: 'backdrop', label: '背景板 / 侧边栏', showOpacity: false },
-  { key: 'main', label: '主界面', showOpacity: true },
-  { key: 'composer', label: '输入栏', showOpacity: true },
-  { key: 'control', label: '控件', showOpacity: true },
+  { key: 'backdrop', get label() { return t("背景板 / 侧边栏") }, showOpacity: false },
+  { key: 'main', get label() { return t("主界面") }, showOpacity: true },
+  { key: 'composer', get label() { return t("输入栏") }, showOpacity: true },
+  { key: 'control', get label() { return t("控件") }, showOpacity: true },
 ]
 const appearanceModes: Array<{ value: ThemeMode; label: string }> = [
-  { value: 'system', label: '跟随系统' },
-  { value: 'light', label: '浅色' },
-  { value: 'dark', label: '深色' },
-  { value: 'scheduled', label: '定时切换' },
+  { value: 'system', get label() { return t("跟随系统") } },
+  { value: 'light', get label() { return t("浅色") } },
+  { value: 'dark', get label() { return t("深色") } },
+  { value: 'scheduled', get label() { return t("定时切换") } },
 ]
 
 const activeArea = ref<ThemeArea | null>(null)

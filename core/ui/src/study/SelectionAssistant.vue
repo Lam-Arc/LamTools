@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, render, watch } from 'vue'
 import { Bookmark, Languages, Lightbulb, MessageCircle, Send, X } from 'lucide-vue-next'
 import { useCorePluginModeContext } from '../plugins/context'
@@ -40,7 +42,7 @@ const FORM_LABELS: Record<string, string> = { pl: '复数', pt: '过去式', pp:
 function dictionaryPhonetics(entry: StudyDictionaryEntry): string {
   const primary = entry.phonetic_uk || entry.phonetic || ''
   const american = entry.phonetic_us || ''
-  if (primary && american && american !== primary) return `英 ${primary} 美 ${american}`
+  if (primary && american && american !== primary) return t("英 {0} 美 {1}", { 0: primary, 1: american })
   return primary || american
 }
 
@@ -111,10 +113,10 @@ function contributeSelectionMenu(context: TextSelectionMenuContext): ContextMenu
   const anchor = captureAnchor(selection, props.sessionId || '', props.mode)
   if (!anchor) return null
   return [
-    { label: '标记', icon: Bookmark, action: () => createPureMark(anchor) },
-    { label: '解释', icon: Lightbulb, action: () => create(anchor, 'explain', context.event) },
-    { label: '询问', icon: MessageCircle, action: () => create(anchor, 'ask', context.event) },
-    { label: '翻译', icon: Languages, action: () => create(anchor, 'translate', context.event) },
+    { get label() { return t("标记") }, icon: Bookmark, action: () => createPureMark(anchor) },
+    { get label() { return t("解释") }, icon: Lightbulb, action: () => create(anchor, 'explain', context.event) },
+    { get label() { return t("询问") }, icon: MessageCircle, action: () => create(anchor, 'ask', context.event) },
+    { get label() { return t("翻译") }, icon: Languages, action: () => create(anchor, 'translate', context.event) },
   ]
 }
 function clearDecorations() {
@@ -132,7 +134,7 @@ function insertDecoration(mark: StudyMark, range: Range) {
   icon.className = `study-mark-icon study-mark-icon--${props.themeMode === 'dark' ? 'dark' : 'light'}`
   icon.dataset.studyMarkIcon = mark.id
   icon.setAttribute('role', 'img')
-  icon.setAttribute('aria-label', '已标记')
+  icon.setAttribute('aria-label', t("已标记"))
   render(h(Bookmark, { size: 13, strokeWidth: 2.25, 'aria-hidden': 'true' }), icon)
 
   const startElement = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement
@@ -242,7 +244,7 @@ async function handleJump(event: Event) {
     await props.jump(mark.anchor)
     await nextTick()
     const range = anchorRange(mark.anchor)
-    if (!range) throw new Error('原文已变化或暂未加载，无法准确定位。')
+    if (!range) throw new Error(t("原文已变化或暂未加载，无法准确定位。"))
     const el = range.startContainer.parentElement
     el?.scrollIntoView({ block: 'center' })
     schedule()
@@ -295,7 +297,7 @@ onBeforeUnmount(() => {
       :style="{ left: x + 'px', top: y + 'px' }" role="dialog" :aria-label="titles[action]" @mouseenter="keepOpen" @pointerdown="hover = false">
       <header>
         <button v-for="(title, kind) in titles" :key="kind" class="text-btn" :aria-pressed="action === kind" :disabled="busy" @click="action = kind; hover = false; error = ''">{{ title }}</button>
-        <button class="text-btn selection-close" aria-label="关闭" @click="close"><X :size="15" /></button>
+        <button class="text-btn selection-close" :aria-label="t('关闭')" @click="close"><X :size="15" /></button>
       </header>
       <blockquote>{{ selected.anchor.quote }}</blockquote>
       <div class="selection-answer" aria-live="polite">
@@ -304,7 +306,7 @@ onBeforeUnmount(() => {
             <p v-if="turn.role === 'user'" class="selection-question">{{ turn.content }}</p>
             <MarkdownRenderer v-else class="selection-assistant-markdown" :content="turn.content" :mermaid="false" />
           </template>
-          <p v-if="!selected.thread.length">想了解什么？</p>
+          <p v-if="!selected.thread.length">{{ t("想了解什么？") }}</p>
         </template>
         <template v-else-if="action === 'translate' && selected.dictionary">
           <p class="selection-dictionary-word">
@@ -325,11 +327,11 @@ onBeforeUnmount(() => {
         </template>
         <MarkdownRenderer v-else-if="content" class="selection-assistant-markdown" :content="content" :mermaid="false" />
         <button v-else-if="!busy" class="text-btn" @click="invoke">{{ titles[action] }}</button>
-        <p v-if="busy" role="status">正在回答…</p><p v-if="error" class="study-error" role="alert">{{ error }}</p>
+        <p v-if="busy" role="status">{{ t("正在回答…") }}</p><p v-if="error" class="study-error" role="alert">{{ error }}</p>
       </div>
       <form v-if="action === 'ask'" @submit.prevent="invoke">
-        <textarea v-model="question" aria-label="问题" placeholder="继续问…" rows="2" maxlength="4000" :disabled="busy" @keydown.ctrl.enter.prevent="invoke" />
-        <button class="text-btn" aria-label="发送" :disabled="busy || !question.trim()"><Send :size="16" /></button>
+        <textarea v-model="question" :aria-label="t('问题')" :placeholder="t('继续问…')" rows="2" maxlength="4000" :disabled="busy" @keydown.ctrl.enter.prevent="invoke" />
+        <button class="text-btn" :aria-label="t('发送')" :disabled="busy || !question.trim()"><Send :size="16" /></button>
       </form>
     </section>
   </Teleport>

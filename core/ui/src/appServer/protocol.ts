@@ -125,8 +125,19 @@ export interface CoreAppTurn {
   /** Provider-reported usage; absent token fields mean the provider did not report them. */
   usage?: Record<string, unknown>
   /** Estimated context pressure and compaction state, never billing usage. */
+  usage_calls?: Array<{ id: string; seq: number; parent_item_id?: string | null; usage: Record<string, unknown> }>
+  child_context_metrics?: Record<string, Record<string, unknown>>
   context_metrics?: Record<string, unknown>
   runtime_snapshot?: CoreAppRuntimeSnapshot
+  /**
+   * The main agent is holding this turn open for background members (the
+   * harness wait), not working itself. Authoritative signal for the quiet
+   * "main stopped, sub-agents still running" state; the paired report event
+   * clears it.
+   */
+  waiting_on_members?: boolean
+  /** Names of the members the turn is currently waiting on. */
+  running_members?: string[]
   [key: string]: unknown
 }
 
@@ -188,8 +199,14 @@ export interface CoreRuntimeTurn {
   items?: string[]
   usage?: Record<string, unknown>
   /** Estimated context pressure and compaction state, never billing usage. */
+  usage_calls?: Array<{ id: string; seq: number; parent_item_id?: string | null; usage: Record<string, unknown> }>
+  child_context_metrics?: Record<string, Record<string, unknown>>
   context_metrics?: Record<string, unknown>
   runtime_snapshot?: CoreAppRuntimeSnapshot
+  /** See `CoreAppTurn.waiting_on_members`. */
+  waiting_on_members?: boolean
+  /** See `CoreAppTurn.running_members`. */
+  running_members?: string[]
   [key: string]: unknown
 }
 

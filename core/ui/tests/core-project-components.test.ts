@@ -400,7 +400,7 @@ describe('Core project narrow layout contract', () => {
     const appSource = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
 
     expect(appSource).toMatch(/<template #primary>[\s\S]*data-sidebar-primary-action[\s\S]*@click="invokeSidebarPrimaryAction"/)
-    expect(appSource).toMatch(/<template #empty>[\s\S]*data-sidebar-empty-projects[\s\S]*sidebar-empty-backdrop[\s\S]*>暂无<\/div>/)
+    expect(appSource).toMatch(/<template #empty>[\s\S]*data-sidebar-empty-projects[\s\S]*sidebar-empty-backdrop[\s\S]*>\{\{ t\("暂无"\) \}\}<\/div>/)
     expect(appSource).not.toContain('data-sidebar-empty-create-project')
     expect(appSource).toContain(':show-sidebar-header="false"')
     expect(appSource).toContain(':show-sidebar-header-action="false"')

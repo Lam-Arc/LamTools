@@ -26,6 +26,7 @@ import httpx
 from lamtools_core.config.network import httpx_client_kwargs
 
 from .protocol import SearchResult
+from .http_requests import ResponseTooLarge, bounded_request
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -75,7 +76,11 @@ class BaiduSearchProvider:
             )
             # warmup：先拿 Cookies（BAIDUID 等），否则 tn=json 会 302 到验证码
             try:
-                await self._client.get(self.warmup_url)
+                await bounded_request(
+                    self._client, "GET", self.warmup_url, total_timeout=self.timeout
+                )
+            except ResponseTooLarge:
+                raise
             except httpx.HTTPError:
                 pass  # warmup 失败不致命，后续请求仍会尝试
             self._warmed = True
@@ -92,6 +97,8 @@ class BaiduSearchProvider:
         for attempt in range(3):
             try:
                 return await self._search_once(query, limit, domains)
+            except ResponseTooLarge:
+                raise
             except (BaiduSearchBlocked, httpx.HTTPError) as exc:
                 last_exc = exc
                 if attempt < 2:
@@ -124,7 +131,9 @@ class BaiduSearchProvider:
                 }
             )
 
-        resp = await client.get(self.endpoint, params=params)
+        resp = await bounded_request(
+            client, "GET", self.endpoint, total_timeout=self.timeout, params=params
+        )
         # 验证码 / 反爬检测
         if resp.status_code in (300, 301, 302, 303, 307, 308):
             loc = resp.headers.get("location", "")

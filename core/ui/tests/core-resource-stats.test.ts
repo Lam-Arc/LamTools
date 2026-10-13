@@ -1,10 +1,9 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import CoreResourceStats from '../src/components/CoreResourceStats.vue'
 import { buildCacheTrend, buildCoreResourceSummary } from '../src/runtime/resources'
+import { selectCoreWorkbenchMessages, type CoreAppSnapshot } from '../src/appServer'
+import { selectCoreSubAgentRuns } from '../src/agents/subAgentProjection'
 import type { CoreMessage, MessagePart } from '../src/types'
 
 const messages = [{ id: 'msg-1', metadata: { processMetrics: {
@@ -183,9 +182,12 @@ describe('CoreResourceStats', () => {
     expect(summary!.callItems.map(item => item.value)).toEqual(['--', '--', '--'])
   })
 
-  it('renders the cache trend chart only when cache data exists', () => {
+  it('renders the cache chart with reported usage and keeps missing cache unknown', () => {
     const withCache = mount(CoreResourceStats, { props: { messages: cachedSingleTurn() } })
     expect(withCache.find('.core-resource-cache-plot').exists()).toBe(true)
+    expect(withCache.text()).toContain('Provider Usage')
+    expect(withCache.text()).toContain('缓存')
+    expect(withCache.text()).toContain('25%')
     expect(withCache.text()).toContain('缓存命中率')
 
     const withoutCache = mount(CoreResourceStats, { props: { messages } })
@@ -193,36 +195,12 @@ describe('CoreResourceStats', () => {
     expect(withoutCache.text()).not.toContain('缓存命中率')
   })
 
-  it('draws the trend line from the second cache-reporting turn on', () => {
-    const single = mount(CoreResourceStats, { props: { messages: cachedSingleTurn() } })
-    expect(single.find('.core-resource-cache-line').exists()).toBe(false)
-    // 单样本也必须有可读主体：末端数据点锚在绘图区右端、25% 命中率对应的高度。
-    const dot = single.get('.core-resource-cache-dot')
-    const dotStyle = dot.attributes('style') || ''
-    expect(Number.parseFloat(/left: ([\d.]+)%/.exec(dotStyle)![1])).toBeCloseTo(97, 0)
-    expect(Number.parseFloat(/top: ([\d.]+)%/.exec(dotStyle)![1])).toBeCloseTo(70.455, 1)
-
-    const multi = mount(CoreResourceStats, { props: { messages: [
-      { id: 'assistant:thread-1:turn:1', metadata: { usageMetrics: { llm_calls: 1, input_tokens: 1_000, cached_tokens: 250 } } },
-      { id: 'assistant:thread-1:turn:2', metadata: { usageMetrics: { llm_calls: 1, cache_hit_rate: 0.9 } } },
-    ] } })
-    expect(multi.find('.core-resource-cache-line').exists()).toBe(true)
-    expect(multi.find('.core-resource-cache-dot').exists()).toBe(true)
-    expect(multi.text()).toContain('90%')
-  })
-
-  it('pins both y-axis labels to the exact gridline heights', () => {
+  it('renders an adaptive single bar with axes and scale labels', () => {
     const wrapper = mount(CoreResourceStats, { props: { messages: cachedSingleTurn() } })
-    const maxTop = Number.parseFloat(/top: ([\d.]+)%/.exec(wrapper.get('.core-resource-cache-scale-max').attributes('style') || '')![1])
-    const minTop = Number.parseFloat(/top: ([\d.]+)%/.exec(wrapper.get('.core-resource-cache-scale-min').attributes('style') || '')![1])
-    expect(maxTop).toBeCloseTo(9.091, 2)
-    expect(minTop).toBeCloseTo(90.909, 2)
-  })
-
-  it('keeps the chart responsive with a proportional clamped height', () => {
-    const source = readFileSync(resolve(import.meta.dirname, '../src/components/CoreResourceStats.vue'), 'utf8')
-    expect(source).toMatch(/\.core-resource-cache-figure\s*\{[^}]*aspect-ratio: 6 \/ 1;/)
-    expect(source).toMatch(/\.core-resource-cache-figure\s*\{[^}]*min-height: 32px;[^}]*max-height: 72px;/)
+    expect(wrapper.findAll('.core-resource-cache-bar')).toHaveLength(1)
+    expect(Number(wrapper.get('.core-resource-cache-bar').attributes('width'))).toBeGreaterThan(60)
+    expect(wrapper.find('.core-resource-cache-axis').exists()).toBe(true)
+    expect(wrapper.find('.core-resource-cache-scale').exists()).toBe(true)
   })
 })
 
@@ -321,4 +299,72 @@ describe('context size source', () => {
     expect(summary?.contextLabel).toContain('2.1k / 100k')
     expect(summary?.contextLabel).toContain('压缩后')
   })
+})
+
+describe('individual resource calls', () => {
+  it('limits history to 200 calls without limiting the total and deduplicates segments', () => {
+    const resourceCalls = Array.from({ length: 201 }, (_, i) => ({ id: `call-${i}`, seq: i, usage: { llm_calls: 1, input_tokens: 100, cached_tokens: i % 2 ? 100 : 0 } }))
+    const messages = [1, 2].map(i => ({ id: `assistant:turn#${i}`, metadata: { resourceCalls } }))
+    expect(buildCacheTrend(messages)).toHaveLength(200)
+    expect(buildCacheTrend(messages)[0].calls).toBe(2)
+    expect(buildCacheTrend(messages)[199].calls).toBe(201)
+    expect(buildCoreResourceSummary(messages)?.callItems[0].value).toBe('201')
+    expect(buildCoreResourceSummary(messages)?.callItems).toContainEqual({ label: '缓存', value: '49.8%' })
+  })
+  it('weights cache by tokens and ignores contradictory direct percentages', () => {
+    const messages = [{ id: 'a', metadata: { resourceCalls: [
+      { id: 'a', usage: { input_tokens: 100, cached_tokens: 100, cache_hit_rate: 0 } },
+      { id: 'b', usage: { input_tokens: 900, cached_tokens: 0, cache_hit_rate: 1 } },
+    ] } }]
+    expect(buildCoreResourceSummary(messages)?.callItems).toContainEqual({ label: '缓存', value: '10%' })
+    expect(buildCacheTrend(messages).map(point => point.rate)).toEqual([1, 0])
+  })
+  it('does not invent a cache percentage for zero input', () => {
+    expect(buildCacheTrend([{ id: 'a', metadata: { usageMetrics: { input_tokens: 0, cached_tokens: 0 } } }])).toEqual([])
+  })
+})
+
+it('projects main and child resources independently from the same snapshot', () => {
+  const snapshot: CoreAppSnapshot = {
+    thread_id: 't', snapshot_seq: 4, status: 'completed', turns: {}, items: {}, item_order: [],
+    core: { thread_id: 't', snapshot_seq: 4, status: 'completed', item_order: ['delegate', 'child-text'], items: {
+      delegate: { item_id: 'delegate', turn_id: 'turn', kind: 'tool_call', status: 'completed', content: '', payload: { type: 'dynamicToolCall', tool_name: 'sub_agent', arguments: { name: 'child', prompt: 'task' }, metadata: { sub_session_id: 'child-session', name: 'child' } } },
+      'child-text': { item_id: 'child-text', parent_item_id: 'delegate', turn_id: 'turn', kind: 'message', status: 'completed', content: 'child answer', payload: { type: 'agentMessage' } },
+    }, turns: { turn: { turn_id: 'turn', status: 'completed', usage: { llm_calls: 1, input_tokens: 100, cached_tokens: 80 },
+      usage_calls: [
+        { id: 'main', seq: 1, usage: { llm_calls: 1, input_tokens: 100, cached_tokens: 80 } },
+        { id: 'child', seq: 2, parent_item_id: 'delegate', usage: { llm_calls: 1, input_tokens: 900, cached_tokens: 0 } },
+      ], child_context_metrics: { delegate: { estimated_prompt_tokens: 3000, context_window_tokens: 10000 } },
+    } } },
+  }
+  const messages = selectCoreWorkbenchMessages(snapshot)
+  expect(buildCoreResourceSummary(messages)?.callItems).toContainEqual({ label: '输入', value: '100' })
+  const runs = selectCoreSubAgentRuns(messages)
+  expect(runs).toHaveLength(1)
+  expect(buildCoreResourceSummary(runs[0].timeline)?.contextLabel).toContain('3k / 10k')
+  expect(buildCoreResourceSummary(runs[0].timeline)?.callItems).toContainEqual({ label: '输入', value: '900' })
+})
+
+it('keeps unknown cache calls in their real slots and labels the last-call rate', () => {
+  const messages = [{ id: 'assistant:cache-slots', metadata: { resourceCalls: [
+    { id: 'one', seq: 1, usage: { llm_calls: 1, input_tokens: 100 } },
+    { id: 'two', seq: 2, usage: { llm_calls: 1, input_tokens: 100, cached_tokens: 0 } },
+    { id: 'three', seq: 3, usage: { llm_calls: 1, input_tokens: 100, cached_tokens: 90 } },
+    { id: 'four', seq: 4, usage: { llm_calls: 1, input_tokens: 100 } },
+  ] } }]
+  expect(buildCacheTrend(messages, true)).toEqual([
+    { calls: 1, rate: -1 }, { calls: 2, rate: 0 }, { calls: 3, rate: 0.9 }, { calls: 4, rate: -1 },
+  ])
+  const wrapper = mount(CoreResourceStats, { props: { messages } })
+  expect(wrapper.find('.core-resource-cache-plot').exists()).toBe(true)
+  const bars = wrapper.findAll('.core-resource-cache-bar')
+  expect(bars).toHaveLength(4)
+  expect(bars[0].classes()).toContain('core-resource-cache-bar--unknown')
+  expect(bars[1].classes()).not.toContain('core-resource-cache-bar--unknown')
+  expect(Number(bars[2].attributes('x')) - Number(bars[1].attributes('x')))
+    .toBeCloseTo(Number(bars[1].attributes('x')) - Number(bars[0].attributes('x')))
+  expect(wrapper.text()).toContain('最近一次 未上报')
+  expect(wrapper.text()).toContain('灰线：未上报缓存')
+  expect(wrapper.get('.core-resource-cache-axis').text()).toContain('1 次调用')
+  expect(buildCoreResourceSummary(messages)?.callItems).toContainEqual({ label: '缓存', value: '45%' })
 })

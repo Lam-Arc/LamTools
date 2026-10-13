@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,6 +39,8 @@ from lamtools_core.attachment.files import safe_filename
 
 from .handoff import sanitize_handoff_context
 from .models import FullArchiveFile, ContextHandoffExport, FullConversationExport, TranscriptEntry, TranscriptExport, export_time
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationExportService:
@@ -79,9 +85,19 @@ class ConversationExportService:
             entries.append(TranscriptEntry(export_time(timestamp), role, text))
         return TranscriptExport("lamtools.transcript", 1, _now(), thread_id, tuple(entries))
 
-    async def full(self, thread_id: str) -> FullConversationExport:
+    async def full(self, thread_id: str, *, operation_id: str | None = None) -> FullConversationExport:
+        export_id = operation_id or uuid.uuid4().hex[:8]
+        started_at = time.perf_counter()
+        family_started_at = started_at
         async with self.session_factory() as db:
             owned_ids = await _session_family_ids(db, thread_id)
+            logger.info(
+                "full session export %s stage=family_lookup duration_ms=%d members=%d",
+                export_id,
+                round((time.perf_counter() - family_started_at) * 1000),
+                len(owned_ids),
+            )
+            rows_started_at = time.perf_counter()
             snapshot_rows = list((await db.execute(
                 select(CoreThreadSnapshot)
                 .where(CoreThreadSnapshot.thread_id.in_(owned_ids))
@@ -250,12 +266,26 @@ class ConversationExportService:
                 .where(CoreProject.work_root.in_(work_roots))
                 .order_by(CoreProject.created_at.asc(), CoreProject.id.asc())
             )).scalars()) if work_roots else []
+            logger.info(
+                "full session export %s stage=db_rows duration_ms=%d snapshots=%d snapshot_items=%d events=%d history=%d runtimes=%d checkpoints=%d attachments=%d",
+                export_id,
+                round((time.perf_counter() - rows_started_at) * 1000),
+                len(snapshot_rows),
+                len(snapshot_items),
+                len(events),
+                len(history),
+                len(runtimes),
+                len(checkpoints) + len(legacy),
+                len(attachments),
+            )
         raw_history = [dict(row.message_json or {}) for row in history]
         if not raw_history and runtime is not None and isinstance(runtime.history_json, list):
             raw_history = [dict(item) for item in runtime.history_json if isinstance(item, dict)]
 
         attachment_dicts: list[dict[str, Any]] = []
         archive_files: list[FullArchiveFile] = []
+        attachments_started_at = time.perf_counter()
+        attachment_file_bytes = 0
         for row in attachments:
             archive_path = _attachment_archive_path(row.id, row.filename)
             attachment = _model_dict(row, omit={"storage_path"})
@@ -264,13 +294,14 @@ class ConversationExportService:
             attachment["storage_path"] = archive_path
             attachment["archive_path"] = archive_path
             source_path = Path(row.storage_path)
-            if source_path.is_file():
+            if await asyncio.to_thread(source_path.is_file):
                 try:
-                    content = source_path.read_bytes()
+                    content = await asyncio.to_thread(source_path.read_bytes)
                 except OSError:
                     content = None
                 if content is not None:
                     archive_files.append(FullArchiveFile(archive_path, content))
+                    attachment_file_bytes += len(content)
                     attachment["file_present"] = True
                     attachment["file_size"] = len(content)
                 else:
@@ -280,6 +311,13 @@ class ConversationExportService:
                 # missing file instead of silently dropping the attachment.
                 attachment["file_present"] = False
             attachment_dicts.append(attachment)
+        logger.info(
+            "full session export %s stage=attachment_files duration_ms=%d files=%d bytes=%d",
+            export_id,
+            round((time.perf_counter() - attachments_started_at) * 1000),
+            len(archive_files),
+            attachment_file_bytes,
+        )
 
         workspace_blob_dicts, workspace_files = _workspace_blob_exports(
             blob_rows,
@@ -297,7 +335,7 @@ class ConversationExportService:
         handoff = None
         if handoff_row is not None and isinstance(handoff_row.context_json, dict):
             handoff = sanitize_handoff_context(handoff_row.context_json)
-        return FullConversationExport(
+        exported = FullConversationExport(
             "lamtools.full-conversation", 1, _now(), thread_id,
             session={
                 "thread_id": thread_id,
@@ -329,6 +367,14 @@ class ConversationExportService:
             handoff=handoff,
             archive_files=tuple([*archive_files, *workspace_files]),
         )
+        logger.info(
+            "full session export %s stage=service_ready duration_ms=%d archive_files=%d archive_file_bytes=%d",
+            export_id,
+            round((time.perf_counter() - started_at) * 1000),
+            len(exported.archive_files),
+            sum(len(item.content) for item in exported.archive_files),
+        )
+        return exported
 
     async def handoff(self, thread_id: str, *, context: dict[str, Any] | None = None) -> ContextHandoffExport:
         """Return the last real model-boundary context for *thread_id*.
@@ -429,8 +475,14 @@ async def _session_family_ids(db: Any, thread_id: str) -> set[str]:
         CoreCheckpointV2.root_session_id,
     )
     owned = {root, thread_id}
+    descendant_pattern = _sqlite_glob_escape(root + ":sub:") + "*"
     for column in columns:
-        rows = list((await db.execute(select(column))).all())
+        rows = list((await db.execute(
+            select(column).where(or_(
+                column == root,
+                column.op("GLOB")(descendant_pattern),
+            ))
+        )).all())
         owned.update(
             str(value)
             for (value,) in rows
@@ -438,6 +490,11 @@ async def _session_family_ids(db: Any, thread_id: str) -> set[str]:
             and (str(value) == root or str(value).startswith(root + ":sub:"))
         )
     return owned
+
+
+def _sqlite_glob_escape(value: str) -> str:
+    """Escape literal GLOB metacharacters while retaining a prefix-searchable pattern."""
+    return "".join({"*": "[*]", "?": "[?]", "[": "[[]"}.get(char, char) for char in value)
 
 
 def _session_work_roots(rows: list[CoreThreadSnapshot]) -> set[str]:

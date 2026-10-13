@@ -4,8 +4,10 @@ import ChatThread from '../src/components/ChatThread.vue'
 import { hydrateSnapshot, selectCoreWorkbenchMessages, type CoreAppItem } from '../src/appServer'
 import {
   artifactListingReference,
+  artifactPathsInText,
   reportMentionsArtifactPath,
   shouldListTurnArtifact,
+  workspaceRelativeFromReportPath,
 } from '../src/artifacts/model'
 import { createFakeTransport } from './fake-transport'
 
@@ -19,6 +21,25 @@ const WORK_ROOT = 'E:\\LamTools'
 
 describe('turn artifact selection rules', () => {
   const none = new Set<string>()
+
+  it('reads path-like tokens out of the report, both separators, backticks and links', () => {
+    const text = '交付：`E:\\LamTools\\lamsmoke\\a.md`，另有 lamsmoke/b.md 与 [c](E:/LamTools/lamsmoke/c.md)。'
+    expect(artifactPathsInText(text).sort()).toEqual([
+      'E:/LamTools/lamsmoke/a.md',
+      'E:/LamTools/lamsmoke/c.md',
+      'lamsmoke/b.md',
+    ])
+    // 不是路径的话不认：没有目录、没有扩展名。
+    expect(artifactPathsInText('见 README 与 v1.2 版本')).toEqual([])
+  })
+
+  it('lands report paths on a workspace-relative reference, drive case included', () => {
+    expect(workspaceRelativeFromReportPath('E:\\LamTools\\lamsmoke\\a.md', WORK_ROOT)).toBe('lamsmoke/a.md')
+    expect(workspaceRelativeFromReportPath('e:/LamTools/lamsmoke/a.md', WORK_ROOT)).toBe('lamsmoke/a.md')
+    expect(workspaceRelativeFromReportPath('lamsmoke/a.md', WORK_ROOT)).toBe('lamsmoke/a.md')
+    // 越出工作区的绝对路径不是项目产物。
+    expect(workspaceRelativeFromReportPath('D:/elsewhere/a.md', WORK_ROOT)).toBe('')
+  })
 
   it('keeps a file the report names by relative path', () => {
     const artifact = { kind: 'file_change', uri: 'reports/out.md' }
@@ -163,16 +184,33 @@ function snapshotWithTurn(options: {
   } as never)
 }
 
-function mountTurn(options: Parameters<typeof snapshotWithTurn>[0]) {
+function mountTurn(
+  options: Parameters<typeof snapshotWithTurn>[0],
+  fileResponse?: { status: number; headers?: Record<string, string>; body?: Uint8Array },
+) {
   const messages = selectCoreWorkbenchMessages(snapshotWithTurn(options))
   return mount(ChatThread, {
     props: {
-      transport: createFakeTransport(),
+      transport: createFakeTransport(fileResponse
+        ? {
+            status: fileResponse.status,
+            headers: fileResponse.headers ?? { 'content-type': 'text/markdown' },
+            body: fileResponse.body ?? new TextEncoder().encode('# reported'),
+          }
+        : undefined),
       messages,
       workRoot: WORK_ROOT,
       projectId: 'project-1',
     },
   })
+}
+
+/** 等存在性检查那一次请求落地并重渲染。 */
+async function settleFileChecks(wrapper: ReturnType<typeof mount>): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  await wrapper.vm.$nextTick()
 }
 
 function deckKeys(wrapper: ReturnType<typeof mount>): string[] {
@@ -196,12 +234,45 @@ describe('本轮产出收录规则（页面级）', () => {
     expect(deckKeys(wrapper).sort()).toEqual(['reports/filed.md', 'reports/out.md'])
   })
 
-  it('ignores a path the report names but the turn never wrote', () => {
+  it('takes a report-named file that exists even when the turn never wrote it — absolute backslash', async () => {
+    const wrapper = mountTurn({
+      report: '产物已落盘：`E:\\LamTools\\lamsmoke\\reported-artifact.md`。',
+      writes: [],
+      library: [],
+    }, { status: 200 })
+    await settleFileChecks(wrapper)
+
+    expect(deckKeys(wrapper)).toEqual(['lamsmoke/reported-artifact.md'])
+  })
+
+  it('takes the same file when the report spells it with forward slashes', async () => {
+    const wrapper = mountTurn({
+      report: '产物已落盘：E:/LamTools/lamsmoke/reported-artifact.md',
+      writes: [],
+    }, { status: 200 })
+    await settleFileChecks(wrapper)
+
+    expect(deckKeys(wrapper)).toEqual(['lamsmoke/reported-artifact.md'])
+  })
+
+  it('takes a report-named file written as a relative path', async () => {
+    const wrapper = mountTurn({
+      report: '本轮产物是 lamsmoke/reported-artifact.md',
+      writes: [],
+    }, { status: 200 })
+    await settleFileChecks(wrapper)
+
+    expect(deckKeys(wrapper)).toEqual(['lamsmoke/reported-artifact.md'])
+  })
+
+  it('shows nothing for a report-named path that does not exist', async () => {
     const wrapper = mountTurn({
       report: '顺手看了一眼 `notes/old.md`，本轮没有新产物。',
-      writes: [{ id: 'w-a', uri: 'reports/out.md' }],
-    })
+      writes: [{ id: 'w-a', uri: 'scratch/tmp.txt' }],
+    }, { status: 404, body: new Uint8Array() })
+    await settleFileChecks(wrapper)
 
+    // 路径不存在就不展示，也不凭空造卡片。
     expect(deckKeys(wrapper)).toEqual([])
   })
 

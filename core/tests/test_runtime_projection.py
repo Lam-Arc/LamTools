@@ -1319,3 +1319,103 @@ def test_runtime_projection_keeps_inline_image_only_on_artifacts():
     assert "image_data_url" not in event.payload["metadata"]
     assert event.payload["metadata"]["path"] == "a.png"
     assert event.artifacts[0]["metadata"]["image_data_url"] == data_url
+
+
+def test_member_wait_projects_the_a_b_distinction_and_the_report_clears_it():
+    """``runtime.sub_agent_wait``/``report`` carry the (a) vs (b) distinction.
+
+    (a) the main agent is still running; (b) the main agent is done and only its
+    background members are still running. Both used to collapse into the same
+    "running" turn, so the fact must project a readable marker: a status item
+    typed ``subAgents`` whose ``waiting_on_members`` flag the report clears.
+    """
+    waiting = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="wait-1",
+        group="plan",
+        source="core",
+        phase="runtime.sub_agent_wait",
+        status="running",
+        sequence=5,
+        metadata={"payload": {
+            "turn_id": "turn-1",
+            "run_id": "run-1",
+            "wait_seconds": 600,
+            "response_index": 3,
+            "members": [{"name": "worker", "status": "running", "running_ms": 1200}],
+        }},
+    )
+    assert waiting is not None and len(waiting) == 1
+    item = waiting[0]
+    assert item.kind == "status"
+    assert item.item_id == "turn-1:sub-agent-wait"
+    assert item.payload["type"] == "subAgents"
+    assert item.payload["waiting_on_members"] is True
+    assert item.payload["wait_seconds"] == 600
+    assert [member["name"] for member in item.payload["members"]] == ["worker"]
+
+    report = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="report-1",
+        group="plan",
+        source="core",
+        phase="runtime.sub_agent_report",
+        status="running",
+        sequence=6,
+        metadata={"payload": {
+            "turn_id": "turn-1",
+            "run_id": "run-1",
+            "content": "worker finished",
+            "response_index": 3,
+        }},
+    )
+    assert report is not None and len(report) == 1
+    cleared = report[0]
+    assert cleared.item_id == item.item_id
+    assert cleared.payload["waiting_on_members"] is False
+    assert cleared.payload["members"] == []
+
+
+def test_forwarded_sub_agent_request_keeps_provenance_in_the_payload():
+    """A delegated member's card must carry who asked, in the payload.
+
+    The item's ``metadata`` is dropped when the run item is projected into the
+    snapshot, so the sub-agent provenance the session reducer and the interface
+    both need has to ride the payload.
+    """
+    forwarded = {
+        "request_id": "call-9",
+        "tool_call_id": "call-9",
+        "request_kind": "ask",
+        "tool_name": "question",
+        "message": "哪个颜色？",
+        "options": [{"id": "red", "label": "红"}],
+        "sub_agent": {
+            "name": "worker",
+            "type": "execute",
+            "sub_session_id": "thread-1:sub:worker",
+            "parent_call_id": "call-0",
+            "parent_run_id": "run-P",
+        },
+    }
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="child-question",
+        group="decision",
+        source="sub_agent",
+        phase="runtime.approval_request",
+        status="waiting",
+        sequence=4,
+        metadata={"payload": forwarded, "turn_id": "turn-1", "run_id": "run-P"},
+    )
+    assert events is not None and len(events) == 1
+    item = events[0]
+    assert item.kind == "approval_request"
+    assert item.status == "waiting"
+    assert item.payload["sub_agent"]["name"] == "worker"
+    assert item.payload["tool_name"] == "question"
+    assert item.payload["kind"] == "ask"
+    # The item is scoped to the sub-agent, so the answer can be routed back.
+    assert item.item_id == "thread-1:sub:worker:call-9:tool"
+    assert item.parent_item_id == "thread-1:run-P:call-0:tool"
+    assert item.metadata["sub_agent"]["name"] == "worker"

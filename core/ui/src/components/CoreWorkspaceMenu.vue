@@ -6,16 +6,16 @@
       :disabled="disabled || options.length === 0"
       aria-haspopup="menu"
       :aria-expanded="open"
-      :aria-label="`工作环境：${activeOption?.label || '未选择'}`"
-      :title="activeOption?.label || '选择工作环境'"
+      :aria-label="t('工作环境：{0}', { 0: activeOption?.label || t('未选择') })"
+      :title="activeOption?.label || t('选择工作环境')"
       @click="toggle"
     >
       <component :is="iconFor(activeOption)" :size="15" :stroke-width="2" aria-hidden="true" />
       <ChevronDown :size="12" :stroke-width="2" aria-hidden="true" />
     </button>
 
-    <section v-if="open" ref="card" class="core-workspace-menu__card" :style="viewportStyle" role="menu" aria-label="选择工作环境">
-      <div class="core-workspace-menu__heading">工作环境</div>
+    <section v-if="open" ref="card" class="core-workspace-menu__card" :style="viewportStyle" role="menu" :aria-label="t('选择工作环境')">
+      <div class="core-workspace-menu__heading">{{ t("工作环境") }}</div>
       <button
         v-for="option in options"
         :key="option.id"
@@ -33,7 +33,7 @@
           <small>{{ option.deviceName || platformLabel(option.platform) }}</small>
         </span>
         <span class="core-workspace-menu__status" :class="{ offline: option.online === false }">
-          {{ option.online === false ? '离线' : '在线' }}
+          {{ option.online === false ? t("离线") : t("在线") }}
         </span>
         <Check v-if="option.id === activeId" :size="15" :stroke-width="2.2" aria-hidden="true" />
       </button>
@@ -42,6 +42,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { Check, ChevronDown, Monitor, Smartphone } from 'lucide-vue-next'
 import type { RuntimeWorkspaceOption } from '../app/runtime'
@@ -71,7 +73,7 @@ function iconFor(option?: RuntimeWorkspaceOption) {
 }
 
 function platformLabel(platform?: string): string {
-  return /android|ios|mobile|phone/i.test(platform || '') ? '移动设备' : '电脑'
+  return /android|ios|mobile|phone/i.test(platform || '') ? t("移动设备") : t("电脑")
 }
 
 function toggle(): void {

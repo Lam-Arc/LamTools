@@ -1,5 +1,8 @@
 <template>
   <div class="composer-root" :class="'composer-root--' + variant">
+    <div v-if="$slots['queue-panel']" class="composer-queue-panel-host">
+      <slot name="queue-panel" />
+    </div>
     <form
       class="floating-composer"
       :class="[{ dragover: dragOver }, 'composer-bar--' + variant]"
@@ -34,19 +37,25 @@
               :disabled="actionMode === 'send' && (disabled || !(modelValue || '').trim())"
               :send-label="sendLabel"
               :stop-label="stopLabel"
-              :send-title="sendTitle"
-              :stop-title="stopTitle"
+              :send-title="defaultUiText(sendTitle, '发送')"
+              :stop-title="defaultUiText(stopTitle, '停止运行')"
             />
           </slot>
         </div>
       </div>
-      <div class="drop-hint">拖拽到这里上传</div>
+      <div class="drop-hint">{{ t("拖拽到这里上传") }}</div>
     </form>
-    <slot name="extras" />
+    <div v-if="$slots.extras" class="composer-extras">
+      <slot name="extras" />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { defaultUiText } from '../i18n/index'
+
+import { t } from '../i18n/index'
+
 /**
  * ComposerBar — floating composer bar (composer layer in the four-layer system)
  *
@@ -69,7 +78,7 @@ const props = withDefaults(defineProps<{
   stopTitle?: string
 }>(), {
   modelValue: '',
-  placeholder: '输入内容...',
+  get placeholder() { return t("输入内容...") },
   textareaAriaLabel: '',
   actionMode: 'send',
   variant: 'floating',

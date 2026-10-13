@@ -1,3 +1,5 @@
+
+import { t } from '../../../../../../ui/src/i18n/index'
 import type {
   WorkflowNode,
   WorkflowNodeKind,
@@ -44,84 +46,84 @@ export const WORKFLOW_HIDDEN_NODE_KINDS = [...WORKFLOW_LEGACY_NODE_KINDS] as str
  * ids so that adding a node never changes the execution contract.
  */
 export const WORKFLOW_NODE_LABELS: Readonly<Record<string, string>> = {
-  model: '模型',
-  agent: '智能体',
-  approval: '人工审批',
-  command: '命令',
-  python: 'Python 脚本',
-  constant: '常量',
-  input: '输入',
-  output: '输出',
+  get model() { return t("模型") },
+  get agent() { return t("智能体") },
+  get approval() { return t("人工审批") },
+  get command() { return t("命令") },
+  get python() { return t("Python 脚本") },
+  get constant() { return t("常量") },
+  get input() { return t("输入") },
+  get output() { return t("输出") },
   template: '模板',
-  condition: '条件',
-  merge: '合并',
-  join: '汇聚',
-  subgraph: '子工作流',
-  wait_event: '等待事件',
-  ai: 'AI（兼容）',
-  script: 'Python 脚本（兼容）',
+  get condition() { return t("条件") },
+  get merge() { return t("合并") },
+  get join() { return t("汇聚") },
+  get subgraph() { return t("子工作流") },
+  get wait_event() { return t("等待事件") },
+  get ai() { return t("AI（兼容）") },
+  get script() { return t("Python 脚本（兼容）") },
   content: '内容（兼容）',
-  transform: '转换（兼容）',
-  branch: '分支（兼容）',
+  get transform() { return t("转换（兼容）") },
+  get branch() { return t("分支（兼容）") },
 }
 
 /** Short descriptions keep catalog rows useful without exposing raw schema copy. */
 export const WORKFLOW_NODE_DESCRIPTIONS: Readonly<Record<string, string>> = {
-  model: '使用选定模型生成结果。',
-  agent: '调用智能体执行任务，可按需使用工具。',
-  approval: '暂停工作流，等待人工批准或拒绝。',
-  command: '运行一条 Shell 命令。',
-  python: '执行 Python 脚本，并通过端口传递变量。',
-  constant: '输出预设的常量值。',
-  input: '接收工作流输入。',
-  output: '输出工作流结果。',
+  get model() { return t("使用选定模型生成结果。") },
+  get agent() { return t("调用智能体执行任务，可按需使用工具。") },
+  get approval() { return t("暂停工作流，等待人工批准或拒绝。") },
+  get command() { return t("运行一条 Shell 命令。") },
+  get python() { return t("执行 Python 脚本，并通过端口传递变量。") },
+  get constant() { return t("输出预设的常量值。") },
+  get input() { return t("接收工作流输入。") },
+  get output() { return t("输出工作流结果。") },
   template: '按照模板生成文本。',
-  condition: '按条件选择后续分支。',
-  merge: '合并多个输入，取首个有效值。',
-  join: '汇聚具名输入并收集为对象。',
-  subgraph: '调用另一个工作流。',
-  wait_event: '等待外部事件后继续执行。',
-  ai: '兼容旧版 AI 节点。',
-  script: '兼容旧版 Python 脚本节点。',
+  get condition() { return t("按条件选择后续分支。") },
+  get merge() { return t("合并多个输入，取首个有效值。") },
+  get join() { return t("汇聚具名输入并收集为对象。") },
+  get subgraph() { return t("调用另一个工作流。") },
+  get wait_event() { return t("等待外部事件后继续执行。") },
+  get ai() { return t("兼容旧版 AI 节点。") },
+  get script() { return t("兼容旧版 Python 脚本节点。") },
   content: '兼容旧版内容节点。',
-  transform: '兼容旧版转换节点。',
-  branch: '兼容旧版分支节点。',
+  get transform() { return t("兼容旧版转换节点。") },
+  get branch() { return t("兼容旧版分支节点。") },
 }
 
 const WORKFLOW_CATEGORY_LABELS: Readonly<Record<string, string>> = {
-  workflow: '工作流',
-  'workflow/model': '模型',
-  'workflow/agent': '智能体',
-  'workflow/runtime': '运行时',
-  'workflow/data': '数据',
-  'workflow/composition': '编排',
-  'workflow/control': '控制',
-  'workflow/input': '输入',
-  'workflow/output': '输出',
-  'workflow/io': '输入输出',
-  'workflow/transform': '转换',
-  'workflow/human': '人工协作',
-  'workflow/legacy': '兼容',
+  get workflow() { return t("工作流") },
+  get 'workflow/model'() { return t("模型") },
+  get 'workflow/agent'() { return t("智能体") },
+  get 'workflow/runtime'() { return t("运行时") },
+  get 'workflow/data'() { return t("数据") },
+  get 'workflow/composition'() { return t("编排") },
+  get 'workflow/control'() { return t("控制") },
+  get 'workflow/input'() { return t("输入") },
+  get 'workflow/output'() { return t("输出") },
+  get 'workflow/io'() { return t("输入输出") },
+  get 'workflow/transform'() { return t("转换") },
+  get 'workflow/human'() { return t("人工协作") },
+  get 'workflow/legacy'() { return t("兼容") },
 }
 
 const WORKFLOW_CATEGORY_SEGMENT_LABELS: Readonly<Record<string, string>> = {
-  ai: '智能',
-  agent: '智能体',
-  command: '命令',
-  composition: '编排',
-  control: '控制',
-  data: '数据',
-  input: '输入',
-  human: '人工协作',
-  io: '输入输出',
-  legacy: '兼容',
-  model: '模型',
-  output: '输出',
-  runtime: '运行时',
-  test: '测试',
-  transform: '转换',
-  vendor: '扩展',
-  workflow: '工作流',
+  get ai() { return t("智能") },
+  get agent() { return t("智能体") },
+  get command() { return t("命令") },
+  get composition() { return t("编排") },
+  get control() { return t("控制") },
+  get data() { return t("数据") },
+  get input() { return t("输入") },
+  get human() { return t("人工协作") },
+  get io() { return t("输入输出") },
+  get legacy() { return t("兼容") },
+  get model() { return t("模型") },
+  get output() { return t("输出") },
+  get runtime() { return t("运行时") },
+  get test() { return t("测试") },
+  get transform() { return t("转换") },
+  get vendor() { return t("扩展") },
+  get workflow() { return t("工作流") },
 }
 
 export function workflowNodeTypeId(schema: WorkflowNodeSchema | null | undefined, fallback = ''): string {
@@ -131,7 +133,7 @@ export function workflowNodeTypeId(schema: WorkflowNodeSchema | null | undefined
 /** Resolve the visible node name while retaining the registry's canonical id. */
 export function workflowNodeDisplayName(
   schema: WorkflowNodeSchema | null | undefined,
-  fallback = '未命名节点',
+  fallback = t("未命名节点"),
 ): string {
   const typeId = workflowNodeTypeId(schema).toLowerCase()
   const localized = (schema as Record<string, unknown> | null | undefined)?.display_name_zh
@@ -148,8 +150,8 @@ export function workflowCategoryDisplayName(category: unknown): string {
   if (canonical === '全部') return canonical
   if (WORKFLOW_CATEGORY_LABELS[canonical]) return WORKFLOW_CATEGORY_LABELS[canonical]
   const segments = canonical.replace(/^workflow\//i, '').split(/[\\/._:-]+/).filter(Boolean)
-  if (!segments.length) return '工作流'
-  return segments.map((segment) => WORKFLOW_CATEGORY_SEGMENT_LABELS[segment.toLowerCase()] || '自定义').join(' / ')
+  if (!segments.length) return t("工作流")
+  return segments.map((segment) => WORKFLOW_CATEGORY_SEGMENT_LABELS[segment.toLowerCase()] || t("自定义")).join(' / ')
 }
 
 /** Resolve a localized description, with the raw description retained for search. */
@@ -159,7 +161,7 @@ export function workflowSchemaDescription(schema: WorkflowNodeSchema | null | un
   if (typeof localized === 'string' && localized.trim()) return localized.trim()
   return WORKFLOW_NODE_DESCRIPTIONS[typeId]
     || String(schema?.description || '').trim()
-    || '自定义工作流节点。'
+    || t("自定义工作流节点。")
 }
 
 /** Search aliases include both localized copy and the original registry data. */

@@ -10,13 +10,13 @@
     @dblclick="handleDoubleClick"
   >
     <template v-if="resizable">
-      <button type="button" class="wf-resize-handle is-east nodrag nopan" aria-label="向右调整宽度" title="拖动调整宽度" @pointerdown.stop.prevent="startResize($event, 'east')" />
-      <button type="button" class="wf-resize-handle is-south nodrag nopan" aria-label="向下调整高度" title="拖动调整高度" @pointerdown.stop.prevent="startResize($event, 'south')" />
-      <button type="button" class="wf-resize-handle is-southeast nodrag nopan" aria-label="调整宽高" title="拖动调整宽高" @pointerdown.stop.prevent="startResize($event, 'southeast')" />
+      <button type="button" class="wf-resize-handle is-east nodrag nopan" :aria-label="t('向右调整宽度')" :title="t('拖动调整宽度')" @pointerdown.stop.prevent="startResize($event, 'east')" />
+      <button type="button" class="wf-resize-handle is-south nodrag nopan" :aria-label="t('向下调整高度')" :title="t('拖动调整高度')" @pointerdown.stop.prevent="startResize($event, 'south')" />
+      <button type="button" class="wf-resize-handle is-southeast nodrag nopan" :aria-label="t('调整宽高')" :title="t('拖动调整宽高')" @pointerdown.stop.prevent="startResize($event, 'southeast')" />
     </template>
     <template v-if="element.kind === 'reroute'">
       <span class="wf-reroute-dot" aria-hidden="true" />
-      <span class="sr-only">{{ element.title || '中继' }}</span>
+      <span class="sr-only">{{ element.title || t("中继") }}</span>
     </template>
     <template v-else>
       <header class="wf-decoration-head">
@@ -24,7 +24,7 @@
           v-model="localTitle"
           class="wf-decoration-title"
           type="text"
-          :aria-label="`${kindLabel}标题`"
+          :aria-label="t('{0}标题', { 0: kindLabel })"
           @blur="pushUpdate"
           @keydown.stop
         />
@@ -33,7 +33,7 @@
       <textarea
         v-model="localText"
         class="wf-decoration-text"
-        :aria-label="`${kindLabel}内容`"
+        :aria-label="t('{0}内容', { 0: kindLabel })"
         :placeholder="placeholder"
         :readonly="!editing && element.kind !== 'note' && element.kind !== 'comment'"
         @blur="pushUpdate"
@@ -44,6 +44,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { useVueFlow } from '@vue-flow/core'
 import type { WorkflowCanvasElement } from './canvas'
@@ -66,13 +68,13 @@ const { viewport } = useVueFlow()
 const resizable = computed(() => props.selected === true && element.value.kind !== 'reroute' && !isCanvasLocked())
 
 const kindLabel = computed(() => {
-  if (element.value.kind === 'group') return '分组'
-  if (element.value.kind === 'frame') return '框架'
-  if (element.value.kind === 'reroute') return '中继'
-  if (element.value.kind === 'comment') return '注释'
-  return '便签'
+  if (element.value.kind === 'group') return t("分组")
+  if (element.value.kind === 'frame') return t("框架")
+  if (element.value.kind === 'reroute') return t("中继")
+  if (element.value.kind === 'comment') return t("注释")
+  return t("便签")
 })
-const placeholder = computed(() => element.value.kind === 'comment' ? '写下注释…' : '写下想法…')
+const placeholder = computed(() => element.value.kind === 'comment' ? t("写下注释…") : t("写下想法…"))
 const elementStyle = computed(() => ({
   width: `${localWidth.value}px`,
   height: `${localHeight.value}px`,

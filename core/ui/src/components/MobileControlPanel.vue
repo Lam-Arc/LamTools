@@ -1,15 +1,15 @@
 <template>
   <section class="settings-panel mobile-control-panel">
     <header class="settings-title">
-      <h1>手机控制</h1>
-      <p>用 LamTools 手机端查看会话、继续任务并处理审批。Core 仍只监听本机地址。</p>
+      <h1>{{ t("手机控制") }}</h1>
+      <p>{{ t("用 LamTools 手机端查看会话、继续任务并处理审批。Core 仍只监听本机地址。") }}</p>
     </header>
 
     <div class="settings-surface settings-surface--stack mobile-control-surface">
       <article class="setting-card mobile-control-account-card">
         <div class="subhead">
-          <span class="muted subhead-title">服务器账号 <span class="subhead-sub">官方发现与 Relay 必须登录</span></span>
-          <span v-if="accountStatus" class="mobile-control-account-state">已登录</span>
+          <span class="muted subhead-title">{{ t("服务器账号") }}<span class="subhead-sub">{{ t("官方发现与 Relay 必须登录") }}</span></span>
+          <span v-if="accountStatus" class="mobile-control-account-state">{{ t("已登录") }}</span>
         </div>
         <div v-if="accountStatus" class="mobile-control-account-connected">
           <div class="mobile-control-account-copy">
@@ -17,12 +17,12 @@
             <small>{{ accountStatus.baseUrl || accountStatus.serverId }}</small>
             <small v-if="accountIdentity">Node {{ accountIdentity.nodeId }}</small>
           </div>
-          <button class="small-btn quiet" type="button" :disabled="accountLoading" @click="logoutAccount">退出账号</button>
+          <button class="small-btn quiet" type="button" :disabled="accountLoading" @click="logoutAccount">{{ t("退出账号") }}</button>
         </div>
         <div v-if="accountStatus" class="mobile-control-account-devices">
           <div class="subhead">
-            <span class="muted subhead-title">设备与工作环境</span>
-            <span class="mobile-control-count">{{ onlineDeviceCount }}/{{ accountDevices.length }} 在线</span>
+            <span class="muted subhead-title">{{ t("设备与工作环境") }}</span>
+            <span class="mobile-control-count">{{ onlineDeviceCount }}/{{ accountDevices.length }}{{ t("在线") }}</span>
           </div>
           <div v-if="accountDevices.length" class="mobile-control-account-device-list">
             <div v-for="device in accountDevices" :key="device.nodeId" class="mobile-control-account-device-row">
@@ -31,46 +31,46 @@
                 <small>{{ device.detail }}</small>
               </div>
               <span class="mobile-control-account-device-state" :class="{ offline: !device.online }">
-                <i aria-hidden="true" />{{ device.online ? '在线' : '离线' }}
+                <i aria-hidden="true" />{{ device.online ? t("在线") : t("离线") }}
               </span>
             </div>
           </div>
-          <p v-else class="mobile-control-empty">这个账号还没有已登记设备。</p>
+          <p v-else class="mobile-control-empty">{{ t("这个账号还没有已登记设备。") }}</p>
         </div>
         <form v-else class="mobile-control-account-form" @submit.prevent="submitAccount">
           <label class="mobile-control-field">
-            <span>用户名</span>
+            <span>{{ t("用户名") }}</span>
             <input v-model.trim="accountUsername" type="text" autocomplete="username" minlength="3" maxlength="32" required>
           </label>
           <label class="mobile-control-field">
-            <span>密码</span>
+            <span>{{ t("密码") }}</span>
             <input v-model="accountPassword" type="password" :autocomplete="accountMode === 'register' ? 'new-password' : 'current-password'" minlength="8" required>
           </label>
           <div class="mobile-control-account-actions">
             <button class="small-btn quiet" type="button" :disabled="accountLoading" @click="accountMode = accountMode === 'login' ? 'register' : 'login'">
-              {{ accountMode === 'login' ? '转到注册' : '返回登录' }}
+              {{ accountMode === 'login' ? t("转到注册") : t("返回登录") }}
             </button>
             <button class="small-btn primary" type="submit" :disabled="accountLoading || !available">
-              {{ accountLoading ? '处理中…' : accountMode === 'register' ? '注册' : '登录' }}
+              {{ accountLoading ? t("处理中…") : accountMode === 'register' ? t("注册") : t("登录") }}
             </button>
           </div>
         </form>
-        <p v-if="!available" class="mobile-control-account-note">账号绑定命令将在桌面 Tauri 运行时启用。</p>
+        <p v-if="!available" class="mobile-control-account-note">{{ t("账号绑定命令将在桌面 Tauri 运行时启用。") }}</p>
       </article>
 
       <p v-if="error" class="skill-error mobile-control-error" role="alert">{{ error }}</p>
 
       <button class="mobile-control-more-toggle" type="button" :aria-expanded="moreOpen" @click="moreOpen = !moreOpen">
-        <span>更多</span><span aria-hidden="true">{{ moreOpen ? '−' : '+' }}</span>
+        <span>{{ t("更多") }}</span><span aria-hidden="true">{{ moreOpen ? '−' : '+' }}</span>
       </button>
 
       <template v-if="moreOpen">
       <article class="setting-card mobile-control-toggle-card">
         <div class="mobile-control-toggle-copy">
           <span class="mobile-control-eyebrow">RemoteGateway</span>
-          <h2>允许手机控制这台电脑</h2>
-          <p v-if="status?.enabled">安全网关已启动；LAN 使用 Noise 加密，公网连接通过自托管 Relay。</p>
-          <p v-else>开启后生成设备身份和一次性六位数字配对码。</p>
+          <h2>{{ t("允许手机控制这台电脑") }}</h2>
+          <p v-if="status?.enabled">{{ t("安全网关已启动；LAN 使用 Noise 加密，公网连接通过自托管 Relay。") }}</p>
+          <p v-else>{{ t("开启后生成设备身份和一次性六位数字配对码。") }}</p>
         </div>
         <button
           class="permission-switch mobile-control-switch"
@@ -78,54 +78,50 @@
           :class="{ 'is-on': Boolean(status?.enabled) }"
           :disabled="loading || !available"
           :aria-pressed="status?.enabled ? 'true' : 'false'"
-          aria-label="开启手机控制"
+          :aria-label="t('开启手机控制')"
           @click="toggleGateway"
         >
           <span class="permission-switch-track" aria-hidden="true"><span /></span>
-          <span>{{ status?.enabled ? '已开启' : '已关闭' }}</span>
+          <span>{{ status?.enabled ? t("已开启") : t("已关闭") }}</span>
         </button>
       </article>
 
-      <p v-if="!available" class="mobile-control-notice" role="status">
-        手机控制命令将在桌面 Tauri 运行时启用。
-      </p>
+      <p v-if="!available" class="mobile-control-notice" role="status">{{ t("手机控制命令将在桌面 Tauri 运行时启用。") }}</p>
       <template v-if="status?.enabled">
         <article class="setting-card mobile-control-device-card">
           <div class="subhead">
-            <span class="muted subhead-title">本机身份 <span class="subhead-sub">仅用于建立设备信任</span></span>
-            <span class="mobile-control-status-dot" aria-label="网关运行中" />
+            <span class="muted subhead-title">{{ t("本机身份") }}<span class="subhead-sub">{{ t("仅用于建立设备信任") }}</span></span>
+            <span class="mobile-control-status-dot" :aria-label="t('网关运行中')" />
           </div>
           <dl class="mobile-control-meta">
-            <div><dt>设备 ID</dt><dd>{{ status.deviceId || '生成中' }}</dd></div>
-            <div><dt>网关</dt><dd>{{ status.bindAddr || '局域网' }}<span v-if="status.port">:{{ status.port }}</span></dd></div>
-            <div><dt>Relay</dt><dd>{{ status.relayConfigured ? (status.relayConnected ? '已连接' : '重连中') : '未配置' }}</dd></div>
+            <div><dt>{{ t("设备 ID") }}</dt><dd>{{ status.deviceId || t("生成中") }}</dd></div>
+            <div><dt>{{ t("网关") }}</dt><dd>{{ status.bindAddr || t("局域网") }}<span v-if="status.port">:{{ status.port }}</span></dd></div>
+            <div><dt>Relay</dt><dd>{{ status.relayConfigured ? (status.relayConnected ? t("已连接") : t("重连中")) : t("未配置") }}</dd></div>
           </dl>
         </article>
 
         <article class="setting-card mobile-control-pairing-card">
           <div class="subhead">
-            <span class="muted subhead-title">配对新设备 <span class="subhead-sub">六位数字码 5 分钟内有效且只能使用一次</span></span>
-            <button class="small-btn primary" type="button" :disabled="loading" @click="createPairing">生成配对码</button>
+            <span class="muted subhead-title">{{ t("配对新设备") }}<span class="subhead-sub">{{ t("六位数字码 5 分钟内有效且只能使用一次") }}</span></span>
+            <button class="small-btn primary" type="button" :disabled="loading" @click="createPairing">{{ t("生成配对码") }}</button>
           </div>
           <div v-if="pairing" class="mobile-control-code-layout">
-            <div class="mobile-control-code-block" aria-label="当前六位数字配对码">
-              <span>当前配对码</span>
+            <div class="mobile-control-code-block" :aria-label="t('当前六位数字配对码')">
+              <span>{{ t("当前配对码") }}</span>
               <strong>{{ pairing.code }}</strong>
-              <small>在 LamTools 手机端输入此数字</small>
+              <small>{{ t("在 LamTools 手机端输入此数字") }}</small>
               <button class="text-btn" type="button" @click="copyNumericCode">{{ numericCopyLabel }}</button>
             </div>
-            <small class="mobile-control-expires">有效期至 {{ expiresLabel }}</small>
+            <small class="mobile-control-expires">{{ t("有效期至") }}{{ expiresLabel }}</small>
           </div>
-          <p v-else class="mobile-control-empty">点击“生成配对码”开始配对。</p>
-          <p v-if="!status.relayConfigured" class="mobile-control-warning" role="status">
-            当前未配置 Relay，手机无法仅凭数字码发现这台电脑；请先配置远程中转服务。
-          </p>
-          <p class="mobile-control-phase-note">手机提交数字码后，Relay 只解析连接元数据；真正的配对认证和会话数据仍通过 Noise 加密隧道完成。</p>
+          <p v-else class="mobile-control-empty">{{ t("点击“生成配对码”开始配对。") }}</p>
+          <p v-if="!status.relayConfigured" class="mobile-control-warning" role="status">{{ t("当前未配置 Relay，手机无法仅凭数字码发现这台电脑；请先配置远程中转服务。") }}</p>
+          <p class="mobile-control-phase-note">{{ t("手机提交数字码后，Relay 只解析连接元数据；真正的配对认证和会话数据仍通过 Noise 加密隧道完成。") }}</p>
         </article>
 
         <article class="setting-card mobile-control-trusted-card">
           <div class="subhead">
-            <span class="muted subhead-title">已配对设备 <span class="subhead-sub">撤销后设备立即失去访问权限</span></span>
+            <span class="muted subhead-title">{{ t("已配对设备") }}<span class="subhead-sub">{{ t("撤销后设备立即失去访问权限") }}</span></span>
             <span class="mobile-control-count">{{ status.trustedDevices?.length || 0 }}</span>
           </div>
           <div v-if="status.trustedDevices?.length" class="mobile-control-trusted-list">
@@ -134,10 +130,10 @@
                 <strong>{{ device.name || device.deviceId }}</strong>
                 <small>{{ device.platform || 'mobile' }} · {{ formatDate(device.lastSeenMs || device.pairedAtMs) }}</small>
               </div>
-              <button class="text-btn danger" type="button" :disabled="loading" @click="revoke(device.deviceId)">移除</button>
+              <button class="text-btn danger" type="button" :disabled="loading" @click="revoke(device.deviceId)">{{ t("移除") }}</button>
             </div>
           </div>
-          <p v-else class="mobile-control-empty">尚未配对手机。</p>
+          <p v-else class="mobile-control-empty">{{ t("尚未配对手机。") }}</p>
         </article>
       </template>
       </template>
@@ -146,6 +142,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, ref } from 'vue'
 
 export interface MobileControlTrustedDevice {
@@ -284,15 +282,15 @@ async function copyNumericCode(): Promise<void> {
   if (!props.pairing?.code || !navigator.clipboard) return
   try {
     await navigator.clipboard.writeText(props.pairing.code)
-    numericCopyLabel.value = '已复制'
-    window.setTimeout(() => { numericCopyLabel.value = '复制数字码' }, 1600)
+    numericCopyLabel.value = t("已复制")
+    window.setTimeout(() => { numericCopyLabel.value = t("复制数字码") }, 1600)
   } catch {
-    numericCopyLabel.value = '复制失败'
+    numericCopyLabel.value = t("复制失败")
   }
 }
 
 function formatDate(value?: number): string {
-  if (!value) return '尚未连接'
+  if (!value) return t("尚未连接")
   return new Date(value).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 </script>

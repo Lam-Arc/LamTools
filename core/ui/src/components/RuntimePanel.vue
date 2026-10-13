@@ -13,7 +13,7 @@
     </section>
 
     <section v-if="showEvents && events.length > 0" class="side-section">
-      <h3>事件</h3>
+      <h3>{{ t("事件") }}</h3>
       <div class="activity-item" v-for="event in recentEvents" :key="event.id">
         <span class="activity-kind">{{ event.type }}</span>
         <span class="activity-text">{{ formatPanelValue(event.data) }}</span>
@@ -22,7 +22,7 @@
 
     <template v-if="visibleStepGroups.length > 0">
       <section class="side-section">
-        <h3>过程</h3>
+        <h3>{{ t("过程") }}</h3>
         <div v-for="group in visibleStepGroups" :key="group.id" class="runtime-panel__group">
           <div class="runtime-panel__group-header">
             <span>{{ group.label }}</span>
@@ -43,7 +43,7 @@
             class="runtime-panel__more"
             @click="toggleGroup(group.id)"
           >
-            {{ expandedGroupIds.has(group.id) ? '收起' : `查看其余 ${group.steps.length - stepLimit} 步` }}
+            {{ expandedGroupIds.has(group.id) ? t("收起") : t('查看其余 {0} 步', { 0: group.steps.length - stepLimit }) }}
           </button>
         </div>
       </section>
@@ -55,6 +55,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, ref } from 'vue'
 import type { CoreRuntimeEvent, CoreRuntimeStepGroup } from '../types'
 
@@ -120,7 +122,7 @@ function formatPanelValue(value: unknown): string {
   try {
     return JSON.stringify(value)
   } catch {
-    return '无法显示'
+    return t("无法显示")
   }
 }
 </script>

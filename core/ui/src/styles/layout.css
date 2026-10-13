@@ -348,7 +348,7 @@
 
 @media (min-width: 641px) {
   .thread-header[data-session-header] {
-    height: calc(var(--space-6) * 2 + var(--space-4) - var(--space-1) - 1px);
+    height: calc(var(--space-6) + var(--space-4) - 1px);
     min-height: 0;
     margin-top: calc(-1 * var(--space-6) - var(--space-4) + var(--space-1));
     margin-right: auto;
@@ -374,13 +374,19 @@
 /* =========================================================================
    Floating composer — bottom input bar
    ========================================================================= */
+/* Composer 的几何量放在根节点上：固定定位的卡片本体与它下方那条提示带共用同一套
+   左缘与宽度，两者不会各自漂移。 */
+.composer-root {
+  --composer-full-width: min(var(--content-width), calc(100vw - var(--main-left) - var(--main-right) - var(--main-x-padding) - var(--main-x-padding) - 2px));
+  --composer-anchor-left: calc(var(--main-left) + (100vw - var(--main-left) - var(--main-right)) / 2);
+}
+
 .floating-composer {
   --text: var(--theme-composer-text);
   --composer-side-width: 58px;
-  --composer-full-width: min(var(--content-width), calc(100vw - var(--main-left) - var(--main-right) - var(--main-x-padding) - var(--main-x-padding) - 2px));
   container: composer / inline-size;
   position: fixed;
-  left: calc(var(--main-left) + (100vw - var(--main-left) - var(--main-right)) / 2);
+  left: var(--composer-anchor-left);
   top: auto;
   /* composer-bottom-offset is the single max(keyboard, safe-area) inset;
      keep it as one term so adjustResize cannot cause double compensation. */
@@ -401,6 +407,27 @@
     bottom var(--dur-morph) var(--ease-inout);
 }
 
+/* The goal + guidance panel is a separate sibling surface anchored directly
+   to the composer's top edge. It remains outside the input form and moves with
+   the same keyboard, safe-area, and centered-composer geometry. */
+.composer-root--floating > .composer-queue-panel-host {
+  position: fixed;
+  left: var(--composer-anchor-left);
+  bottom: calc(
+    var(--composer-bottom-offset, 0px) +
+    var(--composer-rest-bottom, 16px) +
+    var(--composer-height, 120px)
+  );
+  z-index: var(--z-composer, 40);
+  width: var(--composer-full-width);
+  transform: translateX(-50%);
+}
+
+.composer-root--floating:has(.core-guidance-queue-panel) > .floating-composer {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 /* A blank session presents the composer in the usable content area. This is
    a real top position calculation, so keyboard avoidance never relies on a
    vertical transform. */
@@ -410,6 +437,15 @@
     (100vh - var(--titlebar-offset, 0px) - var(--composer-height, 120px)) / 2
   );
   bottom: auto;
+}
+
+.workspace-shell--composer-center .composer-root--floating > .composer-queue-panel-host {
+  top: calc(
+    var(--titlebar-offset, 0px) +
+    (100vh - var(--titlebar-offset, 0px) - var(--composer-height, 120px)) / 2
+  );
+  bottom: auto;
+  transform: translate(-50%, -100%);
 }
 
 .workspace-shell--composer-bottom .floating-composer {
@@ -424,12 +460,22 @@
       (100dvh - var(--titlebar-offset, 0px) - var(--composer-height, 120px)) / 2
     );
   }
+  .workspace-shell--composer-center .composer-root--floating > .composer-queue-panel-host {
+    top: calc(
+      var(--titlebar-offset, 0px) +
+      (100dvh - var(--titlebar-offset, 0px) - var(--composer-height, 120px)) / 2
+    );
+  }
 }
 
 /* Treat the empty-session copy and composer as one visual group. The
    composer remains centered for regular shells, while the empty-session
    group sits one step lower so its combined visual mass is truly centered. */
 .workspace-shell--empty-session.workspace-shell--composer-center .floating-composer {
+  top: var(--empty-session-composer-top);
+}
+
+.workspace-shell--empty-session.workspace-shell--composer-center .composer-root--floating > .composer-queue-panel-host {
   top: var(--empty-session-composer-top);
 }
 
@@ -475,18 +521,17 @@
   z-index: 1;
 }
 
-.core-goal-area {
-  --text: var(--theme-composer-text);
-  --optical-glass-overlay: transparent;
-  position: relative;
-  overflow: hidden;
-  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+/* Composer 扩展内容固定在卡片下方，不参与文档流，也不推动对话区。 */
+.composer-root--floating > .composer-extras {
+  position: fixed;
+  left: var(--composer-anchor-left);
+  width: var(--composer-full-width);
+  transform: translateX(-50%);
+  bottom: var(--composer-bottom-offset, 0px);
+  z-index: var(--z-composer, 40);
+  /* 纯提示：不拦截指针，也不拖动手势。 */
+  pointer-events: none;
 }
-
-.core-goal-area[data-status='blocked'] {
-  --optical-glass-overlay: color-mix(in srgb, var(--orange) 10%, transparent);
-}
-
 .floating-composer.dragover {
   border-color: var(--blue);
   box-shadow:

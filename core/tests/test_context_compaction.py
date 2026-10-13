@@ -25,7 +25,13 @@ from lamtools_core.context_compaction import (
 )
 from lamtools_core.context_compaction_budget import SummaryTokenBudget, TokenBudget
 from lamtools_core.context_compaction.planner import _semantic_message_groups
-from lamtools_core.llm import ChatMessage, LLMResponse, LLMStreamEvent, LLMToolCall
+from lamtools_core.llm import (
+    TAIL_SYSTEM_MESSAGE_MARKER,
+    ChatMessage,
+    LLMResponse,
+    LLMStreamEvent,
+    LLMToolCall,
+)
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
 
@@ -1359,6 +1365,31 @@ def test_default_zero_steps_summarizes_latest_user_turn():
     assert layout is not None
     assert layout.retained_messages == []
     assert layout.compacted_messages == messages
+
+
+def test_marked_member_wake_tail_survives_compaction_layout():
+    wake = ChatMessage(
+        role="system",
+        content="member wake",
+        metadata={TAIL_SYSTEM_MESSAGE_MARKER: True},
+    )
+    messages = [
+        ChatMessage(role="user", content="old context " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="latest request"),
+        wake,
+    ]
+
+    layout = select_context_compaction_layout(
+        messages,
+        limit_tokens=1200,
+        retained_steps=0,
+        estimate_tokens=_estimate,
+    )
+
+    assert layout is not None
+    assert wake in layout.retained_messages
+    assert wake not in layout.compacted_messages
 
 
 def test_positive_override_retains_only_recent_model_steps():

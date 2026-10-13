@@ -20,11 +20,11 @@
         @keydown.escape="cancel"
       >
         <header class="fb-dialog-header">
-          <h2 id="fb-dialog-title">选择目录</h2>
+          <h2 id="fb-dialog-title">{{ t("选择目录") }}</h2>
           <button
             type="button"
             class="fb-dialog-close"
-            aria-label="关闭"
+            :aria-label="t('关闭')"
             @click="cancel"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -43,14 +43,14 @@
                 v-if="canGoUp"
                 type="button"
                 class="fb-tree-up"
-                title="上级目录"
+                :title="t('上级目录')"
                 @click="goUp"
               >
                 <ArrowUp :size="14" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </div>
             <div class="fb-tree-list">
-              <div v-if="loading && entries.length === 0" class="fb-tree-loading">加载中...</div>
+              <div v-if="loading && entries.length === 0" class="fb-tree-loading">{{ t("加载中...") }}</div>
               <div v-else-if="error" class="fb-tree-error">{{ error }}</div>
               <template v-else>
                 <FbTreeItem
@@ -70,13 +70,13 @@
         </div>
 
         <footer class="fb-dialog-footer">
-          <button type="button" class="fb-btn-cancel" @click="cancel">取消</button>
+          <button type="button" class="fb-btn-cancel" @click="cancel">{{ t("取消") }}</button>
           <button
             type="button"
             class="fb-btn-select"
             :disabled="!selectedPath"
             @click="confirm"
-          >选择此目录</button>
+          >{{ t("选择此目录") }}</button>
         </footer>
       </section>
       </div>
@@ -85,6 +85,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { nextTick, onMounted, ref, computed, watch, defineAsyncComponent } from 'vue'
 import { ArrowUp } from 'lucide-vue-next'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'
@@ -178,7 +180,7 @@ watch(visible, (val) => {
 })
 
 const displayPath = computed(() => {
-  if (!treePath.value) return '此电脑'
+  if (!treePath.value) return t("此电脑")
   return treePath.value
 })
 

@@ -1,3 +1,5 @@
+
+import { t } from '../../../../../../ui/src/i18n/index'
 import type { WorkflowDef, WorkflowDocumentV2, WorkflowEdge, WorkflowNode, WorkflowPort } from './types'
 import { normalizeCanvasElements } from './canvas'
 import { workflowNodeKindForTypeId } from './catalog'
@@ -68,7 +70,7 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
  * Normalize imported JSON at the UI boundary. This intentionally accepts the
  * old single-file and folder-merged shapes produced before stable ids/CAS.
  */
-export function normalizeImportedWorkflow(value: unknown, fallbackName = '导入工作流'): WorkflowDef {
+export function normalizeImportedWorkflow(value: unknown, fallbackName = t("导入工作流")): WorkflowDef {
   const candidate = unwrapWorkflow(value)
   if (isWorkflowDocumentV2(candidate)) return workflowDocumentToDefinition(candidate)
   const raw = isRecord(candidate) ? candidate : {}
@@ -108,7 +110,7 @@ export function normalizeImportedWorkflow(value: unknown, fallbackName = '导入
 }
 
 /** Classify imported JSON without projecting ComfyUI through the legacy map model. */
-export function parseWorkflowImport(value: unknown, fallbackName = '导入工作流'): WorkflowImportSource {
+export function parseWorkflowImport(value: unknown, fallbackName = t("导入工作流")): WorkflowImportSource {
   const candidate = unwrapWorkflow(value)
   if (isWorkflowDocumentV2(candidate)) {
     return {

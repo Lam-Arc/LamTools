@@ -2,26 +2,28 @@
   <form class="core-agents-editor" :aria-busy="loading" @keydown.esc.prevent="!loading && emit('close')" @submit.prevent="save">
     <div class="core-agents-editor-head">
       <strong>AGENTS.md</strong>
-      <button type="button" class="icon-btn" data-agents-close :disabled="loading" title="关闭" aria-label="关闭" @click="emit('close')">
+      <button type="button" class="icon-btn" data-agents-close :disabled="loading" :title="t('关闭')" :aria-label="t('关闭')" @click="emit('close')">
         <X :size="13" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </div>
     <textarea
       v-model="draft"
       data-agents-content
-      aria-label="AGENTS.md 内容"
+      :aria-label="t('AGENTS.md 内容')"
       spellcheck="false"
       :disabled="loading"
     />
     <p v-if="error" class="core-agents-error" role="alert">{{ error }}</p>
     <div class="core-agents-actions">
-      <button type="button" class="btn-cancel" :disabled="loading" @click="emit('close')">取消</button>
-      <button type="submit" class="btn-primary-sm" data-agents-save :disabled="loading">{{ loading ? '保存中' : '保存' }}</button>
+      <button type="button" class="btn-cancel" :disabled="loading" @click="emit('close')">{{ t("取消") }}</button>
+      <button type="submit" class="btn-primary-sm" data-agents-save :disabled="loading">{{ loading ? t("保存中") : t("保存") }}</button>
     </div>
   </form>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 

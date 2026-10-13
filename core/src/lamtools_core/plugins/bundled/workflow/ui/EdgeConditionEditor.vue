@@ -3,43 +3,45 @@
     ref="rootEl"
     class="wf-edge-condition-editor"
     role="dialog"
-    aria-label="编辑连线条件"
+    :aria-label="t('编辑连线条件')"
     :style="editorStyle"
     @pointerdown.stop
     @click.stop
     @keydown.esc.prevent="$emit('close')"
   >
     <header class="wf-edge-condition-head">
-      <span>编辑连线条件</span>
-      <button class="text-btn" type="button" aria-label="关闭" @click="$emit('close')">
+      <span>{{ t("编辑连线条件") }}</span>
+      <button class="text-btn" type="button" :aria-label="t('关闭')" @click="$emit('close')">
         <X :size="14" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </header>
 
     <div class="wf-edge-condition-body">
       <label class="wf-edge-condition-field">
-        <span>Python 表达式</span>
+        <span>{{ t("Python 表达式") }}</span>
         <AutoTextarea
           v-model="draft"
           :min-rows="2"
           :max-rows="5"
-          placeholder="例如：quality >= 0.8"
+          :placeholder="t('例如：quality >= 0.8')"
           @keydown.esc.prevent="$emit('close')"
           @keydown.ctrl.enter.prevent="apply"
           @keydown.meta.enter.prevent="apply"
         />
       </label>
-      <p>空值表示无条件；表达式不满足时，下游会跳过。</p>
+      <p>{{ t("空值表示无条件；表达式不满足时，下游会跳过。") }}</p>
     </div>
 
     <footer class="wf-edge-condition-foot">
-      <button class="small-btn" type="button" @click="$emit('close')">取消</button>
-      <button class="small-btn primary" type="button" @click="apply">应用</button>
+      <button class="small-btn" type="button" @click="$emit('close')">{{ t("取消") }}</button>
+      <button class="small-btn primary" type="button" @click="apply">{{ t("应用") }}</button>
     </footer>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { X } from 'lucide-vue-next'
 import AutoTextarea from '../../../../../../ui/src/components/AutoTextarea.vue'

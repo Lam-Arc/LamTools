@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ArrowLeft,
@@ -46,10 +48,10 @@ const editingJob = ref<CoreArrangeJob | null>(null)
 type FilterId = 'all' | 'active' | 'completed' | 'failed'
 const filter = ref<FilterId>('all')
 const filterDefs: Array<{ id: FilterId; label: string }> = [
-  { id: 'all', label: '全部' },
-  { id: 'active', label: '进行中' },
-  { id: 'completed', label: '已完成' },
-  { id: 'failed', label: '失败' },
+  { id: 'all', get label() { return t("全部") } },
+  { id: 'active', get label() { return t("进行中") } },
+  { id: 'completed', get label() { return t("已完成") } },
+  { id: 'failed', get label() { return t("失败") } },
 ]
 
 /* ---- 内置模板：点击带入新建页 ---- */
@@ -65,11 +67,11 @@ const templates: ArrangeTemplate[] = [
   {
     id: 'morning-brief',
     icon: Sunrise,
-    name: '晨会摘要',
-    description: '汇总昨天以来的会话进展、完成事项与待跟进项，生成不超过 6 条的口述摘要。只读分析，不改动文件。',
+    get name() { return t("晨会摘要") },
+    get description() { return t("汇总昨天以来的会话进展、完成事项与待跟进项，生成不超过 6 条的口述摘要。只读分析，不改动文件。") },
     scheduleLabel: '每天 09:00',
     apply: {
-      title: '晨会摘要',
+      get title() { return t("晨会摘要") },
       instruction: '汇总昨天以来的会话进展、完成事项与待跟进项，生成不超过 6 条的口述摘要；只读分析，不改动任何文件。',
       time: '09:00',
     },
@@ -77,11 +79,11 @@ const templates: ArrangeTemplate[] = [
   {
     id: 'risk-scan',
     icon: Radar,
-    name: '风险扫描',
-    description: '检查最近 24 小时的代码与数据变更，识别运行错误、数据丢失与权限越界等风险，并附代码位置与修复建议。',
+    get name() { return t("风险扫描") },
+    get description() { return t("检查最近 24 小时的代码与数据变更，识别运行错误、数据丢失与权限越界等风险，并附代码位置与修复建议。") },
     scheduleLabel: '每天 10:00',
     apply: {
-      title: '风险扫描',
+      get title() { return t("风险扫描") },
       instruction: '检查最近 24 小时的代码与数据变更，识别运行错误、数据丢失与权限越界等风险，并附代码位置与修复建议。',
       time: '10:00',
     },
@@ -117,23 +119,23 @@ const historyLoading = ref(false)
 
 /* ---- UiSelect 选项 ---- */
 const scheduleTypeOptions = [
-  { value: 'once', label: '单次' },
-  { value: 'daily', label: '每天' },
-  { value: 'monthly', label: '每月' },
-  { value: 'interval', label: '间隔' },
-  { value: 'event', label: '事件' },
+  { value: 'once', get label() { return t("单次") } },
+  { value: 'daily', get label() { return t("每天") } },
+  { value: 'monthly', get label() { return t("每月") } },
+  { value: 'interval', get label() { return t("间隔") } },
+  { value: 'event', get label() { return t("事件") } },
 ]
 const modelOptions = computed(() =>
   availableModels.value.map(m => ({ value: m.id, label: m.display_name })),
 )
 const threadOptions = computed(() => [
-  { value: '', label: '每次新建' },
+  { value: '', get label() { return t("每次新建") } },
   ...availableSessions.value.map(s => ({ value: s.id, label: s.title || s.id.slice(0, 8) })),
 ])
 const projectOptions = computed(() => {
   const opts = availableProjects.value.map(p => ({ value: p.work_root, label: p.name }))
   if (props.workRoot && !availableProjects.value.some(p => p.work_root === props.workRoot)) {
-    opts.unshift({ value: props.workRoot, label: '当前项目' })
+    opts.unshift({ value: props.workRoot, get label() { return t("当前项目") } })
   }
   return opts
 })
@@ -212,7 +214,7 @@ async function loadJobs() {
     jobs.value = result.jobs ?? []
     schedulerNotice.value = result.scheduler_notice || ''
   }
-  catch (cause) { error.value = cause instanceof Error ? cause.message : '读取定时任务失败' }
+  catch (cause) { error.value = cause instanceof Error ? cause.message : t("读取定时任务失败") }
   finally { loading.value = false }
 }
 
@@ -377,7 +379,7 @@ async function submitForm() {
       jobs.value = jobs.value.map(item => item.id === updated.id ? updated : item)
     }
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '操作失败'
+    error.value = cause instanceof Error ? cause.message : t("操作失败")
   } finally {
     formSubmitting.value = false
   }
@@ -391,7 +393,7 @@ async function changeStatus(job: CoreArrangeJob, action: 'pause' | 'resume' | 'c
     jobs.value = jobs.value.map(item => item.id === updated.id ? updated : item)
     if (editingJob.value?.id === updated.id) editingJob.value = updated
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '更新定时任务失败'
+    error.value = cause instanceof Error ? cause.message : t("更新定时任务失败")
   } finally {
     const next = new Set(busyIds.value)
     next.delete(job.id)
@@ -418,26 +420,26 @@ const currentOccurrences = computed(() => {
 })
 
 /* ---- 展示辅助 ---- */
-function instruction(job: CoreArrangeJob) { return String(job.payload.message || '未命名定时任务') }
+function instruction(job: CoreArrangeJob) { return String(job.payload.message || t("未命名定时任务")) }
 function displayTitle(job: CoreArrangeJob) { return job.title || instruction(job) }
 function truncateTitle(text: string) {
   return text.length > 28 ? `${text.slice(0, 28)}…` : text
 }
 function formatTime(value: string) {
   const timestamp = Date.parse(value)
-  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : value || '待定'
+  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : value || t("待定")
 }
 function schedule(job: CoreArrangeJob) {
   const trigger = job.trigger
   if (trigger.type === 'calendar') {
     return trigger.frequency === 'daily'
-      ? `每天 ${trigger.time}`
-      : `每月 ${trigger.day} 日 ${trigger.time}`
+      ? t("每天 {0}", { 0: trigger.time })
+      : t("每月 {0} 日 {1}", { 0: trigger.day, 1: trigger.time })
   }
-  if (trigger.type === 'once') return `单次 · ${formatTime(String(trigger.local_at || trigger.run_at || job.next_run_at || ''))}`
-  if (trigger.type === 'interval') return `每 ${trigger.every_seconds} 秒`
-  if (trigger.type === 'event') return `事件 · ${String(trigger.event_type || '')}`
-  return '未知触发方式'
+  if (trigger.type === 'once') return t("单次 · {0}", { 0: formatTime(String(trigger.local_at || trigger.run_at || job.next_run_at || '')) })
+  if (trigger.type === 'interval') return t("每 {0} 秒", { 0: trigger.every_seconds })
+  if (trigger.type === 'event') return t("事件 · {0}", { 0: String(trigger.event_type || '') })
+  return t("未知触发方式")
 }
 function statusLabel(status: CoreArrangeJob['status']) {
   return ({ scheduled: '已安排', waiting: '等待事件', running: '运行中', paused: '已暂停', completed: '已完成', failed: '失败', cancelled: '已取消' } as Record<string, string>)[status] || status
@@ -451,11 +453,11 @@ function statusColor(status: CoreArrangeJob['status']) {
 
 /* ---- 顶部条标题随子页变化 ---- */
 const heading = computed(() => {
-  if (view.value === 'create') return { title: '定时任务 › 新建任务', subtitle: '' }
+  if (view.value === 'create') return { get title() { return t("定时任务 › 新建任务") }, subtitle: '' }
   if (view.value === 'edit' && editingJob.value) {
-    return { title: `定时任务 › ${truncateTitle(displayTitle(editingJob.value))}`, subtitle: '' }
+    return { title: t("定时任务 › {0}", { 0: truncateTitle(displayTitle(editingJob.value)) }), subtitle: '' }
   }
-  return { title: '定时任务', subtitle: '按计划运行任务，或在需要时随时执行。' }
+  return { get title() { return t("定时任务") }, get subtitle() { return t("按计划运行任务，或在需要时随时执行。") } }
 })
 watch(heading, (value) => emit('heading', { ...value }), { immediate: true })
 
@@ -473,10 +475,10 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
     <main class="arrange-page full-area-column">
       <FullAreaActions :to-band="bandActions">
         <template v-if="view === 'list'">
-          <button class="icon-button" type="button" :disabled="loading" aria-label="刷新" title="刷新" @click="loadJobs">
+          <button class="icon-button" type="button" :disabled="loading" :aria-label="t('刷新')" :title="t('刷新')" @click="loadJobs">
             <RotateCw :size="14" :stroke-width="1.8" aria-hidden="true" />
           </button>
-          <button class="primary-button" type="button" @click="openCreateForm()">创建定时任务</button>
+          <button class="primary-button" type="button" @click="openCreateForm()">{{ t("创建定时任务") }}</button>
         </template>
         <button
           v-else-if="view === 'create'"
@@ -484,48 +486,48 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
           type="button"
           :disabled="formSubmitting || !formInstruction.trim() || !scheduleReady || !formModelId"
           @click="submitForm"
-        >{{ formSubmitting ? '创建中…' : '创建定时任务' }}</button>
+        >{{ formSubmitting ? t("创建中…") : t("创建定时任务") }}</button>
         <template v-else-if="editingJob">
           <button
             class="primary-button"
             type="button"
             :disabled="formSubmitting || !formInstruction.trim() || !scheduleReady || !formModelId"
             @click="submitForm"
-          >{{ formSubmitting ? '保存中…' : '保存' }}</button>
+          >{{ formSubmitting ? t("保存中…") : t("保存") }}</button>
           <button
             v-if="['scheduled', 'waiting', 'running'].includes(editingJob.status)"
             class="quiet-button"
             type="button"
             :disabled="busyIds.has(editingJob.id)"
             @click="changeStatus(editingJob, 'pause')"
-          >暂停</button>
+          >{{ t("暂停") }}</button>
           <button
             v-else-if="editingJob.status === 'paused'"
             class="quiet-button"
             type="button"
             :disabled="busyIds.has(editingJob.id)"
             @click="changeStatus(editingJob, 'resume')"
-          >恢复</button>
+          >{{ t("恢复") }}</button>
           <button
             v-if="!terminal.has(editingJob.status)"
             class="quiet-button danger"
             type="button"
             :disabled="busyIds.has(editingJob.id)"
             @click="changeStatus(editingJob, 'cancel')"
-          >取消任务</button>
+          >{{ t("取消任务") }}</button>
         </template>
       </FullAreaActions>
 
       <div class="arrange-mobile-head">
-        <button class="arrange-back" type="button" aria-label="返回" title="返回" @click="onBackClick">
+        <button class="arrange-back" type="button" :aria-label="t('返回')" :title="t('返回')" @click="onBackClick">
           <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
         </button>
         <div v-if="view === 'list'" class="arrange-head-copy">
-          <h1 class="arrange-title">定时任务</h1>
-          <p class="arrange-subtitle">按计划运行任务，或在需要时随时执行。</p>
+          <h1 class="arrange-title">{{ t("定时任务") }}</h1>
+          <p class="arrange-subtitle">{{ t("按计划运行任务，或在需要时随时执行。") }}</p>
         </div>
-        <p v-else-if="view === 'create'" class="arrange-crumb">定时任务 <span class="crumb-sep" aria-hidden="true">›</span> 新建任务</p>
-        <p v-else class="arrange-crumb">定时任务 <span class="crumb-sep" aria-hidden="true">›</span> {{ editingJob ? truncateTitle(displayTitle(editingJob)) : '' }}</p>
+        <p v-else-if="view === 'create'" class="arrange-crumb">{{ t("定时任务") }}<span class="crumb-sep" aria-hidden="true">›</span>{{ t("新建任务") }}</p>
+        <p v-else class="arrange-crumb">{{ t("定时任务") }}<span class="crumb-sep" aria-hidden="true">›</span> {{ editingJob ? truncateTitle(displayTitle(editingJob)) : '' }}</p>
       </div>
 
       <!-- 列表 -->
@@ -535,15 +537,15 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
           <span>{{ schedulerNotice }}</span>
         </p>
 
-        <p v-if="loading" class="arrange-loading" role="status">正在读取定时任务…</p>
+        <p v-if="loading" class="arrange-loading" role="status">{{ t("正在读取定时任务…") }}</p>
 
         <div v-else-if="error" class="arrange-error" role="alert">
           <span>{{ error }}</span>
-          <button type="button" @click="loadJobs">重试</button>
+          <button type="button" @click="loadJobs">{{ t("重试") }}</button>
         </div>
 
         <template v-else>
-          <div class="filter-tabs" role="group" aria-label="按状态筛选">
+          <div class="filter-tabs" role="group" :aria-label="t('按状态筛选')">
             <button
               v-for="f in filterDefs"
               :key="f.id"
@@ -555,16 +557,13 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
           </div>
 
           <section class="arrange-section">
-            <h3 class="section-label">已创建任务</h3>
+            <h3 class="section-label">{{ t("已创建任务") }}</h3>
             <div v-if="jobs.length === 0" class="full-area-empty" data-arrange-empty>
               <span class="full-area-empty-icon" aria-hidden="true"><CalendarClock :size="18" :stroke-width="1.8" /></span>
-              <h2 class="full-area-empty-title">还没有定时任务</h2>
-              <p class="full-area-empty-hint">
-                定时任务是一句交给 Agent 的长期指令：到点它会自己开工，跑完把结果留在会话里。
-                点右上角「创建定时任务」，或直接在聊天里说「每天九点把 XX 做一遍」。
-              </p>
+              <h2 class="full-area-empty-title">{{ t("还没有定时任务") }}</h2>
+              <p class="full-area-empty-hint">{{ t("定时任务是一句交给 Agent 的长期指令：到点它会自己开工，跑完把结果留在会话里。 点右上角「创建定时任务」，或直接在聊天里说「每天九点把 XX 做一遍」。") }}</p>
             </div>
-            <p v-else-if="filteredJobs.length === 0" class="tab-empty">这个状态下暂无任务。</p>
+            <p v-else-if="filteredJobs.length === 0" class="tab-empty">{{ t("这个状态下暂无任务。") }}</p>
             <div v-else class="card-list" role="list">
               <article
                 v-for="job in filteredJobs"
@@ -572,7 +571,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
                 class="arrange-card"
                 role="listitem"
                 tabindex="0"
-                :aria-label="`打开 ${displayTitle(job)}`"
+                :aria-label="t('打开 {0}', { 0: displayTitle(job) })"
                 @click="openEditForm(job)"
                 @keydown.enter.prevent="openEditForm(job)"
               >
@@ -587,14 +586,14 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
                     <Clock3 :size="12" :stroke-width="1.8" aria-hidden="true" />
                     {{ schedule(job) }}
                   </span>
-                  <span class="run-count">已运行 {{ job.run_count }} 次</span>
+                  <span class="run-count">{{ t("已运行") }} {{ job.run_count }} {{ t("次") }}</span>
                 </footer>
               </article>
             </div>
           </section>
 
           <section class="arrange-section">
-            <h3 class="section-label">定时任务模板</h3>
+            <h3 class="section-label">{{ t("定时任务模板") }}</h3>
             <div class="template-grid">
               <button v-for="t in templates" :key="t.id" type="button" class="template-card" @click="applyTemplate(t)">
                 <span class="template-head">
@@ -612,18 +611,18 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
       <!-- 新建 / 编辑 -->
       <div v-else class="form-shell">
         <header class="form-heading">
-          <h2>{{ view === 'create' ? '新建定时任务' : '编辑定时任务' }}</h2>
-          <p>{{ view === 'create' ? '配置任务的执行时间、指令和运行方式。' : '调整此任务的执行时间、指令和运行方式。' }}</p>
+          <h2>{{ view === 'create' ? t("新建定时任务") : t("编辑定时任务") }}</h2>
+          <p>{{ view === 'create' ? t("配置任务的执行时间、指令和运行方式。") : t("调整此任务的执行时间、指令和运行方式。") }}</p>
         </header>
 
-        <div class="form-tabs" role="tablist" aria-label="任务页签">
-          <button type="button" role="tab" :aria-selected="formTab === 'settings'" :class="{ active: formTab === 'settings' }" @click="formTab = 'settings'">设置</button>
-          <button type="button" role="tab" :aria-selected="formTab === 'history'" :class="{ active: formTab === 'history' }" @click="openHistoryTab">历史</button>
+        <div class="form-tabs" role="tablist" :aria-label="t('任务页签')">
+          <button type="button" role="tab" :aria-selected="formTab === 'settings'" :class="{ active: formTab === 'settings' }" @click="formTab = 'settings'">{{ t("设置") }}</button>
+          <button type="button" role="tab" :aria-selected="formTab === 'history'" :class="{ active: formTab === 'history' }" @click="openHistoryTab">{{ t("历史") }}</button>
         </div>
 
         <div v-if="formTab === 'settings'" class="form-body">
           <div v-if="view === 'edit' && editingJob" class="form-field">
-            <span class="field-label">状态</span>
+            <span class="field-label">{{ t("状态") }}</span>
             <span class="status-chip" :style="{ color: statusColor(editingJob.status) }">
               <span class="status-dot" :style="{ background: statusColor(editingJob.status) }" aria-hidden="true" />
               {{ statusLabel(editingJob.status) }}
@@ -632,75 +631,71 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
           </div>
 
           <label class="form-field">
-            <span class="field-label">任务标题</span>
-            <input v-model="formTitle" placeholder="未命名定时任务" />
+            <span class="field-label">{{ t("任务标题") }}</span>
+            <input v-model="formTitle" :placeholder="t('未命名定时任务')" />
           </label>
 
           <div class="form-field">
-            <span class="field-label">调度</span>
+            <span class="field-label">{{ t("调度") }}</span>
             <button v-if="!hasSchedule" type="button" class="schedule-add" @click="addSchedule">
-              <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
-              添加计划
-            </button>
+              <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />{{ t("添加计划") }}</button>
             <div v-else class="schedule-row">
               <UiSelect
                 class="schedule-select"
                 :model-value="formScheduleType"
                 :options="scheduleTypeOptions"
-                aria-label="调度方式"
+                :aria-label="t('调度方式')"
                 @update:model-value="formScheduleType = $event as 'once' | 'daily' | 'monthly' | 'interval' | 'event'"
               />
               <template v-if="formScheduleType === 'once'">
-                <input v-model="formDate" type="date" aria-label="日期" />
-                <input v-model="formTime" type="time" aria-label="时间" />
+                <input v-model="formDate" type="date" :aria-label="t('日期')" />
+                <input v-model="formTime" type="time" :aria-label="t('时间')" />
               </template>
               <template v-else-if="formScheduleType === 'daily'">
-                <span class="schedule-join">于</span>
-                <input v-model="formTime" type="time" aria-label="时间" />
+                <span class="schedule-join">{{ t("于") }}</span>
+                <input v-model="formTime" type="time" :aria-label="t('时间')" />
               </template>
               <template v-else-if="formScheduleType === 'monthly'">
-                <span class="schedule-join">每月</span>
-                <input v-model.number="formDay" type="number" min="1" max="31" aria-label="几号" />
-                <span class="schedule-join">日</span>
-                <input v-model="formTime" type="time" aria-label="时间" />
+                <span class="schedule-join">{{ t("每月") }}</span>
+                <input v-model.number="formDay" type="number" min="1" max="31" :aria-label="t('几号')" />
+                <span class="schedule-join">{{ t("日") }}</span>
+                <input v-model="formTime" type="time" :aria-label="t('时间')" />
               </template>
               <template v-else-if="formScheduleType === 'interval'">
-                <span class="schedule-join">每</span>
-                <input v-model.number="formEverySeconds" type="number" min="1" aria-label="间隔秒数" />
-                <span class="schedule-join">秒</span>
+                <span class="schedule-join">{{ t("每") }}</span>
+                <input v-model.number="formEverySeconds" type="number" min="1" :aria-label="t('间隔秒数')" />
+                <span class="schedule-join">{{ t("秒") }}</span>
               </template>
-              <input v-else v-model="formEventType" placeholder="事件类型，如 artifact.changed" aria-label="事件类型" />
+              <input v-else v-model="formEventType" :placeholder="t('事件类型，如 artifact.changed')" :aria-label="t('事件类型')" />
               <input
                 v-if="formScheduleType === 'once' || formScheduleType === 'daily' || formScheduleType === 'monthly'"
                 v-model="formTimezone"
                 class="schedule-timezone"
                 placeholder="Asia/Shanghai"
-                aria-label="时区"
+                :aria-label="t('时区')"
               />
               <button
                 v-if="view === 'create'"
                 type="button"
                 class="schedule-remove"
-                aria-label="移除计划"
-                title="移除计划"
+                :aria-label="t('移除计划')"
+                :title="t('移除计划')"
                 @click="hasSchedule = false"
               >
                 <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </div>
-            <label v-if="view === 'create'" class="max-runs">
-              最多运行次数
-              <input v-model.number="formMaxRuns" type="number" min="1" placeholder="留空不限" />
+            <label v-if="view === 'create'" class="max-runs">{{ t("最多运行次数") }}<input v-model.number="formMaxRuns" type="number" min="1" :placeholder="t('留空不限')" />
             </label>
           </div>
 
           <div class="form-field">
-            <span class="field-label">指令</span>
+            <span class="field-label">{{ t("指令") }}</span>
             <div class="instruction-shell">
               <textarea
                 v-model="formInstruction"
                 rows="7"
-                placeholder="例如：Review 最近 24 小时的提交，总结可能引入的 bug 和修复建议"
+                :placeholder="t('例如：Review 最近 24 小时的提交，总结可能引入的 bug 和修复建议')"
               />
               <div class="instruction-meta">
                 <div class="instruction-meta-left">
@@ -710,16 +705,16 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
                     :model-value="formWorkRoot"
                     :options="projectOptions"
                     direction="up"
-                    aria-label="项目"
+                    :aria-label="t('项目')"
                     @update:model-value="onProjectChange"
                   />
-                  <input v-else v-model="formWorkRoot" class="meta-input" placeholder="项目目录" aria-label="项目目录" />
+                  <input v-else v-model="formWorkRoot" class="meta-input" :placeholder="t('项目目录')" :aria-label="t('项目目录')" />
                   <UiSelect
                     class="meta-select"
                     :model-value="formSessionKey"
                     :options="threadOptions"
                     direction="up"
-                    aria-label="会话"
+                    :aria-label="t('会话')"
                     :disabled="loadingSessions"
                     @update:model-value="formSessionKey = $event"
                   />
@@ -730,8 +725,8 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
                   :options="modelOptions"
                   direction="up"
                   menu-align="right"
-                  placeholder="选择模型"
-                  aria-label="模型"
+                  :placeholder="t('选择模型')"
+                  :aria-label="t('模型')"
                   @update:model-value="formModelId = $event"
                 />
               </div>
@@ -742,13 +737,13 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
         </div>
 
         <div v-else class="history-panel">
-          <p v-if="view === 'create'" class="tab-empty">任务创建后，这里会显示每次运行的时间与结果。</p>
-          <p v-else-if="historyLoading" class="tab-empty" role="status">读取运行记录…</p>
-          <p v-else-if="!currentOccurrences || currentOccurrences.length === 0" class="tab-empty">还没有运行记录。</p>
+          <p v-if="view === 'create'" class="tab-empty">{{ t("任务创建后，这里会显示每次运行的时间与结果。") }}</p>
+          <p v-else-if="historyLoading" class="tab-empty" role="status">{{ t("读取运行记录…") }}</p>
+          <p v-else-if="!currentOccurrences || currentOccurrences.length === 0" class="tab-empty">{{ t("还没有运行记录。") }}</p>
           <template v-else>
             <div v-for="occ in currentOccurrences" :key="occ.id" class="history-item">
               <span class="history-time">{{ formatTime(occ.scheduled_at) }}</span>
-              <span class="history-status" :class="occ.status">{{ occ.status === 'completed' ? '完成' : occ.status === 'failed' ? '失败' : occ.status }}</span>
+              <span class="history-status" :class="occ.status">{{ occ.status === 'completed' ? t("完成") : occ.status === 'failed' ? t("失败") : occ.status }}</span>
               <span v-if="occ.attempt_count > 1" class="history-attempts">×{{ occ.attempt_count }}</span>
               <span v-if="occ.last_error" class="history-error">{{ occ.last_error }}</span>
             </div>

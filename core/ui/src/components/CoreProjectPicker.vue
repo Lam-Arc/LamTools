@@ -9,8 +9,8 @@
         aria-labelledby="core-project-picker-title"
       >
         <header class="core-project-picker-header">
-          <h2 id="core-project-picker-title">选择项目</h2>
-          <p>选择一个已登记的项目继续工作。</p>
+          <h2 id="core-project-picker-title">{{ t("选择项目") }}</h2>
+          <p>{{ t("选择一个已登记的项目继续工作。") }}</p>
         </header>
 
         <div v-if="projects.length" class="core-project-picker-list" role="list">
@@ -28,10 +28,10 @@
             <span class="core-project-picker-path">{{ project.workRoot }}</span>
           </button>
         </div>
-        <p v-else class="core-project-picker-empty">暂无已登记项目。</p>
+        <p v-else class="core-project-picker-empty">{{ t("暂无已登记项目。") }}</p>
 
         <footer class="core-project-picker-actions">
-          <button type="button" class="core-project-picker-cancel" data-project-picker-cancel @click="emit('cancel')">取消</button>
+          <button type="button" class="core-project-picker-cancel" data-project-picker-cancel @click="emit('cancel')">{{ t("取消") }}</button>
         </footer>
       </section>
     </div>
@@ -39,6 +39,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { ref } from 'vue'
 import type { CoreProject } from '../projects/types'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'

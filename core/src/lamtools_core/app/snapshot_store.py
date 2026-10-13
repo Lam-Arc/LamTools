@@ -106,6 +106,34 @@ class CoreAppSnapshotProjector:
         apply_run_item_event_in_place(core, RunItemEvent.from_dict(payload))
         state["core"] = core
         self._sync_turns_from_core(state)
+        self._apply_member_wait_flag(state, payload)
+
+    def _apply_member_wait_flag(self, state: dict[str, Any], payload: dict[str, Any]) -> None:
+        """Lift the member-wait fact onto the turn as ``waiting_on_members``.
+
+        ``runtime.sub_agent_wait`` / ``runtime.sub_agent_report`` project a
+        ``subAgents`` status item; the meaningful bit for a client is whether the
+        turn is currently held open for background members, which is a property
+        of the turn, not of one row. Reading it off the turn lets the UI tell
+        "the main agent is still working" from "the main agent is done and only
+        its members are still running" without scanning for a private item id.
+        """
+        inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        if str(inner.get("type") or "") != "subAgents":
+            return
+        turn_id = str(payload.get("turn_id") or inner.get("turn_id") or "")
+        if not turn_id:
+            return
+        turn = state.setdefault("turns", {}).setdefault(
+            turn_id, {"turn_id": turn_id, "status": "running", "items": []}
+        )
+        turn["waiting_on_members"] = bool(inner.get("waiting_on_members"))
+        raw_members = inner.get("members")
+        turn["running_members"] = [
+            str(member.get("name") or "")
+            for member in raw_members
+            if isinstance(member, dict) and member.get("name")
+        ] if isinstance(raw_members, list) else []
 
     def _apply_thread_started(self, state: dict[str, Any], event: AppEventEnvelope) -> None:
         payload = dict(event.payload or {})
@@ -142,6 +170,11 @@ class CoreAppSnapshotProjector:
             # The accepted event is the durable authority for this turn.  Do
             # not derive these fields again from current Composer/settings.
             turn["runtime_snapshot"] = deepcopy(runtime_snapshot)
+        # Provenance of an automatic (non-user) turn, e.g. "member_wake": kept on
+        # the turn so the interface can mark its input as a system event.
+        origin = str(payload.get("origin") or "").strip()
+        if origin:
+            turn["origin"] = origin
         turn.setdefault("items", [])
         turns[turn_id] = turn
         state["status"] = "running"
@@ -189,6 +222,13 @@ class CoreAppSnapshotProjector:
         )
         item.setdefault("deltas", [])
         items[item_id] = item
+        # Automatic-turn provenance rides the input item too, so the interface
+        # can mark this bubble as a system event without joining to the turn.
+        origin = str(payload.get("origin") or "").strip()
+        if origin:
+            item["origin"] = origin
+            if payload.get("role"):
+                item["role"] = str(payload["role"])
         self._append_item_order(state, item_id)
         if turn_id:
             turn = self._turn(state, turn_id)
@@ -479,6 +519,7 @@ class SqlAlchemyThreadSnapshotStore:
         state = dict(row.snapshot_json or self.projector.empty(thread_id))
         state["snapshot_seq"] = row.snapshot_seq
         state["revision"] = _row_revision(row, state)
+        await self._hydrate_resource_usage(db, state, thread_id)
         items: dict[str, Any] = {}
         order: list[str] = []
         result = await db.execute(
@@ -513,6 +554,7 @@ class SqlAlchemyThreadSnapshotStore:
         state = dict(row.snapshot_json or self.projector.empty(thread_id))
         state["snapshot_seq"] = row.snapshot_seq
         state["revision"] = _row_revision(row, state)
+        await self._hydrate_resource_usage(db, state, thread_id)
         core = state.get("core")
         if not isinstance(core, dict):
             core = empty_thread_snapshot(thread_id)
@@ -520,6 +562,34 @@ class SqlAlchemyThreadSnapshotStore:
         core.setdefault("items", {})
         core.setdefault("item_order", [])
         return _strip_inline_image_copies(self.projector.reconcile_status(state))
+
+    async def _hydrate_resource_usage(self, db: AsyncSession, state: dict[str, Any], thread_id: str) -> None:
+        """Recover per-call usage from the journal for pre-history snapshots only."""
+        core = state.get("core")
+        if not isinstance(core, dict) or core.get("resource_usage_version") == 1 or self.event_model is None:
+            return
+        if not core.get("turns"):
+            core["resource_usage_version"] = 1
+            return
+        model = self.event_model
+        result = await db.execute(select(model).where(
+            model.thread_id == thread_id,
+            model.seq <= int(state.get("snapshot_seq") or 0),
+            model.method == CORE_RUN_ITEM_METHOD,
+            model.payload_json["kind"].as_string() == "usage",
+        ).order_by(model.seq.asc()))
+        usage_state = empty_thread_snapshot(thread_id)
+        for event_row in result.scalars():
+            payload = dict(event_row.payload_json or {})
+            payload["seq"] = event_row.seq
+            apply_run_item_event_in_place(usage_state, RunItemEvent.from_dict(payload))
+        for turn_id, resources in usage_state["turns"].items():
+            turn = core.setdefault("turns", {}).setdefault(turn_id, {"turn_id": turn_id})
+            for key in ("usage", "usage_calls", "child_context_metrics"):
+                if key in resources:
+                    turn[key] = resources[key]
+        core["resource_usage_version"] = 1
+        self.projector._sync_turns_from_core(state)
 
     async def _partial_state(
         self,
@@ -539,6 +609,7 @@ class SqlAlchemyThreadSnapshotStore:
         state = dict(row.snapshot_json or self.projector.empty(thread_id))
         state["snapshot_seq"] = row.snapshot_seq
         state["revision"] = _row_revision(row, state)
+        await self._hydrate_resource_usage(db, state, thread_id)
         core = state.get("core")
         if not isinstance(core, dict):
             core = empty_thread_snapshot(thread_id)

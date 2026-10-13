@@ -1,117 +1,113 @@
 <template>
   <section class="settings-panel">
     <header class="settings-title">
-      <h1>通用</h1>
-      <p>全应用的出口流量走哪里，以及它们信任哪个根证书。</p>
+      <h1>{{ t("通用") }}</h1>
+      <p>{{ t("设置界面语言、网络连接与运行偏好。") }}</p>
     </header>
 
     <p v-if="error" class="general-error" role="alert">{{ error }}</p>
 
     <article class="setting-card">
+      <div class="subhead"><span class="muted subhead-title">{{ t("界面语言") }}</span></div>
+      <p class="general-hint">{{ t("选择应用界面的显示语言。不会更改对话内容或模型的回答语言。") }}</p>
+      <UiSelect
+        :model-value="uiLanguage"
+        :options="languageOptions"
+        :aria-label="t('界面语言')"
+        :disabled="languageSaving"
+        @update:model-value="changeLanguage"
+      />
+    </article>
+
+    <article class="setting-card">
       <div class="subhead">
-        <span class="muted subhead-title">HTTP 代理</span>
+        <span class="muted subhead-title">{{ t("HTTP 代理") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading" @click="fetchConfig">刷新</button>
-          <button class="text-btn" type="button" :disabled="loading || busy" @click="saveField('proxy')">保存</button>
+          <button class="text-btn" type="button" :disabled="loading" @click="fetchConfig">{{ t("刷新") }}</button>
+          <button class="text-btn" type="button" :disabled="loading || busy" @click="saveField('proxy')">{{ t("保存") }}</button>
         </div>
       </div>
-      <p class="general-hint">
-        模型、MCP、命令工具、网页抓取与搜索、插件安装、软件更新下载的出口流量都将经此代理；
-        应用界面内的网页（渲染层）跟随系统代理设置。留空时这些流量直连，不读取系统环境变量。
-        本机地址（localhost、127.0.0.1、::1）始终直连。
-      </p>
+      <p class="general-hint">{{ t("模型、MCP、命令工具、网页抓取与搜索、插件安装、软件更新下载的出口流量都将经此代理； 应用界面内的网页（渲染层）跟随系统代理设置。留空时这些流量直连，不读取系统环境变量。 本机地址（localhost、127.0.0.1、::1）始终直连。") }}</p>
       <label class="field">
         <input
           v-model="form.proxy"
           type="text"
           spellcheck="false"
           autocomplete="off"
-          placeholder="例如 http://127.0.0.1:7890"
-          aria-label="HTTP 代理"
+          :placeholder="t('例如 http://127.0.0.1:7890')"
+          :aria-label="t('HTTP 代理')"
           :disabled="loading || busy"
           @keyup.enter="saveField('proxy')"
         />
       </label>
       <p v-if="savedField === 'proxy'" class="general-saved" role="status">
-        <Check :size="12" :stroke-width="2.2" aria-hidden="true" /> 已保存
-      </p>
+        <Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
     </article>
 
     <article class="setting-card">
       <div class="subhead">
-        <span class="muted subhead-title">不使用代理的地址</span>
+        <span class="muted subhead-title">{{ t("不使用代理的地址") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading || busy" @click="saveField('no_proxy')">保存</button>
+          <button class="text-btn" type="button" :disabled="loading || busy" @click="saveField('no_proxy')">{{ t("保存") }}</button>
         </div>
       </div>
-      <p class="general-hint">
-        匹配这些主机的请求将直连，不经过 HTTP 代理；命令工具按同一份规则写入 NO_PROXY。
-        多个规则用英文逗号分隔。
-      </p>
+      <p class="general-hint">{{ t("匹配这些主机的请求将直连，不经过 HTTP 代理；命令工具按同一份规则写入 NO_PROXY。 多个规则用英文逗号分隔。") }}</p>
       <label class="field">
         <input
           v-model="form.no_proxy"
           type="text"
           spellcheck="false"
           autocomplete="off"
-          placeholder="例如 localhost,127.0.0.1,::1,.example.com,*.corp.com"
-          aria-label="不使用代理的地址"
+          :placeholder="t('例如 localhost,127.0.0.1,::1,.example.com,*.corp.com')"
+          :aria-label="t('不使用代理的地址')"
           :disabled="loading || busy"
           @keyup.enter="saveField('no_proxy')"
         />
       </label>
       <p v-if="savedField === 'no_proxy'" class="general-saved" role="status">
-        <Check :size="12" :stroke-width="2.2" aria-hidden="true" /> 已保存
-      </p>
+        <Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
     </article>
 
     <article class="setting-card">
       <div class="subhead">
-        <span class="muted subhead-title">自定义证书</span>
+        <span class="muted subhead-title">{{ t("自定义证书") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading || busy" @click="saveField('ca_cert')">保存</button>
+          <button class="text-btn" type="button" :disabled="loading || busy" @click="saveField('ca_cert')">{{ t("保存") }}</button>
         </div>
       </div>
-      <p class="general-hint">
-        可选。填写 PEM 根证书路径后，模型请求以它为信任根，并以 SSL_CERT_FILE、NODE_EXTRA_CA_CERTS
-        等变量注入 MCP 与命令工具；留空则使用系统信任链。
-      </p>
+      <p class="general-hint">{{ t("可选。填写 PEM 根证书路径后，模型请求以它为信任根，并以 SSL_CERT_FILE、NODE_EXTRA_CA_CERTS 等变量注入 MCP 与命令工具；留空则使用系统信任链。") }}</p>
       <label class="field">
         <input
           v-model="form.ca_cert"
           type="text"
           spellcheck="false"
           autocomplete="off"
-          placeholder="例如 C:\certs\root-ca.pem"
-          aria-label="自定义证书"
+          :placeholder="t('例如 C:\\certs\\root-ca.pem')"
+          :aria-label="t('自定义证书')"
           :disabled="loading || busy"
           @keyup.enter="saveField('ca_cert')"
         />
       </label>
       <p v-if="savedField === 'ca_cert'" class="general-saved" role="status">
-        <Check :size="12" :stroke-width="2.2" aria-hidden="true" /> 已保存
-      </p>
+        <Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
     </article>
 
     <article class="setting-card">
       <div class="subhead">
-        <span class="muted subhead-title">提问自动继续</span>
+        <span class="muted subhead-title">{{ t("提问自动继续") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading || busy" @click="fetchAskAutoContinue">刷新</button>
+          <button class="text-btn" type="button" :disabled="loading || busy" @click="fetchAskAutoContinue">{{ t("刷新") }}</button>
         </div>
       </div>
       <div class="general-toggle-row">
-        <p class="general-hint general-hint--inline">
-          打开后，模型的提问卡超过 5 分钟无人回答，会按「用户跳过」回传，本轮继续往下走。
-          需要你授权的审批卡不受影响，会一直等你处理。
-        </p>
+        <p class="general-hint general-hint--inline">{{ t("打开后，模型的提问卡超过 5 分钟无人回答，会按「用户跳过」回传，本轮继续往下走。 需要你授权的审批卡不受影响，会一直等你处理。") }}</p>
         <button
           class="text-btn toggle-btn"
           :class="{ 'is-on': askAutoContinue }"
           type="button"
-          aria-label="提问自动继续"
+          :aria-label="t('提问自动继续')"
           :aria-pressed="askAutoContinue"
-          :title="askAutoContinue ? '已打开' : '已关闭'"
+          :title="askAutoContinue ? t('已打开') : t('已关闭')"
           :disabled="loading || busy"
           @click="toggleAskAutoContinue"
         >
@@ -123,22 +119,20 @@
 
     <article v-if="keepAwakeSupported" class="setting-card">
       <div class="subhead">
-        <span class="muted subhead-title">保持电脑运行</span>
+        <span class="muted subhead-title">{{ t("保持电脑运行") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading || busy" @click="fetchKeepAwake">刷新</button>
+          <button class="text-btn" type="button" :disabled="loading || busy" @click="fetchKeepAwake">{{ t("刷新") }}</button>
         </div>
       </div>
       <div class="general-toggle-row">
-        <p class="general-hint general-hint--inline">
-          打开后阻止系统进入空闲休眠（手动睡眠、合盖休眠不受影响），长任务不会被中断。
-        </p>
+        <p class="general-hint general-hint--inline">{{ t("打开后阻止系统进入空闲休眠（手动睡眠、合盖休眠不受影响），长任务不会被中断。") }}</p>
         <button
           class="text-btn toggle-btn"
           :class="{ 'is-on': keepAwake }"
           type="button"
-          aria-label="保持电脑运行"
+          :aria-label="t('保持电脑运行')"
           :aria-pressed="keepAwake"
-          :title="keepAwake ? '已打开' : '已关闭'"
+          :title="keepAwake ? t('已打开') : t('已关闭')"
           :disabled="loading || busy"
           @click="toggleKeepAwake"
         >
@@ -150,24 +144,21 @@
 
     <article v-if="memoryResumeSupported" class="setting-card">
       <div class="subhead">
-        <span class="muted subhead-title">内存中断自动续跑</span>
+        <span class="muted subhead-title">{{ t("内存中断自动续跑") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading || memoryResumeBusy" @click="fetchMemoryResume">刷新</button>
-          <button class="text-btn" type="button" :disabled="loading || memoryResumeBusy" @click="saveMemoryThreshold">保存</button>
+          <button class="text-btn" type="button" :disabled="loading || memoryResumeBusy" @click="fetchMemoryResume">{{ t("刷新") }}</button>
+          <button class="text-btn" type="button" :disabled="loading || memoryResumeBusy" @click="saveMemoryThreshold">{{ t("保存") }}</button>
         </div>
       </div>
       <div class="general-toggle-row">
-        <p class="general-hint general-hint--inline">
-          机器内存不足导致本轮中断时，Sunday 会说明原因，并写明「可用内存大于多少就自动继续」；
-          内存回来后在同一会话自动开新一轮接着做，最多连续 3 次。你自己先发了新消息时不再自动继续。
-        </p>
+        <p class="general-hint general-hint--inline">{{ t("机器内存不足导致本轮中断时，Sunday 会说明原因，并写明「可用内存大于多少就自动继续」； 内存回来后在同一会话自动开新一轮接着做，最多连续 3 次。你自己先发了新消息时不再自动继续。") }}</p>
         <button
           class="text-btn toggle-btn"
           :class="{ 'is-on': memoryResume }"
           type="button"
-          aria-label="内存中断自动续跑"
+          :aria-label="t('内存中断自动续跑')"
           :aria-pressed="memoryResume"
-          :title="memoryResume ? '已打开' : '已关闭'"
+          :title="memoryResume ? t('已打开') : t('已关闭')"
           :disabled="loading || memoryResumeBusy"
           @click="toggleMemoryResume"
         >
@@ -175,9 +166,7 @@
           <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
-      <p class="general-hint">
-        自动继续的内存阈值（GB）：可用内存 = 物理内存 + 页面文件还能分配的量。调高更保守，但要等更久。
-      </p>
+      <p class="general-hint">{{ t("自动继续的内存阈值（GB）：可用内存 = 物理内存 + 页面文件还能分配的量。调高更保守，但要等更久。") }}</p>
       <label class="field">
         <input
           v-model="memoryThresholdDraft"
@@ -186,25 +175,41 @@
           max="1024"
           step="0.5"
           inputmode="decimal"
-          aria-label="自动继续的内存阈值（GB）"
+          :aria-label="t('自动继续的内存阈值（GB）')"
           :disabled="loading || memoryResumeBusy"
           @keyup.enter="saveMemoryThreshold"
         />
       </label>
       <p v-if="memoryResumeSaved" class="general-saved" role="status">
-        <Check :size="12" :stroke-width="2.2" aria-hidden="true" /> 已保存
-      </p>
+        <Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
     </article>
 
-    <p class="general-hint general-hint--foot">
-      保存后新发起的模型、MCP 与命令调用立即按新设置走；已连接的 MCP 服务与已运行的后台命令需重启应用。
-    </p>
+    <p class="general-hint general-hint--foot">{{ t("保存后新发起的模型、MCP 与命令调用立即按新设置走；已连接的 MCP 服务与已运行的后台命令需重启应用。") }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Check, ToggleLeft, ToggleRight } from 'lucide-vue-next'
+import UiSelect from './UiSelect.vue'
+import { UI_LANGUAGES, uiLanguage, saveUiLanguage } from '../i18n'
+
+const languageOptions = [...UI_LANGUAGES]
+const languageSaving = ref(false)
+async function changeLanguage(locale: string) {
+  if (languageSaving.value) return
+  languageSaving.value = true
+  error.value = ''
+  try {
+    await saveUiLanguage(props.requestRpc, locale)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    languageSaving.value = false
+  }
+}
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -403,7 +408,7 @@ async function saveMemoryThreshold() {
   if (!memoryResumeSupported.value || memoryResumeBusy.value) return
   const parsed = Number(memoryThresholdDraft.value)
   if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 1024) {
-    error.value = '阈值需要是 0.5 到 1024 之间的数字（GB）'
+    error.value = t("阈值需要是 0.5 到 1024 之间的数字（GB）")
     return
   }
   const previous = memoryThresholdDraft.value

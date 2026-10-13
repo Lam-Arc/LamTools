@@ -1,3 +1,5 @@
+
+import { t } from '../i18n/index'
 /**
  * 设置 / 插件的分区清单与图标映射 — 唯一权威来源。
  *
@@ -82,26 +84,26 @@ export function settingsSectionIcon(icon: string | undefined): LucideIcon | null
 }
 
 export const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
-  { id: 'models', label: '模型与供应商', icon: 'database' },
+  { id: 'models', get label() { return t("模型与供应商") }, icon: 'database' },
   // 通用 sits second on purpose: the settings page still opens on 模型与供应商,
   // and this pane is a rarely-touched system surface rather than the landing view.
-  { id: 'general', label: '通用', icon: 'settings' },
-  { id: 'appearance', label: '界面', icon: 'palette' },
-  { id: 'loadtools', label: '工具模式', icon: 'list-checks' },
-  { id: 'permissions', label: '权限', icon: 'lock' },
-  { id: 'mobile-control', label: '手机控制', icon: 'smartphone' },
-  { id: 'agents', label: '上下文', icon: 'file-code' },
+  { id: 'general', get label() { return t("通用") }, icon: 'settings' },
+  { id: 'appearance', get label() { return t("界面") }, icon: 'palette' },
+  { id: 'loadtools', get label() { return t("工具模式") }, icon: 'list-checks' },
+  { id: 'permissions', get label() { return t("权限") }, icon: 'lock' },
+  { id: 'mobile-control', get label() { return t("手机控制") }, icon: 'smartphone' },
+  { id: 'agents', get label() { return t("上下文") }, icon: 'file-code' },
   { id: 'subagent', label: 'Sub agent', icon: 'bot' },
-  { id: 'about', label: '关于与更新', icon: 'info' },
+  { id: 'about', get label() { return t("关于与更新") }, icon: 'info' },
 ]
 
 export const PLUGIN_SHELL_SECTIONS: SettingsSection[] = [
-  { id: 'plugins', label: '插件', icon: 'puzzle' },
-  { id: 'skills', label: '技能', icon: 'sparkles' },
-  { id: 'hooks', label: '钩子', icon: 'plug' },
+  { id: 'plugins', get label() { return t("插件") }, icon: 'puzzle' },
+  { id: 'skills', get label() { return t("技能") }, icon: 'sparkles' },
+  { id: 'hooks', get label() { return t("钩子") }, icon: 'plug' },
 ]
 
 export const PROJECT_SETTINGS_SECTIONS: SettingsSection[] = [
-  { id: 'project', label: '项目', icon: 'folder' },
+  { id: 'project', get label() { return t("项目") }, icon: 'folder' },
   { id: 'subagent', label: 'Sub agent', icon: 'bot' },
 ]

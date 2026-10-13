@@ -15,6 +15,8 @@ from typing import Any
 from urllib.parse import quote
 
 from lamtools_core.llm import (
+    HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER,
+    TAIL_SYSTEM_MESSAGE_MARKER,
     LLMRequest,
     LLMStreamEvent,
     LLMUsage,
@@ -1114,6 +1116,26 @@ def build_profiled_responses_request(
     }
 
 
+def _is_marked_tail_system_message(message: Any) -> bool:
+    """Identify the one internal system tail allowed provider fallback."""
+    return (
+        isinstance(message, dict)
+        and str(message.get("role") or "").strip().lower() == "system"
+        and isinstance(message.get("metadata"), dict)
+        and bool(message["metadata"].get(TAIL_SYSTEM_MESSAGE_MARKER))
+        and not bool(message["metadata"].get(HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER))
+    )
+
+
+def _is_historical_tail_system_message(message: Any) -> bool:
+    return (
+        isinstance(message, dict)
+        and str(message.get("role") or "").strip().lower() == "system"
+        and isinstance(message.get("metadata"), dict)
+        and bool(message["metadata"].get(HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER))
+    )
+
+
 def _responses_input_from_openai_messages(
     messages: Any,
     *,
@@ -1405,6 +1427,7 @@ def _gemini_contents_from_messages(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     contents: list[dict[str, Any]] = []
     system_parts: list[dict[str, Any]] = []
+    tail_system_parts: list[dict[str, Any]] = []
     if not isinstance(messages, list):
         return contents, system_parts
 
@@ -1414,7 +1437,17 @@ def _gemini_contents_from_messages(
         role = str(message.get("role") or "user").strip().lower()
         parts = _gemini_parts_from_content(message.get("content"), role=role)
         if role == "system":
-            system_parts.extend(parts)
+            if _is_marked_tail_system_message(message):
+                # Gemini exposes one leading systemInstruction field. Keep
+                # stable system instructions there and serialize only the
+                # explicitly marked internal tail as a final user turn.
+                tail_system_parts.extend(parts)
+            elif _is_historical_tail_system_message(message):
+                if not parts:
+                    parts = [{"text": ""}]
+                contents.append({"role": "user", "parts": parts})
+            else:
+                system_parts.extend(parts)
             continue
 
         if role == "assistant":
@@ -1463,6 +1496,8 @@ def _gemini_contents_from_messages(
         if not parts:
             parts = [{"text": ""}]
         contents.append({"role": role_name, "parts": parts})
+    if tail_system_parts:
+        contents.append({"role": "user", "parts": tail_system_parts})
     return contents, system_parts
 
 
@@ -1715,8 +1750,21 @@ def build_profiled_anthropic_request(
 ) -> dict[str, Any]:
     system_content = ""
     chat_messages: list[dict[str, Any]] = []
+    tail_system_messages: list[dict[str, Any]] = []
     for message in messages:
         if message.get("role") == "system":
+            if _is_marked_tail_system_message(message):
+                tail_system_messages.append(message)
+                continue
+            if _is_historical_tail_system_message(message):
+                chat_messages.append(
+                    _anthropic_message_from_openai_message(
+                        {**message, "role": "user"},
+                        profile=profile,
+                        model=model,
+                    )
+                )
+                continue
             system_content += str(message.get("content") or "") + "\n"
         else:
             chat_messages.append(
@@ -1726,6 +1774,19 @@ def build_profiled_anthropic_request(
                     model=model,
                 )
             )
+
+    # Anthropic hoists every ordinary system message into ``system``. The
+    # marked internal tail is the sole exception: append it after normal
+    # conversation messages as a user turn so the stable leading system
+    # prefix remains unchanged.
+    for message in tail_system_messages:
+        chat_messages.append(
+            _anthropic_message_from_openai_message(
+                message,
+                profile=profile,
+                model=model,
+            )
+        )
 
     if capability.strip().lower() == "text":
         strip_unsupported_content(chat_messages, capability)

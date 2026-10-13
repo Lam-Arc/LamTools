@@ -9,14 +9,14 @@
     :tabindex="expanded ? undefined : 0"
     :aria-expanded="expanded"
     :aria-controls="detailsId"
-    :aria-label="expanded ? '当前计划' : compactAriaLabel(currentStep)"
+    :aria-label="expanded ? t('当前计划') : compactAriaLabel(currentStep)"
     :title="expanded ? undefined : compactAriaLabel(currentStep)"
     @click="handleCardClick"
     @keydown="handleCardKeydown"
   >
     <div v-if="expanded" class="runtime-checklist-card__header">
       <div class="runtime-checklist-card__heading">
-        <span class="runtime-checklist-card__eyebrow">当前计划</span>
+        <span class="runtime-checklist-card__eyebrow">{{ t("当前计划") }}</span>
         <span class="runtime-checklist-card__status" aria-live="polite">{{ statusLabel(currentStep.status) }}</span>
       </div>
       <button
@@ -26,7 +26,7 @@
         :aria-controls="detailsId"
         @click.stop="toggleExpanded"
         @keydown.stop="handleToggleKeydown"
-      >收起计划</button>
+      >{{ t("收起计划") }}</button>
     </div>
 
     <div v-if="!expanded" class="runtime-checklist-card__compact-row">
@@ -40,8 +40,8 @@
     <template v-if="expanded">
       <div v-if="previousCompletedStep" class="runtime-checklist-card__previous" data-status="completed">
         <span class="runtime-checklist-card__indicator" aria-hidden="true">✓</span>
-        <span class="runtime-checklist-card__previous-title">第 {{ stepNumber(previousCompletedStep) }} 步：{{ previousCompletedStep.title }}</span>
-        <span class="runtime-checklist-card__previous-status">已完成</span>
+        <span class="runtime-checklist-card__previous-title">{{ t("第") }}{{ stepNumber(previousCompletedStep) }}{{ t("步：") }}{{ previousCompletedStep.title }}</span>
+        <span class="runtime-checklist-card__previous-status">{{ t("已完成") }}</span>
       </div>
     </template>
 
@@ -52,7 +52,7 @@
         aria-hidden="true"
       >{{ currentStep.status === 'completed' ? '✓' : currentStep.status === 'failed' ? '!' : '' }}</span>
       <div class="runtime-checklist-card__current-body">
-        <strong class="runtime-checklist-card__current-title">第 {{ stepNumber(currentStep) }} 步：{{ currentStep.title }}</strong>
+        <strong class="runtime-checklist-card__current-title">{{ t("第") }}{{ stepNumber(currentStep) }}{{ t("步：") }}{{ currentStep.title }}</strong>
         <ul v-if="currentStep.deliverables?.length" class="runtime-checklist-card__deliverables">
           <li v-for="deliverable in currentStep.deliverables" :key="deliverable">{{ deliverable }}</li>
         </ul>
@@ -86,7 +86,7 @@
             {{ step.status === 'completed' ? '✓' : '' }}
           </span>
           <div class="runtime-checklist-card__step-body">
-            <span class="runtime-checklist-card__step-title">第 {{ stepNumber(step) }} 步：{{ step.title }}</span>
+            <span class="runtime-checklist-card__step-title">{{ t("第") }}{{ stepNumber(step) }}{{ t("步：") }}{{ step.title }}</span>
             <ul v-if="step.deliverables?.length" class="runtime-checklist-card__deliverables">
               <li v-for="deliverable in step.deliverables" :key="deliverable">{{ deliverable }}</li>
             </ul>
@@ -100,6 +100,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { gsap } from 'gsap'
 import type { CoreRuntimeStep, CoreRuntimeStepGroup, CoreRuntimeStepStatus } from '../types'
@@ -242,7 +244,7 @@ function handleToggleKeydown(event: KeyboardEvent) {
 }
 
 function compactAriaLabel(step: CoreRuntimeStep): string {
-  return `当前步骤：第 ${stepNumber(step)} 步，${step.title}，${statusLabel(step.status)}`
+  return t("当前步骤：第 {0} 步，{1}，{2}", { 0: stepNumber(step), 1: step.title, 2: statusLabel(step.status) })
 }
 
 function statusLabel(status: CoreRuntimeStepStatus): string {

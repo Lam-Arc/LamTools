@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import type { StudyNoteResource } from './types'
 
 defineProps<{
@@ -6,7 +8,7 @@ defineProps<{
 }>()
 
 function resourceLabel(resource: StudyNoteResource): string {
-  return resource.title || resource.id || '未命名来源'
+  return resource.title || resource.id || t("未命名来源")
 }
 function resourceType(resource: StudyNoteResource): string {
   return resource.originalType || resource.original_type || resource.type || resource.kind || 'resource'
@@ -14,8 +16,8 @@ function resourceType(resource: StudyNoteResource): string {
 </script>
 
 <template>
-  <footer v-if="resources.length" class="study-note-references" aria-label="笔记来源">
-    <h3>来源</h3>
+  <footer v-if="resources.length" class="study-note-references" :aria-label="t('笔记来源')">
+    <h3>{{ t("来源") }}</h3>
     <ol>
       <li v-for="(resource, index) in resources" :key="resource.id || `${resourceType(resource)}-${index}`">
         <span class="study-note-reference-index">[{{ index + 1 }}]</span>

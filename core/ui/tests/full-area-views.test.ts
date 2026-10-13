@@ -93,9 +93,9 @@ describe('full-area views (搜索 / 资料库 / 定时任务)', () => {
     expect(appSource).toMatch(/v-if="appRuntime\.platform !== 'mobile' && fullAreaView"[\s\S]*?v-if="!sidebarNavView"[\s\S]*?data-full-area-header/)
     expect(appSource).toMatch(/data-full-area-back[\s\S]*?@click="onFullAreaBack"/)
     expect(appSource).toMatch(/data-full-area-title/)
-    expect(appSource).toMatch(/case 'search':[\s\S]*?title: '搜索'/)
-    expect(appSource).toMatch(/case 'library':[\s\S]*?title: '资料库'/)
-    expect(appSource).toMatch(/case 'arrange':[\s\S]*?title: '定时任务'/)
+    expect(appSource).toMatch(/case 'search':[\s\S]*?get title\(\) \{ return t\("搜索"\)/)
+    expect(appSource).toMatch(/case 'library':[\s\S]*?get title\(\) \{ return t\("资料库"\)/)
+    expect(appSource).toMatch(/case 'arrange':[\s\S]*?get title\(\) \{ return t\("定时任务"\)/)
 
     // 桌面不再在界面内部重复标题与返回键（手机没有顶部条，保留内部的）。
     expect(read('src/components/CoreArrangeManager.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.arrange-mobile-head/)
@@ -113,7 +113,7 @@ describe('full-area views (搜索 / 资料库 / 定时任务)', () => {
       expect(source).not.toContain('settings-overlay')
     }
     // 各自的页内返回键：定时任务是返回（子页先回列表），搜索是返回会话。
-    expect(arrangeSource).toMatch(/aria-label="返回"/)
+    expect(arrangeSource).toContain(':aria-label="t(\'返回\')"')
     expect(searchSource).toContain('返回会话')
     // 各自的退出键：安排是文档级 Esc，搜索是输入框上的 Esc。
     expect(arrangeSource).toContain("key === 'Escape'")
@@ -151,7 +151,7 @@ describe('settings/plugins/project borrow the session drawer as their left nav',
     expect(appSource).toMatch(/const sidebarNavView = computed<'settings' \| 'plugins' \| 'project' \| null>\(\(\) => \{[\s\S]*?return null[\s\S]*?\}\)/)
     // 页名顶替模式下拉的位置；搜索入口与新建项目行同时让位。
     expect(appSource).toMatch(/data-sidebar-nav-title[\s\S]*?>\{\{ sidebarNavTitle \}\}<\/span>/)
-    expect(appSource).toMatch(/const sidebarNavTitle = computed\(\(\) => \{[\s\S]*?case 'settings':[\s\S]*?return '设置'[\s\S]*?case 'plugins':[\s\S]*?return '插件'[\s\S]*?case 'project':[\s\S]*?return '项目'/)
+    expect(appSource).toMatch(/const sidebarNavTitle = computed\(\(\) => \{[\s\S]*?case 'settings':[\s\S]*?return t\("设置"\)[\s\S]*?case 'plugins':[\s\S]*?return t\("插件"\)[\s\S]*?case 'project':[\s\S]*?return t\("项目"\)/)
     expect(appSource).toMatch(/v-if="!sidebarNavView && appRuntime.platform !== 'mobile'"[\s\S]*?class="core-sidebar-search-entry"/)
     expect(appSource).toContain('<div v-if="!sidebarNavView" class="core-project-primary-row">')
     // 会话栏主体换成竖排分区导航（同一份分区清单，不带描述小字）。

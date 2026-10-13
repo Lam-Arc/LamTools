@@ -560,10 +560,12 @@
   background: color-mix(in srgb, var(--theme-backdrop-text) 30%, var(--red) 70%);
   box-shadow: none;
 }
-.conversation .status.waiting {
+.conversation .status.waiting,
+.conversation .status.sub_agents {
   background: color-mix(in srgb, var(--theme-backdrop-text) 30%, var(--orange) 70%);
   box-shadow: none;
-  /* waiting = 呼吸（区别于 running 的转圈）；status-breathe 唯一消费者 */
+  /* 等待 = 呼吸（区别于 running 的转圈）。sub_agents（主代理已结束、子代理仍在
+     运行）共用等待配方：它比运行中安静，且必须读作"主代理停了"。 */
   animation: status-breathe 1.6s ease-in-out infinite;
 }
 .conversation .status.idle {

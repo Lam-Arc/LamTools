@@ -3,8 +3,8 @@
     <section class="wf-inspector-section wf-exposure-section" aria-labelledby="wf-exposure-title">
       <header class="wf-exposure-head">
         <div>
-          <h3 id="wf-exposure-title">Agent 工具</h3>
-          <p>{{ workflowDefinition?.exposed ? (workflowDefinition.tool_name || '已暴露') : '仅在需要时暴露给 Agent' }}</p>
+          <h3 id="wf-exposure-title">{{ t("Agent 工具") }}</h3>
+          <p>{{ workflowDefinition?.exposed ? (workflowDefinition.tool_name || t("已暴露")) : t("仅在需要时暴露给 Agent") }}</p>
         </div>
         <button
           type="button"
@@ -12,8 +12,8 @@
           :class="{ 'is-on': workflowDefinition?.exposed }"
           :disabled="workflowRunning || !workflowDefinition"
           :aria-pressed="workflowDefinition?.exposed ? 'true' : 'false'"
-          :aria-label="workflowDefinition?.exposed ? '取消暴露为 Agent 工具' : '暴露为 Agent 工具'"
-          :title="workflowDefinition?.exposed ? '取消暴露为 Agent 工具' : '暴露为 Agent 工具'"
+          :aria-label="workflowDefinition?.exposed ? t('取消暴露为 Agent 工具') : t('暴露为 Agent 工具')"
+          :title="workflowDefinition?.exposed ? t('取消暴露为 Agent 工具') : t('暴露为 Agent 工具')"
           @click="toggleExpose"
         >
           <EyeOff v-if="workflowDefinition?.exposed" :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -73,7 +73,7 @@
       :on-template="useTemplate"
     />
     <section class="wf-inspector-section wf-right-nodes">
-      <h3>节点</h3>
+      <h3>{{ t("节点") }}</h3>
       <ul v-if="workflowDefinition?.nodes.length" class="wf-node-list">
         <li
           v-for="node in workflowDefinition.nodes"
@@ -92,35 +92,35 @@
           <span class="wf-node-list-title" :title="node.title || node.id">{{ node.title || node.id }}</span>
         </li>
       </ul>
-      <p v-else class="wf-right-empty">暂无节点</p>
+      <p v-else class="wf-right-empty">{{ t("暂无节点") }}</p>
     </section>
 
     <section class="wf-right-info wf-inspector-section">
       <template v-if="selectedNodeId">
         <div class="wf-right-info-head">
           <h3>{{ selectedNode?.title || selectedNodeId }}</h3>
-          <button type="button" class="text-btn" title="返回对话" @click="selectNode(null)">
+          <button type="button" class="text-btn" :title="t('返回对话')" @click="selectNode(null)">
             <ArrowLeft :size="14" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </div>
         <div v-if="selectedNode" class="wf-node-info-body">
-          <p class="wf-node-info-row"><span>类型</span><strong>{{ selectedNode.type_id || selectedNode.kind }}</strong></p>
+          <p class="wf-node-info-row"><span>{{ t("类型") }}</span><strong>{{ selectedNode.type_id || selectedNode.kind }}</strong></p>
           <div v-if="selectedNode.config.instruction" class="wf-node-info-block">
-            <span>指令</span><pre>{{ String(selectedNode.config.instruction) }}</pre>
+            <span>{{ t("指令") }}</span><pre>{{ String(selectedNode.config.instruction) }}</pre>
           </div>
           <div v-if="selectedNode.config.command" class="wf-node-info-block">
-            <span>命令</span><code>{{ String(selectedNode.config.command) }}</code>
+            <span>{{ t("命令") }}</span><code>{{ String(selectedNode.config.command) }}</code>
           </div>
-          <p v-if="selectedNode.config.model_id" class="wf-node-info-row"><span>模型</span><strong>{{ String(selectedNode.config.model_id) }}</strong></p>
-          <p v-if="selectedNode.config.mode" class="wf-node-info-row"><span>模式</span><strong>{{ String(selectedNode.config.mode) }}</strong></p>
-          <p class="wf-node-info-row"><span>端口</span><strong>{{ selectedNode.ports.map((port) => port.name).join(', ') || '—' }}</strong></p>
+          <p v-if="selectedNode.config.model_id" class="wf-node-info-row"><span>{{ t("模型") }}</span><strong>{{ String(selectedNode.config.model_id) }}</strong></p>
+          <p v-if="selectedNode.config.mode" class="wf-node-info-row"><span>{{ t("模式") }}</span><strong>{{ String(selectedNode.config.mode) }}</strong></p>
+          <p class="wf-node-info-row"><span>{{ t("端口") }}</span><strong>{{ selectedNode.ports.map((port) => port.name).join(', ') || '—' }}</strong></p>
         </div>
       </template>
       <template v-else>
         <div class="wf-convo-card">
           <header class="wf-convo-head">
-            <h3>对话</h3>
-            <button type="button" class="text-btn" title="放大" aria-label="放大对话" @click="expandConversation">
+            <h3>{{ t("对话") }}</h3>
+            <button type="button" class="text-btn" :title="t('放大')" :aria-label="t('放大对话')" @click="expandConversation">
               <Maximize2 :size="14" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </header>
@@ -149,6 +149,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import {
   ArrowDownToLine,
   ArrowLeft,

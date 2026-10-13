@@ -1,3 +1,4 @@
+import { waitForBackendApiBase } from './backendReady'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event'
 import { createApp } from 'vue'
@@ -26,31 +27,15 @@ window.requestAnimationFrame(() => {
   })
 })
 
-const BACKEND_API_RETRY_ATTEMPTS = 80
-const BACKEND_API_RETRY_DELAY_MS = 250
-
 function isTauriRuntime(): boolean {
   return typeof (window as any).__TAURI_INTERNALS__ === 'object'
 }
 
+const startupAbort = new AbortController()
+window.addEventListener('pagehide', () => startupAbort.abort(), { once: true })
 async function resolveBackendApiBase(): Promise<string | null> {
   if (!isTauriRuntime()) return null
-
-  let lastError: unknown
-  for (let attempt = 0; attempt < BACKEND_API_RETRY_ATTEMPTS; attempt++) {
-    try {
-      const apiBase = await invoke<string>('get_api_base')
-      if (/^http:\/\/127\.0\.0\.1:\d+$/.test(apiBase)) return apiBase
-      throw new Error(`invalid backend API base: ${apiBase}`)
-    } catch (error) {
-      lastError = error
-      if (attempt + 1 < BACKEND_API_RETRY_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, BACKEND_API_RETRY_DELAY_MS))
-      }
-    }
-  }
-
-  throw new Error(`Sunday backend API unavailable: ${String(lastError)}`)
+  return waitForBackendApiBase(() => invoke('get_api_base'), { signal: startupAbort.signal })
 }
 
 async function init() {
@@ -180,6 +165,12 @@ async function init() {
       filePicker: true,
       notifications: true,
       desktopWindow: true,
+      sessionExports: {
+        saveFullArchive: (sessionId, suggestedFilename) => invoke<string | null>(
+          'export_session_archive',
+          { sessionId, suggestedFilename },
+        ),
+      },
     },
   })
   createApp(LamToolsApp, { runtime }).mount('#app')

@@ -9,11 +9,11 @@
   >
     <header class="pending-decision__head">
       <CircleHelp class="pending-decision__icon" :size="15" :stroke-width="2" aria-hidden="true" />
-      <span class="pending-decision__headline">需要你确认</span>
+      <span class="pending-decision__headline">{{ t("需要你确认") }}</span>
       <span class="pending-decision__count" role="status" aria-live="polite">{{ countLabel }}</span>
     </header>
 
-    <ol v-if="items.length > 1" class="pending-decision__queue" aria-label="待处理项">
+    <ol v-if="items.length > 1" class="pending-decision__queue" :aria-label="t('待处理项')">
       <li v-for="(item, index) in items" :key="item.partId" class="pending-decision__queue-cell">
         <button
           type="button"
@@ -24,12 +24,14 @@
         >
           <span class="pending-decision__queue-index">{{ index + 1 }}</span>
           <span class="pending-decision__queue-title">{{ item.subject }}</span>
-          <span class="pending-decision__queue-state">{{ item.submitting ? '处理中…' : (index === activeIndex ? '待你选择' : '待处理') }}</span>
+          <span class="pending-decision__queue-state">{{ item.submitting ? t("处理中…") : (index === activeIndex ? t("待你选择") : t("待处理")) }}</span>
         </button>
       </li>
     </ol>
 
     <div v-if="active" class="pending-decision__body">
+      <p v-if="active.subAgentName" class="pending-decision__origin" data-pending-decision-origin>{{ t("来自子代理") }}<strong>{{ active.subAgentName }}</strong>{{ t("的") }}{{ active.kindLabel }}
+      </p>
       <p class="pending-decision__subject" data-pending-decision-subject>{{ active.subject }}</p>
       <p v-if="active.detail" class="pending-decision__detail">{{ active.detail }}</p>
 
@@ -45,7 +47,7 @@
         </li>
       </ul>
 
-      <div v-if="active.options.length > 0" class="pending-decision__actions" role="group" aria-label="处理方式">
+      <div v-if="active.options.length > 0" class="pending-decision__actions" role="group" :aria-label="t('处理方式')">
         <div v-for="(option, index) in active.options" :key="option.id" class="pending-decision__action">
           <span class="pending-decision__option-index" aria-hidden="true">{{ index + 1 }}</span>
           <button
@@ -73,8 +75,8 @@
             :value="guideDraft"
             rows="1"
             :disabled="active.submitting"
-            aria-label="用一句话说明要怎么处理"
-            placeholder="输入你的回答…"
+            :aria-label="t('用一句话说明要怎么处理')"
+            :placeholder="t('输入你的回答…')"
             @input="updateGuideDraft"
             @keydown="onGuideKeydown"
           />
@@ -84,25 +86,23 @@
             data-pending-decision-guide-submit
             :disabled="active.submitting || !guideDraft.trim()"
             @click="submitGuide"
-          >
-            发送
-          </button>
+          >{{ t("发送") }}</button>
         </div>
       </div>
 
       <p class="pending-decision__hint">
         <Info class="pending-decision__hint-icon" :size="13" :stroke-width="2" aria-hidden="true" />
-        <span>点击选项直接提交；也可以写下你的处理方式，回车或点「发送」。</span>
+        <span>{{ t("点击选项直接提交；也可以写下你的处理方式，回车或点「发送」。") }}</span>
       </p>
 
-      <p v-if="!channelReady" class="pending-decision__notice" role="alert">
-        与运行时的确认通道已断开，恢复连接后才能提交选择。
-      </p>
+      <p v-if="!channelReady" class="pending-decision__notice" role="alert">{{ t("与运行时的确认通道已断开，恢复连接后才能提交选择。") }}</p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * CorePendingDecisionPanel — composer-area takeover for waiting requests.
  *
@@ -143,11 +143,11 @@ const active = computed<CorePendingDecision | null>(() => (
 ))
 
 const countLabel = computed(() => (
-  props.items.length > 1 ? `第 ${activeIndex.value + 1} / ${props.items.length} 项` : '等待你的选择'
+  props.items.length > 1 ? t("第 {0} / {1} 项", { 0: activeIndex.value + 1, 1: props.items.length }) : t("等待你的选择")
 ))
 
 const ariaLabel = computed(() => (
-  props.items.length > 1 ? `需要你确认，共 ${props.items.length} 项` : '需要你确认'
+  props.items.length > 1 ? t("需要你确认，共 {0} 项", { 0: props.items.length }) : t("需要你确认")
 ))
 
 const guideInputId = computed(() => `pending-decision-guide-${(active.value?.partId || 'none').replace(/[^A-Za-z0-9_-]/g, '_')}`)
@@ -242,7 +242,7 @@ function submitGuide() {
   if (!item || item.submitting) return
   const text = guideDraft.value.trim()
   if (!text) return
-  const option: CoreDecisionChoice = { id: 'guide', label: '引导', wireResponse: text }
+  const option: CoreDecisionChoice = { id: 'guide', get label() { return t("引导") }, wireResponse: text }
   clearGuideDraft()
   emit('decision-select', { partId: item.partId, option, response: text })
 }
@@ -357,6 +357,19 @@ function submitGuide() {
   min-width: 0;
   padding-top: var(--space-2);
   border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+/* 来自子代理的等待请求：先点名是谁在问，再给问题本身——主代理与子代理的
+   确认面共用同一套配方，只有这一行区分来源（用户 2026-10-12 口径）。 */
+.pending-decision__origin {
+  margin: 0;
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pending-decision__origin strong {
+  color: var(--text);
+  font-weight: 650;
 }
 
 .pending-decision__subject {

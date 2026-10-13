@@ -21,7 +21,7 @@
           <component :is="nodeTypeIcon" :size="14" :stroke-width="1.8" />
         </span>
         <span class="wf-node-kind" :title="nodeTypeId">{{ nodeKindLabel }}</span>
-        <input v-model="localTitle" class="wf-title-input" type="text" placeholder="标题" @blur="pushTitle" />
+        <input v-model="localTitle" class="wf-title-input" type="text" :placeholder="t('标题')" @blur="pushTitle" />
         <span class="wf-node-state">
           <component :is="stateDot" :size="11" :stroke-width="2" aria-hidden="true" />
         </span>
@@ -29,40 +29,40 @@
 
       <!-- AI -->
       <template v-if="kind === 'ai'">
-        <UiSelect :model-value="localConfig.mode" :options="modeOptions" aria-label="AI 模式" @update:model-value="localConfig.mode = $event; pushConfig()" />
-        <AutoTextarea v-model="localConfig.instruction" :min-rows="2" :max-rows="4" placeholder="指令…" @blur="pushConfig" />
-        <UiSelect :model-value="String(localConfig.model_id || '')" :options="modelOptions" aria-label="模型" @update:model-value="localConfig.model_id = $event; pushConfig()" />
+        <UiSelect :model-value="localConfig.mode" :options="modeOptions" :aria-label="t('AI 模式')" @update:model-value="localConfig.mode = $event; pushConfig()" />
+        <AutoTextarea v-model="localConfig.instruction" :min-rows="2" :max-rows="4" :placeholder="t('指令…')" @blur="pushConfig" />
+        <UiSelect :model-value="String(localConfig.model_id || '')" :options="modelOptions" :aria-label="t('模型')" @update:model-value="localConfig.model_id = $event; pushConfig()" />
       </template>
 
       <!-- Canonical Model and Agent are independent node types. The legacy
            `ai` branch above keeps old graphs working while these two nodes
            expose the same model selector without the old mode multiplexing. -->
       <template v-else-if="kind === 'model' || kind === 'agent'">
-        <AutoTextarea v-model="localConfig.instruction" :min-rows="2" :max-rows="4" :placeholder="kind === 'agent' ? '智能体目标…' : '模型指令…'" @blur="pushConfig" />
-        <UiSelect :model-value="String(localConfig.model_id || '')" :options="modelOptions" aria-label="模型" @update:model-value="localConfig.model_id = $event; pushConfig()" />
+        <AutoTextarea v-model="localConfig.instruction" :min-rows="2" :max-rows="4" :placeholder="kind === 'agent' ? t('智能体目标…') : t('模型指令…')" @blur="pushConfig" />
+        <UiSelect :model-value="String(localConfig.model_id || '')" :options="modelOptions" :aria-label="t('模型')" @update:model-value="localConfig.model_id = $event; pushConfig()" />
       </template>
 
       <!-- Command: shell command -->
       <template v-else-if="kind === 'command'">
-        <AutoTextarea v-model="localConfig.command" :min-rows="2" :max-rows="4" placeholder="命令…（curl/git/ffmpeg 等）" @blur="pushConfig" />
+        <AutoTextarea v-model="localConfig.command" :min-rows="2" :max-rows="4" :placeholder="t('命令…（curl/git/ffmpeg 等）')" @blur="pushConfig" />
       </template>
 
       <!-- Script: Python (binder: ports-as-variables) -->
       <template v-else-if="kind === 'script'">
-        <AutoTextarea v-model="localConfig.script" :min-rows="2" :max-rows="4" placeholder="y = x * 2（输入端口名当变量，给输出端口名赋值）" @blur="pushConfig" />
+        <AutoTextarea v-model="localConfig.script" :min-rows="2" :max-rows="4" :placeholder="t('y = x * 2（输入端口名当变量，给输出端口名赋值）')" @blur="pushConfig" />
       </template>
 
       <!-- Canonical Python node. `script` remains above as a compatibility
            renderer for old documents; both use the same execution contract. -->
       <template v-else-if="kind === 'python'">
-        <AutoTextarea v-model="localConfig.script" :min-rows="2" :max-rows="4" placeholder="y = x * 2（输入端口名当变量，给输出端口名赋值）" @blur="pushConfig" />
+        <AutoTextarea v-model="localConfig.script" :min-rows="2" :max-rows="4" :placeholder="t('y = x * 2（输入端口名当变量，给输出端口名赋值）')" @blur="pushConfig" />
       </template>
 
       <!-- Content: each output port value -->
       <template v-else-if="kind === 'content'">
         <div v-for="p in outputPorts" :key="`cv-${portHandleId(p)}`" class="wf-port-edit">
           <span class="wf-field-label">{{ p.name }}</span>
-          <AutoTextarea :model-value="String(portValue(p) ?? '')" :min-rows="2" :max-rows="4" placeholder="值" @update:model-value="setPortValue(p, $event)" @blur="pushPorts" />
+          <AutoTextarea :model-value="String(portValue(p) ?? '')" :min-rows="2" :max-rows="4" :placeholder="t('值')" @update:model-value="setPortValue(p, $event)" @blur="pushPorts" />
         </div>
       </template>
 
@@ -71,15 +71,15 @@
       <template v-else-if="kind === 'constant'">
         <div v-for="p in outputPorts" :key="`constant-${portHandleId(p)}`" class="wf-port-edit">
           <span class="wf-field-label">{{ p.name }}</span>
-          <AutoTextarea :model-value="String(portValue(p) ?? localConfig.value ?? '')" :min-rows="2" :max-rows="4" placeholder="值" @update:model-value="setPortValue(p, $event)" @blur="pushPorts" />
+          <AutoTextarea :model-value="String(portValue(p) ?? localConfig.value ?? '')" :min-rows="2" :max-rows="4" :placeholder="t('值')" @update:model-value="setPortValue(p, $event)" @blur="pushPorts" />
         </div>
       </template>
 
       <!-- Subgraph -->
       <template v-else-if="kind === 'subgraph'">
-        <AutoTextarea v-model="localConfig.workflow_name" :min-rows="2" :max-rows="4" placeholder="工作流名称" @blur="pushConfig" />
-        <UiSelect :model-value="localConfig.iterate" :options="iterateOptions" aria-label="迭代模式" @update:model-value="localConfig.iterate = $event; pushConfig()" />
-        <AutoTextarea v-if="localConfig.iterate === 'loop'" v-model="localConfig.condition" :min-rows="2" :max-rows="4" placeholder="退出条件" @blur="pushConfig" />
+        <AutoTextarea v-model="localConfig.workflow_name" :min-rows="2" :max-rows="4" :placeholder="t('工作流名称')" @blur="pushConfig" />
+        <UiSelect :model-value="localConfig.iterate" :options="iterateOptions" :aria-label="t('迭代模式')" @update:model-value="localConfig.iterate = $event; pushConfig()" />
+        <AutoTextarea v-if="localConfig.iterate === 'loop'" v-model="localConfig.condition" :min-rows="2" :max-rows="4" :placeholder="t('退出条件')" @blur="pushConfig" />
       </template>
 
       <!-- Model, Agent and custom registry nodes are rendered from the same
@@ -93,11 +93,10 @@
           @update:ports="onSchemaPorts"
         />
         <p v-if="!schemaFieldsCount" class="wf-schema-hint">
-          {{ workflowNodeDisplayName(schema, '此节点') }}：暂无可配置参数
-        </p>
+          {{ workflowNodeDisplayName(schema, t("此节点")) }}{{ t("：暂无可配置参数") }}</p>
       </template>
 
-      <p v-else class="wf-node-unsupported">此节点暂不支持可视化配置</p>
+      <p v-else class="wf-node-unsupported">{{ t("此节点暂不支持可视化配置") }}</p>
     </div>
 
     <!-- Output ports (right side) -->
@@ -128,6 +127,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, inject, ref, watch } from 'vue'
 import {
   ArrowDownToLine,
@@ -195,7 +196,7 @@ const kind = computed<WorkflowNodeKind>(() => node.value.kind)
 const nodeTypeId = computed(() => workflowNodeTypeId({ type_id: node.value.type_id, name: node.value.kind }))
 const kindClass = computed(() => `kind-${nodeTypeId.value.replace(/[^a-zA-Z0-9_-]/g, '-') || 'node'}`)
 const nodeKindLabel = computed(() => {
-  return workflowNodeDisplayName({ name: nodeTypeId.value, type_id: nodeTypeId.value }, '节点')
+  return workflowNodeDisplayName({ name: nodeTypeId.value, type_id: nodeTypeId.value }, t("节点"))
 })
 const NODE_ICONS: Readonly<Record<string, LucideIcon>> = {
   model: BrainCircuit,
@@ -224,13 +225,13 @@ const outputPorts = computed(() => node.value.ports.filter((p) => p.direction ==
 const state = computed<NodeStateStatus>(() => normalizeNodeStateStatus(props.data.state))
 
 const stateLabel = computed(() => {
-  if (state.value === 'running') return '运行中'
-  if (state.value === 'waiting') return '等待中'
-  if (state.value === 'done') return '已完成'
-  if (state.value === 'error') return '失败'
-  if (state.value === 'skipped') return '已跳过'
-  if (state.value === 'cancelled') return '已取消'
-  return '未运行'
+  if (state.value === 'running') return t("运行中")
+  if (state.value === 'waiting') return t("等待中")
+  if (state.value === 'done') return t("已完成")
+  if (state.value === 'error') return t("失败")
+  if (state.value === 'skipped') return t("已跳过")
+  if (state.value === 'cancelled') return t("已取消")
+  return t("未运行")
 })
 
 const stateDot = computed<LucideIcon>(() => {
@@ -259,17 +260,17 @@ const localConfig = ref<Record<string, any>>({ ...node.value.config })
 const localPorts = ref<WorkflowPort[]>(node.value.ports.map((p) => ({ ...p })))
 
 const modeOptions = [
-  { value: 'single', label: '单次' },
-  { value: 'loop', label: '循环' },
-  { value: 'agent', label: '智能体' },
+  { value: 'single', get label() { return t("单次") } },
+  { value: 'loop', get label() { return t("循环") } },
+  { value: 'agent', get label() { return t("智能体") } },
 ]
 const iterateOptions = [
-  { value: 'none', label: '不迭代' },
-  { value: 'loop', label: '循环' },
-  { value: 'map', label: '映射' },
+  { value: 'none', get label() { return t("不迭代") } },
+  { value: 'loop', get label() { return t("循环") } },
+  { value: 'map', get label() { return t("映射") } },
 ]
 const modelOptions = computed(() => [
-  { value: '', label: '（默认模型）' },
+  { value: '', get label() { return t("（默认模型）") } },
   ...models.value.map((m) => ({ value: m.id, label: m.display_name || m.model_id || m.id })),
 ])
 

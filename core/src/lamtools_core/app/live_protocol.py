@@ -11,6 +11,12 @@ INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 SERVER_ERROR = -32000
 
+# Notification the server sends on the reliable control lane when the lossy
+# outbound lane dropped runItem frames for a thread. It mirrors the hub's
+# ``CoreAppEventGap``: the client is told it missed updates and should resume
+# from its own revision instead of waiting for the next full snapshot.
+THREAD_GAP_METHOD = "thread/gap"
+
 
 class JsonRpcError(BaseModel):
     code: int
@@ -83,6 +89,7 @@ __all__ = [
     "METHOD_NOT_FOUND",
     "PROTOCOL_VERSION",
     "SERVER_ERROR",
+    "THREAD_GAP_METHOD",
     "ClientInfo",
     "InitializeParams",
     "JsonRpcError",

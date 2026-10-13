@@ -9,6 +9,8 @@ import pytest
 import lamtools_core.cli as cli_module
 from lamtools_core.cli import CoreHttpLLMClient, LLMConfig
 from lamtools_core.llm import (
+    HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER,
+    TAIL_SYSTEM_MESSAGE_MARKER,
     ChatMessage,
     LLMRequest,
     REASONING_LEVELS,
@@ -571,6 +573,161 @@ def test_sub_agent_late_context_stays_at_provider_history_tail():
     )["payload"]
     assert gemini["contents"][-1] == {"role": "user", "parts": [{"text": late_context}]}
     assert late_context not in json.dumps(gemini.get("systemInstruction", {}), ensure_ascii=False)
+
+
+def test_member_wake_tail_roles_and_provider_fallbacks_preserve_normal_systems():
+    wake = "子代理 worker 已完成。"
+    request = LLMRequest(
+        messages=[
+            ChatMessage(role="system", content="stable system"),
+            ChatMessage(role="user", content="durable task"),
+            ChatMessage(role="system", content="ordinary system"),
+            ChatMessage(role="assistant", content="durable answer"),
+            ChatMessage(
+                role="system",
+                content=wake,
+                metadata={"origin": "member_wake", TAIL_SYSTEM_MESSAGE_MARKER: True},
+            ),
+        ],
+        model="test-model",
+        temperature=0.2,
+        max_tokens=100,
+    )
+
+    openai = build_profiled_openai_request(
+        request,
+        {"id": "openai", "protocol": "openai-chat-completions"},
+    )["payload"]
+    assert [message["role"] for message in openai["messages"]] == [
+        "system", "user", "system", "assistant", "system",
+    ]
+    assert openai["messages"][-1]["content"] == wake
+
+    responses = build_profiled_responses_request(
+        request,
+        {"id": "responses", "protocol": "openai-responses"},
+    )["payload"]
+    assert [item["role"] for item in responses["input"] if item.get("type") == "message"] == [
+        "developer", "user", "developer", "assistant", "developer",
+    ]
+    assert responses["input"][-1]["role"] == "developer"
+    assert responses["input"][-1]["content"][-1]["text"] == wake
+
+    anthropic = build_profiled_anthropic_request(
+        [message.to_dict() for message in request.messages],
+        {"id": "anthropic", "protocol": "anthropic-messages"},
+        model=request.model,
+        max_tokens=100,
+        temperature=0.2,
+    )["payload"]
+    assert anthropic["system"] == "stable system\nordinary system"
+    assert [message["role"] for message in anthropic["messages"]] == [
+        "user", "assistant", "user",
+    ]
+    assert anthropic["messages"][-1] == {
+        "role": "user",
+        "content": wake,
+    }
+    assert wake not in anthropic["system"]
+
+    gemini = build_profiled_gemini_request(
+        request,
+        {"id": "gemini", "protocol": "gemini-generative-language"},
+    )["payload"]
+    assert gemini["systemInstruction"] == {
+        "parts": [{"text": "stable system"}, {"text": "ordinary system"}],
+    }
+    assert [content["role"] for content in gemini["contents"]] == [
+        "user", "model", "user",
+    ]
+    assert gemini["contents"][-1] == {
+        "role": "user",
+        "parts": [{"text": wake}],
+    }
+    assert wake not in json.dumps(gemini["systemInstruction"], ensure_ascii=False)
+
+
+def test_historical_member_wake_stays_in_provider_order_and_native_user_history():
+    old_wake = "旧唤醒"
+    current_wake = "当前唤醒"
+    request = LLMRequest(
+        messages=[
+            ChatMessage(role="system", content="stable system"),
+            ChatMessage(
+                role="system",
+                content=old_wake,
+                metadata={
+                    "origin": "member_wake",
+                    "turn_id": "turn-old",
+                    TAIL_SYSTEM_MESSAGE_MARKER: True,
+                    HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER: True,
+                },
+            ),
+            ChatMessage(role="user", content="durable task"),
+            ChatMessage(
+                role="system",
+                content=current_wake,
+                metadata={
+                    "origin": "member_wake",
+                    "turn_id": "turn-current",
+                    TAIL_SYSTEM_MESSAGE_MARKER: True,
+                },
+            ),
+        ],
+        model="test-model",
+        temperature=0.2,
+        max_tokens=100,
+    )
+
+    openai = build_profiled_openai_request(
+        request,
+        {"id": "openai", "protocol": "openai-chat-completions"},
+    )["payload"]
+    assert [message["role"] for message in openai["messages"]] == [
+        "system", "system", "user", "system",
+    ]
+    assert [message["content"] for message in openai["messages"]] == [
+        "stable system", old_wake, "durable task", current_wake,
+    ]
+
+    responses = build_profiled_responses_request(
+        request,
+        {"id": "responses", "protocol": "openai-responses"},
+    )["payload"]
+    response_messages = [item for item in responses["input"] if item.get("type") == "message"]
+    assert [item["role"] for item in response_messages] == [
+        "developer", "developer", "user", "developer",
+    ]
+    assert [item["content"][-1]["text"] for item in response_messages] == [
+        "stable system", old_wake, "durable task", current_wake,
+    ]
+
+    anthropic = build_profiled_anthropic_request(
+        [message.to_dict() for message in request.messages],
+        {"id": "anthropic", "protocol": "anthropic-messages"},
+        model=request.model,
+        max_tokens=100,
+        temperature=0.2,
+    )["payload"]
+    assert anthropic["system"] == "stable system"
+    assert [message["role"] for message in anthropic["messages"]] == ["user", "user", "user"]
+    assert [message["content"] for message in anthropic["messages"]] == [
+        old_wake, "durable task", current_wake,
+    ]
+    assert old_wake not in anthropic["system"]
+
+    gemini = build_profiled_gemini_request(
+        request,
+        {"id": "gemini", "protocol": "gemini-generative-language"},
+    )["payload"]
+    assert gemini["systemInstruction"] == {
+        "parts": [{"text": "stable system"}],
+    }
+    assert [content["role"] for content in gemini["contents"]] == ["user", "user", "user"]
+    assert [content["parts"][0]["text"] for content in gemini["contents"]] == [
+        old_wake, "durable task", current_wake,
+    ]
+    assert old_wake not in json.dumps(gemini["systemInstruction"], ensure_ascii=False)
 
 
 def test_reasoning_levels_normalize_to_six_canonical_values_and_keep_aliases():

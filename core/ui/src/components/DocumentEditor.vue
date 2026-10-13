@@ -5,7 +5,7 @@
       class="doc-editor-toolbar"
       v-bind="toolbarAttrs"
       role="toolbar"
-      :aria-label="`${title} 的格式工具`"
+      :aria-label="t('{0} 的格式工具', { 0: title })"
     >
       <button
         v-for="action in ACTIONS"
@@ -24,12 +24,12 @@
         class="doc-editor-tool doc-editor-preview-toggle"
         :class="{ active: previewing }"
         :aria-pressed="previewing"
-        :title="previewing ? '回到编辑' : '预览排版'"
-        :aria-label="previewing ? '回到编辑' : '预览排版'"
+        :title="previewing ? t('回到编辑') : t('预览排版')"
+        :aria-label="previewing ? t('回到编辑') : t('预览排版')"
         v-bind="toggleAttrs"
         @click="previewing = !previewing"
-      ><component :is="previewing ? PenLine : Eye" :size="14" :stroke-width="1.8" aria-hidden="true" />{{ previewing ? '编辑' : '预览' }}</button>
-      <span class="doc-editor-hint" aria-hidden="true">Enter 续列表 · Tab 缩进</span>
+      ><component :is="previewing ? PenLine : Eye" :size="14" :stroke-width="1.8" aria-hidden="true" />{{ previewing ? t("编辑") : t("预览") }}</button>
+      <span class="doc-editor-hint" aria-hidden="true">{{ t("Enter 续列表 · Tab 缩进") }}</span>
     </div>
 
     <!-- 单栏：写的时候是源文，切一下才看排版——不再两栏同时占地方。 -->
@@ -39,7 +39,7 @@
         ref="input"
         v-model="draft"
         class="doc-editor-source"
-        :aria-label="`编辑 ${title}`"
+        :aria-label="t('编辑 {0}', { 0: title })"
         v-bind="inputAttrs"
         spellcheck="false"
         @keydown="onKeydown"
@@ -59,6 +59,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * DocumentEditor — 方案与记忆共用的文档编辑器。
  *
@@ -132,15 +134,15 @@ interface ToolAction {
 }
 
 const ACTIONS: ToolAction[] = [
-  { id: 'heading', title: '标题', icon: Heading2, prefix: '## ' },
-  { id: 'bold', title: '加粗', icon: Bold, prefix: '**', suffix: '**', needsSelection: true },
-  { id: 'italic', title: '斜体', icon: Italic, prefix: '*', suffix: '*', needsSelection: true },
-  { id: 'list', title: '无序列表', icon: List, prefix: '- ', line: true },
-  { id: 'ordered', title: '有序列表', icon: ListOrdered, prefix: '1. ', line: true },
-  { id: 'checklist', title: '清单', icon: ListChecks, prefix: '- [ ] ', line: true },
-  { id: 'quote', title: '引用', icon: Quote, prefix: '> ', line: true },
-  { id: 'code', title: '行内代码', icon: Code, prefix: '`', suffix: '`', needsSelection: true },
-  { id: 'link', title: '链接', icon: Link, prefix: '[', suffix: '](https://)', needsSelection: true },
+  { id: 'heading', get title() { return t("标题") }, icon: Heading2, prefix: '## ' },
+  { id: 'bold', get title() { return t("加粗") }, icon: Bold, prefix: '**', suffix: '**', needsSelection: true },
+  { id: 'italic', get title() { return t("斜体") }, icon: Italic, prefix: '*', suffix: '*', needsSelection: true },
+  { id: 'list', get title() { return t("无序列表") }, icon: List, prefix: '- ', line: true },
+  { id: 'ordered', get title() { return t("有序列表") }, icon: ListOrdered, prefix: '1. ', line: true },
+  { id: 'checklist', get title() { return t("清单") }, icon: ListChecks, prefix: '- [ ] ', line: true },
+  { id: 'quote', get title() { return t("引用") }, icon: Quote, prefix: '> ', line: true },
+  { id: 'code', get title() { return t("行内代码") }, icon: Code, prefix: '`', suffix: '`', needsSelection: true },
+  { id: 'link', get title() { return t("链接") }, icon: Link, prefix: '[', suffix: '](https://)', needsSelection: true },
 ]
 
 function current(): HTMLTextAreaElement | null {

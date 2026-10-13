@@ -31,6 +31,18 @@ function messagesWith(parts: unknown[]): CoreMessage[] {
   return [{ id: 'm1', role: 'assistant', parts } as unknown as CoreMessage]
 }
 
+/** A delegated sub-agent row carrying the child's own waiting request nested
+ *  under it — the shape a sub-agent question/approval arrives in. */
+function subAgentLine(children: unknown[]): unknown {
+  return {
+    id: 'agent-1',
+    partType: 'agent_summary',
+    status: 'running',
+    toolName: 'sub_agent',
+    metadata: { agent_name: 'worker', sub_session_id: 'sub-1', subLineParts: children },
+  }
+}
+
 function setup(options: {
   messages: Ref<CoreMessage[]>
   enabled: () => Promise<boolean>
@@ -86,6 +98,35 @@ describe('useCoreAskAutoContinue', () => {
     await vi.advanceTimersByTimeAsync(ASK_SKIP_TIMEOUT_MS)
     expect(respondApproval).toHaveBeenCalledTimes(1)
     expect(respondApproval).toHaveBeenCalledWith('req-ask', 'other_guidance', ASK_SKIP_GUIDANCE)
+  })
+
+  it('skips a question that came from a sub-agent, on the same five-minute rule', async () => {
+    vi.useFakeTimers()
+    const messages = ref<CoreMessage[]>(messagesWith([subAgentLine([decisionPart('req-sub-ask')])]))
+    const { api, respondApproval } = setup({ messages, enabled: async () => true })
+
+    await nextTick()
+    expect(api.armedRequestIds()).toEqual(['req-sub-ask'])
+
+    await vi.advanceTimersByTimeAsync(ASK_SKIP_TIMEOUT_MS)
+    expect(respondApproval).toHaveBeenCalledWith('req-sub-ask', 'other_guidance', ASK_SKIP_GUIDANCE)
+  })
+
+  it('never auto-answers a sub-agent approval, however deeply nested', async () => {
+    vi.useFakeTimers()
+    const messages = ref<CoreMessage[]>(messagesWith([
+      subAgentLine([subAgentLine([decisionPart('req-sub-approval', { toolName: 'run_command' })])]),
+    ]))
+    const loadEnabled = vi.fn(async () => true)
+    const { api, respondApproval } = setup({ messages, enabled: loadEnabled })
+
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(ASK_SKIP_TIMEOUT_MS * 3)
+
+    expect(api.armedRequestIds()).toEqual([])
+    // 子代理的审批同样是安全边界：不读偏好、不放行。
+    expect(loadEnabled).not.toHaveBeenCalled()
+    expect(respondApproval).not.toHaveBeenCalled()
   })
 
   it('does nothing while the preference is off', async () => {

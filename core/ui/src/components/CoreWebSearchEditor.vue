@@ -1,8 +1,8 @@
 <template>
   <section class="settings-panel">
     <header class="settings-title">
-      <h1>搜索</h1>
-      <p>管理 web_search 工具使用的搜索引擎内核与网络代理，保存到 websearch 插件配置后即时生效。</p>
+      <h1>{{ t("搜索") }}</h1>
+      <p>{{ t("管理 web_search 工具使用的搜索引擎内核与网络代理，保存到 websearch 插件配置后即时生效。") }}</p>
     </header>
 
     <p v-if="error" class="hook-error">{{ error }}</p>
@@ -11,11 +11,8 @@
     <article class="setting-card agent-toggle">
       <div class="agent-toggle-row">
         <div>
-          <h3>默认搜索内核</h3>
-          <p>
-            内置：<strong>baidu</strong>（国内可达，推荐）· bing（英文/分词正常词可用）· ddg（海外备胎）。
-            外部工具（GPL/AGPL 等独立进程）经 subprocess/http 接入，需手动配置 JSONC。
-          </p>
+          <h3>{{ t("默认搜索内核") }}</h3>
+          <p>{{ t("内置：") }}<strong>baidu</strong>{{ t("（国内可达，推荐）· bing（英文/分词正常词可用）· ddg（海外备胎）。 外部工具（GPL/AGPL 等独立进程）经 subprocess/http 接入，需手动配置 JSONC。") }}</p>
         </div>
         <div v-if="!loading" class="kernel-badge">{{ activeProvider }}</div>
       </div>
@@ -24,26 +21,26 @@
     <!-- 表单编辑器（可视化） -->
     <article class="setting-card">
       <div class="subhead">
-        <span class="muted subhead-title">内核配置</span>
+        <span class="muted subhead-title">{{ t("内核配置") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading" @click="fetchConfig">刷新</button>
-          <button class="text-btn" type="button" :disabled="loading || saving" @click="saveForm">保存</button>
+          <button class="text-btn" type="button" :disabled="loading" @click="fetchConfig">{{ t("刷新") }}</button>
+          <button class="text-btn" type="button" :disabled="loading || saving" @click="saveForm">{{ t("保存") }}</button>
         </div>
       </div>
 
       <label class="field">
-        <span>默认内核 provider</span>
+        <span>{{ t("默认内核 provider") }}</span>
         <UiSelect
           :model-value="form.provider"
           :options="providerOptions"
           :disabled="loading || saving"
-          aria-label="默认内核 provider"
+          :aria-label="t('默认内核 provider')"
           @update:model-value="form.provider = $event"
         />
       </label>
 
       <label class="field">
-        <span>结果上限 limit（默认 5，1-20）</span>
+        <span>{{ t("结果上限 limit（默认 5，1-20）") }}</span>
         <input
           v-model.number="form.limit"
           type="number"
@@ -54,7 +51,7 @@
       </label>
 
       <label class="field">
-        <span>超时秒数 timeout</span>
+        <span>{{ t("超时秒数 timeout") }}</span>
         <input
           v-model.number="form.timeout"
           type="number"
@@ -65,7 +62,7 @@
       </label>
 
       <label class="field">
-        <span>DuckDuckGo 本地代理端口（可选）</span>
+        <span>{{ t("DuckDuckGo 本地代理端口（可选）") }}</span>
         <input
           v-model.number="form.proxyPort"
           type="number"
@@ -73,23 +70,23 @@
           max="65535"
           inputmode="numeric"
           placeholder="7890"
-          aria-label="DuckDuckGo 本地代理端口"
+          :aria-label="t('DuckDuckGo 本地代理端口')"
           :disabled="loading || saving"
         />
-        <span class="hook-meta">留空时直连；填写后使用 http://127.0.0.1:端口。</span>
+        <span class="hook-meta">{{ t("留空时直连；填写后使用 http://127.0.0.1:端口。") }}</span>
       </label>
 
-      <p v-if="saved" class="hook-meta" role="status"><Check :size="12" :stroke-width="2.2" aria-hidden="true" /> 已保存</p>
+      <p v-if="saved" class="hook-meta" role="status"><Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
     </article>
 
     <!-- 原始 JSONC 编辑器 -->
     <article class="setting-card">
       <div class="subhead">
-        <span class="muted subhead-title">原始配置</span>
+        <span class="muted subhead-title">{{ t("原始配置") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="configSaving" @click="revertConfig">还原</button>
+          <button class="text-btn" type="button" :disabled="configSaving" @click="revertConfig">{{ t("还原") }}</button>
           <button class="small-btn" type="button" :disabled="configSaving" @click="saveRawConfig">
-            {{ configSaving ? '保存中…' : '保存' }}
+            {{ configSaving ? t("保存中…") : t("保存") }}
           </button>
         </div>
       </div>
@@ -98,36 +95,35 @@
         class="hook-config-textarea"
         rows="12"
         spellcheck="false"
-        aria-label="websearch.jsonc 内容"
+        :aria-label="t('websearch.jsonc 内容')"
         :disabled="configSaving"
         placeholder="{ &quot;provider&quot;: &quot;ddg&quot;, &quot;proxy_port&quot;: 7890 }"
       />
       <p class="hook-meta" :class="{ 'hook-config-error': configError }">
         <Check v-if="configSaved" :size="12" :stroke-width="2.2" aria-hidden="true" />
-        {{ configMessage || '支持注释（JSONC），保存后即时生效。' }}
+        {{ configMessage || t("支持注释（JSONC），保存后即时生效。") }}
       </p>
     </article>
 
     <!-- 说明卡片 -->
     <article class="setting-card">
       <div class="subhead">
-        <span class="muted subhead-title">外部搜索内核（subprocess / http）</span>
+        <span class="muted subhead-title">{{ t("外部搜索内核（subprocess / http）") }}</span>
       </div>
-      <p class="skill-path-explain">
-        如需接入独立搜索工具（如 baidu-serp-api、SearXNG、openserp 等），在原始配置中扩展
-        <code>transport</code> / <code>command</code> / <code>url</code> 字段，例如：
-      </p>
+      <p class="skill-path-explain">{{ t("如需接入独立搜索工具（如 baidu-serp-api、SearXNG、openserp 等），在原始配置中扩展") }}<code>transport</code> / <code>command</code> / <code>url</code>{{ t("字段，例如：") }}</p>
       <pre class="config-sample">{
   "provider": "custom-serp",
   "transport": "http",
   "url": "http://127.0.0.1:8888/search"
 }</pre>
-      <p class="hook-meta">GPL/AGPL 组件以独立进程运行、仓库不携带代码；LamTools 仅按固定 JSON 契约调用（详见 docs/web-search-module.md）。</p>
+      <p class="hook-meta">{{ t("GPL/AGPL 组件以独立进程运行、仓库不携带代码；LamTools 仅按固定 JSON 契约调用（详见 docs/web-search-module.md）。") }}</p>
     </article>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { onMounted, reactive, ref } from 'vue'
 import { Check } from 'lucide-vue-next'
 import UiSelect from './UiSelect.vue'
@@ -149,9 +145,9 @@ const form = reactive({
 })
 
 const providerOptions = [
-  { value: 'baidu', label: 'baidu（百度，国内可达）' },
-  { value: 'bing', label: 'bing（必应中文）' },
-  { value: 'ddg', label: 'ddg（DuckDuckGo，海外）' },
+  { value: 'baidu', get label() { return t("baidu（百度，国内可达）") } },
+  { value: 'bing', get label() { return t("bing（必应中文）") } },
+  { value: 'ddg', get label() { return t("ddg（DuckDuckGo，海外）") } },
 ]
 
 // raw config editor
@@ -294,7 +290,7 @@ async function saveRawConfig() {
     configOriginal.value = configDraft.value
     syncFormFromContent(configDraft.value)
     configSaved.value = true
-    configMessage.value = '已保存'
+    configMessage.value = t("已保存")
   } catch (e) {
     configError.value = true
     configMessage.value = e instanceof Error ? e.message : String(e)

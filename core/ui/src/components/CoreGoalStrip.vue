@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { Goal } from 'lucide-vue-next'
 import type { CoreGoal } from '../durable/types'
 
@@ -10,8 +12,8 @@ defineEmits<{ cancel: [goal: CoreGoal] }>()
   <div class="core-goal-strip" :data-status="goal.status" role="status">
     <span aria-hidden="true"><Goal :size="13" :stroke-width="1.8" /></span>
     <span class="core-goal-objective">{{ goal.objective }}</span>
-    <span class="core-goal-status">{{ goal.status === 'blocked' ? '已暂停' : '进行中' }}</span>
-    <button type="button" @click="$emit('cancel', goal)">取消</button>
+    <span class="core-goal-status">{{ goal.status === 'blocked' ? t("已暂停") : t("进行中") }}</span>
+    <button type="button" @click="$emit('cancel', goal)">{{ t("取消") }}</button>
   </div>
 </template>
 

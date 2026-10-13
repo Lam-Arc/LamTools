@@ -49,12 +49,12 @@
     </WorkflowCanvas>
     <div v-if="workflowSwitchGuard" class="wf-switch-guard" role="dialog" aria-modal="true" aria-labelledby="wf-switch-guard-title">
       <div class="wf-switch-guard-card">
-        <h2 id="wf-switch-guard-title">工作流有未保存修改</h2>
-        <p>切换前要如何处理当前草稿？</p>
+        <h2 id="wf-switch-guard-title">{{ t("工作流有未保存修改") }}</h2>
+        <p>{{ t("切换前要如何处理当前草稿？") }}</p>
         <div class="wf-switch-guard-actions">
-          <button type="button" class="text-btn" @click="resolveWorkflowSwitch('cancel')">取消</button>
-          <button type="button" class="text-btn" @click="resolveWorkflowSwitch('discard')">放弃修改</button>
-          <button type="button" class="primary-btn" @click="resolveWorkflowSwitch('save')">保存并切换</button>
+          <button type="button" class="text-btn" @click="resolveWorkflowSwitch('cancel')">{{ t("取消") }}</button>
+          <button type="button" class="text-btn" @click="resolveWorkflowSwitch('discard')">{{ t("放弃修改") }}</button>
+          <button type="button" class="primary-btn" @click="resolveWorkflowSwitch('save')">{{ t("保存并切换") }}</button>
         </div>
       </div>
     </div>
@@ -73,7 +73,7 @@
   </Teleport>
 
   <Teleport v-if="workflowTabs.length > 1" defer to="[data-titlebar-workflow-tabs]">
-    <nav class="wf-workflow-tabs" role="tablist" aria-label="打开的工作流">
+    <nav class="wf-workflow-tabs" role="tablist" :aria-label="t('打开的工作流')">
       <button
         v-for="tab in workflowTabs"
         :key="tab.id"
@@ -85,15 +85,15 @@
         :tabindex="tab.id === activeWorkflowId ? 0 : -1"
         @click="selectWorkflow(tab.id)"
       >
-        <span class="wf-workflow-tab-title">{{ tab.name || '未命名工作流' }}</span>
-        <span v-if="tab.dirty" class="wf-workflow-tab-dirty" aria-label="有未保存修改">
+        <span class="wf-workflow-tab-title">{{ tab.name || t("未命名工作流") }}</span>
+        <span v-if="tab.dirty" class="wf-workflow-tab-dirty" :aria-label="t('有未保存修改')">
           <CircleDotDashed :size="9" :stroke-width="2" aria-hidden="true" />
         </span>
         <span
           class="wf-workflow-tab-close"
           role="button"
           tabindex="0"
-          aria-label="关闭工作流标签"
+          :aria-label="t('关闭工作流标签')"
           @click.stop="closeWorkflowTab(tab.id)"
           @keydown.enter.stop.prevent="closeWorkflowTab(tab.id)"
           @keydown.space.stop.prevent="closeWorkflowTab(tab.id)"
@@ -110,11 +110,11 @@
       :class="{ 'is-pinned': conversationExpanded }"
       data-workflow-conversation
       role="region"
-      aria-label="工作流对话"
+      :aria-label="t('工作流对话')"
     >
       <header class="wf-convo-float-head">
-        <h3>{{ workflowDefinition?.name || '工作流' }} · 对话</h3>
-        <button type="button" class="text-btn" title="收起" @click="conversationExpanded = false">
+        <h3>{{ workflowDefinition?.name || t("工作流") }}{{ t("· 对话") }}</h3>
+        <button type="button" class="text-btn" :title="t('收起')" @click="conversationExpanded = false">
           <X :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </header>
@@ -141,13 +141,13 @@
 
   <Teleport v-if="showWorkflowCreate" defer to=".workspace-plugin-modal">
     <div class="wf-create-backdrop" @mousedown.self="closeWorkflowCreate">
-      <div class="wf-create-card" role="dialog" aria-modal="true" aria-label="新建工作流">
-        <header class="wf-create-head"><h2>新建工作流</h2></header>
+      <div class="wf-create-card" role="dialog" aria-modal="true" :aria-label="t('新建工作流')">
+        <header class="wf-create-head"><h2>{{ t("新建工作流") }}</h2></header>
         <input
           v-model="workflowNameDraft"
           class="wf-create-input"
           type="text"
-          placeholder="工作流名称"
+          :placeholder="t('工作流名称')"
           autocomplete="off"
           :disabled="workflowCreateLoading"
           @keydown.enter.prevent="createWorkflowFromCard"
@@ -155,9 +155,9 @@
         />
         <p v-if="workflowCreateError" class="wf-create-error">{{ workflowCreateError }}</p>
         <div class="wf-create-actions">
-          <button type="button" class="text-btn" :disabled="workflowCreateLoading" @click="closeWorkflowCreate">取消</button>
+          <button type="button" class="text-btn" :disabled="workflowCreateLoading" @click="closeWorkflowCreate">{{ t("取消") }}</button>
           <button type="button" class="primary-btn" :disabled="workflowCreateLoading || !workflowNameDraft.trim()" @click="createWorkflowFromCard">
-            {{ workflowCreateLoading ? '创建中' : '创建' }}
+            {{ workflowCreateLoading ? t("创建中") : t("创建") }}
           </button>
         </div>
       </div>
@@ -166,6 +166,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CircleDotDashed, X } from 'lucide-vue-next'
 import type { CoreAppEvent } from '../../../../../../ui/src/appServer'
@@ -358,7 +360,7 @@ const workflowRightSidebar = computed<RightSidebarPluginContribution[]>(() => {
   if (!definition) return []
   return [{
     id: 'workflow-inspector',
-    title: '工作流检查器',
+    get title() { return t("工作流检查器") },
     order: 5,
     defaultVisible: true,
     defaultCollapsed: false,
@@ -424,7 +426,7 @@ const workflowProjectGroups = computed<ProjectGroup[]>(() => {
   if (globalDefinitions.length) {
     groups.push({
       id: 'global',
-      name: '个人',
+      get name() { return t("个人") },
       canManage: false,
       sessions: globalDefinitions.map(workflowSessionItem),
     })
@@ -481,7 +483,7 @@ function workflowSessionItem(definition: WorkflowDef): SessionItem {
     id: definition.id,
     title: definition.name,
     status: definition.exposed ? 'completed' : 'idle',
-    meta: definition.exposed ? '已暴露' : '',
+    meta: definition.exposed ? t("已暴露") : '',
     createdAt: definition.created_at || undefined,
     updatedAt: definition.updated_at || undefined,
     metadata: {
@@ -564,7 +566,7 @@ async function closeWorkflowTab(workflowId: string): Promise<void> {
   }
 }
 
-function applyWorkflowDocumentUpdate(definition: WorkflowDef, label = '编辑工作流'): void {
+function applyWorkflowDocumentUpdate(definition: WorkflowDef, label = t("编辑工作流")): void {
   if (!workflowDocument) {
     attachWorkflowDocument(definition)
     return
@@ -578,21 +580,21 @@ function workflowNodeTitle(nodeId: string): string {
 }
 
 function nodeStateLabel(status: NodeStateStatus): string {
-  if (status === 'running') return '运行中'
-  if (status === 'waiting') return '等待中'
-  if (status === 'done') return '已完成'
-  if (status === 'error') return '失败'
-  if (status === 'skipped') return '已跳过'
-  if (status === 'cancelled') return '已取消'
-  return '未运行'
+  if (status === 'running') return t("运行中")
+  if (status === 'waiting') return t("等待中")
+  if (status === 'done') return t("已完成")
+  if (status === 'error') return t("失败")
+  if (status === 'skipped') return t("已跳过")
+  if (status === 'cancelled') return t("已取消")
+  return t("未运行")
 }
 
 function workflowRunStatusLabel(status: WorkflowRunResult['status']): string {
-  if (status === 'running') return '运行中'
-  if (status === 'completed') return '完成'
-  if (status === 'failed') return '失败'
-  if (status === 'paused') return '已暂停'
-  if (status === 'cancelled') return '已取消'
+  if (status === 'running') return t("运行中")
+  if (status === 'completed') return t("完成")
+  if (status === 'failed') return t("失败")
+  if (status === 'paused') return t("已暂停")
+  if (status === 'cancelled') return t("已取消")
   return String(status)
 }
 
@@ -688,7 +690,7 @@ async function refreshWorkflows(): Promise<void> {
         const remote = await workflowApi.getDocumentById(current.id, workflowRoot(current))
         if (workflowDocumentState.value?.dirty) {
           workflowDocument?.markConflict(remote)
-          workflowStatusText.value = '远端工作流有更新，请处理冲突'
+          workflowStatusText.value = t("远端工作流有更新，请处理冲突")
         } else {
           workflowDocument?.acceptRemote(remote)
         }
@@ -748,7 +750,7 @@ async function refreshQueue(): Promise<void> {
     }
   } catch (error) {
     console.error('[workflow] queue refresh failed', error)
-    workflowStatusText.value = `队列刷新失败：${messageFromError(error)}`
+    workflowStatusText.value = t("队列刷新失败：{0}", { 0: messageFromError(error) })
   } finally {
     queueLoading.value = false
   }
@@ -825,7 +827,7 @@ async function completeHumanTask(
     }
     await refreshHumanTasks()
     selectedHumanTask.value = completed.task
-    setRuntimeStatus(completed.idempotent ? '任务已处理' : '人工任务已提交', 2500)
+    setRuntimeStatus(completed.idempotent ? t("任务已处理") : t("人工任务已提交"), 2500)
   } catch (error) {
     humanTaskError.value = messageFromError(error)
   } finally {
@@ -847,7 +849,7 @@ async function refreshWorkflowActivations(): Promise<void> {
     // must not make the workflow editor unusable. Keep the last known list so
     // an intermittent read failure does not hide a still-running activation.
     console.error('[workflow] activation refresh failed', error)
-    workflowStatusText.value = `激活状态刷新失败：${messageFromError(error)}`
+    workflowStatusText.value = t("激活状态刷新失败：{0}", { 0: messageFromError(error) })
   } finally {
     activationsLoading.value = false
   }
@@ -863,10 +865,10 @@ async function activateWorkflowTrigger(triggerId: string, replace = false): Prom
     // trigger list/revision when the user clicks activate immediately.
     if (workflowDirty.value) {
       await saveWorkflow(true)
-      if (workflowDirty.value) throw new Error('请先保存工作流并解决冲突，再激活触发器')
+      if (workflowDirty.value) throw new Error(t("请先保存工作流并解决冲突，再激活触发器"))
     }
     const current = workflowDefinition.value
-    if (!current || !current.name) throw new Error('工作流不存在')
+    if (!current || !current.name) throw new Error(t("工作流不存在"))
     await workflowApi.activate(current.name, {
       workRoot: workflowRoot(current),
       triggerId,
@@ -876,9 +878,9 @@ async function activateWorkflowTrigger(triggerId: string, replace = false): Prom
       replace,
     })
     await refreshWorkflowActivations()
-    setRuntimeStatus(replace ? '已替换并激活触发器' : '已激活触发器', 2500)
+    setRuntimeStatus(replace ? t("已替换并激活触发器") : t("已激活触发器"), 2500)
   } catch (error) {
-    setRuntimeStatus(`激活失败：${messageFromError(error)}`, 4000)
+    setRuntimeStatus(t("激活失败：{0}", { 0: messageFromError(error) }), 4000)
     throw error
   } finally {
     activationBusy.value = false
@@ -895,9 +897,9 @@ async function deactivateWorkflowTrigger(triggerId: string): Promise<void> {
       triggerId,
     })
     await refreshWorkflowActivations()
-    setRuntimeStatus('已停用触发器', 2500)
+    setRuntimeStatus(t("已停用触发器"), 2500)
   } catch (error) {
-    setRuntimeStatus(`停用失败：${messageFromError(error)}`, 4000)
+    setRuntimeStatus(t("停用失败：{0}", { 0: messageFromError(error) }), 4000)
     throw error
   } finally {
     activationBusy.value = false
@@ -916,7 +918,7 @@ function addNodeFromCatalog(schema: WorkflowNodeSchema): void {
   if (['ai', 'model', 'agent'].includes(node.kind) && !String(node.config.model_id || '').trim()) {
     node.config.model_id = selectedModelId.value
   }
-  applyWorkflowDocumentUpdate({ ...definition, nodes: [...definition.nodes, node] }, `添加节点：${node.title}`)
+  applyWorkflowDocumentUpdate({ ...definition, nodes: [...definition.nodes, node] }, t("添加节点：{0}", { 0: node.title }))
   selectedNodeId.value = node.id
   scheduleAutosave()
 }
@@ -924,7 +926,7 @@ function addNodeFromCatalog(schema: WorkflowNodeSchema): void {
 async function enqueueWorkflow(): Promise<void> {
   const definition = workflowDefinition.value
   if (!definition || !definition.name) {
-    setRuntimeStatus('先保存工作流再排队', 3000)
+    setRuntimeStatus(t("先保存工作流再排队"), 3000)
     return
   }
   try {
@@ -936,10 +938,10 @@ async function enqueueWorkflow(): Promise<void> {
       inputs: {},
     })
     selectedQueueItem.value = item
-    setRuntimeStatus(`已加入队列：${item.queue_id || item.run_id}`, 2500)
+    setRuntimeStatus(t("已加入队列：{0}", { 0: item.queue_id || item.run_id }), 2500)
     await refreshQueue()
   } catch (error) {
-    setRuntimeStatus(`排队失败：${messageFromError(error)}`, 4000)
+    setRuntimeStatus(t("排队失败：{0}", { 0: messageFromError(error) }), 4000)
   }
 }
 
@@ -947,10 +949,10 @@ async function cancelQueuedRun(item: WorkflowQueueItem): Promise<void> {
   try {
     const cancelled = await workflowApi.cancelQueue(item.queue_id, item.run_id)
     selectedQueueItem.value = cancelled
-    setRuntimeStatus('已取消队列运行', 2500)
+    setRuntimeStatus(t("已取消队列运行"), 2500)
     await refreshQueue()
   } catch (error) {
-    setRuntimeStatus(`取消失败：${messageFromError(error)}`, 4000)
+    setRuntimeStatus(t("取消失败：{0}", { 0: messageFromError(error) }), 4000)
   }
 }
 
@@ -959,7 +961,7 @@ async function inspectQueuedRun(item: WorkflowQueueItem): Promise<void> {
     selectedQueueItem.value = await workflowApi.getQueue(item.queue_id, item.run_id)
   } catch (error) {
     selectedQueueItem.value = item
-    setRuntimeStatus(`读取运行详情失败：${messageFromError(error)}`, 3500)
+    setRuntimeStatus(t("读取运行详情失败：{0}", { 0: messageFromError(error) }), 3500)
   }
 }
 
@@ -975,10 +977,10 @@ async function clearWorkflowQueue(all: boolean): Promise<void> {
       name: definition.name,
     })
     selectedQueueItem.value = null
-    setRuntimeStatus(`已清理 ${count} 个队列/历史项`, 2500)
+    setRuntimeStatus(t("已清理 {0} 个队列/历史项", { 0: count }), 2500)
     await refreshQueue()
   } catch (error) {
-    setRuntimeStatus(`清理失败：${messageFromError(error)}`, 4000)
+    setRuntimeStatus(t("清理失败：{0}", { 0: messageFromError(error) }), 4000)
   }
 }
 
@@ -998,14 +1000,14 @@ async function importWorkflowDefinition(imported: WorkflowImportSource): Promise
   } else if (imported.kind === 'comfyui') {
     saved = await workflowApi.importComfyUi(imported.workflow, imported.name, scopedRoot || undefined, 0)
   } else {
-    const normalized = normalizeImportedWorkflow(imported.definition, imported.name || '导入工作流')
+    const normalized = normalizeImportedWorkflow(imported.definition, imported.name || t("导入工作流"))
     const savedRaw = await workflowApi.create({ ...normalized, work_root: scopedRoot })
     saved = hydrateWorkflowDefinition({ ...savedRaw, canvas_elements: normalized.canvas_elements })
     if (saved.id) writeWorkflowCanvasSidecar(saved.id, saved.canvas_elements ?? [])
   }
   await refreshWorkflows()
   await selectWorkflow(saved.id)
-  setRuntimeStatus(`已导入：${saved.name}`, 2500)
+  setRuntimeStatus(t("已导入：{0}", { 0: saved.name }), 2500)
 }
 
 async function exportWorkflowDefinition(format: WorkflowExportFormat): Promise<boolean> {
@@ -1071,7 +1073,7 @@ async function selectWorkflow(workflowId: string): Promise<void> {
   try {
     const definition = draft?.snapshot().definition
       || (listed ? await workflowApi.getDocumentById(workflowId, workRoot) : null)
-    if (!definition) throw new Error('工作流不存在')
+    if (!definition) throw new Error(t("工作流不存在"))
     const hydrated = hydrateWorkflowDefinition(definition)
     activeWorkflowId.value = hydrated.id
     rememberOpenWorkflow(hydrated.id)
@@ -1088,7 +1090,7 @@ async function selectWorkflow(workflowId: string): Promise<void> {
     await refreshHumanTasks()
   } catch (error) {
     console.error('[workflow] get failed', error)
-    workflowStatusText.value = `加载失败：${messageFromError(error)}`
+    workflowStatusText.value = t("加载失败：{0}", { 0: messageFromError(error) })
   }
 }
 
@@ -1144,9 +1146,9 @@ async function createWorkflowFromCard(): Promise<void> {
     await refreshWorkflows()
     closeWorkflowCreate()
     await selectWorkflow(saved.id)
-    setRuntimeStatus(`已创建：${saved.name}`, 2500)
+    setRuntimeStatus(t("已创建：{0}", { 0: saved.name }), 2500)
   } catch (error) {
-    workflowCreateError.value = `创建失败：${messageFromError(error)}`
+    workflowCreateError.value = t("创建失败：{0}", { 0: messageFromError(error) })
   } finally {
     workflowCreateLoading.value = false
   }
@@ -1200,9 +1202,9 @@ async function renameWorkflow(title: string): Promise<void> {
     activeWorkflowId.value = renamed.id
     await refreshWorkflows()
     await refreshSessions()
-    setRuntimeStatus(`已重命名：${renamed.name}`, 2500)
+    setRuntimeStatus(t("已重命名：{0}", { 0: renamed.name }), 2500)
   } catch (error) {
-    setRuntimeStatus(`重命名失败：${messageFromError(error)}`, 4000)
+    setRuntimeStatus(t("重命名失败：{0}", { 0: messageFromError(error) }), 4000)
     throw error
   }
 }
@@ -1228,13 +1230,13 @@ async function saveWorkflow(silent = false): Promise<void> {
     if (workflowDocument) workflowDocument.markSaved(saved, { value: saved.revision, updatedAt: saved.updated_at })
     else attachWorkflowDocument(saved)
     activeWorkflowId.value = saved.id
-    if (!silent) setRuntimeStatus(`已保存：${saved.name}`, 2500)
+    if (!silent) setRuntimeStatus(t("已保存：{0}", { 0: saved.name }), 2500)
     if (!silent) await refreshWorkflows()
   } catch (error) {
     console.error('[workflow] save failed', error)
     if (await loadWorkflowConflict(error, definition)) return
     workflowDocument?.markSaveError(error)
-    if (!silent) setRuntimeStatus(`保存失败：${messageFromError(error)}`, 4000)
+    if (!silent) setRuntimeStatus(t("保存失败：{0}", { 0: messageFromError(error) }), 4000)
   }
 }
 
@@ -1242,13 +1244,13 @@ async function loadWorkflowConflict(error: unknown, local: WorkflowDef): Promise
   if (!isWorkflowRevisionConflict(error)) return false
   try {
     const remote = await workflowApi.getDocumentById(local.id, workflowRoot(local))
-    workflowDocument?.markConflict(remote, '保存冲突：远端版本已更新。请选择采用远端，或保留本地后重试。')
-    workflowStatusText.value = '保存冲突，请选择处理方式'
+    workflowDocument?.markConflict(remote, t("保存冲突：远端版本已更新。请选择采用远端，或保留本地后重试。"))
+    workflowStatusText.value = t("保存冲突，请选择处理方式")
   } catch (refreshError) {
     // Keep the conflict signal visible even when a transient read failure
     // prevents loading the canonical remote document.
-    workflowDocument?.markSaveError(new Error(`检测到版本冲突，但无法读取远端版本：${messageFromError(refreshError)}`), false)
-    workflowStatusText.value = '检测到版本冲突，远端版本暂不可读取'
+    workflowDocument?.markSaveError(new Error(t("检测到版本冲突，但无法读取远端版本：{0}", { 0: messageFromError(refreshError) })), false)
+    workflowStatusText.value = t("检测到版本冲突，远端版本暂不可读取")
   }
   return true
 }
@@ -1257,12 +1259,12 @@ function acceptRemoteWorkflow(): void {
   const remote = workflowDocumentState.value?.conflict?.remote
   if (!remote || !workflowDocument) return
   workflowDocument.acceptRemote(remote)
-  workflowStatusText.value = '已采用远端版本'
+  workflowStatusText.value = t("已采用远端版本")
 }
 
 function keepLocalAndRetryWorkflow(): void {
   if (!workflowDocument?.keepLocalAfterConflict()) return
-  workflowStatusText.value = '已保留本地修改，正在重试保存…'
+  workflowStatusText.value = t("已保留本地修改，正在重试保存…")
   void saveWorkflow()
 }
 
@@ -1290,7 +1292,7 @@ async function cancelWorkflowRun(): Promise<void> {
   const definition = workflowDefinition.value
   if (!definition || !workflowRunning.value) return
   const threadId = workflowSessionId(definition)
-  workflowStatusText.value = '正在停止…'
+  workflowStatusText.value = t("正在停止…")
   try {
     await workflowApi.cancel(threadId, activeRunId.value || undefined)
     const previousStates = workflowRun.value?.node_states || {}
@@ -1322,9 +1324,9 @@ async function cancelWorkflowRun(): Promise<void> {
     }
     workflowContinuation.value = undefined
     workflowRunning.value = false
-    workflowStatusText.value = '已取消'
+    workflowStatusText.value = t("已取消")
   } catch (error) {
-    workflowStatusText.value = `停止失败：${messageFromError(error)}`
+    workflowStatusText.value = t("停止失败：{0}", { 0: messageFromError(error) })
   }
 }
 
@@ -1334,7 +1336,7 @@ async function executeWorkflowRun(
 ): Promise<void> {
   const definition = workflowDefinition.value
   if (!definition || !definition.name) {
-    setRuntimeStatus('先保存工作流再运行', 3000)
+    setRuntimeStatus(t("先保存工作流再运行"), 3000)
     return
   }
   if (workflowRunning.value) return
@@ -1348,7 +1350,7 @@ async function executeWorkflowRun(
   activeRunId.value = runId
   if (!resume) workflowTimeline.value = []
   workflowRunning.value = true
-  workflowStatusText.value = options.singleNode ? '运行节点…' : options.startNode ? '从此节点运行…' : maxSteps !== undefined ? '单步运行中…' : '运行中…'
+  workflowStatusText.value = options.singleNode ? t("运行节点…") : options.startNode ? t("从此节点运行…") : maxSteps !== undefined ? t("单步运行中…") : t("运行中…")
   const initialStates = resume && previous
     ? Object.fromEntries(Object.entries(previous.node_states).map(([nodeId, state]) => [nodeId, { ...state }])) as Record<string, WorkflowNodeState>
     : Object.fromEntries(definition.nodes.map((node) => [node.id, {
@@ -1389,13 +1391,13 @@ async function executeWorkflowRun(
     if (activeRunId.value !== result.run_id && result.run_id) return
     activeRunId.value = result.run_id || runId
     applyWorkflowRunResult(result.run, result.continuation)
-    if (result.run.status === 'paused') workflowStatusText.value = '已暂停（单步）'
-    else if (result.run.status === 'completed') workflowStatusText.value = '完成'
-    else if (result.run.status === 'cancelled') workflowStatusText.value = '已取消'
+    if (result.run.status === 'paused') workflowStatusText.value = t("已暂停（单步）")
+    else if (result.run.status === 'completed') workflowStatusText.value = t("完成")
+    else if (result.run.status === 'cancelled') workflowStatusText.value = t("已取消")
     else workflowStatusText.value = result.run.status
   } catch (error) {
     if (activeRunId.value === runId) {
-      workflowStatusText.value = `运行失败：${messageFromError(error)}`
+      workflowStatusText.value = t("运行失败：{0}", { 0: messageFromError(error) })
       workflowRun.value = {
         ...(workflowRun.value || {
           output: null,
@@ -1427,9 +1429,9 @@ async function toggleExpose(): Promise<void> {
     workflowDocument?.markSaved(updated, { value: updated.revision, updatedAt: updated.updated_at })
     if (!workflowDocument) attachWorkflowDocument(updated)
     await refreshWorkflows()
-    setRuntimeStatus(updated.exposed ? `已暴露：${updated.tool_name || `workflow_${updated.name}`}` : '已取消暴露', 2500)
+    setRuntimeStatus(updated.exposed ? t("已暴露：{0}", { 0: updated.tool_name || `workflow_${updated.name}` }) : t("已取消暴露"), 2500)
   } catch (error) {
-    setRuntimeStatus(`操作失败：${messageFromError(error)}`, 4000)
+    setRuntimeStatus(t("操作失败：{0}", { 0: messageFromError(error) }), 4000)
   }
 }
 
@@ -1518,7 +1520,7 @@ function handleRuntimeEvent(event: CoreAppEvent | null): void {
   }
   const item: WorkflowRunTimelineItem = {
     id: String(event.event_id || `${runId}:${nodeId || 'run'}:${status}:${event.seq}`),
-    ...(nodeId ? { node_id: nodeId, title: String(nested.title || workflowNodeTitle(nodeId)) } : { title: status === 'progress' ? '运行进度' : '运行事件' }),
+    ...(nodeId ? { node_id: nodeId, title: String(nested.title || workflowNodeTitle(nodeId)) } : { title: status === 'progress' ? t("运行进度") : t("运行事件") }),
     status: nodeId ? (detail.status || status) : status,
     kind: String(nested.kind || event.event_type || status),
     occurred_at: event.created_at || null,
@@ -1560,7 +1562,7 @@ function scheduleGraphReload(force = false): void {
       .then((fresh) => {
         if (workflowDocumentState.value?.dirty) {
           workflowDocument?.markConflict(fresh)
-          workflowStatusText.value = '远端工作流有更新，请处理冲突'
+          workflowStatusText.value = t("远端工作流有更新，请处理冲突")
         } else {
           workflowDocument?.acceptRemote(fresh)
         }

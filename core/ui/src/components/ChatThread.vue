@@ -2,7 +2,7 @@
   <div class="chat-thread">
     <div v-if="messages.length === 0 && showEmptyState" class="sidebar-empty">
       <slot name="empty">
-        <span>暂无消息，发送一个任务。</span>
+        <span>{{ t("暂无消息，发送一个任务。") }}</span>
       </slot>
     </div>
 
@@ -10,7 +10,7 @@
       v-for="msg in messages"
       :key="msg.id"
       :data-message-id="msg.id"
-      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, turnActive, activeTurnId, lockedMessageIds, autoPlotMath]"
+      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, turnActive, turnStatus, activeTurnId, lockedMessageIds, autoPlotMath]"
       :motion-enter="!initialMessageIds.has(msg.id)"
       :msg="msg"
         :assistant-label="assistantLabelForMessage(msg)"
@@ -21,8 +21,10 @@
       :work-root="workRoot"
       :active-turn-id="activeTurnId"
       :turn-active="turnActive"
+      :turn-status="turnStatus"
       :locked-message-ids="lockedMessageIds"
       :auto-plot-math="autoPlotMath"
+      :sub-agent-rows-inert="subAgentRowsInert"
       @toggle-process="onToggleProcess"
         @decision-select="onDecisionSelect"
         @fork-message="onForkMessage"
@@ -49,6 +51,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import type { CoreAttachment, CoreMessage } from '../types'
 import type { LamToolsTransport } from '../transport'
 import type { CoreSubAgentRef } from '../agents/subAgentProjection'
@@ -87,10 +91,14 @@ const props = withDefaults(
     activeTurnId?: string | null
     /** 当前 turn 是否在运行（与 composer stop 按钮同一信号源） */
     turnActive?: boolean
+    /** 当前 turn 的精确状态；耗时只在 running 时按墙钟推进。 */
+    turnStatus?: string
     /** 最后一次上下文压缩边界之前的消息 id：编辑/分叉/回退入口在这些回合隐藏。 */
     lockedMessageIds?: Set<string>
     /** Automatically plot supported display-math formulas in final answers. */
     autoPlotMath?: boolean
+    /** 面板内部：子代理行明确不可点（点击不抛事件、无障碍标注不可交互）。 */
+    subAgentRowsInert?: boolean
   }>(),
   {
     showEmptyState: true,
@@ -102,8 +110,10 @@ const props = withDefaults(
     workRoot: null,
     activeTurnId: null,
     turnActive: false,
+    turnStatus: 'idle',
     lockedMessageIds: () => new Set(),
     autoPlotMath: false,
+    subAgentRowsInert: false,
   },
 )
 
@@ -1220,6 +1230,16 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   transition: transform var(--dur-fast) var(--ease-out);
 }
 .sub-line-toggle-icon.is-open { transform: rotate(180deg); }
+
+/* 面板内部的子代理行：明确不可点——没有指针反馈、没有悬停反馈。 */
+.sub-line-heading:disabled,
+.tool-card-header:disabled {
+  cursor: default;
+}
+.sub-line-heading:disabled:hover,
+.tool-card-header:disabled:hover {
+  background: transparent;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .sub-line-toggle,

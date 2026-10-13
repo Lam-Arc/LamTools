@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -1608,3 +1609,32 @@ def test_artifact_upload_refuses_a_foreign_project(tmp_path: Path, isolated_conf
         )
 
     assert response.status_code == 404
+
+
+def test_health_reports_absent_global_default_model_honestly(
+    tmp_path: Path, isolated_config_root: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No global default is the normal state; say so instead of implying broken.
+
+    The model is chosen per turn from the session/composer, so the boot config
+    has no default. Health must expose that plainly (model empty, but
+    ``model_configured`` false and ``model_selection`` per_turn) and boot must
+    log it as information, not as the misleading "not resolvable" warning.
+    """
+    with caplog.at_level(logging.INFO, logger="lamtools_core.app.http_agent_app"):
+        app = create_core_agent_http_app(
+            core_db=tmp_path / "core.db",
+            data_dir=tmp_path / "data",
+            work_root=tmp_path / "workspace",
+            model_id="",
+        )
+        with TestClient(app) as client:
+            health = client.get("/api/health").json()
+
+    assert health["status"] == "ok"
+    assert health["model"] == ""
+    assert health["model_configured"] is False
+    assert health["model_selection"] == "per_turn"
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("No global default model is configured" in m for m in messages)
+    assert not any("is not usable" in m for m in messages)

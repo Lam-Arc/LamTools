@@ -1,5 +1,5 @@
 <template>
-  <nav class="app-rail" data-app-rail aria-label="主导航">
+  <nav class="app-rail" data-app-rail :aria-label="t('主导航')">
     <button
       v-for="item in topItems"
       :key="item.id"
@@ -21,8 +21,8 @@
       ref="updateButton"
       class="app-rail__button app-rail__update"
       type="button"
-      :aria-label="updateLabel || '有新版本可用'"
-      :title="updateLabel || '有新版本可用'"
+      :aria-label="updateLabel || t('有新版本可用')"
+      :title="updateLabel || t('有新版本可用')"
       data-rail-update
       :data-rail-update-action="updateAction || 'download'"
       :data-rail-update-state="updateBusy ? 'busy' : 'ready'"
@@ -38,8 +38,8 @@
     <button
       class="app-rail__button"
       type="button"
-      aria-label="账号"
-      title="账号"
+      :aria-label="t('账号')"
+      :title="t('账号')"
       :aria-pressed="props.active === 'account'"
       data-rail-entry="account"
       @click="emit('open', 'account')"
@@ -50,6 +50,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * AppRail — 最左竖栏（Codex 式整界面导航）。
  *
@@ -101,12 +103,12 @@ interface RailEntry {
 }
 
 const topItems: RailEntry[] = [
-  { id: 'chat', label: '聊天', icon: House },
+  { id: 'chat', get label() { return t("聊天") }, icon: House },
   // 定时任务用 lucide 的 calendar-clock：IconPark 的时间家族里没有「日历+时钟」这一枚。
-  { id: 'arrange', label: '定时任务', icon: CalendarClock },
+  { id: 'arrange', get label() { return t("定时任务") }, icon: CalendarClock },
   // 资料库用 IconPark 的 book-one：一叠合着的资料，而不是一本摊开的书。
-  { id: 'library', label: '资料库', icon: BookOne, strokeWidth: 3.6 },
-  { id: 'plugins', label: '插件', icon: Receive, strokeWidth: 3.6 },
-  { id: 'settings', label: '设置', icon: Settings },
+  { id: 'library', get label() { return t("资料库") }, icon: BookOne, strokeWidth: 3.6 },
+  { id: 'plugins', get label() { return t("插件") }, icon: Receive, strokeWidth: 3.6 },
+  { id: 'settings', get label() { return t("设置") }, icon: Settings },
 ]
 </script>

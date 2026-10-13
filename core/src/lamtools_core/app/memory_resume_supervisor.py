@@ -24,8 +24,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
+from lamtools_core.runtime.member_wake import (
+    clear_member_wake_autostart,
+    mark_member_wake_autostart,
+    member_wake_exhausted,
+    member_wake_exhausted_message,
+    member_wake_streak,
+    note_member_wake,
+)
 from lamtools_core.runtime.memory_guard import (
     MEMORY_RESUME_KEY,
     available_memory_gb,
@@ -54,6 +63,19 @@ MEMORY_RESUME_METADATA_KEY = MEMORY_RESUME_KEY
 
 DEFAULT_POLL_SECONDS = 15.0
 
+#: Member completions that land within this window are delivered by ONE wake
+#: turn, so four members finishing at once add one turn, not four (which would
+#: mean four model calls, four snapshot writes, four revisions). It is the only
+#: added latency: the continuation starts at most this long after the last
+#: completion, and in the common case the member result is what the user is
+#: waiting for, so one second is an acceptable coalescing window.
+MEMBER_WAKE_COALESCE_SECONDS = 1.0
+
+#: While a member result is pending and a turn is still running, re-check this
+#: often so the continuation starts as soon as the turn releases. Only scheduled
+#: when such a result is actually waiting, so it is not a standing poll.
+MEMBER_WAKE_RECHECK_SECONDS = 0.5
+
 
 def memory_resume_continuation_prompt(
     *,
@@ -81,14 +103,27 @@ def memory_resume_continuation_prompt(
 
 
 class MemoryResumeSupervisor:
-    """One loop: reconcile orphaned turns, then continue what memory stopped."""
+    """One loop: reconcile orphaned turns, continue what memory stopped, and
+    wake a session whose members finished with nobody watching."""
 
-    def __init__(self, *, context: Any, poll_seconds: float = DEFAULT_POLL_SECONDS) -> None:
+    def __init__(
+        self,
+        *,
+        context: Any,
+        poll_seconds: float = DEFAULT_POLL_SECONDS,
+        sub_agent_data_dir: str | Path | None = None,
+    ) -> None:
         self._context = context
         self._poll_seconds = max(1.0, float(poll_seconds))
+        # The same directory the sub-agent supervisors live in; when it is not
+        # given (focused tests, hosts without members) the member-wake pass is
+        # simply inert.
+        self._sub_agent_data_dir = Path(sub_agent_data_dir) if sub_agent_data_dir else None
         self._task: asyncio.Task[Any] | None = None
         self._wake = asyncio.Event()
         self._stopping = False
+        # Debounce handle for coalescing member completions into one wake turn.
+        self._coalesce_handle: asyncio.TimerHandle | None = None
 
     async def start(self) -> None:
         if self._task is not None:
@@ -103,6 +138,45 @@ class MemoryResumeSupervisor:
         await self._safe_tick()
         self._stopping = False
         self._task = asyncio.create_task(self._run(), name="memory-resume-supervisor")
+        from lamtools_core.sub_agent_supervisor import set_member_event_notifier
+
+        # A member completion wakes the loop at once instead of waiting for the
+        # next tick; the notify is debounced so completions that land close
+        # together become ONE turn.
+        set_member_event_notifier(self.notify_member_event)
+
+    def notify_member_event(self) -> None:
+        """Debounced wake hint from a member completion (event-driven)."""
+        if self._stopping or self._context is None:
+            return
+        if self._coalesce_handle is not None:
+            return  # a wake is already pending; it will pick this event up too
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._wake.set()
+            return
+        self._coalesce_handle = loop.call_later(MEMBER_WAKE_COALESCE_SECONDS, self._fire_coalesced)
+
+    def _fire_coalesced(self) -> None:
+        self._coalesce_handle = None
+        self._wake.set()
+
+    def _schedule_wake_recheck(self) -> None:
+        """Re-check soon while a member result waits on a still-running turn.
+
+        Bounded and targeted: only scheduled when a pending member result could
+        not be delivered because a turn is active, so the continuation starts
+        within a fraction of a second of that turn releasing, without polling
+        forever.
+        """
+        if self._stopping:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.call_later(MEMBER_WAKE_RECHECK_SECONDS, self._wake.set)
 
     async def stop(self) -> None:
         self._stopping = True
@@ -117,6 +191,12 @@ class MemoryResumeSupervisor:
                 pass
             except BaseException:
                 _logger.exception("[memory-resume] stop failed")
+        from lamtools_core.sub_agent_supervisor import set_member_event_notifier
+
+        set_member_event_notifier(None)
+        if self._coalesce_handle is not None:
+            self._coalesce_handle.cancel()
+            self._coalesce_handle = None
 
     def wake(self) -> None:
         """Ask for an immediate tick (a turn just ended)."""
@@ -143,12 +223,167 @@ class MemoryResumeSupervisor:
             _logger.exception("[memory-resume] tick failed")
 
     async def tick(self) -> int:
-        """One pass: repair orphaned turns, then resume what memory can afford."""
+        """One pass: repair orphaned turns, resume what memory can afford, then
+        wake a session whose finished members were never delivered."""
         try:
             await reconcile_terminal_turns(context=self._context)
         except BaseException:
             _logger.exception("[memory-resume] reconcile failed")
-        return await self._resume_ready_threads()
+        resumed = await self._resume_ready_threads()
+        try:
+            resumed += await self._wake_member_threads()
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            _logger.exception("[member-wake] pass failed")
+        return resumed
+
+    async def _wake_member_threads(self) -> int:
+        """Start a turn for every idle session holding an undelivered finish.
+
+        Unlike the memory resume this does not need the session to be open in
+        the interface: the events are durable rows and the started turn is
+        persisted, so a later open renders it. Returns how many sessions woke.
+        """
+        data_dir = self._sub_agent_data_dir
+        if data_dir is None:
+            return 0
+        from lamtools_core.sub_agent_supervisor import (
+            list_threads_with_pending_member_wakes,
+        )
+
+        database = data_dir / "sub_agents.sqlite3"
+        thread_ids = list_threads_with_pending_member_wakes(database)
+        if not thread_ids:
+            return 0
+        woken = 0
+        for thread_id in thread_ids:
+            try:
+                woken += 1 if await self._wake_member_thread(thread_id) else 0
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                _logger.exception("[member-wake] wake failed thread_id=%s", thread_id)
+        return woken
+
+    async def _wake_member_thread(self, thread_id: str) -> bool:
+        context = self._context
+        data_dir = self._sub_agent_data_dir
+        if data_dir is None:
+            return False
+        # Guard 1/2: a live turn (the user's or a kernel's) owns this thread and
+        # drains its own member events; never race it with an automatic wake.
+        registry = context.runtime_task_registry
+        if registry is not None and registry.is_running(thread_id):
+            # A live turn owns this thread; the result waits for it to release,
+            # and we re-check soon so the continuation is not delayed by a full
+            # poll interval.
+            self._schedule_wake_recheck()
+            return False
+        store = context.runtime_state_store
+        if store is None or not thread_id:
+            return False
+        state = await store.get(thread_id)
+        if state is None:
+            return False
+        # Guard 1: an explicit user stop wins. A cancelled turn is the durable
+        # record of "the user stopped this on purpose"; the wake must not undo it.
+        if str(getattr(state, "status", "") or "") == "cancelled":
+            _logger.info(
+                "[member-wake] safely skipping user-cancelled thread_id=%s; "
+                "member events remain unclaimed for a later user-owned turn",
+                thread_id,
+            )
+            return False
+        # Guard 4: bounded consecutive automatic wakes.
+        if member_wake_exhausted(state):
+            _logger.warning(
+                "[member-wake] budget spent after %d consecutive wakes thread_id=%s: %s",
+                member_wake_streak(state),
+                thread_id,
+                member_wake_exhausted_message(),
+            )
+            return False
+
+        from lamtools_core.sub_agent_supervisor import (
+            member_event_is_reportable,
+            member_event_triggers_wake,
+            member_wake_prompt,
+            peek_member_events,
+        )
+
+        database = data_dir / "sub_agents.sqlite3"
+        pending = peek_member_events(database, thread_id)
+        # Guard 3: only a finished or failed member is wake-worthy. A member
+        # paused on a question/approval is a human boundary and must never be
+        # treated as a completion (and nothing here answers it).
+        if not any(member_event_triggers_wake(item.get("payload") or {}) for item in pending):
+            return False
+        # Claim only facts this input actually reports. Recovery/shutdown
+        # interruptions are included when a completion/failure already makes
+        # this turn appropriate; paused and user-closed members remain pending.
+        reportable = [
+            item for item in pending
+            if member_event_is_reportable(item.get("payload") or {})
+        ]
+        # Guard 2: a queued user message owns the next turn; do not race it.
+        if await self._has_queued_user_item(thread_id):
+            _logger.info("[member-wake] queued user message wins thread_id=%s", thread_id)
+            return False
+
+        # Tell the kernel this turn is ours BEFORE it starts, so its streak reset
+        # does not wipe the counter we are enforcing (see runtime/member_wake.py).
+        await _save_runtime_state_with_retry(store, thread_id, mutate=mark_member_wake_autostart)
+        refused = await self._start_continuation(
+            thread_id=thread_id,
+            prompt=member_wake_prompt(reportable),
+            kind="member-wake",
+            origin="member_wake",
+        )
+        if refused:
+            # Nothing was claimed: the row stays pending and the next tick retries.
+            await _save_runtime_state_with_retry(
+                store, thread_id, mutate=clear_member_wake_autostart
+            )
+            _logger.warning(
+                "[member-wake] could not continue thread_id=%s: %s", thread_id, refused
+            )
+            return False
+        # Guard 5: claim only after the turn started. Both paths filter on
+        # `delivered_at IS NULL`, so the kernel cannot deliver these twice.
+        from lamtools_core.sub_agent_supervisor import mark_member_events_delivered
+
+        mark_member_events_delivered(database, [str(item.get("id") or "") for item in reportable])
+        await _save_runtime_state_with_retry(store, thread_id, mutate=note_member_wake)
+        latest = await store.get(thread_id)
+        _logger.warning(
+            "[member-wake] woke thread_id=%s for %d member event(s) (consecutive=%d)",
+            thread_id,
+            len(reportable),
+            member_wake_streak(latest) if latest is not None else 0,
+        )
+        return True
+
+    async def _has_queued_user_item(self, thread_id: str) -> bool:
+        persistence = getattr(self._context, "persistence", None)
+        session_factory = getattr(self._context, "session_factory", None)
+        if persistence is None or session_factory is None:
+            return False
+        try:
+            async with session_factory() as db:
+                snapshot = await persistence.load_metadata(db, thread_id)
+        except BaseException:
+            _logger.exception("[member-wake] queue read failed thread_id=%s", thread_id)
+            return False
+        queue = snapshot.get("queue") if isinstance(snapshot, dict) else None
+        if not isinstance(queue, list):
+            return False
+        return any(
+            isinstance(item, dict)
+            and str(item.get("status") or "") == "queued"
+            and str(item.get("mode") or "next_turn") == "next_turn"
+            for item in queue
+        )
 
     async def _resume_ready_threads(self) -> int:
         context = self._context
@@ -223,7 +458,9 @@ class MemoryResumeSupervisor:
             original_message=str(pending.get("original_message") or ""),
             resumes_spent=memory_resume_resumes_spent(state),
         )
-        refused = await self._start_continuation(thread_id=thread_id, prompt=prompt)
+        refused = await self._start_continuation(
+            thread_id=thread_id, prompt=prompt, kind="memory-resume", origin="memory_resume"
+        )
         if refused:
             # Re-arm so the next tick tries again (memory is fine, so the usual
             # cause is the thread still being busy).
@@ -250,14 +487,17 @@ class MemoryResumeSupervisor:
         return True
 
 
-    async def _start_continuation(self, *, thread_id: str, prompt: str) -> str:
+    async def _start_continuation(
+        self, *, thread_id: str, prompt: str, kind: str = "memory-resume", origin: str | None = None
+    ) -> str:
         """Start the continuation turn; returns a refusal reason ("" on success)."""
         outcome = await handle_turn_start_operation(
             request_id=None,
             params={
                 "thread_id": thread_id,
                 "input": [{"type": "text", "text": prompt}],
-                "client_message_id": f"{thread_id}:memory-resume:{uuid.uuid4().hex[:12]}",
+                "client_message_id": f"{thread_id}:{kind}:{uuid.uuid4().hex[:12]}",
+                **({"origin": origin} if origin else {}),
             },
             context=self._context,
         )

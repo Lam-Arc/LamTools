@@ -6,8 +6,8 @@
     :data-state="visualMode"
     type="submit"
     :disabled="disabled"
-    :title="actionMode === 'stop' ? stopTitle : sendTitle"
-    :aria-label="actionMode === 'stop' ? stopTitle : sendTitle"
+    :title="actionMode === 'stop' ? defaultUiText(stopTitle, '停止运行') : defaultUiText(sendTitle, '发送')"
+    :aria-label="actionMode === 'stop' ? defaultUiText(stopTitle, '停止运行') : defaultUiText(sendTitle, '发送')"
     :aria-pressed="visualMode === 'stop'"
     @pointermove="handlePointerMove"
     @pointerleave="handlePointerLeave"
@@ -19,6 +19,8 @@
 </template>
 
 <script setup lang="ts">
+import { defaultUiText } from '../i18n/index'
+
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 

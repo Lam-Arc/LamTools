@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { BookOpen, ChartNoAxesCombined, ChevronDown, ChevronRight, FileText, GitBranch, Pin, PinOff, Search } from 'lucide-vue-next'
 import { ref } from 'vue'
 import { openContextMenu } from '../components/context-menu'
@@ -91,7 +93,7 @@ function pinMenu(event: MouseEvent, pin: StudyPin): void {
     event,
     ariaLabel: 'Study 置顶操作',
     items: [{
-      label: pinned ? '取消置顶' : '置顶',
+      label: pinned ? t("取消置顶") : t("置顶"),
       icon: pinned ? PinOff : Pin,
       action: () => props.togglePin?.(pin),
     }],
@@ -116,31 +118,31 @@ function visibleChildren(course: Course): Array<{ node: KnowledgeItem; depth: nu
 <template>
   <nav class="study-sidebar" aria-label="Study">
     <button class="sidebar-action study-sidebar-action" :class="{ active: active === 'search' }" type="button" @click="openSearch ? openSearch() : undefined">
-      <Search :size="15" aria-hidden="true" /><span>搜索</span>
+      <Search :size="15" aria-hidden="true" /><span>{{ t("搜索") }}</span>
     </button>
     <button class="sidebar-action study-sidebar-action" :class="{ active: active === 'manage' }" type="button" @click="select('manage')">
-      <ChartNoAxesCombined :size="15" aria-hidden="true" /><span>管理你的知识</span>
+      <ChartNoAxesCombined :size="15" aria-hidden="true" /><span>{{ t("管理你的知识") }}</span>
     </button>
     <button class="sidebar-action study-sidebar-action" :class="{ active: active === 'map' }" type="button" @click="select('map')">
-      <GitBranch :size="15" aria-hidden="true" /><span>图谱</span>
+      <GitBranch :size="15" aria-hidden="true" /><span>{{ t("图谱") }}</span>
     </button>
     <button v-if="notesEnabled" class="sidebar-action study-sidebar-action" :class="{ active: active === 'notes' }" type="button" @click="select('notes')">
-      <FileText :size="15" aria-hidden="true" /><span>笔记</span>
+      <FileText :size="15" aria-hidden="true" /><span>{{ t("笔记") }}</span>
     </button>
     <div class="study-sidebar-divider" role="separator" />
-    <section v-if="pins.length" class="study-pinned" aria-label="置顶">
-      <span class="study-pinned-label">置顶</span>
+    <section v-if="pins.length" class="study-pinned" :aria-label="t('置顶')">
+      <span class="study-pinned-label">{{ t("置顶") }}</span>
       <button v-for="pin in pins" :key="`${pin.kind}:${pin.id}`" class="study-pinned-item" type="button" :title="pin.title" @click="openPin ? openPin(pin) : select(pin.id)">
         <Pin :size="13" aria-hidden="true" /><span>{{ pin.title }}</span>
       </button>
     </section>
-    <section class="study-subject-tree" aria-label="学科">
+    <section class="study-subject-tree" :aria-label="t('学科')">
       <div v-for="course in courses" :key="course.id" class="study-tree-group">
         <div class="study-tree-row study-tree-row--course">
           <button
             class="study-tree-arrow"
             type="button"
-            :aria-label="(expanded.has(keyFor({ id: course.id, kind: 'course' })) ? '收起 ' : '展开 ') + course.name"
+            :aria-label="(expanded.has(keyFor({ id: course.id, kind: 'course' })) ? t('收起 ') : t('展开 ')) + course.name"
             :aria-expanded="expanded.has(keyFor({ id: course.id, kind: 'course' }))"
             @click.stop="toggle({ id: course.id, kind: 'course' })"
           ><ChevronDown v-if="expanded.has(keyFor({ id: course.id, kind: 'course' }))" :size="14" /><ChevronRight v-else :size="14" /></button>
@@ -154,7 +156,7 @@ function visibleChildren(course: Course): Array<{ node: KnowledgeItem; depth: nu
                   v-if="hasChildren(entry.node)"
                   class="study-tree-arrow"
                   type="button"
-                  :aria-label="(expanded.has(keyFor({ id: entry.node.id, kind: 'module' })) ? '收起 ' : '展开 ') + entry.node.name"
+                  :aria-label="(expanded.has(keyFor({ id: entry.node.id, kind: 'module' })) ? t('收起 ') : t('展开 ')) + entry.node.name"
                   :aria-expanded="expanded.has(keyFor({ id: entry.node.id, kind: 'module' }))"
                   @click.stop="toggle({ id: entry.node.id, kind: 'module', courseId: entry.node.course_id })"
                 ><ChevronDown v-if="expanded.has(keyFor({ id: entry.node.id, kind: 'module' }))" :size="14" /><ChevronRight v-else :size="14" /></button>
@@ -164,10 +166,10 @@ function visibleChildren(course: Course): Array<{ node: KnowledgeItem; depth: nu
                   <span>{{ entry.node.name }}</span>
                 </button>
               </div>
-              <span v-if="loading.has(keyFor({ id: entry.node.id, kind: 'module' }))" class="study-tree-loading" role="status">加载中…</span>
+              <span v-if="loading.has(keyFor({ id: entry.node.id, kind: 'module' }))" class="study-tree-loading" role="status">{{ t("加载中…") }}</span>
             </div>
           </template>
-          <span v-if="loading.has(keyFor({ id: course.id, kind: 'course' }))" class="study-tree-loading" role="status">加载中…</span>
+          <span v-if="loading.has(keyFor({ id: course.id, kind: 'course' }))" class="study-tree-loading" role="status">{{ t("加载中…") }}</span>
         </div>
       </div>
     </section>

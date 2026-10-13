@@ -154,6 +154,16 @@ describe('WorkspaceShell rendering', () => {
     expect(wrapper.find('[data-mobile-right-toggle]').exists()).toBe(false);
   });
 
+  it('does not create an empty composer extras row, but forwards supplied content', () => {
+    const empty = mountShell();
+    expect(empty.find('.composer-extras').exists()).toBe(false);
+    empty.unmount();
+
+    const populated = mountShell({ slots: { 'composer-extras': 'Supplemental control' } });
+    expect(populated.find('.composer-extras').text()).toBe('Supplemental control');
+    populated.unmount();
+  });
+
   it('can hide the right panel', () => {
     const wrapper = mountShell({
       props: {

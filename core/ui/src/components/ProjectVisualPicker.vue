@@ -1,8 +1,8 @@
 <template>
-  <section class="project-visual-picker" aria-label="项目图标与颜色">
+  <section class="project-visual-picker" :aria-label="t('项目图标与颜色')">
     <div class="project-visual-picker-group">
-      <strong>图标</strong>
-      <div class="project-icon-options" role="radiogroup" aria-label="项目图标">
+      <strong>{{ t("图标") }}</strong>
+      <div class="project-icon-options" role="radiogroup" :aria-label="t('项目图标')">
         <button
           v-for="option in iconOptions"
           :key="option.key"
@@ -23,8 +23,8 @@
     </div>
 
     <div class="project-visual-picker-group">
-      <strong>颜色</strong>
-      <div class="project-color-options" role="radiogroup" aria-label="项目颜色">
+      <strong>{{ t("颜色") }}</strong>
+      <div class="project-color-options" role="radiogroup" :aria-label="t('项目颜色')">
         <button
           v-for="option in colorOptions"
           :key="option.key"
@@ -47,6 +47,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import type { CoreProjectColorKey, CoreProjectIconKey } from '../projects/types'
 import ProjectVisualIcon from './ProjectVisualIcon.vue'
 
@@ -66,33 +68,33 @@ defineEmits<{
 }>()
 
 const iconOptions: Array<{ key: CoreProjectIconKey; label: string }> = [
-  { key: 'folder', label: '通用文件夹' },
-  { key: 'code', label: '代码开发' },
-  { key: 'idea', label: '灵感构思' },
-  { key: 'design', label: '设计创作' },
-  { key: 'docs', label: '文档知识' },
-  { key: 'work', label: '工作业务' },
-  { key: 'rocket', label: '产品发布' },
-  { key: 'sparkles', label: 'AI 创意' },
+  { key: 'folder', get label() { return t("通用文件夹") } },
+  { key: 'code', get label() { return t("代码开发") } },
+  { key: 'idea', get label() { return t("灵感构思") } },
+  { key: 'design', get label() { return t("设计创作") } },
+  { key: 'docs', get label() { return t("文档知识") } },
+  { key: 'work', get label() { return t("工作业务") } },
+  { key: 'rocket', get label() { return t("产品发布") } },
+  { key: 'sparkles', get label() { return t("AI 创意") } },
 ]
 
 const colorOptions: Array<{ key: CoreProjectColorKey; label: string }> = [
-  { key: 'gray', label: '淡灰' },
-  { key: 'blue', label: '蓝色' },
-  { key: 'violet', label: '紫色' },
-  { key: 'pink', label: '粉色' },
-  { key: 'red', label: '红色' },
-  { key: 'orange', label: '橙色' },
-  { key: 'green', label: '绿色' },
-  { key: 'cyan', label: '青色' },
-  { key: 'sunrise', label: '日出渐变' },
-  { key: 'aurora', label: '极光渐变' },
-  { key: 'ocean', label: '海洋渐变' },
-  { key: 'violet-sky', label: '紫蓝渐变' },
-  { key: 'berry', label: '莓果渐变' },
-  { key: 'ember', label: '余烬渐变' },
-  { key: 'forest', label: '森林渐变' },
-  { key: 'prism', label: '棱镜渐变' },
+  { key: 'gray', get label() { return t("淡灰") } },
+  { key: 'blue', get label() { return t("蓝色") } },
+  { key: 'violet', get label() { return t("紫色") } },
+  { key: 'pink', get label() { return t("粉色") } },
+  { key: 'red', get label() { return t("红色") } },
+  { key: 'orange', get label() { return t("橙色") } },
+  { key: 'green', get label() { return t("绿色") } },
+  { key: 'cyan', get label() { return t("青色") } },
+  { key: 'sunrise', get label() { return t("日出渐变") } },
+  { key: 'aurora', get label() { return t("极光渐变") } },
+  { key: 'ocean', get label() { return t("海洋渐变") } },
+  { key: 'violet-sky', get label() { return t("紫蓝渐变") } },
+  { key: 'berry', get label() { return t("莓果渐变") } },
+  { key: 'ember', get label() { return t("余烬渐变") } },
+  { key: 'forest', get label() { return t("森林渐变") } },
+  { key: 'prism', get label() { return t("棱镜渐变") } },
 ]
 </script>
 

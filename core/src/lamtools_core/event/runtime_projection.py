@@ -345,6 +345,7 @@ def runtime_fact_to_run_item_events(
         tool_item_id = _tool_item_id(fact, payload)
         kind = str(payload.get("request_kind") or "approval")
         message = str(payload.get("message") or payload.get("question") or fact.summary or "Waiting for user decision")
+        approval_sub_agent = payload.get("sub_agent")
         return [
             RunItemEvent(
                 kind="approval_request",
@@ -358,6 +359,12 @@ def runtime_fact_to_run_item_events(
                     "tool_name": _tool_name(payload),
                     "options": _request_options(payload),
                     "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+                    # Provenance also rides the payload (not only the item
+                    # metadata, which the snapshot drops): the session reducer
+                    # needs it to keep a delegated member's card open when the
+                    # parent turn ends, and the interface needs it to attribute
+                    # and answer the card.
+                    **({"sub_agent": approval_sub_agent} if isinstance(approval_sub_agent, dict) else {}),
                 },
                 **base,
             )
@@ -522,6 +529,7 @@ def runtime_fact_to_run_item_events(
                     "tool_name": _tool_name(payload),
                     "options": payload.get("options") if isinstance(payload.get("options"), list) else [],
                     "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+                    **({"sub_agent": payload["sub_agent"]} if isinstance(payload.get("sub_agent"), dict) else {}),
                 },
                 **base,
             )
@@ -682,6 +690,80 @@ def runtime_fact_to_run_item_events(
                 status="completed" if status in {"done", "ok"} else _canonical_status(status),
                 payload=item_payload,
                 **content_base,
+            )
+        ]
+
+    if phase in {"runtime.sub_agent_wait", "runtime.sub_agent_report"}:
+        # The harness holding the main turn open for background members shows up
+        # here. It must be visible as its own fact so a client can tell "the main
+        # agent is still working" (a) from "the main agent is done, only members
+        # are still running" (b) without guessing from the turn status alone.
+        # ``waiting_on_members`` is written on every event of this pair so the
+        # last projection wins: the report (drain finished) clears it. The item id
+        # is stable per turn, so repeated wait rounds refresh one row instead of
+        # stacking a bubble per round.
+        waiting = phase == "runtime.sub_agent_wait"
+        raw_members = payload.get("members")
+        members = (
+            [dict(member) for member in raw_members if isinstance(member, dict)]
+            if isinstance(raw_members, list) and waiting
+            else []
+        )
+        status_payload: dict[str, Any] = {
+            "type": "subAgents",
+            "status": "running",
+            "waiting_on_members": waiting,
+            "members": members,
+        }
+        wait_seconds = payload.get("wait_seconds")
+        if isinstance(wait_seconds, (int, float)) and not isinstance(wait_seconds, bool):
+            status_payload["wait_seconds"] = max(0, int(wait_seconds))
+        content = str(payload.get("content") or fact.summary or fact.preview or "").strip()
+        if content:
+            status_payload["content"] = content
+        return [
+            RunItemEvent(
+                kind="status",
+                item_id=f"{turn_id}:sub-agent-wait",
+                status="running",
+                payload=status_payload,
+                **base,
+            )
+        ]
+
+    if phase == "runtime.sub_agent_status":
+        # One member's own lifecycle status, published as it changes while the
+        # parent turn is still open — so a member that finishes mid-turn reads as
+        # finished without waiting for the turn to end or for a record poll. The
+        # item id is stable per member, so each transition refreshes one row
+        # instead of stacking a row per event. ``kind="message"`` with a nested
+        # ``sub_agent`` payload keeps the parent turn's own status untouched (the
+        # reducer treats a sub_agent payload as a nested child row).
+        record = payload.get("sub_agent") if isinstance(payload.get("sub_agent"), dict) else None
+        if not record or not str(record.get("name") or "").strip():
+            return None
+        member_status = str(record.get("status") or "").strip().lower()
+        item_status: Any = {
+            "running": "running",
+            "idle": "completed",
+            "closed": "completed",
+            "failed": "failed",
+            "error": "failed",
+            "paused": "waiting",
+            "interrupted": "cancelled",
+        }.get(member_status, "running")
+        return [
+            RunItemEvent(
+                kind="message",
+                item_id=f"{_sub_agent_item_scope(fact, record)}:status",
+                status=item_status,
+                payload={
+                    "type": "subAgentStatus",
+                    "tool_name": "sub_agent",
+                    "event": str(payload.get("event") or ""),
+                    "sub_agent": record,
+                },
+                **base,
             )
         ]
 

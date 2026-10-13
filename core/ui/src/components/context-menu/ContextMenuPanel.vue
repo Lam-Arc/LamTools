@@ -4,7 +4,7 @@
     class="context-menu-panel optical-glass optical-glass--low-trans"
     role="menu"
     tabindex="-1"
-    :aria-label="ariaLabel"
+    :aria-label="defaultUiText(ariaLabel, '上下文菜单')"
     :data-context-menu-panel="pathKey"
     :data-context-menu-level="level"
     :data-placement="placement"
@@ -85,6 +85,8 @@
 </template>
 
 <script setup lang="ts">
+import { defaultUiText } from '../../i18n/index'
+
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronDown } from 'lucide-vue-next'
 import ContextMenuItem from './ContextMenuItem.vue'

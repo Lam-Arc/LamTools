@@ -11,6 +11,8 @@
       @update:active-mode="$emit('update:activeMode', $event)"
       @update:permission-preset="$emit('update:permissionPreset', $event)"
     />
+    <!-- 权限/模式芯片右侧的子代理活动位（只占位，激活与否由宿主决定）。 -->
+    <slot name="runtime-indicator" />
     <slot name="after-runtime" />
     <CoreModelThinkingMenu
       :model-value="modelValue"
@@ -19,8 +21,8 @@
       :thinking-mode="thinkingMode"
       :thinking-mode-options="thinkingModeOptions"
       :shallow-thinking-enabled="shallowThinkingEnabled"
-      :model-aria-label="modelAriaLabel"
-      :thinking-aria-label="thinkingAriaLabel"
+      :model-aria-label="defaultUiText(modelAriaLabel, '模型')"
+      :thinking-aria-label="defaultUiText(thinkingAriaLabel, '思考模式')"
       :shallow-label="shallowLabel"
       :disabled="disabled"
       @update:model-value="$emit('update:modelValue', $event)"
@@ -33,6 +35,8 @@
 </template>
 
 <script setup lang="ts">
+import { defaultUiText } from '../i18n/index'
+
 import type {
   CorePermissionPreset,
   CoreModelCatalogView,

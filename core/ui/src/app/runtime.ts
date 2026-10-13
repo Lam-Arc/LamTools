@@ -20,11 +20,16 @@ export interface RuntimeFileCapabilities {
   }): Promise<File[] | null>
 }
 
+export interface RuntimeSessionExportCapabilities {
+  saveFullArchive(sessionId: string, suggestedFilename: string): Promise<string | null>
+}
+
 export interface RuntimeCapabilities {
   filePicker: boolean
   notifications: boolean
   desktopWindow: boolean
   files?: RuntimeFileCapabilities
+  sessionExports?: RuntimeSessionExportCapabilities
   localProjects?: Readonly<Ref<boolean>>
 }
 

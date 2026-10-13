@@ -533,6 +533,14 @@ def build_config_operation_catalog(
             except ValueError as exc:
                 return _error(request, str(exc))
             set_setting(namespace, merged)
+        elif namespace == "core.language":
+            from lamtools_core.config.language import merge_language
+
+            try:
+                merged = merge_language(get_setting(namespace), dict(value))
+            except ValueError as exc:
+                return _error(request, str(exc))
+            set_setting(namespace, merged)
         elif namespace == KEEP_AWAKE_NAMESPACE:
             from lamtools_core.runtime.power import apply_keep_awake, merge_keep_awake
 

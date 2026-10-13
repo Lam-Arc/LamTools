@@ -45,7 +45,7 @@ describe('Shared Core App rollback host wiring', () => {
       source.indexOf('async function confirmRollbackMessage'),
     )
     expect(handler).not.toMatch(/window\.confirm/)
-    expect(handler).toMatch(/askConfirm\(\{ title: '撤回'/)
+    expect(handler).toMatch(/askConfirm\(\{ get title\(\) \{ return t\("撤回"\)/)
     expect(source).toMatch(/<CoreConfirmDialog[\s\S]*?:open="Boolean\(appConfirm\)"/)
     expect(source).toMatch(/@cancel="appConfirm = null"/)
     expect(source).toMatch(/@confirm="confirmAppAction"/)
@@ -55,6 +55,6 @@ describe('Shared Core App rollback host wiring', () => {
       source.indexOf('async function handleEditMessage'),
     )
     expect(confirmed).toMatch(/session\.rollback[\s\S]*turn_id: turnId/)
-    expect(confirmed).toMatch(/showToast\('notice', '已删除此轮及之后的对话；文件与成果保持不变。'\)/)
+    expect(confirmed).toMatch(/showToast\('notice', t\("已删除此轮及之后的对话；文件与成果保持不变。"\)\)/)
   })
 })

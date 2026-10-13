@@ -1,8 +1,8 @@
 <template>
-  <section class="right-sidebar-layout-editor" aria-label="编辑右侧面板布局">
+  <section class="right-sidebar-layout-editor" :aria-label="t('编辑右侧面板布局')">
     <div class="right-sidebar-layout-editor-head">
-      <span>显示模块</span>
-      <button type="button" @click="$emit('reset')">恢复默认</button>
+      <span>{{ t("显示模块") }}</span>
+      <button type="button" @click="$emit('reset')">{{ t("恢复默认") }}</button>
     </div>
     <label v-for="module in modules" :key="module.id" class="right-sidebar-layout-editor-item">
       <input
@@ -17,6 +17,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { Circle } from 'lucide-vue-next'
 import type { RightSidebarLayoutState, RightSidebarModuleDefinition } from '../right-sidebar/types'
 

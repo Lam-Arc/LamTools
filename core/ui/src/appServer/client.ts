@@ -32,6 +32,19 @@ export interface CoreSyncChangeNotification {
   entity?: unknown
 }
 
+/**
+ * Gap notification from the server's reliable lane (`thread/gap`): the lossy
+ * outbound lane dropped frames for a thread, so the client must resynchronize
+ * from its own revision instead of waiting for the next full snapshot. Like
+ * `sync/change` it is a notification whose params carry the report (thread id,
+ * reason, dropped count), not an event envelope.
+ */
+export interface CoreThreadGapNotification {
+  thread_id?: string
+  reason?: string
+  dropped?: number
+}
+
 export interface CoreAppServerClientOptions {
   transport: LamToolsTransport
   clientInfo: { name: string; title?: string; version?: string }
@@ -199,9 +212,21 @@ export class CoreAppServerClient {
         this.options.onSyncChange?.(params as unknown as CoreSyncChangeNotification)
         return
       }
-      this.options.onEvent?.(params as unknown as CoreAppEvent)
+      this.options.onEvent?.(asEventEnvelope(message.method, params))
     }
   }
+}
+
+/**
+ * Event notifications carry their own envelope (including its `method`) as the
+ * params, but a control report such as `thread/gap` does not: its payload is
+ * the report itself and the method lives only on the notification. Attach it so
+ * consumers dispatch by method instead of mistaking the report for an event
+ * envelope (and silently dropping it).
+ */
+function asEventEnvelope(method: string | undefined, params: Record<string, unknown>): CoreAppEvent {
+  if (typeof params.method === 'string') return params as unknown as CoreAppEvent
+  return { ...params, method: method ?? '' } as unknown as CoreAppEvent
 }
 
 function mapTransportState(state: TransportConnectionState): 'connecting' | 'open' | 'closed' | 'error' {

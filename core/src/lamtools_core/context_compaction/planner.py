@@ -8,7 +8,7 @@ from lamtools_core.context_compaction_budget import (
     load_retained_steps,
     resolve_retained_steps,
 )
-from lamtools_core.llm import ChatMessage
+from lamtools_core.llm import TAIL_SYSTEM_MESSAGE_MARKER, ChatMessage
 from lamtools_core.tokens import estimate_message_tokens
 
 from .formatting import truncate_text_to_tokens
@@ -189,6 +189,19 @@ def _protected_message_indexes(
     if step_count:
         for group in step_groups[-step_count:]:
             selected.update(group)
+    # An automatic member wake is a current-turn control input. Keep the
+    # explicitly marked tail system entry through compaction even when the
+    # normal retained-step budget is zero; dropping it would make the wake
+    # appear in the transcript while silently removing it from the request.
+    selected.update(
+        index
+        for index, message in enumerate(messages)
+        if (
+            message.role == "system"
+            and isinstance(message.metadata, dict)
+            and bool(message.metadata.get(TAIL_SYSTEM_MESSAGE_MARKER))
+        )
+    )
     return selected
 
 

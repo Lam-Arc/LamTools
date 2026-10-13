@@ -15,7 +15,7 @@
     </button>
     <template v-if="expanded && entry.type === 'directory'">
       <div v-if="loadingChildren" class="fb-tree-item-loading" :style="{ paddingLeft: `${(depth + 1) * varIndent + 6}px` }">...</div>
-      <div v-else-if="loadError" class="fb-tree-item-loading" :style="{ paddingLeft: `${(depth + 1) * varIndent + 6}px` }" role="alert">加载失败：{{ loadError }}</div>
+      <div v-else-if="loadError" class="fb-tree-item-loading" :style="{ paddingLeft: `${(depth + 1) * varIndent + 6}px` }" role="alert">{{ t("加载失败：") }}{{ loadError }}</div>
       <template v-else>
         <FbTreeItem
           v-for="child in children"
@@ -34,6 +34,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { ref, computed } from 'vue'
 import { ChevronDown, ChevronRight, EyeOff, FileText, Image, Lock, Music, Video, type LucideIcon } from 'lucide-vue-next'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'

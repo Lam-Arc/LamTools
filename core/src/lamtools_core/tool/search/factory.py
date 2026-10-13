@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ from typing import Awaitable, Callable
 from lamtools_core.plugins._jsonc import strip_jsonc_comments
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult, ToolResultStatus
 from lamtools_core.tool.search.protocol import SearchProvider, SearchResult
+from lamtools_core.tool.search.http_requests import SEARCH_TOTAL_TIMEOUT_SECONDS
 
 _logger = logging.getLogger(__name__)
 
@@ -163,7 +165,7 @@ def build_web_search_handler(
         else list(DEFAULT_FALLBACK_PROVIDERS)
     )
 
-    async def web_search(call: ToolCall) -> ToolResult:
+    async def search_with_fallbacks(call: ToolCall) -> ToolResult:
         args = call.arguments if isinstance(call.arguments, dict) else {}
         query = args.get("query", "")
         if not query or not isinstance(query, str) or not query.strip():
@@ -302,5 +304,18 @@ def build_web_search_handler(
                 )
             ],
         )
+
+    async def web_search(call: ToolCall) -> ToolResult:
+        try:
+            async with asyncio.timeout(SEARCH_TOTAL_TIMEOUT_SECONDS):
+                return await search_with_fallbacks(call)
+        except TimeoutError:
+            return ToolResult(
+                call_id=call.id, name=call.name, status="failed",
+                error=f"web_search exceeded its {SEARCH_TOTAL_TIMEOUT_SECONDS:g}s total time limit "
+                "including retries and fallback searches; narrow the query or retry.",
+                error_code="search_timeout",
+                metadata={"timed_out": True},
+            )
 
     return web_search

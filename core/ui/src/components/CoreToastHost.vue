@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { useCoreToast } from '../composables/useCoreToast'
 
 const { toasts, dismiss } = useCoreToast()
@@ -21,7 +23,7 @@ const { toasts, dismiss } = useCoreToast()
         <button
           type="button"
           class="core-toast__dismiss"
-          :aria-label="`关闭提示：${toast.text}`"
+          :aria-label="t('关闭提示：{0}', { 0: toast.text })"
           @click="dismiss(toast.id)"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">

@@ -1,8 +1,6 @@
 <template>
   <div class="right-sidebar-widget-renderer">
-    <div v-if="loading" class="right-sidebar-widget-state" role="status" aria-live="polite">
-      正在加载…
-    </div>
+    <div v-if="loading" class="right-sidebar-widget-state" role="status" aria-live="polite">{{ t("正在加载…") }}</div>
     <div v-else-if="error" class="right-sidebar-widget-state right-sidebar-widget-state--error" role="alert">
       {{ error }}
     </div>
@@ -27,17 +25,17 @@
         :class="`right-sidebar-widget-block--${block.type}`"
       >
         <template v-if="block.type === 'status'">
-          <span>{{ block.label || '状态' }}</span>
-          <strong :data-state="block.state || snapshot?.state">{{ block.value || snapshot?.state || '未知' }}</strong>
+          <span>{{ block.label || t("状态") }}</span>
+          <strong :data-state="block.state || snapshot?.state">{{ block.value || snapshot?.state || t("未知") }}</strong>
         </template>
         <template v-else-if="block.type === 'metric'">
-          <span>{{ block.label || '指标' }}</span>
+          <span>{{ block.label || t("指标") }}</span>
           <strong>{{ formatValue(block.value) }}</strong>
           <small v-if="block.detail">{{ block.detail }}</small>
         </template>
         <template v-else-if="block.type === 'progress'">
           <div class="right-sidebar-widget-progress-head">
-            <span>{{ block.label || '进度' }}</span>
+            <span>{{ block.label || t("进度") }}</span>
             <strong>{{ progressLabel(block.value, block.max) }}</strong>
           </div>
           <div class="right-sidebar-widget-progress-track" role="progressbar" :aria-valuenow="safeProgress(block.value)" :aria-valuemax="safeMax(block.max)">
@@ -63,9 +61,7 @@
           <span>{{ 'text' in block && block.text ? block.text : formatValue('value' in block ? block.value : '') }}</span>
         </template>
       </div>
-      <div v-if="!loading && !error && !snapshot?.blocks?.length && !snapshot?.message" class="right-sidebar-widget-empty">
-        暂无可用数据
-      </div>
+      <div v-if="!loading && !error && !snapshot?.blocks?.length && !snapshot?.message" class="right-sidebar-widget-empty">{{ t("暂无可用数据") }}</div>
       <div v-if="actions.length" class="right-sidebar-widget-actions">
         <button
           v-for="action in actions"
@@ -75,14 +71,14 @@
           :disabled="invoking === action.id || action.enabled === false"
           @click="invoke(action)"
         >
-          {{ invoking === action.id ? '处理中…' : action.title }}
+          {{ invoking === action.id ? t("处理中…") : action.title }}
         </button>
       </div>
     </template>
 
     <CoreConfirmDialog
       :open="Boolean(pendingDangerous)"
-      :title="pendingDangerous?.title || '执行动作？'"
+      :title="pendingDangerous?.title || t('执行动作？')"
       @cancel="resolveDangerous(false)"
       @confirm="resolveDangerous(true)"
     />
@@ -90,6 +86,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, ref, watch } from 'vue'
 import type { Component } from 'vue'
 import { getPluginWidget, invokePluginWidget } from '../plugins/api'
@@ -195,7 +193,7 @@ async function load(): Promise<void> {
       component.value = 'default' in loaded ? loaded.default : loaded
     } catch (cause) {
       if (current !== revision) return
-      error.value = `加载 ${props.entry.title} 失败：${cause instanceof Error ? cause.message : String(cause)}`
+      error.value = t("加载 {0} 失败：{1}", { 0: props.entry.title, 1: cause instanceof Error ? cause.message : String(cause) })
     } finally {
       if (current === revision) loading.value = false
     }
@@ -220,12 +218,12 @@ async function load(): Promise<void> {
       })
       if (current !== revision) return
       snapshot.value = normalizeSnapshot(result)
-      if (!snapshot.value && !component.value) error.value = '插件未返回有效数据'
+      if (!snapshot.value && !component.value) error.value = t("插件未返回有效数据")
     } catch (cause) {
       if (current !== revision) return
       // Missing optional plugin operations are a disabled/empty state, not a
       // fatal host error.  Keep the message actionable but concise.
-      error.value = `暂不可用：${cause instanceof Error ? cause.message : String(cause)}`
+      error.value = t("暂不可用：{0}", { 0: cause instanceof Error ? cause.message : String(cause) })
     } finally {
       if (current === revision) loading.value = false
     }
@@ -295,7 +293,7 @@ async function invoke(action: RightSidebarWidgetAction): Promise<void> {
     const next = normalizeSnapshot(result)
     if (next) snapshot.value = next
   } catch (cause) {
-    error.value = `操作失败：${cause instanceof Error ? cause.message : String(cause)}`
+    error.value = t("操作失败：{0}", { 0: cause instanceof Error ? cause.message : String(cause) })
   } finally {
     invoking.value = ''
   }

@@ -298,6 +298,7 @@ describe('core appServer workbench actions', () => {
       commandCatalog: commands,
       steerTurn: async (_threadId, _turnId, inputItems) => {
         guided.push(inputItems)
+        return { ok: true }
       },
       queueInput: async (_threadId, inputItems) => {
         queued.push(inputItems)
@@ -347,5 +348,97 @@ describe('core appServer workbench actions', () => {
       { type: 'text', text: '写文档' },
       { type: 'attachment', attachment_id: 'att-1', filename: 'note.md' },
     ]])
+  })
+
+  it('queues a busy start refusal instead of failing, with one identity', async () => {
+    const queued: Array<{ text: string; id?: string }> = []
+    const result = await submitCoreComposerTask({
+      threadId: 'thread-1',
+      text: '要发的话',
+      status: 'idle',
+      clientMessageId: 'cmid-busy',
+      steerTurn: async () => ({ ok: true }),
+      queueInput: async (_threadId, inputItems, _options, clientMessageId) => {
+        queued.push({ text: JSON.stringify(inputItems), id: clientMessageId })
+      },
+      startTurn: async () => ({ ok: false, busy: true }),
+    })
+
+    expect(result.status).toBe('queued')
+    expect(queued).toHaveLength(1)
+    expect(queued[0]?.text).toContain('要发的话')
+    // The fallback carries the submission's identity, so a repeat dedupes.
+    expect(queued[0]?.id).toBe('cmid-busy')
+  })
+
+  it('steers the active turn on a busy refusal in guidance mode', async () => {
+    const steps: string[] = []
+    const result = await submitCoreComposerTask({
+      threadId: 'thread-1',
+      activeTurnId: 'turn-1',
+      text: '改成只读',
+      status: 'idle',
+      forceGuide: true,
+      steerTurn: async () => { steps.push('steer'); return { ok: true } },
+      queueInput: async () => { steps.push('queue') },
+      startTurn: async () => { steps.push('start'); return { ok: false, busy: true } },
+    })
+
+    expect(result.status).toBe('guided')
+    // The start is attempted first (the client saw no active turn), refused as
+    // busy, and the guidance fallback steers the live turn.
+    expect(steps).toEqual(['start', 'steer'])
+  })
+
+  it('queues a refused steer (applied false) instead of dropping the message', async () => {
+    const queued: Array<string | undefined> = []
+    const result = await submitCoreComposerTask({
+      threadId: 'thread-1',
+      activeTurnId: 'turn-1',
+      text: '改成只读',
+      status: 'running',
+      forceGuide: true,
+      clientMessageId: 'cmid-steer',
+      steerTurn: async () => ({ ok: false }),
+      queueInput: async (_threadId, _items, _options, clientMessageId) => { queued.push(clientMessageId) },
+      startTurn: async () => true,
+    })
+
+    expect(result.status).toBe('queued')
+    expect(queued).toEqual(['cmid-steer'])
+  })
+
+  it('does not queue again when the runtime already queued a refused steer', async () => {
+    let queueCalls = 0
+    const result = await submitCoreComposerTask({
+      threadId: 'thread-1',
+      activeTurnId: 'turn-1',
+      text: '改成只读',
+      status: 'running',
+      forceGuide: true,
+      steerTurn: async () => ({ ok: false, queued: true }),
+      queueInput: async () => { queueCalls += 1 },
+      startTurn: async () => true,
+    })
+
+    expect(result.status).toBe('queued')
+    expect(queueCalls).toBe(0)
+  })
+
+  it('queues in guidance mode when there is no active turn to steer', async () => {
+    let queueCalls = 0
+    const result = await submitCoreComposerTask({
+      threadId: 'thread-1',
+      activeTurnId: '',
+      text: '改成只读',
+      status: 'idle',
+      forceGuide: true,
+      steerTurn: async () => ({ ok: true }),
+      queueInput: async () => { queueCalls += 1 },
+      startTurn: async () => ({ ok: false, busy: true }),
+    })
+
+    expect(result.status).toBe('queued')
+    expect(queueCalls).toBe(1)
   })
 })

@@ -82,17 +82,26 @@ SUB_AGENT_SPEC = CoreAgentSpec(
 
 SUB_AGENT_TOOL_SPEC: dict[str, Any] = {
     "name": SUB_AGENT_TOOL_NAME,
-    "description": "Create or close one reusable, non-blocking sub-agent.",
+    "description": (
+        "Create, close, or delete one reusable, non-blocking sub-agent. "
+        "Delete removes the sub-agent's own record and its own transcript/"
+        "storage so the space is freed; it refuses a still-running sub-agent "
+        "(close it first). model/reasoning_level are ignored for delete."
+    ),
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "action": {"type": "string", "enum": ["create", "close"]},
+            "action": {"type": "string", "enum": ["create", "close", "delete"]},
             "type": {"type": "string", "enum": ["consider", "execute"]},
             "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
             "model": {
                 "type": "string",
-                "description": "Exact model_id or a unique exact display_name.",
+                "description": (
+                    "Exact model_id of a configured model (preferred). "
+                    "A display label is accepted only when it uniquely "
+                    "identifies one model."
+                ),
             },
             "reasoning_level": {
                 "type": "string",

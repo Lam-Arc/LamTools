@@ -888,3 +888,15 @@ logs.
 - `Path.write_text` translates `\n` to `\r\n` on Windows, so a file whose bytes are hashed and verified server-side must be written as bytes.
 - Per-release deploy scripts are copies and carry the previous release's constants. Set the tarball and APK hashes with an assertion that the replacement happened: a stale hash surfaces as an SSH permission error, which sends you looking in the wrong place.
 - A server key the release flow did not add (an Aliyun key pair appeared once) is left alone. Record it as the baseline that authorize and revoke verify against, rather than asserting zero lines and overwriting someone else's access.
+
+## 自动回合缓存前缀与取证边界（2026-10-13）
+
+- 自动唤醒必须继承同一会话最近有效的项目位置与执行模式：两者都参与历史消息之前的请求前缀，缺失或变动会改变可复用的前缀。执行模式只在自动来源且请求未显式指定时继承，显式选择优先，普通手动回合保持原行为。
+- 供应商缓存读取量只能说明该次请求命中的缓存 token 数，不能反推出本地请求逐字符共同前缀。若历史仅保留清理后的最近上下文，且未保存每次组装后的请求前缀和工具定义快照，就不能事后确定缓存首次分叉的位置；报告应明确区分已观察到的关联与不可证实的历史原因。
+
+## 自动唤醒消息位置稳定性（2026-10-13）
+
+- 当前回合的带标记唤醒消息在每次请求末端追加，位于动态运行时上下文之后；上下文压缩保留该标记项。历史回合的唤醒消息保持既有历史位置，不会在后续请求中反复移位或重新追加，因此新增唤醒内容不会改变既有稳定前缀。
+- 供应商适配按“当前回合追加、历史回合原位”处理：OpenAI Chat Completions 的当前回合使用尾部 system，历史回合保留原历史位置与 system 角色；Responses 的当前回合使用尾部 developer，历史回合保留原历史位置但映射为 developer。Anthropic/Gemini 的当前回合使用尾部 user，历史回合在原历史位置转换为 user。普通系统消息仍按既有路径处理。
+- 兼容边界：普通手动回合与 `memory_resume` 不使用该尾部唤醒消息语义，保持原行为；显式执行模式仍优先于自动继承模式。
+- 验收边界：目标五文件测试初验为 161 passed；补充跨回合时序回归后最新为 163 passed，静态编译 10 个模块和 `git diff --check` 通过。上述结论仅来自本地代码验证，未启动 Sunday、调用模型、修改配置或进行供应商线上测试；缓存命中率改善仍需后续真实回合观测。

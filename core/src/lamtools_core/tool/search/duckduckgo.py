@@ -17,6 +17,7 @@ from lamtools_core.config.network import httpx_client_kwargs
 
 from .protocol import SearchResult
 from .image_candidates import extract_image_candidates
+from .http_requests import bounded_request
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -72,7 +73,9 @@ class DuckDuckGoSearchProvider:
         if domains:
             search_query = f"{query} " + " ".join(f"site:{d}" for d in domains)
 
-        resp = await client.post(self.endpoint, data={"q": search_query})
+        resp = await bounded_request(
+            client, "POST", self.endpoint, total_timeout=self.timeout, data={"q": search_query}
+        )
         if resp.status_code != 200:
             raise DuckDuckGoSearchBlocked(f"DuckDuckGo 返回 HTTP {resp.status_code}")
 
@@ -125,17 +128,23 @@ class DuckDuckGoSearchProvider:
         source_limit = min(max(limit * 2, 6), 12)
         sources = await self.search(query, limit=source_limit, domains=domains)
         client = await self._session()
+        source_errors: list[str] = []
 
         async def from_source(source: SearchResult) -> SearchResult | None:
             source_url = str(source.get("url") or "").strip()
             if urlsplit(source_url).scheme not in {"http", "https"}:
                 return None
             try:
-                response = await client.get(
-                    source_url,
+                response = await bounded_request(
+                    client, "GET", source_url,
+                    total_timeout=min(self.timeout, 8.0),
+                    max_response_bytes=2_097_152,
                     headers={"Range": "bytes=0-2097151"},
                     timeout=min(self.timeout, 8.0),
                 )
+            except httpx.HTTPError as exc:
+                source_errors.append(str(exc))
+                return None
             except Exception:
                 return None
             content_type = response.headers.get("content-type", "").lower()
@@ -171,6 +180,8 @@ class DuckDuckGoSearchProvider:
             results.append(item)
             if len(results) >= limit:
                 break
+        if not results and source_errors:
+            raise httpx.HTTPError("Image source pages could not be read: " + "; ".join(source_errors[:3]))
         return results
 
 

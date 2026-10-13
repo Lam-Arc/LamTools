@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <!-- inheritAttrs: false — 模板根节点是 div + Teleport 双根，自动继承会把 class/attrs 丢掉；
        显式把 $attrs 绑到消息根节点，保证 class（如 sub-line-chat）能落到 DOM 上 -->
   <div ref="rootEl" class="message-view" v-bind="$attrs" @contextmenu="onContextMenu">
@@ -7,6 +7,12 @@
         v-if="$slots['message-product']"
         name="message-product"
         :message="msg"
+      />
+
+      <!-- 机器写入的子系统事件（成员完成唤醒）：安静的系统行，不是用户气泡。 -->
+      <CoreSystemEventRow
+        v-else-if="systemEvent(msg)"
+        :event="(systemEvent(msg) as CoreSystemEvent)"
       />
 
       <!-- User message -->
@@ -19,7 +25,7 @@
               class="user-edit-input"
               :min-rows="2"
               :max-rows="6"
-              aria-label="编辑消息"
+              :aria-label="t('编辑消息')"
               @keydown.ctrl.enter.prevent="confirmEditMessage(msg)"
               @keydown.meta.enter.prevent="confirmEditMessage(msg)"
               @keydown.esc.prevent="cancelEditMessage"
@@ -30,13 +36,13 @@
                 class="user-edit-button user-edit-button--primary"
                 data-user-edit-confirm
                 @click="confirmEditMessage(msg)"
-              >发送</button>
+              >{{ t("发送") }}</button>
               <button
                 type="button"
                 class="user-edit-button"
                 data-user-edit-cancel
                 @click="cancelEditMessage"
-              >取消</button>
+              >{{ t("取消") }}</button>
             </div>
           </div>
           <template v-else>
@@ -51,7 +57,7 @@
             :project-id="projectId"
             :work-root="workRoot"
             side="right"
-            aria-label="消息附件"
+            :aria-label="t('消息附件')"
           />
           <!-- Hover actions: copy / edit / fork / roll back (hidden while editing
                this message). Only the last context-compaction boundary is
@@ -65,8 +71,8 @@
               type="button"
               class="assistant-action"
               :class="{ 'assistant-action--copied': copiedActionId === msg.id }"
-              :title="copiedActionId === msg.id ? '已复制' : '复制消息'"
-              :aria-label="copiedActionId === msg.id ? '已复制' : '复制消息'"
+              :title="copiedActionId === msg.id ? t('已复制') : t('复制消息')"
+              :aria-label="copiedActionId === msg.id ? t('已复制') : t('复制消息')"
               data-user-copy
               @click="copyAssistantMessage(msg)"
             >
@@ -77,8 +83,8 @@
               <button
                 type="button"
                 class="assistant-action"
-                title="编辑消息"
-                aria-label="编辑消息"
+                :title="t('编辑消息')"
+                :aria-label="t('编辑消息')"
                 data-user-edit
                 @click="startEditMessage(msg)"
               >
@@ -87,8 +93,8 @@
               <button
                 type="button"
                 class="assistant-action"
-                title="从此处另开会话"
-                aria-label="从此处另开会话"
+                :title="t('从此处另开会话')"
+                :aria-label="t('从此处另开会话')"
                 data-user-fork
                 @click="emit('fork-message', userActionPayload(msg))"
               >
@@ -97,8 +103,8 @@
               <button
                 type="button"
                 class="assistant-action"
-                title="删除此消息及之后内容"
-                aria-label="删除此消息及之后内容"
+                :title="t('删除此消息及之后内容')"
+                :aria-label="t('删除此消息及之后内容')"
                 data-user-rollback
                 @click="emit('rollback-message', userActionPayload(msg))"
               >
@@ -132,7 +138,7 @@
               v-if="assistantTimestamp"
               class="assistant-timestamp"
               :title="assistantTimestamp.expanded"
-              :aria-label="`时间 ${assistantTimestamp.expanded}`"
+              :aria-label="t('时间 {0}', { 0: assistantTimestamp.expanded })"
               data-message-timestamp
             >
               <span class="assistant-timestamp__compact">{{ assistantTimestamp.compact }}</span>
@@ -167,7 +173,7 @@
             :class="`mobile-turn-progress--${mobileProgress?.status}`"
             role="status"
             aria-live="polite"
-            :aria-label="`执行进度：${mobileProgress?.label}`"
+            :aria-label="t('执行进度：{0}', { 0: mobileProgress?.label })"
           >
             <span class="mobile-turn-progress__label">{{ mobileProgress?.label }}</span>
             <span class="mobile-turn-progress__track" aria-hidden="true">
@@ -176,16 +182,16 @@
           </div>
 
           <div v-if="mobileRuntimeWarnings.length" class="mobile-runtime-warning" role="status">
-            <span class="mobile-runtime-warning__label">扩展提示</span>
+            <span class="mobile-runtime-warning__label">{{ t("扩展提示") }}</span>
             <span v-for="warning in mobileRuntimeWarnings" :key="warning">{{ warning }}</span>
           </div>
 
           <div v-if="terminalErrorText(msg)" class="assistant-terminal-error" role="alert">
-            <span class="assistant-terminal-error__label">运行失败</span>
+            <span class="assistant-terminal-error__label">{{ t("运行失败") }}</span>
             <span>{{ terminalErrorText(msg) }}</span>
           </div>
 
-          <div v-if="isInitialWaitingMessage(msg)" class="initial-waiting-indicator" aria-label="请求中">
+          <div v-if="isInitialWaitingMessage(msg)" class="initial-waiting-indicator" :aria-label="t('请求中')">
             <span v-if="shouldShowShallowThinkingPending(msg)" class="shallow-thinking-pending" role="status" aria-live="polite">
               shallow thinking<span class="shallow-thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
             </span>
@@ -249,7 +255,7 @@
                         v-if="!isGroupExpanded(processGroupId(group))"
                         class="process-group-count"
                         aria-hidden="true"
-                      >{{ group.parts.length }} 步</span>
+                      >{{ group.parts.length }} {{ t("步") }}</span>
                     </button>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
@@ -295,7 +301,7 @@
                         <div
                           v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
                           class="process-step process-step--tool"
-                          :class="'process-step--' + part.status"
+                          :class="['process-step--' + part.status, { 'process-step--sub-agent': isSubAgentToolRow(part) }]"
                           @mouseenter="cancelPartAutoCollapse(part.id)"
                           @mouseleave="schedulePartAutoCollapse(part.id)"
                         >
@@ -303,9 +309,10 @@
                             type="button"
                             class="tool-card-header process-card-header"
                             :class="[{ 'has-detail': hasToolDisplay(part), 'has-flag': Boolean(toolRowFlagTone(part)), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
-                            :aria-expanded="hasToolDisplay(part) ? shouldShowToolBody(part, isLiveMessage(msg)) : undefined"
+                            :aria-expanded="isSubAgentToolRow(part) ? undefined : (hasToolDisplay(part) ? shouldShowToolBody(part, isLiveMessage(msg)) : undefined)"
                             :aria-label="processAccessibleLabel(part)"
-                            @click="togglePartExpand(part, isLiveMessage(msg))"
+                            :disabled="subAgentRowsInert && isSubAgentToolRow(part)"
+                            @click="activateToolRow(part, isLiveMessage(msg))"
                           >
                             <component :is="processIcon(part)" class="process-card-state-icon" :class="processIconStateClass(part)" :size="15" :stroke-width="1.8" aria-hidden="true" />
                             <Transition name="process-caption" mode="out-in">
@@ -336,9 +343,9 @@
                             <!-- 网页获取：标题与正文摘要先行，原始全文收进可展开区 -->
                             <div v-else-if="displayToolResult(part) && isWebFetchTool(part)" class="web-fetch-card">
                               <div v-if="webFetchTitle(part)" class="web-fetch-title">{{ webFetchTitle(part) }}</div>
-                              <p class="web-fetch-summary">{{ webFetchSummary(part) || '未提取到正文摘要。' }}</p>
+                              <p class="web-fetch-summary">{{ webFetchSummary(part) || t("未提取到正文摘要。") }}</p>
                               <details class="web-fetch-more">
-                                <summary class="web-fetch-more-toggle">查看全文</summary>
+                                <summary class="web-fetch-more-toggle">{{ t("查看全文") }}</summary>
                                 <pre class="web-fetch-raw" :class="{ 'web-fetch-raw--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolResult(part) }}</pre>
                               </details>
                             </div>
@@ -389,8 +396,26 @@
                               <pre class="tool-output-content">{{ toolOutputContent(part) }}</pre>
                             </div>
                             <div v-if="imageArtifacts(part).length" class="tool-image-row">
-                              <figure v-for="artifact in imageArtifacts(part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
-                                <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+                              <figure
+                                v-for="artifact in imageArtifacts(part)"
+                                :key="artifactKey(artifact)"
+                                class="tool-image-card"
+                                :class="{ 'tool-image-card--placeholder': !imageSrc(artifact) }"
+                                :ref="(element) => registerImageCard(element, artifact)"
+                                @click="openImagePreview(artifact)"
+                              >
+                                <img v-if="imageSrc(artifact)" :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+                                <div v-else class="tool-image-placeholder">
+                                  <ImageIcon :size="18" :stroke-width="1.7" aria-hidden="true" />
+                                  <span class="tool-image-placeholder__name">{{ imageAlt(artifact) }}</span>
+                                  <span v-if="artifactSizeLabel(artifact)" class="tool-image-placeholder__size">{{ artifactSizeLabel(artifact) }}</span>
+                                  <button
+                                    v-if="artifactLoadFailedFor(artifact)"
+                                    type="button"
+                                    class="tool-image-placeholder__retry"
+                                    @click.stop="retryArtifactSource(artifact)"
+                                  >{{ t("图片暂时取不到，重试") }}</button>
+                                </div>
                               </figure>
                             </div>
                             <!-- 兜底明细只在既无错误块、也无任何结果块（命中清单/网页卡/文件 diff/
@@ -407,7 +432,7 @@
                           aria-live="polite"
                           :title="modelRetryDetail(part)"
                         >
-                          <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(part).attempt }}/{{ modelRetryCounts(part).maxRetries }}</span>
+                          <span class="model-retry-bar__label">{{ t("重试中") }} {{ modelRetryCounts(part).attempt }}/{{ modelRetryCounts(part).maxRetries }}</span>
                           <div class="model-retry-bar__track" aria-hidden="true">
                             <div
                               v-for="i in modelRetryCounts(part).maxRetries"
@@ -461,7 +486,7 @@
                   <div
                     v-else-if="(group.part.partType === 'tool_call' || group.part.partType === 'tool_result') && !isControlTool(group.part)"
                     class="process-step process-step--tool"
-                    :class="'process-step--' + group.part.status"
+                    :class="['process-step--' + group.part.status, { 'process-step--sub-agent': isSubAgentToolRow(group.part) }]"
                     @mouseenter="cancelPartAutoCollapse(group.part.id)"
                     @mouseleave="schedulePartAutoCollapse(group.part.id)"
                   >
@@ -469,9 +494,10 @@
                       type="button"
                       class="tool-card-header process-card-header"
                       :class="[{ 'has-detail': hasToolDisplay(group.part), 'has-flag': Boolean(toolRowFlagTone(group.part)), 'process-tool-row': !isCommandTool(group.part), 'tool-card-header--command': isCommandTool(group.part) }, toolColorClass(group.part)]"
-                      :aria-expanded="!isCommandTool(group.part) && hasToolDisplay(group.part) ? shouldShowToolBody(group.part, isLiveMessage(msg)) : undefined"
+                      :aria-expanded="isSubAgentToolRow(group.part) ? undefined : (!isCommandTool(group.part) && hasToolDisplay(group.part) ? shouldShowToolBody(group.part, isLiveMessage(msg)) : undefined)"
                       :aria-label="processAccessibleLabel(group.part)"
-                      @click="togglePartExpand(group.part, isLiveMessage(msg))"
+                      :disabled="subAgentRowsInert && isSubAgentToolRow(group.part)"
+                      @click="activateToolRow(group.part, isLiveMessage(msg))"
                     >
                       <component :is="processIcon(group.part)" class="process-card-state-icon" :class="processIconStateClass(group.part)" :size="15" :stroke-width="1.8" aria-hidden="true" />
                       <Transition name="process-caption" mode="out-in">
@@ -503,9 +529,9 @@
                       <!-- 网页获取：标题与正文摘要先行，原始全文收进可展开区 -->
                       <div v-else-if="displayToolResult(group.part) && isWebFetchTool(group.part)" class="web-fetch-card">
                         <div v-if="webFetchTitle(group.part)" class="web-fetch-title">{{ webFetchTitle(group.part) }}</div>
-                        <p class="web-fetch-summary">{{ webFetchSummary(group.part) || '未提取到正文摘要。' }}</p>
+                        <p class="web-fetch-summary">{{ webFetchSummary(group.part) || t("未提取到正文摘要。") }}</p>
                         <details class="web-fetch-more">
-                          <summary class="web-fetch-more-toggle">查看全文</summary>
+                          <summary class="web-fetch-more-toggle">{{ t("查看全文") }}</summary>
                           <pre class="web-fetch-raw" :class="{ 'web-fetch-raw--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ displayToolResult(group.part) }}</pre>
                         </details>
                       </div>
@@ -558,8 +584,26 @@
                           <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ toolOutputContent(group.part) }}</pre>
                       </div>
                       <div v-if="imageArtifacts(group.part).length" class="tool-image-row">
-                        <figure v-for="artifact in imageArtifacts(group.part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
-                          <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+                        <figure
+                          v-for="artifact in imageArtifacts(group.part)"
+                          :key="artifactKey(artifact)"
+                          class="tool-image-card"
+                          :class="{ 'tool-image-card--placeholder': !imageSrc(artifact) }"
+                          :ref="(element) => registerImageCard(element, artifact)"
+                          @click="openImagePreview(artifact)"
+                        >
+                          <img v-if="imageSrc(artifact)" :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+                          <div v-else class="tool-image-placeholder">
+                            <ImageIcon :size="18" :stroke-width="1.7" aria-hidden="true" />
+                            <span class="tool-image-placeholder__name">{{ imageAlt(artifact) }}</span>
+                            <span v-if="artifactSizeLabel(artifact)" class="tool-image-placeholder__size">{{ artifactSizeLabel(artifact) }}</span>
+                            <button
+                              v-if="artifactLoadFailedFor(artifact)"
+                              type="button"
+                              class="tool-image-placeholder__retry"
+                              @click.stop="retryArtifactSource(artifact)"
+                            >{{ t("图片暂时取不到，重试") }}</button>
+                          </div>
                         </figure>
                       </div>
                       <!-- 同上：既无错误块也无任何结果块时才补兜底明细。 -->
@@ -585,7 +629,7 @@
                     v-else-if="group.part.partType === 'guidance'"
                     class="process-guidance"
                   >
-                    <div class="user-guide-label" data-user-guide-label>引导</div>
+                    <div class="user-guide-label" data-user-guide-label>{{ t("引导") }}</div>
                     <div
                       class="user-bubble"
                       :class="{ 'user-bubble--pending': isPendingGuidancePart(group.part) }"
@@ -599,12 +643,12 @@
                       @click="togglePartExpand(group.part, isLiveMessage(msg))"
                     >
                       <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                      <span class="process-step-title">{{ group.part.label || '出错' }}</span>
+                      <span class="process-step-title">{{ group.part.label || t("出错") }}</span>
                       <span class="process-step-detail">{{ processDetailPreview(group.part) }}</span>
                     </button>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="isPartExpanded(group.part, isLiveMessage(msg))" class="process-detail-panel process-detail-panel--error">
-                      <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
+                      <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">{{ t("复制") }}</button>
                       <pre>{{ fullProcessDetail(group.part) }}</pre>
                     </div>
                     </Transition>
@@ -617,7 +661,7 @@
                     aria-live="polite"
                     :title="modelRetryDetail(group.part)"
                   >
-                    <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(group.part).attempt }}/{{ modelRetryCounts(group.part).maxRetries }}</span>
+                    <span class="model-retry-bar__label">{{ t("重试中") }} {{ modelRetryCounts(group.part).attempt }}/{{ modelRetryCounts(group.part).maxRetries }}</span>
                     <div class="model-retry-bar__track" aria-hidden="true">
                       <div
                         v-for="i in modelRetryCounts(group.part).maxRetries"
@@ -637,17 +681,17 @@
                       @click="togglePartExpand(group.part, isLiveMessage(msg))"
                     >
                       <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                      <span class="process-step-title">{{ group.part.label || '状态' }}</span>
+                      <span class="process-step-title">{{ group.part.label || t("状态") }}</span>
                       <span class="process-step-detail">{{ processDetailPreview(group.part) }}</span>
                     </button>
                     <template v-else>
                       <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                      <span class="process-step-title">{{ group.part.label || '状态' }}</span>
+                      <span class="process-step-title">{{ group.part.label || t("状态") }}</span>
                       <span class="process-step-detail">{{ group.part.detail || group.part.content }}</span>
                     </template>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="hasExpandableProcessDetail(group.part) && isPartExpanded(group.part, isLiveMessage(msg))" class="process-detail-panel">
-                      <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
+                      <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">{{ t("复制") }}</button>
                       <pre>{{ fullProcessDetail(group.part) }}</pre>
                     </div>
                     </Transition>
@@ -684,13 +728,13 @@
                       </li>
                     </ol>
                     <details v-if="canGuideDecision(group.part)" class="decision-guide">
-                      <summary class="decision-guide-toggle">其他处理方式</summary>
+                      <summary class="decision-guide-toggle">{{ t("其他处理方式") }}</summary>
                       <div class="decision-guide-fields">
                         <textarea
                           class="decision-guide-input"
                           :data-decision-guide="group.part.id"
                           :value="decisionGuideDraft(group.part)"
-                          placeholder="说明希望如何处理…"
+                          :placeholder="t('说明希望如何处理…')"
                           rows="1"
                           @input="updateDecisionGuideDraft(group.part, $event)"
                         />
@@ -699,9 +743,7 @@
                           class="decision-guide-submit"
                           :disabled="!decisionGuideDraft(group.part).trim()"
                           @click="submitDecisionGuide(group.part)"
-                        >
-                          提交
-                        </button>
+                        >{{ t("提交") }}</button>
                       </div>
                     </details>
                   </div>
@@ -713,75 +755,23 @@
                         :data-part-id="group.part.id"
                       >
                         <div class="sub-line-head">
-                          <!-- 行本身打开右侧分屏：这一屏就是「看这个子代理在干什么」。
-                               就地展开收进右侧小箭头，两条路互不干扰。 -->
+                          <!-- 子代理那一行只有一件事：点整行打开右侧分屏（过程流在面板里
+                               完整可见，行内就地展开是冗余，已按用户口径移除）。 -->
                           <button
                             type="button"
                             class="sub-line-heading"
-                            :title="'打开 ' + agentTitle(group.part)"
+                            :disabled="subAgentRowsInert"
+                            :title="subAgentRowsInert ? agentTitle(group.part) : t('打开 ') + agentTitle(group.part)"
                             @click="openSubAgentPane(group.part)"
                           >
                             <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
                             <span v-beam="group.part.status === 'running'" class="sub-line-title">{{ agentTitle(group.part) }}</span>
                             <span class="sub-line-status">{{ agentStatusLabel(group.part) }}</span>
                           </button>
-                          <button
-                            v-if="agentSubMessages(group.part).length > 0"
-                            type="button"
-                            class="sub-line-toggle"
-                            :aria-expanded="isPartExpanded(group.part, isLiveMessage(msg))"
-                            :aria-label="isPartExpanded(group.part, isLiveMessage(msg)) ? '收起子代理过程' : '就地展开子代理过程'"
-                            :title="isPartExpanded(group.part, isLiveMessage(msg)) ? '收起过程' : '就地展开过程'"
-                            @click="togglePartExpand(group.part, isLiveMessage(msg))"
-                          >
-                            <ChevronDown
-                              class="sub-line-toggle-icon"
-                              :class="{ 'is-open': isPartExpanded(group.part, isLiveMessage(msg)) }"
-                              :size="14"
-                              :stroke-width="1.8"
-                              aria-hidden="true"
-                            />
-                          </button>
                         </div>
                         <div v-if="agentDeliveryMeta(group.part).length > 0" class="sub-line-delivery-meta">
                           <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
                         </div>
-                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                        <div v-if="isPartExpanded(group.part, isLiveMessage(msg))" class="sub-line-body">
-                          <MessageView
-                            v-for="subMsg in agentSubMessages(group.part)" :key="subMsg.id"
-                            class="sub-line-chat"
-                            :msg="subMsg"
-                            :transport="props.transport"
-                            :assistant-label="agentTitle(group.part)"
-                            :process-expanded-ids="agentProcessExpandedIds(group.part)"
-                            :suppress-artifacts-panel="artifactsPanelSuppressed"
-                            :auto-plot-math="autoPlotMath"
-                            @toggle-process="toggleAgentProcess"
-                            @decision-select="emit('decision-select', $event)"
-                          >
-                            <template #assistant-content="slotProps">
-                              <slot name="assistant-content" v-bind="slotProps">
-                                <MarkdownRenderer
-                                  class="part-text-content"
-                                  :content="slotProps.content"
-                                  :streaming="Boolean(slotProps.live)"
-                                  :auto-plot-math="autoPlotMath"
-                                />
-                              </slot>
-                            </template>
-                            <template #reasoning-content="slotProps">
-                              <slot name="reasoning-content" v-bind="slotProps">
-                                <MarkdownRenderer
-                                  class="process-step-detail"
-                                  :content="slotProps.content"
-                                  :streaming="Boolean(slotProps.live)"
-                                />
-                              </slot>
-                            </template>
-                          </MessageView>
-                        </div>
-                        </Transition>
                       </div>
 
                   <div
@@ -878,13 +868,13 @@
               :project-id="projectId"
               :work-root="workRoot"
               side="left"
-              heading="本轮产出"
-              aria-label="本轮产出"
+              :heading="t('本轮产出')"
+              :aria-label="t('本轮产出')"
             />
           </Transition>
 
           <!-- 输出中（turn 运行中，与 stop 按钮同步）：文字区域最下方三个圆点逐个显现循环 -->
-          <div v-if="isActiveTurnMessage(msg)" class="streaming-dots" role="status" aria-label="正在输出">
+          <div v-if="isActiveTurnMessage(msg)" class="streaming-dots" role="status" :aria-label="t('正在输出')">
             <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
           </div>
 
@@ -902,8 +892,8 @@
               type="button"
               class="assistant-action"
               :class="{ 'assistant-action--copied': copiedActionId === msg.id }"
-              :title="copiedActionId === msg.id ? '已复制' : '复制回复'"
-              :aria-label="copiedActionId === msg.id ? '已复制' : '复制回复'"
+              :title="copiedActionId === msg.id ? t('已复制') : t('复制回复')"
+              :aria-label="copiedActionId === msg.id ? t('已复制') : t('复制回复')"
               data-message-copy
               @click="copyAssistantMessage(msg)"
             >
@@ -913,8 +903,8 @@
             <button
               type="button"
               class="assistant-action"
-              title="从此处另开会话"
-              aria-label="从此处另开会话"
+              :title="t('从此处另开会话')"
+              :aria-label="t('从此处另开会话')"
               data-message-fork
               @click="emit('fork-message', assistantActionPayload(msg))"
             >
@@ -923,8 +913,8 @@
             <button
               type="button"
               class="assistant-action"
-              title="删除此轮及之后内容"
-              aria-label="删除此轮及之后内容"
+              :title="t('删除此轮及之后内容')"
+              :aria-label="t('删除此轮及之后内容')"
               data-message-rollback
               @click="emit('rollback-message', assistantActionPayload(msg))"
             >
@@ -938,7 +928,7 @@
   <Teleport to="body">
     <div v-if="previewImageSrc" ref="imagePreviewOverlayEl" class="image-preview-overlay" @keydown.esc="previewImageSrc = ''">
       <img ref="imagePreviewEl" :src="previewImageSrc" :alt="previewImageAlt" class="image-preview-full" />
-      <button type="button" class="image-preview-close" aria-label="关闭预览" @click="previewImageSrc = ''">
+      <button type="button" class="image-preview-close" :aria-label="t('关闭预览')" @click="previewImageSrc = ''">
         <X :size="18" :stroke-width="2" aria-hidden="true" />
       </button>
     </div>
@@ -946,6 +936,8 @@
 </template>
 
 <script setup lang="ts">
+import { t, uiLanguage } from '../i18n/index'
+
 import type { CoreAttachment, CoreMessage, MessagePart, ToolArtifact } from '../types'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type DirectiveBinding } from 'vue'
@@ -953,7 +945,6 @@ import { gsap } from 'gsap'
 import {
   Brain,
   Check,
-  ChevronDown,
   CircleHelp,
   Copy,
   FilePenLine,
@@ -963,6 +954,7 @@ import {
   GitFork,
   Globe,
   Hourglass,
+  Image as ImageIcon,
   Info,
   Inbox,
   Minimize2,
@@ -998,10 +990,13 @@ import { autoGrowTextarea } from '../helpers/autoGrowTextarea'
 import { workspaceRelativePath } from '../helpers/workspacePath'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 import { useNarrowViewport } from '../composables/useNarrowViewport'
+import { useProcessSummaryClock } from '../composables/useProcessSummaryClock'
 import AutoTextarea from './AutoTextarea.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import CoreSystemEventRow from './CoreSystemEventRow.vue'
+import { isCoreSystemEvent, type CoreSystemEvent } from '../appServer/systemEvents'
 import MessageAttachmentDeck from './MessageAttachmentDeck.vue'
-import { artifactListingReference, normalizeArtifactReference, shouldListTurnArtifact } from '../artifacts/model'
+import { artifactListingReference, artifactPathsInText, normalizeArtifactReference, shouldListTurnArtifact, workspaceRelativeFromReportPath } from '../artifacts/model'
 import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu'
 import type { ContextMenuEntry } from './context-menu/types'
 import MessageView from './MessageView.vue'
@@ -1116,6 +1111,8 @@ const props = withDefaults(
     activeTurnId?: string | null
     /** 当前 turn 是否在运行（与 composer stop 按钮同一信号源） */
     turnActive?: boolean
+    /** 当前 turn 的精确状态；等待/中断/终态不推进耗时。 */
+    turnStatus?: string
     /** 位于最后一次上下文压缩之前、因而不再提供编辑/分叉/回退的消息 id。 */
     lockedMessageIds?: Set<string>
     /** 挂载时播放入场动效（新消息淡入；初始批次/历史加载不播）。
@@ -1124,6 +1121,8 @@ const props = withDefaults(
     /** 「本轮产出」面板抑制（由父消息向下传播）：本轮运行中，子代理 sub-line 段
         的面板同样隐藏，轮次结束才出现 */
     suppressArtifactsPanel?: boolean
+  /** 面板内部：子代理行明确不可点（面板不消费"打开子代理"事件，别让用户以为点了没反应）。 */
+  subAgentRowsInert?: boolean
     /** Automatically plot supported display-math formulas in final answers. */
     autoPlotMath?: boolean
   }>(),
@@ -1135,9 +1134,11 @@ const props = withDefaults(
     workRoot: null,
     activeTurnId: null,
     turnActive: false,
+    turnStatus: 'idle',
     lockedMessageIds: () => new Set(),
     motionEnter: false,
     suppressArtifactsPanel: false,
+  subAgentRowsInert: false,
     autoPlotMath: false,
   },
 )
@@ -1285,7 +1286,6 @@ const toolExpandedIds = ref<Set<string>>(new Set())
 // reader taps the toggle back to scroll.
 const toolWrapChoices = ref<Map<string, boolean>>(new Map())
 const narrowViewport = useNarrowViewport()
-const subLineProcessCollapsedIds = ref<Set<string>>(new Set())
 const fullyExpandedPartIds = ref<Set<string>>(new Set())
 const processTitleSnapshots = ref<Record<string, string>>({})
 let processTitleTimer: ReturnType<typeof setInterval> | null = null
@@ -1298,6 +1298,7 @@ let subAgentTitleTimer: ReturnType<typeof setInterval> | null = null
 // message (thousands of tool cards), which is the runtime-core self-time spike.
 function partMemo(part: MessagePart, live: boolean): unknown[] {
   return [
+    uiLanguage.value,
     part,
     isPartExpanded(part, live),
     // `live` 与 `autoPlotMath` 都参与 v-memo 子树里的渲染（streaming 样式、
@@ -1309,7 +1310,6 @@ function partMemo(part: MessagePart, live: boolean): unknown[] {
     processTitleSnapshot(part),
     toolExpandedIds.value.has(part.id),
     isToolWrapEnabled(part.id),
-    subLineProcessCollapsedIds.value.has(part.id),
     decisionGuideDrafts.value[part.id],
   ]
 }
@@ -1457,6 +1457,8 @@ function refreshProcessTitleSnapshots() {
   if (changed) processTitleSnapshots.value = next
 }
 
+watch(uiLanguage, refreshProcessTitleSnapshots)
+
 function stopProcessTitleTimer() {
   if (!processTitleTimer) return
   clearInterval(processTitleTimer)
@@ -1471,7 +1473,7 @@ function toolRetryLabel(part: MessagePart): string {
   const maxRetries = typeof meta.max_retries === 'number' ? meta.max_retries
     : typeof meta.maxRetries === 'number' ? meta.maxRetries : 0
   if (part.status === 'running' && retryCount > 0) {
-    return maxRetries > 0 ? `重试中 ${retryCount}/${maxRetries}` : '重试中'
+    return maxRetries > 0 ? t("重试中 {0}/{1}", { 0: retryCount, 1: maxRetries }) : t("重试中")
   }
   return ''
 }
@@ -1497,80 +1499,34 @@ function modelRetryDetail(part: MessagePart): string {
   const meta = (part.metadata || {}) as Record<string, unknown>
   const error = typeof meta.error === 'string' ? meta.error.trim() : ''
   const delay = typeof meta.delay_seconds === 'number' ? meta.delay_seconds : null
-  if (error && delay !== null) return `${delay}s 后重试：${error}`
+  if (error && delay !== null) return t("{0}s 后重试：{1}", { 0: delay, 1: error })
   return error
 }
 
-/**
- * 子代理那一行：点整行打开右侧分屏、行尾箭头就地展开嵌套过程。
- *
- * 投影对委派工具的生命周期行（`sub_agent` create/close）保留 `tool_call` 类型
- * （见 `selectors.ts` 的 `normalizeCoreItemDisplayType`），但它和其余子代理行
- * 是同一类东西：识别漏掉它时，点整行只会就地展开卡片（用户 2026-10-12 报的
- * 正是这一处）。这里按部件类型与工具名一起认定。
- */
 function isSubLinePart(part: MessagePart): boolean {
-  if (part.partType === 'sub_line' || part.partType === 'agent_summary') return true
+  return part.partType === 'sub_line' || part.partType === 'agent_summary'
+}
+
+/**
+ * 委派工具那一行（生命周期 create/close 与信箱收发）：投影按 selectors 的
+ * `normalizeCoreItemDisplayType` 把它保留成普通工具行（专用文案与图标另行钉住），
+ * 所以它走工具卡渲染，但点击语义与其余子代理行一致——点整行打开右侧分屏，
+ * 行尾箭头才就地展开（用户 2026-10-12 报的就是这处缺动作）。
+ */
+function isSubAgentToolRow(part: MessagePart): boolean {
   const name = String(part.toolName || '').trim().toLowerCase()
   return name === 'sub_agent' || name === 'subagent'
     || name === 'sub_agent_message' || name === 'sub_agent_receive'
 }
 
-function agentAssistantMessageId(part: MessagePart): string {
-  return `${part.id}:assistant`
-}
-
-function agentSubMessages(part: MessagePart): CoreMessage[] {
-  const messages: CoreMessage[] = []
-  const assignment = agentAssignmentText(part)
-  if (assignment) {
-    messages.push({
-      id: `${part.id}:assignment`,
-      role: 'user',
-      content: assignment,
-      timestamp: '',
-      parts: [],
-    })
+/** 工具行点击：委派子代理那一行打开右侧分屏，其余工具行就地展开卡片。 */
+function activateToolRow(part: MessagePart, live = false): void {
+  if (isSubAgentToolRow(part)) {
+    // 面板内部这些行不可点：不抛事件，也不给任何反馈。
+    if (!props.subAgentRowsInert) openSubAgentPane(part)
+    return
   }
-
-  const processParts = agentTimelineParts(part)
-  const conclusion = agentConclusion(part)
-  if (processParts.length > 0 || conclusion) {
-    const live = part.status === 'running'
-    const projection = projectAssistantMessageParts(processParts, conclusion, { live })
-    messages.push({
-      id: agentAssistantMessageId(part),
-      role: 'assistant',
-      content: conclusion,
-      timestamp: '',
-      parts: processParts,
-      processParts: projection.processParts,
-      answerPart: projection.answerPart,
-      answerText: projection.answerText,
-      metadata: {
-        timeline: processParts.length > 0 ? true : undefined,
-        live: live ? true : undefined,
-        liveStatus: agentStatusLabel(part),
-      },
-    })
-  }
-  return messages
-}
-
-function agentProcessExpandedIds(part: MessagePart): Set<string> {
-  const messageId = agentAssistantMessageId(part)
-  if (subLineProcessCollapsedIds.value.has(messageId)) return new Set()
-  return new Set([messageId])
-}
-
-function toggleAgentProcess(messageId: string) {
-  const next = new Set(subLineProcessCollapsedIds.value)
-  if (next.has(messageId)) {
-    next.delete(messageId)
-  } else {
-    next.add(messageId)
-  }
-  subLineProcessCollapsedIds.value = next
+  togglePartExpand(part, live)
 }
 
 function attachmentParts(message: CoreMessage): MessagePart[] {
@@ -1611,6 +1567,9 @@ function hasToolDisplay(part: MessagePart): boolean {
 }
 
 function shouldShowToolBody(part: MessagePart, live = false): boolean {
+  // 委派子代理那一行没有行内正文：点整行开右侧面板，过程流在那里完整可见
+  // （用户 2026-10-12 口径：不要双行为）。
+  if (isSubAgentToolRow(part)) return false
   if (!hasToolDisplay(part)) return false
   return isPartExpanded(part, live)
 }
@@ -1652,24 +1611,24 @@ function shouldShowToolArgsPreview(part: MessagePart): boolean {
 function toolArgChips(args: Record<string, unknown>): string[] {
   const chips: string[] = []
   const file = args.path || args.file || args.file_path
-  if (file) chips.push(`文件 ${compactPath(String(file))}`)
+  if (file) chips.push(t("文件 {0}", { 0: compactPath(String(file)) }))
 
   // 记忆工具分「项目档 / 全局档」：不标档位时，同一条路径在两档各读一次
   // 会显示成两张一模一样的卡片，看起来像重复调用。
   const scope = String(args.scope || '')
-  if (scope === 'project') chips.push('档位 项目档')
-  else if (scope === 'global') chips.push('档位 全局档')
+  if (scope === 'project') chips.push(t("档位 项目档"))
+  else if (scope === 'global') chips.push(t("档位 全局档"))
 
   const start = args.start_line || args.startLine || args.line_start
   const end = args.end_line || args.endLine || args.line_end
-  if (start && end) chips.push(`范围 ${start}-${end} 行`)
-  else if (start) chips.push(`从第 ${start} 行`)
+  if (start && end) chips.push(t("范围 {0}-{1} 行", { 0: start, 1: end }))
+  else if (start) chips.push(t("从第 {0} 行", { 0: start }))
 
   const pattern = args.pattern || args.query
-  if (pattern && !file) chips.push(`搜索 ${compactDetail(String(pattern), 44)}`)
+  if (pattern && !file) chips.push(t("搜索 {0}", { 0: compactDetail(String(pattern), 44) }))
 
   const command = args.command || args.cmd
-  if (command) chips.push(`命令 ${compactDetail(String(command), 64)}`)
+  if (command) chips.push(t("命令 {0}", { 0: compactDetail(String(command), 64) }))
 
   return chips
 }
@@ -1766,17 +1725,17 @@ function toolRowFlagTone(part: MessagePart): ToolRowFlagTone | '' {
 
 function toolRowFlagText(part: MessagePart): string {
   const memory = memoryRowDirection(part)
-  if (memory) return memory === 'read' ? '读' : '写'
+  if (memory) return memory === 'read' ? t("读") : t("写")
   if (testArtifact(part)) {
     const meta = testArtifactMetadata(part)
-    if (meta.passed === true) return '✓ 通过'
-    return meta.summary === 'timed_out' ? '✗ 超时' : '✗ 失败'
+    if (meta.passed === true) return t("✓ 通过")
+    return meta.summary === 'timed_out' ? t("✗ 超时") : t("✗ 失败")
   }
   if (isCommandTool(part)) {
     if (part.status === 'running') return commandElapsedLabel(part)
-    if (part.status === 'error' || part.toolError) return '✗ 失败'
+    if (part.status === 'error' || part.toolError) return t("✗ 失败")
     const exit = commandExitCode(part)
-    if (exit !== null && exit !== 0) return `✗ 退出码 ${exit}`
+    if (exit !== null && exit !== 0) return t("✗ 退出码 {0}", { 0: exit })
     return part.status === 'completed' ? '✓' : ''
   }
   return ''
@@ -1898,9 +1857,9 @@ function humanizeDiffMetaLine(line: string): string {
   if (!match) return line
   const oldCount = Number(match[2] || 1)
   const newCount = Number(match[4] || 1)
-  if (oldCount === 0 && newCount > 0) return `新增 ${newCount} 行`
-  if (newCount === 0 && oldCount > 0) return `删除 ${oldCount} 行`
-  return `修改范围：原 ${match[1]} 行起，新 ${match[3]} 行起`
+  if (oldCount === 0 && newCount > 0) return t("新增 {0} 行", { 0: newCount })
+  if (newCount === 0 && oldCount > 0) return t("删除 {0} 行", { 0: oldCount })
+  return t("修改范围：原 {0} 行起，新 {1} 行起", { 0: match[1], 1: match[3] })
 }
 
 function diffHeaderText(part: MessagePart): string {
@@ -1932,6 +1891,12 @@ function isLiveMessage(msg: CoreMessage): boolean {
   return !!(msg.metadata as Record<string, unknown>)?.live
 }
 
+/** The machine-authored system event stamped by the projection, if any. */
+function systemEvent(msg: CoreMessage): CoreSystemEvent | null {
+  const value = (msg.metadata as Record<string, unknown> | undefined)?.systemEvent
+  return isCoreSystemEvent(value) ? value : null
+}
+
 /**
  * 消息所属 turn 当前正在运行（与 composer stop 按钮的 isCoreActiveTurnStatus 同步）。
  * 显示条件：turnActive（running/waiting/interrupting）且该消息属于 active turn。
@@ -1941,6 +1906,16 @@ function isActiveTurnMessage(msg: CoreMessage): boolean {
     && typeof props.activeTurnId === 'string' && props.activeTurnId !== ''
     && assistantSegmentTurnId(msg.id) === props.activeTurnId
 }
+
+const processSummaryClockEnabled = computed(() => (
+  props.turnStatus === 'running'
+  && isActiveTurnMessage(props.msg)
+  && !isLiveMessage(props.msg)
+  && processStartTimestamp(props.msg) !== null
+  && processDurationMetric(props.msg) === null
+  && processEndTimestamp(props.msg) === null
+))
+const processSummaryNow = useProcessSummaryClock(processSummaryClockEnabled)
 
 function isInitialWaitingMessage(msg: CoreMessage): boolean {
   return !!(msg.metadata as Record<string, unknown>)?.initialWaiting
@@ -2145,7 +2120,7 @@ interface TextGroup {
 
 function liveStatusText(msg: CoreMessage): string {
   const metadata = (msg.metadata || {}) as Record<string, unknown>
-  return String(metadata.liveStatus || metadata.statusText || '正在处理')
+  return String(metadata.liveStatus || metadata.statusText || t("正在处理"))
 }
 
 function liveDetailText(msg: CoreMessage): string {
@@ -2278,22 +2253,22 @@ function onContextMenu(event: MouseEvent): void {
   const items: ContextMenuEntry[] = []
   const locked = isActionLocked(msg)
   if (userActionable(msg)) {
-    items.push({ id: 'copy', label: '复制消息', icon: Copy, action: () => copyMessage(msg) })
+    items.push({ id: 'copy', get label() { return t("复制消息") }, icon: Copy, action: () => copyMessage(msg) })
     if (!locked) {
       items.push(
         { type: 'separator', id: 'user-action-separator' },
-        { id: 'edit', label: '编辑消息', icon: Pencil, action: () => startEditMessage(msg) },
-        { id: 'fork', label: '从此处另开会话', icon: GitFork, action: () => emit('fork-message', userActionPayload(msg)) },
-        { id: 'rollback', label: '回滚', icon: Undo2, destructive: true, action: () => emit('rollback-message', userActionPayload(msg)) },
+        { id: 'edit', get label() { return t("编辑消息") }, icon: Pencil, action: () => startEditMessage(msg) },
+        { id: 'fork', get label() { return t("从此处另开会话") }, icon: GitFork, action: () => emit('fork-message', userActionPayload(msg)) },
+        { id: 'rollback', get label() { return t("回滚") }, icon: Undo2, destructive: true, action: () => emit('rollback-message', userActionPayload(msg)) },
       )
     }
   } else if (assistantActionable(msg)) {
-    items.push({ id: 'copy', label: '复制回复', icon: Copy, action: () => copyMessage(msg) })
+    items.push({ id: 'copy', get label() { return t("复制回复") }, icon: Copy, action: () => copyMessage(msg) })
     if (!locked) {
       items.push(
         { type: 'separator', id: 'message-fork-separator' },
-        { id: 'fork', label: '从此处另开会话', icon: GitFork, action: () => emit('fork-message', assistantActionPayload(msg)) },
-        { id: 'rollback', label: '回滚', icon: Undo2, destructive: true, action: () => emit('rollback-message', assistantActionPayload(msg)) },
+        { id: 'fork', get label() { return t("从此处另开会话") }, icon: GitFork, action: () => emit('fork-message', assistantActionPayload(msg)) },
+        { id: 'rollback', get label() { return t("回滚") }, icon: Undo2, destructive: true, action: () => emit('rollback-message', assistantActionPayload(msg)) },
       )
     }
   }
@@ -2302,7 +2277,7 @@ function onContextMenu(event: MouseEvent): void {
     event,
     items,
     ownerId: `message:${msg.id}`,
-    ariaLabel: `${msg.role === 'user' ? '用户消息' : '助手回复'}操作`,
+    ariaLabel: t("{0}操作", { 0: msg.role === 'user' ? t("用户消息") : t("助手回复") }),
     panelAttributes: { 'data-message-menu': msg.id },
   })
 }
@@ -2365,15 +2340,18 @@ function processIconStateClass(part: MessagePart): string {
 
 function processAccessibleLabel(part: MessagePart): string {
   const state = part.status === 'running'
-    ? '运行中'
+    ? t("运行中")
     : part.status === 'error'
-      ? '失败'
+      ? t("失败")
       : part.status === 'pending'
-        ? '等待中'
-        : '已完成'
+        ? t("等待中")
+        : t("已完成")
   const title = readableProcessTitle(part)
   const snapshot = processTitleSnapshot(part)
-  return snapshot === title ? `${title}，${state}` : `${title}，${state}，${snapshot}`
+  const base = snapshot === title ? `${title}，${state}` : `${title}，${state}，${snapshot}`
+  // 委派子代理那一行点下去开的是右侧分屏（面板内部不可点，就不说"打开"）。
+  if (isSubAgentToolRow(part)) return props.subAgentRowsInert ? t("{0}，不可点击", { 0: base }) : t("{0}，打开子代理面板", { 0: base })
+  return base
 }
 
 function processTitleSnapshot(part: MessagePart): string {
@@ -2427,42 +2405,42 @@ function livePartTitle(part: MessagePart): string {
     agent_summary: '过程',
     compaction: '上下文已压缩',
   }
-  return map[part.partType] || '处理中'
+  return map[part.partType] || t("处理中")
 }
 
 function modelTextTitle(part: MessagePart): string {
   const label = String(part.label || '').trim()
-  if (!label) return '正文'
+  if (!label) return t("正文")
   const normalized = label.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ')
   if (normalized === 'model text' || normalized === 'agent message' || normalized === 'agentmessage') {
-    return '正文'
+    return t("正文")
   }
   return label
 }
 
 function readableProcessTitle(part: MessagePart): string {
   const unavailableTool = unavailableToolName(part)
-  if (unavailableTool) return `工具不可用：${unavailableTool}`
-  if (isUnavailableToolNotice(part)) return '工具不可用'
+  if (unavailableTool) return t("工具不可用：{0}", { 0: unavailableTool })
+  if (isUnavailableToolNotice(part)) return t("工具不可用")
   const subAgentTitle = subAgentEventTitle(part)
   if (subAgentTitle) return subAgentTitle
   if (part.partType === 'decision') return decisionTitle(part)
   if (isSubLinePart(part)) return agentTitle(part)
-  if (part.partType === 'compaction') return part.label || '上下文已压缩'
+  if (part.partType === 'compaction') return part.label || t("上下文已压缩")
   if (isControlTool(part)) return controlTitle(part)
-  if (part.partType === 'error') return part.label || '出错'
-  if (part.partType === 'status') return part.label || '状态'
+  if (part.partType === 'error') return part.label || t("出错")
+  if (part.partType === 'status') return part.label || t("状态")
   if (part.partType === 'model_text') return modelTextTitle(part)
-  if (part.partType === 'reasoning') return part.label || '思考'
-  if (part.partType === 'file_diff') return part.label || '文件改动'
-  if (part.partType === 'command_output') return part.label || '命令输出'
+  if (part.partType === 'reasoning') return part.label || t("思考")
+  if (part.partType === 'file_diff') return part.label || t("文件改动")
+  if (part.partType === 'command_output') return part.label || t("命令输出")
 
   if (part.partType === 'tool_call' || part.partType === 'tool_result') {
     const target = processTarget(part)
     const name = (part.toolName || part.label || '').toLowerCase()
     const actionTitle = processActionTitle(name, target)
     if (actionTitle) return actionTitle
-    if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return '运行命令'
+    if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return t("运行命令")
     return readableToolTitle(name, target) || part.toolName || part.label || livePartTitle(part)
   }
 
@@ -2470,31 +2448,31 @@ function readableProcessTitle(part: MessagePart): string {
   const name = (part.toolName || part.label || '').toLowerCase()
   const actionTitle = processActionTitle(name, target)
   if (actionTitle) return actionTitle
-  if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return '运行命令'
+  if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return t("运行命令")
   return readableToolTitle(name, target) || part.label || part.toolName || livePartTitle(part)
 }
 
 function processActionTitle(name: string, target: string): string {
-  if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return target ? `运行 ${target}` : '运行命令'
-  if (/read|cat|get-content|open/.test(name)) return target ? `读取 ${target}` : '读取文件'
-  if (/list|ls|dir/.test(name)) return target ? `列出 ${target}` : '列出目录'
-  if (/grep|rg|search|find|glob/.test(name)) return target ? `搜索 ${target}` : '搜索内容'
-  if (/write|create/.test(name)) return target ? `创建 ${target}` : '创建文件'
-  if (/edit|patch|apply/.test(name)) return target ? `编辑 ${target}` : '编辑文件'
-  if (/fetch|browser|http/.test(name)) return target ? `获取网页 ${target}` : '获取网页'
-  if (/delete|remove/.test(name)) return target ? `删除 ${target}` : '删除内容'
+  if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return target ? t("运行 {0}", { 0: target }) : t("运行命令")
+  if (/read|cat|get-content|open/.test(name)) return target ? t("读取 {0}", { 0: target }) : t("读取文件")
+  if (/list|ls|dir/.test(name)) return target ? t("列出 {0}", { 0: target }) : t("列出目录")
+  if (/grep|rg|search|find|glob/.test(name)) return target ? t("搜索 {0}", { 0: target }) : t("搜索内容")
+  if (/write|create/.test(name)) return target ? t("创建 {0}", { 0: target }) : t("创建文件")
+  if (/edit|patch|apply/.test(name)) return target ? t("编辑 {0}", { 0: target }) : t("编辑文件")
+  if (/fetch|browser|http/.test(name)) return target ? t("获取网页 {0}", { 0: target }) : t("获取网页")
+  if (/delete|remove/.test(name)) return target ? t("删除 {0}", { 0: target }) : t("删除内容")
   return ''
 }
 
 function readableToolTitle(name: string, target: string): string {
-  if (/git/.test(name)) return name.includes('diff') ? '查看 git 差异' : '查看 git 状态'
-  if (/question|ask/.test(name)) return '提问'
-  if (/sub_agent|subagent/.test(name)) return target ? `委派子代理：${target}` : '委派子代理'
-  if (/skill/.test(name)) return target ? `加载技能 · ${target}` : '加载技能'
-  if (/goal/.test(name)) return '管理目标'
-  if (/arrange/.test(name)) return '管理定时任务'
-  if (/mcp/.test(name)) return '调用 MCP 工具'
-  if (/checklist/.test(name)) return '更新任务清单'
+  if (/git/.test(name)) return name.includes('diff') ? t("查看 git 差异") : t("查看 git 状态")
+  if (/question|ask/.test(name)) return t("提问")
+  if (/sub_agent|subagent/.test(name)) return target ? t("委派子代理：{0}", { 0: target }) : t("委派子代理")
+  if (/skill/.test(name)) return target ? t("加载技能 · {0}", { 0: target }) : t("加载技能")
+  if (/goal/.test(name)) return t("管理目标")
+  if (/arrange/.test(name)) return t("管理定时任务")
+  if (/mcp/.test(name)) return t("调用 MCP 工具")
+  if (/checklist/.test(name)) return t("更新任务清单")
   return ''
 }
 
@@ -2555,13 +2533,13 @@ function compactionDetail(part: MessagePart): string {
   const status = compactionStatus(part)
   const reason = String(rawPart.reason || metadata.reason || '').trim()
   if (status === 'not_needed') {
-    return `${reason === 'no_gain' ? '未获得收益 · ' : ''}原上下文已保留`
+    return t("{0}原上下文已保留", { 0: reason === 'no_gain' ? t("未获得收益 · ") : '' })
   }
   if (status === 'failed') {
     const failure = String(
       rawPart.message || rawPart.error || metadata.message || metadata.error || part.detail || '',
     ).trim()
-    return failure ? `原上下文已保留 · ${compactDetail(failure, 180)}` : '原上下文已保留'
+    return failure ? t("原上下文已保留 · {0}", { 0: compactDetail(failure, 180) }) : t("原上下文已保留")
   }
   const before = rawPart.before_tokens ?? rawPart.beforeTokens ?? metadata.before_tokens ?? metadata.beforeTokens
   const after = rawPart.after_tokens ?? rawPart.afterTokens ?? metadata.after_tokens ?? metadata.afterTokens
@@ -2571,14 +2549,14 @@ function compactionDetail(part: MessagePart): string {
   const beforeText = compactTokenCount(before)
   const afterText = compactTokenCount(after)
   if (beforeText && afterText && (status !== 'running' || beforeText !== afterText)) {
-    pieces.push(`${beforeText} 至 ${afterText}`)
+    pieces.push(t("{0} 至 {1}", { 0: beforeText, 1: afterText }))
   } else if (part.detail) {
     pieces.push(String(part.detail))
   }
   if (status === 'running' && typeof segment === 'number' && typeof segments === 'number' && segments > 0) {
-    pieces.push(`第 ${segment}/${segments} 段`)
+    pieces.push(t("第 {0}/{1} 段", { 0: segment, 1: segments }))
   } else if (typeof segments === 'number' && segments > 1) {
-    pieces.push(`${segments} 段`)
+    pieces.push(t("{0} 段", { 0: segments }))
   }
   return pieces.join(' · ')
 }
@@ -2617,29 +2595,29 @@ function subAgentEventTitle(part: MessagePart): string {
   const isPending = state === 'pending'
   const isRunning = state === 'running'
   const isError = state === 'error'
-  const statePrefix = isRunning ? '正在' : isPending ? '等待' : ''
+  const statePrefix = isRunning ? t("正在") : isPending ? t("等待") : ''
   if (kind === 'closed') {
-    if (isError) return `关闭 ${name} 失败`
-    if (isRunning || isPending) return `${statePrefix}关闭 ${name}`
-    return `关闭了 ${name}`
+    if (isError) return t("关闭 {0} 失败", { 0: name })
+    if (isRunning || isPending) return t("{0}关闭 {1}", { 0: statePrefix, 1: name })
+    return t("关闭了 {0}", { 0: name })
   }
   if (kind === 'message_sent') {
-    if (isError) return `向 ${name} 发送消息失败`
-    if (isRunning || isPending) return `${statePrefix}向 ${name} 发送消息`
-    return `向 ${name} 发送了消息`
+    if (isError) return t("向 {0} 发送消息失败", { 0: name })
+    if (isRunning || isPending) return t("{0}向 {1} 发送消息", { 0: statePrefix, 1: name })
+    return t("向 {0} 发送了消息", { 0: name })
   }
   if (kind === 'message_received') {
-    if (isError) return `接收 ${name} 消息失败`
-    if (isRunning || isPending) return `${statePrefix}接收 ${name} 的消息`
-    return `收到了 ${name} 的消息`
+    if (isError) return t("接收 {0} 消息失败", { 0: name })
+    if (isRunning || isPending) return t("{0}接收 {1} 的消息", { 0: statePrefix, 1: name })
+    return t("收到了 {0} 的消息", { 0: name })
   }
   const model = compactDetail(String(result.model_id || result.model || args.model || '').trim(), 40)
   const reasoning = compactDetail(String(result.reasoning_level || result.reasoningLevel || args.reasoning_level || '').trim(), 24)
   const config = [model, reasoning].filter(Boolean).join(' ')
-  const verb = kind === 'enabled' ? '启用' : '创建'
-  if (isError) return `${verb} ${name} 失败${config ? ` · ${config}` : ''}`
+  const verb = kind === 'enabled' ? t("启用") : t("创建")
+  if (isError) return t("{0} {1} 失败{2}", { 0: verb, 1: name, 2: config ? ` · ${config}` : '' })
   if (isRunning || isPending) return `${statePrefix}${verb} ${name}${config ? ` · ${config}` : ''}`
-  return `${kind === 'enabled' ? '启用了' : '创建了'} ${name}${config ? ` · ${config}` : ''}`
+  return t("{0} {1}{2}", { 0: kind === 'enabled' ? t("启用了") : t("创建了"), 1: name, 2: config ? ` · ${config}` : '' })
 }
 
 function compactTokenCount(value: unknown): string {
@@ -2685,10 +2663,10 @@ function compactionTitle(part: MessagePart): string {
   const label = String(part.label || '').trim()
   if (label && label.toLowerCase() !== 'compaction') return label
   const status = compactionStatus(part)
-  if (status === 'running') return '正在压缩上下文'
-  if (status === 'not_needed') return '无需压缩'
-  if (status === 'failed') return '压缩未完成'
-  return '上下文已压缩'
+  if (status === 'running') return t("正在压缩上下文")
+  if (status === 'not_needed') return t("无需压缩")
+  if (status === 'failed') return t("压缩未完成")
+  return t("上下文已压缩")
 }
 
 function compactionPreview(part: MessagePart): string {
@@ -2764,10 +2742,10 @@ function displayToolInputPreview(part: MessagePart): string {
 
 function toolInputPreviewMeta(part: MessagePart): string {
   const preview = part.inputPreview
-  if (!preview) return '生成工具输入'
-  const field = preview.field ? `生成 ${preview.field}` : '生成工具输入'
+  if (!preview) return t("生成工具输入")
+  const field = preview.field ? t("生成 {0}", { 0: preview.field }) : t("生成工具输入")
   const chars = Number.isFinite(preview.chars) ? `${preview.chars} chars` : ''
-  const truncated = preview.truncated ? '已截断' : ''
+  const truncated = preview.truncated ? t("已截断") : ''
   return [field, chars, truncated].filter(Boolean).join(' · ')
 }
 
@@ -2794,12 +2772,32 @@ function fileArtifact(part: MessagePart) {
 
 const IMAGE_URI_RE = /\.(png|jpe?g|webp|gif)$/i
 
+/**
+ * 后端只在大图超过内联上限时、且在发送那一刻把内联正文换成引用：这类条目带
+ * `availability: "reference"`，metadata 里的 data URL 键已被丢掉，正文要按需从
+ * path/uri 取（durable 副本未变，取不到不等于内容丢了）。
+ */
+function isArtifactReference(artifact: { availability?: string } | null | undefined): boolean {
+  return String(artifact?.availability || '').trim().toLowerCase() === 'reference'
+}
+
+/** 内联正文（data URL）的唯一判定入口：引用条目一律没有，也不该再当图片源用。 */
+function inlineImageDataUrl(
+  artifact: { availability?: string; metadata?: Record<string, unknown> } | null | undefined,
+): string {
+  if (isArtifactReference(artifact)) return ''
+  const dataUrl = artifact?.metadata?.image_data_url
+  return typeof dataUrl === 'string' && dataUrl.startsWith('data:image') ? dataUrl : ''
+}
+
 function isImageArtifact(
   artifact: ToolArtifact,
 ): artifact is ToolArtifact & { artifact_id?: string } {
   return artifact.kind === 'image'
     || (typeof artifact.uri === 'string' && IMAGE_URI_RE.test(artifact.uri))
-    || typeof artifact.metadata?.image_data_url === 'string'
+    || Boolean(inlineImageDataUrl(artifact))
+    // 引用条目不再带内联正文：真实 MIME 类型是"这是图片"的另一条依据。
+    || (typeof artifact.mime_type === 'string' && artifact.mime_type.toLowerCase().startsWith('image/'))
 }
 
 function imageArtifacts(part: MessagePart): Array<ToolArtifact & { artifact_id?: string }> {
@@ -2807,9 +2805,48 @@ function imageArtifacts(part: MessagePart): Array<ToolArtifact & { artifact_id?:
 }
 
 const artifactUrls = reactive<Record<string, string>>({})
+/** 按需取字节失败过的条目：界面据此显示取不到的提示与重试，而不是破图。 */
+const artifactLoadFailed = reactive<Record<string, boolean>>({})
 
-function artifactKey(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
-  return String(artifact.artifact_id || artifact.uri || artifact.metadata?.image_data_url || '')
+function artifactKey(artifact: {
+  uri?: string
+  path?: string
+  artifact_id?: string
+  availability?: string
+  metadata?: Record<string, unknown>
+}): string {
+  return String(
+    artifact.artifact_id
+    || artifact.uri
+    || artifact.path
+    || artifact.metadata?.path
+    || inlineImageDataUrl(artifact)
+    || '',
+  )
+}
+
+function artifactLoadFailedFor(artifact: Parameters<typeof artifactKey>[0]): boolean {
+  const key = artifactKey(artifact)
+  return Boolean(key) && artifactLoadFailed[key] === true
+}
+
+/** 占位卡上的体积说明：字节还没取回时就先告诉用户这是多大的东西。 */
+function artifactSizeLabel(artifact: {
+  size_bytes?: unknown
+  metadata?: Record<string, unknown>
+}): string {
+  const raw = Number(
+    artifact.size_bytes
+    ?? artifact.metadata?.size_bytes
+    ?? artifact.metadata?.new_size_bytes
+    ?? 0,
+  )
+  if (!Number.isFinite(raw) || raw <= 0) return ''
+  if (raw < 1024) return `${Math.round(raw)} B`
+  const kb = raw / 1024
+  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`
+  const mb = kb / 1024
+  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`
 }
 
 function compactionIconStateClass(part: MessagePart): string {
@@ -2822,7 +2859,9 @@ function compactionAccessibleLabel(part: MessagePart): string {
 }
 
 function artifactPath(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
-  let path = typeof artifact.uri === 'string' ? artifact.uri : ''
+  let path = typeof artifact.uri === 'string' && artifact.uri
+    ? artifact.uri
+    : (typeof (artifact as { path?: string }).path === 'string' ? String((artifact as { path?: string }).path) : '')
   if (props.projectId && artifact.artifact_id) {
     const query = path ? `?path=${encodeURIComponent(path)}` : ''
     return `/projects/${encodeURIComponent(props.projectId)}/artifacts/${encodeURIComponent(artifact.artifact_id)}/file${query}`
@@ -2837,11 +2876,12 @@ function artifactPath(artifact: { uri?: string; artifact_id?: string; metadata?:
   return ''
 }
 
-function imageSrc(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
-  // read_file 图片结果：base64 data URL 直接内联渲染，不走 HTTP/本地文件路径
-  const dataUrl = artifact.metadata?.image_data_url
-  if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image')) return dataUrl
-  let path = typeof artifact.uri === 'string' ? artifact.uri : ''
+function imageSrc(artifact: { uri?: string; path?: string; artifact_id?: string; availability?: string; metadata?: Record<string, unknown> }): string {
+  // read_file 图片结果：只有内联的 base64 data URL 才直接内联渲染；被换成引用的
+  // 条目没有内联正文，落到下面的按需取字节（path/uri → 本地文件或 HTTP）。
+  const dataUrl = inlineImageDataUrl(artifact)
+  if (dataUrl) return dataUrl
+  let path = typeof artifact.uri === 'string' ? artifact.uri : (artifact.path || '')
   if (path.startsWith('workspace://')) path = path.slice('workspace://'.length)
   // Tauri 桌面端：work_root 内相对路径（.lam/artifacts/...）直接读本地文件
   // （asset protocol），不绕后端 HTTP——新旧消息的 uri 均为无前缀相对路径
@@ -2862,7 +2902,7 @@ function imageSrc(artifact: { uri?: string; artifact_id?: string; metadata?: Rec
 }
 
 function imageAlt(artifact: { name?: string; uri?: string }): string {
-  return artifact.name || (typeof artifact.uri === 'string' ? artifact.uri.split('/').pop() || '生成图片' : '生成图片')
+  return artifact.name || (typeof artifact.uri === 'string' ? artifact.uri.split('/').pop() || t("生成图片") : t("生成图片"))
 }
 
 const previewImageSrc = ref('')
@@ -2877,36 +2917,58 @@ useOutsidePointerDismiss({
   onDismiss: () => { previewImageSrc.value = '' },
 })
 
-/** 本消息及子代理段内的全部图片，用于工具过程内联预览。 */
-function collectImageArtifacts(
-  part: MessagePart,
-  out: Array<ToolArtifact & { artifact_id?: string }>,
-): void {
-  for (const artifact of imageArtifacts(part)) {
-    out.push(artifact)
-  }
-  const subLineParts = (part.metadata as { subLineParts?: MessagePart[] } | undefined)?.subLineParts
-  if (Array.isArray(subLineParts)) {
-    for (const sub of subLineParts) collectImageArtifacts(sub, out)
-  }
-}
-
 /** Artifact 面板的位置固定在最终答案之后；只有显式的父级抑制才会隐藏它。 */
 const artifactsPanelSuppressed = computed(() => {
   return props.suppressArtifactsPanel === true
 })
 
-const allMessageImages = computed<Array<ToolArtifact & { artifact_id?: string }>>(() => {
-  const raw: Array<ToolArtifact & { artifact_id?: string }> = []
-  for (const part of props.msg.parts || []) collectImageArtifacts(part, raw)
-  return raw
-})
+/**
+ * 汇报文本里点到、且经查真实存在的文件（2026-10-12 用户口径：不限于本回合写出的
+ * 那些）。存在性靠工作区文件接口问一次；查不到、或路径越出工作区，都不进产物区，
+ * 也不凭空造卡片。每个引用只问一次，失败的下次重算再试。
+ */
+const reportPathStates = ref<Record<string, 'exists' | 'missing'>>({})
+const reportPathChecks = new Set<string>()
+
+async function verifyReportPaths(): Promise<void> {
+  const projectId = props.projectId
+  if (!projectId || isLiveMessage(props.msg)) return
+  const text = answerContent(props.msg)
+  if (!text) return
+  const references = artifactPathsInText(text)
+    .map(value => workspaceRelativeFromReportPath(value, props.workRoot))
+    .filter(Boolean)
+    .slice(0, 24)
+  for (const reference of references) {
+    if (reference in reportPathStates.value || reportPathChecks.has(reference)) continue
+    reportPathChecks.add(reference)
+    try {
+      const response = await props.transport.request<TransportHttpResponse>({
+        kind: 'http',
+        method: 'GET',
+        path: `/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(reference)}`,
+      })
+      const exists = response.status >= 200 && response.status < 300
+      reportPathStates.value = { ...reportPathStates.value, [reference]: exists ? 'exists' : 'missing' }
+    } catch {
+      // 网络/传输失败不算"不存在"：放掉这次，下次内容变化时再问。
+      reportPathChecks.delete(reference)
+    }
+  }
+}
+
+watch(
+  () => [props.msg.id, isLiveMessage(props.msg), props.msg.content, props.workRoot, props.projectId] as const,
+  () => { void verifyReportPaths() },
+  { immediate: true },
+)
 
 const messageArtifacts = computed<Array<ToolArtifact & { artifact_id?: string }>>(() => {
   const raw: Array<ToolArtifact & { artifact_id?: string }> = []
   for (const part of props.msg.parts || []) collectOutputArtifacts(part, raw)
-  // 本轮产出只收两类（用户规则 2026-10-12）：本回合被收进资料库的文件、以及
-  // 本回合汇报文本里以相对或绝对路径出现过的文件。生成图片不套这两条。
+  // 本轮产出只收三类（用户规则 2026-10-12）：本回合被收进资料库的文件、汇报文本里
+  // 以相对或绝对路径点到且真实存在的文件、以及本回合写出且被点到/入库的文件。
+  // 生成图片不套这些规则。
   const libraryPaths = collectLibraryFiledPaths(props.msg.parts || [])
   const reportText = answerContent(props.msg)
   const listed = raw.filter(artifact => shouldListTurnArtifact(artifact, {
@@ -2914,28 +2976,37 @@ const messageArtifacts = computed<Array<ToolArtifact & { artifact_id?: string }>
     libraryPaths,
     workRoot: props.workRoot,
   }))
-  // 归一化键去重：artifact_id → uri → image_data_url；同一文件在多个 part
-  // 重复出现时只保留一项，同一 uri 优先保留带 artifact_id 的权威条目。
+  const referenced = new Set(listed.map(artifact => artifactListingReference(artifact)).filter(Boolean))
+  for (const [reference, state] of Object.entries(reportPathStates.value)) {
+    if (state !== 'exists' || referenced.has(reference)) continue
+    listed.push({ kind: 'file_change', uri: reference, path: reference, metadata: { path: reference } })
+  }
+  // 归一化键去重：artifact_id → uri → path。同一文件在多个 part 重复出现时只保留
+  // 一项，同一 uri 优先保留带 artifact_id 的权威条目。内联 data URL 不是身份——
+  // 大图被换成引用后它就不存在了，键必须仍然成立（否则同一张图会画两遍，或者两张
+  // 不同的图并成一项）。
   const seen = new Map<string, ToolArtifact & { artifact_id?: string }>()
   for (const artifact of listed) {
     const idKey = artifact.artifact_id || ''
     const uriKey = typeof artifact.uri === 'string' ? artifact.uri : ''
+    const pathKey = typeof artifact.path === 'string' && artifact.path
+      ? artifact.path
+      : String(artifact.metadata?.path || '')
+    // 内联正文只作最后的兜底身份（老的 base64 图没有 id/uri）：引用条目没有它，
+    // 身份就落在标识符或 uri/path 上。
+    const lookupKey = uriKey || pathKey || inlineImageDataUrl(artifact)
     if (idKey) {
       const prevById = [...seen.values()].find(a => a.artifact_id === idKey)
       if (prevById) continue
-      if (uriKey && seen.has(uriKey)) {
-        const prev = seen.get(uriKey)
+      if (lookupKey && seen.has(lookupKey)) {
+        const prev = seen.get(lookupKey)
         if (!prev || prev.artifact_id) continue
-        seen.delete(uriKey) // 无 id 的同 uri 条目让位给带 id 的
+        seen.delete(lookupKey) // 无 id 的同 uri 条目让位给带 id 的
       }
-      seen.set(uriKey || idKey, artifact)
-    } else if (uriKey) {
-      if (seen.has(uriKey)) continue
-      seen.set(uriKey, artifact)
-    } else if (typeof artifact.metadata?.image_data_url === 'string') {
-      const dataUrl = artifact.metadata.image_data_url
-      if (seen.has(dataUrl)) continue
-      seen.set(dataUrl, artifact)
+      seen.set(lookupKey || idKey, artifact)
+    } else if (lookupKey) {
+      if (seen.has(lookupKey)) continue
+      seen.set(lookupKey, artifact)
     } else {
       // 无任何可归一化键（极罕见）：直接保留，避免丢图
       seen.set(`no-key-${seen.size}`, artifact)
@@ -2959,21 +3030,74 @@ const messageArtifacts = computed<Array<ToolArtifact & { artifact_id?: string }>
   return merged
 })
 
-async function loadArtifactSource(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): Promise<void> {
+async function loadArtifactSource(
+  artifact: { uri?: string; path?: string; artifact_id?: string; availability?: string; metadata?: Record<string, unknown> },
+  force = false,
+): Promise<boolean> {
   const key = artifactKey(artifact)
-  if (!key || artifactUrls[key] || artifact.metadata?.image_data_url) return
+  if (!key) return false
+  if (!force && artifactUrls[key]) return true
+  // 内联正文在手：没有任何字节要取。
+  if (inlineImageDataUrl(artifact)) return true
   const path = artifactPath(artifact)
-  if (!path) return
+  if (!path) {
+    artifactLoadFailed[key] = true
+    return false
+  }
   try {
     const response = await props.transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path })
-    if (response.status < 200 || response.status >= 300) return
+    if (response.status < 200 || response.status >= 300) {
+      artifactLoadFailed[key] = true
+      return false
+    }
     artifactUrls[key] = URL.createObjectURL(new Blob([Uint8Array.from(response.body)], {
       type: response.headers['content-type'] || 'application/octet-stream',
     }))
+    artifactLoadFailed[key] = false
+    return true
   } catch {
-    // Artifact previews are best-effort; the message remains usable if the
-    // backing file was removed or the connection is temporarily unavailable.
+    // 取不到不等于内容丢了：durable 副本仍在，这里只标记失败让界面给出重试。
+    artifactLoadFailed[key] = true
+    return false
   }
+}
+
+/** 引用条目的重试入口：清掉失败标记后强制再取一次。 */
+function retryArtifactSource(artifact: Parameters<typeof loadArtifactSource>[0]): void {
+  const key = artifactKey(artifact)
+  if (key) artifactLoadFailed[key] = false
+  void loadArtifactSource(artifact, true)
+}
+
+// 图片按需取字节：进入视口（或所在过程卡被展开后）才去取，不再在消息变化时把整条
+// 消息的图片一次性拉一遍。没有 IntersectionObserver 的环境（测试/老宿主）退回立即取。
+const pendingImageLoads = new Map<Element, ToolArtifact & { artifact_id?: string }>()
+let imageObserver: IntersectionObserver | null = null
+
+function registerImageCard(
+  element: Element | { $el?: Element } | null | undefined,
+  artifact: ToolArtifact & { artifact_id?: string },
+): void {
+  const target = element instanceof Element ? element : element?.$el
+  if (!target) return
+  if (typeof IntersectionObserver === 'undefined') {
+    void loadArtifactSource(artifact)
+    return
+  }
+  if (!imageObserver) {
+    imageObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        const observed = entry.target
+        imageObserver?.unobserve(observed)
+        const pending = pendingImageLoads.get(observed)
+        pendingImageLoads.delete(observed)
+        if (pending) void loadArtifactSource(pending)
+      }
+    }, { rootMargin: '240px' })
+  }
+  pendingImageLoads.set(target, artifact)
+  imageObserver.observe(target)
 }
 
 function collectOutputArtifacts(
@@ -3020,16 +3144,18 @@ function collectLibraryFiledPaths(parts: MessagePart[]): Set<string> {
   return paths
 }
 
-watch(allMessageImages, (items) => {
-  for (const artifact of items) void loadArtifactSource(artifact)
-}, { immediate: true })
-
+// 之前这里在消息变化时把整条消息的图片一次性取一遍；被换成引用的图片按需取
+// （见 registerImageCard），这条广播不再需要。
 onBeforeUnmount(() => {
+  imageObserver?.disconnect()
+  imageObserver = null
+  pendingImageLoads.clear()
   for (const url of Object.values(artifactUrls)) URL.revokeObjectURL(url)
 })
 
 async function openImagePreview(artifact: NonNullable<MessagePart['artifacts']>[number]): Promise<void> {
   await loadArtifactSource(artifact)
+  // 取不到就不打开：预览层只显示已经拿到的字节，不给破图。
   previewImageSrc.value = imageSrc(artifact)
   previewImageAlt.value = imageAlt(artifact)
 }
@@ -3044,13 +3170,13 @@ function fileArtifactMetaText(part: MessagePart): string {
   const meta = artifact?.metadata || {}
   const segments: string[] = []
   const action = String(meta.action || '')
-  if (action === 'create') segments.push('新增')
-  else if (action === 'overwrite') segments.push('覆盖')
-  else if (action === 'edit') segments.push('编辑')
+  if (action === 'create') segments.push(t("新增"))
+  else if (action === 'overwrite') segments.push(t("覆盖"))
+  else if (action === 'edit') segments.push(t("编辑"))
   const lineCount = meta.line_count ?? meta.new_line_count
-  if (typeof lineCount === 'number') segments.push(`${lineCount} 行`)
+  if (typeof lineCount === 'number') segments.push(t("{0} 行", { 0: lineCount }))
   if (typeof meta.size_bytes === 'number') segments.push(`${meta.size_bytes} B`)
-  if (meta.truncated === true) segments.push('已截断')
+  if (meta.truncated === true) segments.push(t("已截断"))
   return segments.join(' · ')
 }
 
@@ -3069,22 +3195,22 @@ function testResultClass(part: MessagePart): string {
 
 function testResultTitle(part: MessagePart): string {
   const meta = testArtifactMetadata(part)
-  if (meta.passed === true) return '测试通过'
-  if (meta.summary === 'timed_out') return '测试超时'
-  return '测试失败'
+  if (meta.passed === true) return t("测试通过")
+  if (meta.summary === 'timed_out') return t("测试超时")
+  return t("测试失败")
 }
 
 function testResultCommand(part: MessagePart): string {
   const command = testArtifactMetadata(part).command || part.toolArgs?.command || ''
-  return command ? compactDetail(String(command), 120) : '未提供命令'
+  return command ? compactDetail(String(command), 120) : t("未提供命令")
 }
 
 function testResultMeta(part: MessagePart): string[] {
   const meta = testArtifactMetadata(part)
   const items: string[] = []
-  if (meta.exit_code !== undefined && meta.exit_code !== null) items.push(`退出码 ${meta.exit_code}`)
-  if (typeof meta.duration_seconds === 'number') items.push(`${meta.duration_seconds.toFixed(2)} 秒`)
-  if (meta.timed_out === true) items.push('超时')
+  if (meta.exit_code !== undefined && meta.exit_code !== null) items.push(t("退出码 {0}", { 0: meta.exit_code }))
+  if (typeof meta.duration_seconds === 'number') items.push(t("{0} 秒", { 0: meta.duration_seconds.toFixed(2) }))
+  if (meta.timed_out === true) items.push(t("超时"))
   return items
 }
 
@@ -3124,16 +3250,16 @@ function bracketMetaPayload(line: string): string {
 
 function formatToolMeta(meta: string): string {
   return meta
-    .replace(/^file:\s*/i, '文件 · ')
-    .replace(/^END OF FILE\b\s*[—-]?\s*/i, '文件结束 · ')
-    .replace(/^exit_code[:\]\s]*/i, '退出码 ')
-    .replace(/^duration_seconds[:\]\s]*/i, '耗时 ')
-    .replace(/^timed_out[:\]\s]*/i, '超时 ')
-    .replace(/^command[:\]\s]*/i, '命令 ')
-    .replace(/^cwd[:\]\s]*/i, '目录 ')
-    .replace(/\blines\b/g, '行')
-    .replace(/\bmodified\b/g, '修改于')
-    .replace(/\bbytes read successfully\b/g, '字节读取完成')
+    .replace(/^file:\s*/i, t("文件 · "))
+    .replace(/^END OF FILE\b\s*[—-]?\s*/i, t("文件结束 · "))
+    .replace(/^exit_code[:\]\s]*/i, t("退出码 "))
+    .replace(/^duration_seconds[:\]\s]*/i, t("耗时 "))
+    .replace(/^timed_out[:\]\s]*/i, t("超时 "))
+    .replace(/^command[:\]\s]*/i, t("命令 "))
+    .replace(/^cwd[:\]\s]*/i, t("目录 "))
+    .replace(/\blines\b/g, t("行"))
+    .replace(/\bmodified\b/g, t("修改于"))
+    .replace(/\bbytes read successfully\b/g, t("字节读取完成"))
 }
 
 function unavailableToolName(part: MessagePart): string {
@@ -3160,7 +3286,7 @@ function sanitizeUnavailableToolText(text: string): string {
 }
 
 function unavailableToolMessage(name: string): string {
-  return `工具 ${name} 不可用：请求了当前环境没有注册的工具。`
+  return t("工具 {0} 不可用：请求了当前环境没有注册的工具。", { 0: name })
 }
 
 function isWriteTool(part: MessagePart): boolean {
@@ -3300,10 +3426,10 @@ function numberValue(value: unknown): number | undefined {
 }
 
 function agentStatusLabel(part: MessagePart): string {
-  if (part.status === 'running') return '运行中'
-  if (part.status === 'error') return '失败'
-  if (part.status === 'pending') return '等待'
-  return '完成'
+  if (part.status === 'running') return t("运行中")
+  if (part.status === 'error') return t("失败")
+  if (part.status === 'pending') return t("等待")
+  return t("完成")
 }
 
 function agentDeliveryMeta(part: MessagePart): string[] {
@@ -3311,12 +3437,12 @@ function agentDeliveryMeta(part: MessagePart): string[] {
   const diagnostics = metadataRecord(meta.diagnostics)
   const delivery = metadataRecord(diagnostics.workspace_delivery || meta.workspace_delivery || meta.workspaceDelivery)
   const items: string[] = []
-  if (delivery.ok === false) items.push('失败')
-  else if (delivery.ok === true || delivery.needs_acceptance === true || delivery.merged === true) items.push('完成')
+  if (delivery.ok === false) items.push(t("失败"))
+  else if (delivery.ok === true || delivery.needs_acceptance === true || delivery.merged === true) items.push(t("完成"))
   const branch = String(delivery.branch || meta.branch || '').trim()
-  if (branch) items.push(`分支 ${compactDetail(branch, 36)}`)
+  if (branch) items.push(t("分支 {0}", { 0: compactDetail(branch, 36) }))
   const paths = Array.isArray(delivery.paths) ? delivery.paths : []
-  if (paths.length > 0) items.push(`${paths.length} 个文件`)
+  if (paths.length > 0) items.push(t("{0} 个文件", { 0: paths.length }))
   return items
 }
 
@@ -3342,7 +3468,7 @@ function agentTimelineItems(part: MessagePart): AgentTimelineItem[] {
   for (const [index, block] of agentReasoningItems(part).entries()) {
     items.push({
       id: `reasoning-${index}`,
-      title: '思考',
+      get title() { return t("思考") },
       detail: block,
       status: 'completed',
       kind: 'reasoning',
@@ -3351,7 +3477,7 @@ function agentTimelineItems(part: MessagePart): AgentTimelineItem[] {
   for (const [index, step] of agentSubsteps(part).entries()) {
     items.push({
       id: `step-${index}`,
-      title: step.label || '执行步骤',
+      title: step.label || t("执行步骤"),
       detail: step.value,
       status: step.status,
       kind: 'step',
@@ -3369,7 +3495,7 @@ function agentTimelineItems(part: MessagePart): AgentTimelineItem[] {
   if (winner) {
     items.push({
       id: 'winner',
-      title: valid === false ? '候选结论' : '结论',
+      title: valid === false ? t("候选结论") : t("结论"),
       detail: compactDetail(String(winner), 120),
       status: valid === false ? 'pending' : 'completed',
       kind: 'conclusion',
@@ -3517,7 +3643,7 @@ function normalizeAgentToolCalls(raw: unknown): AgentTimelineItem[] {
       const error = String(record.error || record.tool_error || record.toolError || '').trim()
       return {
         id: `tool-${index}`,
-        title: agentToolLabel(name) || name || '工具',
+        title: agentToolLabel(name) || name || t("工具"),
         detail: agentToolDetail(args, error || contentPreview || output),
         status: status === 'rejected' ? 'error' : status,
         kind: 'tool',
@@ -3575,7 +3701,7 @@ function agentSubsteps(part: MessagePart): AgentSubstep[] {
   return raw
     .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
     .map(item => ({
-      label: String(item.label || item.title || '步骤'),
+      label: String(item.label || item.title || t("步骤")),
       value: String(item.value || item.summary || item.detail || ''),
       status: String(item.status || 'completed'),
     }))
@@ -3622,13 +3748,13 @@ function controlTitle(part: MessagePart): string {
   const args = part.toolArgs || {}
   if (name.includes('write_checklist')) {
     const steps = Array.isArray(args.steps) ? args.steps.length : 0
-    return steps > 0 ? `计划：${steps} 步` : '计划'
+    return steps > 0 ? t("计划：{0} 步", { 0: steps }) : t("计划")
   }
-  if (name.includes('update_checklist')) return part.status === 'error' ? '计划更新失败' : '更新计划'
-  if (name.includes('verify_design')) return part.status === 'error' ? '验证未通过' : '验证'
+  if (name.includes('update_checklist')) return part.status === 'error' ? t("计划更新失败") : t("更新计划")
+  if (name.includes('verify_design')) return part.status === 'error' ? t("验证未通过") : t("验证")
   if (name.includes('decision_point') || name.includes('ask_clarification')) return decisionTitle(part)
-  if (name.includes('self_critique')) return '自检'
-  return part.label || '过程'
+  if (name.includes('self_critique')) return t("自检")
+  return part.label || t("过程")
 }
 
 function isChecklistPart(part: MessagePart): boolean {
@@ -3692,9 +3818,9 @@ function isLowValueControlResult(part: MessagePart, result: string): boolean {
 
 /** 只有待处理中的审批卡会渲染，因此状态标签只覆盖未答复的三种形态。 */
 function decisionStatusLabel(part: MessagePart): string {
-  if (part.status === 'pending') return '等待选择'
-  if (part.status === 'running') return '处理中'
-  if (part.status === 'error') return '失败'
+  if (part.status === 'pending') return t("等待选择")
+  if (part.status === 'running') return t("处理中")
+  if (part.status === 'error') return t("失败")
   return ''
 }
 
@@ -3722,7 +3848,7 @@ function submitDecisionGuide(part: MessagePart): void {
     partId: part.id,
     option: {
       id: 'guide',
-      label: '其他',
+      get label() { return t("其他") },
       response: 'guide',
     },
     response,
@@ -3841,17 +3967,17 @@ function computeProcessGroupSummary(parts: MessagePart[]): string {
   function buildParts(running: boolean): string[] {
     const parts: string[] = []
     if (running) {
-      if (reasoningCount > 0) parts.push('思考中…')
-      if (contextRead > 0) parts.push(`读取了${contextRead}个文件…`)
-      if (contextSearch > 0) parts.push(`搜索了${contextSearch}次…`)
-      if (contextList > 0) parts.push(`浏览了${contextList}个目录…`)
-      if (toolCount > 0) parts.push(`已调用${toolCount}个工具…`)
+      if (reasoningCount > 0) parts.push(t("思考中…"))
+      if (contextRead > 0) parts.push(t("读取了{0}个文件…", { 0: contextRead }))
+      if (contextSearch > 0) parts.push(t("搜索了{0}次…", { 0: contextSearch }))
+      if (contextList > 0) parts.push(t("浏览了{0}个目录…", { 0: contextList }))
+      if (toolCount > 0) parts.push(t("已调用{0}个工具…", { 0: toolCount }))
     } else {
-      if (reasoningCount > 0) parts.push(reasoningSeconds > 0 ? `思考了${reasoningSeconds}s` : '思考了一会')
-      if (contextRead > 0) parts.push(`读取了${contextRead}个文件`)
-      if (contextSearch > 0) parts.push(`搜索了${contextSearch}次`)
-      if (contextList > 0) parts.push(`浏览了${contextList}个目录`)
-      if (toolCount > 0) parts.push(`调用了${toolCount}个工具`)
+      if (reasoningCount > 0) parts.push(reasoningSeconds > 0 ? t("思考了{0}s", { 0: reasoningSeconds }) : t("思考了一会"))
+      if (contextRead > 0) parts.push(t("读取了{0}个文件", { 0: contextRead }))
+      if (contextSearch > 0) parts.push(t("搜索了{0}次", { 0: contextSearch }))
+      if (contextList > 0) parts.push(t("浏览了{0}个目录", { 0: contextList }))
+      if (toolCount > 0) parts.push(t("调用了{0}个工具", { 0: toolCount }))
     }
     return parts
   }
@@ -3860,7 +3986,7 @@ function computeProcessGroupSummary(parts: MessagePart[]): string {
   if (summaryParts.length > 0) {
     return summaryParts.join('，')
   }
-  return hasRunning ? '处理中…' : ''
+  return hasRunning ? t("处理中…") : ''
 }
 
 function compactGroups(groups: PartGroup[]): PartGroup[] {
@@ -3957,19 +4083,91 @@ function processSummary(msg: CoreMessage): ProcessCounts {
 }
 
 function processMetricSegments(msg: CoreMessage): string[] {
-  const meta = (msg.metadata || {}) as Record<string, unknown>
-  const metrics = ((meta.processMetrics || meta.runtime_metrics || {}) as Record<string, unknown>) || {}
-  const durationMs = numberMetric(meta.duration_ms ?? metrics.duration_ms ?? metrics.durationMs)
-  return [durationMs >= 0 ? `耗时 ${formatSeconds(durationMs)} s` : '耗时 —']
+  const start = processStartTimestamp(msg)
+  const end = processEndTimestamp(msg)
+  let durationMs = processDurationMetric(msg)
+  if (durationMs === null && start !== null && end !== null && end >= start) {
+    durationMs = end - start
+  }
+  if (
+    durationMs === null
+    && start !== null
+    && props.turnStatus === 'running'
+    && isActiveTurnMessage(msg)
+    && !isLiveMessage(msg)
+    && processSummaryClockEnabled.value
+  ) {
+    const now = processSummaryNow.value
+    if (now >= start) durationMs = now - start
+  }
+  return [durationMs !== null ? t("耗时 {0} s", { 0: formatSeconds(durationMs) }) : t("耗时 —")]
 }
 
-function numberMetric(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
+function processDurationMetric(msg: CoreMessage): number | null {
+  const meta = (msg.metadata || {}) as Record<string, unknown>
+  const metrics = isRecord(meta.processMetrics)
+    ? meta.processMetrics
+    : isRecord(meta.runtime_metrics) ? meta.runtime_metrics : {}
+  return numberMetric(meta.duration_ms ?? metrics.duration_ms ?? metrics.durationMs)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function processStartTimestamp(msg: CoreMessage): number | null {
+  const meta = (msg.metadata || {}) as Record<string, unknown>
+  const processMetrics = isRecord(meta.processMetrics) ? meta.processMetrics : {}
+  const runtimeMetrics = isRecord(meta.runtime_metrics) ? meta.runtime_metrics : {}
+  const message = msg as CoreMessage & Record<string, unknown>
+  return firstTimestampMetric(
+    meta.started_at, meta.startedAt, meta.start_time, meta.startTime,
+    processMetrics.started_at, processMetrics.startedAt, processMetrics.start_time, processMetrics.startTime,
+    runtimeMetrics.started_at, runtimeMetrics.startedAt, runtimeMetrics.start_time, runtimeMetrics.startTime,
+    message.started_at, message.startedAt, msg.timestamp,
+  )
+}
+
+function processEndTimestamp(msg: CoreMessage): number | null {
+  const meta = (msg.metadata || {}) as Record<string, unknown>
+  const processMetrics = isRecord(meta.processMetrics) ? meta.processMetrics : {}
+  const runtimeMetrics = isRecord(meta.runtime_metrics) ? meta.runtime_metrics : {}
+  const message = msg as CoreMessage & Record<string, unknown>
+  return firstTimestampMetric(
+    meta.completed_at, meta.completedAt, meta.ended_at, meta.endedAt, meta.finished_at, meta.finishedAt,
+    processMetrics.completed_at, processMetrics.completedAt, processMetrics.ended_at, processMetrics.endedAt,
+    processMetrics.finished_at, processMetrics.finishedAt,
+    runtimeMetrics.completed_at, runtimeMetrics.completedAt, runtimeMetrics.ended_at, runtimeMetrics.endedAt,
+    runtimeMetrics.finished_at, runtimeMetrics.finishedAt,
+    message.completed_at, message.completedAt, message.ended_at, message.endedAt,
+  )
+}
+
+function firstTimestampMetric(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = timestampMetric(value)
+    if (parsed !== null) return parsed
+  }
+  return null
+}
+
+function timestampMetric(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const milliseconds = value < 1_000_000_000_000 ? value * 1000 : value
+    return milliseconds > 0 ? milliseconds : null
+  }
+  if (typeof value !== 'string' || !value.trim()) return null
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function numberMetric(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
   if (typeof value === 'string' && value.trim()) {
     const parsed = Number(value)
-    if (Number.isFinite(parsed)) return parsed
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
   }
-  return -1
+  return null
 }
 
 function formatSeconds(ms: number): string {
@@ -4224,6 +4422,55 @@ function formatContextSummary(c: ContextCounts): string {
   display: block;
   object-fit: cover;
   aspect-ratio: 1 / 1;
+}
+
+/* 引用条目（大图被后端换成引用）在字节取回之前的占位：名字 + 体积，
+   取不到时给重试，绝不留一张破图。 */
+.tool-image-card--placeholder {
+  cursor: pointer;
+  line-height: normal;
+}
+
+.tool-image-placeholder {
+  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 62%, transparent);
+  font-size: 11px;
+  text-align: center;
+}
+
+.tool-image-placeholder__name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+}
+
+.tool-image-placeholder__size {
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 45%, transparent);
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-image-placeholder__retry {
+  margin-top: 2px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
+  color: inherit;
+  padding: 3px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tool-image-placeholder__retry:hover {
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-active), transparent);
 }
 
 .image-preview-overlay {

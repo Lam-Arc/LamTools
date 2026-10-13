@@ -12,9 +12,12 @@ from lamtools_core.config.network import httpx_client_kwargs, proxy_url, url_byp
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult, ToolResultStatus
 from lamtools_core.tool.document_normalize import DocumentNormalizationError, normalize_pdf_bytes
 from lamtools_core.tool.search.image_candidates import extract_image_candidates
+from lamtools_core.tool.search.http_requests import ResponseTooLarge, bounded_request
 
 _WEB_SEARCH_URL = "https://html.duckduckgo.com/html/"
 _DEFAULT_FETCH_TIMEOUT = 30
+_FETCH_TOTAL_TIMEOUT = 60.0
+_FETCH_MAX_RESPONSE_BYTES = 25 * 1024 * 1024
 _FETCH_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -137,7 +140,13 @@ async def _get_following_safe_redirects(
             reason = _unsafe_redirect_reason(current)
             if reason:
                 raise BlockedTargetError(f"refusing {current}: {reason}")
-        response = await client.get(current, follow_redirects=False)
+        response = await bounded_request(
+            client, "GET", current,
+            total_timeout=_FETCH_TOTAL_TIMEOUT,
+            max_response_bytes=_FETCH_MAX_RESPONSE_BYTES,
+            follow_redirects=False,
+            timeout=_DEFAULT_FETCH_TIMEOUT,
+        )
         location = None
         if response.status_code in _REDIRECT_STATUSES:
             location = (response.headers.get("location") or "").strip()
@@ -194,7 +203,24 @@ def make_web_fetch_handler(work_root: str) -> Callable[[ToolCall], Awaitable[Too
             return ToolResult(call_id=call.id, name=call.name, status="failed", error="'expect' must be a string or null")
 
         try:
-            resp = await _fetch_with_loopback_bypass(url)
+            async with asyncio.timeout(_FETCH_TOTAL_TIMEOUT):
+                resp = await _fetch_with_loopback_bypass(url)
+        except TimeoutError:
+            return ToolResult(
+                call_id=call.id, name=call.name, status="failed",
+                error=f"web_fetch exceeded its {_FETCH_TOTAL_TIMEOUT:g}s total network time limit.",
+                error_code="fetch_timeout",
+            )
+        except ResponseTooLarge as exc:
+            return ToolResult(
+                call_id=call.id, name=call.name, status="failed",
+                error=f"web_fetch response too large: {exc}", error_code="fetch_response_too_large",
+            )
+        except httpx.TimeoutException as exc:
+            return ToolResult(
+                call_id=call.id, name=call.name, status="failed",
+                error=f"web_fetch network timeout: {exc}", error_code="fetch_timeout",
+            )
         except BlockedTargetError as exc:
             return ToolResult(
                 call_id=call.id,

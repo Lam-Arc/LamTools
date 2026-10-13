@@ -23,6 +23,7 @@ from lamtools_core.cli import (
     _resolve_adapter_profile,
     _resolve_core_db,
     configure_model_store_context,
+    configured_model_ref,
     list_llm_model_configs,
     load_llm_config,
 )
@@ -228,16 +229,32 @@ def create_core_agent_http_app(
     apply_keep_awake()
     resolved_boot_model = ""
     try:
+        configured_ref = configured_model_ref()
+    except Exception:  # noqa: BLE001 - settings are best-effort at boot
+        configured_ref = ""
+    try:
         config = load_llm_config(model_ref=model_id)
         resolved_boot_model = config.model_record_id
-    except ValueError:
-        # No usable model configured yet (no jsonc model/provider). Boot
-        # with an unconfigured placeholder instead of crashing — the UI can
-        # set up a real provider/model afterwards.
-        _logger.warning(
-            "Model %r not resolvable from jsonc config; booting with an unconfigured placeholder",
-            model_id,
-        )
+    except ValueError as exc:
+        requested = str(model_id or "").strip() or configured_ref
+        if requested:
+            # A default WAS configured (or passed) and is unusable: a real
+            # misconfiguration, worth a warning with the reason.
+            _logger.warning(
+                "Configured default model %r is not usable (%s); booting with an "
+                "unconfigured placeholder until it is fixed",
+                requested,
+                exc,
+            )
+        else:
+            # There is deliberately no global default model: the model is chosen
+            # per turn from the session/composer. This is the normal boot state,
+            # not a failure, so say so plainly at INFO.
+            _logger.info(
+                "No global default model is configured; booting without one. "
+                "Each turn resolves its model from the session/composer "
+                "(设置 → 模型与供应商, or --model-id / lamtools.modelRouting)."
+            )
         config = LLMConfig(
             provider_name="",
             provider_api_type="openai",
@@ -605,7 +622,10 @@ def create_core_agent_http_app(
         # itself once the machine can afford it, and closes the turns whose
         # recorded ending never reached the snapshot (a memory crash usually
         # stops the writer between the two).
-        memory_resume_supervisor = MemoryResumeSupervisor(context=live_context())
+        memory_resume_supervisor = MemoryResumeSupervisor(
+            context=live_context(),
+            sub_agent_data_dir=resolved_data_dir,
+        )
         app_state["memory_resume_supervisor"] = memory_resume_supervisor
         try:
             await memory_resume_supervisor.start()
@@ -674,6 +694,12 @@ def create_core_agent_http_app(
             "agent_id": runtime_spec.id,
             "agent_name": runtime_spec.name,
             "model": config.display_name or config.model_id,
+            # ``model`` is empty when no global default is configured, which is
+            # the normal state: the model is chosen per turn from the
+            # session/composer. These two fields state that plainly instead of
+            # letting an empty string read as "unconfigured/broken".
+            "model_configured": bool(resolved_boot_model),
+            "model_selection": "default" if resolved_boot_model else "per_turn",
             # Internal absolute paths (work_root / core_db) were previously
             # exposed to any loopback caller — auxiliary info for targeted
             # attacks (audit 03 S4). Nothing depends on those fields.

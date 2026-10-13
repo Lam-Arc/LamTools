@@ -354,3 +354,49 @@ export function shouldListTurnArtifact(
   if (!isAbsoluteArtifactReference(reference) && options.libraryPaths.has(reference)) return true
   return reportMentionsArtifactPath(options.reportText, reference, options.workRoot)
 }
+
+/**
+ * 汇报文本里出现的文件路径候选（2026-10-12 用户口径：汇报里点到的文件也算产物）。
+ * 反引号包裹、Markdown 链接、裸路径都收；只收"像路径"的：带目录（或盘符）且有扩展名。
+ * 反斜杠与正斜杠两种写法都认（统一成 /）。
+ */
+export function artifactPathsInText(text: string): string[] {
+  const normalized = String(text || '').replace(/\\/g, '/')
+  const found: string[] = []
+  const push = (raw: string): void => {
+    // 链接写法 `[文字](路径)`：从 '](' 之后取路径本体。
+    const link = raw.lastIndexOf('](')
+    const value = (link >= 0 ? raw.slice(link + 2) : raw)
+      .replace(/^[`'“"（(\[【]+/, '')
+      .replace(/[`'“"，。；;：:）)\]】>]+$/, '')
+      .replace(/^[^A-Za-z0-9._/\-]+/, '')
+      .trim()
+    if (!value) return
+    if (!value.includes('/')) return
+    const tail = value.split('/').pop() || ''
+    if (!/\.[A-Za-z0-9]{1,8}$/.test(tail)) return
+    if (!found.includes(value)) found.push(value)
+  }
+  // 绝对写法自带起点；相对写法要求前面是边界（空白/引号/反引号/括号），
+  // 免得把中文句子和链接文字一起吞进来。
+  for (const match of normalized.matchAll(/([A-Za-z]:\/[^\s`"'<>|]*)|(?:^|[\s`"'“”（(【<\[])((?:[^\s`"'<>|]+\/)+[^\s`"'<>|]*)/g)) {
+    push(match[1] ?? match[2] ?? '')
+  }
+  return found
+}
+
+/**
+ * 把汇报里的路径候选落到工作区相对引用：相对写法原样，盘符绝对写法按工作根归一
+ * （盘符不区分大小写），越出工作区或没有工作根时返回 ''——那种文件不是项目产物。
+ */
+export function workspaceRelativeFromReportPath(value: string, workRoot?: string | null): string {
+  const reference = normalizeArtifactReference(value)
+  if (!reference) return ''
+  if (!isAbsoluteArtifactReference(reference)) return reference.replace(/^\/+/, '')
+  const root = normalizeArtifactReference(workRoot || '').replace(/\/+$/, '')
+  if (!root) return ''
+  const lowered = reference.toLowerCase()
+  const loweredRoot = root.toLowerCase()
+  if (lowered === loweredRoot) return ''
+  return lowered.startsWith(`${loweredRoot}/`) ? reference.slice(root.length + 1) : ''
+}

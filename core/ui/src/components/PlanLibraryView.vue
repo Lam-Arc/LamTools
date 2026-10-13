@@ -14,7 +14,7 @@
           :disabled="saving"
           data-library-editor-confirm
           @click="confirmEditor"
-        >{{ saving ? '保存中…' : '确认' }}</button>
+        >{{ saving ? t("保存中…") : t("确认") }}</button>
       </template>
       <!-- 列表 / 文件夹：工具栏动作；阅读：文档动作 -->
       <template v-else-if="mode === 'reader' && selected">
@@ -25,39 +25,36 @@
           :title="startTitle"
           data-library-start
           @click="emit('start-plan', selected)"
-        >开工</button>
-        <button class="library-button" type="button" @click="openEditor(selected)">编辑</button>
+        >{{ t("开工") }}</button>
+        <button class="library-button" type="button" @click="openEditor(selected)">{{ t("编辑") }}</button>
         <button
           class="library-button library-button--danger"
           type="button"
           :data-library-delete="confirmingDelete ? 'confirm' : 'arm'"
           @click="removeSelected"
           @blur="confirmingDelete = false"
-        >{{ confirmingDelete ? '确认删除' : '删除' }}</button>
+        >{{ confirmingDelete ? t("确认删除") : t("删除") }}</button>
       </template>
       <template v-else>
-        <button class="icon-button" type="button" :disabled="loading" aria-label="刷新" title="刷新" data-library-refresh @click="reload">
+        <button class="icon-button" type="button" :disabled="loading" :aria-label="t('刷新')" :title="t('刷新')" data-library-refresh @click="reload">
           <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
         <!-- 资料库跟随项目文件夹：没选项目就没有可写的位置，按钮先别装作能按。 -->
-        <button class="library-button" type="button" :disabled="!projectId" :title="projectId ? '' : '先在左侧选择一个项目'" data-library-create-folder @click="openDialog('create-folder')">新建文件夹</button>
-        <button class="library-button library-button--primary" type="button" :disabled="!projectId" :title="projectId ? '' : '先在左侧选择一个项目'" data-library-create @click="openDialog('create-plan')">
-          <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
-          新建方案
-        </button>
+        <button class="library-button" type="button" :disabled="!projectId" :title="projectId ? '' : t('先在左侧选择一个项目')" data-library-create-folder @click="openDialog('create-folder')">{{ t("新建文件夹") }}</button>
+        <button class="library-button library-button--primary" type="button" :disabled="!projectId" :title="projectId ? '' : t('先在左侧选择一个项目')" data-library-create @click="openDialog('create-plan')">
+          <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />{{ t("新建方案") }}</button>
       </template>
     </FullAreaActions>
 
     <div class="library-mobile-head">
-      <button class="library-back" type="button" aria-label="返回" title="返回" @click="onBackClick">
+      <button class="library-back" type="button" :aria-label="t('返回')" :title="t('返回')" @click="onBackClick">
         <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
       </button>
-      <p v-if="mode === 'reader' && selected" class="library-crumb" data-library-crumb>
-        资料库 <span class="crumb-sep" aria-hidden="true">›</span> {{ truncateTitle(displayTitle(selected)) }}
+      <p v-if="mode === 'reader' && selected" class="library-crumb" data-library-crumb>{{ t("资料库") }}<span class="crumb-sep" aria-hidden="true">›</span> {{ truncateTitle(displayTitle(selected)) }}
       </p>
       <!-- 文件夹可以嵌套：面包屑逐层可点，最后一段是当前层。 -->
-      <nav v-else-if="openFolder" class="library-crumb" data-library-crumb aria-label="位置">
-        <button type="button" class="crumb-link" @click="goToFolder('')">资料库</button>
+      <nav v-else-if="openFolder" class="library-crumb" data-library-crumb :aria-label="t('位置')">
+        <button type="button" class="crumb-link" @click="goToFolder('')">{{ t("资料库") }}</button>
         <template v-for="(step, index) in folderTrail" :key="step.dir">
           <span class="crumb-sep" aria-hidden="true">›</span>
           <button
@@ -71,23 +68,23 @@
         </template>
       </nav>
       <div v-else class="library-head-copy">
-        <h1 class="library-title">资料库</h1>
-        <p class="library-subtitle">「{{ dirName }}」文件夹里的方案 — 点开读全文，就绪后开工。</p>
+        <h1 class="library-title">{{ t("资料库") }}</h1>
+        <p class="library-subtitle">「{{ dirName }}{{ t("」文件夹里的方案 — 点开读全文，就绪后开工。") }}</p>
       </div>
     </div>
 
-    <p v-if="!projectId" class="full-area-note">先在左侧选择一个项目 — 资料库跟随项目文件夹。</p>
+    <p v-if="!projectId" class="full-area-note">{{ t("先在左侧选择一个项目 — 资料库跟随项目文件夹。") }}</p>
 
     <!-- ── 阅读子页 ── -->
-    <section v-else-if="mode === 'reader' && selected" class="library-reader" aria-label="方案阅读" data-library-reader>
+    <section v-else-if="mode === 'reader' && selected" class="library-reader" :aria-label="t('方案阅读')" data-library-reader>
       <header class="library-reader-head">
         <h2 class="library-reader-title">{{ displayTitle(selected) }}</h2>
         <p class="library-reader-meta">
           <span class="library-status" :data-plan-status="selected.status">{{ statusLabel(selected.status) }}</span>
-          <span v-if="contentUpdatedAt">更新于 {{ contentUpdatedAt }}</span>
+          <span v-if="contentUpdatedAt">{{ t("更新于") }}{{ contentUpdatedAt }}</span>
         </p>
       </header>
-      <p v-if="contentLoading" class="full-area-note" role="status">正在打开…</p>
+      <p v-if="contentLoading" class="full-area-note" role="status">{{ t("正在打开…") }}</p>
       <p v-else-if="contentError" class="full-area-note full-area-note--error" role="alert">{{ contentError }}</p>
       <article v-else class="library-document">
         <MarkdownRenderer :content="documentBody" />
@@ -95,17 +92,17 @@
     </section>
 
     <!-- ── 编辑子页：资料库自己的编辑器，写方案原文，不跳文件工作台 ── -->
-    <section v-else-if="mode === 'editor' && selected" class="library-editor" aria-label="方案编辑" data-library-editor>
+    <section v-else-if="mode === 'editor' && selected" class="library-editor" :aria-label="t('方案编辑')" data-library-editor>
       <header class="library-editor-head">
         <h2 class="library-editor-title">{{ displayTitle(selected) }}</h2>
         <p class="library-editor-meta">
           <span :class="dirty ? 'library-editor-state library-editor-state--dirty' : 'library-editor-state'" data-library-editor-state>
-            {{ dirty ? '未保存' : '已保存' }}
+            {{ dirty ? t("未保存") : t("已保存") }}
           </span>
           <span class="library-editor-path">{{ selected.path }}</span>
         </p>
       </header>
-      <p v-if="editorLoading" class="full-area-note" role="status">正在打开…</p>
+      <p v-if="editorLoading" class="full-area-note" role="status">{{ t("正在打开…") }}</p>
       <template v-else>
         <DocumentEditor ref="editorInput" id-prefix="library-editor" :title="displayTitle(selected)" v-model="draft">
           <template #preview="{ content }">
@@ -124,33 +121,33 @@
           <input
             v-model="query"
             type="search"
-            placeholder="搜索资料库"
-            aria-label="搜索资料库"
+            :placeholder="t('搜索资料库')"
+            :aria-label="t('搜索资料库')"
             data-library-search
           />
         </div>
-        <div class="library-view-toggle" role="group" aria-label="视图切换" data-library-view-toggle>
+        <div class="library-view-toggle" role="group" :aria-label="t('视图切换')" data-library-view-toggle>
           <button
             type="button"
             :class="{ active: viewMode === 'grid' }"
             :aria-pressed="viewMode === 'grid'"
-            aria-label="网格视图"
-            title="网格视图"
+            :aria-label="t('网格视图')"
+            :title="t('网格视图')"
             @click="viewMode = 'grid'"
           ><LayoutGrid :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
           <button
             type="button"
             :class="{ active: viewMode === 'list' }"
             :aria-pressed="viewMode === 'list'"
-            aria-label="列表视图"
-            title="列表视图"
+            :aria-label="t('列表视图')"
+            :title="t('列表视图')"
             @click="viewMode = 'list'"
           ><List :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
         </div>
       </div>
 
       <!-- ── 筛选页签 ── -->
-      <div class="filter-tabs" role="group" aria-label="筛选资料库" data-library-tabs>
+      <div class="filter-tabs" role="group" :aria-label="t('筛选资料库')" data-library-tabs>
         <button
           v-for="tab in TABS"
           :key="tab.id"
@@ -162,9 +159,9 @@
         >{{ tab.label }}</button>
       </div>
 
-      <p v-if="loading && !entries.length && !folders.length" class="full-area-note" role="status">正在读取资料库…</p>
+      <p v-if="loading && !entries.length && !folders.length" class="full-area-note" role="status">{{ t("正在读取资料库…") }}</p>
       <p v-else-if="error" class="full-area-note full-area-note--error" role="alert">
-        {{ error }}<button class="library-link" type="button" @click="reload">重试</button>
+        {{ error }}<button class="library-link" type="button" @click="reload">{{ t("重试") }}</button>
       </p>
 
       <template v-else>
@@ -176,7 +173,7 @@
             class="folder-card"
             role="listitem"
             tabindex="0"
-            :aria-label="`打开文件夹 ${folder.name}`"
+            :aria-label="t('打开文件夹 {0}', { 0: folder.name })"
             :data-library-folder="folder.dir"
             @click="goToFolder(folder.dir)"
             @keydown.enter.prevent="goToFolder(folder.dir)"
@@ -184,8 +181,8 @@
           >
             <span class="folder-card-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.6" /></span>
             <span class="folder-card-name">{{ folder.name }}</span>
-            <span class="folder-card-count">{{ folder.count }} 份方案</span>
-            <button class="card-menu-btn" type="button" :aria-label="`${folder.name} 的操作`" @click.stop="openFolderMenu($event, folder)">
+            <span class="folder-card-count">{{ folder.count }} {{ t("份方案") }}</span>
+            <button class="card-menu-btn" type="button" :aria-label="t('{0} 的操作', { 0: folder.name })" @click.stop="openFolderMenu($event, folder)">
               <MoreHorizontal :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </article>
@@ -194,25 +191,22 @@
         <!-- ── 空态 ── -->
         <div v-if="folderTabActive && childFolders.length === 0" class="full-area-empty" data-folders-empty>
           <span class="full-area-empty-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.8" /></span>
-          <h2 class="full-area-empty-title">{{ openFolder ? '这里还没有子文件夹' : '创建你的第一个文件夹' }}</h2>
-          <p class="full-area-empty-hint">创建文件夹，整理资料库中的方案。</p>
-          <button class="library-button library-button--primary" type="button" data-folders-create @click="openDialog('create-folder')">创建文件夹</button>
+          <h2 class="full-area-empty-title">{{ openFolder ? t("这里还没有子文件夹") : t("创建你的第一个文件夹") }}</h2>
+          <p class="full-area-empty-hint">{{ t("创建文件夹，整理资料库中的方案。") }}</p>
+          <button class="library-button library-button--primary" type="button" data-folders-create @click="openDialog('create-folder')">{{ t("创建文件夹") }}</button>
         </div>
         <div v-else-if="openFolder && !showFolderGrid && folderEntries.length === 0" class="folder-empty" data-folder-empty>
           <Upload :size="18" :stroke-width="1.6" aria-hidden="true" />
-          <p>这个文件夹还是空的 — 点右上角「新建方案」，它会建在这里。</p>
+          <p>{{ t("这个文件夹还是空的 — 点右上角「新建方案」，它会建在这里。") }}</p>
         </div>
         <div v-else-if="!openFolder && entries.length === 0" class="full-area-empty" data-library-empty>
           <span class="full-area-empty-icon" aria-hidden="true"><BookOpen :size="18" :stroke-width="1.8" /></span>
-          <h2 class="full-area-empty-title">还没有方案</h2>
-          <p class="full-area-empty-hint">
-            在聊天里说出你的想法，助手会一边问一边把方案写进「{{ dirName }}」文件夹；写好后就出现在这里。
-            方案是一篇普通的 Markdown 文档，你也可以直接新建一篇来写。
-          </p>
-          <button class="library-button library-button--primary" type="button" data-library-empty-create @click="openDialog('create-plan')">新建方案</button>
+          <h2 class="full-area-empty-title">{{ t("还没有方案") }}</h2>
+          <p class="full-area-empty-hint">{{ t("在聊天里说出你的想法，助手会一边问一边把方案写进「") }}{{ dirName }}{{ t("」文件夹；写好后就出现在这里。 方案是一篇普通的 Markdown 文档，你也可以直接新建一篇来写。") }}</p>
+          <button class="library-button library-button--primary" type="button" data-library-empty-create @click="openDialog('create-plan')">{{ t("新建方案") }}</button>
         </div>
         <p v-else-if="!openFolder && filteredEntries.length === 0" class="full-area-note tab-empty" data-library-tab-empty>
-          {{ activeTab === 'favorites' ? '还没有收藏的方案 — 在方案卡片的菜单里「添加到收藏」。' : '这个状态下暂无方案。' }}
+          {{ activeTab === 'favorites' ? t("还没有收藏的方案 — 在方案卡片的菜单里「添加到收藏」。") : t("这个状态下暂无方案。") }}
         </p>
 
         <!-- ── 方案本体（网格 / 列表）：文件夹详情与主列表共用一块 ── -->
@@ -224,23 +218,23 @@
             class="plan-card"
             role="listitem"
             tabindex="0"
-            :aria-label="`打开 ${displayTitle(entry)}`"
+            :aria-label="t('打开 {0}', { 0: displayTitle(entry) })"
             :data-library-entry="entry.name"
             @click="openEntry(entry)"
             @keydown.enter.prevent="openEntry(entry)"
             @contextmenu="openEntryMenu($event, entry)"
           >
             <div class="plan-card-preview">
-              <p class="plan-card-summary">{{ entry.summary || '还没有摘要 — 打开写第一段。' }}</p>
+              <p class="plan-card-summary">{{ entry.summary || t("还没有摘要 — 打开写第一段。") }}</p>
               <FileText :size="26" :stroke-width="1.4" aria-hidden="true" class="plan-card-glyph" />
             </div>
-            <button class="card-menu-btn" type="button" :aria-label="`${displayTitle(entry)} 的操作`" @click.stop="openEntryMenu($event, entry)">
+            <button class="card-menu-btn" type="button" :aria-label="t('{0} 的操作', { 0: displayTitle(entry) })" @click.stop="openEntryMenu($event, entry)">
               <MoreHorizontal :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
             <h4 class="plan-card-title">{{ displayTitle(entry) }}</h4>
             <div class="plan-card-foot">
               <span class="library-status" :data-plan-status="entry.status">{{ statusLabel(entry.status) }}</span>
-              <Star v-if="entry.favorite" :size="12" :stroke-width="1.8" aria-label="已收藏" class="plan-card-star" />
+              <Star v-if="entry.favorite" :size="12" :stroke-width="1.8" :aria-label="t('已收藏')" class="plan-card-star" />
               <span class="plan-card-time">{{ shortDate(entry.updated_at) }}</span>
             </div>
           </article>
@@ -259,14 +253,14 @@
             >
               <div class="library-item-top">
                 <span class="library-item-title">{{ displayTitle(entry) }}</span>
-                <Star v-if="entry.favorite" :size="12" :stroke-width="1.8" aria-label="已收藏" class="plan-card-star" />
+                <Star v-if="entry.favorite" :size="12" :stroke-width="1.8" :aria-label="t('已收藏')" class="plan-card-star" />
                 <span class="library-status" :data-plan-status="entry.status">{{ statusLabel(entry.status) }}</span>
               </div>
               <div class="library-item-bottom">
-                <span class="library-item-summary">{{ entry.summary || '（还没有摘要）' }}</span>
+                <span class="library-item-summary">{{ entry.summary || t("（还没有摘要）") }}</span>
                 <span class="library-item-time">{{ updatedLabel(entry.updated_at) }}</span>
               </div>
-              <button class="card-menu-btn" type="button" :aria-label="`${displayTitle(entry)} 的操作`" @click.stop="openEntryMenu($event, entry)">
+              <button class="card-menu-btn" type="button" :aria-label="t('{0} 的操作', { 0: displayTitle(entry) })" @click.stop="openEntryMenu($event, entry)">
                 <MoreHorizontal :size="15" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </div>
@@ -283,12 +277,12 @@
           <div class="dialog-body">
             <h3 class="dialog-title">{{ dialogTitle }}</h3>
             <label class="dialog-field">
-              <span>{{ dialog.kind === 'create-folder' ? '文件夹名称' : '方案名称' }}</span>
+              <span>{{ dialog.kind === 'create-folder' ? t("文件夹名称") : t("方案名称") }}</span>
               <input
                 ref="dialogInput"
                 v-model="dialog.value"
                 type="text"
-                :placeholder="dialog.kind === 'create-folder' ? '例如：迭代计划' : '例如：导出显示进度'"
+                :placeholder="dialog.kind === 'create-folder' ? t('例如：迭代计划') : t('例如：导出显示进度')"
                 :data-library-dialog-input="dialog.kind"
                 @keydown.enter.prevent="submitDialog"
                 @keydown.escape.prevent="closeDialog"
@@ -297,14 +291,14 @@
             <p v-if="dialog.error" class="dialog-error" role="alert">{{ dialog.error }}</p>
           </div>
           <div class="dialog-actions">
-            <button class="library-button" type="button" @click="closeDialog">取消</button>
+            <button class="library-button" type="button" @click="closeDialog">{{ t("取消") }}</button>
             <button
               class="library-button library-button--primary"
               type="button"
               :disabled="dialog.busy || !dialog.value.trim()"
               data-library-dialog-submit
               @click="submitDialog"
-            >{{ dialog.busy ? '处理中…' : dialog.kind === 'rename' ? '重命名' : '创建' }}</button>
+            >{{ dialog.busy ? t("处理中…") : dialog.kind === 'rename' ? t("重命名") : t("创建") }}</button>
           </div>
         </div>
       </div>
@@ -313,14 +307,14 @@
     <!-- ── 放弃未保存修改的确认 ── -->
     <Transition name="library-dialog">
       <div v-if="pendingDiscard" class="dialog-dimmer" @click.self="pendingDiscard = false">
-        <div class="dialog-card" role="dialog" aria-modal="true" aria-label="确认放弃修改" data-library-discard>
+        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('确认放弃修改')" data-library-discard>
           <div class="dialog-body">
-            <h3 class="dialog-title">放弃修改</h3>
-            <p class="dialog-text">「{{ displayTitle(selected!) }}」还有没保存的内容，离开就会丢掉。</p>
+            <h3 class="dialog-title">{{ t("放弃修改") }}</h3>
+            <p class="dialog-text">「{{ displayTitle(selected!) }}{{ t("」还有没保存的内容，离开就会丢掉。") }}</p>
           </div>
           <div class="dialog-actions">
-            <button class="library-button" type="button" @click="pendingDiscard = false">继续编辑</button>
-            <button class="library-button library-button--danger" type="button" data-library-discard-confirm @click="discardEditor">放弃修改</button>
+            <button class="library-button" type="button" @click="pendingDiscard = false">{{ t("继续编辑") }}</button>
+            <button class="library-button library-button--danger" type="button" data-library-discard-confirm @click="discardEditor">{{ t("放弃修改") }}</button>
           </div>
         </div>
       </div>
@@ -329,14 +323,14 @@
     <!-- ── 删除确认 ── -->
     <Transition name="library-dialog">
       <div v-if="pendingDelete" class="dialog-dimmer" @click.self="pendingDelete = null">
-        <div class="dialog-card" role="dialog" aria-modal="true" aria-label="确认删除" data-library-confirm>
+        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('确认删除')" data-library-confirm>
           <div class="dialog-body">
-            <h3 class="dialog-title">删除方案</h3>
-            <p class="dialog-text">「{{ displayTitle(pendingDelete) }}」将被删除，且无法恢复。</p>
+            <h3 class="dialog-title">{{ t("删除方案") }}</h3>
+            <p class="dialog-text">「{{ displayTitle(pendingDelete) }}{{ t("」将被删除，且无法恢复。") }}</p>
           </div>
           <div class="dialog-actions">
-            <button class="library-button" type="button" @click="pendingDelete = null">取消</button>
-            <button class="library-button library-button--danger" type="button" data-library-confirm-delete @click="confirmDelete">删除</button>
+            <button class="library-button" type="button" @click="pendingDelete = null">{{ t("取消") }}</button>
+            <button class="library-button library-button--danger" type="button" data-library-confirm-delete @click="confirmDelete">{{ t("删除") }}</button>
           </div>
         </div>
       </div>
@@ -345,6 +339,8 @@
 </template>
 
 <script setup lang="tsx">
+import { t } from '../i18n/index'
+
 /**
  * PlanLibraryView — the 资料库 as one full-area view.
  *
@@ -401,7 +397,7 @@ const emit = defineEmits<{
 }>()
 
 const dirName = '方案'
-const rootLabel = computed(() => props.rootLabel || '资料库')
+const rootLabel = computed(() => props.rootLabel || t("资料库"))
 
 /* ---- 卡片墙缩放：Ctrl+滚轮增减，资料与方案共用一档 ---- */
 const { zoom, onZoomWheel } = useLibraryZoom()
@@ -411,13 +407,13 @@ const loading = ref(false)
 const error = ref('')
 
 const TABS = [
-  { id: 'all', label: '全部' },
-  { id: 'favorites', label: '收藏' },
-  { id: 'folders', label: '文件夹' },
-  { id: 'draft', label: '草稿' },
-  { id: 'ready', label: '就绪' },
-  { id: 'executing', label: '执行中' },
-  { id: 'done', label: '完成' },
+  { id: 'all', get label() { return t("全部") } },
+  { id: 'favorites', get label() { return t("收藏") } },
+  { id: 'folders', get label() { return t("文件夹") } },
+  { id: 'draft', get label() { return t("草稿") } },
+  { id: 'ready', get label() { return t("就绪") } },
+  { id: 'executing', get label() { return t("执行中") } },
+  { id: 'done', get label() { return t("完成") } },
 ] as const
 type TabId = (typeof TABS)[number]['id']
 const activeTab = ref<TabId>('all')
@@ -507,8 +503,8 @@ const leadingHeading = /^\s*#\s+[^\n]*\n/
 
 const startTitle = computed(() => {
   if (!selected.value) return ''
-  if (selected.value.status === 'ready') return '把这份方案交给当前会话执行'
-  return '方案就绪后才能开工 — 在聊天里对助手说"可以开工了"，它会更新方案状态'
+  if (selected.value.status === 'ready') return t("把这份方案交给当前会话执行")
+  return t("方案就绪后才能开工 — 在聊天里对助手说\"可以开工了\"，它会更新方案状态")
 })
 
 function updatedLabel(epochSeconds: number): string {
@@ -522,7 +518,7 @@ function shortDate(epochSeconds: number): string {
   if (!epochSeconds) return ''
   const date = new Date(epochSeconds * 1000)
   const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${pad(date.getMonth() + 1)}月${pad(date.getDate())}日`
+  return t("{0}月{1}日", { 0: pad(date.getMonth() + 1), 1: pad(date.getDate()) })
 }
 
 /* ---- 数据 ---- */
@@ -785,9 +781,9 @@ async function toggleFavorite(entry: PlanLibraryEntry): Promise<void> {
 /* ---- 对话框 ---- */
 const dialogTitle = computed(() => {
   if (!dialog.value) return ''
-  if (dialog.value.kind === 'create-folder') return '新建文件夹'
-  if (dialog.value.kind === 'rename') return '重命名方案'
-  return '新建方案'
+  if (dialog.value.kind === 'create-folder') return t("新建文件夹")
+  if (dialog.value.kind === 'rename') return t("重命名方案")
+  return t("新建方案")
 })
 
 function openDialog(kind: DialogKind, target?: PlanLibraryEntry): void {
@@ -810,7 +806,7 @@ async function submitDialog(): Promise<void> {
   if (!current || current.busy || !current.value.trim()) return
   if (!props.projectId) {
     // 按钮已禁用；这里再兜一次，避免对话框以任何方式被打开时静默什么都不做。
-    current.error = '先在左侧选择一个项目'
+    current.error = t("先在左侧选择一个项目")
     return
   }
   const name = current.value.trim()
@@ -852,7 +848,7 @@ async function submitDialog(): Promise<void> {
 /* ---- 右键菜单 ---- */
 function entryMenuItems(entry: PlanLibraryEntry): ContextMenuEntry[] {
   const moveChildren = [
-    { id: 'move-root', label: '库根', disabled: !entry.folder, action: () => void moveEntry(entry, '') },
+    { id: 'move-root', get label() { return t("库根") }, disabled: !entry.folder, action: () => void moveEntry(entry, '') },
     ...folders.value.map(folder => ({
       id: `move-${folder.path}`,
       // 按层级缩进，嵌套时看得出目标在哪儿。
@@ -864,27 +860,27 @@ function entryMenuItems(entry: PlanLibraryEntry): ContextMenuEntry[] {
   return [
     {
       id: 'start',
-      label: '开工',
+      get label() { return t("开工") },
       disabled: entry.status !== 'ready',
       action: () => emit('start-plan', entry),
     },
-    { id: 'edit', label: '编辑', action: () => void openEditor(entry) },
+    { id: 'edit', get label() { return t("编辑") }, action: () => void openEditor(entry) },
     { type: 'separator' as const, id: 'sep-favorite' },
     {
       id: 'favorite',
-      label: entry.favorite ? '从收藏移除' : '添加到收藏',
+      label: entry.favorite ? t("从收藏移除") : t("添加到收藏"),
       action: () => void toggleFavorite(entry),
     },
     {
       id: 'move',
       type: 'submenu',
-      label: '添加到文件夹',
+      get label() { return t("添加到文件夹") },
       disabled: folders.value.length === 0,
       children: moveChildren,
     },
     { type: 'separator' as const, id: 'sep-danger' },
-    { id: 'rename', label: '重命名', action: () => openDialog('rename', entry) },
-    { id: 'delete', label: '删除', destructive: true, action: () => { pendingDelete.value = entry } },
+    { id: 'rename', get label() { return t("重命名") }, action: () => openDialog('rename', entry) },
+    { id: 'delete', get label() { return t("删除") }, destructive: true, action: () => { pendingDelete.value = entry } },
   ]
 }
 
@@ -905,7 +901,7 @@ function openEntryMenu(event: MouseEvent, entry: PlanLibraryEntry): void {
     event,
     items: entryMenuItems(entry),
     ownerId: `library-entry:${entry.path}`,
-    ariaLabel: `${displayTitle(entry)} 的操作`,
+    ariaLabel: t("{0} 的操作", { 0: displayTitle(entry) }),
     panelAttributes: { 'data-library-menu': entry.path },
   })
 }
@@ -914,23 +910,23 @@ function openFolderMenu(event: MouseEvent, folder: CorePlanLibraryFolder): void 
   openContextMenu({
     event,
     items: [
-      { id: 'open', label: '打开文件夹', action: () => goToFolder(folder.dir) },
+      { id: 'open', get label() { return t("打开文件夹") }, action: () => goToFolder(folder.dir) },
       {
         id: 'new-subfolder',
-        label: '在里面新建文件夹',
+        get label() { return t("在里面新建文件夹") },
         action: () => { goToFolder(folder.dir); openDialog('create-folder') },
       },
       { type: 'separator' as const, id: 'sep' },
       {
         id: 'delete-folder',
-        label: '删除文件夹',
+        get label() { return t("删除文件夹") },
         destructive: true,
         disabled: !isFolderEmpty(folder),
         action: () => void removeFolder(folder),
       },
     ],
     ownerId: `library-folder:${folder.path}`,
-    ariaLabel: `${folder.name} 的操作`,
+    ariaLabel: t("{0} 的操作", { 0: folder.name }),
     panelAttributes: { 'data-library-folder-menu': folder.path },
   })
 }
@@ -977,7 +973,7 @@ defineExpose({ handleBack, isEditing: () => mode.value === 'editor' })
 const heading = computed(() => {
   const root = rootLabel.value
   if (mode.value === 'editor' && selected.value) {
-    return { title: `${root} › 编辑 ${truncateTitle(displayTitle(selected.value))}`, subtitle: '' }
+    return { title: t("{0} › 编辑 {1}", { 0: root, 1: truncateTitle(displayTitle(selected.value)) }), subtitle: '' }
   }
   if (mode.value === 'reader' && selected.value) {
     return { title: `${root} › ${truncateTitle(displayTitle(selected.value))}`, subtitle: '' }
@@ -985,7 +981,7 @@ const heading = computed(() => {
   if (openFolder.value) {
     return { title: `${root} › ${folderTrail.value.map(step => step.name).join(' › ')}`, subtitle: '' }
   }
-  return { title: root, subtitle: `「${dirName}」文件夹里的方案 — 点开读全文，就绪后开工。` }
+  return { title: root, subtitle: t("「{0}」文件夹里的方案 — 点开读全文，就绪后开工。", { 0: dirName }) }
 })
 watch(heading, (value) => emit('heading', { ...value }), { immediate: true })
 

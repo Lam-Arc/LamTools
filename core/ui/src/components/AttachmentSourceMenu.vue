@@ -3,8 +3,8 @@
     <button
       class="composer-attachment-button"
       type="button"
-      title="添加附件"
-      aria-label="添加附件"
+      :title="t('添加附件')"
+      :aria-label="t('添加附件')"
       :aria-expanded="categorized ? open : undefined"
       :disabled="disabled"
       @click="handleTrigger"
@@ -12,24 +12,26 @@
       <Paperclip :size="17" :stroke-width="1.9" aria-hidden="true" />
     </button>
 
-    <div v-if="categorized && open" class="attachment-source__menu optical-glass optical-glass--low-trans" role="menu" aria-label="选择附件来源">
+    <div v-if="categorized && open" class="attachment-source__menu optical-glass optical-glass--low-trans" role="menu" :aria-label="t('选择附件来源')">
       <button type="button" role="menuitem" @click="select('file')">
         <FileUp :size="18" :stroke-width="1.8" aria-hidden="true" />
-        <span><strong>文件</strong><small>从设备文件中选择</small></span>
+        <span><strong>{{ t("文件") }}</strong><small>{{ t("从设备文件中选择") }}</small></span>
       </button>
       <button type="button" role="menuitem" @click="select('photos')">
         <Image :size="18" :stroke-width="1.8" aria-hidden="true" />
-        <span><strong>相册</strong><small>选择已有照片</small></span>
+        <span><strong>{{ t("相册") }}</strong><small>{{ t("选择已有照片") }}</small></span>
       </button>
       <button type="button" role="menuitem" @click="select('camera')">
         <Camera :size="18" :stroke-width="1.8" aria-hidden="true" />
-        <span><strong>相机</strong><small>拍摄一张新照片</small></span>
+        <span><strong>{{ t("相机") }}</strong><small>{{ t("拍摄一张新照片") }}</small></span>
       </button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { onMounted, onUnmounted, ref } from 'vue'
 import { Camera, FileUp, Image, Paperclip } from 'lucide-vue-next'
 import type { RuntimeFileSource } from '../app/runtime'

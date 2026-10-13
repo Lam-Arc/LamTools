@@ -1,3 +1,4 @@
+import { waitForBackendApiBase } from './backendReady'
 import { invoke } from '@tauri-apps/api/core'
 import type { Event } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -25,6 +26,8 @@ interface DesktopDropSummary {
 }
 
 const DESKTOP_PET_PLUGIN_NAME = 'emotion-ball-pet'
+const startupAbort = new AbortController()
+window.addEventListener('pagehide', () => startupAbort.abort(), { once: true })
 
 const frame = document.querySelector<HTMLIFrameElement>('#plugin-frame')
 const errorRegion = document.querySelector<HTMLElement>('#host-error')
@@ -148,6 +151,7 @@ window.addEventListener('beforeunload', () => {
 })
 
 async function showError(error: unknown): Promise<void> {
+  if (errorRegion) errorRegion.setAttribute('role', 'alert')
   console.error('[desktop-plugin-host]', error)
   document.body.classList.add('has-error')
   if (errorRegion) errorRegion.textContent = `桌面插件启动失败：${errorText(error)}`
@@ -257,10 +261,14 @@ window.addEventListener('message', async (event) => {
 async function start(): Promise<void> {
   if (!frame) throw new Error('桌面插件宿主初始化失败')
 
-  const apiBase = await invoke('get_api_base')
-  if (typeof apiBase !== 'string' || !apiBase.startsWith('http://127.0.0.1:')) {
-    throw new Error('Core API 地址无效')
+  document.body.classList.add('has-error')
+  if (errorRegion) {
+    errorRegion.setAttribute('role', 'status')
+    errorRegion.textContent = '桌面插件正在准备…'
   }
+  const apiBase = await waitForBackendApiBase(() => invoke('get_api_base'), {
+    signal: startupAbort.signal,
+  })
 
   const response = await fetch(`${apiBase}/api/core/desktop-plugins`, { cache: 'no-store' })
   if (!response.ok) throw new Error(`读取桌面插件失败（HTTP ${response.status}）`)
@@ -289,9 +297,13 @@ async function start(): Promise<void> {
     frame.src = entryUrl.toString()
   })
   await listenForFileDrops()
+  document.body.classList.remove('has-error')
+  if (errorRegion) errorRegion.textContent = ''
   await invoke('show_current_window')
 }
 
-start().catch(showError)
+start().catch((error) => {
+  if (!startupAbort.signal.aborted) void showError(error)
+})
 
 export {}

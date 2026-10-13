@@ -1,5 +1,6 @@
 import { onScopeDispose, watch, type Ref } from 'vue'
 import {
+  collectDecisionParts,
   coreDecisionIsQuestion,
   coreDecisionIsUnanswered,
   coreDecisionRequestId,
@@ -44,8 +45,9 @@ export function useCoreAskAutoContinue(options: UseCoreAskAutoContinueOptions) {
     const ids = new Set<string>()
     for (const message of options.messages.value || []) {
       if (message.role !== 'assistant') continue
-      for (const part of message.parts || []) {
-        if (part.partType !== 'decision') continue
+      // 提问可能来自主代理，也可能来自某个子代理（嵌套在委派行下）：两者都是
+      // 「提问卡」，都走这条自动路径。审批卡（无论在哪一层）永远不在这里。
+      for (const part of collectDecisionParts(message.parts || [])) {
         // 审批卡永远不自动处理：只有提问卡走这条自动路径。
         if (!coreDecisionIsQuestion(part)) continue
         if (!coreDecisionIsUnanswered(part)) continue

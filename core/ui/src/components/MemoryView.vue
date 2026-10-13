@@ -3,45 +3,43 @@
     <FullAreaActions :to-band="bandActions">
       <!-- 编辑：写完为止，只留保存 / 取消 -->
       <template v-if="mode === 'editor' && selected">
-        <button class="library-button" type="button" data-memory-editor-cancel @click="requestCloseEditor">取消</button>
+        <button class="library-button" type="button" data-memory-editor-cancel @click="requestCloseEditor">{{ t("取消") }}</button>
         <button
           class="library-button library-button--primary"
           type="button"
           :disabled="saving || !dirty"
           data-memory-editor-save
           @click="saveEditor"
-        >{{ saving ? '保存中…' : '保存' }}</button>
+        >{{ saving ? t("保存中…") : t("保存") }}</button>
       </template>
       <template v-else-if="mode === 'reader' && selected">
-        <button class="library-button" type="button" data-memory-edit @click="openEditor(selected)">编辑</button>
+        <button class="library-button" type="button" data-memory-edit @click="openEditor(selected)">{{ t("编辑") }}</button>
         <button
           class="library-button library-button--danger"
           type="button"
           :data-memory-delete="confirmingDelete ? 'confirm' : 'arm'"
           @click="removeSelected"
           @blur="confirmingDelete = false"
-        >{{ confirmingDelete ? '确认删除' : '删除' }}</button>
+        >{{ confirmingDelete ? t("确认删除") : t("删除") }}</button>
       </template>
       <template v-else>
-        <button class="icon-button" type="button" :disabled="loading" aria-label="刷新" title="刷新" data-memory-refresh @click="reload">
+        <button class="icon-button" type="button" :disabled="loading" :aria-label="t('刷新')" :title="t('刷新')" data-memory-refresh @click="reload">
           <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="library-button" type="button" :disabled="!canWrite" :title="canWrite ? '' : '先进入一个项目'" data-memory-create-folder @click="openDialog('create-folder')">新建文件夹</button>
-        <button class="library-button library-button--primary" type="button" :disabled="!canWrite" :title="canWrite ? '' : '先进入一个项目'" data-memory-create-file @click="openDialog('create-file')">
-          <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
-          新建记忆
-        </button>
+        <button class="library-button" type="button" :disabled="!canWrite" :title="canWrite ? '' : t('先进入一个项目')" data-memory-create-folder @click="openDialog('create-folder')">{{ t("新建文件夹") }}</button>
+        <button class="library-button library-button--primary" type="button" :disabled="!canWrite" :title="canWrite ? '' : t('先进入一个项目')" data-memory-create-file @click="openDialog('create-file')">
+          <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />{{ t("新建记忆") }}</button>
       </template>
     </FullAreaActions>
 
     <div class="library-mobile-head">
-      <button class="library-back" type="button" aria-label="返回" title="返回" @click="onBackClick">
+      <button class="library-back" type="button" :aria-label="t('返回')" :title="t('返回')" @click="onBackClick">
         <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
       </button>
       <p v-if="mode !== 'listing' && selected" class="library-crumb" data-memory-crumb>
         {{ rootLabel }}<template v-if="activeProject"><span class="crumb-sep" aria-hidden="true">›</span>{{ activeProject.name }}</template><span class="crumb-sep" aria-hidden="true">›</span>{{ truncateTitle(selectedName) }}
       </p>
-      <nav v-else-if="insideProject" class="library-crumb" data-memory-crumb aria-label="位置">
+      <nav v-else-if="insideProject" class="library-crumb" data-memory-crumb :aria-label="t('位置')">
         <button type="button" class="crumb-link" @click="exitProject">{{ rootLabel }}</button>
         <span class="crumb-sep" aria-hidden="true">›</span>
         <button
@@ -62,8 +60,8 @@
           >{{ step.name }}</button>
         </template>
       </nav>
-      <nav v-else-if="openFolder" class="library-crumb" data-memory-crumb aria-label="位置">
-        <button type="button" class="crumb-link" @click="goToFolder('')">记忆</button>
+      <nav v-else-if="openFolder" class="library-crumb" data-memory-crumb :aria-label="t('位置')">
+        <button type="button" class="crumb-link" @click="goToFolder('')">{{ t("记忆") }}</button>
         <template v-for="(step, index) in folderTrail" :key="step.dir">
           <span class="crumb-sep" aria-hidden="true">›</span>
           <button
@@ -76,13 +74,13 @@
         </template>
       </nav>
       <div v-else class="library-head-copy">
-        <h1 class="library-title">记忆</h1>
+        <h1 class="library-title">{{ t("记忆") }}</h1>
         <p class="library-subtitle">{{ tierSubtitle }}</p>
       </div>
     </div>
 
     <!-- ── 阅读子页 ── -->
-    <section v-if="mode === 'reader' && selected" class="library-reader" aria-label="记忆阅读" data-memory-reader>
+    <section v-if="mode === 'reader' && selected" class="library-reader" :aria-label="t('记忆阅读')" data-memory-reader>
       <header class="library-reader-head">
         <h2 class="library-reader-title">{{ selectedName }}</h2>
         <p class="library-reader-meta">
@@ -90,7 +88,7 @@
           <span v-if="selected.modified">· {{ selected.modified }}</span>
         </p>
       </header>
-      <p v-if="contentLoading" class="full-area-note" role="status">正在打开…</p>
+      <p v-if="contentLoading" class="full-area-note" role="status">{{ t("正在打开…") }}</p>
       <p v-else-if="contentError" class="full-area-note full-area-note--error" role="alert">{{ contentError }}</p>
       <article v-else-if="selected.path.toLowerCase().endsWith('.md')" class="library-document">
         <MarkdownRenderer :content="content" />
@@ -99,17 +97,17 @@
     </section>
 
     <!-- ── 编辑子页：和资料库同一个编辑器 ── -->
-    <section v-else-if="mode === 'editor' && selected" class="library-editor" aria-label="记忆编辑" data-memory-editor>
+    <section v-else-if="mode === 'editor' && selected" class="library-editor" :aria-label="t('记忆编辑')" data-memory-editor>
       <header class="library-editor-head">
         <h2 class="library-editor-title">{{ selectedName }}</h2>
         <p class="library-editor-meta">
           <span :class="dirty ? 'library-editor-state library-editor-state--dirty' : 'library-editor-state'" data-memory-editor-state>
-            {{ dirty ? '未保存' : '已保存' }}
+            {{ dirty ? t("未保存") : t("已保存") }}
           </span>
           <span class="library-editor-path">{{ selected.path }}</span>
         </p>
       </header>
-      <p v-if="editorLoading" class="full-area-note" role="status">正在打开…</p>
+      <p v-if="editorLoading" class="full-area-note" role="status">{{ t("正在打开…") }}</p>
       <template v-else>
         <DocumentEditor ref="editorInput" id-prefix="memory-editor" :title="selectedName" v-model="draft">
           <template #preview="{ content }">
@@ -129,21 +127,21 @@
           <input
             v-model="query"
             type="search"
-            :placeholder="atProjectLevel ? '搜索项目' : '搜索记忆'"
-            :aria-label="atProjectLevel ? '搜索项目' : '搜索记忆'"
+            :placeholder="atProjectLevel ? t('搜索项目') : t('搜索记忆')"
+            :aria-label="atProjectLevel ? t('搜索项目') : t('搜索记忆')"
             data-memory-search
           />
         </div>
-        <div v-if="!atProjectLevel" class="library-view-toggle" role="group" aria-label="视图切换" data-memory-view-toggle>
-          <button type="button" :class="{ active: viewMode === 'grid' }" :aria-pressed="viewMode === 'grid'" aria-label="网格视图" title="网格视图" @click="viewMode = 'grid'"><LayoutGrid :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
-          <button type="button" :class="{ active: viewMode === 'list' }" :aria-pressed="viewMode === 'list'" aria-label="列表视图" title="列表视图" @click="viewMode = 'list'"><List :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
+        <div v-if="!atProjectLevel" class="library-view-toggle" role="group" :aria-label="t('视图切换')" data-memory-view-toggle>
+          <button type="button" :class="{ active: viewMode === 'grid' }" :aria-pressed="viewMode === 'grid'" :aria-label="t('网格视图')" :title="t('网格视图')" @click="viewMode = 'grid'"><LayoutGrid :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
+          <button type="button" :class="{ active: viewMode === 'list' }" :aria-pressed="viewMode === 'list'" :aria-label="t('列表视图')" :title="t('列表视图')" @click="viewMode = 'list'"><List :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
         </div>
       </div>
 
       <!-- ── 两档：项目 / 全局 ── -->
-      <div class="filter-tabs" role="group" aria-label="记忆档位" data-memory-tiers>
-        <button type="button" :class="{ active: scope === 'project' }" :aria-pressed="scope === 'project'" data-memory-tier="project" @click="setScope('project')">项目记忆</button>
-        <button type="button" :class="{ active: scope === 'global' }" :aria-pressed="scope === 'global'" data-memory-tier="global" @click="setScope('global')">全局记忆</button>
+      <div class="filter-tabs" role="group" :aria-label="t('记忆档位')" data-memory-tiers>
+        <button type="button" :class="{ active: scope === 'project' }" :aria-pressed="scope === 'project'" data-memory-tier="project" @click="setScope('project')">{{ t("项目记忆") }}</button>
+        <button type="button" :class="{ active: scope === 'global' }" :aria-pressed="scope === 'global'" data-memory-tier="global" @click="setScope('global')">{{ t("全局记忆") }}</button>
       </div>
 
       <!-- 手机没有 memory RPC：如实说明，不做半截界面。 -->
@@ -151,9 +149,9 @@
 
       <!-- ── 项目档第一层：先选是哪个项目 ── -->
       <template v-else-if="atProjectLevel">
-        <p v-if="projectsLoading && !projects.length" class="full-area-note" role="status">正在读取项目…</p>
+        <p v-if="projectsLoading && !projects.length" class="full-area-note" role="status">{{ t("正在读取项目…") }}</p>
         <p v-else-if="projectsError" class="full-area-note full-area-note--error" role="alert" data-memory-project-error>
-          {{ projectsError }}<button class="library-link" type="button" @click="reload">重试</button>
+          {{ projectsError }}<button class="library-link" type="button" @click="reload">{{ t("重试") }}</button>
         </p>
         <div v-else-if="filteredProjects.length" class="folder-grid" role="list" data-memory-projects>
           <article
@@ -162,7 +160,7 @@
             class="folder-card"
             role="listitem"
             tabindex="0"
-            :aria-label="`打开 ${project.name} 的项目记忆`"
+            :aria-label="t('打开 {0} 的项目记忆', { 0: project.name })"
             :data-memory-project="project.id"
             @click="enterProject(project)"
             @keydown.enter.prevent="enterProject(project)"
@@ -181,9 +179,9 @@
       </template>
 
       <template v-else>
-        <p v-if="loading && !entries.length" class="full-area-note" role="status">正在读取记忆…</p>
+        <p v-if="loading && !entries.length" class="full-area-note" role="status">{{ t("正在读取记忆…") }}</p>
         <p v-else-if="error" class="full-area-note full-area-note--error" role="alert">
-          {{ error }}<button class="library-link" type="button" @click="reload">重试</button>
+          {{ error }}<button class="library-link" type="button" @click="reload">{{ t("重试") }}</button>
         </p>
         <template v-else>
         <!-- ── 子文件夹 ── -->
@@ -194,7 +192,7 @@
             class="folder-card"
             role="listitem"
             tabindex="0"
-            :aria-label="`打开文件夹 ${folder.name}`"
+            :aria-label="t('打开文件夹 {0}', { 0: folder.name })"
             :data-memory-folder="folder.path"
             @click="goToFolder(folder.path)"
             @keydown.enter.prevent="goToFolder(folder.path)"
@@ -202,8 +200,8 @@
           >
             <span class="folder-card-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.6" /></span>
             <span class="folder-card-name">{{ folder.name }}</span>
-            <span class="folder-card-count">{{ folder.count }} 个条目</span>
-            <button class="card-menu-btn" type="button" :aria-label="`${folder.name} 的操作`" @click.stop="openFolderMenu($event, folder)">
+            <span class="folder-card-count">{{ folder.count }} {{ t("个条目") }}</span>
+            <button class="card-menu-btn" type="button" :aria-label="t('{0} 的操作', { 0: folder.name })" @click.stop="openFolderMenu($event, folder)">
               <MoreHorizontal :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </article>
@@ -214,9 +212,9 @@
           <span class="full-area-empty-icon" aria-hidden="true"><BookOpen :size="18" :stroke-width="1.8" /></span>
           <h2 class="full-area-empty-title">{{ emptyTitle }}</h2>
           <p class="full-area-empty-hint">{{ emptyHint }}</p>
-          <button class="library-button library-button--primary" type="button" data-memory-empty-create @click="openDialog('create-file')">新建记忆</button>
+          <button class="library-button library-button--primary" type="button" data-memory-empty-create @click="openDialog('create-file')">{{ t("新建记忆") }}</button>
         </div>
-        <p v-else-if="!listFiles.length" class="full-area-note tab-empty" data-memory-tab-empty>这个文件夹里还没有记忆文件。</p>
+        <p v-else-if="!listFiles.length" class="full-area-note tab-empty" data-memory-tab-empty>{{ t("这个文件夹里还没有记忆文件。") }}</p>
 
         <!-- ── 条目本体 ── -->
         <template v-if="listFiles.length">
@@ -227,17 +225,17 @@
               class="plan-card"
               role="listitem"
               tabindex="0"
-              :aria-label="`打开 ${file.name}`"
+              :aria-label="t('打开 {0}', { 0: file.name })"
               :data-memory-entry="file.path"
               @click="openEntry(file)"
               @keydown.enter.prevent="openEntry(file)"
               @contextmenu="openEntryMenu($event, file)"
             >
               <div class="plan-card-preview">
-                <p class="plan-card-summary">{{ file.summary || '还没有内容。' }}</p>
+                <p class="plan-card-summary">{{ file.summary || t("还没有内容。") }}</p>
                 <FileText :size="26" :stroke-width="1.4" aria-hidden="true" class="plan-card-glyph" />
               </div>
-              <button class="card-menu-btn" type="button" :aria-label="`${file.name} 的操作`" @click.stop="openEntryMenu($event, file)">
+              <button class="card-menu-btn" type="button" :aria-label="t('{0} 的操作', { 0: file.name })" @click.stop="openEntryMenu($event, file)">
                 <MoreHorizontal :size="15" :stroke-width="1.8" aria-hidden="true" />
               </button>
               <h4 class="plan-card-title">{{ file.name }}</h4>
@@ -262,10 +260,10 @@
                   <span class="library-item-title">{{ file.name }}</span>
                 </div>
                 <div class="library-item-bottom">
-                  <span class="library-item-summary">{{ file.summary || '（还没有内容）' }}</span>
+                  <span class="library-item-summary">{{ file.summary || t("（还没有内容）") }}</span>
                   <span class="library-item-time">{{ file.modified }}</span>
                 </div>
-                <button class="card-menu-btn" type="button" :aria-label="`${file.name} 的操作`" @click.stop="openEntryMenu($event, file)">
+                <button class="card-menu-btn" type="button" :aria-label="t('{0} 的操作', { 0: file.name })" @click.stop="openEntryMenu($event, file)">
                   <MoreHorizontal :size="15" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
@@ -283,12 +281,12 @@
           <div class="dialog-body">
             <h3 class="dialog-title">{{ dialogTitle }}</h3>
             <label class="dialog-field">
-              <span>{{ dialog.kind === 'create-folder' ? '文件夹名称' : '记忆名称' }}</span>
+              <span>{{ dialog.kind === 'create-folder' ? t("文件夹名称") : t("记忆名称") }}</span>
               <input
                 ref="dialogInput"
                 v-model="dialog.value"
                 type="text"
-                :placeholder="dialog.kind === 'create-folder' ? '例如：偏好' : '例如：用户偏好.md'"
+                :placeholder="dialog.kind === 'create-folder' ? t('例如：偏好') : t('例如：用户偏好.md')"
                 :data-memory-dialog-input="dialog.kind"
                 @keydown.enter.prevent="submitDialog"
                 @keydown.escape.prevent="closeDialog"
@@ -297,14 +295,14 @@
             <p v-if="dialog.error" class="dialog-error" role="alert">{{ dialog.error }}</p>
           </div>
           <div class="dialog-actions">
-            <button class="library-button" type="button" @click="closeDialog">取消</button>
+            <button class="library-button" type="button" @click="closeDialog">{{ t("取消") }}</button>
             <button
               class="library-button library-button--primary"
               type="button"
               :disabled="dialog.busy || !dialog.value.trim()"
               data-memory-dialog-submit
               @click="submitDialog"
-            >{{ dialog.busy ? '处理中…' : dialog.kind === 'rename' ? '重命名' : '创建' }}</button>
+            >{{ dialog.busy ? t("处理中…") : dialog.kind === 'rename' ? t("重命名") : t("创建") }}</button>
           </div>
         </div>
       </div>
@@ -313,16 +311,15 @@
     <!-- ── 删除确认 ── -->
     <Transition name="library-dialog">
       <div v-if="pendingDelete" class="dialog-dimmer" @click.self="pendingDelete = null">
-        <div class="dialog-card" role="dialog" aria-modal="true" aria-label="确认删除" data-memory-confirm>
+        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('确认删除')" data-memory-confirm>
           <div class="dialog-body">
-            <h3 class="dialog-title">{{ pendingDelete.is_dir ? '删除文件夹' : '删除记忆' }}</h3>
+            <h3 class="dialog-title">{{ pendingDelete.is_dir ? t("删除文件夹") : t("删除记忆") }}</h3>
             <p class="dialog-text">
-              「{{ pendingDelete.name }}」将被删除{{ pendingDelete.is_dir ? '，里面的条目也会一起删掉' : '' }}，且无法恢复。
-            </p>
+              「{{ pendingDelete.name }}{{ t("」将被删除") }}{{ pendingDelete.is_dir ? t("，里面的条目也会一起删掉") : '' }}{{ t("，且无法恢复。") }}</p>
           </div>
           <div class="dialog-actions">
-            <button class="library-button" type="button" @click="pendingDelete = null">取消</button>
-            <button class="library-button library-button--danger" type="button" data-memory-confirm-delete @click="confirmDelete">删除</button>
+            <button class="library-button" type="button" @click="pendingDelete = null">{{ t("取消") }}</button>
+            <button class="library-button library-button--danger" type="button" data-memory-confirm-delete @click="confirmDelete">{{ t("删除") }}</button>
           </div>
         </div>
       </div>
@@ -331,14 +328,14 @@
     <!-- ── 放弃未保存修改 ── -->
     <Transition name="library-dialog">
       <div v-if="pendingDiscard" class="dialog-dimmer" @click.self="pendingDiscard = false">
-        <div class="dialog-card" role="dialog" aria-modal="true" aria-label="确认放弃修改" data-memory-discard>
+        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('确认放弃修改')" data-memory-discard>
           <div class="dialog-body">
-            <h3 class="dialog-title">放弃修改</h3>
-            <p class="dialog-text">「{{ selectedName }}」还有没保存的内容，离开就会丢掉。</p>
+            <h3 class="dialog-title">{{ t("放弃修改") }}</h3>
+            <p class="dialog-text">「{{ selectedName }}{{ t("」还有没保存的内容，离开就会丢掉。") }}</p>
           </div>
           <div class="dialog-actions">
-            <button class="library-button" type="button" @click="pendingDiscard = false">继续编辑</button>
-            <button class="library-button library-button--danger" type="button" data-memory-discard-confirm @click="discardEditor">放弃修改</button>
+            <button class="library-button" type="button" @click="pendingDiscard = false">{{ t("继续编辑") }}</button>
+            <button class="library-button library-button--danger" type="button" data-memory-discard-confirm @click="discardEditor">{{ t("放弃修改") }}</button>
           </div>
         </div>
       </div>
@@ -347,6 +344,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * MemoryView — the 记忆 as one full-area view, shaped like the 资料库.
  *
@@ -477,13 +476,13 @@ const atProjectLevel = computed(() => scope.value === 'project' && !activeProjec
 const insideProject = computed(() => scope.value === 'project' && Boolean(activeProject.value))
 const activeProjectName = computed(() => activeProject.value?.name ?? '')
 const viewNote = computed(() => (isMobile.value
-  ? '手机端还没有接入记忆目录：在会话里让助手用记忆工具整理，或连上桌面端在这里浏览。'
+  ? t("手机端还没有接入记忆目录：在会话里让助手用记忆工具整理，或连上桌面端在这里浏览。")
   : ''))
 const canWrite = computed(() => scope.value === 'global' || Boolean(activeProject.value))
 const tierSubtitle = computed(() => {
-  if (scope.value === 'global') return '跨项目共享的记忆 — 模型在会话里读它，你在这里整理它。'
-  if (activeProject.value) return `只属于「${activeProject.value.name}」的记忆 — 模型在会话里读它，你在这里整理它。`
-  return '项目记忆按项目归档 — 先选一个项目，再整理它的记忆。'
+  if (scope.value === 'global') return t("跨项目共享的记忆 — 模型在会话里读它，你在这里整理它。")
+  if (activeProject.value) return t("只属于「{0}」的记忆 — 模型在会话里读它，你在这里整理它。", { 0: activeProject.value.name })
+  return t("项目记忆按项目归档 — 先选一个项目，再整理它的记忆。")
 })
 
 /** 项目清单层的搜索框过滤的是项目，不是文件。 */
@@ -491,8 +490,8 @@ const filteredProjects = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   return projects.value.filter(project => !keyword || project.name.toLowerCase().includes(keyword))
 })
-const projectsEmptyTitle = computed(() => (query.value.trim() ? '没有匹配的项目' : '还没有项目有记忆'))
-const projectsEmptyHint = computed(() => (query.value.trim() ? '换个关键词再试。' : '在会话里让助手写下记忆，它就会出现在这里。'))
+const projectsEmptyTitle = computed(() => (query.value.trim() ? t("没有匹配的项目") : t("还没有项目有记忆")))
+const projectsEmptyHint = computed(() => (query.value.trim() ? t("换个关键词再试。") : t("在会话里让助手写下记忆，它就会出现在这里。")))
 
 function parentOf(path: string): string {
   return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
@@ -535,12 +534,12 @@ const folderTrail = computed(() => {
 })
 
 const selectedName = computed(() => selected.value?.name ?? '')
-const rootLabel = computed(() => props.rootLabel || '记忆')
+const rootLabel = computed(() => props.rootLabel || t("记忆"))
 
-const emptyTitle = computed(() => (openFolder.value ? '这个文件夹还是空的' : '这片记忆还是空的'))
+const emptyTitle = computed(() => (openFolder.value ? t("这个文件夹还是空的") : t("这片记忆还是空的")))
 const emptyHint = computed(() => (openFolder.value
-  ? '写点什么，助手下次就会读到它。'
-  : '记忆就是普通文件：写在这里的，助手在之后的每个会话里都能读到。'))
+  ? t("写点什么，助手下次就会读到它。")
+  : t("记忆就是普通文件：写在这里的，助手在之后的每个会话里都能读到。")))
 
 function rpcParams(extra: Record<string, unknown> = {}): Record<string, unknown> {
   if (scope.value === 'global') return { scope: 'global', ...extra }
@@ -550,7 +549,7 @@ function rpcParams(extra: Record<string, unknown> = {}): Record<string, unknown>
 
 async function rpc<T>(method: string, extra: Record<string, unknown> = {}): Promise<T> {
   if (scope.value === 'project' && !activeProject.value?.workRoot) {
-    throw new Error('先进入一个项目，再操作它的记忆')
+    throw new Error(t("先进入一个项目，再操作它的记忆"))
   }
   return await props.requestRpc(method, rpcParams(extra)) as T
 }
@@ -560,7 +559,7 @@ async function loadProjects(): Promise<void> {
   projectsLoading.value = true
   projectsError.value = ''
   try {
-    if (!props.client) throw new Error('项目列表不可用，无法进入项目记忆')
+    if (!props.client) throw new Error(t("项目列表不可用，无法进入项目记忆"))
     const all = await props.client.list()
     // 只显示真正存有记忆的项目：后端纯探测，不建目录、不生成索引。
     const result = await props.requestRpc('memory.projects', {
@@ -776,9 +775,9 @@ async function deleteItem(entry: MemoryItem): Promise<void> {
 
 const dialogTitle = computed(() => {
   if (!dialog.value) return ''
-  if (dialog.value.kind === 'create-folder') return '新建文件夹'
-  if (dialog.value.kind === 'rename') return '重命名'
-  return '新建记忆'
+  if (dialog.value.kind === 'create-folder') return t("新建文件夹")
+  if (dialog.value.kind === 'rename') return t("重命名")
+  return t("新建记忆")
 })
 
 function openDialog(kind: DialogKind, target?: MemoryItem): void {
@@ -800,12 +799,12 @@ async function submitDialog(): Promise<void> {
   const current = dialog.value
   if (!current || current.busy || !current.value.trim()) return
   if (!canWrite.value) {
-    current.error = '先进入一个项目'
+    current.error = t("先进入一个项目")
     return
   }
   const name = current.value.trim().replace(/^\/+|\/+$/g, '')
   if (!name || name.includes('/')) {
-    current.error = '名称不能包含路径分隔符'
+    current.error = t("名称不能包含路径分隔符")
     return
   }
   const path = openFolder.value ? `${openFolder.value}/${name}` : name
@@ -847,14 +846,14 @@ function openEntryMenu(event: MouseEvent, item: MemoryItem): void {
   openContextMenu({
     event,
     items: [
-      { id: 'open', label: '打开', action: () => openEntry(item) },
-      { id: 'edit', label: '编辑', action: () => void openEditor(item) },
+      { id: 'open', get label() { return t("打开") }, action: () => openEntry(item) },
+      { id: 'edit', get label() { return t("编辑") }, action: () => void openEditor(item) },
       { type: 'separator' as const, id: 'sep' },
-      { id: 'rename', label: '重命名', action: () => openDialog('rename', item) },
-      { id: 'delete', label: '删除', destructive: true, action: () => { pendingDelete.value = item } },
+      { id: 'rename', get label() { return t("重命名") }, action: () => openDialog('rename', item) },
+      { id: 'delete', get label() { return t("删除") }, destructive: true, action: () => { pendingDelete.value = item } },
     ],
     ownerId: `memory-entry:${item.path}`,
-    ariaLabel: `${item.name} 的操作`,
+    ariaLabel: t("{0} 的操作", { 0: item.name }),
     panelAttributes: { 'data-memory-menu': item.path },
   })
 }
@@ -863,20 +862,20 @@ function openFolderMenu(event: MouseEvent, folder: { name: string; path: string;
   openContextMenu({
     event,
     items: [
-      { id: 'open', label: '打开文件夹', action: () => goToFolder(folder.path) },
-      { id: 'new-file', label: '在里面新建记忆', action: () => { goToFolder(folder.path); openDialog('create-file') } },
-      { id: 'new-folder', label: '在里面新建文件夹', action: () => { goToFolder(folder.path); openDialog('create-folder') } },
+      { id: 'open', get label() { return t("打开文件夹") }, action: () => goToFolder(folder.path) },
+      { id: 'new-file', get label() { return t("在里面新建记忆") }, action: () => { goToFolder(folder.path); openDialog('create-file') } },
+      { id: 'new-folder', get label() { return t("在里面新建文件夹") }, action: () => { goToFolder(folder.path); openDialog('create-folder') } },
       { type: 'separator' as const, id: 'sep' },
-      { id: 'rename', label: '重命名', action: () => openDialog('rename', folderItem(folder)) },
+      { id: 'rename', get label() { return t("重命名") }, action: () => openDialog('rename', folderItem(folder)) },
       {
         id: 'delete',
-        label: folder.count > 0 ? '删除文件夹（含里面全部条目）' : '删除文件夹',
+        label: folder.count > 0 ? t("删除文件夹（含里面全部条目）") : t("删除文件夹"),
         destructive: true,
         action: () => { pendingDelete.value = folderItem(folder) },
       },
     ],
     ownerId: `memory-folder:${folder.path}`,
-    ariaLabel: `${folder.name} 的操作`,
+    ariaLabel: t("{0} 的操作", { 0: folder.name }),
     panelAttributes: { 'data-memory-folder-menu': folder.path },
   })
 }
@@ -933,7 +932,7 @@ const heading = computed(() => {
   const root = rootLabel.value
   const project = activeProject.value ? `${activeProject.value.name} › ` : ''
   if (mode.value === 'editor' && selected.value) {
-    return { title: `${root} › ${project}编辑 ${truncateTitle(selectedName.value)}`, subtitle: '' }
+    return { title: t("{0} › {1}编辑 {2}", { 0: root, 1: project, 2: truncateTitle(selectedName.value) }), subtitle: '' }
   }
   if (mode.value === 'reader' && selected.value) {
     return { title: `${root} › ${project}${truncateTitle(selectedName.value)}`, subtitle: '' }

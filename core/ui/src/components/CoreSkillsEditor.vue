@@ -1,63 +1,63 @@
 <template>
   <section class="settings-panel">
     <header class="settings-title">
-      <h1>技能</h1>
-      <p>管理已发现的 Skills，禁用后不会出现在斜杠命令中；新建技能写入用户级技能目录，Agent 按需 load_skill 调取。</p>
+      <h1>{{ t("技能") }}</h1>
+      <p>{{ t("管理已发现的 Skills，禁用后不会出现在斜杠命令中；新建技能写入用户级技能目录，Agent 按需 load_skill 调取。") }}</p>
     </header>
 
     <p v-if="error" class="skill-error">{{ error }}</p>
 
     <div class="subhead">
-      <span class="muted">{{ loading ? '加载中…' : `共 ${skills.length} 个 · 已启用 ${enabledCount}` }}</span>
+      <span class="muted">{{ loading ? t("加载中…") : t('共 {0} 个 · 已启用 {1}', { 0: skills.length, 1: enabledCount }) }}</span>
       <div class="row-actions">
         <button
           v-if="!showCreateForm"
           class="small-btn primary"
           type="button"
           @click="openCreateForm"
-        >新建技能</button>
-        <button class="text-btn" type="button" @click="refreshSkills">刷新</button>
+        >{{ t("新建技能") }}</button>
+        <button class="text-btn" type="button" @click="refreshSkills">{{ t("刷新") }}</button>
       </div>
     </div>
 
     <!-- 新建技能表单：标题 / 描述 / 内容 -->
     <article v-if="showCreateForm" class="setting-card skill-create-card">
       <div class="editor-popover-head">
-        <h3>新建技能</h3>
-        <button type="button" class="editor-popover-close" aria-label="关闭" @click="closeCreateForm">
+        <h3>{{ t("新建技能") }}</h3>
+        <button type="button" class="editor-popover-close" :aria-label="t('关闭')" @click="closeCreateForm">
           <X :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
       <p v-if="createError" class="skill-error create-error" role="alert">{{ createError }}</p>
       <div class="config-form">
         <label class="field">
-          <span class="field-label">标题（name）<code class="field-type">目录名 + frontmatter name</code></span>
-          <input v-model="createForm.name" class="field-input" type="text" placeholder="如 my-skill（字母/数字/._-）" />
+          <span class="field-label">{{ t("标题（name）") }}<code class="field-type">{{ t("目录名 + frontmatter name") }}</code></span>
+          <input v-model="createForm.name" class="field-input" type="text" :placeholder="t('如 my-skill（字母/数字/._-）')" />
         </label>
         <label class="field">
-          <span class="field-label">描述（description）<code class="field-type">说明何时使用，供 Agent 检索</code></span>
-          <input v-model="createForm.description" class="field-input" type="text" placeholder="一句话说明这个技能的用途" />
+          <span class="field-label">{{ t("描述（description）") }}<code class="field-type">{{ t("说明何时使用，供 Agent 检索") }}</code></span>
+          <input v-model="createForm.description" class="field-input" type="text" :placeholder="t('一句话说明这个技能的用途')" />
         </label>
         <label class="field">
-          <span class="field-label">内容（content）<code class="field-type">SKILL.md 正文，加载后应遵循的指引</code></span>
+          <span class="field-label">{{ t("内容（content）") }}<code class="field-type">{{ t("SKILL.md 正文，加载后应遵循的指引") }}</code></span>
           <textarea
             v-model="createForm.content"
             class="field-input skill-content-input"
             rows="8"
-            placeholder="技能加载后 Agent 应遵循的完整指引……"
+            :placeholder="t('技能加载后 Agent 应遵循的完整指引……')"
           ></textarea>
         </label>
         <div class="editor-actions">
-          <button class="small-btn quiet" type="button" @click="closeCreateForm">取消</button>
+          <button class="small-btn quiet" type="button" @click="closeCreateForm">{{ t("取消") }}</button>
           <button class="small-btn primary" type="button" :disabled="createSaving" @click="submitCreate">
-            {{ createSaving ? '创建中…' : '创建技能' }}
+            {{ createSaving ? t("创建中…") : t("创建技能") }}
           </button>
         </div>
       </div>
     </article>
 
     <article v-if="!loading && !skills.length" class="setting-card">
-      <p>未发现任何 Skill。点击「新建技能」创建，或将 SKILL.md 放入技能目录（桌面端为 <code>.lam/skills/</code>，移动端为应用私有技能目录）。</p>
+      <p>{{ t("未发现任何 Skill。点击「新建技能」创建，或将 SKILL.md 放入技能目录（桌面端为") }}<code>.lam/skills/</code>{{ t("，移动端为应用私有技能目录）。") }}</p>
     </article>
 
     <div v-else class="provider-list">
@@ -69,7 +69,7 @@
         <header class="provider-head">
           <div class="provider-identity">
             <strong>{{ sourceLabel(source) }}</strong>
-            <span>{{ group.length }} 个</span>
+            <span>{{ group.length }}{{ t("个") }}</span>
           </div>
         </header>
 
@@ -91,8 +91,8 @@
                 class="text-btn danger icon-btn"
                 type="button"
                 :disabled="deletingName === skill.name"
-                :aria-label="`删除技能 ${skill.name}`"
-                title="删除"
+                :aria-label="t('删除技能 {0}', { 0: skill.name })"
+                :title="t('删除')"
                 @click="deleteSkill(skill)"
               >
                 <Trash2 :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -101,8 +101,8 @@
                 class="text-btn toggle-btn"
                 :class="{ 'is-on': skill.enabled }"
                 type="button"
-                :aria-label="skill.enabled ? `禁用技能 ${skill.name}` : `启用技能 ${skill.name}`"
-                :title="skill.enabled ? '已启用' : '已禁用'"
+                :aria-label="skill.enabled ? t('禁用技能 {0}', { 0: skill.name }) : t('启用技能 {0}', { 0: skill.name })"
+                :title="skill.enabled ? t('已启用') : t('已禁用')"
                 @click="toggleSkill(skill.name, !skill.enabled)"
               >
                 <ToggleRight v-if="skill.enabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -116,7 +116,7 @@
 
     <CoreConfirmDialog
       :open="Boolean(pendingDeleteSkill)"
-      title="删除技能及目录？"
+      :title="t('删除技能及目录？')"
       :detail="pendingDeleteSkill?.name || ''"
       @cancel="pendingDeleteSkill = null"
       @confirm="confirmDeleteSkill"
@@ -125,6 +125,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, ref } from 'vue'
 import { ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
 import CoreConfirmDialog from './CoreConfirmDialog.vue'

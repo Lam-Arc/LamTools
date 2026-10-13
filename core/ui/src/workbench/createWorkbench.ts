@@ -16,12 +16,14 @@ import {
   hydrateSnapshot,
   isCoreActiveTurnStatus,
   selectCoreQueuedInputs,
+  selectCoreSessionActivity,
   selectLatestActiveTurnId,
   selectLatestTurnStatus,
   type CoreAppEvent,
   type CoreAppServerRuntimeClient,
   type CoreAppSnapshot,
   type CoreSyncChangeNotification,
+  type CoreWorkbenchTurnStatus,
 } from '../appServer'
 import {
   useCoreApprovalController,
@@ -245,15 +247,13 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     const activeId = activeSessionId.value
     const activeSnapshot = runtime.state
     if (!activeId || !activeSnapshot || activeSnapshot.thread_id !== activeId) return
-    const status = turnState.value
+    // Sessions list dot: state (b) publishes its own status so the sidebar shows
+    // the quieter "waiting on sub-agents" dot instead of the generic running one.
+    const status = sessionPhase.value === 'awaiting_sub_agents' ? 'sub_agents' : turnState.value
     sessions.value = sessions.value.map((session) => (
-      session.id === activeId ? { ...session, status } : session
+      session.id === activeId && session.status !== status ? { ...session, status } : session
     ))
   }
-
-  // Sidebar status is a projection of the canonical session snapshot, not a
-  // one-time value captured when turn/start is accepted.
-  watch([activeSessionId, turnState], syncActiveSessionStatus, { immediate: true })
 
   // The composer owns a single live draft. Park the outgoing thread's text
   // under that thread and restore the incoming one, so an unsent draft never
@@ -278,10 +278,17 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     queueInput: (threadId, input) => runtimeController.queueInput(threadId, input),
     onError: options.onError,
   })
+  // Snapshot-only member-wait flag (no transcript scan needed) so the
+  // projection can tell "main agent working" from "main agent stopped, members
+  // running" without depending on the projected messages it is about to build.
+  const memberWaitActive = computed(() => (
+    snapshot.value ? selectCoreSessionActivity(snapshot.value).awaitingSubAgents : false
+  ))
   const projectionController = useCoreWorkbenchProjectionController({
     snapshot,
     activeThreadId: activeSessionId,
     status: turnState,
+    awaitingSubAgents: memberWaitActive,
     activeTurnId,
     pendingGuidance: pendingGuidance.guidanceParts,
     submittingApprovalRequestIds: computed(() => (
@@ -293,6 +300,29 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   const hasMoreHistory = computed(() => (
     projectionController.hasMoreHistory.value || snapshot.value?.history_page?.has_more === true
   ))
+
+  // Session activity is derived once (see selectCoreSessionActivity): state (a)
+  // main agent running, state (b) main stopped with sub-agents still pending.
+  // Every busy/disabled decision reads these, never the raw status ad hoc.
+  const sessionActivity = computed(() => selectCoreSessionActivity(snapshot.value, {
+    messages: projectionController.messages.value,
+  }))
+  const sessionPhase = computed(() => sessionActivity.value.phase)
+
+  // Sidebar status is a projection of the canonical session snapshot, not a
+  // one-time value captured when turn/start is accepted.
+  watch([activeSessionId, turnState, sessionPhase], syncActiveSessionStatus, { immediate: true })
+
+  // Composer queue-vs-start decision keys off the turn's own status, not off
+  // who is working: while the runtime reports a turn as active the message
+  // belongs to that turn (steer or queue), and only a session the server
+  // reports as having no active turn starts a new one. The earlier rule
+  // (mainRunning) sent a start-turn while the server still had an active turn,
+  // which the server refused and the client showed as an error.
+  const composerTurnStatus = computed<CoreWorkbenchTurnStatus>(() => (
+    isCoreActiveTurnStatus(turnState.value) ? turnState.value : 'idle'
+  ))
+
   const historyBuffered = computed(() => projectionController.hasMoreHistory.value)
   const totalMessages = computed(() => Math.max(
     projectionController.totalMessages.value,
@@ -362,19 +392,33 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     connectionState,
     text: composerText,
     cursor: composerCursor,
-    status: turnState,
+    // The turn's own status decides: while the runtime considers a turn active
+    // the message goes to that turn (steer or queue); only a session the server
+    // reports as having no active turn starts a new one. Deriving this from
+    // "is the main agent working" sent a new turn while the server still had one
+    // active, and the refusal surfaced as an error.
+    status: composerTurnStatus,
     attachments,
     connect: (threadId) => runtimeController.connect(threadId),
-    startTurn: (threadId, input, workRoot, turnOptions) => (
-      runtimeController.startTurn(threadId, input, workRoot, turnOptions)
+    startTurn: (threadId, input, workRoot, turnOptions, clientMessageId) => (
+      runtimeController.startTurn(threadId, input, workRoot, turnOptions, clientMessageId)
     ),
     interruptTurn: (threadId, turnId) => runtimeController.interruptTurn(threadId, turnId),
     forceResetTurn: (threadId, turnId) => runtimeController.forceResetTurn(threadId, turnId),
     steerTurn: async (threadId, turnId, input) => {
-      await runtimeController.steerTurn(threadId, turnId, input)
-      pendingGuidance.track(threadId, turnId, input)
+      const outcome = await runtimeController.steerTurn(threadId, turnId, input)
+      if (outcome.applied) {
+        pendingGuidance.track(threadId, turnId, input)
+        return { ok: true }
+      }
+      // A refusal is a success response with `applied: false`: there is nothing
+      // live to steer, so the caller queues the message. `queued` means the
+      // runtime already filed it and it must not be queued twice.
+      return { ok: false, queued: outcome.queued }
     },
-    queueInput: (threadId, input, turnOptions) => runtimeController.queueInput(threadId, input, turnOptions),
+    queueInput: (threadId, input, turnOptions, clientMessageId) => (
+      runtimeController.queueInput(threadId, input, turnOptions, clientMessageId)
+    ),
     listCommands: (workRoot) => runtimeController.listCommands(workRoot),
     getWorkRoot: () => sessionWorkRoot() || '',
     executeCommand: async (threadId, command, workRoot, argumentsText) => {
@@ -481,10 +525,15 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     // A local cache may be used by a host for offline rendering, but it must
     // not become the mutation/revision source. Always resume with the server
     // snapshot before enabling the composer for the selected session.
+    // The persisted transcript loads first (`thread/read`) and the live attach
+    // (`thread/resume`) resolves in the background: a session whose turn is
+    // legitimately non-terminal must never hold the visible thread blank until
+    // the resume signal times out.
     await runtimeController.switchThread(id, {
       lastSeenSeq: 0,
       includeSnapshot: true,
       preserveState: false,
+      attachInBackground: true,
     })
     if (generation !== sessionSelectionGeneration) return
     // Keep one complete ten-turn page ahead of the rendered window. Normal
@@ -516,7 +565,8 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     if (!await liveComposerController.ensureConnected(threadId)) {
       throw new Error(liveComposerController.lastError.value || '连接不可用')
     }
-    await runtimeController.steerTurn(threadId, activeTurnId.value, text.trim())
+    const outcome = await runtimeController.steerTurn(threadId, activeTurnId.value, text.trim())
+    if (!outcome.applied) throw new Error(outcome.message || '引导没有生效')
   }
 
   async function queueInput(text: string): Promise<void> {
@@ -556,6 +606,8 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     turnState,
     activeTurnId,
     turnActive,
+    sessionActivity,
+    sessionPhase,
     composerText,
     composerCursor,
     attachments,

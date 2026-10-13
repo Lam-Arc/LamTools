@@ -1,5 +1,5 @@
 <template>
-  <div v-if="commands.length" class="command-palette" role="listbox" aria-label="命令">
+  <div v-if="commands.length" class="command-palette" role="listbox" :aria-label="t('命令')">
     <div class="command-list">
       <section v-for="group in groupedCommands" :key="group.kind" class="command-group">
         <div class="command-group-label">{{ group.label }}</div>
@@ -27,14 +27,16 @@
       </section>
     </div>
     <div class="command-footer" aria-hidden="true">
-      <span><kbd>↑↓</kbd> 移动</span>
-      <span><kbd>Enter</kbd> 选择</span>
-      <span><kbd>Esc</kbd> 关闭</span>
+      <span><kbd>↑↓</kbd>{{ t("移动") }}</span>
+      <span><kbd>Enter</kbd>{{ t("选择") }}</span>
+      <span><kbd>Esc</kbd>{{ t("关闭") }}</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, nextTick, watch, type Component } from 'vue'
 import { resolveComposerCommandKind } from '../composer/syntax'
 import { coreCommandIcon } from '../composer/commandIcons'
@@ -55,8 +57,8 @@ const groupedCommands = computed(() => {
     label: string
     items: Array<{ command: CoreCommandCatalogItem; index: number }>
   }> = [
-    { kind: 'action', label: '操作', items: [] },
-    { kind: 'skill', label: '技能', items: [] },
+    { kind: 'action', get label() { return t("操作") }, items: [] },
+    { kind: 'skill', get label() { return t("技能") }, items: [] },
   ]
   props.commands.forEach((command, index) => {
     const kind = resolveComposerCommandKind(command)
@@ -81,11 +83,11 @@ function commandIcon(command: CoreCommandCatalogItem): Component {
 }
 
 function commandSourceLabel(command: CoreCommandCatalogItem): string {
-  if (resolveComposerCommandKind(command) === 'skill') return '技能'
+  if (resolveComposerCommandKind(command) === 'skill') return t("技能")
   if (command.source === 'plugin') {
-    return String(command.metadata?.plugin_title || command.metadata?.plugin_name || '插件')
+    return String(command.metadata?.plugin_title || command.metadata?.plugin_name || t("插件"))
   }
-  if (command.source === 'member') return '成员'
+  if (command.source === 'member') return t("成员")
   return 'Core'
 }
 

@@ -7,15 +7,28 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import func, select
 
 from lamtools_core.agent import SubAgentRunResult
 from lamtools_core.agent import SUB_AGENT_TOOL_SPEC
+from lamtools_core.app import open_core_app_db
+from lamtools_core.app.core_db import (
+    CoreAppEvent,
+    CoreHistoryEntry,
+    CoreRuntimeSession,
+    CoreThreadSnapshot,
+    CoreThreadSnapshotItem,
+)
+from lamtools_core.cli import build_parser
+from lamtools_core.event import CollectingEventSink
 from lamtools_core.sub_agent_supervisor import (
     SubAgentRecord,
     SubAgentSupervisor,
     acknowledge_parent_mailbox,
     current_child_identity,
     drain_parent_mailbox,
+    find_sub_agent_supervisor,
+    resolve_model_id,
     validate_reasoning,
 )
 from lamtools_core.tool import ToolCall
@@ -28,6 +41,17 @@ def seed_model(root) -> None:
     (directory / "test-model.jsonc").write_text(
         '{"model_id":"test-model","display_name":"Test Model"}', encoding="utf-8"
     )
+
+
+def seed_models(root, entries) -> None:
+    """Seed several model jsonc files into a project-scoped model dir."""
+    directory = root / ".lam" / "config" / "models"
+    directory.mkdir(parents=True, exist_ok=True)
+    for record_id, payload in entries:
+        (directory / f"{record_id}.jsonc").write_text(
+            json.dumps({"id": record_id, **payload}), encoding="utf-8"
+        )
+
 
 
 @dataclass
@@ -177,6 +201,64 @@ def test_sub_agent_reasoning_schema_and_normalizer_accept_user_aliases():
     assert "Medium" in enum
     assert validate_reasoning(" xh ") == "xhigh"
     assert validate_reasoning(" Medium ") == "medium"
+
+
+def test_resolve_model_id_exact_real_id_wins(tmp_path):
+    seed_models(tmp_path, [
+        ("prov-a-alpha", {"model_id": "prov-a/alpha-1", "display_name": "Alpha One", "provider": "Prov A"}),
+        ("prov-b-shared", {"model_id": "prov-b/shared", "display_name": "Twin Label", "provider": "Prov B"}),
+        ("prov-c-shared", {"model_id": "prov-c/shared", "display_name": "Twin Label", "provider": "Prov C"}),
+    ])
+    # Upstream model_id is the canonical real id and wins exactly.
+    assert resolve_model_id("prov-a/alpha-1", work_root=tmp_path) == "prov-a/alpha-1"
+    # The record/file id is also an exact real id.
+    assert resolve_model_id("prov-a-alpha", work_root=tmp_path) == "prov-a/alpha-1"
+    # Exact real ids resolve even when a display label is duplicated elsewhere.
+    assert resolve_model_id("prov-b/shared", work_root=tmp_path) == "prov-b/shared"
+
+
+def test_resolve_model_id_unique_display_label_and_provider_label(tmp_path):
+    seed_models(tmp_path, [
+        ("uniq", {"model_id": "vendor/uniq-1", "display_name": "Unique Label", "provider": "Prov X"}),
+    ])
+    assert resolve_model_id("Unique Label", work_root=tmp_path) == "vendor/uniq-1"
+    # The label the running agent actually sees is "<provider>/<display_name>".
+    assert resolve_model_id("Prov X/Unique Label", work_root=tmp_path) == "vendor/uniq-1"
+    # Models commonly echo the label lower-cased; matching is case-insensitive.
+    assert resolve_model_id("unique label", work_root=tmp_path) == "vendor/uniq-1"
+    assert resolve_model_id("prov x/unique label", work_root=tmp_path) == "vendor/uniq-1"
+
+
+def test_resolve_model_id_duplicate_display_label_is_rejected_with_candidates(tmp_path):
+    seed_models(tmp_path, [
+        ("dup-a", {"model_id": "prov-a/twin", "display_name": "Twin Label", "provider": "Prov A"}),
+        ("dup-b", {"model_id": "prov-b/twin", "display_name": "Twin Label", "provider": "Prov B"}),
+    ])
+    with pytest.raises(ValueError) as excinfo:
+        resolve_model_id("Twin Label", work_root=tmp_path)
+    message = str(excinfo.value)
+    assert "ambiguous" in message
+    # Every colliding candidate is listed by its real id so the caller can retry.
+    assert "prov-a/twin" in message
+    assert "prov-b/twin" in message
+    # A lower-cased duplicated label is still rejected, not silently resolved.
+    with pytest.raises(ValueError, match="ambiguous"):
+        resolve_model_id("twin label", work_root=tmp_path)
+    # A provider-qualified label is unique and therefore still resolves.
+    assert resolve_model_id("Prov A/Twin Label", work_root=tmp_path) == "prov-a/twin"
+
+
+def test_resolve_model_id_unknown_lists_available_ids(tmp_path):
+    seed_models(tmp_path, [
+        ("only", {"model_id": "vendor/only-1", "display_name": "Only Model", "provider": "Prov Z"}),
+    ])
+    with pytest.raises(ValueError) as excinfo:
+        resolve_model_id("no-such-model-xyz", work_root=tmp_path)
+    message = str(excinfo.value)
+    assert "unknown model" in message
+    assert "vendor/only-1" in message
+    # Display labels stay as a supplementary note next to the real id.
+    assert "Only Model" in message
 
 
 @pytest.mark.asyncio
@@ -595,7 +677,32 @@ async def test_recover_reports_orphaned_running_member(tmp_path):
     await second.recover()
     assert second._load("王构建").status == "interrupted"
     payloads = await second.drain_member_events()
-    assert any(item.get("event") == "member_interrupted" for item in payloads), payloads
+    interrupted = next(item for item in payloads if item.get("event") == "member_interrupted")
+    assert interrupted["detail"] == "进程重启时该成员仍在运行"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_reports_why_running_member_was_interrupted(tmp_path):
+    database = tmp_path / "shutdown.sqlite3"
+    supervisor = SubAgentSupervisor(
+        parent_thread_id="parent", runner=FakeRunner(tmp_path), database_path=database
+    )
+    supervisor._save(
+        SubAgentRecord(
+            parent_thread_id="parent", type="execute", name="李数据",
+            model_id="test-model", reasoning_level="medium", status="running",
+            started_at=time.time() - 2,
+        )
+    )
+
+    async def hold_open():
+        await asyncio.Event().wait()
+
+    supervisor._tasks["李数据"] = asyncio.create_task(hold_open())
+    await supervisor.shutdown()
+    events = await supervisor.drain_member_events()
+    interrupted = next(item for item in events if item.get("event") == "member_interrupted")
+    assert interrupted["detail"] == "进程关闭时该成员仍在运行"
 
 
 def test_find_sub_agent_supervisor_resolves_by_thread_id(tmp_path):
@@ -615,3 +722,253 @@ def test_find_sub_agent_supervisor_resolves_by_thread_id(tmp_path):
         assert find_sub_agent_supervisor("") is None
     finally:
         _SUPERVISORS.pop((str(tmp_path.resolve()), "thread-lookup"), None)
+
+
+async def _seed_session_family(db, *, session_id: str, history: int) -> None:
+    """Seed the runtime-state row and history rows a member's runs leave behind."""
+    async with db.session_factory() as session:
+        session.add(CoreRuntimeSession(
+            thread_id=session_id,
+            revision=1,
+            runtime_state_json={"session_id": session_id, "status": "idle", "metadata": {}},
+            history_json=[],
+        ))
+        for index in range(1, history + 1):
+            session.add(CoreHistoryEntry(
+                thread_id=session_id,
+                seq=index,
+                revision=index,
+                message_json={"role": "assistant", "content": f"{session_id} message {index}"},
+            ))
+        await session.commit()
+
+
+async def _scalar_count(db, statement) -> int:
+    async with db.session_factory() as session:
+        return int((await session.execute(statement)).scalar_one())
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_only_the_members_own_rows_and_its_session_family(tmp_path):
+    """Deleting a member frees its own storage and damages nothing else.
+
+    Removed: the member's durable record, its events and mailbox, and its own
+    session family (runtime state + full internal transcript). Protected: the
+    parent session's own conversation rows and every other member — they carry
+    different session ids, so the purge can never reach them.
+    """
+    seed_model(tmp_path)
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        runner = FakeRunner(tmp_path)
+        runner.state_store = db.runtime_state_store
+        supervisor = SubAgentSupervisor(
+            parent_thread_id="parent", runner=runner,
+            database_path=tmp_path / "state.sqlite3",
+        )
+        await supervisor.create(type="execute", name="worker", model="test-model", reasoning_level="high")
+        await supervisor.create(type="execute", name="other", model="test-model", reasoning_level="high")
+
+        worker_session = "parent:sub:worker"
+        other_session = "parent:sub:other"
+        await _seed_session_family(db, session_id=worker_session, history=3)
+        await _seed_session_family(db, session_id=other_session, history=1)
+
+        # The parent session's own conversation is a different session id.
+        async with db.session_factory() as session:
+            session.add(CoreThreadSnapshot(thread_id="parent", snapshot_json={"status": "completed"}))
+            session.add(CoreAppEvent(
+                event_id="event-1", thread_id="parent", seq=1,
+                method="core/runItem", payload_json={"kind": "message"},
+            ))
+            session.add(CoreThreadSnapshotItem(
+                thread_id="parent", item_id="item-1", seq=1, item_json={"item_id": "item-1"},
+            ))
+            await session.commit()
+
+        # The member's own event/mailbox rows, plus a sibling's that must survive.
+        with supervisor._connection() as connection:
+            connection.execute(
+                "INSERT INTO sub_agent_events(id,parent_thread_id,name,payload,event_key,created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                ("worker-event", "parent", "worker",
+                 json.dumps({"event": "member_finished", "name": "worker"}),
+                 "member_finished:worker:1", time.time()),
+            )
+            connection.execute(
+                "INSERT INTO sub_agent_events(id,parent_thread_id,name,payload,event_key,created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                ("other-event", "parent", "other",
+                 json.dumps({"event": "member_finished", "name": "other"}),
+                 "member_finished:other:1", time.time()),
+            )
+            connection.execute(
+                "INSERT INTO sub_agent_mailbox(id,parent_thread_id,name,direction,body,digest,message_key,created_at)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                ("worker-mail", "parent", "worker", "parent_to_child", "hi", "d", "k-worker", time.time()),
+            )
+
+        result = await supervisor.delete_operation(name="worker")
+
+        assert result["lifecycle_action"] == "deleted"
+        assert result["freed_sub_session"] is True
+        assert result["sub_session_id"] == worker_session
+
+        # The member's durable record, events and mailbox are actually gone.
+        assert supervisor._load("worker") is None
+        with supervisor._connection() as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM sub_agents WHERE parent_thread_id='parent' AND name='worker'"
+            ).fetchone()[0] == 0
+            assert connection.execute(
+                "SELECT COUNT(*) FROM sub_agent_events WHERE parent_thread_id='parent' AND name='worker'"
+            ).fetchone()[0] == 0
+            assert connection.execute(
+                "SELECT COUNT(*) FROM sub_agent_mailbox WHERE parent_thread_id='parent' AND name='worker'"
+            ).fetchone()[0] == 0
+            # The sibling member's rows are untouched.
+            assert connection.execute(
+                "SELECT COUNT(*) FROM sub_agents WHERE parent_thread_id='parent' AND name='other'"
+            ).fetchone()[0] == 1
+            assert connection.execute(
+                "SELECT COUNT(*) FROM sub_agent_events WHERE parent_thread_id='parent' AND name='other'"
+            ).fetchone()[0] == 1
+
+        # The member's own session family is gone...
+        assert await _scalar_count(
+            db, select(func.count()).select_from(CoreRuntimeSession).where(
+                CoreRuntimeSession.thread_id == worker_session
+            )
+        ) == 0
+        assert await _scalar_count(
+            db, select(func.count()).select_from(CoreHistoryEntry).where(
+                CoreHistoryEntry.thread_id == worker_session
+            )
+        ) == 0
+        # ...while the sibling's family and the parent session's own content remain.
+        assert await _scalar_count(
+            db, select(func.count()).select_from(CoreRuntimeSession).where(
+                CoreRuntimeSession.thread_id == other_session
+            )
+        ) == 1
+        assert await _scalar_count(
+            db, select(func.count()).select_from(CoreHistoryEntry).where(
+                CoreHistoryEntry.thread_id == other_session
+            )
+        ) == 1
+        assert await _scalar_count(
+            db, select(func.count()).select_from(CoreThreadSnapshot).where(
+                CoreThreadSnapshot.thread_id == "parent"
+            )
+        ) == 1
+        assert await _scalar_count(
+            db, select(func.count()).select_from(CoreAppEvent).where(
+                CoreAppEvent.thread_id == "parent"
+            )
+        ) == 1
+        assert await _scalar_count(
+            db, select(func.count()).select_from(CoreThreadSnapshotItem).where(
+                CoreThreadSnapshotItem.thread_id == "parent"
+            )
+        ) == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_refuses_a_running_member_and_succeeds_after_close(tmp_path):
+    """A running member is refused, never half-deleted; stopping it first works."""
+    seed_model(tmp_path)
+    runner = FakeRunner(tmp_path)
+    supervisor = SubAgentSupervisor(
+        parent_thread_id="parent", runner=runner, database_path=tmp_path / "state.sqlite3"
+    )
+    await supervisor.create(type="execute", name="worker", model="test-model", reasoning_level="medium")
+    await supervisor.message(
+        type="execute", name="worker", prompt="do it",
+        source_ids={"call_id": "c1", "run_id": "r1"},
+    )
+
+    with pytest.raises(ValueError, match="is running"):
+        await supervisor.delete_operation(name="worker")
+    # Nothing was removed while the task is live.
+    assert supervisor._load("worker") is not None
+
+    # Stopping it first is the explicit, loss-free path; delete is then allowed.
+    await supervisor.close(type="execute", name="worker", model="test-model", reasoning_level="medium")
+    result = await supervisor.delete_operation(name="worker")
+    assert result["lifecycle_action"] == "deleted"
+    assert supervisor._load("worker") is None
+
+
+@pytest.mark.asyncio
+async def test_toolbox_and_cli_expose_delete(tmp_path):
+    """Delete is reachable from the model-facing tool and the CLI parser."""
+    seed_model(tmp_path)
+    runner = FakeRunner(tmp_path)
+    runner.session_prefix = "toolbox-delete"
+    toolbox = build_core_toolbox(
+        work_root=tmp_path, data_dir=tmp_path / "data", sub_agent_runner=runner,
+    )
+    common = {"type": "execute", "name": "worker", "model": "test-model", "reasoning_level": "xh"}
+    await toolbox.execute(ToolCall(id="create-1", name="sub_agent", arguments={"action": "create", **common}))
+    deleted = await toolbox.execute(ToolCall(
+        id="delete-1", name="sub_agent", arguments={"action": "delete", **common},
+    ))
+    assert deleted.status == "ok"
+    assert deleted.metadata["lifecycle_action"] == "deleted"
+    supervisor = find_sub_agent_supervisor("toolbox-delete")
+    assert supervisor is not None
+    assert await supervisor.list() == []
+
+    parsed = build_parser().parse_args([
+        "subagent", "delete", "thread-1", "--type", "execute", "--name", "worker",
+    ])
+    assert parsed.subagent_command == "delete"
+    assert parsed.func is not None
+
+
+
+@pytest.mark.asyncio
+async def test_member_status_is_published_mid_turn_when_it_finishes(tmp_path):
+    """A member finishing while the turn is open is published as finished.
+
+    The parent's tool-call row stays running until the turn closes it, and the
+    members-running fact is turn-terminal. So the member's own status must be
+    published at each transition; here the turn is never closed, yet the
+    member's real status is already on the live stream.
+    """
+    from lamtools_core.app.base_agent import core_events_to_run_items
+
+    seed_model(tmp_path)
+    runner = FakeRunner(tmp_path)
+    runner.parent_event_sink = CollectingEventSink()
+    supervisor = SubAgentSupervisor(
+        parent_thread_id="parent", runner=runner, database_path=tmp_path / "state.sqlite3"
+    )
+    await supervisor.create(type="execute", name="worker", model="test-model", reasoning_level="medium")
+    await supervisor.message(
+        type="execute", name="worker", prompt="do it",
+        source_ids={"call_id": "c1", "run_id": "run-1", "turn_id": "turn-1"},
+    )
+    runner.release.set()
+    for _ in range(200):
+        if not await supervisor.has_active_members():
+            break
+        await asyncio.sleep(0.02)
+    await supervisor.close(type="execute", name="worker", model="test-model", reasoning_level="medium")
+
+    statuses = [e for e in runner.parent_event_sink.events if e.name == "runtime.sub_agent_status"]
+    events = [e.payload["event"] for e in statuses]
+    assert events[0] == "member_running", events
+    assert "member_finished" in events, events
+    finished = next(e for e in statuses if e.payload["event"] == "member_finished")
+    assert finished.payload["sub_agent"]["name"] == "worker"
+    assert finished.payload["sub_agent"]["status"] == "idle"
+    assert finished.turn_id == "turn-1"
+
+    # And it projects to a per-member row carrying that real status.
+    items = core_events_to_run_items([finished], thread_id="parent")
+    assert len(items) == 1
+    assert items[0].payload["sub_agent"]["status"] == "idle"
+    assert items[0].metadata["sub_agent"]["name"] == "worker"

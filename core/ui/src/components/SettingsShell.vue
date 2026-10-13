@@ -32,7 +32,7 @@
       <footer class="settings-sidebar-footer">
         <button class="settings-entry" @click="$emit('close')">
           <span aria-hidden="true"><ArrowLeft :size="16" :stroke-width="1.8" /></span>
-          <span>返回主界面</span>
+          <span>{{ t("返回主界面") }}</span>
         </button>
       </footer>
     </aside>
@@ -51,6 +51,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * SettingsShell — settings page layout
  *
@@ -81,7 +83,7 @@ const props = withDefaults(
     activeSection?: string
   }>(),
   {
-    title: '设置',
+    get title() { return t("设置") },
     settingsThemeStyle: () => ({}),
     initialSection: undefined,
     hideNav: false,

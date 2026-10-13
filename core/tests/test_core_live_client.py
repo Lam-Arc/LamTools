@@ -335,6 +335,62 @@ async def test_core_app_server_client_passes_configured_path_and_bearer_token_to
 
 
 @pytest.mark.asyncio
+async def test_core_app_server_client_resyncs_after_gap():
+    """A ``thread/gap`` must make the client resume from its own last applied
+    revision, so a drop converges without waiting for a full snapshot."""
+
+    class GapWebSocket(FakeWebSocket):
+        async def send_json(self, payload: dict) -> None:
+            await super().send_json(payload)
+            method = payload["method"]
+            if method == "initialize":
+                await self.inbound.put({"id": payload["id"], "result": {"protocolVersion": "core.app_server.v1"}})
+            elif method == "initialized":
+                await self.inbound.put({"id": payload["id"], "result": {"ok": True}})
+            elif method == "thread/resume":
+                after = payload["params"]["last_seen_seq"]
+                if after < 3:
+                    events = [
+                        {"event_id": f"event-{seq}", "thread_id": "thread-1", "seq": seq, "method": "core/runItem", "payload": {}}
+                        for seq in range(after + 1, 4)
+                    ]
+                else:
+                    events = [
+                        {"event_id": "event-4", "thread_id": "thread-1", "seq": 4, "method": "core/runItem", "payload": {}}
+                    ]
+                await self.inbound.put({
+                    "id": payload["id"],
+                    "result": {
+                        "events": events,
+                        "has_more": False,
+                        "next_after_seq": events[-1]["seq"] if events else after,
+                    },
+                })
+
+    websocket = GapWebSocket()
+
+    async def connect(_url: str):
+        return websocket
+
+    client = CoreAppServerClient("http://core.test", websocket_connect=connect)
+    await client.connect(thread_id="thread-1")
+
+    # Initial resume delivered events 1..3.
+    got = [await asyncio.wait_for(client._events.get(), timeout=1) for _ in range(3)]
+    assert [event["data"]["seq"] for event in got] == [1, 2, 3]
+
+    # The server signals that it dropped frames; the client resumes from seq 3
+    # and converges on the missing event, without surfacing the gap itself.
+    await websocket.inbound.put({"method": "thread/gap", "params": {"thread_id": "thread-1", "reason": "outbound_dropped"}})
+    tail = await asyncio.wait_for(client._events.get(), timeout=1)
+    assert tail["data"]["seq"] == 4
+
+    resume_calls = [p["params"]["last_seen_seq"] for p in websocket.sent if p["method"] == "thread/resume"]
+    assert resume_calls == [0, 3]
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_builtin_client_raises_aiohttp_single_message_cap(monkeypatch):
     """aiohttp defaults to a 4 MiB single-message cap, which aborted the CLI on a
     large snapshot page (one turn can be tens of MB); the built-in client must

@@ -5,8 +5,8 @@
         <button
           class="search-back"
           type="button"
-          aria-label="返回会话"
-          title="返回会话"
+          :aria-label="t('返回会话')"
+          :title="t('返回会话')"
           @click="$emit('close')"
         >
           <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -17,8 +17,8 @@
               ref="inputEl"
               :value="query"
               type="text"
-              placeholder="搜索任务、插件或文件"
-              aria-label="搜索"
+              :placeholder="t('搜索任务、插件或文件')"
+              :aria-label="t('搜索')"
               autocomplete="off"
               spellcheck="false"
               @input="onInput"
@@ -29,11 +29,11 @@
               @keydown.up.prevent="moveCursor(-1)"
               @keydown.esc.prevent="$emit('close')"
             />
-            <button v-if="query" type="button" class="search-clear" aria-label="清除" @click="clearQuery">
+            <button v-if="query" type="button" class="search-clear" :aria-label="t('清除')" @click="clearQuery">
               <X :size="13" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </div>
-          <nav class="search-tabs" aria-label="搜索范围">
+          <nav class="search-tabs" :aria-label="t('搜索范围')">
             <button
               v-for="category in CATEGORIES"
               :key="category.id"
@@ -52,7 +52,7 @@
 
         <main class="search-body full-area-column">
           <p v-if="actionError" class="search-status search-error" role="alert">{{ actionError }}</p>
-          <p v-if="searching" class="search-status">搜索中…</p>
+          <p v-if="searching" class="search-status">{{ t("搜索中…") }}</p>
           <p v-else-if="error" class="search-status search-error" role="alert">{{ error }}</p>
           <p v-else-if="!visibleRows.length" class="search-status search-hint">{{ hintText }}</p>
 
@@ -83,14 +83,16 @@
         </main>
 
         <div class="search-footer full-area-column" aria-hidden="true">
-          <span><kbd>↑↓</kbd> 移动</span>
-          <span><kbd>Enter</kbd> 选择</span>
-          <span><kbd>Esc</kbd> 返回</span>
+          <span><kbd>↑↓</kbd>{{ t("移动") }}</span>
+          <span><kbd>Enter</kbd>{{ t("选择") }}</span>
+          <span><kbd>Esc</kbd>{{ t("返回") }}</span>
         </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 /**
  * SearchShell — 全局搜索（Ctrl+K / 侧边栏“搜索”）。
  *
@@ -162,10 +164,10 @@ const searchViewEl = ref<HTMLElement | null>(null)
 type SearchCategoryId = 'all' | 'tasks' | 'plugins' | 'files'
 
 const CATEGORIES: { id: SearchCategoryId; label: string; icon: Component }[] = [
-  { id: 'all', label: '全部', icon: LayoutList },
-  { id: 'tasks', label: '任务', icon: ListChecks },
-  { id: 'plugins', label: '插件', icon: Plug },
-  { id: 'files', label: '文件', icon: File },
+  { id: 'all', get label() { return t("全部") }, icon: LayoutList },
+  { id: 'tasks', get label() { return t("任务") }, icon: ListChecks },
+  { id: 'plugins', get label() { return t("插件") }, icon: Plug },
+  { id: 'files', get label() { return t("文件") }, icon: File },
 ]
 
 interface SearchHit {
@@ -245,8 +247,8 @@ const hasStudy = computed(() => Boolean(props.activeModeId?.startsWith('study:')
 
 const hintText = computed(() =>
   query.value
-    ? `没有匹配「${query.value.trim()}」的结果 — 换个关键词，或切到「全部」看看其他范围`
-    : '输入关键词搜索任务、插件或文件',
+    ? t("没有匹配「{0}」的结果 — 换个关键词，或切到「全部」看看其他范围", { 0: query.value.trim() })
+    : t("输入关键词搜索任务、插件或文件"),
 )
 
 /** Task title matches: instant, and they work without the RAG plugin. */
@@ -289,7 +291,7 @@ const rows = computed<SearchRow[]>(() => {
       for (const session of recentSessions.value) {
         built.push({
           key: `recent-${session.id}`,
-          group: '最近任务',
+          get group() { return t("最近任务") },
           icon: MessageSquareText,
           title: String(session.title || session.id),
           meta: relativeTime(session),
@@ -316,10 +318,10 @@ const rows = computed<SearchRow[]>(() => {
     for (const session of sessionTitleMatches.value) {
       built.push({
         key: `session-${session.id}`,
-        group: '任务',
+        get group() { return t("任务") },
         icon: MessageSquareText,
         title: String(session.title || session.id),
-        subtitle: '任务标题',
+        get subtitle() { return t("任务标题") },
         meta: relativeTime(session),
         action: () => openSession(session.id),
       })
@@ -327,7 +329,7 @@ const rows = computed<SearchRow[]>(() => {
     for (const hit of messageHits.value) {
       built.push({
         key: `message-${hit.message_id || built.length}`,
-        group: '任务',
+        get group() { return t("任务") },
         icon: MessageSquareText,
         title: titleOf(hit.session_id),
         subtitle: hit.snippet,
@@ -341,7 +343,7 @@ const rows = computed<SearchRow[]>(() => {
     for (const entry of catalogMatches.value) {
       built.push({
         key: `catalog-${entry.section}-${entry.id}`,
-        group: '插件',
+        get group() { return t("插件") },
         icon: entry.icon,
         title: entry.name,
         subtitle: entry.description,
@@ -355,21 +357,21 @@ const rows = computed<SearchRow[]>(() => {
     for (const hit of fileHits.value) {
       built.push({
         key: `file-${hit.path}`,
-        group: '文件',
+        get group() { return t("文件") },
         icon: File,
         title: hit.path || '',
-        subtitle: '文件名',
+        get subtitle() { return t("文件名") },
         action: fileAction(hit),
       })
     }
     for (const hit of contentHits.value) {
       built.push({
         key: `content-${hit.path}-${hit.line}`,
-        group: '文件',
+        get group() { return t("文件") },
         icon: FileText,
         title: hit.path || '',
         subtitle: hit.content,
-        meta: hit.line ? `第 ${hit.line} 行` : undefined,
+        meta: hit.line ? t("第 {0} 行", { 0: hit.line }) : undefined,
         action: fileAction(hit),
       })
     }
@@ -382,11 +384,11 @@ const rows = computed<SearchRow[]>(() => {
     for (const hit of docHits.value) {
       built.push({
         key: `doc-${hit.path}-${hit.heading || ''}`,
-        group: '文件',
+        get group() { return t("文件") },
         icon: FolderSearch,
         title: hit.title || hit.path || '',
         subtitle: hit.snippet,
-        meta: hit.score ? hit.score.toFixed(3) : '文档',
+        meta: hit.score ? hit.score.toFixed(3) : t("文档"),
       })
     }
   }
@@ -460,7 +462,7 @@ async function openHitFile(hit: SearchHit): Promise<void> {
     // 打不开必须说出来：静默吞掉会让用户以为点了没反应，或以为文件已经打开。
     const name = path.split('/').pop() || path
     const reason = cause instanceof Error ? cause.message : String(cause)
-    actionError.value = `打开「${name}」失败：${reason}`
+    actionError.value = t("打开「{0}」失败：{1}", { 0: name, 1: reason })
   }
 }
 
@@ -623,7 +625,7 @@ const settingsThemeStyle = computed(() => {
 function titleOf(sessionId: string | undefined): string {
   const session = props.sessions.find((item) => item.id === sessionId)
   if (session?.title && session.title !== sessionId) return session.title
-  return `任务 ${(sessionId || '').slice(0, 8) || '未知'}…`
+  return t("任务 {0}…", { 0: (sessionId || '').slice(0, 8) || t("未知") })
 }
 
 function timeOf(ts: number | null | undefined): string {
@@ -640,11 +642,11 @@ function relativeTime(session: CoreSessionListItem): string {
   const stamp = new Date(raw).getTime()
   if (!Number.isFinite(stamp)) return ''
   const minutes = Math.floor((Date.now() - stamp) / 60000)
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes}分`
+  if (minutes < 1) return t("刚刚")
+  if (minutes < 60) return t("{0}分", { 0: minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}小时`
-  return `${Math.floor(hours / 24)}天`
+  if (hours < 24) return t("{0}小时", { 0: hours })
+  return t("{0}天", { 0: Math.floor(hours / 24) })
 }
 
 function highlight(text: string | undefined): string {
@@ -697,7 +699,7 @@ async function loadCatalog(): Promise<void> {
       description: String(item.description || ''),
       icon: sectionIcon('plugins'),
       section: 'plugins',
-      meta: item.enabled === false ? '已停用' : '插件',
+      meta: item.enabled === false ? t("已停用") : t("插件"),
     })
   }
   for (const item of (skills.skills as Record<string, unknown>[]) || []) {
@@ -709,7 +711,7 @@ async function loadCatalog(): Promise<void> {
       description: String(item.description || ''),
       icon: sectionIcon('skills'),
       section: 'skills',
-      meta: item.enabled === false ? '已停用' : '技能',
+      meta: item.enabled === false ? t("已停用") : t("技能"),
     })
   }
   for (const item of (hooks.hooks as Record<string, unknown>[]) || []) {
@@ -721,7 +723,7 @@ async function loadCatalog(): Promise<void> {
       description: String(item.description || item.command || ''),
       icon: sectionIcon('hooks'),
       section: 'hooks',
-      meta: item.trusted ? '钩子·已信任' : '钩子',
+      meta: item.trusted ? t("钩子·已信任") : t("钩子"),
     })
   }
   catalog.value = entries

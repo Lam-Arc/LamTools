@@ -1,19 +1,19 @@
 <template>
-  <section v-if="params.length" class="wf-run-inputs" aria-label="工作流运行输入">
+  <section v-if="params.length" class="wf-run-inputs" :aria-label="t('工作流运行输入')">
     <header class="wf-run-input-head">
       <div>
-        <h3>运行输入</h3>
-        <span>按工作流 input_params 传入</span>
+        <h3>{{ t("运行输入") }}</h3>
+        <span>{{ t("按工作流 input_params 传入") }}</span>
       </div>
       <span class="wf-run-input-count">{{ params.length }}</span>
     </header>
     <form class="wf-run-input-form" @submit.prevent="submit">
       <label v-for="param in params" :key="param.name" class="wf-run-input-field">
-        <span class="wf-run-input-label">{{ param.name }}<em v-if="param.required">必填</em></span>
+        <span class="wf-run-input-label">{{ param.name }}<em v-if="param.required">{{ t("必填") }}</em></span>
         <small v-if="param.description">{{ param.description }}</small>
         <label v-if="param.type === 'boolean'" class="wf-run-input-toggle">
           <input type="checkbox" :checked="Boolean(values[param.name])" @change="onBooleanChange(param.name, $event)" />
-          <span>{{ values[param.name] ? '开启' : '关闭' }}</span>
+          <span>{{ values[param.name] ? t("开启") : t("关闭") }}</span>
         </label>
         <input
           v-else-if="param.type === 'number'"
@@ -31,12 +31,14 @@
         <input v-else :value="stringValue(values[param.name])" type="text" @input="onValueInput(param.name, $event)" />
       </label>
       <p v-if="error" class="wf-run-input-error" role="alert">{{ error }}</p>
-      <button class="wf-run-input-submit" type="submit" :disabled="disabled">{{ disabled ? '运行中…' : '带输入运行' }}</button>
+      <button class="wf-run-input-submit" type="submit" :disabled="disabled">{{ disabled ? t("运行中…") : t("带输入运行") }}</button>
     </form>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, ref, watch } from 'vue'
 import type { WorkflowInputParam } from './types'
 
@@ -94,19 +96,19 @@ function submit(): void {
   for (const param of props.params) {
     let value = values.value[param.name]
     if (param.required && (value === undefined || value === null || value === '')) {
-      error.value = `请填写必填输入：${param.name}`
+      error.value = t("请填写必填输入：{0}", { 0: param.name })
       return
     }
     if (param.type === 'number' && value !== '') {
       const number = Number(value)
-      if (!Number.isFinite(number)) { error.value = `输入必须是数字：${param.name}`; return }
+      if (!Number.isFinite(number)) { error.value = t("输入必须是数字：{0}", { 0: param.name }); return }
       value = number
     } else if (param.type === 'object' || param.type === 'array') {
       if (typeof value === 'string') {
-        try { value = value.trim() ? JSON.parse(value) : param.type === 'array' ? [] : {} } catch { error.value = `请输入有效 JSON：${param.name}`; return }
+        try { value = value.trim() ? JSON.parse(value) : param.type === 'array' ? [] : {} } catch { error.value = t("请输入有效 JSON：{0}", { 0: param.name }); return }
       }
-      if (param.type === 'array' && !Array.isArray(value)) { error.value = `输入必须是数组：${param.name}`; return }
-      if (param.type === 'object' && (value === null || typeof value !== 'object' || Array.isArray(value))) { error.value = `输入必须是对象：${param.name}`; return }
+      if (param.type === 'array' && !Array.isArray(value)) { error.value = t("输入必须是数组：{0}", { 0: param.name }); return }
+      if (param.type === 'object' && (value === null || typeof value !== 'object' || Array.isArray(value))) { error.value = t("输入必须是对象：{0}", { 0: param.name }); return }
     }
     if (value !== '' || param.required || param.default !== undefined) inputs[param.name] = value
   }

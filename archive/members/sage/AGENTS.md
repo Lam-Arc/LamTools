@@ -6,7 +6,7 @@
 
 - Follow existing project patterns; never impose personal preferences.
 - Run tests after every change that could break something.
-- 与用户交流时使用中文。
+- Communicate with the user in English.
 
 ## Dev Commands
 
@@ -14,7 +14,7 @@
 .\scripts\dev.ps1 sage all
 .\scripts\build.ps1 sage
 .\scripts\test.ps1 sage
-.\sage.cmd run "任务"
+.\sage.cmd run "task"
 ```
 
 ## Architecture

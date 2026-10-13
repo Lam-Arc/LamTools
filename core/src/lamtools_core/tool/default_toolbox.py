@@ -1941,8 +1941,14 @@ class CoreToolbox:
                             "part_id": str(call_metadata.get("parent_part_id") or ""),
                         },
                     )
+                elif args["action"] == "delete":
+                    deleted = await supervisor.delete_operation(name=args["name"])
+                    return ToolResult(
+                        call_id=call.id, name=call.name, status="ok",
+                        content=json.dumps(deleted, ensure_ascii=False), metadata=deleted,
+                    )
                 else:
-                    raise ValueError("action must be exactly 'create' or 'close'")
+                    raise ValueError("action must be exactly 'create', 'close', or 'delete'")
             except ValueError as exc:
                 return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
             return ToolResult(

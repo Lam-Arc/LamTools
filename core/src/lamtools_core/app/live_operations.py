@@ -9,7 +9,7 @@ import os
 import sys
 import time as time_module
 import uuid
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -97,25 +97,39 @@ from .runtime_permissions import (
 TERMINAL_TURN_STATUSES = {"completed", "failed", "cancelled", "skipped"}
 # History paging bounds.
 #
-# ``char_limit`` is *not* a size guard.  Every live paging path
-# (thread.resume / thread.read / thread.history) passes a ``turn_limit`` (default
-# 10), and in turn-limit mode a page is a whole number of complete turns that the
-# character budget never splits — it only feeds the informational
-# ``history_page.char_limit`` / ``character_count`` fields.  So
-# ``MAX_THREAD_HISTORY_CHAR_LIMIT`` does NOT bound the response body: one
-# oversized turn can exceed it arbitrarily (see the "单个超大回合" section in
-# docs/core-ui-streaming-perf.md).  Do not rely on it as a byte/size guard.
+# Every live paging path (thread.resume / thread.read / thread.history) routes
+# through ``_character_page_snapshot``, which now budgets the page by
+# *serialized bytes*. Items are selected newest-first and accumulation stops
+# once the next item would cross the byte budget, so a page may end inside a
+# turn — the before_item_id/before_seq cursor already addresses that, and the
+# client already loops thread.history with it.
 #
-# If a real size budget is ever wanted it must (a) be a byte limit measured after
-# the page is assembled, (b) be able to cut *inside* a turn while keeping tool
-# calls paired with their results and the before_item_id/before_seq cursor
-# meaningful, and (c) raise the receiving clients' single-message caps with it
-# (aiohttp's max_msg_size and Node/undici's non-configurable permessage-deflate
-# decompressed limit).  That is a new design, not a retune of this figure.
+# One item is one tool exchange: a tool_call and its tool_result share an item id
+# (see runtime_projection._tool_item_id), so an item-boundary cut can never
+# strand a result without its call.
+#
+# ``char_limit`` and ``turn_limit`` are retained as informational / turn-count
+# upper bounds only; ``MAX_THREAD_HISTORY_CHAR_LIMIT`` is still not a size guard.
+# The byte budget is deliberately well under the 4 MiB single-message cap most
+# clients enforce. A single item that exceeds the budget on its own (an oversized
+# body that should not ride with the page) still yields one page of at least that
+# item, so paging always makes progress; that separate case is not solved here.
 DEFAULT_THREAD_HISTORY_CHAR_LIMIT = 200_000
 MAX_THREAD_HISTORY_CHAR_LIMIT = 1_000_000
 DEFAULT_THREAD_HISTORY_TURN_LIMIT = 10
 MAX_THREAD_HISTORY_TURN_LIMIT = 100
+DEFAULT_THREAD_HISTORY_PAGE_BYTES = 2 * 1024 * 1024
+MAX_THREAD_HISTORY_PAGE_BYTES = 3 * 1024 * 1024
+MIN_THREAD_HISTORY_PAGE_BYTES = 64 * 1024
+# Inline artifact bodies (notably ``metadata.image_data_url`` on tool results)
+# are the only thing that can push a single item past the page budget. When one
+# exceeds this, the page carries a reference instead: the durable snapshot, the
+# event row and the database keep the body byte for byte, and only the serialized
+# page swaps it for an identifier + mime type + byte size with
+# ``availability == "reference"``, resolved on demand through the existing
+# artifact path/read. See the "single oversized item" design note.
+MAX_INLINE_ARTIFACT_BYTES = 256 * 1024
+ARTIFACT_AVAILABILITY_REFERENCE = "reference"
 
 SERIALIZED_SESSION_OPERATIONS = frozenset({
     "thread.start",
@@ -605,6 +619,30 @@ class CoreLiveOperationHost:
         try:
             actor_key = _serialized_actor_key(name, params)
             if actor_key:
+                if name == "turn.start":
+                    # 会话已有活跃回合时，答案不会随等待改变（回合结束前一直活跃），
+                    # 而排队在 session actor / 写协调器后面会先等数秒再回 busy（实测
+                    # 1.6s / 13.1s / 26.5s）。注册表里的 run 认领就是排他依据，所以在
+                    # 进入串行化之前先短路：SESSION_BUSY 立即可答。排他性不变——若注册
+                    # 表没有认领，仍旧走原来的 actor + 写内判定（含 client_message_id
+                    # 去重）。代价：活跃回合期间，一个重复到达的 turn/start 请求会得到
+                    # SESSION_BUSY 而不是被去重为已接受；不改变正常（非重复）路径。
+                    active_run_id = self.runtime_task_registry.active_run_id(
+                        _thread_id_from_params(params)
+                    )
+                    if active_run_id:
+                        return CoreLiveOperationOutcome(
+                            response=rpc_error(
+                                request_id,
+                                code=INVALID_REQUEST,
+                                message="session has an active turn",
+                                data={
+                                    "code": "SESSION_BUSY",
+                                    "reason": "active_turn_exists",
+                                    "active_run_id": active_run_id,
+                                },
+                            )
+                        )
                 # Ordinary composer commands are short state mutations. Do
                 # not queue a second request behind one that may be waiting
                 # on an external command; report the conflict immediately.
@@ -740,6 +778,7 @@ async def handle_thread_resume_operation(
     include_snapshot = params.get("include_snapshot") is not False
     full_journal = params.get("full_journal") is True
     page_limit = max(1, min(_int_param(params.get("limit"), default=500), 500))
+    before_item_id, before_seq = _history_cursor(params)
     async with context.session_factory() as db:
         # The snapshot is the durable authority for everything up to its
         # snapshot_seq.  Journal paging therefore starts after that seq unless
@@ -778,10 +817,11 @@ async def handle_thread_resume_operation(
     if include_snapshot:
         result["snapshot"] = _character_page_snapshot(
             snapshot,
-            before_item_id=None,
-            before_seq=None,
+            before_item_id=before_item_id,
+            before_seq=before_seq,
             char_limit=_history_char_limit(params),
             turn_limit=_history_turn_limit(params),
+            byte_limit=_history_byte_budget(params),
         )
     return CoreLiveOperationOutcome(
         response=rpc_result(request_id, result)
@@ -838,6 +878,7 @@ async def handle_thread_read_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
         )
+    before_item_id, before_seq = _history_cursor(params)
     async with context.session_factory() as db:
         snapshot = await context.persistence.load(db, thread_id)
         events = []
@@ -855,10 +896,11 @@ async def handle_thread_read_operation(
                 "events": [event.to_dict() for event in events],
                 "snapshot": _character_page_snapshot(
                     snapshot,
-                    before_item_id=None,
-                    before_seq=None,
+                    before_item_id=before_item_id,
+                    before_seq=before_seq,
                     char_limit=_history_char_limit(params),
                     turn_limit=_history_turn_limit(params),
+                    byte_limit=_history_byte_budget(params),
                 ),
                 **member_payload,
             },
@@ -902,6 +944,7 @@ async def handle_thread_history_operation(
                     before_seq=before_seq,
                     char_limit=_history_char_limit(params),
                     turn_limit=_history_turn_limit(params),
+                    byte_limit=_history_byte_budget(params),
                 ),
             },
         )
@@ -957,9 +1000,140 @@ def _history_char_limit(params: dict[str, Any]) -> int:
 
 
 def _history_turn_limit(params: dict[str, Any]) -> int:
-    """Clamp the requested page size in complete turns (this is the real bound)."""
+    """Clamp the requested page size in turns (an upper bound, not the size guard)."""
     raw = params.get("turn_limit") or params.get("turnLimit")
     return max(1, min(_int_param(raw, default=DEFAULT_THREAD_HISTORY_TURN_LIMIT), MAX_THREAD_HISTORY_TURN_LIMIT))
+
+
+def _history_byte_budget(params: dict[str, Any]) -> int:
+    """Clamp the requested page byte budget (the real response-size guard).
+
+    Defaults to ``DEFAULT_THREAD_HISTORY_PAGE_BYTES`` (well under the 4 MiB
+    client cap) and is bounded above by ``MAX_THREAD_HISTORY_PAGE_BYTES`` so a
+    caller cannot ask for a page that would defeat the guard.
+    """
+    raw = params.get("page_bytes") or params.get("pageBytes")
+    requested = _int_param(raw, default=DEFAULT_THREAD_HISTORY_PAGE_BYTES)
+    return max(MIN_THREAD_HISTORY_PAGE_BYTES, min(requested, MAX_THREAD_HISTORY_PAGE_BYTES))
+
+
+def _history_cursor(params: dict[str, Any]) -> tuple[str | None, int | None]:
+    """Optional before cursor shared by thread.read/resume/history.
+
+    ``(None, None)`` means "newest page". Passing it explicitly lets the same
+    continuation loop the client already runs against ``thread.history`` also
+    walk the snapshot embedded in ``thread.read`` / ``thread.resume``.
+    """
+    before_item_id = str(params.get("before_item_id") or params.get("beforeItemId") or "").strip() or None
+    raw_seq = params.get("before_seq") or params.get("beforeSeq")
+    before_seq = None if raw_seq is None or raw_seq == "" else _int_param(raw_seq, default=0)
+    return before_item_id, before_seq
+
+
+def _mime_from_data_url(value: str) -> str:
+    """Extract the media type from a ``data:<mime>;base64,...`` URL."""
+    if not value.startswith("data:"):
+        return ""
+    header = value[5:].split(",", 1)[0]
+    return header.split(";", 1)[0].strip()
+
+
+def _decoded_data_url_size(value: str) -> int:
+    """Approximate decoded byte size of a base64 data URL."""
+    if "," not in value:
+        return 0
+    payload = value.split(",", 1)[1]
+    padding = payload.count("=", max(0, len(payload) - 2))
+    return max(0, (len(payload) * 3) // 4 - padding)
+
+
+def _artifact_has_large_inline_body(artifact: Mapping[str, Any]) -> bool:
+    """True when an artifact carries an inline body worth referencing out.
+
+    Only data-URL bodies over ``MAX_INLINE_ARTIFACT_BYTES`` count; a small inline
+    body is left alone so ordinary cards stay self-contained.
+    """
+    def _is_large(value: Any) -> bool:
+        return isinstance(value, str) and value.startswith("data:") and len(value) > MAX_INLINE_ARTIFACT_BYTES
+
+    if _is_large(artifact.get("content")):
+        return True
+    metadata = artifact.get("metadata")
+    if isinstance(metadata, Mapping):
+        return any(_is_large(value) for value in metadata.values())
+    return False
+
+
+def _artifact_reference(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    """Replace an oversized inline body with an explicit reference marker.
+
+    The durable artifact is untouched: this returns a new dict holding the
+    artifact's identity (``artifact_id``) plus, explicitly, a mime type and a
+    byte size, with ``availability == "reference"`` and the bulky data URL
+    dropped. The client resolves the body on demand through the existing
+    artifact path/read, so nothing needs a new fetch call.
+    """
+    reference = dict(artifact)
+    mime = str(artifact.get("mime_type") or "")
+    size = artifact.get("size_bytes")
+    inline_bytes = 0
+    metadata = artifact.get("metadata")
+    if not isinstance(size, int) and isinstance(metadata, Mapping):
+        # The artifact's own file size is the most useful display size; fall back
+        # to decoding the data URL only when it is absent.
+        declared = metadata.get("size_bytes")
+        if isinstance(declared, int):
+            size = declared
+
+    if isinstance(metadata, Mapping):
+        trimmed: dict[str, Any] = {}
+        for key, value in metadata.items():
+            if isinstance(value, str) and value.startswith("data:"):
+                inline_bytes += len(value)
+                mime = mime or _mime_from_data_url(value)
+                if not isinstance(size, int):
+                    size = _decoded_data_url_size(value)
+                continue
+            trimmed[key] = value
+        reference["metadata"] = trimmed
+
+    content = artifact.get("content")
+    if isinstance(content, str) and content.startswith("data:") and len(content) > MAX_INLINE_ARTIFACT_BYTES:
+        inline_bytes += len(content)
+        mime = mime or _mime_from_data_url(content)
+        if not isinstance(size, int):
+            size = _decoded_data_url_size(content)
+        reference.pop("content", None)
+
+    reference["availability"] = ARTIFACT_AVAILABILITY_REFERENCE
+    if mime:
+        reference["mime_type"] = mime
+    if isinstance(size, int):
+        reference["size_bytes"] = size
+    reference["inline_bytes"] = inline_bytes
+    return reference
+
+
+def _reference_oversized_item_artifacts(item: dict[str, Any]) -> dict[str, Any]:
+    """Return the wire view of an item: original, or a copy with bodies referenced.
+
+    The copy is shallow and fresh (a new artifact list) so the shared snapshot
+    item — and therefore the durable row — is never mutated.
+    """
+    artifacts = item.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return item
+    replaced: list[Any] | None = None
+    for index, artifact in enumerate(artifacts):
+        if isinstance(artifact, Mapping) and _artifact_has_large_inline_body(artifact):
+            if replaced is None:
+                replaced = list(artifacts)
+            replaced[index] = _artifact_reference(artifact)
+    if replaced is None:
+        return item
+    view = dict(item)
+    view["artifacts"] = replaced
+    return view
 
 
 def _character_page_snapshot(
@@ -969,26 +1143,27 @@ def _character_page_snapshot(
     before_seq: int | None,
     char_limit: int,
     turn_limit: int | None = None,
+    byte_limit: int = DEFAULT_THREAD_HISTORY_PAGE_BYTES,
 ) -> dict[str, Any]:
-    """Keep snapshot metadata but include only one newest-first item page.
+    """Keep snapshot metadata but include only one newest-first, byte-bounded page.
 
-    When ``turn_limit`` is provided, complete turns are the atomic page unit;
-    the character budget becomes informational and never splits a turn. The
-    legacy character-only mode remains for direct compatibility callers.
-    Consequence: the page size is bounded by turns, not by ``char_limit``, so a
-    single oversized turn can make the response arbitrarily large — see the
-    constants block above and the "单个超大回合" section of
-    docs/core-ui-streaming-perf.md.  Artifact bodies are available through
-    artifact operations and never ride with conversation pages.
+    Items are selected newest-first and accumulation stops once the next item
+    would push the page past ``byte_limit`` serialized bytes, so a page may end
+    inside a turn (the before_item_id/before_seq cursor the client already loops
+    on addresses that). ``turn_limit`` is a turn-count upper bound and
+    ``char_limit`` is informational only. A single item larger than
+    ``byte_limit`` still yields a page containing at least that one item, so
+    paging always makes progress; that oversized-body case is not solved here.
+    Artifact bodies are available through artifact operations and never ride with
+    conversation pages.
 
     The page is assembled without cloning the snapshot: every key the page
     replaces is rebuilt into a fresh container, so the input snapshot is never
     mutated, while untouched branches — including the exposed item dicts — are
     shared with the caller. The page is meant to be serialized into a response
-    immediately, not stored or mutated by callers. Item character sizes — only
-    needed for the informational ``character_count`` and the legacy
-    character-only selection — are measured lazily per item instead of
-    serializing the whole thread up front (tens of MB on long sessions).
+    immediately, not stored or mutated by callers. Item sizes are measured lazily
+    per item instead of serializing the whole thread up front (tens of MB on long
+    sessions); bytes are measured so the budget is a real wire-size bound.
     """
     core = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
     raw_core_items = core.get("items") if isinstance(core.get("items"), dict) else {}
@@ -1015,6 +1190,22 @@ def _character_page_snapshot(
                 turn_id_by_item.setdefault(str(raw_item_id), turn_id)
 
     char_sizes: dict[str, int] = {}
+    byte_sizes: dict[str, int] = {}
+    wired_top: dict[str, dict[str, Any]] = {}
+    wired_core: dict[str, dict[str, Any]] = {}
+
+    def _wire(item_id: str, items: dict[str, Any], cache: dict[str, dict[str, Any]]) -> Any:
+        # The wire view is the item with any oversized inline artifact body
+        # swapped for a reference. Sizes and the page both use this view, so the
+        # budget bounds what is actually sent while the durable item is untouched.
+        item = items.get(item_id)
+        if not isinstance(item, dict):
+            return item
+        cached = cache.get(item_id)
+        if cached is None:
+            cached = _reference_oversized_item_artifacts(item)
+            cache[item_id] = cached
+        return cached
 
     def _item_chars(item_id: str) -> int:
         # Mirrors the merged-timeline semantics: an item id present in both the
@@ -1022,13 +1213,28 @@ def _character_page_snapshot(
         cached = char_sizes.get(item_id)
         if cached is None:
             cached = 0
-            item = raw_top_items.get(item_id)
+            item = _wire(item_id, raw_top_items, wired_top)
             if isinstance(item, dict):
                 cached += len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
-            item = raw_core_items.get(item_id)
+            item = _wire(item_id, raw_core_items, wired_core)
             if isinstance(item, dict):
                 cached += len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
             char_sizes[item_id] = cached
+        return cached
+
+    def _item_bytes(item_id: str) -> int:
+        # UTF-8 byte length, not characters: the budget must bound what actually
+        # goes on the wire (CJK content is 3 bytes per character).
+        cached = byte_sizes.get(item_id)
+        if cached is None:
+            cached = 0
+            item = _wire(item_id, raw_top_items, wired_top)
+            if isinstance(item, dict):
+                cached += len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            item = _wire(item_id, raw_core_items, wired_core)
+            if isinstance(item, dict):
+                cached += len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            byte_sizes[item_id] = cached
         return cached
 
     # User messages live in the top-level item map while assistant process
@@ -1068,17 +1274,24 @@ def _character_page_snapshot(
 
     selected: list[tuple[int, int, int, str, str]] = []
     if turn_limit is not None:
+        # Byte-budgeted selection, newest-first. Accumulation stops before the
+        # next item would cross the budget, so a page may end inside a turn; the
+        # cursor below is what the client already follows. ``turn_limit`` stays a
+        # turn-count upper bound. At least one item is always taken so a page
+        # never comes back empty (progress even when one item alone is oversized).
         selected_turns: set[str] = set()
+        selected_bytes = 0
         for entry in reversed(ordered):
             turn_key = entry[4] or f"item:{entry[3]}"
             if turn_key not in selected_turns and len(selected_turns) >= turn_limit:
                 continue
+            item_bytes = _item_bytes(entry[3])
+            if selected and selected_bytes + item_bytes > byte_limit:
+                break
+            selected.append(entry)
+            selected_bytes += item_bytes
             selected_turns.add(turn_key)
-        selected = [
-            entry
-            for entry in ordered
-            if (entry[4] or f"item:{entry[3]}") in selected_turns
-        ]
+        selected.reverse()
     else:
         character_count = 0
         for entry in reversed(ordered):
@@ -1134,7 +1347,9 @@ def _character_page_snapshot(
 
     page_core = dict(core)
     page_core["items"] = {
-        item_id: item for item_id, item in raw_core_items.items() if item_id in selected_ids
+        item_id: _wire(item_id, raw_core_items, wired_core)
+        for item_id in selected_ids
+        if isinstance(raw_core_items.get(item_id), dict)
     }
     page_core["item_order"] = [
         str(item_id) for item_id in raw_core_order if str(item_id) in selected_ids
@@ -1145,7 +1360,9 @@ def _character_page_snapshot(
     page = dict(snapshot)
     page["core"] = page_core
     page["items"] = {
-        item_id: item for item_id, item in raw_top_items.items() if item_id in visible_ids
+        item_id: _wire(item_id, raw_top_items, wired_top)
+        for item_id in visible_ids
+        if isinstance(raw_top_items.get(item_id), dict)
     }
     page["item_order"] = [
         str(item_id) for item_id in raw_top_order if str(item_id) in visible_ids
@@ -1153,9 +1370,15 @@ def _character_page_snapshot(
     page["turns"] = filtered_turns(snapshot.get("turns"))
     page["artifacts"] = {}
     page["seen_event_ids"] = []
+    # Serialized bytes of the selected items, the quantity the budget bounds. The
+    # page also carries a few metadata keys, so this under-reports the exact wire
+    # size; the budget leaves ample headroom under the client cap for them.
+    page_bytes = sum(_item_bytes(entry[3]) for entry in selected)
     page["history_page"] = {
         "char_limit": char_limit,
         "character_count": character_count,
+        "byte_limit": byte_limit,
+        "byte_count": page_bytes,
         "turn_limit": turn_limit,
         "turn_count": len({entry[4] or f"item:{entry[3]}" for entry in selected}),
         "item_count": len(visible_ids),
@@ -1220,26 +1443,21 @@ async def handle_turn_start_operation(
 ) -> CoreLiveOperationOutcome:
     thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
     client_message_id = str(params.get("client_message_id") or params.get("clientMessageId") or uuid.uuid4().hex)
+    # Provenance of an automatic (non-user) turn, e.g. "member_wake". It rides the
+    # acceptance and runtime payloads so the projection can mark the turn and its
+    # input item, and the kernel can preserve the wake as a marked system-history
+    # entry at the model boundary.
+    turn_origin = str(params.get("origin") or params.get("turn_origin") or "").strip()
     input_items = params.get("input")
     if not thread_id or not isinstance(input_items, list):
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and input are required")
         )
     try:
-        expected_revision = _expected_revision(params)
+        _expected_revision(params)  # 形状校验；回合创建是幂等追加，见 write 说明
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
 
-    try:
-        prepared = await context.host.member_hooks.prepare_turn_input(
-            thread_id=thread_id,
-            params=params,
-            input_items=input_items,
-        )
-    except ValueError as exc:
-        return CoreLiveOperationOutcome(
-            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
-        )
     turn_id = str(params.get("turn_id") or params.get("turnId") or f"{thread_id}:turn:{uuid.uuid4().hex[:12]}")
     user_item_id = str(params.get("user_item_id") or params.get("userItemId") or f"{turn_id}:user")
     run_claimed = False
@@ -1249,6 +1467,19 @@ async def handle_turn_start_operation(
     # boundary, while the remaining runtime options stay turn-scoped.
     try:
         resolved = await _resolve_turn_approval_policy(context=context, params={**params, "thread_id": thread_id})
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
+        )
+    # Clients and automatic continuations need not repeat the project path on
+    # every message. Resolve it before composer preparation and persist the
+    # same root that the tools/runtime will receive.
+    if not (params.get("work_root") or params.get("workRoot")) and resolved.get("work_root"):
+        params = {**params, "work_root": resolved["work_root"]}
+    try:
+        prepared = await context.host.member_hooks.prepare_turn_input(
+            thread_id=thread_id, params=params, input_items=input_items,
+        )
     except ValueError as exc:
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
@@ -1275,7 +1506,12 @@ async def handle_turn_start_operation(
             return ("existing", existing, None, None, None, False)
 
         _w2 = time_module.perf_counter()
-        await context.persistence.assert_revision(db, thread_id, expected_revision)
+        # 回合创建是幂等追加（client_message_id 去重）：它只追加 turn/accepted、
+        # user item 与 running 状态，不读改写任何共享字段，真正的并发保护是下面的
+        # 活跃回合判定（注册表 + 元数据行）。因此这里不做修订号 CAS：活跃回合持续
+        # 追加事件会把会话修订号一路推高，而本写又要排队数秒才执行，客户端在发起
+        # RPC 前读到的修订号几乎必然落后，CAS 会把一条合法的新回合打成
+        # REVISION_CONFLICT，还盖住了本该返回的 SESSION_BUSY（2026-10-12）。
         # 只需要轮次状态与顶层用户条目顺序（活跃轮判定 + 首条消息判定），
         # 全部存放在元数据行——这里曾装配整个会话的条目表，大会话上阻塞写锁秒级。
         snapshot = await context.persistence.load_metadata(db, thread_id)
@@ -1336,8 +1572,18 @@ async def handle_turn_start_operation(
                 turn_payload_extra={
                     **materialized.turn_payload_extra,
                     "runtime_snapshot": turn_runtime_snapshot,
+                    **({"origin": turn_origin} if turn_origin else {}),
                 },
-                user_payload_extra=materialized.user_payload_extra,
+                user_payload_extra={
+                    **materialized.user_payload_extra,
+                    **(
+                        # An automatic turn's input is a SYSTEM message, not the
+                        # user's: the interface must not render it as their text.
+                        {"origin": turn_origin, "type": "systemMessage", "role": "system"}
+                        if turn_origin
+                        else {}
+                    ),
+                },
                 include_turn_status=materialized.include_turn_status,
             )
             _w4 = time_module.perf_counter()
@@ -1457,6 +1703,7 @@ async def handle_turn_start_operation(
         ),
         **prepared.runtime_extras,
         **materialized.runtime_extras,
+        **({"origin": turn_origin} if turn_origin else {}),
     }
     events = [accepted, user, running]
     _t2 = time_module.perf_counter()
@@ -1489,6 +1736,55 @@ async def handle_turn_start_operation(
     )
 
 
+async def _latest_persisted_active_mode(*, context: "CoreLiveContext", thread_id: str) -> str | None:
+    """Return the newest non-empty active mode persisted for this thread."""
+    session_factory = getattr(context, "session_factory", None)
+    persistence = getattr(context, "persistence", None)
+    load_metadata = getattr(persistence, "load_metadata", None)
+    if not thread_id or not callable(session_factory) or not callable(load_metadata):
+        return None
+    try:
+        async with session_factory() as db:
+            snapshot = await load_metadata(db, thread_id)
+    except Exception:
+        # Mode inheritance is best-effort; an unavailable snapshot must not
+        # prevent an automatic continuation from starting.
+        return None
+    if not isinstance(snapshot, Mapping):
+        return None
+
+    # Turn acceptance stores the authoritative runtime snapshot in `turns`.
+    # Older snapshots may expose only the core projection, so use it only when
+    # the canonical turn map is unavailable.
+    raw_turns = snapshot.get("turns")
+    core = snapshot.get("core")
+    core_turns = core.get("turns") if isinstance(core, Mapping) else None
+    if not isinstance(raw_turns, Mapping):
+        raw_turns = core_turns
+    if not isinstance(raw_turns, Mapping):
+        return None
+
+    def turn_sequence(turn: Mapping[str, Any]) -> int:
+        try:
+            return int(turn.get("last_seq") or turn.get("seq") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    ordered_turns = sorted(
+        (turn for turn in raw_turns.values() if isinstance(turn, Mapping)),
+        key=turn_sequence,
+        reverse=True,
+    )
+    for turn in ordered_turns:
+        runtime_snapshot = turn.get("runtime_snapshot")
+        if not isinstance(runtime_snapshot, Mapping):
+            continue
+        active_mode = runtime_snapshot.get("active_mode")
+        if isinstance(active_mode, str) and active_mode.strip():
+            return active_mode.strip()
+    return None
+
+
 async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: dict[str, Any]) -> dict[str, Any]:
     """Resolve approval policy, tier configuration, and loadtools mode for a turn.
     
@@ -1507,6 +1803,9 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
         active_mode = active_mode.strip()
     else:
         active_mode = None
+    automatic_origin = str(params.get("origin") or params.get("turn_origin") or "").strip()
+    if active_mode is None and automatic_origin:
+        active_mode = await _latest_persisted_active_mode(context=context, thread_id=thread_id)
     load_tools = _load_load_tools(context)
     global_controls: dict[str, Any] = load_global_runtime_controls()
     global_value: dict[str, Any] = {}
@@ -1601,6 +1900,7 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
     )
     return {
         **permissions.to_dict(),
+        "work_root": str(session_metadata.get("work_root") or ""),
         "tier_tools": permissions.tier_tools,
         "active_mode": active_mode,
         "runtime_snapshot": build_runtime_snapshot(permissions=permissions, active_mode=active_mode),
@@ -2156,7 +2456,7 @@ async def handle_turn_steer_operation(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id, turn_id and input are required")
         )
     try:
-        expected_revision = _expected_revision(params)
+        _expected_revision(params)  # Validate the optional event cursor only.
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     text = input_items_text(input_items)
@@ -2177,7 +2477,10 @@ async def handle_turn_steer_operation(
         )
         if existing is not None:
             return "existing", existing
-        await context.persistence.assert_revision(db, thread_id, expected_revision)
+        # Guidance is an idempotent append scoped to turn_id. Live progress
+        # changes the session revision between the client's read and this
+        # transaction, without invalidating the requested guidance. Check the
+        # target run below instead; retain client-message deduplication above.
         registry_run_id = context.host.runtime_task_registry.active_run_id(thread_id)
         # run id 有两种写法（`<thread>:turn:<run>` 与 `<run>`）：这里必须归一后比较，
         # 否则写法不同就会被判成"轮次不匹配"而把一条合法引导挡在门外（2026-10-09）。
@@ -2553,13 +2856,8 @@ async def handle_queue_create_operation(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and input are required")
         )
     try:
-        expected_revision = _expected_revision(params)
-    except ValueError as exc:
-        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    try:
-        prepared = await context.host.member_hooks.prepare_queue_input(
-            thread_id=thread_id, params=params, input_items=input_items
-        )
+        # 仅校验参数形状；排队是幂等追加，不参与修订号 CAS（见下方 write 的说明）。
+        _expected_revision(params)
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     queue_item_id = str(params.get("queue_item_id") or params.get("queueItemId") or f"queue:{uuid.uuid4().hex[:12]}")
@@ -2571,6 +2869,14 @@ async def handle_queue_create_operation(
         resolved = await _resolve_turn_approval_policy(
             context=context,
             params={**params, "thread_id": thread_id},
+        )
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    if not (params.get("work_root") or params.get("workRoot")) and resolved.get("work_root"):
+        params = {**params, "work_root": resolved["work_root"]}
+    try:
+        prepared = await context.host.member_hooks.prepare_queue_input(
+            thread_id=thread_id, params=params, input_items=input_items,
         )
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
@@ -2586,6 +2892,7 @@ async def handle_queue_create_operation(
         mode=str(params.get("mode") or "next_turn"),
         runtime_snapshot=queue_runtime_snapshot,
     )
+    payload["work_root"] = prepared.work_root
     async def write(db: AsyncSession):
         existing = await context.persistence.find_client_event(
             db,
@@ -2595,7 +2902,15 @@ async def handle_queue_create_operation(
         )
         if existing is not None:
             return existing, None
-        await context.persistence.assert_revision(db, thread_id, expected_revision)
+        # 排队是"只增"的幂等追加：条目自带 queue_item_id 与 runtime_snapshot，
+        # 写入在事务内读的是最新快照，客户端传进来的期望修订号不参与任何读改写。
+        # 因此这里刻意不做 CAS：主回合等待后台子代理期间，会话修订号会被持续追加
+        # 的事件推高（本轮事件、成员转发事件），客户端在发起 RPC 前读到的修订号
+        # 几乎必然落后，CAS 会把一条完全合法的消息打成"Revision conflict"（用户
+        # 只能刷新重试才能发出）。真正需要乐观锁的是读改写类变更（turn.start、
+        # command.execute、queue.update/delete/guide、会话设置），它们各自的 CAS
+        # 一个都没有动，这里移除的只针对幂等追加。expected_revision 仍按参数校验
+        # （见本函数入口），但不再作为拒绝依据（2026-10-12）。
         materialized = await context.host.member_hooks.materialize_queue(
             db=db,
             thread_id=thread_id,
@@ -2657,7 +2972,7 @@ async def handle_queue_update_operation(
             )
         )
     try:
-        expected_revision = _expected_revision(params)
+        _expected_revision(params)  # 形状校验；写事件是幂等追加，见 write 说明
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     input_items = params.get("input")
@@ -2696,7 +3011,10 @@ async def handle_queue_update_operation(
         )
         if not plan.applied:
             return plan.reason, None
-        await context.persistence.assert_revision(db, thread_id, expected_revision)
+        # 更新排队条目是幂等追加（queue_item_id 为键），计划在事务内基于最新元数据
+        # 行构建，客户端期望修订号不参与任何读改写。这里不做 CAS：活跃回合持续追加
+        # 事件会让客户端读到的修订号必然落后，CAS 会把合法的编辑打成修订冲突
+        # （2026-10-12，与 queue.create 同一原因）。
         event = await _append_app_event(
             db,
             context=context,
@@ -2739,11 +3057,13 @@ async def handle_queue_delete_operation(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and queue_item_id are required")
         )
     try:
-        expected_revision = _expected_revision(params)
+        _expected_revision(params)  # 形状校验；删除是幂等追加，见 write 说明
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     async def write(db: AsyncSession) -> AppEventEnvelope:
-        await context.persistence.assert_revision(db, thread_id, expected_revision)
+        # 删除排队条目只追加一个 queue_item_id 为键的 tombstone 事件，不读改写任何
+        # 共享字段；活跃回合持续追加事件时客户端修订号必然落后，CAS 会让用户根本删
+        # 不掉这条排队消息（2026-10-12）。因此与 queue.create 一致，不做修订号 CAS。
         return await _append_app_event(
             db,
             context=context,
@@ -2784,7 +3104,7 @@ async def handle_queue_guidance_operation(
             )
         )
     try:
-        expected_revision = _expected_revision(params)
+        _expected_revision(params)  # 形状校验；引导是幂等追加，见 write 说明
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     client_message_id = str(
@@ -2817,7 +3137,9 @@ async def handle_queue_guidance_operation(
             replacement_text=replacement_text,
         )
         if plan.applied:
-            await context.persistence.assert_revision(db, thread_id, expected_revision)
+            # 引导把排队条目转成两枚追加事件（turn/steered + itemDeleted）并在内存
+            # 注册表登记，不读改写共享的持久字段。活跃回合持续追加事件会让客户端修订
+            # 号落后，CAS 会把合法的引导打成修订冲突（2026-10-12，同 queue.create）。
             guidance_text = input_items_text(plan.runtime_input_items)
             guidance_status = context.host.runtime_task_registry.accept_guidance(
                 thread_id,

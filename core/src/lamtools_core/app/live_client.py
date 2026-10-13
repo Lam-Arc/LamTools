@@ -7,6 +7,8 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
+from .live_protocol import THREAD_GAP_METHOD
+
 
 WebSocketConnect = Callable[[str], Awaitable[Any]]
 
@@ -43,6 +45,12 @@ class CoreAppServerClient:
         self._events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         self._seen_event_ids: set[str] = set()
         self._reader: asyncio.Task[None] | None = None
+        # Resync anchor for the server's ``thread/gap`` signal: the thread we are
+        # attached to and the highest journal seq we have applied. A gap resumes
+        # from this revision instead of waiting for the next full snapshot.
+        self._thread_id: str | None = None
+        self._last_seq: int = 0
+        self._resync_task: asyncio.Task[None] | None = None
 
     async def connect(self, *, thread_id: str | None = None, last_seen_seq: int = 0) -> None:
         self._ws = await self._connect_websocket()
@@ -57,6 +65,8 @@ class CoreAppServerClient:
         )
         await self.request("initialized", {})
         if thread_id:
+            self._thread_id = thread_id
+            self._last_seq = max(self._last_seq, _int_value(last_seen_seq, default=0))
             await self._resume_thread(thread_id=thread_id, last_seen_seq=last_seen_seq)
 
     async def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -304,6 +314,8 @@ class CoreAppServerClient:
     async def close(self) -> None:
         if self._reader:
             self._reader.cancel()
+        if self._resync_task is not None and not self._resync_task.done():
+            self._resync_task.cancel()
         if self._ws is not None and not bool(getattr(self._ws, "closed", False)):
             try:
                 await self._ws.close()
@@ -327,7 +339,30 @@ class CoreAppServerClient:
             if key in self._seen_event_ids:
                 return
             self._seen_event_ids.add(key)
+        seq = event.get("seq")
+        if seq is not None:
+            try:
+                self._last_seq = max(self._last_seq, int(seq))
+            except (TypeError, ValueError):
+                pass
         await self._events.put(app_server_event(event))
+
+    def _schedule_resync(self) -> None:
+        """React to a server ``thread/gap`` by resuming from our own revision."""
+        if not self._thread_id:
+            return
+        if self._resync_task is not None and not self._resync_task.done():
+            return
+        self._resync_task = asyncio.create_task(self._resync_thread())
+
+    async def _resync_thread(self) -> None:
+        thread_id = self._thread_id
+        if not thread_id:
+            return
+        try:
+            await self._resume_thread(thread_id=thread_id, last_seen_seq=self._last_seq)
+        except Exception:
+            logger.warning("app-server gap resync failed", exc_info=True)
 
     async def _connect_websocket(self) -> Any:
         url = self._websocket_url()
@@ -384,6 +419,11 @@ class CoreAppServerClient:
                     future.set_result(raw)
                 continue
             if raw.get("method") and isinstance(raw.get("params"), dict):
+                if raw["method"] == THREAD_GAP_METHOD:
+                    # The server dropped frames for us; resync from our revision
+                    # instead of surfacing a lossy stream.
+                    self._schedule_resync()
+                    continue
                 await self.put_app_server_event(raw["params"])
         for future in self._pending.values():
             if not future.done():

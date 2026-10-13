@@ -2,7 +2,7 @@
   <section class="settings-panel settings-panel--editor">
     <header class="settings-title">
       <h1>Sub agent</h1>
-      <p>配置 sub_agent 调用提示词，指导主 Agent 如何与何时委派子 Agent（model/mode 等）。</p>
+      <p>{{ t("配置 sub_agent 调用提示词，指导主 Agent 如何与何时委派子 Agent（model/mode 等）。") }}</p>
     </header>
 
     <p v-if="error" class="skill-error">{{ error }}</p>
@@ -11,9 +11,9 @@
     <!-- Default multimodal model picker -->
     <article class="setting-card">
       <div class="subhead">
-        <span class="muted">默认多模态解析模型</span>
+        <span class="muted">{{ t("默认多模态解析模型") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="settingsLoading || settingsSaving" @click="saveSettings">保存</button>
+          <button class="text-btn" type="button" :disabled="settingsLoading || settingsSaving" @click="saveSettings">{{ t("保存") }}</button>
         </div>
       </div>
       <UiSelect
@@ -21,11 +21,10 @@
         class="mm-select"
         :options="mmModelOptions"
         :disabled="settingsLoading"
-        aria-label="默认多模态解析模型"
+        :aria-label="t('默认多模态解析模型')"
         @update:model-value="defaultMmModel = $event"
       />
-      <p class="hook-meta">
-        当主模型为文本模型且需要理解图片/视频等附件时，能力提示词会引导主 Agent 用此模型委派 sub_agent 查看。仅显示已声明 <strong>多模态</strong> 能力的模型。保存到 <code>{{ settingsTargetPath }}</code>。
+      <p class="hook-meta">{{ t("当主模型为文本模型且需要理解图片/视频等附件时，能力提示词会引导主 Agent 用此模型委派 sub_agent 查看。仅显示已声明") }}<strong>{{ t("多模态") }}</strong>{{ t("能力的模型。保存到") }}<code>{{ settingsTargetPath }}</code>。
       </p>
     </article>
 
@@ -33,7 +32,7 @@
     <article class="setting-card delegation-strategy-card">
       <div class="subhead">
         <div>
-          <strong>子代理委派策略</strong>
+          <strong>{{ t("子代理委派策略") }}</strong>
           <p class="delegation-strategy-summary">{{ delegationStrategySource }}</p>
         </div>
         <div class="subhead-actions">
@@ -43,7 +42,7 @@
             :disabled="settingsLoading || delegationStrategySaving"
             data-delegation-strategy-save
             @click="saveDelegationStrategy"
-          >{{ delegationStrategySaving ? '保存中…' : '保存' }}</button>
+          >{{ delegationStrategySaving ? t("保存中…") : t("保存") }}</button>
         </div>
       </div>
       <div class="delegation-strategy-body">
@@ -52,7 +51,7 @@
           class="delegation-strategy-select"
           :options="availableDelegationStrategyOptions"
           :disabled="settingsLoading || delegationStrategySaving"
-          aria-label="子代理委派策略"
+          :aria-label="t('子代理委派策略')"
           :menu-min-width="0"
         />
         <p class="delegation-strategy-description">
@@ -68,7 +67,7 @@
     <article class="setting-card role-assignment-card">
       <div class="subhead">
         <div>
-          <strong>角色分配</strong>
+          <strong>{{ t("角色分配") }}</strong>
           <p class="role-assignment-summary">{{ roleAssignmentDescription }}</p>
         </div>
         <div class="subhead-actions">
@@ -78,14 +77,14 @@
             :disabled="settingsLoading || roleAssignmentsSaving"
             data-role-assignment-add
             @click="addRoleAssignment"
-          >新增</button>
+          >{{ t("新增") }}</button>
           <button
             class="text-btn"
             type="button"
             :disabled="settingsLoading || roleAssignmentsSaving"
             data-role-assignment-save
             @click="saveRoleAssignments"
-          >{{ roleAssignmentsSaving ? '保存中…' : '保存' }}</button>
+          >{{ roleAssignmentsSaving ? t("保存中…") : t("保存") }}</button>
         </div>
       </div>
 
@@ -94,11 +93,11 @@
       </p>
 
       <div class="role-assignment-labels" aria-hidden="true">
-        <span>任务类型</span>
-        <span>类型</span>
-        <span>建议模型</span>
-        <span>最低思考强度</span>
-        <span>最高思考强度</span>
+        <span>{{ t("任务类型") }}</span>
+        <span>{{ t("类型") }}</span>
+        <span>{{ t("建议模型") }}</span>
+        <span>{{ t("最低思考强度") }}</span>
+        <span>{{ t("最高思考强度") }}</span>
         <span></span>
       </div>
 
@@ -115,62 +114,62 @@
           :data-role-assignment-row="index"
         >
           <label class="role-assignment-field role-assignment-field--task">
-            <span class="role-assignment-mobile-label">任务类型</span>
+            <span class="role-assignment-mobile-label">{{ t("任务类型") }}</span>
             <input
               v-model="assignment.task_type"
               class="role-assignment-input"
               type="text"
               autocomplete="off"
               :disabled="settingsLoading || roleAssignmentsSaving"
-              :aria-label="`任务类型 ${index + 1}`"
-              placeholder="例如：代码审查"
+              :aria-label="t('任务类型 {0}', { 0: index + 1 })"
+              :placeholder="t('例如：代码审查')"
               @input="roleAssignmentError = ''"
             />
           </label>
           <label class="role-assignment-field">
-            <span class="role-assignment-mobile-label">类型</span>
+            <span class="role-assignment-mobile-label">{{ t("类型") }}</span>
             <UiSelect
               v-model="assignment.type"
               :options="roleTypeOptions"
               :disabled="settingsLoading || roleAssignmentsSaving"
-              :aria-label="`类型 ${index + 1}`"
+              :aria-label="t('类型 {0}', { 0: index + 1 })"
             />
           </label>
           <label class="role-assignment-field role-assignment-field--model">
-            <span class="role-assignment-mobile-label">建议模型</span>
+            <span class="role-assignment-mobile-label">{{ t("建议模型") }}</span>
             <UiSelect
               v-model="assignment.model"
               :options="modelOptionsFor(assignment.model)"
               :disabled="settingsLoading || roleAssignmentsSaving"
-              :aria-label="`建议模型 ${index + 1}`"
-              placeholder="选择模型"
+              :aria-label="t('建议模型 {0}', { 0: index + 1 })"
+              :placeholder="t('选择模型')"
             />
           </label>
           <label class="role-assignment-field">
-            <span class="role-assignment-mobile-label">最低思考强度</span>
+            <span class="role-assignment-mobile-label">{{ t("最低思考强度") }}</span>
             <UiSelect
               v-model="assignment.reasoning_min"
               :options="reasoningOptions"
               :disabled="settingsLoading || roleAssignmentsSaving"
-              :aria-label="`最低思考强度 ${index + 1}`"
+              :aria-label="t('最低思考强度 {0}', { 0: index + 1 })"
             />
           </label>
           <label class="role-assignment-field">
-            <span class="role-assignment-mobile-label">最高思考强度</span>
+            <span class="role-assignment-mobile-label">{{ t("最高思考强度") }}</span>
             <UiSelect
               v-model="assignment.reasoning_max"
               :options="reasoningOptions"
               :disabled="settingsLoading || roleAssignmentsSaving"
-              :aria-label="`最高思考强度 ${index + 1}`"
+              :aria-label="t('最高思考强度 {0}', { 0: index + 1 })"
             />
           </label>
           <button
             class="text-btn danger role-assignment-remove"
             type="button"
             :disabled="settingsLoading || roleAssignmentsSaving"
-            :aria-label="`删除角色分配 ${index + 1}`"
+            :aria-label="t('删除角色分配 {0}', { 0: index + 1 })"
             @click="removeRoleAssignment(index)"
-          >删除</button>
+          >{{ t("删除") }}</button>
         </div>
       </TransitionGroup>
 
@@ -180,20 +179,18 @@
         type="button"
         :disabled="settingsLoading || roleAssignmentsSaving"
         @click="addRoleAssignment"
-      >新增第一条角色分配</button>
+      >{{ t("新增第一条角色分配") }}</button>
 
-      <p class="hook-meta">
-        规则会统一追加到 sub_agent 调用纪律之后。任务类型匹配时，为主 Agent 提供建议的子代理类型、模型与思考强度范围。
-      </p>
+      <p class="hook-meta">{{ t("规则会统一追加到 sub_agent 调用纪律之后。任务类型匹配时，为主 Agent 提供建议的子代理类型、模型与思考强度范围。") }}</p>
     </article>
 
     <!-- Guide editor -->
     <article class="setting-card">
       <div class="subhead">
-        <span class="muted">{{ loading ? '加载中…' : statusLabel }}</span>
+        <span class="muted">{{ loading ? t("加载中…") : statusLabel }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading" @click="fetchGuide">刷新</button>
-          <button class="text-btn" type="button" :disabled="loading || saving" @click="saveGuide">保存</button>
+          <button class="text-btn" type="button" :disabled="loading" @click="fetchGuide">{{ t("刷新") }}</button>
+          <button class="text-btn" type="button" :disabled="loading || saving" @click="saveGuide">{{ t("保存") }}</button>
         </div>
       </div>
 
@@ -203,7 +200,7 @@
         rows="18"
         spellcheck="false"
         :disabled="loading || saving"
-        placeholder="# Sub-agent 委派指南&#10;在此编写自然语言指令，将注入到主 Agent 系统提示词中…"
+        :placeholder="t('# Sub-agent 委派指南\n在此编写自然语言指令，将注入到主 Agent 系统提示词中…')"
       />
       <p class="hook-meta">
         {{ guideDescription }}
@@ -214,6 +211,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, ref } from 'vue'
 import UiSelect from './UiSelect.vue'
 import type { CoreSettingsModel } from './CoreSettings.vue'
@@ -267,26 +266,26 @@ function withScope<T extends Record<string, unknown>>(extra: T): T {
 }
 
 const statusLabel = computed(() => {
-  if (saving.value) return '保存中…'
+  if (saving.value) return t("保存中…")
   if (props.scope === 'project') {
     return isBuiltin.value
-      ? '当前来源：继承全局 / 内置默认（未配置项目级 guide）'
-      : '当前来源：项目配置'
+      ? t("当前来源：继承全局 / 内置默认（未配置项目级 guide）")
+      : t("当前来源：项目配置")
   }
-  return isBuiltin.value ? '当前来源：内置默认（未配置全局 guide）' : '当前来源：全局配置'
+  return isBuiltin.value ? t("当前来源：内置默认（未配置全局 guide）") : t("当前来源：全局配置")
 })
 
 const settingsTargetPath = computed(() =>
   props.scope === 'project'
-    ? `${props.workRoot || '(项目根)'}/.lam/config/subagent/settings.json`
+    ? t("{0}/.lam/config/subagent/settings.json", { 0: props.workRoot || t("(项目根)") })
     : '~/.lam/core/config/subagent/settings.json',
 )
 
 const guideDescription = computed(() => {
   if (props.scope === 'project') {
-    return `保存到项目配置 ${props.workRoot || '(项目根)'}/.lam/config/subagent/guide.md。留空保存则移除项目级配置，回退到继承的全局 / 内置默认。CLI：core subagent guide show/set/edit --scope project --work-root <root>`
+    return t("保存到项目配置 {0}/.lam/config/subagent/guide.md。留空保存则移除项目级配置，回退到继承的全局 / 内置默认。CLI：core subagent guide show/set/edit --scope project --work-root <root>", { 0: props.workRoot || t("(项目根)") })
   }
-  return '保存到全局配置 ~/.lam/core/config/subagent/guide.md。项目级配置请在项目设置内编辑。留空保存则恢复为内置默认。CLI：core subagent guide show/set/edit --scope global'
+  return t("保存到全局配置 ~/.lam/core/config/subagent/guide.md。项目级配置请在项目设置内编辑。留空保存则恢复为内置默认。CLI：core subagent guide show/set/edit --scope global")
 })
 
 async function fetchGuide() {
@@ -340,10 +339,10 @@ const roleTypeOptions = [
 ]
 
 const delegationStrategyOptions: Array<{ value: DelegationStrategy; label: string }> = [
-  { value: 'forbidden', label: '禁止' },
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中（默认）' },
-  { value: 'high', label: '高' },
+  { value: 'forbidden', get label() { return t("禁止") } },
+  { value: 'low', get label() { return t("低") } },
+  { value: 'medium', get label() { return t("中（默认）") } },
+  { value: 'high', get label() { return t("高") } },
 ]
 
 const delegationStrategyLabels: Record<DelegationStrategy, string> = {
@@ -365,7 +364,7 @@ const availableDelegationStrategyOptions = computed(() => {
   return [
     {
       value: 'inherit',
-      label: `继承全局（当前：${delegationStrategyLabels[inheritedDelegationStrategy.value]}）`,
+      label: t("继承全局（当前：{0}）", { 0: delegationStrategyLabels[inheritedDelegationStrategy.value] }),
     },
     ...delegationStrategyOptions,
   ]
@@ -382,7 +381,7 @@ const multimodalModels = computed(() =>
 )
 
 const mmModelOptions = computed(() => [
-  { value: '', label: `未配置（使用内置兜底：${fallbackLabel.value}）` },
+  { value: '', label: t("未配置（使用内置兜底：{0}）", { 0: fallbackLabel.value }) },
   ...multimodalModels.value.map(m => ({
     value: m.display_name || m.model_id || m.id,
     label: m.display_name || m.model_id || m.id,
@@ -407,28 +406,28 @@ const roleAssignmentDescription = computed(() => {
   if (props.scope === 'project') {
     const effectiveCount = effectiveRoleAssignments.value.length
     if (roleAssignmentsInherited.value) {
-      return `当前没有项目覆盖，沿用全局基线；同名任务类型新增项目规则后将由项目覆盖。当前生效 ${effectiveCount} 条。`
+      return t("当前没有项目覆盖，沿用全局基线；同名任务类型新增项目规则后将由项目覆盖。当前生效 {0} 条。", { 0: effectiveCount })
     }
-    return `全局规则作为基线；这里只编辑项目覆盖，同名任务类型以项目规则为准。当前合并后 ${effectiveCount} 条。`
+    return t("全局规则作为基线；这里只编辑项目覆盖，同名任务类型以项目规则为准。当前合并后 {0} 条。", { 0: effectiveCount })
   }
-  return '全局基线适用于所有项目；项目可按同名任务类型覆盖。'
+  return t("全局基线适用于所有项目；项目可按同名任务类型覆盖。")
 })
 
 const delegationStrategySource = computed(() => {
   const effectiveLabel = delegationStrategyLabels[effectiveDelegationStrategy.value]
   if (props.scope === 'project') {
     return delegationStrategyInherited.value
-      ? `当前继承全局有效策略：${effectiveLabel}`
-      : `当前项目覆盖：${effectiveLabel}`
+      ? t("当前继承全局有效策略：{0}", { 0: effectiveLabel })
+      : t("当前项目覆盖：{0}", { 0: effectiveLabel })
   }
   return delegationStrategyInherited.value
-    ? `当前使用内置默认：${effectiveLabel}`
-    : `当前全局基线：${effectiveLabel}`
+    ? t("当前使用内置默认：{0}", { 0: effectiveLabel })
+    : t("当前全局基线：{0}", { 0: effectiveLabel })
 })
 
 const delegationStrategyDescription = computed(() => {
   if (delegationStrategy.value === 'inherit') {
-    return `继承全局策略：${delegationStrategyDescriptions[inheritedDelegationStrategy.value]}`
+    return t("继承全局策略：{0}", { 0: delegationStrategyDescriptions[inheritedDelegationStrategy.value] })
   }
   return delegationStrategyDescriptions[delegationStrategy.value]
 })
@@ -437,14 +436,14 @@ const delegationStrategyScopeDescription = computed(() => {
   if (props.scope === 'project') {
     if (delegationStrategy.value === 'inherit') {
       return delegationStrategyInherited.value
-        ? '当前项目没有本地覆盖。'
-        : '保存后将移除当前项目覆盖，恢复继承全局策略。'
+        ? t("当前项目没有本地覆盖。")
+        : t("保存后将移除当前项目覆盖，恢复继承全局策略。")
     }
     return delegationStrategyInherited.value
-      ? '项目尚未配置覆盖；选择策略并保存后，仅写入当前项目。'
-      : `保存到项目配置 ${props.workRoot || '(项目根)'}/.lam/config/subagent/settings.json。`
+      ? t("项目尚未配置覆盖；选择策略并保存后，仅写入当前项目。")
+      : t("保存到项目配置 {0}/.lam/config/subagent/settings.json。", { 0: props.workRoot || t("(项目根)") })
   }
-  return '保存为所有项目的全局基线；项目可单独覆盖。'
+  return t("保存为所有项目的全局基线；项目可单独覆盖。")
 })
 
 function parseDelegationStrategy(value: unknown, fallback: DelegationStrategy = 'medium'): DelegationStrategy {
@@ -457,7 +456,7 @@ function modelOptionsFor(currentModel: string) {
   if (!currentModel || roleModelOptions.value.some(option => option.value === currentModel)) {
     return roleModelOptions.value
   }
-  return [{ value: currentModel, label: `${currentModel}（当前配置）` }, ...roleModelOptions.value]
+  return [{ value: currentModel, label: t("{0}（当前配置）", { 0: currentModel }) }, ...roleModelOptions.value]
 }
 
 function isRoleAssignmentType(value: unknown): value is RoleAssignmentType {
@@ -529,21 +528,21 @@ function validatedRoleAssignments(): RoleAssignmentPayload[] | null {
   for (let index = 0; index < normalized.length; index += 1) {
     const assignment = normalized[index]
     if (!assignment.task_type) {
-      roleAssignmentError.value = `第 ${index + 1} 条角色分配的任务类型不能为空。`
+      roleAssignmentError.value = t("第 {0} 条角色分配的任务类型不能为空。", { 0: index + 1 })
       return null
     }
     const taskKey = roleTaskTypeKey(assignment.task_type)
     if (seen.has(taskKey)) {
-      roleAssignmentError.value = `任务类型“${assignment.task_type}”重复，请保留一条。`
+      roleAssignmentError.value = t("任务类型“{0}”重复，请保留一条。", { 0: assignment.task_type })
       return null
     }
     seen.add(taskKey)
     if (!assignment.model) {
-      roleAssignmentError.value = `第 ${index + 1} 条角色分配必须选择建议模型。`
+      roleAssignmentError.value = t("第 {0} 条角色分配必须选择建议模型。", { 0: index + 1 })
       return null
     }
     if (reasoningLevels.indexOf(assignment.reasoning_min) > reasoningLevels.indexOf(assignment.reasoning_max)) {
-      roleAssignmentError.value = `第 ${index + 1} 条角色分配的最低思考强度不能高于最高思考强度。`
+      roleAssignmentError.value = t("第 {0} 条角色分配的最低思考强度不能高于最高思考强度。", { 0: index + 1 })
       return null
     }
   }
@@ -560,7 +559,7 @@ const fallbackMultimodalModel = computed(() =>
 
 const fallbackLabel = computed(() => {
   const m = fallbackMultimodalModel.value
-  if (!m) return '无多模态模型'
+  if (!m) return t("无多模态模型")
   return m.display_name || m.model_id || m.id
 })
 

@@ -399,6 +399,7 @@ describe('useCoreLiveComposerController', () => {
       forceResetTurn: async () => undefined,
       steerTurn: async () => {
         settled.push('guided')
+        return { ok: true }
       },
       queueInput: async () => {
         if (queueFails) throw new Error('queue unavailable')
@@ -532,6 +533,7 @@ describe('useCoreLiveComposerController', () => {
       forceResetTurn: async () => undefined,
       steerTurn: async (threadId, turnId, input) => {
         calls.push(`steer:${threadId}:${turnId}:${JSON.stringify(input)}`)
+        return { ok: true }
       },
       queueInput: async (threadId, input) => {
         calls.push(`queue:${threadId}:${JSON.stringify(input)}`)

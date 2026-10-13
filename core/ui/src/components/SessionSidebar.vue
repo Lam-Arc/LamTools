@@ -14,7 +14,7 @@
         <button
           class="sidebar-search-toggle"
           type="button"
-          aria-label="搜索项目和会话"
+          :aria-label="t('搜索项目和会话')"
           :aria-expanded="searchExpanded || Boolean(normalizedQuery)"
           data-sidebar-search-toggle
           @click="focusSearchInput"
@@ -27,8 +27,8 @@
           v-model="searchQuery"
           class="sidebar-search"
           type="search"
-          placeholder="搜索项目和会话"
-          aria-label="搜索项目和会话"
+          :placeholder="t('搜索项目和会话')"
+          :aria-label="t('搜索项目和会话')"
           data-sidebar-search
           @focus="searchExpanded = true"
           @blur="collapseSearchIfEmpty"
@@ -37,22 +37,20 @@
       <slot name="toolbar-actions" />
     </div>
     <div v-if="!hasProjectData" class="sidebar-empty">
-      <slot name="empty">暂无内容，创建一个开始。</slot>
+      <slot name="empty">{{ t("暂无内容，创建一个开始。") }}</slot>
     </div>
     <div
       v-else-if="normalizedQuery && filteredGroups.length === 0"
       class="sidebar-empty sidebar-search-empty"
       data-sidebar-search-empty
     >
-      <p>未找到匹配的项目或会话</p>
+      <p>{{ t("未找到匹配的项目或会话") }}</p>
       <button
         type="button"
         class="sidebar-search-clear"
         data-sidebar-search-clear
         @click="searchQuery = ''"
-      >
-        清除搜索
-      </button>
+      >{{ t("清除搜索") }}</button>
     </div>
 
     <section
@@ -67,8 +65,8 @@
           v-if="section.groups.length > 0"
           class="sidebar-section-toggle"
           type="button"
-          :title="isSectionCollapsed(section.id) ? '展开' : '收起'"
-          :aria-label="isSectionCollapsed(section.id) ? `展开${section.label}分区` : `折叠${section.label}分区`"
+          :title="isSectionCollapsed(section.id) ? t('展开') : t('收起')"
+          :aria-label="isSectionCollapsed(section.id) ? t('展开{0}分区', { 0: section.label }) : t('折叠{0}分区', { 0: section.label })"
           :aria-expanded="!isSectionCollapsed(section.id)"
           :data-sidebar-section-more="section.id"
           @click.stop="toggleSectionCollapsed(section.id)"
@@ -101,7 +99,7 @@
           type="button"
           class="project-name project-main clickable"
           :data-project-entry="group.id"
-          :title="isCollapsed(group.id) ? `展开 ${group.name}` : `收起 ${group.name}`"
+          :title="isCollapsed(group.id) ? t('展开 {0}', { 0: group.name }) : t('收起 {0}', { 0: group.name })"
           :aria-expanded="!isCollapsed(group.id)"
           @click="toggleProjectCollapse(group.id)"
           @contextmenu="handleProjectContextMenu(section.id, group, $event)"
@@ -113,8 +111,8 @@
           <button
             class="project-action menu-trigger project-menu-button"
             type="button"
-            title="项目操作"
-            :aria-label="`${group.name} 项目操作`"
+            :title="t('项目操作')"
+            :aria-label="t('{0} 项目操作', { 0: group.name })"
             :aria-expanded="isContextMenuOpen(projectMenuOwner(section.id, group.id))"
             data-context-menu-trigger
             :data-project-menu-trigger="group.id"
@@ -129,7 +127,7 @@
           class="sidebar-project-empty"
           data-project-empty
         >
-          <span>暂无会话</span>
+          <span>{{ t("暂无会话") }}</span>
           <button
             v-if="allowProjectNewSession && group.canManage !== false"
             class="sidebar-project-empty-action"
@@ -138,7 +136,7 @@
             :data-project-empty-new="group.id"
             @click.stop="emit('new-session', group.id)"
           >
-            {{ isProjectBusy(group.id) ? '正在创建…' : `＋ ${newSessionLabel}` }}
+            {{ isProjectBusy(group.id) ? t("正在创建…") : `＋ ${defaultUiText(newSessionLabel, '新建会话')}` }}
           </button>
         </div>
         <TransitionGroup name="sidebar-sort" tag="div" class="conversation-items">
@@ -165,7 +163,7 @@
             class="conversation-select session-main"
             type="button"
             :data-session-select="s.id"
-            :aria-label="`打开会话 ${s.title || s.id.slice(0, 8)}`"
+            :aria-label="t('打开会话 {0}', { 0: s.title || s.id.slice(0, 8) })"
             @click="selectSession(s.id)"
           >
             <span class="conversation-main">
@@ -180,7 +178,7 @@
                 class="session-name-input"
                 type="text"
                 :data-session-name-input="s.id"
-                :aria-label="`重命名会话 ${s.title || s.id.slice(0, 8)}`"
+                :aria-label="t('重命名会话 {0}', { 0: s.title || s.id.slice(0, 8) })"
                 autocomplete="off"
                 spellcheck="false"
                 @click.stop
@@ -196,15 +194,15 @@
               class="status conversation-status session-status"
               :class="statusClass(s.status || '')"
               :title="statusLabel(s.status || '')"
-              :aria-label="`状态：${statusLabel(s.status || '')}`"
+              :aria-label="t('状态：{0}', { 0: statusLabel(s.status || '') })"
               role="img"
             ></span>
             <button
               v-if="showSessionActions && editingSessionId !== s.id"
               class="conversation-action session-menu-button"
               type="button"
-              title="会话操作"
-              :aria-label="`${s.title || s.id.slice(0, 8)} 会话操作`"
+              :title="t('会话操作')"
+              :aria-label="t('{0} 会话操作', { 0: s.title || s.id.slice(0, 8) })"
               :aria-expanded="isContextMenuOpen(sessionMenuOwner(s.id))"
               data-context-menu-trigger
               :data-session-menu-trigger="s.id"
@@ -219,8 +217,8 @@
           v-if="hiddenCount(group, section.id) > 0"
           type="button"
           class="conversation-more"
-          :title="`展开另外 ${hiddenCount(group, section.id)} 个会话`"
-          :aria-label="`展开另外 ${hiddenCount(group, section.id)} 个会话`"
+          :title="t('展开另外 {0} 个会话', { 0: hiddenCount(group, section.id) })"
+          :aria-label="t('展开另外 {0} 个会话', { 0: hiddenCount(group, section.id) })"
           @click.stop="toggleGroupExpand(group.id)"
         >
           {{ hiddenCount(group, section.id) }} more…
@@ -237,13 +235,13 @@
       data-sidebar-section="recent"
     >
       <div class="sidebar-section-head">
-        <h2 class="sidebar-section-title">最近</h2>
+        <h2 class="sidebar-section-title">{{ t("最近") }}</h2>
         <button
           v-if="recentEntriesAll.length > 0"
           class="sidebar-section-toggle"
           type="button"
-          :title="recentCollapsed ? '展开' : '收起'"
-          :aria-label="recentCollapsed ? '展开最近会话' : '折叠最近会话'"
+          :title="recentCollapsed ? t('展开') : t('收起')"
+          :aria-label="recentCollapsed ? t('展开最近会话') : t('折叠最近会话')"
           :aria-expanded="!recentCollapsed"
           data-sidebar-recent-toggle
           @click.stop="recentCollapsed = !recentCollapsed"
@@ -266,7 +264,7 @@
             class="conversation-select session-main"
             type="button"
             :data-sidebar-recent-select="entry.session.id"
-            :aria-label="`打开会话 ${entry.session.title || entry.session.id.slice(0, 8)}`"
+            :aria-label="t('打开会话 {0}', { 0: entry.session.title || entry.session.id.slice(0, 8) })"
             @click="selectSession(entry.session.id)"
           >
             <span class="conversation-main">
@@ -281,7 +279,7 @@
                 class="session-name-input"
                 type="text"
                 :data-sidebar-recent-name-input="entry.session.id"
-                :aria-label="`重命名会话 ${entry.session.title || entry.session.id.slice(0, 8)}`"
+                :aria-label="t('重命名会话 {0}', { 0: entry.session.title || entry.session.id.slice(0, 8) })"
                 autocomplete="off"
                 spellcheck="false"
                 @click.stop
@@ -295,8 +293,8 @@
               v-if="showSessionActions && editingSessionId !== entry.session.id"
               class="conversation-action session-menu-button"
               type="button"
-              title="会话操作"
-              :aria-label="`${entry.session.title || entry.session.id.slice(0, 8)} 会话操作`"
+              :title="t('会话操作')"
+              :aria-label="t('{0} 会话操作', { 0: entry.session.title || entry.session.id.slice(0, 8) })"
               :aria-expanded="isContextMenuOpen(sessionMenuOwner(entry.session.id))"
               data-context-menu-trigger
               :data-sidebar-recent-menu="entry.session.id"
@@ -313,6 +311,10 @@
 </template>
 
 <script setup lang="ts">
+import { defaultUiText } from '../i18n/index'
+
+import { t } from '../i18n/index'
+
 import { computed, nextTick, onBeforeUnmount, ref, reactive, watch } from 'vue'
 import {
   ChevronDown,
@@ -491,8 +493,8 @@ const projectSections = computed(() => {
   })
   const others = orderedGroups.value.filter((group) => !isPinned(group.id))
   return [
-    { id: 'pinned', label: '置顶', groups: pinned },
-    { id: 'default', label: '项目', groups: others },
+    { id: 'pinned', get label() { return t("置顶") }, groups: pinned },
+    { id: 'default', get label() { return t("项目") }, groups: others },
   ].filter((section) => section.groups.length > 0)
 })
 
@@ -818,7 +820,7 @@ function projectMenuEntries(group: ProjectGroup): ContextMenuEntry[] {
   if (props.allowProjectNewSession && group.canManage !== false) {
     entries.push({
       id: 'new-session',
-      label: isProjectBusy(group.id) ? '正在创建…' : props.newSessionLabel,
+      label: isProjectBusy(group.id) ? t("正在创建…") : defaultUiText(props.newSessionLabel, "新建会话"),
       icon: MessageSquarePlus,
       disabled: isProjectBusy(group.id),
       attributes: contextMenuAttributes('data-project-new', group.id),
@@ -827,7 +829,7 @@ function projectMenuEntries(group: ProjectGroup): ContextMenuEntry[] {
   }
   entries.push({
     id: 'pin',
-    label: isPinned(group.id) ? '取消置顶' : '置顶项目',
+    label: isPinned(group.id) ? t("取消置顶") : t("置顶项目"),
     icon: isPinned(group.id) ? PinOff : Pin,
     attributes: contextMenuAttributes('data-project-pin', group.id),
     action: () => toggleProjectPin(group.id),
@@ -835,14 +837,14 @@ function projectMenuEntries(group: ProjectGroup): ContextMenuEntry[] {
   if (group.sessions.length > props.projectSessionLimit && props.projectSessionLimit > 0) {
     entries.push({
       id: 'fold',
-      label: groupExpanded[group.id] ? '收起会话' : '展开全部会话',
+      label: groupExpanded[group.id] ? t("收起会话") : t("展开全部会话"),
       action: () => toggleGroupExpand(group.id),
     })
   }
   if (props.allowProjectContextMenu && group.canManage !== false) {
     entries.push({
       id: 'rename',
-      label: '重命名',
+      get label() { return t("重命名") },
       icon: Pencil,
       attributes: contextMenuAttributes('data-project-rename', group.id),
       action: () => emit('rename-project', group.id),
@@ -850,7 +852,7 @@ function projectMenuEntries(group: ProjectGroup): ContextMenuEntry[] {
     if (props.allowProjectSettings) {
       entries.push({
         id: 'settings',
-        label: '项目设置',
+        get label() { return t("项目设置") },
         icon: Settings,
         action: () => emit('project-context-menu', group.id),
       })
@@ -861,7 +863,7 @@ function projectMenuEntries(group: ProjectGroup): ContextMenuEntry[] {
       { type: 'separator', id: 'project-danger-separator' },
       {
         id: 'delete',
-        label: '删除项目',
+        get label() { return t("删除项目") },
         icon: Trash2,
         destructive: true,
         action: () => emit('delete-project', group.id),
@@ -879,7 +881,7 @@ function openProjectContextMenu(sectionId: string, group: ProjectGroup, event: M
     event,
     items,
     ownerId,
-    ariaLabel: `${group.name} 项目操作`,
+    ariaLabel: t("{0} 项目操作", { 0: group.name }),
     panelAttributes: contextMenuAttributes('data-project-menu', group.id),
   })
 }
@@ -914,7 +916,7 @@ function toggleSessionMenu(sessionId: string, event: MouseEvent): void {
     event,
     items: sessionMenuEntries(sessionId),
     ownerId,
-    ariaLabel: `${session.title || `Session ${sessionId.slice(0, 8)}`} 会话操作`,
+    ariaLabel: t("{0} 会话操作", { 0: session.title || `Session ${sessionId.slice(0, 8)}` }),
     panelAttributes: contextMenuAttributes('data-session-menu', sessionId),
   })
 }
@@ -923,7 +925,7 @@ function sessionMenuEntries(sessionId: string): ContextMenuEntry[] {
   return [
     {
       id: 'pin',
-      label: isSessionPinned(sessionId) ? '取消置顶' : '置顶会话',
+      label: isSessionPinned(sessionId) ? t("取消置顶") : t("置顶会话"),
       icon: isSessionPinned(sessionId) ? PinOff : Pin,
       attributes: {
         ...contextMenuAttributes('data-session-menu-pin', sessionId),
@@ -933,7 +935,7 @@ function sessionMenuEntries(sessionId: string): ContextMenuEntry[] {
     },
     {
       id: 'rename',
-      label: '重命名',
+      get label() { return t("重命名") },
       icon: Pencil,
       attributes: contextMenuAttributes('data-session-menu-rename', sessionId),
       action: () => startSessionRename(sessionId),
@@ -941,24 +943,24 @@ function sessionMenuEntries(sessionId: string): ContextMenuEntry[] {
     {
       type: 'submenu',
       id: 'export',
-      label: '导出',
+      get label() { return t("导出") },
       panelAttributes: contextMenuAttributes('data-session-export-menu', sessionId),
       attributes: contextMenuAttributes('data-session-menu-export', sessionId),
       children: [
-        { type: 'label', label: '文本记录' },
+        { type: 'label', get label() { return t("文本记录") } },
         { id: 'markdown', label: 'Markdown', attributes: { 'data-session-export-format': 'markdown' }, action: () => exportSession(sessionId, 'markdown') },
         { id: 'txt', label: 'TXT', attributes: { 'data-session-export-format': 'txt' }, action: () => exportSession(sessionId, 'txt') },
         { id: 'jsonl', label: 'JSONL', attributes: { 'data-session-export-format': 'jsonl' }, action: () => exportSession(sessionId, 'jsonl') },
         { id: 'handoff', label: 'Agent Handoff', attributes: { 'data-session-export-format': 'handoff', 'data-session-export-handoff': sessionId }, action: () => exportSession(sessionId, 'handoff') },
         { type: 'separator', id: 'export-separator' },
-        { id: 'zip', label: '完整归档', attributes: { 'data-session-export-format': 'zip', 'data-session-export-full': sessionId }, action: () => exportSession(sessionId, 'zip') },
+        { id: 'zip', get label() { return t("完整归档") }, attributes: { 'data-session-export-format': 'zip', 'data-session-export-full': sessionId }, action: () => exportSession(sessionId, 'zip') },
       ],
     },
     ...(props.allowSessionDelete ? [
       { type: 'separator' as const, id: 'session-danger-separator' },
       {
         id: 'delete',
-        label: '删除',
+        get label() { return t("删除") },
         icon: Trash2,
         destructive: true,
         attributes: contextMenuAttributes('data-session-menu-delete', sessionId),
@@ -982,7 +984,7 @@ function handleSessionContextMenu(sessionId: string, event: MouseEvent): void {
     event,
     items: sessionMenuEntries(sessionId),
     ownerId: sessionMenuOwner(sessionId),
-    ariaLabel: `${session.title || `Session ${sessionId.slice(0, 8)}`} 会话操作`,
+    ariaLabel: t("{0} 会话操作", { 0: session.title || `Session ${sessionId.slice(0, 8)}` }),
     panelAttributes: contextMenuAttributes('data-session-menu', sessionId),
   })
 }
@@ -1278,6 +1280,8 @@ function statusClass(status: string): string {
   if (s === 'completed' || s === 'done') return 'completed'
   if (s === 'failed' || s === 'error') return 'failed'
   if (s === 'waiting' || s === 'pending') return 'waiting'
+  // 状态 b：主代理已结束、子代理仍在运行 —— 走等待配方（安静、非转圈）
+  if (s === 'sub_agents') return 'sub_agents'
   if (s === 'idle' || s === 'active') return 'idle'
   return ''
 }
@@ -1287,17 +1291,19 @@ function shouldShowStatus(session: SessionItem): boolean {
   return status === 'running'
     || status === 'waiting'
     || status === 'pending'
+    || status === 'sub_agents'
     || status === 'failed'
     || status === 'error'
 }
 
 function statusLabel(status: string): string {
   const s = status.toLowerCase()
-  if (s === 'running') return '运行中'
-  if (s === 'completed' || s === 'done') return '已完成'
-  if (s === 'failed' || s === 'error') return '失败'
-  if (s === 'waiting' || s === 'pending') return '等待中'
-  if (s === 'idle' || s === 'active') return '空闲'
+  if (s === 'running') return t("运行中")
+  if (s === 'completed' || s === 'done') return t("已完成")
+  if (s === 'failed' || s === 'error') return t("失败")
+  if (s === 'waiting' || s === 'pending') return t("等待中")
+  if (s === 'sub_agents') return t("子代理运行中")
+  if (s === 'idle' || s === 'active') return t("空闲")
   return status
 }
 

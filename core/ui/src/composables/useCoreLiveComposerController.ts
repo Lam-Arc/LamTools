@@ -3,8 +3,10 @@ import {
   coreComposerActionMode,
   coreComposerSubmissionEffects,
   isCoreActiveTurnStatus,
+  isCoreSessionBusyError,
   normalizeCoreCommandCatalogItem,
   submitCoreComposerTask,
+  type CoreSteerAttempt,
   type CoreWorkbenchTurnStatus,
   type SubmitCoreComposerTaskResult,
 } from '../appServer/workbenchActions'
@@ -38,11 +40,26 @@ export interface UseCoreLiveComposerControllerOptions {
   status: Readonly<Ref<CoreWorkbenchTurnStatus>>
   attachments: Readonly<Ref<CoreInputItem[]>>
   connect(threadId: string): Promise<void>
-  startTurn(threadId: string, input: CoreInputItem[], workRoot?: string, options?: Record<string, unknown>): Promise<void>
+  startTurn(
+    threadId: string,
+    input: CoreInputItem[],
+    workRoot?: string,
+    options?: Record<string, unknown>,
+    clientMessageId?: string,
+  ): Promise<void>
   interruptTurn(threadId: string, turnId?: string): Promise<void>
   forceResetTurn(threadId: string, turnId?: string): Promise<void>
-  steerTurn?(threadId: string, turnId: string, input: CoreInputItem[]): Promise<void>
-  queueInput(threadId: string, input: CoreInputItem[], options?: Record<string, unknown>): Promise<void>
+  steerTurn?(
+    threadId: string,
+    turnId: string,
+    input: CoreInputItem[],
+  ): Promise<boolean | CoreSteerAttempt>
+  queueInput(
+    threadId: string,
+    input: CoreInputItem[],
+    options?: Record<string, unknown>,
+    clientMessageId?: string,
+  ): Promise<void>
   listCommands(workRoot?: string): Promise<unknown[]>
   getWorkRoot(): string
   executeCommand(threadId: string, command: string, workRoot?: string, argumentsText?: string): Promise<boolean>
@@ -304,6 +321,9 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       options.onSubmitStart?.(submittedText)
     }
     try {
+      // One identity for the whole submission: the start attempt and its queue
+      // fallback carry it, so a repeat cannot double-send.
+      const clientMessageId = crypto.randomUUID()
       const result = await submitCoreComposerTask({
         threadId,
         activeTurnId: options.activeTurnId?.value || '',
@@ -314,20 +334,27 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
         executeCommand: runCommand,
         steerTurn: options.steerTurn,
         queueInput: options.queueInput,
+        clientMessageId,
         forceGuide: submissionOptions.forceGuide === true,
         startTurn: async (_threadId, input) => {
-          const started = await liveTurnController.startThreadTurn(
+          const outcome = await liveTurnController.startThreadTurnOutcome(
             input,
             threadId,
             workRoot,
             turnOptions,
+            clientMessageId,
           )
-          if (started) {
+          if (outcome.ok) {
             notifyTurnStarted()
-          } else {
+            return { ok: true }
+          }
+          // A busy session is not a failure: the caller falls back to the
+          // mode-appropriate path (steer or queue). Anything else still surfaces.
+          const busy = isCoreSessionBusyError(outcome.error)
+          if (!busy) {
             reportError(liveTurnController.lastError.value || options.messages?.sendFailed || 'Unable to send message')
           }
-          return started
+          return { ok: false, busy }
         },
       })
       applySubmissionEffects(result, submittedText, submissionOptions.clearComposer === true)

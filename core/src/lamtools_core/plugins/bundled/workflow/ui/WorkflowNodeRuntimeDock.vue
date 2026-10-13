@@ -3,7 +3,7 @@
     v-if="visible"
     class="wf-node-runtime optical-glass"
     :class="[`state-${state}`, { 'is-collapsed': collapsed }]"
-    :aria-label="`${title}运行详情`"
+    :aria-label="t('{0}运行详情', { 0: title })"
     @pointerdown.stop
     @click.stop
   >
@@ -11,41 +11,41 @@
       type="button"
       class="wf-node-runtime-summary"
       :aria-expanded="collapsed ? 'false' : 'true'"
-      :title="collapsed ? '展开运行详情' : '收起运行详情'"
+      :title="collapsed ? t('展开运行详情') : t('收起运行详情')"
       @click="collapsed = !collapsed"
     >
       <component :is="statusIcon" :size="13" :stroke-width="1.9" :class="{ 'is-spinning': state === 'running' }" aria-hidden="true" />
       <span>{{ stateLabel }}</span>
-      <span v-if="artifactItems.length" class="wf-node-runtime-count">{{ artifactItems.length }} 个产物</span>
+      <span v-if="artifactItems.length" class="wf-node-runtime-count">{{ artifactItems.length }}{{ t("个产物") }}</span>
       <ChevronRight :size="13" :stroke-width="1.8" class="wf-node-runtime-chevron" aria-hidden="true" />
     </button>
 
     <div v-if="!collapsed" class="wf-node-runtime-body">
       <dl v-if="hasMetadata" class="wf-node-runtime-meta">
-        <div v-if="durationLabel"><dt>耗时</dt><dd>{{ durationLabel }}</dd></div>
-        <div v-if="runtime.attempts !== undefined"><dt>尝试</dt><dd>{{ runtime.attempts }}</dd></div>
-        <div v-if="runtime.cache_status"><dt>缓存</dt><dd>{{ runtime.cache_status }}</dd></div>
+        <div v-if="durationLabel"><dt>{{ t("耗时") }}</dt><dd>{{ durationLabel }}</dd></div>
+        <div v-if="runtime.attempts !== undefined"><dt>{{ t("尝试") }}</dt><dd>{{ runtime.attempts }}</dd></div>
+        <div v-if="runtime.cache_status"><dt>{{ t("缓存") }}</dt><dd>{{ runtime.cache_status }}</dd></div>
       </dl>
 
       <p v-if="runtime.error" class="wf-node-runtime-error" role="alert">{{ runtime.error }}</p>
 
       <section v-if="hasValue(runtime.output)" class="wf-node-runtime-section">
-        <header><span>{{ outputLabel }}</span><small v-if="state === 'running'">实时</small></header>
+        <header><span>{{ outputLabel }}</span><small v-if="state === 'running'">{{ t("实时") }}</small></header>
         <pre>{{ formatRuntimeValue(runtime.output) }}</pre>
       </section>
 
       <section v-if="hasValue(runtime.logs)" class="wf-node-runtime-section">
-        <header><span>日志</span><small>{{ detailCount(runtime.logs) }}</small></header>
+        <header><span>{{ t("日志") }}</span><small>{{ detailCount(runtime.logs) }}</small></header>
         <pre>{{ formatRuntimeValue(runtime.logs) }}</pre>
       </section>
 
       <section v-if="hasValue(runtime.tool_calls)" class="wf-node-runtime-section">
-        <header><span>工具调用</span><small>{{ detailCount(runtime.tool_calls) }}</small></header>
+        <header><span>{{ t("工具调用") }}</span><small>{{ detailCount(runtime.tool_calls) }}</small></header>
         <pre>{{ formatRuntimeValue(runtime.tool_calls) }}</pre>
       </section>
 
       <section v-if="artifactItems.length" class="wf-node-runtime-section">
-        <header><span>产物</span><small>{{ artifactItems.length }}</small></header>
+        <header><span>{{ t("产物") }}</span><small>{{ artifactItems.length }}</small></header>
         <ul class="wf-node-runtime-artifacts">
           <li v-for="item in artifactItems" :key="item.id">
             <img v-if="item.kind === 'image' && item.previewable" :src="item.value" :alt="item.label" loading="lazy" />
@@ -72,6 +72,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../../../../../ui/src/i18n/index'
+
 import { computed, ref, watch } from 'vue'
 import {
   CheckCircle2,
@@ -150,7 +152,7 @@ const statusIcon = computed<LucideIcon>(() => ({
   cancelled: XCircle,
   idle: Circle,
 }[state.value] || Circle))
-const outputLabel = computed(() => ['command', 'python', 'script'].includes(props.kind) ? '输出' : '结果')
+const outputLabel = computed(() => ['command', 'python', 'script'].includes(props.kind) ? t("输出") : t("结果"))
 const durationLabel = computed(() => formatDuration(runtime.value))
 const hasMetadata = computed(() => Boolean(durationLabel.value || runtime.value.attempts !== undefined || runtime.value.cache_status))
 const artifactItems = computed(() => collectArtifacts(runtime.value.output))

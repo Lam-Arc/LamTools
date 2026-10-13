@@ -14,6 +14,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed } from 'vue'
 import { Circle, CircleCheck, Clock3, LoaderCircle, TriangleAlert } from 'lucide-vue-next'
 
@@ -38,11 +40,11 @@ const normalizedState = computed<RuntimeState>(() => {
 })
 const stateLabel = computed(() => {
   switch (normalizedState.value) {
-    case 'running': return '运行中'
-    case 'waiting': return '等待中'
-    case 'completed': return '已完成'
-    case 'error': return '运行失败'
-    default: return '空闲'
+    case 'running': return t("运行中")
+    case 'waiting': return t("等待中")
+    case 'completed': return t("已完成")
+    case 'error': return t("运行失败")
+    default: return t("空闲")
   }
 })
 </script>

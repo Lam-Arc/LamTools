@@ -35,7 +35,7 @@
       v-if="isNarrowViewport && (leftOpen || rightOpen)"
       class="mobile-drawer-backdrop"
       type="button"
-      aria-label="关闭面板"
+      :aria-label="t('关闭面板')"
       @click="closeDrawers"
     ></button>
 
@@ -45,7 +45,7 @@
       :inert="rightDrawerModal || undefined"
       role="button"
       tabindex="0"
-      aria-label="打开左侧会话栏"
+      :aria-label="t('打开左侧会话栏')"
       @mouseenter="!leftPinned && !collapseLeftSidebar && openLeftDrawer()"
       @focus="!leftPinned && !collapseLeftSidebar && openLeftDrawer()"
       @keydown.enter.prevent="!collapseLeftSidebar && openLeftDrawer()"
@@ -56,7 +56,7 @@
       class="edge edge-right"
       role="button"
       tabindex="0"
-      aria-label="打开右侧面板"
+      :aria-label="t('打开右侧面板')"
       @mouseenter="openRightDrawer"
       @focus="openRightDrawer"
       @keydown.enter.prevent="openRightDrawer"
@@ -136,18 +136,21 @@
       :data-workflow-composer-has-value="workflowMode ? String(workflowComposerHasValue) : undefined"
       :inert="rightDrawerModal || undefined"
       variant="floating"
-      :placeholder="composerPlaceholder"
+      :placeholder="defaultUiText(composerPlaceholder, '输入内容...')"
       :disabled="composerDisabled"
       :action-mode="composerActionMode"
       :send-label="composerSendLabel"
       :stop-label="composerStopLabel"
-      :send-title="composerSendTitle"
-      :stop-title="composerStopTitle"
+      :send-title="defaultUiText(composerSendTitle, '发送')"
+      :stop-title="defaultUiText(composerStopTitle, '停止运行')"
       @submit="onComposerSubmit"
       @drop="onComposerDrop"
     >
       <template #popover>
         <slot name="composer-popover" />
+      </template>
+      <template #queue-panel>
+        <slot v-if="!workflowMode" name="composer-queue-panel" />
       </template>
       <template #preamble>
         <slot v-if="!workflowMode" name="composer-preamble" />
@@ -158,8 +161,8 @@
       <template #textarea>
         <slot name="composer-textarea">
           <textarea
-            :placeholder="composerPlaceholder"
-            :aria-label="composerPlaceholder"
+            :placeholder="defaultUiText(composerPlaceholder, '输入内容...')"
+            :aria-label="defaultUiText(composerPlaceholder, '输入内容...')"
             :disabled="composerDisabled"
             rows="1"
             @keydown.enter.exact="onComposerEnter"
@@ -176,10 +179,13 @@
             :disabled="composerActionMode === 'send' && composerSendDisabled"
             :send-label="composerSendLabel"
             :stop-label="composerStopLabel"
-            :send-title="composerSendTitle"
-            :stop-title="composerStopTitle"
+            :send-title="defaultUiText(composerSendTitle, '发送')"
+            :stop-title="defaultUiText(composerStopTitle, '停止运行')"
           />
         </slot>
+      </template>
+      <template v-if="$slots['composer-extras']" #extras>
+        <slot name="composer-extras" />
       </template>
     </ComposerBar>
 
@@ -194,7 +200,7 @@
       @mouseleave="onRightDrawerLeave"
     >
       <header v-if="showRightPanelHeader" class="drawer-head">
-        <strong>{{ rightPanelTitle }}</strong>
+        <strong>{{ defaultUiText(rightPanelTitle, '运行状态') }}</strong>
       </header>
       <div class="drawer-body right-body">
         <slot name="right-panel" />
@@ -207,6 +213,10 @@
 </template>
 
 <script setup lang="ts">
+import { defaultUiText } from '../i18n/index'
+
+import { t } from '../i18n/index'
+
 /**
  * WorkspaceShell — three-card workspace layout
  *

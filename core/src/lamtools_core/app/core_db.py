@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -9,6 +11,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 import uuid
 
@@ -43,6 +46,34 @@ if TYPE_CHECKING:
 
 
 _logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _database_startup_phase(name: str) -> AsyncIterator[None]:
+    """Log startup phase timing without including SQL text or parameters."""
+    started = perf_counter()
+    _logger.info("[startup:database] %s started", name)
+    try:
+        yield
+    except BaseException as exc:
+        original = getattr(exc, "orig", exc)
+        sqlite_errorname = getattr(original, "sqlite_errorname", None)
+        error_label = type(exc).__name__
+        if isinstance(sqlite_errorname, str) and sqlite_errorname.isascii():
+            error_label = f"{error_label}/{sqlite_errorname}"
+        _logger.error(
+            "[startup:database] %s failed after %.3fs (%s)",
+            name,
+            perf_counter() - started,
+            error_label,
+        )
+        raise
+    else:
+        _logger.info(
+            "[startup:database] %s ready in %.3fs",
+            name,
+            perf_counter() - started,
+        )
 
 
 class CoreDbBase(DeclarativeBase):
@@ -1846,84 +1877,116 @@ async def open_core_app_db(
     project_roots: list[Path | str] | None = None,
     project_roots_file: Path | str | None = None,
 ) -> CoreAppDb:
-    db_path = Path(path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_async_engine(
-        _sqlite_url(db_path),
-        future=True,
-        poolclass=NullPool,
-    )
-    configure_sqlite_engine(engine)
-    async with engine.begin() as conn:
-        await conn.run_sync(CoreDbBase.metadata.create_all)
-        resolved_workspace_id = await _ensure_workspace_identity(conn, workspace_id)
-        schema_version = await _core_schema_version(conn)
-        if schema_version < CORE_SCHEMA_VERSION:
-            await _migrate_core_app_schema(conn, workspace_id=resolved_workspace_id)
-            await _set_core_schema_version(conn, CORE_SCHEMA_VERSION)
-        # 版本号已经是当前值、但库来自旧代码或旧备份时，缺的列照样要补上。
-        await _ensure_late_columns(conn)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    write_coordinator = SQLiteWriteCoordinator(session_factory)
-    from .project_store import CoreProjectStore
-    from .sync_store import CoreSyncJournal
-    from lamtools_core.artifact.store import ArtifactStore
+    open_started = perf_counter()
+    async with _database_startup_phase("path and engine setup"):
+        db_path = Path(path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        engine = create_async_engine(
+            _sqlite_url(db_path),
+            future=True,
+            poolclass=NullPool,
+        )
+        configure_sqlite_engine(engine)
 
-    sync_journal = CoreSyncJournal(
-        session_factory,
-        write_coordinator,
-        workspace_id=resolved_workspace_id,
-    )
-    event_store = SqlAlchemyAppEventStore(
-        CoreAppEvent,
-        sync_change_model=CoreSyncChange,
-        workspace_id=resolved_workspace_id,
-    )
-    snapshot_store = SqlAlchemyThreadSnapshotStore(
-        CoreThreadSnapshot,
-        item_model=CoreThreadSnapshotItem,
-        projector=CoreAppSnapshotProjector(),
-        event_model=CoreAppEvent,
-    )
-    persistence = AppPersistenceHost(
-        event_store,
-        snapshot_store,
-        session_factory=session_factory,
-        write_coordinator=write_coordinator,
-    )
-    session_actors = SessionActorRegistry()
-    return CoreAppDb(
-        path=db_path,
-        engine=engine,
-        session_factory=session_factory,
-        event_store=event_store,
-        snapshot_store=snapshot_store,
-        runtime_state_store=SqlAlchemyRuntimeStateStore(
+    async with _database_startup_phase("connection and initial PRAGMAs"):
+        connection = await engine.connect()
+
+    try:
+        async with _database_startup_phase("schema transaction"):
+            async with connection.begin():
+                async with _database_startup_phase("table creation"):
+                    await connection.run_sync(CoreDbBase.metadata.create_all)
+                async with _database_startup_phase("workspace identity check"):
+                    resolved_workspace_id = await _ensure_workspace_identity(
+                        connection,
+                        workspace_id,
+                    )
+                async with _database_startup_phase("schema version check"):
+                    schema_version = await _core_schema_version(connection)
+                if schema_version < CORE_SCHEMA_VERSION:
+                    async with _database_startup_phase("core schema migration"):
+                        await _migrate_core_app_schema(
+                            connection,
+                            workspace_id=resolved_workspace_id,
+                        )
+                    async with _database_startup_phase("schema version update"):
+                        await _set_core_schema_version(connection, CORE_SCHEMA_VERSION)
+                # 版本号已经是当前值、但库来自旧代码或旧备份时，缺的列照样要补上。
+                async with _database_startup_phase("late-column checks and repairs"):
+                    await _ensure_late_columns(connection)
+    finally:
+        await connection.close()
+
+    async with _database_startup_phase("store assembly"):
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        write_coordinator = SQLiteWriteCoordinator(session_factory)
+        from .project_store import CoreProjectStore
+        from .sync_store import CoreSyncJournal
+        from lamtools_core.artifact.store import ArtifactStore
+
+        sync_journal = CoreSyncJournal(
             session_factory,
             write_coordinator,
-            sync_journal=sync_journal,
-        ),
-        handoff_context_store=SqlAlchemyHandoffContextStore(session_factory, write_coordinator),
-        goal_store=SqlAlchemyGoalStore(session_factory, write_coordinator),
-        arrange_store=SqlAlchemyArrangeStore(session_factory, write_coordinator),
-        project_store=CoreProjectStore(
-            session_factory,
-            write_coordinator,
-            project_roots=project_roots,
-            project_roots_file=project_roots_file,
             workspace_id=resolved_workspace_id,
+        )
+        event_store = SqlAlchemyAppEventStore(
+            CoreAppEvent,
+            sync_change_model=CoreSyncChange,
+            workspace_id=resolved_workspace_id,
+        )
+        snapshot_store = SqlAlchemyThreadSnapshotStore(
+            CoreThreadSnapshot,
+            item_model=CoreThreadSnapshotItem,
+            projector=CoreAppSnapshotProjector(),
+            event_model=CoreAppEvent,
+        )
+        persistence = AppPersistenceHost(
+            event_store,
+            snapshot_store,
+            session_factory=session_factory,
+            write_coordinator=write_coordinator,
+        )
+        session_actors = SessionActorRegistry()
+        core_db = CoreAppDb(
+            path=db_path,
+            engine=engine,
+            session_factory=session_factory,
+            event_store=event_store,
+            snapshot_store=snapshot_store,
+            runtime_state_store=SqlAlchemyRuntimeStateStore(
+                session_factory,
+                write_coordinator,
+                sync_journal=sync_journal,
+            ),
+            handoff_context_store=SqlAlchemyHandoffContextStore(
+                session_factory,
+                write_coordinator,
+            ),
+            goal_store=SqlAlchemyGoalStore(session_factory, write_coordinator),
+            arrange_store=SqlAlchemyArrangeStore(session_factory, write_coordinator),
+            project_store=CoreProjectStore(
+                session_factory,
+                write_coordinator,
+                project_roots=project_roots,
+                project_roots_file=project_roots_file,
+                workspace_id=resolved_workspace_id,
+                sync_journal=sync_journal,
+            ),
             sync_journal=sync_journal,
-        ),
-        sync_journal=sync_journal,
-        workspace_id=resolved_workspace_id,
-        persistence=persistence,
-        member_defaults=dict(member_defaults or {}),
-        session_actors=session_actors,
-        artifact_store=ArtifactStore(
-            session_factory,
-            write_coordinator,
-        ),
+            workspace_id=resolved_workspace_id,
+            persistence=persistence,
+            member_defaults=dict(member_defaults or {}),
+            session_actors=session_actors,
+            artifact_store=ArtifactStore(
+                session_factory,
+                write_coordinator,
+            ),
+        )
+    _logger.info(
+        "[startup:database] open complete in %.3fs",
+        perf_counter() - open_started,
     )
+    return core_db
 
 
 async def persist_core_run_items(db: CoreAppDb, run_items: list[RunItemEvent]) -> dict[str, Any] | None:
@@ -2054,6 +2117,7 @@ _LATE_COLUMNS: dict[str, dict[str, str]] = {
 
 async def _ensure_late_columns(connection: Any) -> None:
     """补齐模型里后加的列；表还不存在时跳过（`create_all` 会按当前模型建全）。"""
+    snapshot_revision_added = False
     for table, columns in _LATE_COLUMNS.items():
         existing = {
             row["name"]
@@ -2072,6 +2136,7 @@ async def _ensure_late_columns(connection: Any) -> None:
             # 刚补的列全是默认 0，而快照 JSON / 事件锚点里可能已经有值。
             # 客户端见过的修订号不能高于服务端，所以补完立刻按手头的最可靠
             # 依据回填一次（只在这张表这一次；之后由写入侧维持单调）。
+            snapshot_revision_added = True
             await connection.execute(text(
                 "UPDATE core_thread_snapshots SET revision = MAX("
                 "revision, snapshot_seq, "
@@ -2079,7 +2144,70 @@ async def _ensure_late_columns(connection: Any) -> None:
                 "THEN snapshot_json END, '$.revision'), 0)) "
                 "WHERE revision = 0"
             ))
+    await _ensure_thread_revision_repair(
+        connection,
+        column_added=snapshot_revision_added,
+    )
+
+
+#: Marker recording that the one-time thread-revision repair has been applied.
+THREAD_REVISION_REPAIR_MARKER = "thread_revision_repair_v1"
+
+
+async def _metadata_flag(connection: Any, key: str) -> bool:
+    value = await connection.scalar(
+        select(CoreDbMetadata.value).where(CoreDbMetadata.key == key)
+    )
+    return value is not None and str(value) != ""
+
+
+async def _set_metadata_flag(connection: Any, key: str) -> None:
+    await connection.execute(
+        text(
+            "INSERT INTO core_db_metadata (key, value, updated_at) "
+            "VALUES (:key, '1', :updated_at) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+        ),
+        {"key": key, "updated_at": datetime.now()},
+    )
+
+
+async def _thread_revision_repair_is_needed(connection: Any) -> bool:
+    """Cheap schema probe: does any snapshot row still carry the legacy signature?
+
+    Reads only the small ``core_thread_snapshots`` table and never
+    ``core_app_events``, so the decision cannot scale with the event count.
+    The signature is the default-0 row that already has projected content, plus
+    any row whose revision fell below its own snapshot_seq.
+    """
+    row = await connection.scalar(
+        text(
+            "SELECT 1 FROM core_thread_snapshots "
+            "WHERE (revision = 0 AND snapshot_seq > 0) OR revision < snapshot_seq "
+            "LIMIT 1"
+        )
+    )
+    return row is not None
+
+
+async def _ensure_thread_revision_repair(connection: Any, *, column_added: bool) -> None:
+    """Apply the thread-revision repair once, decided from metadata, not data.
+
+    ``_repair_thread_revisions`` scans ``core_app_events`` per thread and on a
+    large database takes minutes, yet it is almost always a no-op. It is only
+    needed while upgrading a database whose ``revision`` column was just added,
+    or one left by an older code version with the default-0 signature. Once it
+    has run, or once a schema-only probe shows nothing to repair, a marker is
+    recorded and later boots skip the scan entirely — so the boot path is
+    independent of row count.
+    """
+    if await _metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER):
+        return
+    if not column_added and not await _thread_revision_repair_is_needed(connection):
+        await _set_metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER)
+        return
     await _repair_thread_revisions(connection)
+    await _set_metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER)
 
 
 async def _repair_thread_revisions(connection: Any) -> None:

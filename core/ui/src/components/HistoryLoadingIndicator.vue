@@ -4,10 +4,10 @@
     class="history-loading"
     role="status"
     aria-live="polite"
-    aria-label="正在加载历史消息"
+    :aria-label="t('正在加载历史消息')"
     :aria-hidden="!active"
   >
-    <span class="sr-only">正在加载历史消息</span>
+    <span class="sr-only">{{ t("正在加载历史消息") }}</span>
     <div class="history-loading-stack" aria-hidden="true">
       <div
         v-for="(message, index) in loadingMessages"
@@ -33,6 +33,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 

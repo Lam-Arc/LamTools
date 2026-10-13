@@ -17,7 +17,7 @@
     </button>
 
     <div v-if="open" class="core-runtime-menu__panel" :style="viewportStyle" role="menu">
-      <section ref="parameterCard" class="core-runtime-menu__card core-runtime-menu__card--parameters" aria-label="运行模式与权限参数">
+      <section ref="parameterCard" class="core-runtime-menu__card core-runtime-menu__card--parameters" :aria-label="t('运行模式与权限参数')">
         <button
           class="core-runtime-menu__option core-runtime-menu__parameter"
           type="button"
@@ -29,7 +29,7 @@
           @focus="activateSection('mode')"
           @click="activateSection('mode')"
         >
-          <span class="core-runtime-menu__parameter-label">运行模式</span>
+          <span class="core-runtime-menu__parameter-label">{{ t("运行模式") }}</span>
           <span class="core-runtime-menu__parameter-value">{{ activeModeLabel }}</span>
           <ChevronRight class="core-runtime-menu__parameter-chevron" :size="15" :stroke-width="2" aria-hidden="true" />
         </button>
@@ -44,7 +44,7 @@
           @focus="activateSection('permission')"
           @click="activateSection('permission')"
         >
-          <span class="core-runtime-menu__parameter-label">权限审批</span>
+          <span class="core-runtime-menu__parameter-label">{{ t("权限审批") }}</span>
           <span class="core-runtime-menu__parameter-value">{{ permissionLabel }}</span>
           <ChevronRight class="core-runtime-menu__parameter-chevron" :size="15" :stroke-width="2" aria-hidden="true" />
         </button>
@@ -56,10 +56,10 @@
         class="core-runtime-menu__card core-runtime-menu__card--submenu"
         :class="'core-runtime-menu__card--submenu-' + submenuSide"
         role="menu"
-        aria-label="运行模式选项"
+        :aria-label="t('运行模式选项')"
         data-runtime-submenu="mode"
       >
-        <div class="core-runtime-menu__heading">运行模式</div>
+        <div class="core-runtime-menu__heading">{{ t("运行模式") }}</div>
         <button
           v-for="option in modeOptions"
           :key="option.value"
@@ -75,7 +75,7 @@
           <span>{{ option.label }}</span>
           <span v-if="option.value === activeMode" class="core-runtime-menu__check" aria-hidden="true">✓</span>
         </button>
-        <div v-if="modeOptions.length === 0" class="core-runtime-menu__empty">当前模式由插件提供</div>
+        <div v-if="modeOptions.length === 0" class="core-runtime-menu__empty">{{ t("当前模式由插件提供") }}</div>
       </section>
 
       <section
@@ -84,10 +84,10 @@
         class="core-runtime-menu__card core-runtime-menu__card--submenu"
         :class="'core-runtime-menu__card--submenu-' + submenuSide"
         role="menu"
-        aria-label="权限审批选项"
+        :aria-label="t('权限审批选项')"
         data-runtime-submenu="permission"
       >
-        <div class="core-runtime-menu__heading">权限审批</div>
+        <div class="core-runtime-menu__heading">{{ t("权限审批") }}</div>
         <button
           v-for="option in permissionOptions"
           :key="option.value"
@@ -105,15 +105,15 @@
           </span>
           <span v-if="option.value === permissionPreset" class="core-runtime-menu__check" aria-hidden="true">✓</span>
         </button>
-        <p v-if="permissionPreset === 'full_access'" class="core-runtime-menu__warning">
-          完全编辑、自动批准，并允许访问工作目录外
-        </p>
+        <p v-if="permissionPreset === 'full_access'" class="core-runtime-menu__warning">{{ t("完全编辑、自动批准，并允许访问工作目录外") }}</p>
       </section>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ChevronDown, ChevronRight, ShieldCheck } from 'lucide-vue-next'
 import {
@@ -164,14 +164,14 @@ const activeModeLabel = computed(() => (
     || props.modeOptions.find((option) => option.value === props.activeMode)?.selectedLabel
     || props.modeOptions.find((option) => option.value === props.activeMode)?.label
     || props.activeMode
-    || '模式'
+    || t("模式")
 ))
 
 const permissionLabel = computed(() => (
   CORE_PERMISSION_PRESET_LABELS[normalizeCorePermissionPreset(props.permissionPreset)]
 ))
 
-const ariaLabel = computed(() => `运行模式与权限：${activeModeLabel.value} · ${permissionLabel.value}`)
+const ariaLabel = computed(() => t("运行模式与权限：{0} · {1}", { 0: activeModeLabel.value, 1: permissionLabel.value }))
 
 function toggle(): void {
   if (props.disabled) return

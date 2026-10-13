@@ -3,23 +3,21 @@
     <!-- 插件被禁用时只说明状态：留一个可点的引擎下拉会把"关掉的搜索"装成还在
          运行，而且它写下去的配置没人会用。 -->
     <template v-if="pluginDisabled">
-      <p class="right-sidebar-web-search-message" data-state="disabled">
-        搜索插件未启用。到「插件」页启用 websearch 后可用。
-      </p>
+      <p class="right-sidebar-web-search-message" data-state="disabled">{{ t("搜索插件未启用。到「插件」页启用 websearch 后可用。") }}</p>
       <div class="right-sidebar-web-search-health" data-state="unavailable">
         <button class="right-sidebar-web-search-action" type="button" :disabled="healthLoading" @click="recheck">
           <RefreshCw :size="13" :stroke-width="1.8" :class="{ spinning: healthLoading }" aria-hidden="true" />
-          <span>重新检查</span>
+          <span>{{ t("重新检查") }}</span>
         </button>
       </div>
     </template>
     <template v-else>
       <div class="right-sidebar-web-search-row">
-        <span class="right-sidebar-web-search-label">引擎</span>
+        <span class="right-sidebar-web-search-label">{{ t("引擎") }}</span>
         <UiSelect
           v-model="engine"
           :options="engineOptions"
-          aria-label="Web Search 引擎"
+          :aria-label="t('Web Search 引擎')"
           :disabled="!requestRpc || loadingConfig"
           @update:model-value="saveEngine"
         />
@@ -35,16 +33,18 @@
           @click="checkHealth"
         >
           <RefreshCw :size="13" :stroke-width="1.8" :class="{ spinning: healthLoading }" aria-hidden="true" />
-          <span>{{ healthLoading ? '检查中…' : '检查连接' }}</span>
+          <span>{{ healthLoading ? t("检查中…") : t("检查连接") }}</span>
         </button>
       </div>
       <p v-if="message" class="right-sidebar-web-search-message" :data-state="connectionState">{{ message }}</p>
-      <p v-else-if="!requestRpc" class="right-sidebar-web-search-message">未连接到搜索服务</p>
+      <p v-else-if="!requestRpc" class="right-sidebar-web-search-message">{{ t("未连接到搜索服务") }}</p>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, onMounted, ref } from 'vue'
 import { RefreshCw } from 'lucide-vue-next'
 import UiSelect from './UiSelect.vue'
@@ -86,10 +86,10 @@ const engineOptions = [
 
 const connectionLabel = computed(() => {
   switch (connectionState.value) {
-    case 'connected': return '已连接'
-    case 'error': return '连接异常'
-    case 'unavailable': return '不可用'
-    default: return '未检查'
+    case 'connected': return t("已连接")
+    case 'error': return t("连接异常")
+    case 'unavailable': return t("不可用")
+    default: return t("未检查")
   }
 })
 
@@ -226,8 +226,8 @@ async function checkHealth(): Promise<void> {
     const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - started
     latencyMs.value = Math.max(0, Math.round(elapsed))
     if (state !== 'ok' && health.error) message.value = String(health.error)
-    else if (health.provider) message.value = `当前内核：${String(health.provider)}`
-    else message.value = '搜索服务响应正常'
+    else if (health.provider) message.value = t("当前内核：{0}", { 0: String(health.provider) })
+    else message.value = t("搜索服务响应正常")
   } catch (cause) {
     connectionState.value = 'error'
     latencyMs.value = null

@@ -36,18 +36,14 @@
           >{{ error || detail }}</span>
           <span class="core-confirm__spacer" aria-hidden="true"></span>
           <span class="core-confirm__actions">
-            <button type="button" class="core-confirm__cancel" :disabled="loading" @click="cancel">
-              取消
-            </button>
+            <button type="button" class="core-confirm__cancel" :disabled="loading" @click="cancel">{{ t("取消") }}</button>
             <button
               ref="confirmButtonEl"
               type="button"
               class="core-confirm__submit"
               :disabled="loading || confirmDisabled"
               @click="confirm"
-            >
-              确认
-            </button>
+            >{{ t("确认") }}</button>
           </span>
         </section>
       </div>
@@ -56,6 +52,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
 

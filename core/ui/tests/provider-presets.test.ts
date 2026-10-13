@@ -75,7 +75,7 @@ describe('free provider presets', () => {
   it('keeps the curated free providers OpenAI Chat compatible and key-driven', () => {
     const expected = [
       ['command-code-free', 'https://api.commandcode.ai/provider/v1', 'poolside/laguna-s-2.1-free'],
-      ['opencode-free', 'https://opencode.ai/zen/v1', 'deepseek-v4-flash-free'],
+      ['opencode-free', 'https://opencode.ai/inference/v1', 'big-pickle'],
       ['sambanova-free', 'https://api.sambanova.ai/v1', 'DeepSeek-V3.1'],
       ['groq-free', 'https://api.groq.com/openai/v1', 'openai/gpt-oss-120b'],
       ['google-gemini-free', 'https://generativelanguage.googleapis.com/v1beta/openai/', 'gemini-3.8-flash'],
@@ -102,15 +102,24 @@ describe('free provider presets', () => {
     expect(model?.maxOutputTokens).toBe(32768)
   })
 
-  it('does not keep retired OpenCode free model ids or non-chat endpoints', () => {
+  it('keeps OpenCode free models current and excludes non-conversation APIs', () => {
     const preset = PROVIDER_PRESETS.find(candidate => candidate.id === 'opencode-free')
 
     expect(preset?.models.map(model => model.modelId)).not.toEqual(
-      expect.arrayContaining(['ling-3.0-flash-free', 'ling-3.0-tiny-free', 'north-mini-code-free', 'longcat-2.0-free']),
+      expect.arrayContaining([
+        'deepseek-v4-flash-free', 'mimo-v2.5-free', 'ling-3.0-flash-fin-free',
+        'nemotron-3-ultra-free', 'longcat-2.0-free',
+      ]),
     )
     expect(preset?.models.map(model => model.modelId)).not.toEqual(
-      expect.arrayContaining(['jev-1.13-free', 'muse-spark-1.3-contributor-free', 'muse-spark-1.2-contributor-free']),
+      expect.arrayContaining(['jev-1.13-free']),
     )
+    expect(preset?.models.map(model => model.modelId)).toEqual(expect.arrayContaining([
+      'big-pickle', 'ling-3.1-flash-free', 'cat-jam-free', 'mimo-v2.6-flash-free',
+      'muse-spark-1.2-contributor-free', 'muse-spark-1.3-contributor-free',
+      'nemotron-3.5-lightning-free', 'step-5-preview-free', 'longcat-2.5-preview-free',
+      'space-bunny-free',
+    ]))
   })
 
   it('exposes the Free group metadata for onboarding and model catalog consumers', () => {

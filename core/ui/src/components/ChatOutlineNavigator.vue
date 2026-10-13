@@ -4,7 +4,7 @@
     ref="rootEl"
     class="chat-outline-navigator"
     role="group"
-    aria-label="用户指令导航"
+    :aria-label="t('用户指令导航')"
     :aria-describedby="statusId"
     tabindex="0"
     data-chat-outline-navigator
@@ -32,11 +32,9 @@
       @pointerleave="handlePreviewLeave"
       @click.stop="selectIndex(previewIndex)"
     >
-      <span class="chat-outline-navigator__preview-label">
-        第 {{ previewIndex + 1 }} 条用户指令
-      </span>
+      <span class="chat-outline-navigator__preview-label">{{ t("第") }}{{ previewIndex + 1 }}{{ t("条用户指令") }}</span>
       <span class="chat-outline-navigator__preview-prompt">
-        {{ previewItem.prompt || '（空指令）' }}
+        {{ previewItem.prompt || t("（空指令）") }}
       </span>
       <span v-if="previewItem.response_excerpt" class="chat-outline-navigator__preview-response">
         {{ previewItem.response_excerpt }}
@@ -50,6 +48,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n/index'
+
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import type { CoreMessage } from '../types'
 import {
@@ -137,7 +137,7 @@ const previewItem = computed(() => (
 const statusText = computed(() => {
   const index = selectedIndex.value
   return index >= 0 && outline.value.length
-    ? `第 ${index + 1} 条用户指令，共 ${outline.value.length} 条`
+    ? t("第 {0} 条用户指令，共 {1} 条", { 0: index + 1, 1: outline.value.length })
     : ''
 })
 const previewStyle = computed(() => {

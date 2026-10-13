@@ -934,4 +934,74 @@ describe('cancelled turn explanation collapse', () => {
     const assistant = messages.find(message => message.role === 'assistant')
     expect((assistant?.parts ?? []).some(part => String(part.item_id).includes(':model-retry:'))).toBe(false)
   })
+
+  it('reports the running turn even when the thread status still reads the previous terminal value', () => {
+    // turn/accepted updates the turn map and the top-level status, not
+    // core.status, so a freshly started turn can sit behind a stale terminal
+    // core status. The active turn must win, or the stop affordance disappears
+    // mid-run.
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-stale',
+      snapshot_seq: 6,
+      status: 'completed',
+      turns: {
+        'turn-1': { turn_id: 'turn-1', status: 'completed', items: [] },
+        'turn-2': { turn_id: 'turn-2', status: 'running', items: [], seq: 4 },
+      },
+      core: {
+        thread_id: 'thread-stale',
+        snapshot_seq: 6,
+        status: 'completed',
+        turns: {
+          'turn-1': { turn_id: 'turn-1', status: 'completed', items: [] },
+          'turn-2': { turn_id: 'turn-2', status: 'running', items: [], seq: 4 },
+        },
+        items: {},
+        item_order: [],
+        requests: {},
+        artifacts: {},
+      },
+    })
+    expect(selectLatestTurnStatus(snapshot)).toBe('running')
+  })
+
+  it('reads the active turn from the top-level turn map too', () => {
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-outer-turn',
+      snapshot_seq: 4,
+      status: 'completed',
+      turns: { 'turn-9': { turn_id: 'turn-9', status: 'waiting', items: [] } },
+      core: {
+        thread_id: 'thread-outer-turn',
+        snapshot_seq: 4,
+        status: 'completed',
+        turns: { 'turn-8': { turn_id: 'turn-8', status: 'completed', items: [] } },
+        items: {},
+        item_order: [],
+        requests: {},
+        artifacts: {},
+      },
+    })
+    expect(selectLatestTurnStatus(snapshot)).toBe('waiting')
+  })
+
+  it('reports the terminal status when no turn is active', () => {
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-done',
+      snapshot_seq: 3,
+      status: 'completed',
+      turns: { 'turn-1': { turn_id: 'turn-1', status: 'completed', items: [] } },
+      core: {
+        thread_id: 'thread-done',
+        snapshot_seq: 3,
+        status: 'completed',
+        turns: { 'turn-1': { turn_id: 'turn-1', status: 'completed', items: [] } },
+        items: {},
+        item_order: [],
+        requests: {},
+        artifacts: {},
+      },
+    })
+    expect(selectLatestTurnStatus(snapshot)).toBe('completed')
+  })
 })

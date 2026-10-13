@@ -8,7 +8,13 @@ export interface UseCoreLiveTurnControllerOptions<Input> {
   connectedThreadId: Readonly<Ref<string>>
   connectionState: Readonly<Ref<CoreLiveConnectionState>>
   connect(threadId: string): Promise<void>
-  startTurn(threadId: string, input: Input, workRoot?: string, options?: Record<string, unknown>): Promise<void>
+  startTurn(
+    threadId: string,
+    input: Input,
+    workRoot?: string,
+    options?: Record<string, unknown>,
+    clientMessageId?: string,
+  ): Promise<void>
   interruptTurn(threadId: string, turnId?: string): Promise<void>
   forceResetTurn(threadId: string, turnId?: string): Promise<void>
 }
@@ -51,15 +57,32 @@ export function useCoreLiveTurnController<Input>(options: UseCoreLiveTurnControl
     threadId: string,
     workRoot?: string,
     turnOptions: Record<string, unknown> = {},
+    clientMessageId?: string,
   ): Promise<boolean> {
-    if (!await ensureConnected(threadId)) return false
+    return (await startThreadTurnOutcome(input, threadId, workRoot, turnOptions, clientMessageId)).ok
+  }
+
+  /**
+   * Same as `startThreadTurn` but keeps the refusal so the composer can tell a
+   * busy session (queue or steer instead of failing) from a real error.
+   */
+  async function startThreadTurnOutcome(
+    input: Input,
+    threadId: string,
+    workRoot?: string,
+    turnOptions: Record<string, unknown> = {},
+    clientMessageId?: string,
+  ): Promise<{ ok: boolean; error?: unknown }> {
+    if (!await ensureConnected(threadId)) {
+      return { ok: false, error: lastError.value ? new Error(lastError.value) : undefined }
+    }
     try {
-      await options.startTurn(threadId, input, workRoot, turnOptions)
+      await options.startTurn(threadId, input, workRoot, turnOptions, clientMessageId)
       lastError.value = ''
-      return true
+      return { ok: true }
     } catch (error) {
       lastError.value = error instanceof Error ? error.message : String(error)
-      return false
+      return { ok: false, error }
     }
   }
 
@@ -101,5 +124,6 @@ export function useCoreLiveTurnController<Input>(options: UseCoreLiveTurnControl
     lastError,
     startActiveTurn,
     startThreadTurn,
+    startThreadTurnOutcome,
   }
 }

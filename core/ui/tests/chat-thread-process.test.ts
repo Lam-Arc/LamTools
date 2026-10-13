@@ -1305,101 +1305,7 @@ describe('ChatThread process cards', () => {
     });
   });
 
-  it('renders agent metadata as a nested timeline', async () => {
-    const messages: CoreMessage[] = [{
-      id: 'm-agent',
-      role: 'assistant',
-      content: '',
-      timestamp: '2026-06-18T00:00:00.000Z',
-      metadata: { timeline: true },
-      parts: [{
-        id: 'p-agent',
-        partType: 'agent_summary',
-        status: 'completed',
-        content: 'Use the smaller implementation.\n\n- Keep the nested timeline.',
-        detail: 'Use the smaller implementation.\n\n- Keep the nested timeline.',
-        toolResult: 'Use the smaller implementation.\n\n- Keep the nested timeline.',
-        label: 'Agent completed',
-        toolName: 'sub_agent',
-        toolArgs: {
-          agent: 'sub',
-          task: 'Audit Writer tool display\n\n## Scope\nCheck the nested timeline.',
-        },
-        metadata: {
-          agent_name: 'repo_reader',
-          agent_index: '001',
-          mode: 'review',
-          valid_design: true,
-          winner_name: 'smaller implementation',
-          reasoning_blocks: [
-            { content: 'Inspect the component flow before changing UI.' },
-          ],
-          tool_calls: [
-            {
-              name: 'read_file',
-              arguments: { path: 'core/ui/src/components/ChatThread.vue' },
-              status: 'completed',
-              output: 'Read component source.',
-            },
-            {
-              name: 'write_file',
-              arguments: { path: 'src/index.html' },
-              status: 'completed',
-              output: 'Created src/index.html: 42 chars, 2 lines. --- preview ---\n1 | <main>Hello</main>\n2 | <script src=\"app.js\"></script>\n--- end preview ---',
-            },
-          ],
-        },
-      }],
-    }];
-
-    const wrapper = mountChatThread( {
-      props: {
-        messages,
-        processExpandedIds: new Set(['m-agent']),
-      },
-    });
-
-    const block = wrapper.find('.sub-line-block');
-    expect(block.exists()).toBe(true);
-    expect(block.find('.sub-line-heading').text()).toContain('execute repo_reader');
-    expect(block.find('.sub-line-heading').text()).not.toContain('子任务');
-    expect(block.find('.sub-line-heading.tool-card-header').exists()).toBe(false);
-    // Sub-agent details collapse by default until the inline caret is opened
-    expect(block.find('.sub-line-body').exists()).toBe(false);
-
-    await block.find('.sub-line-toggle').trigger('click');
-    expect(block.find('.sub-line-body').exists()).toBe(true);
-    expect(block.find('.sub-line-chat .user-bubble').exists()).toBe(true);
-    expect(block.find('.sub-line-chat .user-bubble').text()).toContain('## Scope');
-
-    // Adjacent reasoning and tools share one collapsed process group.
-    const groupSummary = block.find('.process-group-summary');
-    expect(groupSummary.exists()).toBe(true);
-    expect(block.find('.process-group-body').exists()).toBe(false);
-    await groupSummary.trigger('click');
-    const reasoningStep = block.find('.process-step--reasoning');
-    expect(reasoningStep.exists()).toBe(true);
-    expect(block.find('.reasoning-body').exists()).toBe(false);
-    await block.find('.reasoning-toggle').trigger('click');
-    expect(block.find('.reasoning-body').text()).toContain('Inspect the component flow');
-    const toolHeaders = block.findAll('.tool-card-header');
-    expect(toolHeaders.length).toBeGreaterThan(1);
-    const writeHeader = toolHeaders.find(header => header.text().includes('src/index.html'));
-    expect(writeHeader).toBeTruthy();
-    await writeHeader!.trigger('click');
-
-    const writeDiff = block.find('.diff-block--write');
-    expect(writeDiff.exists()).toBe(true);
-    expect(writeDiff.text()).toContain('src/index.html');
-    expect(writeDiff.text()).toContain('<main>Hello</main>');
-    expect(block.find('.sub-line-chat .assistant-answer .part-text-content').exists()).toBe(true);
-    expect(block.text()).toContain('Inspect the component flow');
-    expect(block.text()).toContain('## Scope');
-    expect(block.text()).toContain('Use the smaller implementation.');
-    expect(block.text()).not.toContain('调用子 Agent');
-  }, 20_000);
-
-  it('opens the split sub-agent view from the row, and keeps inline expand on the caret', async () => {
+  it('opens the split sub-agent view from the row, with no inline expand on sub-agent rows', async () => {
     const messages: CoreMessage[] = [{
       id: 'm-agent-open',
       role: 'assistant',
@@ -1430,20 +1336,15 @@ describe('ChatThread process cards', () => {
     });
 
     const block = wrapper.find('.sub-line-block');
+    // 子代理行只有一件事：点整行开右侧面板（行内展开与箭头都已按用户口径移除）。
+    expect(block.find('.sub-line-toggle').exists()).toBe(false);
     expect(block.find('.sub-line-body').exists()).toBe(false);
 
-    // 行本身打开右侧分屏，只带身份（优先子会话 id），由壳体解析出运行。
     await block.find('.sub-line-heading').trigger('click');
-    expect(wrapper.emitted('open-sub-agent')).toBeTruthy();
     expect(wrapper.emitted('open-sub-agent')!.at(-1)).toEqual([
       { subSessionId: 'thread-1:sub:renderer_dev', name: 'renderer_dev' },
     ]);
     expect(block.find('.sub-line-body').exists()).toBe(false);
-
-    // 就地展开仍走小箭头，两条路互不干扰。
-    await block.find('.sub-line-toggle').trigger('click');
-    expect(block.find('.sub-line-body').exists()).toBe(true);
-    expect(wrapper.emitted('open-sub-agent')!.length).toBe(1);
   }, 20_000);
 
   it('opens the split view from a delegation tool row too (projection keeps it tool_call)', async () => {
@@ -1490,134 +1391,21 @@ describe('ChatThread process cards', () => {
       },
     });
 
-    const block = wrapper.find('.sub-line-block');
-    expect(block.exists()).toBe(true);
-    // 不再退化成工具卡：没有工具卡的展开头与正文。
-    expect(block.find('.tool-card-header').exists()).toBe(false);
+    const row = wrapper.find('.process-step--tool.process-step--sub-agent');
+    expect(row.exists()).toBe(true);
+    // 渲染仍是工具卡（专用文案与图标另有用例钉住），点击语义是子代理行。
+    const header = row.find('.tool-card-header');
+    expect(header.text()).toContain('创建了 reviewer');
 
-    // 点整行：只开分屏、不动就地展开。
-    await block.find('.sub-line-heading').trigger('click');
+    // 整行只有一件事：开右侧分屏。
+    await header.trigger('click');
     expect(wrapper.emitted('open-sub-agent')!.at(-1)).toEqual([
       { subSessionId: 'thread-1:sub:reviewer', name: 'reviewer' },
     ]);
-    expect(block.find('.sub-line-body').exists()).toBe(false);
-    // 这一行还没有可展开的嵌套过程：不摆一个点了没反应的箭头。
-    expect(block.find('.sub-line-toggle').exists()).toBe(false);
+    // 单行为：没有行尾箭头，也没有行内正文（完整过程流在右侧面板里）。
+    expect(row.find('.tool-row-toggle').exists()).toBe(false);
+    expect(row.find('.tool-card-body').exists()).toBe(false);
   }, 20_000);
-
-  it('renders sub agent process through the same ChatThread timeline renderer', async () => {
-    const messages: CoreMessage[] = [{
-      id: 'm-agent-shared-renderer',
-      role: 'assistant',
-      content: '',
-      timestamp: '2026-06-18T00:00:00.000Z',
-      metadata: { timeline: true },
-      parts: [{
-        id: 'p-agent-shared-renderer',
-        partType: 'agent_summary',
-        status: 'completed',
-        content: '子 agent 已完成复核。',
-        toolResult: '子 agent 已完成复核。',
-        toolName: 'sub_agent',
-        toolArgs: {
-          agent: 'sub',
-          task: '复核子线渲染是否复用主线逻辑',
-        },
-        metadata: {
-          agent_name: 'retrospective_analyst',
-          agent_index: '001',
-          subLineParts: [
-            {
-              id: 'sub-reasoning',
-              partType: 'reasoning',
-              status: 'completed',
-              content: '先读取子任务，再复用主线过程块展示。',
-            },
-          ],
-        },
-      }],
-    }];
-
-    const wrapper = mountChatThread( {
-      props: {
-        messages,
-        processExpandedIds: new Set(['m-agent-shared-renderer']),
-      },
-    });
-
-    const block = wrapper.find('.sub-line-block');
-    expect(block.find('.sub-line-heading').text()).toContain('execute retrospective_analyst');
-    // Nested child timeline is rendered by the same MessageView, hidden until opened
-    await block.find('.sub-line-toggle').trigger('click');
-    expect(block.find('.message-view.sub-line-chat').exists()).toBe(true);
-    expect(block.find('.sub-line-nested-process').exists()).toBe(false);
-    expect(block.find('.sub-line-chat .assistant-meta').text()).toContain('execute retrospective_analyst');
-    expect(block.find('.sub-line-chat .reasoning-toggle').exists()).toBe(true);
-    await block.find('.sub-line-chat .reasoning-toggle').trigger('click');
-    expect(block.find('.sub-line-chat .reasoning-body').text()).toContain('先读取子任务');
-    expect(block.find('.sub-line-assistant-answer').exists()).toBe(false);
-    expect(block.find('.sub-line-chat .assistant-answer').text()).toContain('子 agent 已完成复核。');
-  });
-
-  it('gives a sub agent the same body and historical-process text lifecycle', async () => {
-    const finalText = '任务已完成。\n\n文件保存路径：story.txt'
-    const messages: CoreMessage[] = [{
-      id: 'm-agent-text-lifecycle',
-      role: 'assistant',
-      content: '',
-      timestamp: '2026-06-18T00:00:00.000Z',
-      metadata: { timeline: true },
-      parts: [{
-        id: 'p-agent-text-lifecycle',
-        partType: 'agent_summary',
-        status: 'completed',
-        content: finalText,
-        toolResult: finalText,
-        toolName: 'sub_agent',
-        metadata: {
-          agent_name: 'story_writer',
-          subLineParts: [
-            {
-              id: 'sub-text-old',
-              partType: 'model_text',
-              status: 'completed',
-              content: '我先检查写作要求。',
-            },
-            {
-              id: 'sub-write',
-              partType: 'tool_result',
-              status: 'completed',
-              toolName: 'write_file',
-              toolResult: 'Created story.txt',
-            },
-            {
-              id: 'sub-text-final',
-              partType: 'model_text',
-              status: 'completed',
-              content: finalText,
-            },
-          ],
-        },
-      }],
-    }];
-
-    const wrapper = mountChatThread( {
-      props: {
-        messages,
-        processExpandedIds: new Set(['m-agent-text-lifecycle']),
-      },
-    });
-
-    const block = wrapper.find('.sub-line-block');
-    await block.find('.sub-line-toggle').trigger('click');
-    const chat = block.find('.sub-line-chat');
-    // Historical model text renders inline in the child process stream
-    const historicalText = chat.find('.process-stream .part-text-content');
-    expect(historicalText.text()).toContain('我先检查写作要求。');
-    expect(historicalText.text()).not.toContain('任务已完成。');
-    // The final text owns the answer body
-    expect(chat.find('.assistant-answer').text()).toContain('任务已完成。');
-  });
 
   it('renders agent final answer as user-facing conclusion', async () => {
     const messages: CoreMessage[] = [{
@@ -1654,9 +1442,8 @@ describe('ChatThread process cards', () => {
     const block = wrapper.find('.sub-line-block');
     expect(block.text()).toContain('execute worker');
     expect(block.text()).not.toContain('执行子任务');
-    // Conclusion sits inside the collapsed sub-line; open it to surface the text
-    await block.find('.sub-line-toggle').trigger('click');
-    expect(block.text()).toContain('已创建首页、样式和交互脚本。');
+    // 行内不再展开：结论的文字契约移到投影（面板时间线消费的就是它）。
+    expect(block.text()).not.toContain('已创建首页');
     expect(block.text()).not.toContain('Agent: sub');
     expect(block.text()).not.toContain('"handoff"');
     expect(block.text()).not.toContain('"confidence"');
@@ -1689,11 +1476,11 @@ describe('ChatThread process cards', () => {
       },
     });
 
-    const block = wrapper.find('.sub-line-block');
-    await block.find('.sub-line-toggle').trigger('click');
-    const answerText = block.find('.sub-line-chat .part-text-content').text();
-    expect(answerText).toContain('子 agent 的完整结论。');
-    expect(answerText).not.toBe('sub_agent');
+    expect(wrapper.find('.sub-line-toggle').exists()).toBe(false);
+    // 行内不再展示结论文本：这一行只给出身份标题（结论在右侧面板的过程流里）。
+    const heading = wrapper.find('.sub-line-heading').text();
+    expect(heading).toContain('retrospective');
+    expect(heading).not.toContain('sub_agent');
   });
 
   it('renders structured checklist parts as checkbox items', () => {
@@ -2846,6 +2633,137 @@ describe('ChatThread process cards', () => {
     });
 
     expect(wrapper.find('.process-summary-text').text()).toBe('耗时 —');
+  });
+
+  it('updates elapsed time once per second only for the active running turn', async () => {
+    vi.useFakeTimers();
+    const start = Date.parse('2026-10-12T02:00:00.000Z');
+    vi.setSystemTime(start + 1000);
+    const message: CoreMessage = {
+      id: 'assistant:turn-clock',
+      role: 'assistant',
+      content: 'Working.',
+      timestamp: '',
+      metadata: { timeline: true, started_at: new Date(start).toISOString() },
+      parts: [{ id: 'clock-reasoning', partType: 'reasoning', status: 'completed', content: 'Checking.' }],
+    };
+    const wrapper = mountChatThread({
+      props: { messages: [message], activeTurnId: 'turn-clock', turnActive: true, turnStatus: 'running' },
+    });
+    try {
+      expect(wrapper.find('.process-summary-text').text()).toBe('耗时 1 s');
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(wrapper.find('.process-summary-text').text()).toBe('耗时 4 s');
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a terminal duration stable and falls through blank timestamp fields', async () => {
+    vi.useFakeTimers();
+    const start = '2026-10-12T02:00:00.000Z';
+    const end = '2026-10-12T02:00:03.500Z';
+    vi.setSystemTime(new Date('2026-10-12T02:00:10.000Z'));
+    const message: CoreMessage = {
+      id: 'assistant:turn-terminal-clock',
+      role: 'assistant',
+      content: 'Done.',
+      timestamp: '',
+      metadata: {
+        timeline: true,
+        started_at: '',
+        startedAt: '',
+        completed_at: '',
+        processMetrics: {},
+        runtime_metrics: { started_at: start, completed_at: end },
+      },
+      parts: [{ id: 'terminal-clock-reasoning', partType: 'reasoning', status: 'completed', content: 'Finished.' }],
+    };
+    const wrapper = mountChatThread({
+      props: { messages: [message], activeTurnId: 'turn-terminal-clock', turnActive: false, turnStatus: 'completed' },
+    });
+    try {
+      expect(wrapper.find('.process-summary-text').text()).toBe('耗时 4 s');
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(wrapper.find('.process-summary-text').text()).toBe('耗时 4 s');
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['waiting', 'interrupting', 'interrupted', 'failed'])('does not advance duration while turn status is %s', (status) => {
+    vi.useFakeTimers();
+    const start = Date.parse('2026-10-12T02:00:00.000Z');
+    vi.setSystemTime(start + 30_000);
+    const message: CoreMessage = {
+      id: 'assistant:turn-paused-clock',
+      role: 'assistant',
+      content: 'Paused.',
+      timestamp: '',
+      metadata: { timeline: true, started_at: new Date(start).toISOString() },
+      parts: [{ id: 'paused-clock-reasoning', partType: 'reasoning', status: 'completed', content: 'Paused.' }],
+    };
+    const wrapper = mountChatThread({
+      props: { messages: [message], activeTurnId: 'turn-paused-clock', turnActive: false, turnStatus: status },
+    });
+    try {
+      expect(wrapper.find('.process-summary-text').text()).toBe('耗时 —');
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not create a live clock without a usable start time and clears it on unmount', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-12T02:00:00.000Z'));
+    const message: CoreMessage = {
+      id: 'assistant:turn-no-start-clock',
+      role: 'assistant',
+      content: 'Working.',
+      timestamp: '',
+      metadata: { timeline: true, started_at: '', startedAt: '', processMetrics: {} },
+      parts: [{ id: 'no-start-clock-reasoning', partType: 'reasoning', status: 'completed', content: 'Checking.' }],
+    };
+    const wrapper = mountChatThread({
+      props: { messages: [message], activeTurnId: 'turn-no-start-clock', turnActive: true, turnStatus: 'running' },
+    });
+    try {
+      expect(wrapper.find('.process-summary-text').text()).toBe('耗时 —');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the shared duration clock after the active message unmounts', () => {
+    vi.useFakeTimers();
+    const start = Date.parse('2026-10-12T02:00:00.000Z');
+    vi.setSystemTime(start + 1000);
+    const message: CoreMessage = {
+      id: 'assistant:turn-cleanup-clock',
+      role: 'assistant',
+      content: 'Working.',
+      timestamp: '',
+      metadata: { timeline: true, started_at: new Date(start).toISOString() },
+      parts: [{ id: 'cleanup-clock-reasoning', partType: 'reasoning', status: 'completed', content: 'Checking.' }],
+    };
+    const wrapper = mountChatThread({
+      props: { messages: [message], activeTurnId: 'turn-cleanup-clock', turnActive: true, turnStatus: 'running' },
+    });
+    let unmounted = false;
+    try {
+      expect(vi.getTimerCount()).toBe(1);
+      wrapper.unmount();
+      unmounted = true;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      if (!unmounted) wrapper.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('does not surface usage details alongside elapsed duration', () => {

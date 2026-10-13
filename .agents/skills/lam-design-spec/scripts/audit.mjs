@@ -1,39 +1,41 @@
 #!/usr/bin/env node
 /**
- * lam-design-spec audit — 扫描 LamTools 前端样式，报告偏离规范的值。
+ * lam-design-spec audit — scan LamTools frontend styles and report values that violate the design specification.
  *
- * 用法： node .agents/skills/lam-design-spec/scripts/audit.mjs
+ * Usage: node .agents/skills/lam-design-spec/scripts/audit.mjs
  *
- * 检查项：
- *  1. border-radius / padding / gap 的 px 值不在标尺 → 报告
- *  2. z-index 数字字面量不在 --z-* 标尺 → 报告
- *  3. color-mix(... X%, ...) 的 X 不在 {8,12,16} → 报告
- *  4. 出现本地命名空间（--fb- / --xxx-radius 等）→ 报告
- *  5. control 控件误用 --theme-main-text（应在 control area 用 --theme-control-text）→ 提示
+ * Checks:
+ *  1. Report border-radius / padding / gap pixel values outside the scales.
+ *  2. Report numeric z-index literals outside the --z-* scale.
+ *  3. Report color-mix(... X%, ...) values where X is not in {8,12,16}.
+ *  4. Report local namespaces such as --fb- / --xxx-radius.
+ *  5. Warn when control components use --theme-main-text instead of --theme-control-text.
  *
- * 零依赖（仅用 fs/path/正则）。按文件分组打印。不自动改代码。
+ * Zero dependencies (uses only fs/path/regular expressions). Output is grouped by file.
+ * This script does not edit code.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// __dirname 等价（ESM）。从脚本位置回溯到仓库根：scripts/ -> lam-design-spec/ -> skills/ -> .agents/ -> ROOT
+// ESM equivalent of __dirname. Walk from this script to the repository root:
+// scripts/ -> lam-design-spec/ -> skills/ -> .agents/ -> ROOT
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..', '..', '..');
 const CORE_UI = path.join(ROOT, 'core', 'ui', 'src');
 
-// —— 标尺 ——
+// Scales
 const RADIUS_SCALE = new Set(['6', '12', '18', '22']);          // --radius-sm/-/-lg/-xl
 const SPACE_SCALE = new Set(['4', '8', '12', '16', '24', '32']); // --space-1..6
 const ALPHA_OK = new Set(['8', '12', '16']);                      // --alpha-hover/active/press
 const Z_SCALE = new Set(['10', '15', '20', '35', '40', '60', '80', '90']);
 
-// 允许的圆角 px（含标尺 + 常见合理值不报，只报明显 off-scale）
-// off-scale 黑名单
+// Allowed radius pixels: the scale plus common reasonable values; report only clear off-scale cases.
+// Off-scale blocklist
 const RADIUS_BANNED = new Set(['5', '7', '9', '10', '11', '14']);
 
-// —— 扫描目标 ——
+// Scan targets
 function collectFiles(dir, exts) {
   const out = [];
   if (!fs.existsSync(dir)) return out;
@@ -50,14 +52,14 @@ const targets = [
   ...collectFiles(path.join(CORE_UI, 'components'), ['.vue']),
 ];
 
-// —— 规则 ——
+// Rules
 const findings = {};  // file -> [{ line, rule, msg }]
 
 function add(file, line, rule, msg) {
   (findings[file] ??= []).push({ line, rule, msg });
 }
 
-// 提取每行首个 px 数字
+// Extract the first pixel value on a property line.
 function pxValues(line, prop) {
   const vals = [];
   const re = new RegExp(prop + '\\s*:\\s*([^;]+)', 'i');
@@ -75,63 +77,64 @@ for (const file of targets) {
     const ln = i + 1;
     if (!line || line.startsWith('/*') || line.startsWith('*')) return;
 
-    // 1a. border-radius px off-scale
+    // 1a. Off-scale border-radius pixels
     if (/border-radius/i.test(line) && !/var\(--radius/.test(line)) {
       for (const { val } of pxValues(raw, 'border-radius')) {
         if (RADIUS_BANNED.has(Math.round(parseFloat(val)).toString()))
-          add(rel, ln, 'radius-off-scale', `${val}px → 用 --radius-* 标尺（6/12/18/22）`);
+          add(rel, ln, 'radius-off-scale', `${val}px → use the --radius-* scale (6/12/18/22)`);
       }
     }
-    // 1b. off-scale radius 也包括硬编码 4px 在非 dense 场景（4px 是 WorkflowNode 小控件，标记提示）
-    // 不强制报 4px，仅在显式 banned 集合里报。
+    // 1b. Off-scale radii also include hard-coded 4px outside dense contexts.
+    // Do not report 4px by default; report only values in the explicit blocklist.
 
-    // 2. z-index 数字字面量不在标尺——只报 ≥50 的浮层/模态级硬编码
-    //    （z-index:0/1/2/3/5/6 是局部 stacking context，不属于主题级标尺）
+    // 2. Numeric z-index literals outside the scale; report only overlay/modal values >= 50.
+    //    (z-index: 0/1/2/3/5/6 are local stacking contexts, not theme-level values.)
     {
       const m = line.match(/z-index\s*:\s*(\d+)\s*(?:;|$)/);
       if (m && !/var\(--z-/.test(line)) {
         const z = parseInt(m[1], 10);
         if (z >= 50 && !Z_SCALE.has(m[1]))
-          add(rel, ln, 'z-index-literal', `z-index:${m[1]} → 用 --z-* 标尺（如 --z-popover 60 / --z-modal 80 / --z-toast 90）`);
+          add(rel, ln, 'z-index-literal', `z-index:${m[1]} → use the --z-* scale (for example, --z-popover 60 / --z-modal 80 / --z-toast 90)`);
       }
     }
 
-    // 3. color-mix alpha 不在 {8,12,16}——只报明显的交互态用途（hover/active/selected 行）
-    //    边框/次要文字的 alpha（如 5%/6%/7%/9%/10%/14%/20%/36%/58%）另行提示但不当交互态误报
+    // 3. Report color-mix alpha outside {8,12,16} only for likely interaction states (hover/active/selected rows).
+    //    Border and secondary-text alpha (such as 5%/6%/7%/9%/10%/14%/20%/36%/58%) is noted separately,
+    //    but is not treated as an interaction-state violation.
     {
       const isState = /hover|active|selected|focus|press/i.test(line);
       for (const m of line.matchAll(/color-mix\([^)]*?(\d+(?:\.\d+)?)\s*%,\s*transparent\)/g)) {
         const a = parseFloat(m[1]);
         const key = Math.round(a).toString();
         if (isState && !ALPHA_OK.has(key))
-          add(rel, ln, 'alpha-state-off-scale', `交互态 color-mix ... ${m[1]}% → 用 --alpha-*（hover 8% / active 12% / press 16%）`);
+          add(rel, ln, 'alpha-state-off-scale', `interaction color-mix ... ${m[1]}% → use --alpha-* (hover 8% / active 12% / press 16%)`);
         else if (!isState && a < 20 && !ALPHA_OK.has(key))
-          add(rel, ln, 'alpha-inconsistent', `color-mix ... ${m[1]}% → 非标尺值，考虑统一（交互态用 --alpha-*）`);
+          add(rel, ln, 'alpha-inconsistent', `color-mix ... ${m[1]}% → off-scale value; consider consolidating (use --alpha-* for interaction states)`);
       }
     }
 
-    // 4. 本地命名空间 --fb- / --xxx-radius（注意 \b 在 - 前无效，直接匹配）
+    // 4. Local namespaces such as --fb- / --xxx-radius (\b is ineffective before -, so match directly).
     if (line.includes('--fb-') || /--[a-z]+-radius\b/.test(line)) {
-      add(rel, ln, 'local-namespace', '本地命名空间 → 用全局 --radius-* / --theme-* ，禁止平行体系');
+      add(rel, ln, 'local-namespace', 'Local namespace → use global --radius-* / --theme-* tokens; do not create a parallel system');
     }
 
-    // 5. 静态色绕过主题（control 控件用 --panel/--line 直接做背景/边框）
-    // 仅在 .vue 的 input/select/button 相关规则里提示
+    // 5. Static color bypassing the theme (control components using --panel/--line directly for backgrounds/borders).
+    // Warn only in input/select/button-related Vue rules.
     if (/\.(lt-|small-|wf-field|field-input)/.test(line) && /var\(--panel\b/.test(line) && !/--theme-/.test(line)) {
-      add(rel, ln, 'static-bypass-theme', '控件用静态 --panel → 应挂 control area：--theme-control-background/text');
+      add(rel, ln, 'static-bypass-theme', 'Control uses static --panel → use the control area: --theme-control-background/text');
     }
   });
 }
 
-// —— 输出 ——
+// Output
 const files = Object.keys(findings);
 let total = 0;
 for (const f of files) total += findings[f].length;
 
 if (total === 0) {
-  console.log('\n✓ 未发现偏离规范的值。所有扫描文件均落在标尺上。\n');
+  console.log('\n✓ No off-spec values found. All scanned files use the defined scales.\n');
 } else {
-  console.log(`\nlam-design-spec audit — ${total} 项偏离规范（${files.length} 个文件）\n`);
+  console.log(`\nlam-design-spec audit — ${total} off-spec finding(s) across ${files.length} file(s)\n`);
   for (const f of files) {
     console.log(`  ${f}`);
     for (const { line, rule, msg } of findings[f]) {
@@ -140,4 +143,4 @@ if (total === 0) {
     console.log('');
   }
 }
-console.log(`扫描文件：${targets.length}  ·  偏离：${total}`);
+console.log(`Scanned files: ${targets.length}  ·  Findings: ${total}`);
