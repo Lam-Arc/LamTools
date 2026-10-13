@@ -34,9 +34,11 @@ import json
 import pathlib
 
 def read(path):
-    return json.loads(pathlib.Path(path).read_text(encoding='utf-8'))['version']
+    return json.loads(pathlib.Path(path).read_text(encoding='utf-8'))
 
-print(read('/var/www/lamtools/desktop-update.json'), read('/var/www/lamtools/mobile-update.json'))
+desktop = read('/var/www/lamtools/desktop-update.json')
+mobile = read('/var/www/lamtools/mobile-update.json')
+print(desktop['version'], mobile['version'], desktop.get('linux_version', desktop['version']))
 PY
 }
 
@@ -45,9 +47,10 @@ PY
 page_is_current() {
     wanted_desktop=$1
     wanted_mobile=$2
+    wanted_linux=$3
     grep -q "SUNDAY $wanted_desktop " "$PUBLIC_ROOT/sunday.html" &&
         grep -q "SUNDAY MOBILE $wanted_mobile " "$PUBLIC_ROOT/sunday.html" &&
-        grep -q "Sunday_${wanted_desktop}_amd64" "$PUBLIC_ROOT/sunday.html"
+        grep -q "Sunday_${wanted_linux}_amd64" "$PUBLIC_ROOT/sunday.html"
 }
 
 preview_is_current() {
@@ -68,6 +71,7 @@ import re
 desktop = json.loads(pathlib.Path('/var/www/lamtools/desktop-update.json').read_text(encoding='utf-8'))
 mobile = json.loads(pathlib.Path('/var/www/lamtools/mobile-update.json').read_text(encoding='utf-8'))
 dv, mv = desktop['version'], mobile['version']
+lv = desktop.get('linux_version', dv)
 
 changed = []
 for path in sorted(pathlib.Path('/var/www/ainarit').rglob('*')):
@@ -77,11 +81,11 @@ for path in sorted(pathlib.Path('/var/www/ainarit').rglob('*')):
     before = text
     text = re.sub(r'SUNDAY (\d+\.\d+\.\d+)(?=\s+.\s+X64)', 'SUNDAY ' + dv, text)
     text = re.sub(r'SUNDAY MOBILE (\d+\.\d+\.\d+)(?=\s+.\s+APK)', 'SUNDAY MOBILE ' + mv, text)
-    text = re.sub(r'Sunday_\d+\.\d+\.\d+_amd64', 'Sunday_' + dv + '_amd64', text)
+    text = re.sub(r'Sunday_\d+\.\d+\.\d+_amd64', 'Sunday_' + lv + '_amd64', text)
     if text != before:
         path.write_text(text, encoding='utf-8')
         changed.append(path.name)
-print('page stamped for desktop {} / mobile {}: {}'.format(dv, mv, ', '.join(changed) or 'already current'))
+print('page stamped for desktop {} / mobile {} / Linux {}: {}'.format(dv, mv, lv, ', '.join(changed) or 'already current'))
 PY
 }
 
@@ -118,10 +122,11 @@ backup() {
 verify_live() {
     wanted_desktop=$1
     wanted_mobile=$2
+    wanted_linux=$3
     page=$(curl -sS -m 30 "$ORIGIN/sunday.html")
     echo "$page" | grep -q "SUNDAY $wanted_desktop " || die "$ORIGIN still does not read desktop $wanted_desktop"
     echo "$page" | grep -q "SUNDAY MOBILE $wanted_mobile " || die "$ORIGIN still does not read mobile $wanted_mobile"
-    echo "$page" | grep -q "Sunday_${wanted_desktop}_amd64" || die "$ORIGIN still links the old Linux build"
+    echo "$page" | grep -q "Sunday_${wanted_linux}_amd64" || die "$ORIGIN still links the old Linux build"
 
     entry=$(curl -sS -m 30 "$ORIGIN/preview/" |
         sed -n 's|.*\(/preview/assets/preview-[A-Za-z0-9._-]*\.js\).*|\1|p' | head -1)
@@ -134,19 +139,20 @@ verify_live() {
 set -- $(versions)
 wanted_desktop=$1
 wanted_mobile=$2
-echo "published channel: desktop $wanted_desktop, mobile $wanted_mobile"
+wanted_linux=$3
+echo "published channel: desktop $wanted_desktop, mobile $wanted_mobile, Linux $wanted_linux"
 
 [ -d "$SITE" ] || die "$SITE is absent; publish the site release first"
 
-if page_is_current "$wanted_desktop" "$wanted_mobile" && preview_is_current; then
+if page_is_current "$wanted_desktop" "$wanted_mobile" "$wanted_linux" && preview_is_current; then
     echo "public site already in step"
     [ "$CHECK" -eq 1 ] && exit 0
-    verify_live "$wanted_desktop" "$wanted_mobile"
+    verify_live "$wanted_desktop" "$wanted_mobile" "$wanted_linux"
     exit 0
 fi
 
 if [ "$CHECK" -eq 1 ]; then
-    page_is_current "$wanted_desktop" "$wanted_mobile" || echo "out of step: $PUBLIC_ROOT/sunday.html"
+    page_is_current "$wanted_desktop" "$wanted_mobile" "$wanted_linux" || echo "out of step: $PUBLIC_ROOT/sunday.html"
     preview_is_current || echo "out of step: $PREVIEW"
     exit 1
 fi
@@ -155,4 +161,4 @@ backup
 stamp_page
 sync_preview
 systemctl is-active caddy-lamtools lamtools-relay
-verify_live "$wanted_desktop" "$wanted_mobile"
+verify_live "$wanted_desktop" "$wanted_mobile" "$wanted_linux"

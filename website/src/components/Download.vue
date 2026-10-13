@@ -8,12 +8,13 @@ import type { SiteTheme } from '../composables/useSiteTheme'
 const props = defineProps<{ theme: SiteTheme }>()
 const icon = computed(() => props.theme === 'ivory' ? iconLight : iconDark)
 const version = import.meta.env.VITE_SUNDAY_VERSION || '0.3.18'
+const linuxVersion = import.meta.env.VITE_LINUX_VERSION || '0.3.17'
 const downloadUrl = import.meta.env.VITE_WINDOWS_DOWNLOAD_URL || '/downloads/Sunday-latest-x64-setup.exe'
 const mobileVersion = import.meta.env.VITE_SUNDAY_MOBILE_VERSION || '0.1.48'
 const androidDownloadUrl = import.meta.env.VITE_ANDROID_DOWNLOAD_URL || '/downloads/Sunday-mobile-latest.apk'
 const linuxReleaseDownloadBase = 'https://github.com/Lam-Arc/LamTools/releases/latest/download'
-const linuxAppImageUrl = import.meta.env.VITE_LINUX_APPIMAGE_URL || `${linuxReleaseDownloadBase}/Sunday_${version}_amd64.AppImage`
-const linuxDebUrl = import.meta.env.VITE_LINUX_DEB_URL || `${linuxReleaseDownloadBase}/Sunday_${version}_amd64.deb`
+const linuxAppImageUrl = import.meta.env.VITE_LINUX_APPIMAGE_URL || `${linuxReleaseDownloadBase}/Sunday_${linuxVersion}_amd64.AppImage`
+const linuxDebUrl = import.meta.env.VITE_LINUX_DEB_URL || `${linuxReleaseDownloadBase}/Sunday_${linuxVersion}_amd64.deb`
 </script>
 
 <template>
