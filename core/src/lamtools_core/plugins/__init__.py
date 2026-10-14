@@ -35,9 +35,11 @@ from .registry import (
 )
 from .trust import HookTrustStore
 from .lifecycle import (
+    PluginLifecycleError,
     PluginRuntimeManager,
     PluginRuntimeHandle,
     attach_plugin_runtime,
+    await_plugin_backends,
     load_enabled_plugin_backends,
     load_plugin_backend,
     start_plugin_backend,
@@ -61,6 +63,8 @@ __all__ = [
     "PluginContext",
     "PluginRuntimeHandle",
     "PluginRuntimeManager",
+    "PluginLifecycleError",
+    "await_plugin_backends",
     "PluginSidebarWidget",
     "PluginUIContribution",
     "PluginUIMode",

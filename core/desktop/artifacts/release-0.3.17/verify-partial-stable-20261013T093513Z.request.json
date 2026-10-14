@@ -1,0 +1,14 @@
+{
+  "purpose": "verify-partial-stable",
+  "commandName": "sunday-desktop-0317-verify-partial-stable-20261013T093513Z",
+  "description": "Read-only verify the original partial installer stage is stable and no matching curl downloader remains after stopping the orphan process",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "verify-partial-stable.sh",
+  "commandSha256": "84726c141705c07c5963aadbb1262a25a9ed100656f326271d800b1c54651ba7",
+  "timeoutSeconds": 120,
+  "startedAtUtc": "2026-10-13T09:35:13Z",
+  "clientToken": "sunday-desktop-0317-verify-partial-stable-20261013T093513Z"
+}

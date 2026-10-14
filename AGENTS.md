@@ -85,6 +85,8 @@ current operating system and shell.
 ## User Preferences
 
 - Answer only what is asked. Keep communication concise, direct, and efficient.
+- For small, contained changes while the user is present, skip the full test suites: restart the dev app and let the user test in the window. Run full suites only when the change spans shared machinery or the user is away.
+- Debugging always starts by restating what the user actually did, reconstructed from evidence (logs, journals, timestamps, stored state) and stated before any cause is offered. Never infer the user's actions from a plausible story.
 - For exploration tasks, use six Luna sub-agents with high or maximum reasoning
   effort. Respect platform concurrency limits by scheduling them in batches.
 - Do not use Computer Use unless explicitly requested. Limit verification to

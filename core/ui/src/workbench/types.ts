@@ -3,12 +3,13 @@ import type {
   CoreAppEvent,
   CoreAppServerRuntimeClient,
   CoreAppSnapshot,
+  CoreAppServerThreadSwitchOptions,
   CoreSessionActivity,
   CoreSessionPhase,
   CoreSteerOutcome,
   CoreSyncChangeNotification,
 } from '../appServer'
-import type { CoreCommandCatalogItem, CoreInputItem, CoreMessage, CoreSessionListItem } from '../types'
+import type { CoreCommandCatalogItem, CoreInputItem, CoreMessage, CoreSessionListItem, CoreSubAgentDurableRecord } from '../types'
 import type { useComposerCommandPalette } from '../composables/useComposerCommandPalette'
 import type { useCoreApprovalController } from '../composables/useCoreApprovalController'
 import type { useCoreLiveComposerController } from '../composables/useCoreLiveComposerController'
@@ -107,16 +108,17 @@ export interface WorkbenchRuntime {
   commandCatalog: Ref<CoreCommandCatalogItem[]>
   commandPalette: ReturnType<typeof useComposerCommandPalette>
   paletteVisible: ComputedRef<boolean>
-  actionMode: ComputedRef<'send' | 'stop'>
+  actionMode: ComputedRef<'send' | 'stop' | 'resume'>
   handleComposerKeydown(event: KeyboardEvent): Promise<boolean>
   handleComposerKeyup(event: KeyboardEvent): Promise<boolean>
   selectCommand(command: CoreCommandCatalogItem): Promise<boolean>
   runCommand(command: string, argumentsText?: string): Promise<boolean>
-  connect(threadId?: string): Promise<void>
-  switchThread(threadId: string): Promise<void>
+  connect(threadId?: string, options?: CoreAppServerThreadSwitchOptions): Promise<void>
+  switchThread(threadId: string, options?: CoreAppServerThreadSwitchOptions): Promise<void>
   disconnect(): void
   selectSession(id: string): Promise<void>
   createSession(input?: { title?: string; metadata?: Record<string, unknown> }): Promise<CoreSessionListItem | null>
+  setSubAgentRecords(threadId: string, records: Record<string, CoreSubAgentDurableRecord>): void
   refreshSessions(): Promise<void>
   send(text?: string): Promise<void>
   stop(): Promise<boolean>

@@ -16,6 +16,8 @@ export interface UseCoreLiveTurnControllerOptions<Input> {
     clientMessageId?: string,
   ): Promise<void>
   interruptTurn(threadId: string, turnId?: string): Promise<void>
+  pauseTurn(threadId: string, turnId?: string): Promise<void>
+  terminateTurn(threadId: string, turnId?: string): Promise<void>
   forceResetTurn(threadId: string, turnId?: string): Promise<void>
 }
 
@@ -99,6 +101,34 @@ export function useCoreLiveTurnController<Input>(options: UseCoreLiveTurnControl
     }
   }
 
+  /** Single click on the stop button: park the turn instead of ending it. */
+  async function pauseActiveTurn(turnId?: string): Promise<boolean> {
+    const threadId = options.activeThreadId.value || ''
+    if (!await ensureConnected(threadId)) return false
+    try {
+      await options.pauseTurn(threadId, turnId || options.activeTurnId?.value || undefined)
+      lastError.value = ''
+      return true
+    } catch (error) {
+      lastError.value = error instanceof Error ? error.message : String(error)
+      return false
+    }
+  }
+
+  /** Long-press confirm: terminate the turn and everything it started. */
+  async function terminateActiveTurn(turnId?: string): Promise<boolean> {
+    const threadId = options.activeThreadId.value || ''
+    if (!await ensureConnected(threadId)) return false
+    try {
+      await options.terminateTurn(threadId, turnId || options.activeTurnId?.value || undefined)
+      lastError.value = ''
+      return true
+    } catch (error) {
+      lastError.value = error instanceof Error ? error.message : String(error)
+      return false
+    }
+  }
+
   async function forceResetActiveTurn(): Promise<boolean> {
     const threadId = options.activeThreadId.value || ''
     if (!await ensureConnected(threadId)) return false
@@ -120,6 +150,8 @@ export function useCoreLiveTurnController<Input>(options: UseCoreLiveTurnControl
     ensureConnected,
     forceResetActiveTurn,
     interruptActiveTurn,
+    pauseActiveTurn,
+    terminateActiveTurn,
     isActiveThreadConnected,
     lastError,
     startActiveTurn,

@@ -1,0 +1,14 @@
+{
+  "purpose": "verify-fetch-stopped",
+  "commandName": "sunday-desktop-0317-verify-fetch-stopped-20261013T093444Z",
+  "description": "Read-only verify the original partial installer stage is stable and no matching curl downloader remains after stopping the orphan process",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "verify-fetch-stopped.sh",
+  "commandSha256": "0012d1d521494884dc597ecb8dfc7063cd1403538b77a0f93be9ad2ecdbdc456",
+  "timeoutSeconds": 120,
+  "startedAtUtc": "2026-10-13T09:34:44Z",
+  "clientToken": "sunday-desktop-0317-verify-fetch-stopped-20261013T093444Z"
+}

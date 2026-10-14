@@ -1,0 +1,14 @@
+{
+  "purpose": "final-verify",
+  "commandName": "sunday-desktop-0318-final-verify-20261013T113840Z",
+  "description": "Read-only verify published installer/manifest, backups, Linux 0.3.17 GitHub URLs, public site sync check, and service health",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "final-verify.sh",
+  "commandSha256": "55cb0ef1397f47319764dd97bf7780ab3c2f33cf0b05f448953c5a7b76373665",
+  "timeoutSeconds": 600,
+  "startedAtUtc": "2026-10-13T11:38:40Z",
+  "clientToken": "sunday-desktop-0318-final-verify-20261013T113840Z"
+}

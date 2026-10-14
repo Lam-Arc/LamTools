@@ -1,0 +1,2 @@
+sftp> put "E:/LamTools/core/desktop/artifacts/release-0.3.18/site-0.3.18.tar.gz" /var/tmp/Sunday-site-mobile-0.3.18-20261013.upload.tar.gz
+sftp> quit

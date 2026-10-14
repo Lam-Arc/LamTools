@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .persistence import WorkflowPersistenceError
+
 
 @dataclass(frozen=True)
 class WorkflowCacheLookup:
@@ -162,11 +164,7 @@ class WorkflowContentCache:
             self._load_sync()
             if key not in self._entries:
                 return False
-            del self._entries[key]
-            try:
-                self._write_sync()
-            except OSError:
-                pass
+            self._commit({name: value for name, value in self._entries.items() if name != key}, "delete cache entry")
             return True
 
     async def clear(self, *, confirm: bool = False) -> int:
@@ -175,11 +173,7 @@ class WorkflowContentCache:
         async with self._lock:
             self._load_sync()
             count = len(self._entries)
-            self._entries.clear()
-            try:
-                self._write_sync()
-            except OSError:
-                pass
+            self._commit({}, "clear cache")
             return count
 
     async def list(self) -> list[dict[str, Any]]:
@@ -200,12 +194,17 @@ class WorkflowContentCache:
             raise ValueError("clearing workflow cache requires confirm=True")
         self._load_sync()
         count = len(self._entries)
-        self._entries.clear()
+        self._commit({}, "clear cache")
+        return count
+
+    def _commit(self, entries: dict[str, Any], operation: str) -> None:
+        previous = self._entries
+        self._entries = entries
         try:
             self._write_sync()
-        except OSError:
-            pass
-        return count
+        except Exception as exc:
+            self._entries = previous
+            raise WorkflowPersistenceError(operation, self.path or Path("cache"), exc) from exc
 
 
 def _json_copy(value: Any) -> Any:

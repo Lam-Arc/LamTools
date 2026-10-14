@@ -75,6 +75,12 @@ def _run() -> None:
 
     port = int(os.environ.get("LAMCORE_PORT", "5172"))
     host = os.environ.get("LAMCORE_HOST", "127.0.0.1")
+    from lamtools_core.app.api_access import CoreApiAccessPolicy
+
+    # The packaged sidecar is internal; LAN access belongs to a separate
+    # explicitly configured CLI listener or the authenticated Rust gateway.
+    access_policy = CoreApiAccessPolicy()
+    host = access_policy.validate_bind_host(host)
 
     # --- data directory ------------------------------------------------
     # Windows green/portable mode sets LAMTOOLS_HOME to the app-side .lam.
@@ -133,13 +139,13 @@ def _run() -> None:
     # --- FastAPI app --------------------------------------------------------
     from lamtools_core.app.http_agent_app import create_default_core_agent_http_app
 
-    app = create_default_core_agent_http_app()
+    app = create_default_core_agent_http_app(access_policy=access_policy)
     if frontend_dir:
         from lamtools_core.app.factory import add_spa_fallback
         add_spa_fallback(app, Path(frontend_dir))
 
     _log.info("Starting LamCore backend on %s:%s", host, port)
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info", proxy_headers=False)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,42 @@
+{
+  "RequestId": "01A13508-EF22-5B2A-BFB1-B40E78370E9B",
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "OssOutputDelivery": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputErrorCode": "",
+          "ExitCode": 1,
+          "FinishedTime": "2026-10-13T11:32:20Z",
+          "OssOutputUri": "",
+          "OssOutputStatus": "",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Output": "U1RBR0VfVkVSSUZZX1VUQ19CRUdJTj0yMDI2LTEwLTEzVDExOjMyOjE4WgphY3RpdmUKYWN0aXZlCi92YXIvdG1wL1N1bmRheS1kZXNrdG9wLTAuMy4xOC0yMDI2MTAxMy51cGxvYWQuZXhlOiBPSwpzdGF0OiBjYW5ub3Qgc3RhdHggJy92YXIvdG1wL1N1bmRheS1kZXNrdG9wLTAuMy4xOC0yMDI2MTAxMy5kZXNrdG9wLXVwZGF0ZS5qc29uJzogTm8gc3VjaCBmaWxlIG9yIGRpcmVjdG9yeQo=",
+          "InvokeId": "t-hz06zwula0hm48w",
+          "Tags": {
+            "Tag": []
+          },
+          "StopTime": "",
+          "Dropped": 0,
+          "InvocationStatus": "Failed",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "ErrorInfo": "The command execution exit code is not zero.",
+          "StartTime": "2026-10-13T11:32:18Z",
+          "Repeats": 1,
+          "InvokeRecordStatus": "Finished",
+          "Username": "root",
+          "Launcher": "",
+          "CommandId": "c-hz06zwula054mio",
+          "ErrorCode": "ExitCodeNonzero",
+          "TerminationMode": "Process"
+        }
+      ]
+    },
+    "TotalCount": 1,
+    "NextToken": "",
+    "PageSize": 10,
+    "PageNumber": 1
+  }
+}

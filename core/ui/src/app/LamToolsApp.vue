@@ -62,6 +62,7 @@
     :composer-send-disabled="composerSendDisabled"
     :composer-placeholder="composerPlaceholder"
     :composer-action-mode="composerActionMode"
+    :composer-hold-enabled="composerHoldEnabled"
     :composer-stop-title="composerStopTitle"
     :hide-composer="shouldHideComposer"
     :empty-session="isEmptySession"
@@ -75,6 +76,7 @@
     @plugins="openPlugins"
     @search="openSearch"
     @composer-submit="submitComposer"
+    @composer-terminate="requestComposerTerminate"
     @composer-drop="handleComposerDrop"
   >
     <template v-if="appRuntime.platform !== 'mobile'" #app-rail>
@@ -184,7 +186,7 @@
         :sections="CORE_SETTINGS_SECTIONS"
         :active-id="settingsSection"
         :aria-label="t('设置分区')"
-        @select="settingsSection = $event"
+        @select="settingsRef?.requestSection($event)"
       />
       <FullAreaSidebarNav
         v-else-if="sidebarNavView === 'plugins'"
@@ -198,7 +200,7 @@
         :sections="PROJECT_SETTINGS_SECTIONS"
         :active-id="projectSettingsSection"
         :aria-label="t('项目设置分区')"
-        @select="projectSettingsSection = $event"
+        @select="projectSettingsRef?.requestSection($event)"
       />
       <component
         v-else-if="activePluginSurface?.sidebar?.component"
@@ -355,6 +357,7 @@
           @heading="libraryHeading = $event"
         />
         <CoreSettings
+          ref="settingsRef"
           v-else-if="showSettings"
             class="full-area-view full-area-wide"
           :models="availableModels"
@@ -363,6 +366,7 @@
           :catalog-view="modelCatalogView"
           :section="settingsSection"
           :active-section="settingsSection"
+          :persist-catalog="persistSettingsCatalog"
           :hide-nav="appRuntime.platform !== 'mobile'"
           :density="density"
           :theme="theme"
@@ -453,6 +457,7 @@
           @close="closeFullArea"
           />
         <CoreProjectSettings
+          ref="projectSettingsRef"
           v-else-if="showProjectView && selectedProject && !activePluginMode"
             class="full-area-view full-area-wide"
           :project="{
@@ -470,6 +475,8 @@
           :agents-content="agentsContent"
           :agents-loading="agentsLoading"
           :agents-saving="agentsSaving"
+          :persist-agents="saveAgents"
+          :persist-name="renameProject"
           :agents-error="agentsError"
           :project-action-loading="projectActionLoading"
           :project-action-error="projectActionError"
@@ -609,12 +616,13 @@
           :key="openSubAgentRun.subSessionId || openSubAgentRun.id"
           :run="openSubAgentRun"
           :transport="transport"
-          :durable-record="subAgentDurableRecords[openSubAgentRun.name] ?? null"
+          :durable-record="effectiveSubAgentRecords[openSubAgentRun.name.toLowerCase()] ?? null"
           :width="subAgentPaneWidth"
           :member-wait-known="sessionActivity.memberWaitKnown"
           :running-member-names="sessionActivity.runningMemberNames"
           :main-running="activeTurnRunning"
           :member-statuses="sessionActivity.memberStatuses"
+          :member-status-records="sessionActivity.memberStatusRecords"
           @close="closeSubAgentPane"
           @resize="subAgentPaneWidth = $event"
           @decision-select="handlePendingDecisionSelect"
@@ -749,6 +757,9 @@
         :active-mode-id="activePluginMode?.id || null"
         :plugin-contributions="activePluginSidebarContributions"
         :hidden-sub-agent-identities="dismissedSubAgentIdentities"
+        :member-statuses="sessionActivity.memberStatuses"
+        :member-status-records="sessionActivity.memberStatusRecords"
+        :sub-agent-durable-records="effectiveSubAgentRecords"
         @open-sub-agent="openSubAgentPane"
         @delete-sub-agent="deleteSubAgentRun"
         @hover-change="rightSidebarHold = $event"
@@ -1151,6 +1162,8 @@ function syncRightPinned(value: boolean) {
 const settingsStorageKey = 'lamtools.core.ui'
 /** Section the settings surface opens on; the rail's account entry targets it. */
 const settingsSection = ref<string | undefined>(undefined)
+const settingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requestSection: (id: string) => void } | null>(null)
+const projectSettingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requestSection: (id: string) => void } | null>(null)
 // 整版界面状态：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出；
 // 打开同一个入口相当于退出（与旧浮层的开合直觉一致）。
 type FullAreaViewId = 'library' | 'search' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project'
@@ -1222,10 +1235,15 @@ function onFullAreaBack(): void {
   closeFullArea()
 }
 function openFullArea(view: FullAreaViewId): void {
-  fullAreaView.value = fullAreaView.value === view ? null : view
+  requestSettingsNavigation(() => { fullAreaView.value = fullAreaView.value === view ? null : view })
 }
 function closeFullArea(): void {
-  fullAreaView.value = null
+  requestSettingsNavigation(() => { fullAreaView.value = null })
+}
+function requestSettingsNavigation(proceed: () => void): void {
+  if (showSettings.value && settingsRef.value) settingsRef.value.requestNavigation(proceed)
+  else if (showProjectView.value && projectSettingsRef.value) projectSettingsRef.value.requestNavigation(proceed)
+  else proceed()
 }
 
 // 最左竖栏：整界面导航。当前分区高亮；点开的视图即“整个界面切走”的状态
@@ -2069,6 +2087,7 @@ const activeTurnId = workbench.activeTurnId
 // awaitingSubAgents = 主代理已结束、但本会话派出的子代理仍在运行（状态 b）。
 // 所有"忙碌/禁用"判断都读这两个值，不再各处直接看 status。
 const sessionActivity = workbench.sessionActivity
+const effectiveSubAgentRecords = computed(() => sessionActivity.value.memberStatusRecords)
 const activeTurnRunning = computed(() => sessionActivity.value.mainRunning)
 const awaitingSubAgents = computed(() => sessionActivity.value.awaitingSubAgents)
 const pendingSubAgentNames = computed(() => sessionActivity.value.pendingSubAgentNames)
@@ -2100,6 +2119,28 @@ async function confirmAppAction(): Promise<void> {
   const request = appConfirm.value
   appConfirm.value = null
   if (request) await request.action()
+}
+
+/** 长按终止：先确认，并列出这次终止会丢弃什么。 */
+function requestComposerTerminate(): void {
+  if (!(composerActionMode.value === 'stop' || composerActionMode.value === 'resume')) return
+  appConfirm.value = {
+    title: t("终止这个回合？"),
+    detail: terminateDiscardSummary(),
+    action: () => { void liveComposerController.terminate() },
+  }
+}
+
+/** 终止会丢弃什么：未完成的步骤与未回答的子代理提问，已完成的工具结果保留。 */
+function terminateDiscardSummary(): string {
+  const pending = selectPendingCoreDecisions(workbench.messages.value).length
+  const members = sessionActivity.value.interruptibleSubAgentNames.length
+    + sessionActivity.value.resumableSubAgentNames.length
+  const parts: string[] = []
+  if (members > 0) parts.push(t("正在运行或已暂停的子代理 {count} 个", { count: members }))
+  if (pending > 0) parts.push(t("未回答的子代理提问 {count} 个", { count: pending }))
+  parts.push(t("未完成的步骤"))
+  return t("将丢弃：{items}。已完成的工具结果会保留，终止后不能继续。", { items: parts.join('、') })
 }
 
 function stopLatestActivityMotion(): void {
@@ -2244,6 +2285,8 @@ const {
   commandPalette,
   paletteVisible: commandPaletteVisible,
 } = liveComposerController
+// 长按终止只在能停/能继续的两态提供：发送态没有可终止的回合。
+const composerHoldEnabled = computed(() => composerActionMode.value !== 'send')
 workbench.setShallowThinking(shallowThinkingEnabled.value)
 workbench.setTurnOptionsProvider(async () => {
   const pluginOptions = await activePluginSurface.value?.turnOptions?.() || {}
@@ -2330,13 +2373,12 @@ const openSubAgentRun = computed(() => {
   return selectCoreSubAgentRun(messages.value, ref)
 })
 
-// 监督者的持久记录：续跑过的子代理，其运行边界（状态/耗时/完成时间）只在
-// 监督者库里，消息投影上看不出来。分屏开着时拉取并低频刷新。
-const subAgentDurableRecords = ref<Record<string, CoreSubAgentDurableRecord>>({})
+// 每个会话共享同一份监督者记录：卡片、分屏和后台工作指示器同时刷新，
+// 不以分屏是否打开为条件。只在会话/连接边界拉取，并保持原有低频轮询。
 let subAgentRecordsTimer: ReturnType<typeof setInterval> | null = null
-// 拉取/刷新只认"打开的是哪个子代理"，不认运行快照对象：openSubAgentRun 每次消息
-// 更新都会重建一个新对象（时间线跟着流式变），直接 watch 它会让下面的 RPC 与计时器
-// 每条事件都重建一次——面板一开就成了每帧一次请求，整机卡顿。
+let subAgentRecordsGeneration = 0
+// 打开分屏的身份只用于导航。监督者刷新按会话/连接边界触发，
+// 不 watch 每帧重建的运行快照，避免流式期间重复 RPC。
 const openSubAgentIdentity = computed(() => subAgentRunIdentity(openSubAgentRun.value))
 
 /** 已删除的子代理身份（右栏列表的过滤依据）。删除是"这次会话里不再为它占位"：
@@ -2366,34 +2408,35 @@ async function deleteSubAgentRun(run: CoreSubAgentRun): Promise<void> {
 async function refreshSubAgentRecords(): Promise<void> {
   const threadId = String(activeSessionId.value || '').trim()
   if (!threadId) return
+  const generation = ++subAgentRecordsGeneration
   try {
     const result = await requestConfigOperation('sub_agent.list', { thread_id: threadId }) as {
       items?: CoreSubAgentDurableRecord[]
     }
     const next: Record<string, CoreSubAgentDurableRecord> = {}
     for (const item of result?.items ?? []) {
-      if (item && typeof item.name === 'string') next[item.name] = item
+      if (item && typeof item.name === 'string') next[item.name.trim().toLowerCase()] = item
     }
-    subAgentDurableRecords.value = next
+    if (generation !== subAgentRecordsGeneration || activeSessionId.value !== threadId) return
+    workbench.setSubAgentRecords(threadId, next)
   } catch {
-    // 拉不到就保留投影自己的状态，不打扰用户。
+    // 读取失败保留这次会话上一次成功的状态，不把未知情况猜成运行中。
   }
 }
 
 function syncSubAgentRecordsPolling(): void {
+  subAgentRecordsGeneration += 1
+  const threadId = String(activeSessionId.value || '')
   if (subAgentRecordsTimer) {
     clearInterval(subAgentRecordsTimer)
     subAgentRecordsTimer = null
   }
-  if (!openSubAgentRun.value) {
-    subAgentDurableRecords.value = {}
-    return
-  }
+  if (!threadId || workbench.connectionState.value !== 'open') return
   void refreshSubAgentRecords()
   subAgentRecordsTimer = setInterval(() => { void refreshSubAgentRecords() }, 10_000)
 }
 
-watch(openSubAgentIdentity, () => syncSubAgentRecordsPolling(), { immediate: true })
+watch([activeSessionId, workbench.connectionState], () => syncSubAgentRecordsPolling(), { immediate: true })
 onBeforeUnmount(() => {
   if (subAgentRecordsTimer) clearInterval(subAgentRecordsTimer)
   subAgentRecordsTimer = null
@@ -2579,15 +2622,17 @@ async function createProjectSession(projectId: string) {
 }
 
 function openProjectActions(projectId: string) {
-  const project = projects.value.find((item) => item.id === projectId)
-  if (!project) return
-  selectedProjectId.value = project.id
-  projectNameDraft.value = project.name
-  projectActionError.value = ''
-  projectSettingsSection.value = 'project'
-  openFullArea('project')
-  // Load AGENTS.md content for the in-place editor inside project settings.
-  void loadAgentsForProject(project.id)
+  requestSettingsNavigation(() => {
+    const project = projects.value.find((item) => item.id === projectId)
+    if (!project) return
+    selectedProjectId.value = project.id
+    projectNameDraft.value = project.name
+    projectActionError.value = ''
+    projectSettingsSection.value = 'project'
+    fullAreaView.value = 'project'
+    // Load AGENTS.md content for the in-place editor inside project settings.
+    void loadAgentsForProject(project.id)
+  })
 }
 
 function openProjectRename(projectId: string): void {
@@ -2651,18 +2696,20 @@ async function renameProject(nameFromEditor?: string) {
   const project = selectedProject.value
   if (nameFromEditor !== undefined) projectNameDraft.value = nameFromEditor
   const name = projectNameDraft.value.trim()
-  if (!project || !name || projectActionLoading.value) return
+  if (!project || !name || projectActionLoading.value) return false
   if (name === project.name) {
     projectNameDraft.value = project.name
-    return
+    return true
   }
   projectActionLoading.value = true
   projectActionError.value = ''
   try {
     const updated = await projectWorkspace.renameProject(project.id, name)
     projectNameDraft.value = updated.name
+    return true
   } catch (error) {
     projectActionError.value = messageFromError(error)
+    return false
   } finally {
     projectActionLoading.value = false
   }
@@ -2712,15 +2759,17 @@ async function refreshAgentsContent() {
 
 async function saveAgents(content: string) {
   const projectId = agentsProjectId.value
-  if (!projectId) return
+  if (!projectId) return false
   agentsSaving.value = true
   agentsError.value = ''
   try {
     const agents = await projectWorkspace.writeAgents(projectId, content)
     agentsContent.value = agents.content
     setRuntimeStatus(t("AGENTS.md 已保存"))
+    return true
   } catch (error) {
     agentsError.value = messageFromError(error)
+    return false
   } finally {
     agentsSaving.value = false
   }
@@ -3099,7 +3148,10 @@ async function handleEditMessage(payload: { turnId: string; content: string; att
 }
 
 async function connectLive(threadId: string) {
-  await workbench.connect(threadId)
+  // Persisted transcript first, live attach in the background: a session whose
+  // turn is still open (or a long thread whose snapshot is slow to assemble)
+  // must not hold the visible thread blank until the resume signal answers.
+  await workbench.connect(threadId, { attachInBackground: true })
 }
 
 /**
@@ -3117,7 +3169,7 @@ async function handlePendingDecisionSelect(payload: {
 async function submitComposer() {
   composerErrorText.value = ''
   // 停止模式：composer 必为空，须在空文本守卫之前处理，否则 stop 请求永远发不出去
-  if (composerActionMode.value === 'stop') {
+  if (composerActionMode.value === 'stop' || composerActionMode.value === 'resume') {
     try {
       await liveComposerController.submit({ clearComposer: false })
     } catch {
@@ -3462,6 +3514,34 @@ async function createProvider(payload: CoreSettingsProviderPayload) {
     setRuntimeStatus(t("供应商已添加"))
   } catch (error) {
     setLoadError(error instanceof Error ? error.message : String(error))
+  }
+}
+
+/** Same catalog persistence as the event handlers, with errors propagated to
+ * the still-open settings editor instead of treating emission as success. */
+async function persistSettingsCatalog(operation: import('../components/CoreSettings.vue').SettingsCatalogMutation, payload: Record<string, unknown>): Promise<void> {
+  const methods = {
+    'create-provider': 'config.provider.create', 'update-provider': 'config.provider.update',
+    'create-model': 'config.models.upsert', 'update-model': 'config.models.upsert',
+    'create-model-group': 'config.model_group.create', 'update-model-group': 'config.model_group.update',
+    'set-model-group-members': 'config.model_group.members.set', 'create-model-with-provider': 'config.model.create_with_provider',
+  }
+  const isGroupMutation = ['create-model-group', 'update-model-group', 'set-model-group-members', 'create-model-with-provider'].includes(operation)
+  const params = {
+    ...payload,
+    ...(['create-model', 'update-model'].includes(operation) ? { scope: 'global' } : {}),
+    ...(isGroupMutation && modelGroupsRevision.value !== undefined ? { expected_revision: modelGroupsRevision.value } : {}),
+  }
+  const result = await requestConfigOperation(methods[operation], params)
+  setRuntimeStatus(t('已保存'))
+  // The write has committed. A later catalog refresh/association failure
+  // must not turn it into a retryable create and duplicate saved records.
+  try {
+    await loadModelOptions()
+    if (operation === 'create-provider' && payload.model_group_name) await ensureCreatedModelsInGroup(String(payload.model_group_name), result)
+    if (isGroupMutation) await loadModelGroups()
+  } catch (cause) {
+    showToast('error', t('配置已保存，但未能完成同步：{0}', { 0: messageFromError(cause) }), 8000)
   }
 }
 
@@ -4054,14 +4134,16 @@ function handleShellNewSession(): void {
 }
 
 function handleSidebarSession(id: string): void {
-  const action = activePluginSurface.value?.sidebar?.onSelectSession
-  if (action) {
-    void Promise.resolve(action(id)).catch((error) => {
-      composerErrorText.value = messageFromError(error)
-    })
-    return
-  }
-  void selectSession(id)
+  requestSettingsNavigation(() => {
+    const action = activePluginSurface.value?.sidebar?.onSelectSession
+    if (action) {
+      void Promise.resolve(action(id)).catch((error) => {
+        composerErrorText.value = messageFromError(error)
+      })
+      return
+    }
+    void selectSession(id)
+  })
 }
 
 function handleSidebarProject(id: string): void {
@@ -4087,10 +4169,16 @@ function handleSidebarNewSession(projectGroupId: string): void {
 }
 
 function openSettings(section?: string): void {
-  settingsSection.value = section
-  openFullArea('settings')
-  void refreshRemoteGateway()
-  void refreshRemoteAccount()
+  if (showSettings.value && section) {
+    settingsRef.value?.requestSection(section)
+    return
+  }
+  requestSettingsNavigation(() => {
+    settingsSection.value = section
+    fullAreaView.value = fullAreaView.value === 'settings' ? null : 'settings'
+    void refreshRemoteGateway()
+    void refreshRemoteAccount()
+  })
 }
 
 /** Rail account entry: show the account state, and open settings on it. */

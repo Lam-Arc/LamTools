@@ -1,0 +1,14 @@
+{
+  "purpose": "preflight",
+  "commandName": "sunday-desktop-0317-preflight-20261013T092109Z",
+  "description": "Read-only recheck site, manifest, installer, targets and SSH grants immediately before Sunday 0.3.17 publication",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "preflight.sh",
+  "commandSha256": "fdc7ce19bb75b1c0027d074c341d0841e779fb43527b8e936967757ade4cf554",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T09:21:09Z",
+  "clientToken": "sunday-desktop-0317-preflight-20261013T092109Z"
+}

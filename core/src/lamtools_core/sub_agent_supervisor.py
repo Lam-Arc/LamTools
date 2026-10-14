@@ -7,17 +7,27 @@ import contextvars
 import hashlib
 import inspect
 import json
+import logging
 import re
 import sqlite3
 import time
 import uuid
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from contextlib import closing, contextmanager
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
 
 from lamtools_core.config.model_store import ModelStore
 from lamtools_core.llm import REASONING_LEVELS
+from lamtools_core.runtime_owner import (
+    LIVE_RUN_STATES,
+    is_own_token,
+    owner_is_live,
+    owner_token,
+    read_owner,
+)
+
+_logger = logging.getLogger(__name__)
 
 SUB_AGENT_TYPES = ("consider", "execute")
 # 允许中文名字（例如「张前端」这类稳定称呼），仍须以小写拉丁字母或汉字开头。
@@ -49,6 +59,7 @@ class SubAgentRecord:
     source_turn_id: str = ""
     source_message_id: str = ""
     source_part_id: str = ""
+    runtime_owner: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -182,6 +193,12 @@ def resolve_model_id(value: object, *, work_root: str | Path | None = None) -> s
 
 def _result_status(result: Any) -> str:
     decision = str(getattr(result, "decision", "done") or "done").strip().lower()
+    error = str(getattr(result, "error", "") or "").strip().lower()
+    if error == "paused":
+        # The kernel parked this child on a session pause. ``paused`` is taken:
+        # for a member it already means "parked at a human boundary" (a
+        # question), and the two must stay distinguishable in the record.
+        return "suspended"
     if decision == "wait":
         return "paused"
     if decision in {"cancelled", "canceled", "interrupted"}:
@@ -189,6 +206,17 @@ def _result_status(result: Any) -> str:
     if decision in {"failed", "error"} or getattr(result, "error", ""):
         return "failed"
     return "idle"
+
+
+def _owned_elsewhere(record: SubAgentRecord) -> bool:
+    """Whether a live owner other than this process still runs the member.
+
+    A record with no local drive task but this process's own owner token is not
+    "owned elsewhere": this process already released the drive (Stop, close, or
+    a finished run), so the member is free for takeover. Another host's or a
+    different process's live token must still be refused.
+    """
+    return owner_is_live(record.runtime_owner) and not is_own_token(record.runtime_owner)
 
 
 class SubAgentSupervisor:
@@ -206,8 +234,24 @@ class SubAgentSupervisor:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        # Member runs executed inline by the caller (an answered question or
+        # approval continuation). They are not drive tasks, but a Stop must be
+        # able to cancel them like any other member work.
+        self._inline_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._resume_names: set[str] = set()
         self._pending_prompts: dict[str, str] = {}
-        self._guidance: dict[str, list[str]] = {}
+        # Continuation text for a scheduled resume. ``None`` means "use the
+        # runner's default (interruption-aware) text"; a user pause schedules
+        # ``""`` for a pure continuation from committed history.
+        self._resume_prompts: dict[str, str | None] = {}
+        # Session-level pause signal shared with every child kernel this
+        # supervisor drives. Set = the user paused the session; cleared = the
+        # session continues.
+        self._pause_event: asyncio.Event | None = None
+        # Mailbox rows are the queue. These sets only reserve offers within one
+        # invocation; unacknowledged rows survive process exit/checkpoint failure.
+        self._offered_mail: dict[str, set[str]] = {}
+        self._initial_mail_ids: dict[str, list[str]] = {}
         self._provider_messages_by_invocation: dict[str, set[str]] = {}
         self._closed = False
         self._owned_runner: Any | None = None
@@ -298,6 +342,23 @@ class SubAgentSupervisor:
         """Converge orphaned process-owned work after application restart."""
         interrupted: list[SubAgentRecord] = []
         async with self._lock:
+            # The registry is shared with CLI/other hosts. Never reap work still
+            # owned by a live process, including the pre-kernel launch boundary.
+            with self._connection() as db:
+                candidates = db.execute(
+                    "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
+                    (self.parent_thread_id,),
+                ).fetchall()
+            live_names: set[str] = set()
+            store = getattr(self.runner, "state_store", None)
+            for row in candidates:
+                payload = json.loads(row["payload"])
+                owner = payload.get("runtime_owner") or {}
+                if not owner and store is not None and payload.get("sub_session_id"):
+                    state = await store.get(payload["sub_session_id"])
+                    owner = read_owner(getattr(state, "metadata", {}))
+                if owner_is_live(owner):
+                    live_names.add(row["name"])
             with self._connection() as db:
                 rows = db.execute(
                     "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
@@ -305,7 +366,8 @@ class SubAgentSupervisor:
                 ).fetchall()
                 for row in rows:
                     payload = json.loads(row["payload"])
-                    if payload.get("status") == "running":
+                    if (payload.get("status") == "running" and row["name"] not in live_names
+                            and not owner_is_live(payload.get("runtime_owner"))):
                         payload["status"] = "interrupted"
                         payload["completed_at"] = time.time()
                         if payload.get("started_at"):
@@ -504,6 +566,8 @@ class SubAgentSupervisor:
             if record is None:
                 raise ValueError(f"sub-agent not found: {child_name}")
             task = self._tasks.get(child_name)
+            if record.status == "running" and (task is None or task.done()) and owner_is_live(record.runtime_owner):
+                raise ValueError("sub-agent is owned by another running process")
             if (
                 record.status == "running"
                 or (task is not None and not task.done())
@@ -532,7 +596,8 @@ class SubAgentSupervisor:
                 )
             self._pending_prompts.pop(child_name, None)
             self._tasks.pop(child_name, None)
-            self._guidance.pop(child_name, None)
+            self._offered_mail.pop(child_name, None)
+            self._initial_mail_ids.pop(child_name, None)
             return {
                 **record.to_dict(),
                 "lifecycle_action": "deleted",
@@ -575,6 +640,9 @@ class SubAgentSupervisor:
             record = self._required(child_name)
             if record.type != child_type or record.status in {"closed", "interrupted", "failed"}:
                 raise ValueError("sub-agent must exist, match type, and be active")
+            task = self._tasks.get(child_name)
+            if record.status == "running" and (task is None or task.done()) and owner_is_live(record.runtime_owner):
+                raise ValueError("sub-agent is owned by another running process")
             self._refresh_source(record, source_ids)
             self._save(record)
             ids = source_ids or {}
@@ -582,25 +650,32 @@ class SubAgentSupervisor:
             run_id = str(ids.get("run_id") or "")
             message_key = f"{run_id}:{call_id}" if call_id else uuid.uuid4().hex
             inserted = self._mail(child_name, "parent_to_child", body, message_key=message_key)
+            with self._connection() as db:
+                message_id = db.execute(
+                    "SELECT id FROM sub_agent_mailbox WHERE parent_thread_id=? AND name=? "
+                    "AND direction='parent_to_child' AND message_key=?",
+                    (self.parent_thread_id, child_name, message_key),
+                ).fetchone()["id"]
             if not inserted:
                 return {
                     "accepted": True,
                     "deduplicated": True,
+                    "message_id": message_id,
                     "type": child_type,
                     "name": child_name,
                     "lifecycle_action": "message_sent",
                 }
             task = self._tasks.get(child_name)
             if task is not None and not task.done():
-                self._guidance.setdefault(child_name, []).append(body)
                 publish_running = False
             else:
                 record.status = "running"
                 record.started_at = time.time()
                 record.completed_at = None
                 record.elapsed_ms = None
+                record.runtime_owner = owner_token()
                 self._save(record)
-                self._pending_prompts[child_name] = body
+                self._queue_initial_mail(child_name)
                 self._tasks[child_name] = asyncio.create_task(
                     self._drive(child_name), name=f"sub-agent:{self.parent_thread_id}:{child_name}"
                 )
@@ -609,20 +684,267 @@ class SubAgentSupervisor:
             # The member's own "running" transition, published while the parent
             # turn is still open (one event per transition).
             await self._publish_member_status(record, event="member_running")
+        delivery_mode = "new_turn" if publish_running else "next_boundary"
+        _logger.info("sub-agent message accepted parent=%s name=%s message_id=%s delivery=%s",
+                     self.parent_thread_id, child_name, message_id, delivery_mode)
         return {
             "accepted": True,
             "deduplicated": False,
+            "message_id": message_id,
+            "delivery_mode": delivery_mode,
             "type": child_type,
             "name": child_name,
             "lifecycle_action": "message_sent",
         }
 
+    def track_inline_task(self, name: object, task: asyncio.Task[Any] | None) -> None:
+        """Register (or clear) a member run the caller executes inline.
+
+        The approval/question continuation runs inside the caller's request, not
+        in a drive task, so without this a Stop could not reach it.
+        """
+        child_name = str(name or "").strip()
+        if not child_name:
+            return
+        if task is None:
+            self._inline_tasks.pop(child_name, None)
+        else:
+            self._inline_tasks[child_name] = task
+
+    async def interrupt_active(self) -> list[dict[str, Any]]:
+        """Interrupt every locally owned active child and return its records.
+
+        The parent turn may already be terminal, so this operation deliberately
+        targets the supervisor's member tasks instead of the parent runtime
+        registry. Paused members remain paused; only running/pending work is
+        interrupted, which makes mixed child states deterministic.
+        """
+        victims: list[SubAgentRecord] = []
+        tasks: list[asyncio.Task[None]] = []
+        async with self._lock:
+            names = set(self._tasks)
+            with self._connection() as db:
+                rows = db.execute(
+                    "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
+                    (self.parent_thread_id,),
+                ).fetchall()
+            for row in rows:
+                record = SubAgentRecord(**json.loads(row["payload"]))
+                task = self._tasks.get(record.name)
+                active = record.status in {"running", "pending"} or (
+                    task is not None and not task.done()
+                )
+                if not active:
+                    continue
+                if task is None and _owned_elsewhere(record):
+                    raise ValueError(
+                        f"sub-agent '{record.name}' is owned by another running process"
+                    )
+                record.status = "interrupted"
+                record.completed_at = time.time()
+                if record.started_at:
+                    record.elapsed_ms = int((record.completed_at - record.started_at) * 1000)
+                self._save(record)
+                self._pending_prompts.pop(record.name, None)
+                self._initial_mail_ids.pop(record.name, None)
+                self._offered_mail.pop(record.name, None)
+                self._resume_names.discard(record.name)
+                self._resume_prompts.pop(record.name, None)
+                if task is not None and not task.done():
+                    task.cancel()
+                    tasks.append(task)
+                inline = self._inline_tasks.pop(record.name, None)
+                if inline is not None and not inline.done():
+                    inline.cancel()
+                    tasks.append(inline)
+                self._tasks.pop(record.name, None)
+                victims.append(record)
+            # A stale task entry with no durable row must not keep the member
+            # drain signal alive after a stop.
+            for name in names - {record.name for record in victims}:
+                task = self._tasks.get(name)
+                if task is not None and task.done():
+                    self._tasks.pop(name, None)
+        for record in victims:
+            await self._record_member_event(
+                record, "member_interrupted", detail="用户停止了该子代理"
+            )
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        # Cancellation persists through the kernel's detached cancel finalizer,
+        # which can still be in flight when the task is gone. A Resume issued
+        # right after Stop must not race that write, so Stop only reports done
+        # once each child state has left the live set (bounded; the record
+        # itself is already interrupted either way and the kernel adopts its
+        # own stale run).
+        await self._await_children_settled(victims)
+        await self._maybe_report_members_drained()
+        return [record.to_dict() for record in victims]
+
+    async def _await_children_settled(
+        self, records: list[SubAgentRecord], *, timeout: float = 3.0
+    ) -> None:
+        store = getattr(self.runner, "state_store", None)
+        pending = [record.sub_session_id for record in records if record.sub_session_id]
+        if store is None or not pending:
+            return
+        deadline = time.monotonic() + timeout
+        while pending and time.monotonic() < deadline:
+            remaining: list[str] = []
+            for session_id in pending:
+                try:
+                    state = await store.get(session_id)
+                except BaseException:
+                    continue
+                if state is not None and state.status in LIVE_RUN_STATES:
+                    remaining.append(session_id)
+            pending = remaining
+            if pending:
+                await asyncio.sleep(0.025)
+
+    @property
+    def pause_event(self) -> asyncio.Event:
+        """Session pause signal shared by every child kernel of this session."""
+        if self._pause_event is None:
+            self._pause_event = asyncio.Event()
+        return self._pause_event
+
+    async def pause_active(self) -> list[dict[str, Any]]:
+        """Park every locally owned active child without killing its work.
+
+        The mirror image of :meth:`interrupt_active`: the child kernel observes
+        the shared pause event, drops the step it is in, and keeps a resumable
+        state; its record moves to ``suspended`` so the session can continue it
+        later. Children parked on a question stay where they are: that card is
+        still the user's to answer, and nothing here consumes it.
+        """
+        victims: list[SubAgentRecord] = []
+        tasks: list[asyncio.Task[None]] = []
+        self.pause_event.set()
+        async with self._lock:
+            names = set(self._tasks)
+            with self._connection() as db:
+                rows = db.execute(
+                    "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
+                    (self.parent_thread_id,),
+                ).fetchall()
+            for row in rows:
+                record = SubAgentRecord(**json.loads(row["payload"]))
+                task = self._tasks.get(record.name)
+                active = record.status in {"running", "pending"} or (
+                    task is not None and not task.done()
+                )
+                if not active:
+                    continue
+                if task is None and _owned_elsewhere(record):
+                    raise ValueError(
+                        f"sub-agent '{record.name}' is owned by another running process"
+                    )
+                record.status = "suspended"
+                record.completed_at = time.time()
+                if record.started_at:
+                    record.elapsed_ms = int((record.completed_at - record.started_at) * 1000)
+                self._save(record)
+                self._pending_prompts.pop(record.name, None)
+                self._initial_mail_ids.pop(record.name, None)
+                self._offered_mail.pop(record.name, None)
+                self._resume_names.discard(record.name)
+                self._resume_prompts.pop(record.name, None)
+                if task is not None and not task.done():
+                    # Abort work that cannot poll the pause event (a long tool).
+                    # The kernel tells this teardown apart from a cancel and
+                    # still converges on the paused state.
+                    task.cancel()
+                    tasks.append(task)
+                inline = self._inline_tasks.pop(record.name, None)
+                if inline is not None and not inline.done():
+                    inline.cancel()
+                    tasks.append(inline)
+                self._tasks.pop(record.name, None)
+                victims.append(record)
+            for name in names - {record.name for record in victims}:
+                task = self._tasks.get(name)
+                if task is not None and task.done():
+                    self._tasks.pop(name, None)
+        for record in victims:
+            await self._record_member_event(
+                record, "member_suspended", detail="用户暂停了该子代理"
+            )
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await self._maybe_report_members_drained()
+        return [record.to_dict() for record in victims]
+
+    async def resume_interrupted(self) -> list[dict[str, Any]]:
+        """Schedule interrupted children from their committed child history."""
+        return await self._resume_records(statuses={"interrupted"}, prompt=None)
+
+    async def resume_suspended(self) -> list[dict[str, Any]]:
+        """Continue the children a user pause parked, from committed history.
+
+        Pure continuation: no synthetic prompt, the child's own history says
+        what is left to do. The pause event is cleared first so the resumed
+        kernels do not immediately park again.
+        """
+        event = self._pause_event
+        if event is not None:
+            event.clear()
+        return await self._resume_records(statuses={"suspended"}, prompt="")
+
+    async def _resume_records(
+        self,
+        *,
+        statuses: set[str],
+        prompt: str | None,
+    ) -> list[dict[str, Any]]:
+        resumed: list[SubAgentRecord] = []
+        async with self._lock:
+            with self._connection() as db:
+                rows = db.execute(
+                    "SELECT name,payload FROM sub_agents WHERE parent_thread_id=? ORDER BY name",
+                    (self.parent_thread_id,),
+                ).fetchall()
+            for row in rows:
+                record = SubAgentRecord(**json.loads(row["payload"]))
+                if record.status not in statuses:
+                    continue
+                task = self._tasks.get(record.name)
+                if task is not None and not task.done():
+                    continue
+                if task is None and _owned_elsewhere(record):
+                    continue
+                record.status = "running"
+                record.started_at = time.time()
+                record.completed_at = None
+                record.elapsed_ms = None
+                record.runtime_owner = owner_token()
+                self._save(record)
+                self._resume_names.add(record.name)
+                self._resume_prompts[record.name] = prompt
+                self._tasks[record.name] = asyncio.create_task(
+                    self._drive(record.name),
+                    name=f"sub-agent-resume:{self.parent_thread_id}:{record.name}",
+                )
+                resumed.append(record)
+        for record in resumed:
+            # The durable outbox is what publishes this transition when no
+            # parent turn holds a live sink (e.g. Resume from the lifecycle RPC
+            # after a restart); the direct publish is the in-turn fast path.
+            await self._record_member_event(record, "member_resumed")
+            await self._publish_member_status(record, event="member_running")
+        return [record.to_dict() for record in resumed]
+
     async def _drive(self, name: str) -> None:
         try:
             while True:
                 async with self._lock:
+                    resume = name in self._resume_names
+                    if resume:
+                        self._resume_names.discard(name)
                     prompt = self._pending_prompts.pop(name, "")
-                    if prompt:
+                    resume_prompt = self._resume_prompts.pop(name, None)
+                    initial_ids = self._initial_mail_ids.pop(name, [])
+                    if prompt or resume:
                         record = self._required(name)
                         if record.status == "closed":
                             stop_driving = True
@@ -653,21 +975,41 @@ class SubAgentSupervisor:
                     for attribute in ("parent_event_sink", "parent_guidance_sink"):
                         if hasattr(self.runner, attribute):
                             setattr(run_runner, attribute, getattr(self.runner, attribute))
+                setter = getattr(run_runner, "set_pause_event", None)
+                if callable(setter):
+                    setter(self.pause_event)
                 token = _child_identity.set((self, record.type, record.name))
                 invocation_id = uuid.uuid4().hex
                 self._provider_messages_by_invocation[invocation_id] = set()
                 invocation_token = _child_invocation_id.set(invocation_id)
                 try:
-                    result = await run_runner.run(
-                        task=prompt, agent=record.name, model=record.model_id,
-                        reasoning_level=record.reasoning_level, mode=record.type,
-                        parent_call_id=record.source_call_id,
-                        parent_run_id=record.source_run_id,
-                        parent_turn_id=record.source_turn_id,
-                        late_context=self._late_context(record),
-                        guidance_source=lambda child=name: self.consume_guidance(child),
-                        guidance_finalizer=lambda child=name: self.finalize_guidance(child),
-                    )
+                    if resume and hasattr(run_runner, "resume_interrupted"):
+                        result = await run_runner.resume_interrupted(
+                            session_id=record.sub_session_id,
+                            agent=record.name,
+                            model=record.model_id,
+                            reasoning_level=record.reasoning_level,
+                            mode=record.type,
+                            parent_call_id=record.source_call_id,
+                            parent_run_id=record.source_run_id,
+                            parent_turn_id=record.source_turn_id,
+                            supervisor=self,
+                            prompt=resume_prompt,
+                        )
+                    else:
+                        result = await run_runner.run(
+                            task=prompt or "Continue the interrupted sub-agent task using committed conversation history.",
+                            agent=record.name, model=record.model_id,
+                            reasoning_level=record.reasoning_level, mode=record.type,
+                            parent_call_id=record.source_call_id,
+                            parent_run_id=record.source_run_id,
+                            parent_turn_id=record.source_turn_id,
+                            late_context=self._late_context(record),
+                            guidance_source=lambda child=name: self.consume_guidance(child),
+                            guidance_finalizer=lambda child=name: self.finalize_guidance(child),
+                            guidance_acknowledger=lambda ids, child=name: self.acknowledge_guidance(child, ids),
+                            initial_guidance_ids=initial_ids,
+                        )
                 finally:
                     _child_invocation_id.reset(invocation_token)
                     _child_identity.reset(token)
@@ -683,14 +1025,25 @@ class SubAgentSupervisor:
                     # Guidance accepted after the kernel sealed its final step
                     # becomes the immediate next run; the normal busy path is
                     # consumed inside the same run at a step boundary.
-                    leftover = self.consume_guidance(name)
-                    if leftover and current.status not in {"paused", "failed", "closed"}:
-                        self._pending_prompts[name] = "\n\n".join(leftover)
+                    # A normally returned successful/waiting runner has persisted
+                    # the input it accepted. The kernel acknowledges sooner, at
+                    # its checkpoints; this also supports simpler host runners.
+                    if decision in {"done", "wait"}:
+                        self.acknowledge_guidance(name, list(self._offered_mail.get(name, set())))
+                    self._offered_mail.pop(name, None)
+                    if current.status == "idle":
+                        self._queue_initial_mail(name)
                     await self._record_member_event(
                         current,
                         "member_finished" if current.status == "idle" else f"member_{current.status}",
                     )
-                    terminal_member = current.status in {"paused", "failed", "closed"}
+                    terminal_member = current.status != "idle" or name not in self._pending_prompts
+                    if terminal_member:
+                        # Release ownership before any awaited closeout work.
+                        # A new message must start a new drive, rather than enter
+                        # a task that has already sealed its final boundary.
+                        if self._tasks.get(name) is asyncio.current_task():
+                            self._tasks.pop(name, None)
                 if terminal_member:
                     await self._maybe_report_members_drained(exclude=name)
                     return
@@ -700,6 +1053,8 @@ class SubAgentSupervisor:
             async with self._lock:
                 record = self._load(name)
                 if record and record.status != "closed":
+                    self._offered_mail.pop(name, None)
+                    self._initial_mail_ids.pop(name, None)
                     record.status = "failed"
                     record.summary = str(exc)[:1000]
                     record.completed_at = time.time()
@@ -769,7 +1124,7 @@ class SubAgentSupervisor:
                 injected = bool(sink(*sink_args))
             else:
                 injected = bool(sink(*sink_args, guidance_metadata))
-            if injected:
+            if injected and not getattr(sink, "acknowledges_after_checkpoint", False):
                 with self._connection() as db:
                     db.execute(
                         "UPDATE sub_agent_mailbox SET delivered_at=? WHERE parent_thread_id=? AND name=? AND direction='child_to_parent' AND message_key=?",
@@ -777,10 +1132,41 @@ class SubAgentSupervisor:
                     )
         return {"accepted": True, "deduplicated": not inserted, "injected": injected, "type": child_type, "name": name}
 
-    def consume_guidance(self, name: str) -> list[str]:
-        return self._guidance.pop(name, [])
+    def pending_guidance(self, name: str) -> list[dict[str, Any]]:
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT id,body,created_at FROM sub_agent_mailbox WHERE parent_thread_id=? AND name=? "
+                "AND direction='parent_to_child' AND delivered_at IS NULL ORDER BY created_at,id",
+                (self.parent_thread_id, name),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
-    def finalize_guidance(self, name: str) -> list[str] | None:
+    def _queue_initial_mail(self, name: str) -> None:
+        rows = self.pending_guidance(name)
+        if not rows:
+            return
+        first = rows[0]
+        self._pending_prompts[name] = first["body"]
+        self._initial_mail_ids[name] = [first["id"]]
+        self._offered_mail.setdefault(name, set()).add(first["id"])
+
+    def consume_guidance(self, name: str) -> list[dict[str, Any]]:
+        offered = self._offered_mail.setdefault(name, set())
+        rows = [row for row in self.pending_guidance(name) if row["id"] not in offered]
+        offered.update(row["id"] for row in rows)
+        return [{"content": row["body"], "metadata": {
+            "guidance_id": row["id"], "sent_at": row["created_at"], "source": "parent_to_child",
+        }} for row in rows]
+
+    def acknowledge_guidance(self, name: str, ids: list[str]) -> None:
+        with self._connection() as db:
+            db.executemany(
+                "UPDATE sub_agent_mailbox SET delivered_at=COALESCE(delivered_at,?) "
+                "WHERE id=? AND parent_thread_id=? AND name=? AND direction='parent_to_child'",
+                [(time.time(), message_id, self.parent_thread_id, name) for message_id in ids],
+            )
+
+    def finalize_guidance(self, name: str) -> list[dict[str, Any]] | None:
         guidance = self.consume_guidance(name)
         return guidance or None
 
@@ -855,13 +1241,18 @@ class SubAgentSupervisor:
         key = f"{event}:{record.name}:{record.completed_at or record.started_at or 0}"
         try:
             with self._connection() as db:
-                db.execute(
+                cursor = db.execute(
                     "INSERT OR IGNORE INTO sub_agent_events(id,parent_thread_id,name,payload,event_key,created_at) VALUES(?,?,?,?,?,?)",
                     (uuid.uuid4().hex, self.parent_thread_id, record.name, payload, key, time.time()),
                 )
         except Exception:
-            # A failed event write must never break the member's lifecycle.
-            pass
+            # Registry state survives; the application reconciliation retries
+            # publication. Keep the failed outbox write observable in logs.
+            _logger.exception("sub-agent lifecycle event write failed parent=%s name=%s event=%s",
+                              self.parent_thread_id, record.name, event)
+            return
+        if cursor.rowcount == 0:
+            return
         self._notify_activity()
         _notify_member_event()
 
@@ -895,12 +1286,20 @@ class SubAgentSupervisor:
                 name="runtime.sub_agent_status",
                 category="message",
                 payload={"event": event, "sub_agent": record.to_dict()},
+                event_id=hashlib.sha256(
+                    f"member-status:{self.parent_thread_id}:{record.name}:{record.status}:"
+                    f"{record.started_at}:{record.completed_at}:{record.source_turn_id}".encode()
+                ).hexdigest()[:32],
                 session_id=self.parent_thread_id,
                 run_id=str(record.source_run_id or ""),
                 turn_id=str(record.source_turn_id or ""),
                 tags=["sub_agent", "status"],
             ))
-        except BaseException:
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _logger.exception("sub-agent status publication failed parent=%s name=%s event=%s",
+                              self.parent_thread_id, record.name, event)
             return
 
     async def drain_member_events(self) -> list[dict[str, Any]]:
@@ -931,7 +1330,9 @@ class SubAgentSupervisor:
         async with self._lock:
             if self._pending_prompts:
                 return True
-            return any(not task.done() for task in self._tasks.values())
+            if any(not task.done() for task in self._tasks.values()):
+                return True
+            return any(not task.done() for task in self._inline_tasks.values())
 
     def note_member_wait_turn(self, turn_id: object) -> None:
         """Record the turn whose members-running fact is currently published.
@@ -949,6 +1350,8 @@ class SubAgentSupervisor:
         still alive while it emits this check, so it must not count itself.
         """
         if self._pending_prompts:
+            return False
+        if any(not task.done() for name, task in self._inline_tasks.items() if name != exclude):
             return False
         return all(task.done() for name, task in self._tasks.items() if name != exclude)
 
@@ -1218,6 +1621,32 @@ def register_sub_agent_lifecycle_operations(
                     request.name,
                     payload=await supervisor.delete_operation(name=payload.get("name")),
                 )
+            if request.name == "sub_agent.interrupt":
+                # Stop for the members themselves: the parent turn may already
+                # be terminal, so this never touches the parent runtime.
+                victims = await supervisor.interrupt_active()
+                return OperationResult(request.name, payload={
+                    "items": victims,
+                    "lifecycle_action": "members_interrupted",
+                })
+            if request.name == "sub_agent.pause":
+                # Per-member Stop has the same meaning as the session Stop: the
+                # member is parked and can be continued, not killed. The kill
+                # entry point stays ``sub_agent.interrupt``.
+                parked = await supervisor.pause_active()
+                return OperationResult(request.name, payload={
+                    "items": parked,
+                    "lifecycle_action": "members_suspended",
+                })
+            if request.name == "sub_agent.resume":
+                # One Resume press covers both stoppings: members interrupted by
+                # a terminate or a crash, and members a pause parked.
+                resumed = await supervisor.resume_interrupted()
+                resumed += await supervisor.resume_suspended()
+                return OperationResult(request.name, payload={
+                    "items": resumed,
+                    "lifecycle_action": "members_resumed",
+                })
             accepted = await supervisor.message(
                 type=payload.get("type"),
                 name=payload.get("name"),
@@ -1234,6 +1663,9 @@ def register_sub_agent_lifecycle_operations(
         "sub_agent.close",
         "sub_agent.delete",
         "sub_agent.message",
+        "sub_agent.interrupt",
+        "sub_agent.pause",
+        "sub_agent.resume",
     ):
         if not catalog.has(operation_name):
             catalog.register(operation_name, lifecycle)
@@ -1289,13 +1721,30 @@ def acknowledge_parent_mailbox(
     if not ids or not path.is_file():
         return
     placeholders = ",".join("?" for _ in ids)
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute(
             f"UPDATE sub_agent_mailbox SET delivered_at=? "
             f"WHERE parent_thread_id=? AND direction='child_to_parent' "
             f"AND delivered_at IS NULL AND id IN ({placeholders})",
             (time.time(), str(parent_thread_id), *ids),
         )
+
+
+def acknowledge_parent_guidance(database_path: str | Path, parent_thread_id: str, guidance_ids: list[str]) -> None:
+    """Translate injected guidance IDs to mailbox receipts after the parent checkpoint."""
+    path = Path(database_path)
+    ids = set(guidance_ids)
+    if not ids or not path.is_file():
+        return
+    with closing(sqlite3.connect(path)) as db:
+        rows = db.execute(
+            "SELECT id,name,message_key FROM sub_agent_mailbox WHERE parent_thread_id=? "
+            "AND direction='child_to_parent' AND delivered_at IS NULL", (parent_thread_id,),
+        ).fetchall()
+    acknowledge_parent_mailbox(path, parent_thread_id, [
+        message_id for message_id, name, key in rows
+        if f"sub-agent:{parent_thread_id}:{name}:{key}" in ids
+    ])
 
 
 # ── Waking an idle parent: durable member lifecycle events ──────────────────

@@ -1,21 +1,36 @@
 <template>
-  <button
-    ref="buttonElement"
-    class="core-send-stop-button"
-    :class="{ 'core-send-stop-button--stop': visualMode === 'stop' }"
-    :data-state="visualMode"
-    type="submit"
-    :disabled="disabled"
-    :title="actionMode === 'stop' ? defaultUiText(stopTitle, '停止运行') : defaultUiText(sendTitle, '发送')"
-    :aria-label="actionMode === 'stop' ? defaultUiText(stopTitle, '停止运行') : defaultUiText(sendTitle, '发送')"
-    :aria-pressed="visualMode === 'stop'"
-    @pointermove="handlePointerMove"
-    @pointerleave="handlePointerLeave"
-  >
-    <span class="core-send-stop-button__label" aria-hidden="true">
-      {{ actionMode === 'stop' ? stopLabel : sendLabel }}
+  <span class="core-send-stop-button__anchor">
+    <span v-if="holdHintVisible" class="core-send-stop-button__hold-hint" aria-hidden="true">
+      {{ holdTitle }}
     </span>
-  </button>
+    <button
+      ref="buttonElement"
+      class="core-send-stop-button"
+      :class="{
+        'core-send-stop-button--stop': visualMode === 'stop',
+        'core-send-stop-button--holding': holding,
+      }"
+      :style="{ '--hold-progress': `${holdProgress}deg` }"
+      :data-state="visualMode"
+      type="submit"
+      :disabled="disabled"
+      :title="holdEnabled
+        ? (actionMode === 'resume' ? defaultUiText(resumeTitle, '继续运行') : defaultUiText(stopTitle, '停止运行'))
+        : (actionMode === 'resume' ? defaultUiText(resumeTitle, '继续运行') : actionMode === 'stop' ? defaultUiText(stopTitle, '停止运行') : defaultUiText(sendTitle, '发送'))"
+      :aria-label="actionMode === 'resume' ? defaultUiText(resumeTitle, '继续运行') : actionMode === 'stop' ? defaultUiText(stopTitle, '停止运行') : defaultUiText(sendTitle, '发送')"
+      :aria-pressed="visualMode === 'stop'"
+      @click="handleClick"
+      @pointerdown="handlePointerDown"
+      @pointerup="handlePointerUp"
+      @pointercancel="cancelHold"
+      @pointerleave="handlePointerLeaveAll"
+      @pointermove="handlePointerMove"
+    >
+      <span class="core-send-stop-button__label" aria-hidden="true">
+        {{ actionMode === 'resume' ? resumeLabel : actionMode === 'stop' ? stopLabel : sendLabel }}
+      </span>
+    </button>
+  </span>
 </template>
 
 <script setup lang="ts">
@@ -24,7 +39,7 @@ import { defaultUiText } from '../i18n/index'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 
-type ActionMode = 'send' | 'stop'
+type ActionMode = 'send' | 'stop' | 'resume'
 
 const props = withDefaults(defineProps<{
   actionMode?: ActionMode
@@ -33,6 +48,14 @@ const props = withDefaults(defineProps<{
   stopLabel?: string
   sendTitle?: string
   stopTitle?: string
+  resumeTitle?: string
+  resumeLabel?: string
+  /** 长按是否触发终止（停止与继续两态都提供）。 */
+  holdEnabled?: boolean
+  /** 悬浮提示文案，出现在按钮右侧。 */
+  holdTitle?: string
+  /** 长按触发终止所需的毫秒数。 */
+  holdDurationMs?: number
 }>(), {
   actionMode: 'send',
   disabled: false,
@@ -40,10 +63,28 @@ const props = withDefaults(defineProps<{
   stopLabel: 'stop',
   sendTitle: '发送',
   stopTitle: '停止运行',
+  resumeTitle: '继续运行',
+  resumeLabel: 'resume',
+  holdEnabled: true,
+  holdTitle: '长摁终止',
+  holdDurationMs: 800,
 })
+
+const emit = defineEmits<{
+  /** 长按完成：由宿主弹出终止确认。 */
+  (event: 'terminate'): void
+}>()
 
 const buttonElement = ref<HTMLButtonElement | null>(null)
 const visualMode = ref<ActionMode>(props.actionMode)
+// 长按终止：进度环按长按时长填充，完成后由宿主确认。按压期间的 click 必须吞掉，
+// 否则同一次长按会先终止再暂停。
+const holding = ref(false)
+const holdProgress = ref(0)
+const holdHintVisible = ref(false)
+let holdTimer: ReturnType<typeof setInterval> | null = null
+let holdStartedAt = 0
+let holdCompleted = false
 let mounted = false
 let busy = false
 let transitionTarget: ActionMode | null = null
@@ -196,7 +237,7 @@ function animateTo(mode: ActionMode) {
       ease: 'power2.in',
     }, 0.055)
     .call(() => {
-      setVisualMode('send')
+      setVisualMode(mode)
       gsap.set(button, {
         '--glyph-x': '-8px',
         '--glyph-y': '7px',
@@ -221,8 +262,63 @@ function animateTo(mode: ActionMode) {
   settleButton(timeline, 0.125)
 }
 
+function clearHoldTimer() {
+  if (holdTimer !== null) {
+    clearInterval(holdTimer)
+    holdTimer = null
+  }
+}
+
+function cancelHold() {
+  clearHoldTimer()
+  holding.value = false
+  holdProgress.value = 0
+}
+
+function handlePointerDown(event: PointerEvent) {
+  if (!props.holdEnabled || props.disabled || event.button !== 0) return
+  if (props.actionMode === 'send') return
+  holdCompleted = false
+  holdStartedAt = Date.now()
+  holding.value = true
+  holdProgress.value = 0
+  clearHoldTimer()
+  holdTimer = setInterval(() => {
+    const elapsed = Date.now() - holdStartedAt
+    const ratio = Math.min(1, elapsed / Math.max(1, props.holdDurationMs))
+    holdProgress.value = Math.round(ratio * 360)
+    if (ratio >= 1) {
+      holdCompleted = true
+      cancelHold()
+      emit('terminate')
+    }
+  }, 40)
+}
+
+function handlePointerUp() {
+  clearHoldTimer()
+  if (holding.value) {
+    holding.value = false
+    holdProgress.value = 0
+  }
+}
+
+function handleClick(event: MouseEvent) {
+  if (!holdCompleted) return
+  // 这次 click 属于刚完成的長按：吞掉它，避免紧接着再发一次暂停。
+  holdCompleted = false
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+function handlePointerLeaveAll() {
+  cancelHold()
+  holdHintVisible.value = false
+  handlePointerLeave()
+}
+
 function handlePointerMove(event: PointerEvent) {
-  if (prefersReducedMotion() || props.disabled || busy || event.pointerType === 'touch') return
+  if (prefersReducedMotion() || props.disabled || busy || holding.value || event.pointerType === 'touch') return
   const button = buttonElement.value
   if (!button || !xTo || !yTo || !rotationTo) return
   const bounds = button.getBoundingClientRect()
@@ -261,9 +357,15 @@ watch(
   },
 )
 
+function handlePointerEnter() {
+  if (!props.holdEnabled || props.disabled || props.actionMode === 'send') return
+  holdHintVisible.value = true
+}
+
 onMounted(() => {
   const button = buttonElement.value
   if (!button) return
+  button.addEventListener('pointerenter', handlePointerEnter)
   mounted = true
   animationContext = gsap.context(() => {
     xTo = gsap.quickTo(button, 'x', { duration: 0.24, ease: 'power3.out' })
@@ -273,6 +375,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  clearHoldTimer()
+  buttonElement.value?.removeEventListener('pointerenter', handlePointerEnter)
   activeTimeline?.kill()
   animationContext?.revert()
   xTo = null
@@ -283,6 +387,42 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.core-send-stop-button__anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 悬浮时出现在按钮右侧的提示：说明长按会终止。 */
+.core-send-stop-button__hold-hint {
+  position: absolute;
+  left: calc(100% + var(--space-2, 8px));
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 2px var(--space-2, 8px);
+  border-radius: var(--radius-pill, 999px);
+  background: color-mix(in srgb, var(--theme-composer-text) 8%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 72%, transparent);
+  font-size: var(--text-xs, 11px);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* 长按进度环：conic-gradient 按按住时长扫过，长按完成即成整圈。 */
+.core-send-stop-button--holding::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: conic-gradient(
+    color-mix(in srgb, var(--theme-composer-text) 62%, transparent) var(--hold-progress, 0deg),
+    transparent var(--hold-progress, 0deg)
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  pointer-events: none;
+}
+
 .core-send-stop-button {
   --glyph-x: 0px;
   --glyph-y: 0px;
@@ -347,6 +487,11 @@ onUnmounted(() => {
   transform: translate(calc(-50% + var(--trail-x)), -50%) scaleX(var(--trail-scale));
   transform-origin: right center;
   will-change: transform, opacity;
+}
+
+/* Resume uses the same action surface with a play glyph. */
+.core-send-stop-button[data-state="resume"]::before {
+  clip-path: polygon(22% 8%, 92% 50%, 22% 92%);
 }
 
 .core-send-stop-button--stop {

@@ -13,6 +13,11 @@
 
 ### 启动开发服务
 
+Core API 默认只信任回环连接。直接绑定 LAN 地址必须显式启用 `serve --allow-lan`
+并配置 `LAMTOOLS_CORE_API_TOKEN`；所有 HTTP/WebSocket 请求均需 Bearer 认证。
+桌面远程连接继续使用原有网关。配置、TLS 与信任边界见
+[Core API access](../core/docs/core-api-access.md)。
+
 主入口：
 
 ```powershell
@@ -55,7 +60,12 @@
 
 .\scripts\test.ps1 all
 .\scripts\test.ps1 core
+.\scripts\test.ps1 all -Serial
 ```
+
+默认同时执行完整 Core 后端 pytest 和 Core UI contract 测试；输出带组件前缀，保留所有失败详情，并显示各套件及总耗时。任一套件失败，命令返回非零退出码，另一套件仍完成执行。`-Serial` 执行相同测试，供排查资源竞争或比较耗时。
+
+该入口不包含 CI 的类型检查、构建、移动端/Rust 测试或发布验收；这些检查仍由原有 CI 和发布流程执行。
 
 ### 打开与诊断
 

@@ -1,0 +1,8 @@
+{
+  "version": "0.3.19",
+  "download_url": "https://ainarit.com/downloads/Sunday_0.3.19_x64-setup.exe",
+  "release_url": "https://ainarit.com/sunday.html",
+  "release_notes": "# Sunday 0.3.19 \u2014 proposed Windows stable release\n\n- Keep sub-agent execution state and steering consistent with the main turn.\n- Resume a stopped turn without duplicating its user input or replaying completed tools.\n- Keep the internal Core API local; require authentication for explicitly configured LAN access.\n- Improve Workflow persistence and plugin startup, failure diagnostics and recovery.\n- Protect unsaved settings drafts when navigating or closing editors.\n- Add optional raw model request/response recording for diagnostics, disabled by default.\n- Repair legacy conversation revision drift after restoring older data.\n- Show model setup failures immediately and leave the conversation available for retry.\n\nWorkflow remains an optional external plugin, excluded from the desktop installer.\nSix-digit WAN pairing is deprecated and unsupported.\n",
+  "sha256": "5a000e5d5ebc71ff9057b76414a96998ceedb93e995cdd6b60794e766cb34185",
+  "size": 95078359
+}

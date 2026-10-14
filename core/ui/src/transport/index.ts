@@ -9,6 +9,7 @@ export {
   type TransportRequest,
   type TransportRpcRequest,
   TransportRpcError,
+  TransportRequestTimeoutError,
 } from './types'
 
 export {

@@ -1,0 +1,77 @@
+{
+  "task": "Core Task 1",
+  "captured_at_utc": "2026-10-13T16:22:14.015456+00:00",
+  "source_access": "SQLite mode=ro; no original database writes",
+  "source_databases": [
+    "data/core-agent/sub_agents.sqlite3",
+    "data/core.db"
+  ],
+  "parent_thread_id": "5545f1e3cc4f41fea09bac0ac675a8fb",
+  "child_session_id": "5545f1e3cc4f41fea09bac0ac675a8fb:sub:host_lamtools_v1",
+  "registry": {
+    "status": "interrupted",
+    "started_at_utc": "2026-10-13T13:13:08.392998+00:00",
+    "interruption_detected_at_utc": "2026-10-13T14:38:18.773145+00:00"
+  },
+  "child_runtime": {
+    "status": "running",
+    "run_id": "bc23bc6a7843",
+    "updated_at_local_utc_minus_12": "2026-10-13 01:21:59.895590"
+  },
+  "parent_to_child_messages": [
+    {
+      "id": "7ecd085cd55d44e89c59b4826f3c1ccf",
+      "sent_at_utc": "2026-10-13T13:13:08.350351+00:00",
+      "body_sha256": "cba485bc1eff9002e38d5d097e9ece0889eee78c912c38f171c1f810d6af3ced",
+      "body_characters": 2589,
+      "delivered_at": null,
+      "exact_history_matches": [
+        {
+          "seq": 1,
+          "created_at_local_utc_minus_12": "2026-10-13 01:13:09.894178"
+        }
+      ]
+    },
+    {
+      "id": "e0464f71a3de435693e1ff64ce8ffe6b",
+      "sent_at_utc": "2026-10-13T13:14:54.329439+00:00",
+      "body_sha256": "2e9e8fd0561fa303c4330ec34f8e0cfec68f56b2dc3058a198bcf086c5b96a3f",
+      "body_characters": 873,
+      "delivered_at": null,
+      "exact_history_matches": [
+        {
+          "seq": 21,
+          "created_at_local_utc_minus_12": "2026-10-13 01:14:55.339002"
+        }
+      ]
+    },
+    {
+      "id": "5121380753ed4b00ba507100a37e4049",
+      "sent_at_utc": "2026-10-13T13:15:55.928551+00:00",
+      "body_sha256": "7fcbbbc763487877dcf3abb05cc817eccf8189f3b8a577f17315a3c6429bba8a",
+      "body_characters": 145,
+      "delivered_at": null,
+      "exact_history_matches": [
+        {
+          "seq": 30,
+          "created_at_local_utc_minus_12": "2026-10-13 01:16:00.068519"
+        }
+      ]
+    }
+  ],
+  "registry_events": [
+    {
+      "event": "member_interrupted",
+      "created_at_utc": "2026-10-13T14:38:18.849067+00:00",
+      "delivered_at": null
+    }
+  ],
+  "logs_inspected": [
+    "data/core-agent/backend.log (last 4 MiB)",
+    "data/core-agent/quality-task-1-dev-20261013-023347.err.log (884 KB)"
+  ],
+  "limits": [
+    "Original process termination cause and exact termination time are not established.",
+    "No live model, desktop restart, or GUI verification was performed."
+  ]
+}

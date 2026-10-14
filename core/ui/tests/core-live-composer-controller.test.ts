@@ -9,6 +9,36 @@ const commands = [
 ] as const
 
 describe('useCoreLiveComposerController', () => {
+  it('resumes only an empty composer with an interrupted turn and uses no start message', async () => {
+    const text = ref('')
+    const resumable = ref('turn-1')
+    const attachments = ref<CoreInputItem[]>([])
+    const calls: string[] = []
+    const controller = useCoreLiveComposerController({
+      activeThreadId: ref('thread-1'), connectedThreadId: ref('thread-1'),
+      connectionState: ref('open'), text, cursor: ref(0), status: ref('idle'), attachments,
+      resumableTurnId: resumable,
+      connect: async () => undefined,
+      resumeTurn: async (threadId, turnId) => { calls.push(`resume:${threadId}:${turnId}`) },
+      startTurn: async () => { calls.push('start') },
+      interruptTurn: async () => undefined, forceResetTurn: async () => undefined,
+      queueInput: async () => undefined, listCommands: async () => [],
+      getWorkRoot: () => '', executeCommand: async () => true,
+    })
+    expect(controller.actionMode.value).toBe('resume')
+    await controller.submit()
+    expect(calls).toEqual(['resume:thread-1:turn-1'])
+    expect(text.value).toBe('')
+    text.value = 'new request'
+    expect(controller.actionMode.value).toBe('send')
+    text.value = ''
+    attachments.value = [{ type: 'text', text: 'attachment' }]
+    expect(controller.actionMode.value).toBe('send')
+    attachments.value = []
+    resumable.value = ''
+    expect(controller.actionMode.value).toBe('send')
+  })
+
   it('refreshes the command catalog when a new slash candidate starts', async () => {
     const text = ref('')
     const cursor = ref(0)

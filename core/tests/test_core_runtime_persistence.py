@@ -586,7 +586,10 @@ async def test_core_pending_approval_survives_restart_and_continues_once(tmp_pat
             message.to_dict() for message in continuation_llm.requests[0].messages
             if message.role != "system" and not (message.metadata or {}).get("internal")
         ]
-        assert messages[0] == {"role": "user", "content": "Write the approval file."}
+        assert messages[0] == {
+            "role": "user", "content": "Write the approval file.",
+            "metadata": {"turn_id": waiting.payload["turn_id"]},
+        }
         assert messages[1]["role"] == "assistant"
         assert messages[1]["tool_calls"][0]["id"] == "call-write"
         assert messages[2]["role"] == "tool"

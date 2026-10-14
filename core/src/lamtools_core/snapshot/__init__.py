@@ -91,11 +91,24 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
 
     if event.kind == "approval_response":
         _apply_approval_response(state, event)
-        turn = _upsert_turn(state, event)
-        if turn is not None and str(turn.get("status") or "") not in {"failed", "cancelled", "skipped"}:
-            # Resolving a server request resumes the existing turn; it does not
-            # complete that turn.  A later lifecycle/status item owns terminality.
-            turn["status"] = "running"
+        # Only an existing turn may be resumed by an answer. A response naming a
+        # turn this thread never created must not invent one: the invented turn
+        # stayed `running` forever (nothing owns it to close it) and pinned the
+        # whole session to "running" after everything had finished (2026-10-14).
+        turn = (state.get("turns") or {}).get(event.turn_id) if event.turn_id else None
+        if isinstance(turn, dict):
+            turn["last_kind"] = event.kind
+            turn["last_seq"] = event.seq or state.get("snapshot_seq", 0)
+            if event.run_id:
+                turn["run_id"] = event.run_id
+            if str(turn.get("status") or "") not in {"failed", "cancelled", "skipped", "paused"}:
+                # Resolving a server request resumes the existing turn; it does
+                # not complete that turn. A later lifecycle/status item owns
+                # terminality. A *paused* turn is excluded: its run has already
+                # ended, so reviving it left the session reading running with
+                # nothing running, until the user terminated it by hand
+                # (2026-10-14).
+                turn["status"] = "running"
         _recompute_thread_status(state)
         return state
 
@@ -178,7 +191,10 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
         item["status"] = event.status
     else:
         item["status"] = event.status
-        if event.turn_id and not nested_child:
+        # A paused turn stays paused: an item the pause itself wrote (the
+        # interrupted tool result that closes the cut step) is ordinary work
+        # arriving late, not the turn running again.
+        if event.turn_id and not nested_child and str(state.get("status") or "") != "paused":
             state["status"] = "running"
 
     turn = _upsert_turn(state, event)
@@ -197,7 +213,13 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
     elif event.status == "waiting":
         turn["status"] = "waiting"
         state["status"] = "waiting"
-    elif event.turn_id and str(turn.get("status") or "") not in TERMINAL_STATUSES:
+    elif (
+        event.turn_id
+        and str(turn.get("status") or "") not in TERMINAL_STATUSES
+        and str(turn.get("status") or "") != "paused"
+    ):
+        # Same rule for the turn itself: only a resume or a status event may
+        # take a paused turn back to running.
         turn["status"] = "running"
         _recompute_thread_status(state)
     return state
@@ -270,7 +292,7 @@ def _close_turn_items(state: dict[str, Any], turn: dict[str, Any], status: str) 
             item["status"] = status
 
 
-def _is_sub_agent_child_item(item: dict[str, Any]) -> bool:
+def is_sub_agent_child_item(item: dict[str, Any]) -> bool:
     """Whether an item belongs to a delegated member's timeline.
 
     Provenance: nested items carry the parent's delegated tool row as
@@ -503,7 +525,23 @@ def _latest_active_turn(state: dict[str, Any]) -> dict[str, Any] | None:
     return turns[0] if turns else None
 
 
-def _recompute_thread_status(state: dict[str, Any]) -> None:
+def _is_sub_agent_child_item(item: dict[str, Any]) -> bool:
+    """Internal alias kept for the module's own call sites."""
+    return is_sub_agent_child_item(item)
+
+
+def recompute_thread_status(state: dict[str, Any]) -> None:
+    # A paused turn owns the session until the user continues or terminates it.
+    # It outranks an open request (a member waiting on a question keeps its card
+    # answerable, but the session itself is paused, not waiting) and it is not
+    # an active execution, so the runtime never reports it as "running" again.
+    paused = any(
+        isinstance(turn, dict) and str(turn.get("status") or "") == "paused"
+        for turn in (state.get("turns") or {}).values()
+    )
+    if paused:
+        state["status"] = "paused"
+        return
     if _has_open_request(state):
         state["status"] = "waiting"
         return
@@ -524,6 +562,11 @@ def _recompute_thread_status(state: dict[str, Any]) -> None:
         state["status"] = "failed"
     else:
         state["status"] = "idle"
+
+
+def _recompute_thread_status(state: dict[str, Any]) -> None:
+    """Internal alias kept for the module's own call sites."""
+    recompute_thread_status(state)
 
 
 def _merge_dict_values(current: Any, incoming: dict[str, Any]) -> dict[str, Any]:

@@ -1,0 +1,14 @@
+{
+  "purpose": "publish-site",
+  "commandName": "sunday-desktop-0318-publish-site-20261013T113719Z",
+  "description": "Extract verified 0.3.18 site archive and atomically switch site pointer; keep 0.3.17 release intact and do not restart services",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "publish-site.sh",
+  "commandSha256": "c5a565c2c2b9194580995ef67e2486ce3851476664b859668fad8523bda9c0f7",
+  "timeoutSeconds": 600,
+  "startedAtUtc": "2026-10-13T11:37:19Z",
+  "clientToken": "sunday-desktop-0318-publish-site-20261013T113719Z"
+}

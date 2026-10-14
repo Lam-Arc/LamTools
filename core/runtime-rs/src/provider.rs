@@ -283,6 +283,7 @@ enum AttemptOutcome {
 
 pub struct HttpModelBackend {
     client: reqwest::Client,
+    request_headers: HeaderMap,
     config: ProviderConfig,
     profile: Value,
     last_runtime_model_id: RwLock<String>,
@@ -343,8 +344,7 @@ impl HttpModelBackend {
             );
         }
         // A total timeout is what keeps a stalled turn finite.
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
+        let client = crate::forensics::client_builder(reqwest::Client::builder())
             .connect_timeout(policy.timeout.min(CONNECT_TIMEOUT))
             .timeout(policy.timeout)
             .build()
@@ -352,6 +352,7 @@ impl HttpModelBackend {
         let initial_model_id = config.api_model_id.clone();
         Ok(Self {
             client,
+            request_headers: headers,
             config,
             profile,
             last_runtime_model_id: RwLock::new(initial_model_id),
@@ -424,13 +425,13 @@ impl HttpModelBackend {
 
     /// Retry a transport failure within the policy budget so a stalled
     /// provider cannot leave a turn running forever.
-    async fn send_with_retry(&self, body: &Value) -> Result<Value, RuntimeError> {
+    async fn send_with_retry(&self, body: &Value, empty_retry_index: usize) -> Result<Value, RuntimeError> {
         let mut failures = 0usize;
         loop {
             if failures > 0 {
                 self.stream_event("reset", String::new());
             }
-            match self.send_attempt(body).await {
+            match self.send_attempt_recorded(body, failures, empty_retry_index).await {
                 Ok(payload) => return Ok(payload),
                 Err(AttemptOutcome::Fatal(error)) => return Err(error),
                 Err(AttemptOutcome::Retry(error)) => {
@@ -462,11 +463,12 @@ impl HttpModelBackend {
     }
 
     /// One attempt, classified so the caller knows whether a retry can help.
-    async fn send_attempt(&self, body: &Value) -> Result<Value, AttemptOutcome> {
+    async fn send_attempt_recorded(&self, body: &Value, retry_index: usize, empty_retry_index: usize) -> Result<Value, AttemptOutcome> {
         self.report("http_send_start");
         let request = self
             .client
             .post(self.request_url())
+            .headers(self.request_headers.clone())
             .json(body)
             .build()
             .map_err(|_| {
@@ -475,50 +477,80 @@ impl HttpModelBackend {
                     "provider request could not be built".into(),
                 ))
             })?;
-        // Queue the request before emitting the built marker: a slow native
-        // progress callback must not prevent the send from starting.
-        let client = self.client.clone();
-        let send = AbortSendOnDrop(tokio::spawn(async move { client.execute(request).await }));
-        self.report("http_request_built");
-        let response = send_until_headers_with_marker(
-            send,
-            self.header_deadline(),
-            RESPONSE_HEADER_WAIT_MARKER,
-            || self.report("http_waiting_for_headers"),
-        )
-        .await;
-        let response = response.map_err(|error| {
-            let message = match error {
-                HeaderSendError::Timeout => {
-                    self.report("http_send_timeout");
-                    "provider response headers timed out"
+        let mut request = request;
+        let mut redirect_index = 0;
+        let response = loop {
+            let original = request.try_clone();
+            let mut capture = crate::forensics::Capture::start(&request, serde_json::json!({
+                "session_id": null, "run_id": null, "step": null,
+                "identity_status": "host_does_not_supply_request_identity",
+                "model": self.config.api_model_id, "provider": self.config.provider_name,
+                "protocol": format!("{:?}", self.protocol()), "retry_index": retry_index,
+                "empty_response_retry_index": empty_retry_index, "redirect_index": redirect_index,
+            })).map_err(|error| AttemptOutcome::Fatal(RuntimeError::Model(error)))?;
+            // Queue the request before emitting the built marker: a slow native
+            // progress callback must not prevent the send from starting.
+            let client = self.client.clone();
+            let send = AbortSendOnDrop(tokio::spawn(async move { client.execute(request).await }));
+            self.report("http_request_built");
+            let response = send_until_headers_with_marker(
+                send,
+                self.header_deadline(),
+                RESPONSE_HEADER_WAIT_MARKER,
+                || self.report("http_waiting_for_headers"),
+            )
+            .await;
+            let response = response.map_err(|error| {
+                if let Some(c) = &mut capture {
+                    if c.fail("request_failed_before_headers").is_err() {
+                        eprintln!("Forensic failure metadata could not be persisted; record is incomplete");
+                    }
                 }
-                HeaderSendError::Transport(error) if error.is_connect() => {
-                    self.report("http_connect_error");
-                    connection_failure_detail(error.source().unwrap_or(&error), error.is_dns())
+                let message = match error {
+                    HeaderSendError::Timeout => {
+                        self.report("http_send_timeout");
+                        "provider response headers timed out"
+                    }
+                    HeaderSendError::Transport(error) if error.is_connect() => {
+                        self.report("http_connect_error");
+                        connection_failure_detail(error.source().unwrap_or(&error), error.is_dns())
+                    }
+                    HeaderSendError::Transport(error) if error.is_timeout() => {
+                        self.report("http_send_timeout");
+                        "provider request timed out before response headers"
+                    }
+                    HeaderSendError::TaskPanicked => {
+                        self.report("http_send_task_panicked");
+                        return AttemptOutcome::Fatal(RuntimeError::Model(
+                            "provider send task panicked".into(),
+                        ));
+                    }
+                    HeaderSendError::TaskCancelled => {
+                        self.report("http_send_task_cancelled");
+                        return AttemptOutcome::Fatal(RuntimeError::Model(
+                            "provider send task cancelled".into(),
+                        ));
+                    }
+                    HeaderSendError::Transport(_) => "provider request failed before response headers",
+                };
+                self.report("http_transport_error");
+                AttemptOutcome::Retry(RuntimeError::Model(message.into()))
+            })?;
+            let mut response = crate::forensics::Response::new(response, capture)
+                .map_err(|error| AttemptOutcome::Fatal(RuntimeError::Model(error)))?;
+            self.report("http_headers_received");
+            if let Some(original) = original {
+                if let Some(next) = crate::forensics::redirect_request(&original, &response, redirect_index)
+                    .map_err(|e| AttemptOutcome::Fatal(RuntimeError::Model(e)))? {
+                    response.drain(self.policy.stream_idle_timeout).await
+                        .map_err(|e| AttemptOutcome::Retry(RuntimeError::Model(e)))?;
+                    request = next;
+                    redirect_index += 1;
+                    continue;
                 }
-                HeaderSendError::Transport(error) if error.is_timeout() => {
-                    self.report("http_send_timeout");
-                    "provider request timed out before response headers"
-                }
-                HeaderSendError::TaskPanicked => {
-                    self.report("http_send_task_panicked");
-                    return AttemptOutcome::Fatal(RuntimeError::Model(
-                        "provider send task panicked".into(),
-                    ));
-                }
-                HeaderSendError::TaskCancelled => {
-                    self.report("http_send_task_cancelled");
-                    return AttemptOutcome::Fatal(RuntimeError::Model(
-                        "provider send task cancelled".into(),
-                    ));
-                }
-                HeaderSendError::Transport(_) => "provider request failed before response headers",
-            };
-            self.report("http_transport_error");
-            AttemptOutcome::Retry(RuntimeError::Model(message.into()))
-        })?;
-        self.report("http_headers_received");
+            }
+            break response;
+        };
         let status = response.status();
         if status.is_success() && self.stream.is_some() {
             let payload = match self.protocol() {
@@ -611,11 +643,12 @@ async fn read_openai_stream(
 }
 
 async fn read_openai_stream_with_idle(
-    mut response: reqwest::Response,
+    response: impl Into<crate::forensics::Response>,
     report: Option<&Arc<dyn Fn(&'static str, String) + Send + Sync>>,
     progress: Option<&Arc<dyn Fn(&'static str) + Send + Sync>>,
     idle_timeout: Option<Duration>,
 ) -> Result<Value, String> {
+    let mut response = response.into();
     if !response
         .headers()
         .get(CONTENT_TYPE)
@@ -747,6 +780,7 @@ async fn read_openai_stream_with_idle(
             }
         }
         if done {
+            response.drain(idle_timeout).await?;
             break;
         }
     }
@@ -810,12 +844,13 @@ const MAX_NATIVE_STREAM_BYTES: usize = 32 * 1024 * 1024;
 /// endpoint, so the existing model-turn and continuation parsers remain the
 /// single source of truth for text, reasoning and tool calls.
 async fn read_native_stream(
-    mut response: reqwest::Response,
+    response: impl Into<crate::forensics::Response>,
     protocol: ProviderProtocol,
     report: Option<&Arc<dyn Fn(&'static str, String) + Send + Sync>>,
     progress: Option<&Arc<dyn Fn(&'static str) + Send + Sync>>,
     idle_timeout: Option<Duration>,
 ) -> Result<Value, String> {
+    let mut response = response.into();
     if !response
         .headers()
         .get(CONTENT_TYPE)
@@ -873,6 +908,7 @@ async fn read_native_stream(
                 accumulator.ingest(&event, event_name, report, progress)?;
             }
             if accumulator.done {
+                response.drain(idle_timeout).await?;
                 return accumulator.finish();
             }
         }
@@ -1341,7 +1377,7 @@ impl ModelBackend for HttpModelBackend {
             if empty_attempt > 0 {
                 self.stream_event("reset", String::new());
             }
-            let payload = self.send_with_retry(&body).await?;
+            let payload = self.send_with_retry(&body, empty_attempt).await?;
             let turn = match protocol {
                 ProviderProtocol::AnthropicMessages => parse_anthropic(
                     payload,
@@ -4405,5 +4441,53 @@ mod tests {
             backend.request_url(),
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
         );
+    }
+}
+
+#[cfg(test)]
+mod quality_task_1 {
+    use super::*;
+    use std::io::{Read, Write};
+
+    #[tokio::test]
+    async fn every_sse_protocol_records_tail_through_http_eof() {
+        for (protocol, prefix) in [
+            (ProviderProtocol::OpenAiChat, "data: [DONE]\n\n"),
+            (ProviderProtocol::AnthropicMessages, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"),
+            (ProviderProtocol::OpenAiResponses, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n"),
+            (ProviderProtocol::GeminiGenerativeLanguage, "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"),
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket.read(&mut [0; 4096]).unwrap();
+                socket.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/event-stream\r\n\r\n").unwrap();
+                socket.write_all(prefix.as_bytes()).unwrap();
+                socket.flush().unwrap();
+                std::thread::sleep(Duration::from_millis(30));
+                socket.write_all(b"tail\x00\xff").unwrap();
+            });
+            let root = std::env::temp_dir().join(format!("quality-task-1-{}", uuid::Uuid::new_v4()));
+            let client = reqwest::Client::new();
+            let request = client.post(format!("http://{address}")).body("request").build().unwrap();
+            let capture = crate::forensics::Capture::start_at(&request, json!({}), root.clone()).unwrap();
+            let response = crate::forensics::Response::new(client.execute(request).await.unwrap(), Some(capture)).unwrap();
+            let result = if protocol == ProviderProtocol::OpenAiChat {
+                read_openai_stream_with_idle(response, None, None, Some(Duration::from_secs(2))).await
+            } else {
+                read_native_stream(response, protocol, None, None, Some(Duration::from_secs(2))).await
+            };
+            assert!(result.is_ok(), "{:?}: {:?}", protocol, result);
+            server.join().unwrap();
+            let path = std::fs::read_dir(&root).unwrap().next().unwrap().unwrap().path();
+            let mut expected = prefix.as_bytes().to_vec();
+            expected.extend(b"tail\x00\xff");
+            assert_eq!(std::fs::read(path.join("response.bin")).unwrap(), expected);
+            let meta: Value = serde_json::from_slice(&std::fs::read(path.join("metadata.json")).unwrap()).unwrap();
+            assert_eq!(meta["capture_state"], "complete");
+            assert_eq!(meta["response_bytes"], expected.len());
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }

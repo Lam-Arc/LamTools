@@ -1,0 +1,20 @@
+CLEANUP_CHECK_UTC=2026-10-13T09:48:34Z
+active
+active
+AUTHORIZED_KEY_COUNT=1
+AUTHORIZED_KEYS_LINES=2
+-rw-r--r-- 1 root root 6496256 Oct 13 17:34 /var/tmp/Sunday-desktop-0.3.17-20261013.upload.exe
+-rw-r--r-- 1 root root 4826025 Oct 13 17:40 /var/tmp/Sunday-site-mobile-0.3.17-20261013.upload.tar.gz
+drwx------ 2 root root 4096 Oct 13 17:36 /var/tmp/dl-0.3.17-20261013T0935
+ABSENT /tmp/sunday-0317-public-versioned-20261013.exe
+ABSENT /tmp/sunday-0317-public-latest-20261013.exe
+part.0 7339650 bytes
+part.1 7339650 bytes
+part.2 7339650 bytes
+part.3 7339650 bytes
+part.4 7339650 bytes
+part.5 7339650 bytes
+part.6 7339650 bytes
+part.7 7339648 bytes
+SITE=/var/www/lamtools/site-releases/0.3.17-mobile-0.1.48-20261013
+VERSIONED_SHA=d25a030599b148d52c44021a89b487f4ccf1a695d7b7d19bedd4c1a7ab3015b1  /var/www/lamtools/Sunday_0.3.17_x64-setup.exe

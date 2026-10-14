@@ -117,6 +117,16 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core/runtime-rs -> target
+            core/mobile/src-tauri -> target
+
+      - name: Cache Gradle dependencies and build outputs
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Install mobile dependencies
         run: |
           cd core/mobile
@@ -152,6 +162,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache Linux dependency downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/lamtools-linux/npm-cache
+            ~/.cache/lamtools-linux/pip-cache
+            ~/.cache/lamtools-linux/uv-cache
+            ~/.cache/lamtools-linux/cargo/registry
+            ~/.cache/lamtools-linux/cargo/git
+          key: linux-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/ui/package-lock.json', 'core/desktop/package-lock.json', 'core/desktop/src-tauri/Cargo.lock', 'core/pyproject.toml', 'scripts/package-linux.sh') }}
+          restore-keys: |
+            linux-deps-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install Linux desktop build dependencies
         run: |

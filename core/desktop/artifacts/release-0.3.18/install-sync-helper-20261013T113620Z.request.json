@@ -1,0 +1,14 @@
+{
+  "purpose": "install-sync-helper",
+  "commandName": "sunday-desktop-0318-install-sync-helper-20261013T113620Z",
+  "description": "Install version-split public-site sync helper with verified rollback backup; do not restart services",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "install-sync-helper.sh",
+  "commandSha256": "cc18c9aacd051a37b62ea26ef07ef97ab23cca3e80b3b13ea467aff4535ac170",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T11:36:20Z",
+  "clientToken": "sunday-desktop-0318-install-sync-helper-20261013T113620Z"
+}

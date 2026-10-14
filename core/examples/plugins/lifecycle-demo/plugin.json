@@ -1,0 +1,10 @@
+{
+  "name": "lifecycle-demo",
+  "id": "lifecycle-demo",
+  "version": "0.1.0",
+  "description": "Minimal managed backend with health and critical task reporting",
+  "platforms": "desktop",
+  "backend": "./backend.py",
+  "tools": ["./tools.jsonc"],
+  "operations": ["./operations.jsonc"]
+}

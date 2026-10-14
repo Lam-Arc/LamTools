@@ -367,7 +367,7 @@ describe('composer takeover wiring', () => {
   })
 
   it('leaves the queued-input tray and its guide actions untouched', () => {
-    const preambleStart = appSource.indexOf('<template #composer-preamble>')
+    const preambleStart = appSource.indexOf('<template #composer-queue-panel>')
     const preambleEnd = appSource.indexOf('<template #composer-popover>', preambleStart)
     expect(preambleStart).toBeGreaterThanOrEqual(0)
     const preamble = appSource.slice(preambleStart, preambleEnd)

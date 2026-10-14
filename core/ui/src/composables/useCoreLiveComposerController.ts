@@ -11,6 +11,8 @@ import {
   type SubmitCoreComposerTaskResult,
 } from '../appServer/workbenchActions'
 import type { CoreCommandCatalogItem, CoreInputItem } from '../types'
+import { buildCoreComposerInputItems } from '../composer/inputItems'
+import { CoreRequestAcceptanceUnknownError } from '../appServer/client'
 import { parseComposerInput } from '../composer/syntax'
 import { useComposerCommandPalette } from './useComposerCommandPalette'
 import {
@@ -33,6 +35,29 @@ export interface CoreLiveComposerMessages {
 export interface UseCoreLiveComposerControllerOptions {
   activeThreadId: Readonly<Ref<string | null>>
   activeTurnId?: Readonly<Ref<string>>
+  resumableTurnId?: Readonly<Ref<string>>
+  /** Whether the session is paused as a whole: its members follow the session. */
+  sessionPaused?: Readonly<Ref<boolean>>
+  /** Continue the paused turn. Text typed while paused rides the same press. */
+  resumeTurn?(threadId: string, turnId: string, input?: CoreInputItem[]): Promise<void>
+  /** Long-press confirm: end the turn and its members for good. */
+  terminateTurn?(threadId: string, turnId?: string): Promise<void>
+  /**
+   * Members currently working. When the parent turn is not the active target,
+   * Stop addresses these members: a parent turn that already ended is never
+   * restarted to control them.
+   */
+  interruptibleSubAgents?: Readonly<Ref<string[]>>
+  /** Members whose last recorded state is `interrupted`; Resume continues them. */
+  resumableSubAgents?: Readonly<Ref<string[]>>
+  /**
+   * Whether the connected server implements the child-directed operations.
+   * Runtimes that do not (embedded mobile standalone) must not show a control
+   * whose request would fail.
+   */
+  subAgentControl?: Readonly<Ref<boolean>>
+  interruptSubAgents?(threadId: string): Promise<void>
+  resumeSubAgents?(threadId: string): Promise<void>
   connectedThreadId: Readonly<Ref<string>>
   connectionState: Readonly<Ref<CoreLiveConnectionState>>
   text: Ref<string>
@@ -48,6 +73,8 @@ export interface UseCoreLiveComposerControllerOptions {
     clientMessageId?: string,
   ): Promise<void>
   interruptTurn(threadId: string, turnId?: string): Promise<void>
+  /** Single click on the stop button: pause instead of ending. */
+  pauseTurn(threadId: string, turnId?: string): Promise<void>
   forceResetTurn(threadId: string, turnId?: string): Promise<void>
   steerTurn?(
     threadId: string,
@@ -81,6 +108,12 @@ export interface UseCoreLiveComposerControllerOptions {
 }
 
 export function useCoreLiveComposerController(options: UseCoreLiveComposerControllerOptions) {
+  const uncertainSubmissions = new Map<string, string>()
+  // Clearing the draft explicitly ends that submission's retry identity.
+  // A later newly composed identical message is a new user action.
+  watch(options.text, value => {
+    if (!value.trim()) uncertainSubmissions.clear()
+  }, { flush: 'sync' })
   const commandCatalog = ref<CoreCommandCatalogItem[]>([])
   const commandError = ref('')
   const commandCatalogLoading = ref(false)
@@ -115,6 +148,10 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     connect: options.connect,
     startTurn: options.startTurn,
     interruptTurn: options.interruptTurn,
+    // Hosts that predate the pause contract keep their stop behaviour instead of
+    // sending a method the runtime may not implement.
+    pauseTurn: options.pauseTurn ?? options.interruptTurn,
+    terminateTurn: options.terminateTurn ?? (async () => {}),
     forceResetTurn: options.forceResetTurn,
   })
   const commandPalette = useComposerCommandPalette({
@@ -125,13 +162,45 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   const paletteVisible = computed(() => (
     commandPalette.open.value && dismissedText.value !== options.text.value
   ))
+  // A stop/resume affordance must name its target: the parent turn while one is
+  // active, otherwise the delegated members it can actually control. With the
+  // parent turn already terminal, the old derivation fell back to `send`, so
+  // running members had no stop control at all.
+  const draftEmpty = computed(() => (
+    !options.text.value.trim() && !options.attachments.value.length
+  ))
+  const childControlSupported = computed(() => options.subAgentControl?.value === true)
+  const childStopTarget = computed(() => (
+    childControlSupported.value
+    && !isCoreActiveTurnStatus(options.status.value)
+    && !options.resumableTurnId?.value
+    && draftEmpty.value
+    && (options.interruptibleSubAgents?.value.length ?? 0) > 0
+    && Boolean(options.interruptSubAgents)
+  ))
+  const childResumeTarget = computed(() => (
+    childControlSupported.value
+    && !isCoreActiveTurnStatus(options.status.value)
+    && options.sessionPaused?.value !== true
+    && !options.resumableTurnId?.value
+    && draftEmpty.value
+    && !childStopTarget.value
+    && (options.resumableSubAgents?.value.length ?? 0) > 0
+    && Boolean(options.resumeSubAgents)
+  ))
   const actionMode = computed(() => commandRunning.value
     ? 'stop'
-    : coreComposerActionMode({
-        status: options.status.value,
-        text: options.text.value,
-        pendingAttachmentCount: options.attachments.value.length,
-      }))
+    : childStopTarget.value
+      ? 'stop'
+      : options.resumableTurnId?.value && options.resumeTurn && draftEmpty.value
+        ? 'resume'
+        : childResumeTarget.value
+          ? 'resume'
+          : coreComposerActionMode({
+            status: options.status.value,
+            text: options.text.value,
+            pendingAttachmentCount: options.attachments.value.length,
+          }))
 
   watch(options.text, () => {
     if (dismissedText.value && dismissedText.value !== options.text.value) dismissedText.value = ''
@@ -243,41 +312,106 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   }
 
   async function stop(): Promise<boolean> {
+    if (childStopTarget.value) {
+      // The parent turn is not the target (already terminal): Stop means stop
+      // the members it left running. Nothing here may restart the parent, and
+      // there is no turn to force-reset, so no grace escalation applies.
+      const threadId = options.activeThreadId.value || ''
+      options.setStatusText?.(options.messages?.stopping || 'Stopping')
+      try {
+        if (!await liveTurnController.ensureConnected(threadId)) {
+          reportError(liveTurnController.lastError.value || options.messages?.stopFailed || 'Unable to stop turn')
+          return false
+        }
+        await options.interruptSubAgents?.(threadId)
+        options.setStatusText?.('')
+        return true
+      } catch (error) {
+        reportError(errorMessage(error) || options.messages?.stopFailed || 'Unable to stop turn')
+        return false
+      }
+    }
     stopPending = true
     clearStopGraceTimer()
     options.setStatusText?.(options.messages?.stopping || 'Stopping')
-    const ok = await liveTurnController.interruptActiveTurn()
+    // Single click parks the turn: the model answer of the running step is
+    // dropped, finished tools stay, and Continue brings the same turn back.
+    const ok = await liveTurnController.pauseActiveTurn(options.activeTurnId?.value || '')
     if (!ok) {
       stopPending = false
       reportError(liveTurnController.lastError.value || options.messages?.stopFailed || 'Unable to stop turn')
       return ok
     }
-    // Grace-timeout escalation: if the turn is still active after a short
-    // window, cancel was a no-op (the stuck-state where turn.cancel returns
-    // idle because recovery already marked the turn terminal but trailing
-    // running events keep the UI believing it is active). Escalate to a
-    // force reset, which bypasses the active-turn guards and closes
-    // dangling items.
-    stopGraceTimer = setTimeout(() => {
-      stopGraceTimer = null
-      if (!stopPending || !isCoreActiveTurnStatus(options.status.value)) return
-      void escalateForceReset()
-    }, 3000)
+    // No grace escalation. It used to force-reset a turn that still looked
+    // active 3 s after Stop, and with Stop being a pause that is exactly wrong:
+    // a pause that has not settled yet (the cut tool still unwinding, a member
+    // still being parked) was terminated by the user's own Stop press
+    // (2026-10-14). A pause that genuinely fails just leaves the turn running;
+    // the user presses Stop again, and nothing is destroyed by a timeout.
     return ok
   }
 
-  async function escalateForceReset(): Promise<void> {
-    options.setStatusText?.(options.messages?.forceResetting || 'Force resetting…')
-    const ok = await liveTurnController.forceResetActiveTurn()
-    if (!ok) {
-      stopPending = false
-      reportError(liveTurnController.lastError.value || options.messages?.forceResetFailed || 'Unable to force reset turn')
+  /**
+   * Long-press confirm result: terminate the turn and every member with it.
+   * Nothing is offered to continue afterwards.
+   */
+  async function terminate(): Promise<boolean> {
+    const threadId = options.activeThreadId.value || ''
+    if (!threadId) return false
+    if (!await liveTurnController.ensureConnected(threadId)) {
+      reportError(liveTurnController.lastError.value || options.messages?.stopFailed || 'Unable to stop turn')
+      return false
     }
-    // On success applyResponse snaps the local snapshot to the post-reset
-    // reality; the status watcher will clear stopPending + status text.
+    // A paused turn is not the "active" one, so name it explicitly.
+    const ok = await liveTurnController.terminateActiveTurn(options.resumableTurnId?.value || '')
+    if (!ok) {
+      reportError(liveTurnController.lastError.value || options.messages?.stopFailed || 'Unable to stop turn')
+      return false
+    }
+    stopPending = false
+    clearStopGraceTimer()
+    options.setStatusText?.('')
+    return true
   }
 
   async function submit(submissionOptions: { clearComposer?: boolean; forceGuide?: boolean } = {}): Promise<SubmitCoreComposerTaskResult | null> {
+    // A paused turn owns the session: sending continues it, whether the draft is
+    // empty (the Continue press) or holds the user's answer to it.
+    const pausedTurnId = options.resumableTurnId?.value || ''
+    if (pausedTurnId || actionMode.value === 'resume') {
+      if (submitting.value) return null
+      const threadId = options.activeThreadId.value || ''
+      const turnId = pausedTurnId
+      // What the user typed while the turn was paused. It rides the continue
+      // press as a supplementary input instead of waiting for a later turn.
+      const supplement = (options.text.value.trim() || (options.attachments.value || []).length > 0)
+        ? buildCoreComposerInputItems(
+          options.text.value.trim(),
+          options.attachments.value || [],
+          commandCatalog.value,
+        )
+        : []
+      submitting.value = true
+      try {
+        if (await liveTurnController.ensureConnected(threadId)) {
+          if (turnId) await options.resumeTurn?.(threadId, turnId, supplement)
+          // Parked members continue on the same Continue press; they are
+          // independent of whether the parent turn itself was resumable.
+          if ((options.resumableSubAgents?.value.length ?? 0) > 0) {
+            await options.resumeSubAgents?.(threadId)
+          }
+          if (supplement.length > 0) {
+            options.clearComposer?.(options.text.value)
+          }
+          options.setStatusText?.('')
+        }
+      } catch (error) {
+        options.onError?.(errorMessage(error))
+      } finally {
+        submitting.value = false
+      }
+      return null
+    }
     if (actionMode.value === 'stop') {
       await stop()
       return null
@@ -323,12 +457,17 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     try {
       // One identity for the whole submission: the start attempt and its queue
       // fallback carry it, so a repeat cannot double-send.
-      const clientMessageId = crypto.randomUUID()
+      const submissionKey = JSON.stringify([threadId, submittedText, options.attachments.value])
+      const retainedId = uncertainSubmissions.get(submissionKey)
+      const clientMessageId = retainedId || crypto.randomUUID()
+      let acceptanceUnknown = false
       const result = await submitCoreComposerTask({
         threadId,
         activeTurnId: options.activeTurnId?.value || '',
         text: submittedText,
-        status: options.status.value,
+        // Retry an uncertain start as the same start, even if a late event has
+        // made the UI running. Do not turn that retry into new guidance/queue.
+        status: retainedId ? 'idle' : options.status.value,
         commandCatalog: commandCatalog.value,
         attachments: options.attachments.value,
         executeCommand: runCommand,
@@ -348,6 +487,10 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
             notifyTurnStarted()
             return { ok: true }
           }
+          if (outcome.error instanceof CoreRequestAcceptanceUnknownError) {
+            acceptanceUnknown = true
+            uncertainSubmissions.set(submissionKey, clientMessageId)
+          }
           // A busy session is not a failure: the caller falls back to the
           // mode-appropriate path (steer or queue). Anything else still surfaces.
           const busy = isCoreSessionBusyError(outcome.error)
@@ -357,6 +500,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
           return { ok: false, busy }
         },
       })
+      if (!acceptanceUnknown) uncertainSubmissions.delete(submissionKey)
       applySubmissionEffects(result, submittedText, submissionOptions.clearComposer === true)
       return result
     } catch (error) {
@@ -469,6 +613,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
 
   return {
     actionMode,
+    terminate,
     commandCatalog,
     commandCatalogLoading,
     commandError,

@@ -85,7 +85,7 @@ export interface CoreAppServerChatMessage {
   metadata?: Record<string, unknown>
 }
 
-export function selectLatestTurnStatus(state: CoreAppSnapshot): 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' {
+export function selectLatestTurnStatus(state: CoreAppSnapshot): 'idle' | 'running' | 'waiting' | 'paused' | 'completed' | 'failed' | 'cancelled' {
   // A turn the server reports as active wins. The thread-level status is not a
   // reliable "is a turn running" signal: right after a turn is accepted it can
   // still read the previous turn's terminal value (turn/accepted updates the

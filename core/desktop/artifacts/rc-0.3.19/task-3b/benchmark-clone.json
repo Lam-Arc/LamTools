@@ -1,0 +1,25 @@
+{
+  "private_clone": "E:\\setuptest\\task-3b-private-clone-v3\\core.db",
+  "source_open_mode": "ro",
+  "clone_size": 2526093312,
+  "copy_seconds": 29.981695000024047,
+  "before_seconds": 0.04961899999761954,
+  "index_creation_seconds": 0.10321210001711734,
+  "after_seconds": 3.819999983534217e-05,
+  "plan_before": [
+    [
+      5,
+      0,
+      61,
+      "SEARCH core_app_events USING INDEX sqlite_autoindex_core_app_events_2 (thread_id=?)"
+    ]
+  ],
+  "plan_after": [
+    [
+      5,
+      0,
+      61,
+      "SEARCH core_app_events USING INDEX idx_core_events_client_message (thread_id=? AND client_message_id=?)"
+    ]
+  ]
+}

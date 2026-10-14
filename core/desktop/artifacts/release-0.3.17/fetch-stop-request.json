@@ -1,0 +1,10 @@
+{
+  "purpose": "stop only the slow v0.3.17 installer fetch invocation",
+  "api": "ecs StopInvocation",
+  "endpoint": "ecs.cn-hangzhou.aliyuncs.com",
+  "regionId": "cn-hangzhou",
+  "invokeId": "t-hz06zwj03uivytc",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "startedAtUtc": "2026-10-13T09:31:30Z",
+  "reason": "After 8m36s only 4,599,808 bytes of 58,717,198 were staged; replace with audited eight-range fetch. Keep partial stage as evidence."
+}

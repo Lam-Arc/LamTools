@@ -1,0 +1,85 @@
+{
+  "task": "Core Task 1B",
+  "captured_at_utc": "2026-10-14T08:20:52.424258+00:00",
+  "source_access": "SQLite mode=ro; no repair applied manually",
+  "registry": {
+    "name": "host_lamtools_v1",
+    "status": "interrupted",
+    "started_at": 1791897188.392998,
+    "completed_at": 1791902298.7731454,
+    "elapsed_ms": 5110380,
+    "sub_session_id": "5545f1e3cc4f41fea09bac0ac675a8fb:sub:host_lamtools_v1",
+    "source_turn_id": "5545f1e3cc4f41fea09bac0ac675a8fb:turn:0f8c31f5deb7",
+    "source_run_id": "5545f1e3cc4f41fea09bac0ac675a8fb:turn:0f8c31f5deb7"
+  },
+  "runtime": [
+    {
+      "thread_id": "5545f1e3cc4f41fea09bac0ac675a8fb",
+      "status": "completed",
+      "run_id": "5545f1e3cc4f41fea09bac0ac675a8fb:turn:ccd3fa811b26",
+      "turn_id": "5545f1e3cc4f41fea09bac0ac675a8fb:turn:ccd3fa811b26",
+      "failure_code": null,
+      "database_updated_at": "2026-10-13 02:37:53.851133"
+    },
+    {
+      "thread_id": "5545f1e3cc4f41fea09bac0ac675a8fb:sub:host_lamtools_v1",
+      "status": "cancelled",
+      "run_id": "bc23bc6a7843",
+      "turn_id": "5545f1e3cc4f41fea09bac0ac675a8fb:sub:host_lamtools_v1:turn:bc23bc6a7843",
+      "failure_code": "sub_agent_process_interrupted",
+      "database_updated_at": "2026-10-13 19:58:05.220830"
+    }
+  ],
+  "status_items": [
+    {
+      "item_id": "5545f1e3cc4f41fea09bac0ac675a8fb:sub:host_lamtools_v1:status",
+      "seq": 23768,
+      "item_status": "cancelled",
+      "registry_payload": {
+        "name": "host_lamtools_v1",
+        "status": "interrupted",
+        "started_at": 1791897188.392998,
+        "completed_at": 1791902298.7731454,
+        "elapsed_ms": 5110380,
+        "sub_session_id": "5545f1e3cc4f41fea09bac0ac675a8fb:sub:host_lamtools_v1",
+        "source_turn_id": "5545f1e3cc4f41fea09bac0ac675a8fb:turn:0f8c31f5deb7",
+        "source_run_id": "5545f1e3cc4f41fea09bac0ac675a8fb:turn:0f8c31f5deb7"
+      }
+    }
+  ],
+  "delegation_items": [
+    {
+      "event_id": "07087d93781eeaabe972df92c6162cb7",
+      "seq": 24226,
+      "database_created_at": "2026-10-13 19:58:06.080245",
+      "item_status": "cancelled",
+      "member_status": "interrupted",
+      "started_at": 1791897188.392998,
+      "completed_at": 1791902298.7731454,
+      "sub_session_id": "5545f1e3cc4f41fea09bac0ac675a8fb:sub:host_lamtools_v1"
+    },
+    {
+      "event_id": "a267b496852f465a:runtime-part-tool-input:e0a5ea4a801f",
+      "seq": 24175,
+      "database_created_at": "2026-10-13 01:23:01.831886",
+      "item_status": "running",
+      "member_status": "running",
+      "started_at": 1791897188.460313,
+      "completed_at": null,
+      "sub_session_id": "5545f1e3cc4f41fea09bac0ac675a8fb:sub:host_lamtools_v1"
+    }
+  ],
+  "tauri_acceptance": {
+    "environment": "Existing desktop Tauri debug window; real chatt conversation; UI HMR and WebView reload; backend not restarted",
+    "agent": "host_lamtools_v1",
+    "card_status": "Interrupted",
+    "pane_status": "Interrupted",
+    "displayed_elapsed": "85m 10s",
+    "running_group_present": false,
+    "screenshots": [
+      "task-1b-tauri/card-interrupted.png",
+      "task-1b-tauri/pane-interrupted.png"
+    ],
+    "model_requests_submitted": 0
+  }
+}

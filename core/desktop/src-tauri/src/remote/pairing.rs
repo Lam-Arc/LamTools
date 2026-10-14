@@ -159,11 +159,11 @@ impl PairingManager {
         self.prune()?;
         let pairing_id = random_token(18)?;
         let code = random_pairing_code()?;
-        let expires_at_ms = now_ms().saturating_add(self.ttl.as_millis() as u64);
         let mut pairings = self
             .pairings
             .write()
             .map_err(|_| "pairing store lock failed".to_string())?;
+        let expires_at_ms = now_ms().saturating_add(self.ttl.as_millis() as u64);
         // There is exactly one code shown by the desktop at a time. Creating
         // a new code invalidates any older code, which keeps Relay and the UI
         // aligned and avoids stale codes remaining usable for five minutes.
@@ -206,13 +206,27 @@ impl PairingManager {
             return Err("配对码必须是六位数字".to_string());
         }
         self.prune()?;
-        let pairings = self
+        let mut pairings = self
             .pairings
-            .read()
+            .write()
             .map_err(|_| "pairing store lock failed".to_string())?;
+        let now = now_ms();
+        pairings.retain(|_, record| record.expires_at_ms > now);
         let Some((pairing_id, record)) = pairings.iter().find(|(_, record)| {
             !record.consumed && constant_time_eq(record.code.as_bytes(), code.as_bytes())
         }) else {
+            // Resolution is itself a code oracle. Share its failed-attempt
+            // budget with encrypted redemption, under the same write lock.
+            // A new TCP peer/relay tunnel must not reset this budget.
+            for record in pairings.values_mut().filter(|record| !record.consumed) {
+                record.attempts = record.attempts.saturating_add(1);
+                if record.attempts >= MAX_PAIRING_ATTEMPTS {
+                    record.consumed = true;
+                }
+            }
+            if pairings.values().any(|record| record.attempts >= MAX_PAIRING_ATTEMPTS) {
+                return Err("配对码尝试次数过多，请在电脑端重新生成".to_string());
+            }
             return Err("配对码无效、已过期或电脑未连接".to_string());
         };
         Ok(PairingCodePayload {
@@ -246,11 +260,12 @@ impl PairingManager {
         {
             return Err("pairing_id, code and device_id are required".to_string());
         }
-        let now = now_ms();
         let mut pairings = self
             .pairings
             .write()
             .map_err(|_| "pairing store lock failed".to_string())?;
+        // Check expiry after acquiring the lock, not before waiting for it.
+        let now = now_ms();
         let record = pairings
             .get_mut(pairing_id)
             .ok_or_else(|| "配对已失效或不存在".to_string())?;
@@ -399,11 +414,13 @@ impl PairingManager {
     }
 
     pub fn prune(&self) -> Result<(), String> {
-        let now = now_ms();
-        self.pairings
+        let mut pairings = self.pairings
             .write()
-            .map_err(|_| "pairing store lock failed".to_string())?
-            .retain(|_, record| !record.consumed && record.expires_at_ms > now);
+            .map_err(|_| "pairing store lock failed".to_string())?;
+        let now = now_ms();
+        // Keep the one consumed record until expiry so a lockout remains
+        // observable across resolves/reconnects. create() replaces it.
+        pairings.retain(|_, record| record.expires_at_ms > now);
         Ok(())
     }
 
@@ -506,6 +523,73 @@ mod tests {
     use crate::remote::identity::DeviceIdentity;
     use crate::remote::secure_store::{MemorySecureStore, SecureStore};
     use std::sync::Arc;
+
+    fn redeem_request(code: &str, device: &str) -> PairingRedeemRequest {
+        PairingRedeemRequest {
+            code: code.to_string(), device_id: device.to_string(),
+            device_name: device.to_string(), platform: "test".to_string(),
+            mobile_public_key: "mobile-key".to_string(),
+        }
+    }
+
+    fn wrong_code(code: &str) -> &str {
+        if code == "000000" { "000001" } else { "000000" }
+    }
+
+    #[test]
+    fn resolution_and_redemption_share_five_failure_budget() {
+        let manager = PairingManager::new(DeviceIdentity::generate().unwrap());
+        let pairing = manager.create("http://127.0.0.1:4000").unwrap();
+        for _ in 0..4 { assert!(manager.resolve(wrong_code(&pairing.code), "").is_err()); }
+        assert!(manager.resolve(&pairing.code, "").is_ok());
+        assert!(manager.redeem(&pairing.pairing_id, redeem_request(wrong_code(&pairing.code), "phone"), "").is_err());
+        assert!(!manager.pairing_exists(&pairing.pairing_id).unwrap());
+        assert!(manager.resolve(&pairing.code, "").unwrap_err().contains("尝试次数过多"));
+        assert!(manager.redeem(&pairing.pairing_id, redeem_request(&pairing.code, "phone"), "").is_err());
+        let fresh = manager.create("http://127.0.0.1:4000").unwrap();
+        assert!(manager.resolve(&fresh.code, "").is_ok());
+        assert!(manager.redeem(&fresh.pairing_id, redeem_request(&fresh.code, "phone"), "").is_ok());
+    }
+
+    #[test]
+    fn concurrent_resolution_cannot_race_attempt_limit() {
+        let manager = PairingManager::new(DeviceIdentity::generate().unwrap());
+        let pairing = manager.create("http://127.0.0.1:4000").unwrap();
+        let handles: Vec<_> = (0..32).map(|_| {
+            let manager = manager.clone();
+            let wrong = wrong_code(&pairing.code).to_string();
+            std::thread::spawn(move || assert!(manager.resolve(&wrong, "").is_err()))
+        }).collect();
+        for handle in handles { handle.join().unwrap(); }
+        assert_eq!(manager.pairings.read().unwrap()[&pairing.pairing_id].attempts, 5);
+        assert!(!manager.pairing_exists(&pairing.pairing_id).unwrap());
+    }
+
+    #[test]
+    fn concurrent_redemption_enrolls_exactly_one_device() {
+        let manager = PairingManager::new(DeviceIdentity::generate().unwrap());
+        let pairing = manager.create("http://127.0.0.1:4000").unwrap();
+        let handles: Vec<_> = (0..16).map(|index| {
+            let manager = manager.clone();
+            let pairing = pairing.clone();
+            std::thread::spawn(move || manager.redeem(&pairing.pairing_id, redeem_request(&pairing.code, &format!("phone-{index}")), "").is_ok())
+        }).collect();
+        assert_eq!(handles.into_iter().filter_map(|handle| handle.join().ok()).filter(|success| *success).count(), 1);
+        assert_eq!(manager.trusted_devices().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn expired_and_superseded_codes_do_not_enroll_devices() {
+        let manager = PairingManager::new(DeviceIdentity::generate().unwrap());
+        let expired = manager.create("http://127.0.0.1:4000").unwrap();
+        manager.pairings.write().unwrap().get_mut(&expired.pairing_id).unwrap().expires_at_ms = super::now_ms() - 1;
+        assert!(manager.resolve(&expired.code, "").is_err());
+        assert!(manager.redeem(&expired.pairing_id, redeem_request(&expired.code, "phone"), "").is_err());
+        let old = manager.create("http://127.0.0.1:4000").unwrap();
+        manager.create("http://127.0.0.1:4000").unwrap();
+        assert!(!manager.pairing_exists(&old.pairing_id).unwrap());
+        assert!(manager.trusted_devices().unwrap().is_empty());
+    }
 
     #[test]
     fn pairing_codes_are_six_decimal_digits() {

@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Deterministic node-graph workflows",
   "builtin": true,
-  "backend": "./backend/__init__.py",
+  "backend": "./bootstrap.py",
   "tools": ["./tools.jsonc"],
   "operations": ["./operations.jsonc"],
   "session": {

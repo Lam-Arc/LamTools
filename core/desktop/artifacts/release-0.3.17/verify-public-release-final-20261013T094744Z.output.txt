@@ -1,0 +1,19 @@
+PUBLIC_VERIFY_UTC_BEGIN=2026-10-13T09:47:44Z
+d25a030599b148d52c44021a89b487f4ccf1a695d7b7d19bedd4c1a7ab3015b1  /tmp/sunday-0317-public-versioned-20261013.exe
+d25a030599b148d52c44021a89b487f4ccf1a695d7b7d19bedd4c1a7ab3015b1  /tmp/sunday-0317-public-latest-20261013.exe
+{
+  "version": "0.3.17",
+  "download_url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.17_x64-setup.exe",
+  "release_url": "https://47.114.43.99.nip.io/#download",
+  "release_notes": "Sunday 0.3.17",
+  "published_at": "2026-10-13T09:38:03Z",
+  "sha256": "d25a030599b148d52c44021a89b487f4ccf1a695d7b7d19bedd4c1a7ab3015b1",
+  "size": 58717198
+}
+MANIFEST_OK
+official_asset=assets/main-Cent3w5F.js carries 0.3.17
+ainarit_page_versions=0.3.17,0.1.48
+preview_resource=/preview/assets/preview-0DVyVsmS.js carries 0.3.17
+active
+active
+PUBLIC_VERIFY_UTC_END=2026-10-13T09:47:55Z

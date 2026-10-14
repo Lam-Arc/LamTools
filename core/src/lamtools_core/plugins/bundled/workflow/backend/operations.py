@@ -13,6 +13,7 @@ from lamtools_core.session import build_session_record
 
 from .runtime import WorkflowDef, WorkflowExecutionContext, WorkflowNodeState, WorkflowRunResult
 from .queue import TERMINAL_STATUSES, WorkflowQueueItem
+from .persistence import WorkflowPersistenceError
 from .document import (
     canonicalize_document,
     compile_document,
@@ -91,7 +92,13 @@ def _scoped_work_root(
 
 
 def _error(request: OperationRequest, error: object) -> OperationResult:
-    return OperationResult(name=request.name, status="error", payload={"error": str(error)})
+    payload: dict[str, Any] = {"error": str(error)}
+    if isinstance(error, WorkflowPersistenceError):
+        payload.update(code=error.code, retryable=True)
+        for key in ("queue_id", "run_id"):
+            if getattr(error, key, None):
+                payload[key] = getattr(error, key)
+    return OperationResult(name=request.name, status="error", payload=payload)
 
 
 def _expected_revision(payload: dict[str, Any]) -> int | None:

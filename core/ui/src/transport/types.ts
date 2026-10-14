@@ -34,6 +34,14 @@ export interface TransportRpcRequest {
 
 export type TransportRequest = TransportHttpRequest | TransportRpcRequest
 
+/** A timeout ends local acknowledgement waiting, not a remote mutation. */
+export class TransportRequestTimeoutError extends Error {
+  constructor(readonly method: string, readonly timeoutMs: number) {
+    super(`LamTools transport request timed out: ${method} (${timeoutMs}ms)`)
+    this.name = 'TransportRequestTimeoutError'
+  }
+}
+
 export interface TransportHttpResponse {
   status: number
   headers: Record<string, string>

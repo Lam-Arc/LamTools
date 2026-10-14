@@ -1,0 +1,9 @@
+{
+  "purpose": "local temporary private key cleanup",
+  "attemptedAtUtc": "2026-10-13T11:47:14Z",
+  "target": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\sunday-desktop-0318-upload-7e1c480efb814820bdad544b442c57f3\\sftp_ed25519",
+  "serverAuthorizationRevoked": true,
+  "fileRemoved": false,
+  "automaticReviewDecision": "rejected; blocked by policy",
+  "rejections": 2
+}

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import CoreSettings from '../src/components/CoreSettings.vue'
 import CoreConfirmDialog from '../src/components/CoreConfirmDialog.vue'
 import { DEFAULT_THEME } from '../src/helpers/theme'
+import { t } from '../src/i18n'
 
 const models = [{
   id: 'model-1',
@@ -64,7 +65,7 @@ describe('CoreSettings', () => {
   it('shows Core model and provider state without exposing an API key', () => {
     const wrapper = mountSettings()
 
-    expect(wrapper.text()).toContain('模型与供应商')
+    expect(wrapper.text()).toContain(t('模型与供应商'))
     expect(wrapper.text()).toContain('GPT Test')
     expect(wrapper.text()).toContain('OpenAI')
     expect(wrapper.text()).toContain('已配置密钥')

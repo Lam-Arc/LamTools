@@ -33,6 +33,8 @@ Turn a user's capability request into a working LamTools plugin.
 | `tools` | string[] | no | `./`-relative tools.jsonc paths |
 | `dependencies` | string[] | no | pip requirements, e.g. `["sqlite-vec>=0.1.9"]` |
 | `configSchema` | string | no | `./`-relative JSONC schema for plugin config |
+| `backend` | string | no | `./`-relative synchronous backend factory entry, e.g. `./backend.py` |
+| `operations` | string[] | no | `./`-relative direct RPC operation declarations |
 
 All `./`-relative paths must stay inside the plugin root.
 
@@ -62,6 +64,7 @@ All `./`-relative paths must stay inside the plugin root.
 - The handler module must be importable in the Core runtime. Put `tools.py` at the plugin root and add the plugin directory to `sys.path` if needed, or name modules so the runtime imports them (declare the full import path in `handler`).
 - Handler signature: `async def my_tool(call) -> ToolResult` where `call` has `.id`, `.name`, `.arguments` (dict). Return a `ToolResult` with `status` in `ok | failed | blocked | skipped`, plus `content`/`error`.
 - Return `status="failed"` with a clear `error` for expected failures; the model sees the error and can retry.
+- For mutations that require persistence, return success only after the write commits. Propagate storage failures; do not silently acknowledge an in-memory update. Keep disposable computation caches separate from required state.
 
 ## Permission model
 
@@ -80,6 +83,9 @@ All `./`-relative paths must stay inside the plugin root.
 6. Test the tool once with a real input; fix the handler and reinstall (reinstall = update) if it fails.
 
 ## Rules
+
+- For a managed backend, use a synchronous `create_plugin(context)` factory and optional `start`/`stop` hooks. Declare critical owned tasks/processes through `lifecycle_tasks`/`lifecycle_processes`, and an optional `health_check`. Startup exceptions/timeouts mean unavailable, even when the enabled preference remains true. Verify `plugin.list` availability and retry behavior; do not equate installation with readiness.
+- Follow `core/docs/plugin-lifecycle.md` and the runnable `core/examples/plugins/lifecycle-demo` example for backend startup, cleanup, diagnostics and recovery. Use a plugin-specific handler package. Disable/enable reuses a runtime; do not claim it transactionally updates or reloads plugin code.
 
 - Plugin code runs inside the Core process — never scaffold handlers that read credentials or arbitrary files without user-visible justification.
 - Never invent manifest fields; stick to the schema above (unknown keys are tolerated but not documented).

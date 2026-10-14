@@ -7,7 +7,8 @@ import type { CoreSubAgentRun, CoreSubAgentStatus } from '../types'
 export function subAgentStatusLabel(status: CoreSubAgentStatus | string): string {
   if (status === 'running') return t("运行中")
   if (status === 'pending') return t("等待中")
-  if (status === 'paused') return t("已暂停")
+  if (status === 'paused') return t("等待回答")
+  if (status === 'suspended') return t("已暂停")
   if (status === 'interrupted') return t("已中断")
   if (status === 'closed') return t("已关闭")
   if (status === 'idle') return t("空闲")

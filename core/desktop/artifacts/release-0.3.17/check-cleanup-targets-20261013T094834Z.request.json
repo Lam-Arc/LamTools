@@ -1,0 +1,14 @@
+{
+  "purpose": "check-cleanup-targets",
+  "commandName": "sunday-desktop-0317-check-cleanup-targets-20261013T094834Z",
+  "description": "Read-only confirm the exact temporary SSH grant and this release run staging files before revocation and cleanup",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "check-cleanup-targets.sh",
+  "commandSha256": "6d7e57a4c523e97f131dd44c21ee7d6437ea661b950702145b3fc4ff952e3a6d",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T09:48:34Z",
+  "clientToken": "sunday-desktop-0317-check-cleanup-targets-20261013T094834Z"
+}

@@ -290,6 +290,10 @@ async def test_restart_still_reaps_an_unanswerable_wait(
         state.metadata["pending_approval"] = pending
         await handle.runtime_state_store.save(state)
 
+        # Simulate the owner process having exited, as a real restart does.
+        # Clearing the registry alone leaves this test process alive.
+        monkeypatch.setattr("lamtools_core.runtime_owner.owner_is_live", lambda owner: False)
+
         registry.clear()
         restarted_registry = RuntimeTaskRegistry()
         restarted = _build_context(

@@ -80,6 +80,7 @@ def build_thread_outline(
             current is None
             or item_type != "agentMessage"
             or _parent_item_id(item)
+            or _is_child_owned_item(item)
             or current.get("_queued") is True
         ):
             continue
@@ -96,6 +97,20 @@ def build_thread_outline(
     for item in outlines:
         item.pop("_queued", None)
     return {"thread": {"id": resolved_thread_id}, "items": outlines}
+
+
+def _is_child_owned_item(item: Mapping[str, Any]) -> bool:
+    """Whether a delegated child produced this item.
+
+    A turn often ends with its children's output, and a child's reply is not the
+    turn's own answer: taking one as ``response_excerpt`` showed another agent's
+    report as the user-visible summary of the turn.
+    """
+    payload = _mapping(item.get("payload"))
+    if isinstance(payload.get("sub_agent"), Mapping):
+        return True
+    metadata = _mapping(payload.get("metadata"))
+    return bool(metadata.get("sub_agent") or metadata.get("sub_session_id"))
 
 
 def _timeline_items(

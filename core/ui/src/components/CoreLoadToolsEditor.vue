@@ -9,7 +9,7 @@
       <div class="loadtools-title-actions">
         <span v-if="dirty" class="loadtools-dirty" role="status">
           <span class="loadtools-dirty-dot" aria-hidden="true" />{{ t("有未保存的修改") }}</span>
-        <button class="text-btn loadtools-refresh" type="button" :disabled="loading || saving" @click="fetchModes">
+        <button class="text-btn loadtools-refresh" type="button" :disabled="loading || saving" @click="modesDraft.requestReplace(() => void fetchModes())">
           <RefreshCw :size="14" :stroke-width="1.9" aria-hidden="true" />
           <span>{{ t("刷新") }}</span>
         </button>
@@ -203,7 +203,8 @@
 <script setup lang="ts">
 import { t } from '../i18n/index'
 
-import { computed, onMounted, reactive, ref, watch, type Component } from 'vue'
+import { computed, onMounted, reactive, ref, type Component } from 'vue'
+import { useSettingsDraft } from '../composables/useSettingsDraftGuard'
 import { BookOne, Receive } from '@icon-park/vue-next'
 import {
   BookOpen,
@@ -325,20 +326,21 @@ const catalog = ref<CatalogTool[]>([])
 const source = ref<'config' | 'builtin'>('builtin')
 const loading = ref(true)
 const saving = ref(false)
-const dirty = ref(false)
 const error = ref('')
 const selectedMode = ref<ModeDraft | null>(null)
 const modeQuery = ref('')
 const toolQuery = ref('')
-// Guards the deep watch below: fetchModes/saveModes rebuild the array and
-// must not mark the freshly-loaded server state as dirty (audit 17).
-const hydrating = ref(false)
 
-// Any edit to a mode — name, description, tool selection, unlimited toggle —
-// must enable the save button; previously only add/remove did (audit 17 S2).
-watch(modes, () => {
-  if (!loading.value && !saving.value && !hydrating.value) dirty.value = true
-}, { deep: true, flush: 'sync' })
+const modesDraft = useSettingsDraft({
+  section: 'loadtools', label: () => t('工具模式'),
+  read: () => modes.map(mode => ({ ...mode, selected: [...mode.selected].sort() })),
+  restore: value => {
+    modes.splice(0, modes.length, ...value)
+    selectedMode.value = modes[0] || null
+    error.value = ''
+  }, save: saveModes, busy: saving, error,
+})
+const dirty = modesDraft.dirty
 
 const sourceLabel = computed(() => (
   source.value === 'config' ? t("配置文件") : t("内置默认")
@@ -422,7 +424,6 @@ function selectMode(mode: ModeDraft): void {
 async function fetchModes() {
   const previousName = selectedMode.value?.name.trim()
   loading.value = true
-  hydrating.value = true
   error.value = ''
   try {
     const result = await props.requestRpc('config.loadtools.get')
@@ -443,11 +444,10 @@ async function fetchModes() {
     selectedMode.value = modes.find(mode => mode.name === previousName) || modes[0] || null
     modeQuery.value = ''
     toolQuery.value = ''
-    dirty.value = false
+    modesDraft.accept()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    hydrating.value = false
     loading.value = false
   }
 }
@@ -464,7 +464,6 @@ function addMode() {
   selectedMode.value = created
   modeQuery.value = ''
   toolQuery.value = ''
-  dirty.value = true
 }
 
 function removeMode(mode: ModeDraft) {
@@ -473,12 +472,10 @@ function removeMode(mode: ModeDraft) {
   const wasSelected = selectedMode.value === mode
   modes.splice(index, 1)
   if (wasSelected) selectedMode.value = orderedModes.value[0] || null
-  dirty.value = true
 }
 
 async function saveModes() {
   saving.value = true
-  hydrating.value = true
   error.value = ''
   try {
     // Validate before touching the payload: empty or duplicate mode names
@@ -489,11 +486,11 @@ async function saveModes() {
       const name = mode.name.trim()
       if (!name) {
         error.value = t("模式名不能为空，已取消保存")
-        return
+        return false
       }
       if (seen.has(name)) {
         error.value = t("模式名重复：{0}，已取消保存", { 0: name })
-        return
+        return false
       }
       seen.add(name)
     }
@@ -523,11 +520,12 @@ async function saveModes() {
       })
     }
     selectedMode.value = modes.find(mode => mode.name === selectedName) || modes[0] || null
-    dirty.value = false
+    modesDraft.accept()
+    return true
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
-    hydrating.value = false
     saving.value = false
   }
 }

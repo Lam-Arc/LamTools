@@ -506,6 +506,8 @@ impl ConnectionRuntime {
             Err(error) => {
                 let status = if error == "配对码必须是六位数字" {
                     400
+                } else if error.contains("尝试次数过多") {
+                    429
                 } else {
                     404
                 };

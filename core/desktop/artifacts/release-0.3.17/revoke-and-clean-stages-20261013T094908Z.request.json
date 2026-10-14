@@ -1,0 +1,14 @@
+{
+  "purpose": "revoke-and-clean-stages",
+  "commandName": "sunday-desktop-0317-revoke-and-clean-stages-20261013T094908Z",
+  "description": "Revoke only the unique restricted upload key used by this release and remove only the exact verified temporary files created during the incomplete and successful installer/site transfers",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "revoke-and-clean-stages.sh",
+  "commandSha256": "c8f6c446a571dafe32e509cb7658e54c4adad08d82647a220aea60f25b5d53bf",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T09:49:08Z",
+  "clientToken": "sunday-desktop-0317-revoke-and-clean-stages-20261013T094908Z"
+}

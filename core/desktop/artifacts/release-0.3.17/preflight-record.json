@@ -1,0 +1,15 @@
+{
+  "purpose": "read-only website publication preflight",
+  "startedAtUtc": "2026-10-13T09:10:26Z",
+  "completedAtUtc": "2026-10-13T09:10:29Z",
+  "commandName": "sunday-desktop-0317-preflight-20261013T091026Z",
+  "commandDescription": "Read-only inspect official site health, active site release, installer channel, 0.3.17 publication targets and SSH grant baseline before Sunday desktop 0.3.17 publish",
+  "keepCommand": true,
+  "commandId": "c-hz06zwhxpmo31fk",
+  "invokeId": "t-hz06zwhxpn0kj5s",
+  "runCommandRequestId": "01A13487-03D9-5AA2-BCE6-9492287BF5F9",
+  "resultRequestId": "01A13487-0DC3-56D7-AC10-5B8B0FE71792",
+  "invocationStatus": "Success",
+  "exitCode": 0,
+  "outputFile": "preflight.output.txt"
+}

@@ -1,0 +1,42 @@
+{
+  "RequestId": "01A13513-1261-5E53-A80F-7CB52DEE0250",
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "OssOutputDelivery": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputErrorCode": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-10-13T11:43:25Z",
+          "OssOutputUri": "",
+          "OssOutputStatus": "",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Output": "Q0xFQU5VUF9VVENfQkVHSU49MjAyNi0xMC0xM1QxMTo0MzoyMloKYWN0aXZlCmFjdGl2ZQpDVVJSRU5UX0NIQU5ORUxfT0sgMC4zLjE4IDAuMy4xNwpwdWJsaXNoZWQgY2hhbm5lbDogZGVza3RvcCAwLjMuMTgsIG1vYmlsZSAwLjEuNDgsIExpbnV4IDAuMy4xNwpwdWJsaWMgc2l0ZSBhbHJlYWR5IGluIHN0ZXAKQVVUSE9SSVpFRF9LRVlTX0xJTkVTPTEKU0lURV9QT0lOVEVSPS92YXIvd3d3L2xhbXRvb2xzL3NpdGUtcmVsZWFzZXMvMC4zLjE4LW1vYmlsZS0wLjEuNDgtMjAyNjEwMTMKTEFURVNUX1NIQT1iODY4MWU2NjI0MzYzNDY1NGI5OGI3MDI3NGFlZTNjZWU3ZTZmZDY5MjQxZGRmMWY5OTIxOWNlYzYzMzRhNWY3ICAvdmFyL3d3dy9sYW10b29scy9TdW5kYXktbGF0ZXN0LXg2NC1zZXR1cC5leGUKU1lOQ19IRUxQRVJfU0hBPTk0ZWI1MmZiOTUzMjIxMjIzNzg2YzA3MGZlY2VhNWNlYmE2MzllZjljNWEzOTM2NjY1YTEyMDdjY2Y3ODAwMzAgIC91c3IvbG9jYWwvYmluL3N5bmMtcHVibGljLXNpdGUuc2gKYWN0aXZlCmFjdGl2ZQpwdWJsaXNoZWQgY2hhbm5lbDogZGVza3RvcCAwLjMuMTgsIG1vYmlsZSAwLjEuNDgsIExpbnV4IDAuMy4xNwpwdWJsaWMgc2l0ZSBhbHJlYWR5IGluIHN0ZXAKQ0xFQU5VUF9VVENfRU5EPTIwMjYtMTAtMTNUMTE6NDM6MjRaCg==",
+          "InvokeId": "t-hz06zwvku688zy8",
+          "Tags": {
+            "Tag": []
+          },
+          "StopTime": "",
+          "Dropped": 0,
+          "InvocationStatus": "Success",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "ErrorInfo": "",
+          "StartTime": "2026-10-13T11:43:23Z",
+          "Repeats": 1,
+          "InvokeRecordStatus": "Finished",
+          "Username": "root",
+          "Launcher": "",
+          "CommandId": "c-hz06zwvku5vri80",
+          "ErrorCode": "",
+          "TerminationMode": "Process"
+        }
+      ]
+    },
+    "TotalCount": 1,
+    "NextToken": "",
+    "PageSize": 10,
+    "PageNumber": 1
+  }
+}

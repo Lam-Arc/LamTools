@@ -110,7 +110,9 @@ def test_consider_and_execute_are_fail_closed_non_delegating_tool_sets(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_public_run_forwards_effective_child_identity_metadata(tmp_path) -> None:
+async def test_public_run_forwards_effective_child_identity_metadata(
+    tmp_path, instant_model_retry_sleep,
+) -> None:
     sink = CollectingEventSink()
     runner = KernelSubAgentRunner(
         work_root=tmp_path,

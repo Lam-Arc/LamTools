@@ -620,6 +620,8 @@ def test_forwarded_sub_agent_lifecycle_projects_nested_terminal_without_parent_s
         "type": "agentMessage",
         "content": "child finished",
         "sub_agent_terminal": True,
+        "tool_name": "sub_agent",
+        "sub_agent": terminal.metadata["sub_agent"],
     }
     assert terminal.metadata["sub_agent"]["status"] == "idle"
     assert terminal.metadata["sub_agent"]["summary"] == "child finished"

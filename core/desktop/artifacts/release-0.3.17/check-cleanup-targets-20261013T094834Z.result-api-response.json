@@ -1,0 +1,42 @@
+{
+  "RequestId": "01A134A9-F90D-5B1C-9E66-7E016059DDC8",
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "OssOutputDelivery": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputErrorCode": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-10-13T09:48:35Z",
+          "OssOutputUri": "",
+          "OssOutputStatus": "",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Output": "Q0xFQU5VUF9DSEVDS19VVEM9MjAyNi0xMC0xM1QwOTo0ODozNFoKYWN0aXZlCmFjdGl2ZQpBVVRIT1JJWkVEX0tFWV9DT1VOVD0xCkFVVEhPUklaRURfS0VZU19MSU5FUz0yCi1ydy1yLS1yLS0gMSByb290IHJvb3QgNjQ5NjI1NiBPY3QgMTMgMTc6MzQgL3Zhci90bXAvU3VuZGF5LWRlc2t0b3AtMC4zLjE3LTIwMjYxMDEzLnVwbG9hZC5leGUKLXJ3LXItLXItLSAxIHJvb3Qgcm9vdCA0ODI2MDI1IE9jdCAxMyAxNzo0MCAvdmFyL3RtcC9TdW5kYXktc2l0ZS1tb2JpbGUtMC4zLjE3LTIwMjYxMDEzLnVwbG9hZC50YXIuZ3oKZHJ3eC0tLS0tLSAyIHJvb3Qgcm9vdCA0MDk2IE9jdCAxMyAxNzozNiAvdmFyL3RtcC9kbC0wLjMuMTctMjAyNjEwMTNUMDkzNQpBQlNFTlQgL3RtcC9zdW5kYXktMDMxNy1wdWJsaWMtdmVyc2lvbmVkLTIwMjYxMDEzLmV4ZQpBQlNFTlQgL3RtcC9zdW5kYXktMDMxNy1wdWJsaWMtbGF0ZXN0LTIwMjYxMDEzLmV4ZQpwYXJ0LjAgNzMzOTY1MCBieXRlcwpwYXJ0LjEgNzMzOTY1MCBieXRlcwpwYXJ0LjIgNzMzOTY1MCBieXRlcwpwYXJ0LjMgNzMzOTY1MCBieXRlcwpwYXJ0LjQgNzMzOTY1MCBieXRlcwpwYXJ0LjUgNzMzOTY1MCBieXRlcwpwYXJ0LjYgNzMzOTY1MCBieXRlcwpwYXJ0LjcgNzMzOTY0OCBieXRlcwpTSVRFPS92YXIvd3d3L2xhbXRvb2xzL3NpdGUtcmVsZWFzZXMvMC4zLjE3LW1vYmlsZS0wLjEuNDgtMjAyNjEwMTMKVkVSU0lPTkVEX1NIQT1kMjVhMDMwNTk5YjE0OGQ1MmM0NDAyMWE4OWI0ODdmNGNjZjFhNjk1ZDdiN2QxOWJlZGQ0YzFhN2FiMzAxNWIxICAvdmFyL3d3dy9sYW10b29scy9TdW5kYXlfMC4zLjE3X3g2NC1zZXR1cC5leGUK",
+          "InvokeId": "t-hz06zwlc5qgcxds",
+          "Tags": {
+            "Tag": []
+          },
+          "StopTime": "",
+          "Dropped": 0,
+          "InvocationStatus": "Success",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "ErrorInfo": "",
+          "StartTime": "2026-10-13T09:48:35Z",
+          "Repeats": 1,
+          "InvokeRecordStatus": "Finished",
+          "Username": "root",
+          "Launcher": "",
+          "CommandId": "c-hz06zwlc5qbd4ow",
+          "ErrorCode": "",
+          "TerminationMode": "Process"
+        }
+      ]
+    },
+    "TotalCount": 1,
+    "NextToken": "",
+    "PageSize": 10,
+    "PageNumber": 1
+  }
+}

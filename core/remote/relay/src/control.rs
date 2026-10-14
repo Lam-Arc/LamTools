@@ -888,9 +888,10 @@ impl ControlPlane {
     }
 
     /// Issue a short-lived, one-time ticket for the first account-backed
-    /// pairing handshake.  The six-digit code remains inside the encrypted
-    /// Noise payload; this ticket only authorizes the relay route and binds it
-    /// to the authenticated mobile Node.
+    /// pairing handshake. The compatibility lookup sends the six-digit code
+    /// to the TLS-protected relay control plane; Noise protects redemption,
+    /// not that lookup. This ticket authorizes a route, not device enrollment,
+    /// and binds the route to the authenticated mobile Node.
     pub fn create_pairing_ticket(
         &self,
         auth: &AuthContext,

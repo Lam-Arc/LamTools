@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Windows Sunday installer lifecycle acceptance.
 .DESCRIPTION
@@ -264,7 +264,7 @@ try {
     Assert-True ($null -ne $blocker) "a payload file exists for the locked-file check"
     # Held from a windowless process on purpose: the close mechanism can only
     # shut applications down, so this lock survives it and must reach the guard.
-    $holder = Start-Process -FilePath 'powershell' -PassThru -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass',
+    $holder = Start-Process -FilePath 'powershell' -WindowStyle Hidden -PassThru -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass',
         '-Command', "`$h=[IO.File]::Open('$($blocker.FullName)','Open','ReadWrite','None'); Start-Sleep -Seconds 300"
     Start-Sleep -Seconds 5
     try {

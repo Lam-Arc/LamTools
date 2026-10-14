@@ -1,0 +1,14 @@
+{
+  "purpose": "verify-public-release-final",
+  "commandName": "sunday-desktop-0317-verify-public-release-final-20261013T094744Z",
+  "description": "Read back the public 0.3.17 manifest, fully download and hash both installer URLs, verify official site JS, ainarit version labels and preview asset, and check service health",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "verify-public-release-final.sh",
+  "commandSha256": "e90bc6e405d94099b89b4f23e5e142fe2bf577b925bc348233605a43d3de1339",
+  "timeoutSeconds": 600,
+  "startedAtUtc": "2026-10-13T09:47:44Z",
+  "clientToken": "sunday-desktop-0317-verify-public-release-final-20261013T094744Z"
+}

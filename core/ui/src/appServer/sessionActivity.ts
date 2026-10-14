@@ -1,9 +1,9 @@
 import { isCoreActiveTurnStatus } from './workbenchActions.ts'
 import { selectLatestTurnStatus } from './selectors.ts'
 import { selectLatestActiveTurnId } from './workbenchProjection.ts'
-import { normalizeSubAgentStatus, selectCoreSubAgentRuns } from '../agents/subAgentProjection'
+import { normalizeSubAgentStatus, reconcileCoreSubAgentRecords, reconcileCoreSubAgentRun, selectCoreSubAgentRuns } from '../agents/subAgentProjection'
 import type { CoreAppSnapshot, CoreAppThreadStatus } from './protocol.ts'
-import type { CoreMessage, CoreSubAgentStatus } from '../types'
+import type { CoreMessage, CoreSubAgentStatus, CoreSubAgentDurableRecord } from '../types'
 
 /**
  * Session-level activity, derived once and consumed by every surface that needs
@@ -51,6 +51,18 @@ export interface CoreSessionActivity {
    * waiting for the turn to end or for the supervisor-record poll.
    */
   memberStatuses: Record<string, CoreSubAgentStatus>
+  memberStatusRecords: Record<string, CoreSubAgentDurableRecord>
+  /**
+   * Members currently working (running/pending). When the main turn is not the
+   * active target, Stop addresses these members instead of the parent turn: a
+   * parent turn that already ended must not be restarted to control them.
+   */
+  interruptibleSubAgentNames: string[]
+  /**
+   * Members whose last recorded state is `interrupted`. Resume continues them
+   * from their committed child history; it never restarts the parent turn.
+   */
+  resumableSubAgentNames: string[]
   /** The single display phase derived from the two flags above. */
   phase: CoreSessionPhase
 }
@@ -60,6 +72,8 @@ export interface SelectCoreSessionActivityOptions {
    *  the backend did not report the member-wait signal, so the per-frame
    *  streaming path pays nothing for the sub-agent scan. */
   messages?: readonly CoreMessage[]
+  /** Complete polled registry for this thread; undefined until loaded. */
+  memberRecords?: Record<string, CoreSubAgentDurableRecord>
 }
 
 /**
@@ -73,6 +87,7 @@ interface MemberWaitSignal {
   names: string[]
   /** 每个成员自己发布的实时状态（同一遍扫描顺手收下，不额外扫一遍条目）。 */
   statuses: Record<string, CoreSubAgentStatus>
+  records: Record<string, CoreSubAgentDurableRecord>
 }
 
 // `createWorkbench` asks for the same snapshot-only member signal both before
@@ -100,14 +115,25 @@ export function selectCoreSessionActivity(
   // decides "the main agent stopped". Only then can the two states be told
   // apart without guessing.
   const mainRunning = statusActive && !signal.waiting
-  const inferredCount = mainRunning || signal.known
-    ? 0
-    : countOutstandingSubAgents(options.messages)
-  const awaitingSubAgents = !mainRunning && (signal.waiting || inferredCount > 0)
-  const pendingSubAgentNames = awaitingSubAgents ? signal.names : []
+  const records = options.memberRecords === undefined ? signal.records
+    : reconcileCoreSubAgentRecords(signal.records, options.memberRecords)
+  const registryNames = Object.entries(records)
+    .filter(([, record]) => record.status === 'running' || record.status === 'pending')
+    .map(([name]) => name)
+  // Child-directed control reads the same reconciled records as every status
+  // label, so Stop/Resume can never disagree with the pane about a member.
+  const interruptedNames = Object.entries(records)
+    .filter(([, record]) => normalizeSubAgentStatus(record.status) === 'interrupted')
+    .map(([name]) => name)
+  const inferredCount = mainRunning || signal.known || options.memberRecords !== undefined
+    ? 0 : countOutstandingSubAgents(options.messages, signal.records)
+  const awaitingSubAgents = !mainRunning && (options.memberRecords !== undefined
+    ? registryNames.length > 0 : signal.waiting || inferredCount > 0)
+  const pendingSubAgentNames = awaitingSubAgents
+    ? options.memberRecords !== undefined ? registryNames : signal.names : []
   const pendingSubAgentCount = awaitingSubAgents
-    ? (signal.waiting ? Math.max(signal.names.length, 1) : inferredCount)
-    : 0
+    ? options.memberRecords !== undefined ? registryNames.length
+      : signal.waiting ? Math.max(signal.names.length, 1) : inferredCount : 0
   return {
     status,
     mainRunning,
@@ -116,13 +142,17 @@ export function selectCoreSessionActivity(
     pendingSubAgentNames,
     memberWaitKnown: signal.known,
     memberWaitWaiting: signal.waiting,
-    runningMemberNames: signal.waiting ? signal.names : [],
-    memberStatuses: signal.statuses,
+    runningMemberNames: options.memberRecords !== undefined ? registryNames : signal.waiting ? signal.names : [],
+    memberStatuses: options.memberRecords === undefined ? signal.statuses
+      : Object.fromEntries(Object.entries(records).map(([name, record]) => [name, normalizeSubAgentStatus(record.status)])),
+    memberStatusRecords: records,
+    interruptibleSubAgentNames: registryNames,
+    resumableSubAgentNames: interruptedNames,
     phase: mainRunning ? 'running' : awaitingSubAgents ? 'awaiting_sub_agents' : 'idle',
   }
 }
 
-const EMPTY_MEMBER_WAIT: MemberWaitSignal = { known: false, waiting: false, names: [], statuses: {} }
+const EMPTY_MEMBER_WAIT: MemberWaitSignal = { known: false, waiting: false, names: [], statuses: {}, records: {} }
 
 /** The turn-level flag first (authoritative), the live item second. */
 function readMemberWaitSignal(snapshot: CoreAppSnapshot): MemberWaitSignal {
@@ -142,7 +172,7 @@ function readMemberWaitSignal(snapshot: CoreAppSnapshot): MemberWaitSignal {
     break
   }
   if (known) {
-    const signal = { known, waiting, names: [...new Set(names)], statuses: readMemberStatuses(snapshot, turnId) }
+    const signal = { known, waiting, names: [...new Set(names)], ...readMemberStatuses(snapshot, turnId) }
     memberWaitSignalsBySnapshot.set(snapshot, signal)
     return signal
   }
@@ -168,7 +198,7 @@ function readMemberWaitSignal(snapshot: CoreAppSnapshot): MemberWaitSignal {
     known,
     waiting,
     names: [...new Set(names)],
-    statuses: readMemberStatuses(snapshot, itemTurnId),
+    ...readMemberStatuses(snapshot, itemTurnId),
   }
   memberWaitSignalsBySnapshot.set(snapshot, signal)
   return signal
@@ -186,7 +216,8 @@ function readMemberWaitSignal(snapshot: CoreAppSnapshot): MemberWaitSignal {
 function readMemberStatuses(
   snapshot: CoreAppSnapshot,
   turnId: string,
-): Record<string, CoreSubAgentStatus> {
+): Pick<MemberWaitSignal, 'statuses' | 'records'> {
+  const records: Record<string, CoreSubAgentDurableRecord> = {}
   const statuses: Record<string, CoreSubAgentStatus> = {}
   // 只扫这一轮的条目（成员状态行属于当前回合），不为此再全量扫一遍线程条目。
   const turnItemIds: string[] = []
@@ -198,17 +229,17 @@ function readMemberStatuses(
       }
     }
   }
-  if (turnItemIds.length === 0) return statuses
+  if (turnItemIds.length === 0) return { statuses, records }
   for (const itemId of turnItemIds) {
     for (const items of [snapshot.items, snapshot.core?.items]) {
-      recordMemberStatus(items?.[itemId], statuses)
+      recordMemberStatus(items?.[itemId], statuses, records)
     }
   }
-  return statuses
+  return { statuses, records }
 }
 
 /** 一行 `subAgentStatus` → 该成员自己的状态（名字小写做键，后出现的覆盖先出现的）。 */
-function recordMemberStatus(item: unknown, statuses: Record<string, CoreSubAgentStatus>): void {
+function recordMemberStatus(item: unknown, statuses: Record<string, CoreSubAgentStatus>, records: Record<string, CoreSubAgentDurableRecord>): void {
   const payload = isRecord((item as { payload?: unknown })?.payload)
     ? (item as { payload: Record<string, unknown> }).payload
     : null
@@ -216,6 +247,7 @@ function recordMemberStatus(item: unknown, statuses: Record<string, CoreSubAgent
   const record = isRecord(payload.sub_agent) ? payload.sub_agent : null
   const name = String(record?.name || '').trim().toLowerCase()
   if (!name) return
+  records[name] = record as unknown as CoreSubAgentDurableRecord
   statuses[name] = normalizeSubAgentStatus(record?.status)
 }
 
@@ -305,9 +337,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * already derives. Fallback only: consulted when the snapshot carries no
  * member-wait signal at all, and never while the main turn is running.
  */
-export function countOutstandingSubAgents(messages?: readonly CoreMessage[]): number {
+export function countOutstandingSubAgents(messages?: readonly CoreMessage[], records: Record<string, CoreSubAgentDurableRecord> = {}): number {
   if (!messages?.length) return 0
   return selectCoreSubAgentRuns(messages)
+    .map(run => reconcileCoreSubAgentRun(run, records[run.name.trim().toLowerCase()]))
     .filter(run => run.status === 'running' || run.status === 'pending')
     .length
 }

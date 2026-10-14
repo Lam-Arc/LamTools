@@ -1057,6 +1057,42 @@ class TestKernelVerification:
 
 class TestKernelUnboundedLoop:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("first_verification_passes", [False, True])
+    async def test_steering_remains_open_during_completion_verification(self, first_verification_passes):
+        from lamtools_core.runtime import CompletionResult
+        registry = RuntimeTaskRegistry()
+        registry.accept_run("gate-thread", "gate-run")
+        registry.register("gate-thread", asyncio.current_task(), run_id="gate-run")
+        accepted = []
+        class Gate:
+            calls = 0
+            async def verify(self, _state, _context):
+                self.calls += 1
+                if self.calls == 1:
+                    accepted.append(registry.accept_guidance(
+                        "gate-thread", "steer during verification", run_id="gate-run", guidance_id="gate-guidance",
+                    ))
+                    return CompletionResult(passed=first_verification_passes, summary="first verification", repair_instruction="continue checking")
+                return CompletionResult(passed=True, summary="complete")
+        kit = MockRuntimeKit([
+            MockKitStep(reply="First", decision="done"), MockKitStep(reply="Final", decision="done"),
+        ])
+        kernel = _make_kernel(kit)
+        kernel.completion_gate = Gate()
+        try:
+            result = await kernel.run(RuntimeTurnInput(
+                user_message="start", run_id="gate-run", metadata={"session_id": "gate-thread"},
+                guidance_source=registry.guidance_source("gate-thread", run_id="gate-run", include_metadata=True),
+                guidance_finalizer=registry.guidance_finalizer("gate-thread", run_id="gate-run", include_metadata=True),
+            ))
+            assert result.decision == "done"
+            assert accepted == ["accepted"]
+            assert any(message.content == "steer during verification" for message in kit.context_histories[1])
+            assert registry.accept_guidance("gate-thread", "late", run_id="gate-run", guidance_id="late") == "closed"
+        finally:
+            registry.release_run("gate-thread", run_id="gate-run")
+
+    @pytest.mark.asyncio
     async def test_no_tool_final_atomically_seals_guidance_before_task_done(self):
         registry = RuntimeTaskRegistry()
         current_task = asyncio.current_task()
@@ -1176,7 +1212,7 @@ class TestKernelUnboundedLoop:
         assert event.payload == {
             "content": "child evidence",
             "response_index": 0,
-            "metadata": {"source": "sub_agent", "name": "reviewer", "type": "consider"},
+            "metadata": {"source": "sub_agent", "name": "reviewer", "type": "consider", "guidance_id": "sub-agent-message"},
         }
         assert any(
             message.role == "user" and message.content == "child evidence"
@@ -5281,12 +5317,8 @@ async def test_empty_stop_fails_after_max_retries(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_tool_progress_incomplete_gate_is_bounded():
-    """Audit 05 S3 + 13 S1: the tool-progress gate may force a bounded number
-    of continue rounds while the model keeps emitting text+tools without the
-    required three-section structure, then yields to wait.  Previously the
-    forced continue had no round limit (infinite loop entry) and overrode
-    terminal Kit verdicts."""
+async def test_tool_progress_report_does_not_require_a_fixed_structure():
+    """A text response acknowledges a progress request without format retries."""
     big_text = "\n".join(f"line-{index:03d} content" for index in range(60))  # >=512 chars, >=3 lines
 
     class ProgressGateKit(MockRuntimeKit):
@@ -5303,15 +5335,16 @@ async def test_tool_progress_incomplete_gate_is_bounded():
             return "continue"
 
     kit = ProgressGateKit(steps=[MockKitStep()])
-    kernel = _make_kernel(kit)
+    kernel = _make_kernel(kit, policy=LoopPolicy(max_identical_tool_results=3))
 
     result = await kernel.run(_make_turn_input())
 
-    # The gate gave up after TOOL_PROGRESS_INCOMPLETE_ROUND_LIMIT forced
-    # rounds and surfaced a wait instead of looping forever.
+    # The separate repeated-result guard still bounds the identical-call loop,
+    # but the progress request does not demand headings or force retry rounds.
     assert result.decision == "wait"
-    assert any(step.metadata.get("tool_progress_retry_required") for step in result.steps)
-    assert result.steps[-1].metadata.get("tool_progress_no_progress") is True
+    assert any(step.metadata.get("tool_progress_acknowledged") for step in result.steps)
+    assert not any(step.metadata.get("tool_progress_incomplete") for step in result.steps)
+    assert not any(step.metadata.get("tool_progress_retry_required") for step in result.steps)
     assert result.error == ""
 
 
@@ -5575,17 +5608,23 @@ class TestMemoryExhaustionInterruption:
 
         state = await state_store.get("thread-oom")
         assert state is not None
-        assert state.status == "failed"
+        # Memory exhaustion parks the turn instead of failing it: the watchdog
+        # continues it once memory is back, so the durable status is the
+        # resumable one and the reason rides the metadata.
+        assert state.status == "paused"
+        assert state.loop_state == "paused"
+        assert state.metadata["pause_reason"] == "host_memory"
         assert state.metadata["failure_code"] == HOST_MEMORY_EXHAUSTED
         assert state.metadata["failure_message"] == result.error
         pending = pending_memory_resume(state)
         assert pending is not None and pending["turn_id"] == state.run_id
 
-        # The terminal event carries the code and the explanation onward.
-        failed = [e for e in sink.events if e.name == "runtime.failed"]
-        assert len(failed) == 1
-        assert failed[0].payload["failure_code"] == HOST_MEMORY_EXHAUSTED
-        assert failed[0].payload["failure_message"] == result.error
+        # The decision event carries the code and the explanation onward.
+        paused = [e for e in sink.events if e.name == "runtime.paused"]
+        assert len(paused) == 1
+        assert paused[0].payload["failure_code"] == HOST_MEMORY_EXHAUSTED
+        assert paused[0].payload["failure_message"] == result.error
+        assert paused[0].payload["pause_reason"] == "host_memory"
 
     @pytest.mark.asyncio
     async def test_spent_resume_budget_stops_promising(self, isolated_config_root):

@@ -568,6 +568,18 @@
      运行）共用等待配方：它比运行中安静，且必须读作"主代理停了"。 */
   animation: status-breathe 1.6s ease-in-out infinite;
 }
+/* 已暂停：暂停图标。不再是色点——它是"停在这里等你"的图形语言，与
+   运行的转圈、等待的呼吸都不重复。 */
+.conversation .status.paused {
+  width: 13px;
+  height: 13px;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 78%, transparent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  animation: none;
+}
 .conversation .status.idle {
   background: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent);
 }

@@ -1,0 +1,8 @@
+{
+  "operations": [{
+    "name": "lifecycle_demo.status",
+    "description": "Read demo heartbeat state through Sunday's operation catalog",
+    "handler": "sunday_lifecycle_demo.handlers:status",
+    "permission": "auto_allow"
+  }]
+}

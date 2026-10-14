@@ -1,5 +1,14 @@
 import type { CoreAppEvent, CoreAppSnapshot } from './protocol'
 import type { LamToolsTransport, TransportConnectionState, TransportMessage } from '../transport'
+import { TransportRequestTimeoutError } from '../transport'
+
+export class CoreRequestAcceptanceUnknownError extends Error {
+  readonly code = 'ACCEPTANCE_UNKNOWN'
+  constructor(readonly clientMessageId: string, readonly cause: unknown) {
+    super('Message acceptance could not be confirmed. Retry the same submission to check its status.')
+    this.name = 'CoreRequestAcceptanceUnknownError'
+  }
+}
 
 export interface JsonRpcRequest {
   id?: number | string
@@ -62,10 +71,15 @@ export class CoreAppServerClosedError extends Error {
 }
 
 export class CoreAppServerClient {
+  capabilities: Record<string, unknown> = {}
   private readonly transport: LamToolsTransport
   private removeMessageListener: (() => void) | null = null
   private removeStateListener: (() => void) | null = null
   private readonly serverRequestIds = new Map<string, number | string>()
+  private readonly acceptanceWaiters = new Set<{
+    method: string; threadId: string; clientId: string
+    resolve(value: Record<string, unknown>): void
+  }>()
   private closed = false
   private initialized = false
   private connectionGeneration = 0
@@ -91,7 +105,7 @@ export class CoreAppServerClient {
       }
       if (this.initialized) return
 
-      await this.requestRaw('initialize', {
+      const initialized = await this.requestRaw('initialize', {
         clientInfo: this.options.clientInfo,
         threadId: params.threadId,
         lastSeenSeq: params.lastSeenSeq,
@@ -99,6 +113,8 @@ export class CoreAppServerClient {
       if (this.closed || this.connectionGeneration !== generation) {
         throw new CoreAppServerClosedError()
       }
+      this.capabilities = initialized.capabilities && typeof initialized.capabilities === 'object'
+        ? initialized.capabilities as Record<string, unknown> : {}
       this.initialized = true
       this.notifyConnectionState('open')
       this.notify('initialized', {})
@@ -134,15 +150,43 @@ export class CoreAppServerClient {
       await this.connect(this.lastConnectParams)
       if (this.closed || !this.initialized) throw new CoreAppServerClosedError()
     }
-    return await this.requestRaw(method, params, timeoutMs)
+    const clientId = String(params.client_message_id || '')
+    if (!clientId || (method !== 'turn/start' && method !== 'turn/resume')) {
+      return await this.requestRaw(method, params, timeoutMs)
+    }
+    // A committed, correlated acceptance event is as authoritative as the RPC
+    // reply. Agent completion is deliberately not part of this acknowledgement.
+    const abort = new AbortController()
+    let resolve!: (value: Record<string, unknown>) => void
+    const accepted = new Promise<Record<string, unknown>>((done) => { resolve = done })
+    const waiter = { method, threadId: String(params.thread_id || ''), clientId, resolve }
+    this.acceptanceWaiters.add(waiter)
+    const acknowledgement = this.requestRaw(method, params, timeoutMs, abort.signal).catch(async (error) => {
+      if (!(error instanceof TransportRequestTimeoutError)) throw error
+      // Reconcile once using the SAME idempotency key, not a new submission.
+      // Keep the original deadline; this separate bounded lookup can recover
+      // a lost reply after durable acceptance. No execution wait or timeout bump.
+      try {
+        return await this.requestRaw(method, params, 5_000, abort.signal)
+      } catch (recoveryError) {
+        throw new CoreRequestAcceptanceUnknownError(clientId, recoveryError)
+      }
+    })
+    try {
+      return await Promise.race([acknowledgement, accepted])
+    } finally {
+      this.acceptanceWaiters.delete(waiter)
+      abort.abort() // removes local pending RPC state; does not cancel Core work
+    }
   }
 
-  private async requestRaw(method: string, params: Record<string, unknown>, timeoutMs = 30_000): Promise<Record<string, unknown>> {
+  private async requestRaw(method: string, params: Record<string, unknown>, timeoutMs = 30_000, signal?: AbortSignal): Promise<Record<string, unknown>> {
     const result = await this.transport.request<Record<string, unknown>>({
       kind: 'rpc',
       method,
       params,
       timeoutMs,
+      signal,
     })
     return result && typeof result === 'object' ? result : {}
   }
@@ -212,7 +256,15 @@ export class CoreAppServerClient {
         this.options.onSyncChange?.(params as unknown as CoreSyncChangeNotification)
         return
       }
-      this.options.onEvent?.(asEventEnvelope(message.method, params))
+      const event = asEventEnvelope(message.method, params)
+      for (const waiter of this.acceptanceWaiters) {
+        const expected = waiter.method === 'turn/start' ? 'turn/accepted' : 'turn/started'
+        if (event.method === expected && event.thread_id === waiter.threadId
+            && event.client_message_id === waiter.clientId) {
+          waiter.resolve({ events: [event], ...(waiter.method === 'turn/resume' ? { turn_id: event.turn_id } : {}) })
+        }
+      }
+      this.options.onEvent?.(event)
     }
   }
 }

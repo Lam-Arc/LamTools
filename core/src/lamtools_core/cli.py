@@ -54,6 +54,7 @@ from lamtools_core.llm import (
     LLMToolCall,
     normalize_usage,
 )
+from lamtools_core.llm.forensics import recorded_request, record_id, drain_recording
 from lamtools_core.llm.shallow_thinking import ShallowThinkingClient
 from lamtools_core.llm.profiles import (
     build_profiled_anthropic_request,
@@ -410,11 +411,11 @@ class CoreHttpLLMClient:
             timeout=httpx.Timeout(360.0, connect=30.0),
             **httpx_client_kwargs(endpoint),
         ) as client:
-            response = await client.post(
-                endpoint,
-                json=assembled["payload"],
-                headers=self._headers(prepared),
-            )
+            async with recorded_request(
+                client, "POST", endpoint, context=self._forensic_context(prepared),
+                json=assembled["payload"], headers=self._headers(prepared),
+            ) as response:
+                pass
         if response.status_code >= 400:
             raise self._provider_error(response.status_code, response.text[:300], response)
         normalized = self._normalize_response(response.json(), model=prepared.model)
@@ -425,6 +426,7 @@ class CoreHttpLLMClient:
             usage=normalize_usage(normalized.get("usage")),
             finish_reason=str(normalized.get("finish_reason") or "stop"),
             raw=None,
+            metadata={"cache_diagnostic_route": {**self._cache_diagnostic_route(), "forensic_record_id": record_id(response)}},
             provider_state=normalized.get("provider_state"),
         )
 
@@ -438,9 +440,8 @@ class CoreHttpLLMClient:
             timeout=httpx.Timeout(360.0, connect=30.0),
             **httpx_client_kwargs(endpoint),
         ) as client:
-            async with client.stream(
-                "POST",
-                endpoint,
+            async with recorded_request(
+                client, "POST", endpoint, stream=True, context=self._forensic_context(prepared),
                 json=assembled["payload"],
                 headers=self._headers(prepared),
             ) as response:
@@ -451,6 +452,8 @@ class CoreHttpLLMClient:
                         text.decode("utf-8", errors="replace")[:300],
                         response,
                     )
+                route = {**self._cache_diagnostic_route(), "forensic_record_id": record_id(response)}
+                terminal_event = None
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data:"):
                         continue
@@ -460,12 +463,16 @@ class CoreHttpLLMClient:
                     if data.startswith(" "):
                         data = data[1:]
                     if data == "[DONE]":
-                        yield LLMStreamEvent(
+                        terminal_event = LLMStreamEvent(
                             kind="done",
-                            metadata={"finish_reason": "stop"},
+                            metadata={
+                                "finish_reason": "stop",
+                                "cache_diagnostic_route": route,
+                            },
                             provider_state=finalize_provider_stream_state(provider_state),
                         )
-                        return
+                        await drain_recording(response)
+                        break
                     try:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
@@ -479,14 +486,48 @@ class CoreHttpLLMClient:
                     )
                     event = self._normalize_stream_event(chunk)
                     if event is not None:
-                        event = replace(event, provider_state=copy.deepcopy(provider_state))
-                        yield event
+                        metadata = dict(event.metadata) if isinstance(event.metadata, dict) else {}
+                        if event.kind in {"usage", "finish", "done"} or event.usage is not None:
+                            metadata["cache_diagnostic_route"] = route
+                        event = replace(
+                            event,
+                            metadata=metadata,
+                            provider_state=copy.deepcopy(provider_state),
+                        )
+                        if event.kind == "done" and record_id(response) is not None:
+                            terminal_event = event
+                            await drain_recording(response)
+                            break
+                        else:
+                            yield event
+                if terminal_event is not None:
+                    yield terminal_event
+
+    def _forensic_context(self, request: LLMRequest) -> dict[str, Any]:
+        metadata = request.metadata
+        return {
+            "session_id": metadata.get("_runtime_session_id"),
+            "run_id": metadata.get("_runtime_run_id"),
+            "step": metadata.get("_runtime_step"),
+            "retry_index": metadata.get("_forensic_retry_index", 0),
+            "model": request.model, "provider": self.config.provider_name,
+            "protocol": self._protocol(),
+        }
 
     def _protocol(self) -> str:
         protocol = str(self.adapter_profile.get("protocol") or "").strip().lower()
         if protocol:
             return protocol
         return "anthropic-messages" if self.config.provider_api_type.strip().lower() == "anthropic" else "openai-chat-completions"
+
+    def _cache_diagnostic_route(self) -> dict[str, Any]:
+        return {
+            "provider": str(self.config.provider_name or ""),
+            "protocol": self._protocol(),
+            "model": str(self.config.model_id or ""),
+            "endpoint_host": str(urlsplit(self.config.base_url).hostname or ""),
+            "session_affinity_header": self._uses_opencode_session_header(),
+        }
 
     def _assemble_request(self, request: LLMRequest, *, stream: bool) -> dict[str, Any]:
         protocol = self._protocol()
@@ -1248,6 +1289,9 @@ def build_parser(
 
     serve = sub.add_parser("serve", help="Run the Sunday HTTP app")
     serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--allow-lan", action="store_true", default=None, help="Enable authenticated direct network access; requires LAMTOOLS_CORE_API_TOKEN")
+    serve.add_argument("--ssl-certfile", default="", help="TLS certificate for direct HTTPS/WSS access")
+    serve.add_argument("--ssl-keyfile", default="", help="TLS private key for direct HTTPS/WSS access")
     serve.add_argument("--port", type=int, default=5172)
     serve.add_argument("--model-id", default="")
     serve.add_argument("--core-db", default="")
@@ -1429,6 +1473,27 @@ def build_parser(
     start.add_argument("--interactive-decisions", action="store_true")
     start.add_argument("--approval-decision", choices=("approve_once", "deny", "other_guidance"))
     start.set_defaults(func=cmd_start)
+
+    resume_turn = sub.add_parser("resume", help="Continue the latest paused turn without a new user message")
+    resume_turn.add_argument("thread_id")
+    resume_turn.add_argument("--turn-id", default="")
+    _add_live_connection_arguments(resume_turn)
+    resume_turn.add_argument("--raw", action="store_true")
+    resume_turn.set_defaults(func=cmd_resume_turn)
+
+    pause = sub.add_parser("pause", help="Pause a live Sunday turn (resumable)")
+    pause.add_argument("thread_id")
+    pause.add_argument("--turn-id", default="")
+    _add_live_connection_arguments(pause)
+    pause.add_argument("--raw", action="store_true")
+    pause.set_defaults(func=cmd_pause_turn)
+
+    terminate = sub.add_parser("terminate", help="Terminate a live Sunday turn for good")
+    terminate.add_argument("thread_id")
+    terminate.add_argument("--turn-id", default="")
+    _add_live_connection_arguments(terminate)
+    terminate.add_argument("--raw", action="store_true")
+    terminate.set_defaults(func=cmd_terminate_turn)
 
     cancel = sub.add_parser("cancel", help="Cancel a live Sunday turn")
     cancel.add_argument("thread_id")
@@ -2070,10 +2135,10 @@ def build_parser(
 
     subagent = sub.add_parser("subagent", help="Manage sub-agent delegation guide")
     subagent_sub = subagent.add_subparsers(dest="subagent_command", required=True)
-    for command in ("list", "create", "close", "delete", "message"):
+    for command in ("list", "create", "close", "delete", "message", "interrupt", "pause", "resume"):
         lifecycle = subagent_sub.add_parser(command, help=f"{command.title()} session sub-agents")
         lifecycle.add_argument("thread_id")
-        if command != "list":
+        if command not in {"list", "interrupt", "pause", "resume"}:
             lifecycle.add_argument("--type", choices=("consider", "execute"), required=True)
             lifecycle.add_argument("--name", required=True)
         if command in {"create", "close"}:
@@ -2909,6 +2974,14 @@ async def cmd_serve(args: argparse.Namespace) -> int:
         import uvicorn
     except ImportError as exc:
         raise RuntimeError("serve requires uvicorn; install the Core HTTP server dependencies") from exc
+    from lamtools_core.app.api_access import CoreApiAccessPolicy
+
+    access_policy = CoreApiAccessPolicy.from_env(allow_lan=getattr(args, "allow_lan", None))
+    bind_host = access_policy.validate_bind_host(args.host)
+    certfile = getattr(args, "ssl_certfile", "")
+    keyfile = getattr(args, "ssl_keyfile", "")
+    if bool(certfile) != bool(keyfile):
+        raise ValueError("--ssl-certfile and --ssl-keyfile must be supplied together")
     # Seed the unified config directory with built-in defaults on first run
     # (idempotent; user edits are never overwritten).
     from lamtools_core.config.defaults import ensure_default_config_files
@@ -2917,6 +2990,7 @@ async def cmd_serve(args: argparse.Namespace) -> int:
     from lamtools_core.app.http_agent_app import create_core_agent_http_app
 
     app_kwargs = {
+        "access_policy": access_policy,
         "model_id": args.model_id,
         "core_db": args.core_db or None,
         "data_dir": args.data_dir or None,
@@ -2931,9 +3005,13 @@ async def cmd_serve(args: argparse.Namespace) -> int:
     if reasoning_level:
         app_kwargs["reasoning_level"] = reasoning_level
     app = create_core_agent_http_app(**app_kwargs)
-    url = f"http://{args.host}:{args.port}"
+    url_host = f"[{bind_host}]" if ":" in bind_host else bind_host
+    url = f"{'https' if certfile else 'http'}://{url_host}:{args.port}"
     _print_live_result(args, {"url": url}, f"serving {url}")
-    server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, reload=bool(args.reload)))
+    server_kwargs = {"host": bind_host, "port": args.port, "reload": bool(args.reload), "proxy_headers": False}
+    if certfile:
+        server_kwargs.update(ssl_certfile=certfile, ssl_keyfile=keyfile)
+    server = uvicorn.Server(uvicorn.Config(app, **server_kwargs))
     await server.serve()
     return 0
 
@@ -3102,6 +3180,24 @@ async def cmd_start(args: argparse.Namespace) -> int:
         return await _watch_live_cli(args, thread_id=args.thread_id, on_connected=start)
     result = await _invoke_live(args, start)
     _print_live_result(args, result, f"started {args.thread_id}")
+    return 0
+
+
+async def cmd_resume_turn(args: argparse.Namespace) -> int:
+    result = await _invoke_live(args, lambda client: client.resume_turn(thread_id=args.thread_id, turn_id=args.turn_id))
+    _print_live_result(args, result, f"resume requested {args.thread_id}")
+    return 0
+
+
+async def cmd_pause_turn(args: argparse.Namespace) -> int:
+    result = await _invoke_live(args, lambda client: client.pause_turn(thread_id=args.thread_id, turn_id=args.turn_id))
+    _print_live_result(args, result, f"pause requested {args.thread_id}")
+    return 0
+
+
+async def cmd_terminate_turn(args: argparse.Namespace) -> int:
+    result = await _invoke_live(args, lambda client: client.terminate_turn(thread_id=args.thread_id, turn_id=args.turn_id))
+    _print_live_result(args, result, f"terminate requested {args.thread_id}")
     return 0
 
 
@@ -3287,6 +3383,9 @@ async def cmd_plugin_list(args: argparse.Namespace) -> int:
             for tool in tool_file.get("tools", [])
         ]
         state = "enabled" if item.get("enabled") else "disabled"
+        backend = item.get("backend") or {}
+        if backend.get("state"):
+            state += f", backend={backend['state']}"
         line = (
             f"{item.get('name')} {item.get('version')} [{state}]"
             f" ({item.get('root')})"
@@ -3295,6 +3394,9 @@ async def cmd_plugin_list(args: argparse.Namespace) -> int:
             line += f"\n  tools: {', '.join(tools)}"
         if deps:
             line += f"\n  deps: {', '.join(deps)}"
+        diagnostic = backend.get("error") or {}
+        if diagnostic.get("message"):
+            line += f"\n  backend error: {diagnostic['message']}"
         print(line, flush=True)
     for error in result.get("errors") or []:
         print(f"[error] {error.get('name')}: {error.get('error')}", flush=True)
@@ -4430,7 +4532,7 @@ async def cmd_arrange_edit(args: argparse.Namespace) -> int:
 async def cmd_subagent_lifecycle(args: argparse.Namespace) -> int:
     command = str(args.subagent_command)
     payload: dict[str, Any] = {"thread_id": args.thread_id}
-    if command != "list":
+    if command not in {"list", "interrupt", "pause", "resume"}:
         payload.update({"type": args.type, "name": args.name})
     if command in {"create", "close"}:
         payload.update({"model": args.model, "reasoning_level": args.reasoning_level})
@@ -5208,6 +5310,17 @@ def normalize_remote_server_base_url(value: str) -> str:
     parsed = urlsplit(value.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RuntimeError("Relay 服务器地址格式无效")
+    if parsed.username is not None or parsed.password is not None or not parsed.hostname:
+        raise RuntimeError("Relay 地址不得包含凭据")
+    if parsed.scheme == "http":
+        from ipaddress import ip_address
+
+        try:
+            local = ip_address(parsed.hostname).is_loopback
+        except ValueError:
+            local = parsed.hostname.lower() == "localhost"
+        if not local:
+            raise RuntimeError("非回环 Relay 控制面必须使用 HTTPS，不能通过明文发送账号凭据")
     path = parsed.path
     marker = path.find("/v1/")
     if marker >= 0:

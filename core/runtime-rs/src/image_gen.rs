@@ -157,7 +157,7 @@ impl GenerateImageTools {
     }
 
     fn http(&self) -> Result<reqwest::Client, RuntimeError> {
-        reqwest::Client::builder()
+        crate::forensics::client_builder(reqwest::Client::builder())
             .timeout(self.request_timeout)
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
@@ -258,16 +258,39 @@ impl ToolRuntime for GenerateImageTools {
         if !self.config.api_key.trim().is_empty() {
             request = request.bearer_auth(self.config.api_key.trim());
         }
-        let response = request.send().await.map_err(|error| {
-            if error.is_timeout() {
-                RuntimeError::Tool("生图 API 超时（生成较慢可稍后重试）".into())
-            } else {
-                RuntimeError::Tool(format!("生图 API 请求失败: {error}"))
+        let request = request.build().map_err(|_| RuntimeError::Tool("image request build failed".into()))?;
+        let mut request = request;
+        let mut redirect_index = 0;
+        let response = loop {
+            let original = request.try_clone();
+            let mut capture = crate::forensics::Capture::start(&request, json!({
+                "model": self.config.model, "provider": "image-generation", "retry_index": 0,
+                "session_id": null, "run_id": null, "step": null,
+                "identity_status": "host_does_not_supply_request_identity", "redirect_index": redirect_index,
+            })).map_err(RuntimeError::Tool)?;
+            let response = http.execute(request).await.map_err(|error| {
+                if let Some(c) = &mut capture { let _ = c.fail("request_failed_before_headers"); }
+                if error.is_timeout() {
+                    RuntimeError::Tool("生图 API 超时（生成较慢可稍后重试）".into())
+                } else {
+                    RuntimeError::Tool(format!("生图 API 请求失败: {error}"))
+                }
+            })?;
+            let mut response = crate::forensics::Response::new(response, capture).map_err(RuntimeError::Tool)?;
+            if let Some(original) = original {
+                if let Some(next) = crate::forensics::redirect_request(&original, &response, redirect_index)
+                    .map_err(RuntimeError::Tool)? {
+                    response.drain(Some(std::time::Duration::from_secs(240))).await.map_err(RuntimeError::Tool)?;
+                    request = next;
+                    redirect_index += 1;
+                    continue;
+                }
             }
-        })?;
+            break response;
+        };
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = response.text().await.map_err(RuntimeError::Tool)?;
             return Err(RuntimeError::Tool(format!(
                 "生图 API 返回 HTTP {}: {}",
                 status.as_u16(),

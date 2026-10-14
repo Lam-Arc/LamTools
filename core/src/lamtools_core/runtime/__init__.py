@@ -1,9 +1,10 @@
 """Runtime protocol types and interfaces."""
 
 import asyncio
+import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Literal, Protocol, runtime_checkable
 
 from lamtools_core.llm import LLMResponse
 from lamtools_core.tool import ToolCall, ToolResult
@@ -82,7 +83,8 @@ class RuntimeTurnInput:
     turn_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     guidance_source: Callable[[], list[Any]] | None = field(default=None, repr=False, compare=False)
-    guidance_finalizer: Callable[[], list[Any] | None] | None = field(default=None, repr=False, compare=False)
+    guidance_finalizer: Callable[[], list[Any] | None | Awaitable[list[Any] | None]] | None = field(default=None, repr=False, compare=False)
+    guidance_acknowledger: Callable[[list[str]], Any] | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"user_message": self.user_message}
@@ -265,14 +267,20 @@ class _RuntimeTaskEntry:
     guidance_open: bool = True
     guidance: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
     guidance_ids: set[str] = field(default_factory=set)
+    staged_guidance_ids: set[str] = field(default_factory=set)
+    offered_guidance_ids: set[str] = field(default_factory=set)
+    guidance_changed: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class RuntimeTaskRegistry:
-    """Track active runtime tasks, cancellation signals, and transient guidance."""
+    """Track active tasks and stage/offer guidance until checkpoint acknowledgement."""
 
     def __init__(self, *, background_process_registry: BackgroundProcessRegistry | None = None) -> None:
         self._entries: dict[str, _RuntimeTaskEntry] = {}
         self._cancel_events: dict[str, asyncio.Event] = {}
+        # Pause requests are their own signal: a pause keeps the run resumable
+        # while the cancel event above keeps its terminal meaning.
+        self._pause_events: dict[str, asyncio.Event] = {}
         self._background_process_registry = (
             background_process_registry or default_background_process_registry()
         )
@@ -291,6 +299,49 @@ class RuntimeTaskRegistry:
         event.clear()
         return event
 
+    def get_pause_event(self, thread_id: str) -> asyncio.Event:
+        if thread_id not in self._pause_events:
+            self._pause_events[thread_id] = asyncio.Event()
+        return self._pause_events[thread_id]
+
+    def reset_pause_event(self, thread_id: str) -> asyncio.Event:
+        event = self.get_pause_event(thread_id)
+        event.clear()
+        return event
+
+    def request_pause(
+        self,
+        thread_id: str,
+        *,
+        run_id: str | None = None,
+        force: bool = False,
+        reason: str = "user_pause",
+    ) -> bool:
+        """Ask the live run of *thread_id* to pause instead of to stop.
+
+        The kernel polls this event mid-stream and between steps, so a blocked
+        provider request stops promptly. ``force`` additionally cancels the task
+        to tear down a tool that never checks the event; the kernel tells that
+        teardown apart from a cancel and still converges on the paused state.
+        The active-run claim stays untouched: the paused turn owns the session
+        until the user continues or terminates it.
+        """
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        if entry is None:
+            return False
+        if run_id is not None and normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
+            return False
+        event = self.get_pause_event(thread_id)
+        # The kernel reads the reason off the event it polls, so the log and the
+        # durable metadata can tell a user pause from the memory watchdog.
+        setattr(event, "pause_reason", str(reason or "user_pause"))
+        event.set()
+        task = entry.task
+        if force and task is not None and not task.done():
+            task.cancel()
+        return task is not None and not task.done()
+
     def accept_run(self, thread_id: str, run_id: str) -> bool:
         thread_id = str(thread_id or "").strip()
         run_id = str(run_id or "").strip()
@@ -301,6 +352,9 @@ class RuntimeTaskRegistry:
         if entry is not None:
             return entry.run_id == run_id
         self.reset_cancel_event(thread_id)
+        # A fresh run starts unpaused: the resume clears the request that
+        # parked the previous run.
+        self.reset_pause_event(thread_id)
         self._entries[thread_id] = _RuntimeTaskEntry(run_id=run_id)
         return True
 
@@ -360,6 +414,9 @@ class RuntimeTaskRegistry:
         entry.guidance_open = False
         entry.guidance.clear()
         entry.guidance_ids.clear()
+        entry.staged_guidance_ids.clear()
+        entry.offered_guidance_ids.clear()
+        entry.guidance_changed.set()
         if force and task is not None and not task.done():
             task.cancel()
         return task is not None and not task.done()
@@ -378,6 +435,9 @@ class RuntimeTaskRegistry:
         entry.guidance_open = False
         entry.guidance.clear()
         entry.guidance_ids.clear()
+        entry.staged_guidance_ids.clear()
+        entry.offered_guidance_ids.clear()
+        entry.guidance_changed.set()
         self._entries.pop(thread_id, None)
         self._background_process_registry.cleanup_session(thread_id)
         if not force:
@@ -396,6 +456,7 @@ class RuntimeTaskRegistry:
         run_id: str,
         guidance_id: str,
         metadata: dict[str, Any] | None = None,
+        ready: bool = True,
     ) -> Literal["accepted", "duplicate", "closed", "not_active"]:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
@@ -404,13 +465,50 @@ class RuntimeTaskRegistry:
             return "not_active"
         if not entry.guidance_open:
             return "closed"
-        normalized_id = str(guidance_id or "").strip()
+        normalized_id = str(guidance_id or "").strip() or uuid.uuid4().hex
         if normalized_id and normalized_id in entry.guidance_ids:
             return "duplicate"
         entry.guidance.append((normalized_id, guidance, deepcopy(metadata or {})))
         if normalized_id:
             entry.guidance_ids.add(normalized_id)
+            if not ready:
+                entry.staged_guidance_ids.add(normalized_id)
+        entry.guidance_changed.set()
         return "accepted"
+
+    def publish_guidance(self, thread_id: str, *, run_id: str, guidance_id: str) -> None:
+        """Expose a reserved offer only after its acceptance transaction commits."""
+        entry = self._entries.get(thread_id)
+        if entry is not None and normalize_run_id(thread_id, entry.run_id) == normalize_run_id(thread_id, run_id):
+            entry.staged_guidance_ids.discard(guidance_id)
+            entry.guidance_changed.set()
+
+    def has_guidance(self, thread_id: str, *, run_id: str, guidance_id: str) -> bool:
+        entry = self._entries.get(thread_id)
+        return bool(entry is not None
+                    and normalize_run_id(thread_id, entry.run_id) == normalize_run_id(thread_id, run_id)
+                    and guidance_id in entry.guidance_ids)
+
+    def acknowledge_guidance(self, thread_id: str, *, run_id: str, guidance_ids: list[str]) -> None:
+        entry = self._entries.get(thread_id)
+        if entry is None or normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
+            return
+        ids = set(guidance_ids)
+        entry.guidance = [item for item in entry.guidance if item[0] not in ids]
+        entry.offered_guidance_ids.difference_update(ids)
+        entry.guidance_changed.set()
+
+    def offer_guidance(self, thread_id: str, *, run_id: str) -> list[Any]:
+        """Reserve committed guidance until the shared kernel checkpoints/ACKs it."""
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        if entry is None or normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id) or entry.task is None:
+            return []
+        items = [item for item in entry.guidance if item[0] not in entry.staged_guidance_ids
+                 and item[0] not in entry.offered_guidance_ids]
+        entry.offered_guidance_ids.update(item[0] for item in items)
+        return [{"content": text, "metadata": {**deepcopy(metadata), "guidance_id": guidance_id}}
+                for guidance_id, text, metadata in items]
 
     def inject_guidance(
         self,
@@ -421,7 +519,7 @@ class RuntimeTaskRegistry:
         guidance_id: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        """Queue one transient instruction for the matching active runtime task."""
+        """Queue one instruction for the matching active runtime task."""
         return self.accept_guidance(
             thread_id,
             text,
@@ -442,10 +540,10 @@ class RuntimeTaskRegistry:
         if entry is None or normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id) or entry.task is None:
             return []
         guidance = [
-            ({"content": text, "metadata": deepcopy(metadata)} if include_metadata else text)
-            for _guidance_id, text, metadata in entry.guidance
+            ({"content": text, "metadata": {**deepcopy(metadata), "guidance_id": guidance_id}} if include_metadata else text)
+            for guidance_id, text, metadata in entry.guidance if guidance_id not in entry.staged_guidance_ids
         ]
-        entry.guidance.clear()
+        entry.guidance = [item for item in entry.guidance if item[0] in entry.staged_guidance_ids]
         return guidance
 
     def close_guidance_if_empty(
@@ -462,7 +560,11 @@ class RuntimeTaskRegistry:
             return None
         if not entry.guidance_open:
             return []
+        if entry.staged_guidance_ids:
+            return []  # the async production finalizer waits for commit/rollback
         if entry.guidance:
+            if include_metadata:
+                return self.offer_guidance(thread_id, run_id=run_id)
             guidance = [
                 ({"content": text, "metadata": deepcopy(metadata)} if include_metadata else text)
                 for _guidance_id, text, metadata in entry.guidance
@@ -479,6 +581,13 @@ class RuntimeTaskRegistry:
         run_id: str = "",
         include_metadata: bool = False,
     ) -> Callable[[], list[Any]]:
+        if include_metadata:
+            def source():
+                return self.offer_guidance(thread_id, run_id=run_id)
+            source.acknowledger = lambda ids: self.acknowledge_guidance(
+                thread_id, run_id=run_id, guidance_ids=ids,
+            )
+            return source
         return lambda: self.consume_guidance(
             thread_id,
             run_id=run_id,
@@ -491,7 +600,18 @@ class RuntimeTaskRegistry:
         *,
         run_id: str,
         include_metadata: bool = False,
-    ) -> Callable[[], list[Any] | None]:
+    ) -> Callable[[], Any]:
+        if include_metadata:
+            async def finalize():
+                while True:
+                    entry = self._entries.get(thread_id)
+                    if entry is None or normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
+                        return None
+                    entry.guidance_changed.clear()
+                    if not entry.staged_guidance_ids:
+                        return self.close_guidance_if_empty(thread_id, run_id=run_id, include_metadata=True)
+                    await entry.guidance_changed.wait()
+            return finalize
         return lambda: self.close_guidance_if_empty(
             thread_id,
             run_id=run_id,
@@ -507,10 +627,14 @@ class RuntimeTaskRegistry:
             return
         entry.guidance = [item for item in entry.guidance if item[0] != guidance_id]
         entry.guidance_ids.discard(guidance_id)
+        entry.staged_guidance_ids.discard(guidance_id)
+        entry.offered_guidance_ids.discard(guidance_id)
+        entry.guidance_changed.set()
 
     def release_run(self, thread_id: str, *, run_id: str) -> None:
         entry = self._entries.get(thread_id)
         if entry is not None and entry.run_id == run_id:
+            entry.guidance_changed.set()
             self._entries.pop(thread_id, None)
             self._background_process_registry.cleanup_session(thread_id)
 

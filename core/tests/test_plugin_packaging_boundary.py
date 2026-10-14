@@ -46,5 +46,9 @@ def test_release_workflow_boundary_checks_excluded_and_required_plugins() -> Non
 def test_release_skill_documents_the_same_plugin_boundary() -> None:
     assert "`resources/plugins/bundled/emotion-ball-pet`" in RELEASE_SKILL
     assert "`resources/plugins/bundled/workflow`" in RELEASE_SKILL
-    assert "`git`、`websearch`、`imagegen`" in RELEASE_SKILL
+    required_line = re.search(r"(?m)^- Still contains (.+)$", RELEASE_SKILL)
+    assert required_line, "release skill must explicitly list the required bundled plugins"
+    required_plugins = re.findall(r"`([^`]+)`", required_line.group(1))
+    assert len(required_plugins) == 3
+    assert set(required_plugins) == {"git", "websearch", "imagegen"}
     assert "四个必要内置插件" not in RELEASE_SKILL

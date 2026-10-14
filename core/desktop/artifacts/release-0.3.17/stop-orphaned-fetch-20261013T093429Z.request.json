@@ -1,0 +1,14 @@
+{
+  "purpose": "stop-orphaned-fetch",
+  "commandName": "sunday-desktop-0317-stop-orphaned-fetch-20261013T093429Z",
+  "description": "Stop only the verified orphan curl process for the incomplete v0.3.17 installer staging file after the Cloud Assistant invocation termination left it running",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "stop-orphaned-fetch.sh",
+  "commandSha256": "461a9a344503884bd20350dee2e6a1c413f6d2feab2319298a9f52b8dee528eb",
+  "timeoutSeconds": 120,
+  "startedAtUtc": "2026-10-13T09:34:29Z",
+  "clientToken": "sunday-desktop-0317-stop-orphaned-fetch-20261013T093429Z"
+}

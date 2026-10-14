@@ -126,7 +126,7 @@ _COMMON_TOOL_PROTOCOL = (
     "Use load_skill when an available skill matches the task.",
     "After receiving a tool result, continue to the next step or give the final response.",
     "Treat successful tool results as reusable evidence. Before querying the same resource again, state what fact is missing; otherwise reuse the evidence already obtained.",
-    "After several tool-only steps, briefly report confirmed facts, remaining uncertainties, and the next step before continuing to use tools. Keep progress summaries concise and do not repeat existing evidence.",
+    "After 12 consecutive tool-only rounds, proactively report confirmed facts, remaining uncertainties, and the next step before continuing to use tools. Keep progress summaries concise and do not repeat existing evidence.",
     # Recall rule for long-term memory, parallel to the load_skill line above:
     # the index alone is passive, and a memory whose title states when it
     # applies is only useful if the model checks it before acting. Appended
@@ -1303,7 +1303,7 @@ def assemble_core_agent_plugins(
         if len(full_ids) == 1:
             plugin_mode_tool_sets[mode_id] = set(plugin_mode_tool_sets[full_ids[0]])
     from lamtools_core.plugins.context import PluginContext
-    from lamtools_core.plugins.lifecycle import load_enabled_plugin_backends
+    from lamtools_core.plugins.lifecycle import load_enabled_plugin_backends, plugin_backend_available
 
     plugin_context = context or PluginContext(work_root=Path(work_root), data_dir=Path(data_dir))
     if plugin_runtimes is None:
@@ -1315,7 +1315,10 @@ def assemble_core_agent_plugins(
     plugin_tool_handlers: dict[str, Any] = {}
     plugin_tool_providers: list[Any] = []
     plugin_runtime_specs: list[Any] = []
+    enabled_plugins = [plugin for plugin in enabled_plugins if plugin_backend_available(plugin, plugin_runtimes)]
     for handle in plugin_runtimes:
+        if not plugin_backend_available(handle.plugin, plugin_runtimes):
+            continue
         plugin_tool_handlers.update(handle.tool_handlers)
         plugin_tool_providers.extend(handle.tool_providers)
         runtime_specs = getattr(handle.value, "tool_specs", [])

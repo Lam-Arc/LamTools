@@ -90,7 +90,7 @@ describe('PlanLibraryView', () => {
     expect(wrapper.get('.library-document').text()).toContain('做点什么')
     // 顶部条标题上报为面包屑。
     const headings = wrapper.emitted('heading') as Array<Array<{ title: string; subtitle: string }>>
-    expect(headings[headings.length - 1][0].title).toContain('资料库 ›')
+    expect(headings[headings.length - 1][0].title).toContain('库 ›')
 
     // Esc 回列表，再 Esc 才退出整版视图。
     pressEscape()
@@ -201,7 +201,7 @@ describe('PlanLibraryView', () => {
     expect(wrapper.find('[data-library-editor]').exists()).toBe(true)
     expect(wrapper.emitted('edit-plan')).toBeUndefined()
     const headings = wrapper.emitted('heading') as Array<Array<{ title: string; subtitle: string }>>
-    expect(headings[headings.length - 1][0].title).toBe('资料库 › 编辑 导出显示进度')
+    expect(headings[headings.length - 1][0].title).toBe('库 › 编辑 导出显示进度')
 
     const box = wrapper.get('[data-library-editor-input]')
     expect((box.element as HTMLTextAreaElement).value).toContain('# 导出显示进度')
@@ -419,7 +419,7 @@ describe('PlanLibraryView', () => {
 
     const empty = wrapper.get('[data-folders-empty]')
     expect(empty.text()).toContain('创建你的第一个文件夹')
-    expect(empty.text()).toContain('创建文件夹，整理资料库中的方案。')
+    expect(empty.text()).toContain('创建文件夹，整理库中的方案。')
     wrapper.unmount()
   })
 })

@@ -1,0 +1,55 @@
+{
+  "artifacts": [
+    {
+      "path": "E:\\LamTools\\core\\desktop\\artifacts\\rc-0.3.19\\Sunday_0.3.19_x64-setup.exe",
+      "size": 95078359,
+      "sha256": "5a000e5d5ebc71ff9057b76414a96998ceedb93e995cdd6b60794e766cb34185"
+    },
+    {
+      "path": "E:\\LamTools\\core\\desktop\\artifacts\\rc-0.3.19\\workflow-1.0.0-optional-rc.zip",
+      "size": 342720,
+      "sha256": "728487a75eff03a92c6e23ffb1255374fd83e07a1a20e753e156b682876b2f12"
+    },
+    {
+      "path": "E:\\setuptest\\0.3.19\\lamcore.exe",
+      "size": 18266624,
+      "sha256": "9c4089634cc424701c968e0a630ca61462e000ecf130b2010494733d29f0aec8"
+    },
+    {
+      "path": "E:\\setuptest\\0.3.19\\lamcore-backend\\sunday-core.exe",
+      "size": 34290252,
+      "sha256": "06bb34118449a0967313edb17f3d46d0ba54f7f4141397e93bb7e8d0fe70c89d"
+    }
+  ],
+  "resource_checks": [
+    {
+      "source": "E:\\LamTools\\core\\skills",
+      "installed": "E:\\setuptest\\0.3.19\\lamcore-backend\\_internal\\resources\\skills",
+      "verified_files": 42
+    },
+    {
+      "source": "E:\\LamTools\\core\\config\\resources",
+      "installed": "E:\\setuptest\\0.3.19\\lamcore-backend\\_internal\\config\\resources",
+      "verified_files": 5
+    },
+    {
+      "source": "E:\\LamTools\\core\\config\\command",
+      "installed": "E:\\setuptest\\0.3.19\\lamcore-backend\\_internal\\config\\command",
+      "verified_files": 3
+    },
+    {
+      "source": "E:\\LamTools\\core\\config\\llm_adapters",
+      "installed": "E:\\setuptest\\0.3.19\\lamcore-backend\\_internal\\config\\llm_adapters",
+      "verified_files": 25
+    }
+  ],
+  "plugins": [
+    "git",
+    "imagegen",
+    "plan",
+    "study",
+    "websearch"
+  ],
+  "runtime": "Bundled Python 3.14, native extensions and standard library verified; WebView2 present on test host. Bootstrapper offline installation untested.",
+  "source_snapshot": "Existing working tree; no commit or publication created."
+}

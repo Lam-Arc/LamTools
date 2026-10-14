@@ -1,0 +1,228 @@
+"""Opt-in, byte-exact HTTP entity-body evidence (never headers or error text)."""
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from datetime import datetime, timezone
+import asyncio
+import hashlib
+import json
+import logging
+import os
+from pathlib import Path
+import uuid
+
+import httpx
+
+_log = logging.getLogger(__name__)
+runtime_context: ContextVar[dict] = ContextVar("llm_forensic_context", default={})
+
+
+def enabled() -> bool:
+    return os.environ.get("LAMTOOLS_LLM_RAW_RECORDING", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class Capture:
+    def __init__(self, request: httpx.Request, context: dict):
+        root = Path(os.environ.get("LAMTOOLS_LLM_FORENSIC_DIR") or
+                    Path(os.environ.get("LAMTOOLS_CORE_DATA_DIR", "data")) / "llm-forensics")
+        self.id = uuid.uuid4().hex
+        self.path = root / self.id
+        self.path.mkdir(parents=True, exist_ok=False)
+        url = request.url
+        # No userinfo, query, fragment, request/response headers, or exception text.
+        self.meta = {"version": 1, "record_id": self.id, "started_at": _now(),
+                     "endpoint": str(url.copy_with(username=None, password=None, query=None, fragment=None)),
+                     "method": request.method, "status": None, "capture_state": "in_progress",
+                     "request_complete": False, "response_complete": False,
+                     "request_bytes": 0, "response_bytes": 0,
+                     "identity_status": "available" if context.get("session_id") and context.get("run_id")
+                     and context.get("step") is not None else "partial_or_unavailable",
+                     **{key: context.get(key) for key in
+                        ("session_id", "run_id", "step", "model", "provider", "protocol", "retry_index")}}
+        self.hashes = {side: hashlib.sha256() for side in ("request", "response")}
+        for side in self.hashes:
+            self.meta[f"{side}_sha256"] = self.hashes[side].hexdigest()
+        self.eof = False
+        self.save()
+        for side in self.hashes:
+            (self.path / f"{side}.bin").touch(exist_ok=False)
+
+    def save(self):
+        target = self.path / "metadata.json"
+        temporary = self.path / "metadata.tmp"
+        with temporary.open("w", encoding="utf-8") as file:
+            json.dump(self.meta, file, ensure_ascii=False, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, target)
+
+    def append(self, side: str, chunk: bytes):
+        # Unbuffered append and fsync before advancing persisted counts. A crash
+        # between body and manifest writes leaves an explicitly unfinished record.
+        with (self.path / f"{side}.bin").open("ab", buffering=0) as file:
+            view = memoryview(chunk)
+            while view:
+                written = file.write(view)
+                if not written:
+                    raise OSError("forensic body write made no progress")
+                view = view[written:]
+            os.fsync(file.fileno())
+        self.hashes[side].update(chunk)
+        self.meta[f"{side}_bytes"] = (self.path / f"{side}.bin").stat().st_size
+        self.meta[f"{side}_sha256"] = self.hashes[side].hexdigest()
+        self.save()
+
+    def finish(self, error: BaseException | None):
+        for side in ("request", "response"):
+            try:
+                self.meta[f"{side}_bytes"] = (self.path / f"{side}.bin").stat().st_size
+            except OSError:
+                self.meta[f"{side}_bytes"] = None
+        self.meta.update(ended_at=_now(), response_complete=self.eof,
+                         capture_state="complete" if self.eof else "interrupted" if error is None or
+                         isinstance(error, (GeneratorExit, asyncio.CancelledError)) else "failed",
+                         operation_state="failed" if error else "finished",
+                         error_type=type(error).__name__ if error else None)
+        self.save()
+
+
+class _ResponseStream(httpx.AsyncByteStream):
+    def __init__(self, inner, capture: Capture):
+        self.inner, self.capture = inner, capture
+        self.iterator = aiter(inner)
+
+    async def __aiter__(self):
+        async for chunk in self.iterator:
+            self.capture.append("response", chunk)
+            yield chunk
+        self.capture.eof = True
+        self.capture.meta.update(response_complete=True, response_eof_at=_now())
+        self.capture.save()
+
+    async def drain(self):
+        async for _ in self:
+            pass
+
+    async def aclose(self):
+        await self.inner.aclose()
+
+
+@asynccontextmanager
+async def recorded_request(client, method, endpoint, *, context, stream=False, **kwargs):
+    """All model HTTP dispatch goes here; disabled mode preserves existing calls.
+
+    Record the serialized request generated by httpx, and response bytes before
+    httpx decompression/character decoding. Transfer framing/TLS are not bodies.
+    Capture I/O failures are visible and fail the operation, never silently bypass.
+    """
+    if not enabled():
+        if stream:
+            async with client.stream(method, endpoint, **kwargs) as response:
+                yield response
+        else:
+            yield await client.post(endpoint, **kwargs)
+        return
+    request = client.build_request(method, endpoint, **kwargs)
+    capture = Capture(request, {**runtime_context.get(), **context})
+    response = None
+    error = None
+    try:
+        body = await request.aread()
+        capture.append("request", body)
+        capture.meta.update(request_complete=True, request_serialized_at=_now())
+        capture.save()
+        response = await client.send(request, stream=True)
+        response.extensions["forensic_record_id"] = capture.id
+        capture.meta.update(status=response.status_code, headers_received_at=_now(),
+                            http_state="success" if 200 <= response.status_code < 300 else "non_success",
+                            response_content_encoding=response.headers.get("content-encoding"),
+                            response_content_type=response.headers.get("content-type"))
+        capture.save()
+        response.stream = _ResponseStream(response.stream, capture)
+        response.extensions["forensic_stream"] = response.stream
+        if not stream:
+            await response.aread()
+        yield response
+    except BaseException as exc:
+        error = exc
+        raise
+    finally:
+        try:
+            if response is not None:
+                await response.aclose()
+        except BaseException as exc:
+            error = error or exc
+            raise
+        finally:
+            try:
+                capture.finish(error)
+            except OSError:
+                _log.error("Forensic capture persistence failed record_id=%s; record is incomplete", capture.id)
+                raise
+
+
+def record_id(response) -> str | None:
+    return getattr(response, "extensions", {}).get("forensic_record_id")
+
+
+async def drain_recording(response) -> None:
+    """Drain remaining raw bytes without parsing/decoding the post-terminal tail."""
+    stream = getattr(response, "extensions", {}).get("forensic_stream")
+    if stream is not None:
+        await stream.drain()
+
+
+def inspect_record(path: Path) -> dict:
+    """Read-only integrity check; stale/in-progress/invalid manifests never pass.
+
+    Actual file sizes are returned even when a crash prevented manifest updates.
+    This does not infer that a process has died or mutate an active recording.
+    """
+    problems = []
+    try:
+        metadata = json.loads((path / "metadata.json").read_text(encoding="utf-8"))
+        if not isinstance(metadata, dict):
+            raise ValueError("metadata is not an object")
+    except (OSError, ValueError):
+        metadata = {}
+        problems.append("missing_or_invalid_metadata")
+    sizes = {}
+    for side in ("request", "response"):
+        try:
+            digest = hashlib.sha256()
+            size = 0
+            with (path / f"{side}.bin").open("rb") as file:
+                while chunk := file.read(1024 * 1024):
+                    size += len(chunk)
+                    digest.update(chunk)
+            sizes[side] = size
+            if size != metadata.get(f"{side}_bytes"):
+                problems.append(f"{side}_byte_count_mismatch")
+            if digest.hexdigest() != metadata.get(f"{side}_sha256"):
+                problems.append(f"{side}_digest_mismatch")
+        except OSError:
+            sizes[side] = None
+            problems.append(f"{side}_unreadable")
+    complete = metadata.get("capture_state") == "complete" and all(
+        metadata.get(f"{side}_complete") is True for side in ("request", "response"))
+    return {"record_id": path.name, "capture_state": metadata.get("capture_state", "unknown"),
+            "verified_complete": complete and not problems, "actual_bytes": sizes, "problems": problems}
+
+
+def main() -> int:
+    import argparse
+    parser = argparse.ArgumentParser(description="Read-only local LLM forensic integrity audit (no network)")
+    parser.add_argument("root", type=Path)
+    args = parser.parse_args()
+    results = [inspect_record(path) for path in sorted(args.root.iterdir()) if path.is_dir()]
+    print(json.dumps(results, ensure_ascii=False, indent=2))
+    return 0 if all(result["verified_complete"] for result in results) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

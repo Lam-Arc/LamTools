@@ -55,7 +55,10 @@ def runtime_group_from_event_name(event_name: str) -> str:
         return "verification"
     if event_name.startswith("runtime.repair"):
         return "verification"
-    if event_name in {"runtime.done", "runtime.failed", "runtime.cancelled", "runtime.waiting", "runtime.started"}:
+    if event_name in {
+        "runtime.done", "runtime.failed", "runtime.cancelled", "runtime.waiting",
+        "runtime.paused", "runtime.started",
+    }:
         return "system"
     return "plan"
 
@@ -77,6 +80,8 @@ def runtime_summary_from_event_name(event_name: str, payload: dict[str, Any]) ->
         return str(payload.get("error") or payload.get("message") or "任务失败。")
     if event_name == "runtime.cancelled":
         return str(payload.get("message") or "任务已取消。")
+    if event_name == "runtime.paused":
+        return str(payload.get("message") or "任务已暂停。")
     if event_name == "runtime.reply":
         return "生成最终回复。"
     if event_name == "runtime.reply_delta":
@@ -819,8 +824,56 @@ def runtime_fact_to_run_item_events(
                     "type": "agentMessage",
                     "content": child_summary,
                     "sub_agent_terminal": True,
+                    "tool_name": "sub_agent",
+                    "sub_agent": terminal_sub_agent,
                 },
                 **terminal_base,
+            )
+        ]
+
+    if phase == "runtime.paused":
+        if sub_agent is not None:
+            # A paused child keeps its own row: publishing a main-line status
+            # item here would end the parent turn in the app-server reducer.
+            # ``waiting`` is the item vocabulary for a member that is neither
+            # running nor finished; the nested record carries the pause.
+            return [
+                RunItemEvent(
+                    kind="message",
+                    item_id=f"{_sub_agent_item_scope(fact, sub_agent)}:status",
+                    status="waiting",
+                    payload={
+                        "type": "subAgentStatus",
+                        "tool_name": "sub_agent",
+                        "event": "member_paused",
+                        "sub_agent": {**sub_agent, "status": "paused"},
+                    },
+                    **base,
+                )
+            ]
+        # The turn stopped on request and stays resumable. The row is a plain
+        # status item carrying the frozen duration, so the transcript shows
+        # "已暂停" and stops counting time until the resumed run reports again.
+        paused_payload: dict[str, Any] = {
+            "type": "turn",
+            "status": "paused",
+            "pause_reason": str(payload.get("pause_reason") or "user_pause"),
+            "message": _terminal_message(payload, str(fact.summary or "")),
+        }
+        paused_metrics = payload.get("runtime_metrics") if isinstance(payload.get("runtime_metrics"), dict) else None
+        if paused_metrics is not None:
+            paused_payload["runtime_metrics"] = paused_metrics
+        paused_duration = payload.get("duration_ms")
+        if isinstance(paused_duration, (int, float)) and not isinstance(paused_duration, bool):
+            paused_payload["duration_ms"] = max(0, round(paused_duration))
+        return [
+            RunItemEvent(
+                kind="status",
+                item_id=f"{run_id}:paused" if run_id else f"{turn_id}:paused",
+                status="paused",
+                payload=paused_payload,
+                usage=paused_metrics or {},
+                **base,
             )
         ]
 

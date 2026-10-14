@@ -58,6 +58,7 @@ from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_oper
 from .durable_operations import register_durable_operations
 from .event_store import AppEventInput
 from .factory import add_spa_fallback, create_app
+from .api_access import CoreApiAccessPolicy
 from .live_hub import CoreAppEventHub
 from .live_member import DefaultCoreLiveMemberHooks
 from .live_operations import CoreLiveContext, CoreLiveOperationHost, recover_stale_active_turns
@@ -216,7 +217,9 @@ def create_core_agent_http_app(
     max_tokens: int | None = None,
     temperature: float = 0.2,
     frontend_dir: Path | str | None = None,
+    access_policy: CoreApiAccessPolicy | None = None,
 ) -> FastAPI:
+    access_policy = access_policy if access_policy is not None else CoreApiAccessPolicy.from_env()
     # Resolve the command shell while the server starts. Windows automatic
     # selection runs a bounded WSL probe whose cost must not land on the first
     # model request; the cached decision is what the prompt and run_command use.
@@ -474,6 +477,10 @@ def create_core_agent_http_app(
             attachment_service=app_state.get("attachment_store"),
             model_context_sink=capture_model_context,
         )
+        from lamtools_core.plugins.lifecycle import await_plugin_backends
+
+        app_state["plugin_runtimes"] = getattr(agent_operations, "plugin_runtimes", [])
+        await await_plugin_backends(app_state["plugin_runtimes"])
         _logger.info("[startup] operation catalog ready in %.3fs", perf_counter() - phase_started)
         phase_started = perf_counter()
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
@@ -616,6 +623,13 @@ def create_core_agent_http_app(
         except BaseException:
             _logger.exception("[startup] stale active turn recovery failed (non-fatal)")
         _logger.info("[startup] stale-turn recovery ready in %.3fs", perf_counter() - phase_started)
+        from .sub_agent_recovery import reconcile_sub_agent_state
+        try:
+            await reconcile_sub_agent_state(
+                context=live_context(), data_dir=resolved_data_dir, acknowledge_legacy_mail=True,
+            )
+        except Exception:
+            _logger.exception("[startup] sub-agent state reconciliation failed; watchdog will retry")
         await arrange_runner.start()
         await observer_supervisor.start()
         # Watches host memory so a turn stopped by memory exhaustion continues by
@@ -684,6 +698,7 @@ def create_core_agent_http_app(
         )
 
     app = create_app(
+        access_policy=access_policy,
         members=members,
         title=runtime_spec.name,
         enable_core_routes=False,
@@ -745,7 +760,7 @@ def create_core_agent_http_app(
             for item in plugins
             if isinstance(item, dict)
             and isinstance(item.get("desktop"), dict)
-            and (not enabled_only or item.get("enabled") is True)
+            and (not enabled_only or item.get("enabled") is True and item.get("available", True) is True)
         ]
 
     @app.get("/api/core/desktop-plugins")
@@ -1451,6 +1466,10 @@ def _register_loadtools_operations(catalog: OperationCatalog) -> None:
         # normalized runtime handles exposed by the generic operation catalog
         # instead of importing any plugin implementation from Core.
         for handle in getattr(catalog, "plugin_runtimes", []) or []:
+            from lamtools_core.plugins.lifecycle import plugin_backend_available
+
+            if not plugin_backend_available(handle.plugin, catalog.plugin_runtimes):
+                continue
             runtime_specs = getattr(handle.value, "tool_specs", [])
             if callable(runtime_specs):
                 runtime_specs = runtime_specs()
@@ -2303,7 +2322,7 @@ def _list_llm_provider_configs() -> list[dict[str, Any]]:
     ]
 
 
-def create_default_core_agent_http_app() -> FastAPI:
+def create_default_core_agent_http_app(*, access_policy: CoreApiAccessPolicy | None = None) -> FastAPI:
     # No built-in "default-model" anymore: empty model_id means "unconfigured",
     # and the app boots with a placeholder until the user sets up a model.
     model_id = os.environ.get("LAMTOOLS_CORE_MODEL_ID") or ""
@@ -2311,6 +2330,7 @@ def create_default_core_agent_http_app() -> FastAPI:
     data_dir = os.environ.get("LAMTOOLS_CORE_DATA_DIR") or None
     work_root = os.environ.get("LAMTOOLS_CORE_WORK_ROOT") or None
     return create_core_agent_http_app(
+        access_policy=access_policy,
         model_id=model_id,
         core_db=core_db,
         data_dir=data_dir,

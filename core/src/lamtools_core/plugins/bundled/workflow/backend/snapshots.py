@@ -17,6 +17,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from .persistence import WorkflowPersistenceError, finish_commit
+
 if TYPE_CHECKING:  # pragma: no cover - imported only for static checkers
     from .runtime import WorkflowRunResult
 
@@ -64,17 +66,18 @@ class WorkflowSnapshotStore:
         if key in self._loaded:
             value = self._cache.get(key)
             return _json_copy(value) if value is not None else None
-        self._loaded.add(key)
         path = self._single_path if self._single_path is not None else self.snapshot_path(*key)
-        if not path.is_file():
-            return None
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
+        except FileNotFoundError:
+            self._loaded.add(key)
             return None
+        except (OSError, ValueError, TypeError) as exc:
+            raise WorkflowPersistenceError("read snapshot", path, exc) from exc
         if not isinstance(value, dict):
-            return None
+            raise WorkflowPersistenceError("read snapshot", path, ValueError("snapshot must be an object"))
         self._cache[key] = value
+        self._loaded.add(key)
         return _json_copy(value)
 
     def _write_sync(self, thread_id: str, run_id: str, value: Mapping[str, Any]) -> None:
@@ -96,19 +99,19 @@ class WorkflowSnapshotStore:
 
     async def get(self, thread_id: str, run_id: str) -> "WorkflowRunResult | None":
         async with self._lock:
-            raw = await asyncio.to_thread(self._load_sync, thread_id, run_id)
+            raw = await finish_commit(asyncio.to_thread(self._load_sync, thread_id, run_id))
         if raw is None:
             return None
         from .runtime import WorkflowRunResult
 
         try:
             return WorkflowRunResult.from_dict(raw.get("result", raw))
-        except (TypeError, ValueError, KeyError):
-            return None
+        except (TypeError, ValueError, KeyError) as exc:
+            raise WorkflowPersistenceError("decode snapshot", self.snapshot_path(thread_id, run_id), exc) from exc
 
     async def get_dict(self, thread_id: str, run_id: str) -> dict[str, Any] | None:
         async with self._lock:
-            value = await asyncio.to_thread(self._load_sync, thread_id, run_id)
+            value = await finish_commit(asyncio.to_thread(self._load_sync, thread_id, run_id))
         return value
 
     async def save(
@@ -143,39 +146,41 @@ class WorkflowSnapshotStore:
             "result": _json_copy(result_dict),
         }
         async with self._lock:
-            self._cache[self._key(thread_id, run_id)] = value
-            self._loaded.add(self._key(thread_id, run_id))
-            try:
-                await asyncio.to_thread(self._write_sync, thread_id, run_id, value)
-            except OSError:
-                # Snapshot durability is best effort at the filesystem layer;
-                # an unavailable cache path must not fail the workflow itself.
-                pass
+            async def commit() -> None:
+                try:
+                    await asyncio.to_thread(self._write_sync, thread_id, run_id, value)
+                except Exception as exc:
+                    raise WorkflowPersistenceError("save snapshot", self.snapshot_path(thread_id, run_id), exc) from exc
+                self._cache[self._key(thread_id, run_id)] = value
+                self._loaded.add(self._key(thread_id, run_id))
+            await finish_commit(commit())
 
     async def delete(self, thread_id: str, run_id: str) -> bool:
         key = self._key(thread_id, run_id)
         async with self._lock:
-            self._cache.pop(key, None)
-            self._loaded.add(key)
             path = self._single_path if self._single_path is not None else self.snapshot_path(*key)
-            try:
-                await asyncio.to_thread(path.unlink, missing_ok=True)
-            except OSError:
-                return False
+            async def commit() -> None:
+                try:
+                    await asyncio.to_thread(path.unlink, missing_ok=True)
+                except OSError as exc:
+                    raise WorkflowPersistenceError("delete snapshot", path, exc) from exc
+                self._cache.pop(key, None)
+                self._loaded.add(key)
+            await finish_commit(commit())
             return True
 
     async def list(self) -> list[dict[str, Any]]:
         async with self._lock:
             try:
                 paths = list(self.directory.glob("*.json"))
-            except OSError:
-                paths = []
+            except OSError as exc:
+                raise WorkflowPersistenceError("list snapshots", self.directory, exc) from exc
             values: list[dict[str, Any]] = []
             for path in paths:
                 try:
                     raw = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, ValueError, TypeError):
-                    continue
+                except (OSError, ValueError, TypeError) as exc:
+                    raise WorkflowPersistenceError("read snapshot", path, exc) from exc
                 if isinstance(raw, dict):
                     values.append(raw)
             return values
@@ -186,15 +191,19 @@ class WorkflowSnapshotStore:
         async with self._lock:
             try:
                 paths = list(self.directory.glob("*.json"))
-            except OSError:
-                paths = []
+            except OSError as exc:
+                raise WorkflowPersistenceError("list snapshots", self.directory, exc) from exc
             count = 0
             for path in paths:
                 try:
                     path.unlink()
                     count += 1
-                except OSError:
-                    pass
+                except OSError as exc:
+                    # Some files may already have been removed. Invalidate the
+                    # projections even when reporting the partial clear error.
+                    self._cache.clear()
+                    self._loaded.clear()
+                    raise WorkflowPersistenceError("clear snapshots", path, exc) from exc
             self._cache.clear()
             self._loaded.clear()
             return count

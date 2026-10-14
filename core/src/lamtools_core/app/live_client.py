@@ -263,6 +263,21 @@ class CoreAppServerClient:
         if isinstance(event, dict):
             await self.put_app_server_event(event)
 
+    async def resume_turn(self, *, thread_id: str, turn_id: str = "") -> dict[str, Any]:
+        return await self.request("turn.resume", {"thread_id": thread_id, "turn_id": turn_id})
+
+    async def pause_turn(self, *, thread_id: str, turn_id: str = "") -> dict[str, Any]:
+        return await self.request(
+            "turn.pause",
+            {"thread_id": thread_id, "turn_id": turn_id, "include_snapshot": False},
+        )
+
+    async def terminate_turn(self, *, thread_id: str, turn_id: str = "") -> dict[str, Any]:
+        return await self.request(
+            "turn.terminate",
+            {"thread_id": thread_id, "turn_id": turn_id, "include_snapshot": False},
+        )
+
     async def cancel_turn(self, *, thread_id: str, turn_id: str = "") -> dict[str, Any]:
         return await self.request(
             "turn.cancel",

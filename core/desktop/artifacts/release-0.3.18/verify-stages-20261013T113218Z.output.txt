@@ -1,0 +1,5 @@
+STAGE_VERIFY_UTC_BEGIN=2026-10-13T11:32:18Z
+active
+active
+/var/tmp/Sunday-desktop-0.3.18-20261013.upload.exe: OK
+stat: cannot statx '/var/tmp/Sunday-desktop-0.3.18-20261013.desktop-update.json': No such file or directory

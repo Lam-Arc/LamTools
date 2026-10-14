@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import lamtools_core
 import pytest
+import socket
+import httpx
 from lamtools_core.update.checker import (
     DEFAULT_SITE_UPDATE_URL,
     RELEASES_LATEST_URL,
@@ -380,3 +382,62 @@ def test_site_update_url_can_be_pointed_elsewhere(monkeypatch) -> None:
     # The override replaces the default official manifest URL.
     assert custom in calls
     assert DEFAULT_SITE_UPDATE_URL not in calls
+
+
+@pytest.mark.parametrize("proxy", ["", "http://proxy-user:proxy-secret@proxy.example:8080"])
+def test_dns_failure_logs_original_error_and_safe_route(monkeypatch, caplog, proxy) -> None:
+    from lamtools_core.update.checker import _http_get_json
+
+    dns = socket.gaierror(11001, "getaddrinfo failed")
+    transport_error = ConnectionError("transport failed")
+    transport_error.__cause__ = dns
+    failure = httpx.ConnectError("connection failed")
+    failure.__cause__ = transport_error
+    routing = {"trust_env": False, **({"proxy": proxy} if proxy else {})}
+    monkeypatch.setattr("lamtools_core.update.checker.httpx_client_kwargs", lambda url: routing)
+
+    class FailingClient:
+        def __init__(self, **kwargs):
+            assert kwargs["trust_env"] is False
+            assert kwargs.get("proxy", "") == proxy
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            raise failure
+
+    monkeypatch.setattr(httpx, "Client", FailingClient)
+    # Logging must not retry DNS: preserve the error from the actual request.
+    def unexpected_lookup(*args, **kwargs):
+        pytest.fail("diagnostic logging performed another DNS lookup")
+
+    monkeypatch.setattr(socket, "getaddrinfo", unexpected_lookup)
+    with pytest.raises(httpx.ConnectError) as caught:
+        _http_get_json("https://site-user:site-secret@ainarit.com/downloads/desktop-update.json?token=secret#private")
+    assert caught.value is failure
+    logged = caplog.text
+    assert "stage=dns" in logged
+    assert "url=https://ainarit.com/downloads/desktop-update.json" in logged
+    assert "hostname=ainarit.com" in logged
+    assert f"route={'proxy' if proxy else 'direct'}" in logged
+    assert f"proxy={'http://proxy.example:8080' if proxy else 'none'}" in logged
+    assert "exception_chain=ConnectError -> ConnectionError -> gaierror" in logged
+    assert "dns_errno=11001" in logged
+    assert "dns_message=getaddrinfo failed" in logged
+    assert "elapsed_ms=" in logged
+    assert "timeout_seconds=10.0" in logged
+    for secret in ("site-user", "site-secret", "proxy-user", "proxy-secret", "token=", "#private"):
+        assert secret not in logged
+
+
+def test_non_dns_failure_is_not_mislabeled(caplog) -> None:
+    from lamtools_core.update.checker import _log_request_failure
+
+    _log_request_failure(DEFAULT_SITE_UPDATE_URL, {}, httpx.ConnectTimeout("timed out"), 0.5)
+    assert "stage=request" in caplog.text
+    assert "exception_chain=ConnectTimeout" in caplog.text
+    assert "dns_errno=unavailable" in caplog.text

@@ -6,7 +6,7 @@ import type {
   TransportMessage,
   TransportRequest,
 } from './types'
-import { TransportDisconnectedError, TransportRpcError } from './types'
+import { TransportDisconnectedError, TransportRpcError, TransportRequestTimeoutError } from './types'
 
 type FetchLike = typeof fetch
 
@@ -224,7 +224,7 @@ export class DirectTransport implements LamToolsTransport {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         request.signal?.removeEventListener('abort', abort)
-        reject(new Error(`LamTools transport request timed out: ${request.method} (${timeoutMs}ms)`))
+        reject(new TransportRequestTimeoutError(request.method, timeoutMs))
       }, timeoutMs)
       const abort = () => {
         clearTimeout(timer)

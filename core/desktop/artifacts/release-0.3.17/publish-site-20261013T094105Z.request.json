@@ -1,0 +1,14 @@
+{
+  "purpose": "publish-site",
+  "commandName": "sunday-desktop-0317-publish-site-20261013T094105Z",
+  "description": "Extract the digest-verified v0.3.17 website bundle into a versioned release directory and atomically switch the official site pointer, preserving the previous release for rollback",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "publish-site.sh",
+  "commandSha256": "7b73f3f70def4ee8e1998b84485e6202773e8627809173c6954fa0e2e23b44d0",
+  "timeoutSeconds": 600,
+  "startedAtUtc": "2026-10-13T09:41:05Z",
+  "clientToken": "sunday-desktop-0317-publish-site-20261013T094105Z"
+}

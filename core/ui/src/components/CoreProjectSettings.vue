@@ -5,9 +5,10 @@
       :title="t('{0} · 项目设置', { 0: project.name })"
       :settings-theme-style="settingsThemeStyle"
       :hide-nav="props.hideNav"
-      :active-section="props.activeSection"
-      @close="$emit('close')"
-      @section-change="$emit('section-change', $event)"
+      :active-section="currentSection"
+      :before-section-change="beforeSectionChange"
+      @close="requestClose"
+      @section-change="onSectionChange"
     >
       <template #default="{ activeSection }">
             <!-- 项目分区：即时保存的名称/外观 + work root + AGENTS.md -->
@@ -77,8 +78,8 @@
                   <span class="muted subhead-title">{{ t("项目规则") }}<span class="subhead-sub">AGENTS.md</span>
                   </span>
                   <div class="subhead-actions">
-                    <button class="text-btn" type="button" :disabled="agentsLoading" @click="emit('refresh-agents')">{{ t("刷新") }}</button>
-                    <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="emit('save-agents', agentsDraft)">{{ t("保存") }}</button>
+                    <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="rulesDraft.requestReplace(() => emit('refresh-agents'))">{{ t("刷新") }}</button>
+                    <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="saveRules">{{ t("保存") }}</button>
                   </div>
                 </div>
                 <textarea
@@ -87,7 +88,7 @@
                   rows="14"
                   spellcheck="false"
                   :placeholder="agentsLoading ? t('加载中…') : t('# 项目级约束\n项目专属指令，会叠加在全局约束之上…')"
-                  :disabled="agentsLoading"
+                  :disabled="agentsLoading || agentsSaving"
                 />
                 <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
                 <p class="hook-meta">{{ t("保存到") }}<code>{{ project.workRoot || t("(项目根)") }}/AGENTS.md</code>{{ t("。注入顺序：先全局约束（.lam/core/config/AGENTS.md），再本文件，两者相加。全局约束在「设置 → 上下文」内编辑。") }}</p>
@@ -112,6 +113,7 @@
 
       </template>
     </SettingsShell>
+    <SettingsDraftDialog :guard="draftGuard" />
   </div>
 </template>
 
@@ -132,6 +134,8 @@ import ProjectVisualPicker from './ProjectVisualPicker.vue'
 import type { CoreSettingsModel } from './CoreSettings.vue'
 import { copyText } from '../helpers/clipboard'
 import type { CoreProjectColorKey, CoreProjectIconKey } from '../projects/types'
+import { createSettingsDraftGuard, useSettingsDraft } from '../composables/useSettingsDraftGuard'
+import SettingsDraftDialog from './SettingsDraftDialog.vue'
 
 export interface CoreProjectSettingsProject {
   id: string
@@ -158,6 +162,8 @@ const props = defineProps<{
   hideNav?: boolean
   /** Controlled section from the host's drawer nav. */
   activeSection?: string
+  persistAgents?: (content: string) => Promise<boolean>
+  persistName?: (name: string) => Promise<boolean>
 }>()
 
 const emit = defineEmits<{
@@ -170,6 +176,22 @@ const emit = defineEmits<{
 }>()
 
 const sections = PROJECT_SETTINGS_SECTIONS
+const draftGuard = createSettingsDraftGuard()
+const currentSection = ref(props.activeSection || 'project')
+function beforeSectionChange(_id: string, proceed: () => void) {
+  draftGuard.requestNavigation(proceed, { section: currentSection.value })
+}
+function onSectionChange(id: string) {
+  currentSection.value = id
+  emit('section-change', id)
+}
+function requestSection(id: string) {
+  if (id === currentSection.value) return
+  beforeSectionChange(id, () => onSectionChange(id))
+}
+function requestClose() { draftGuard.requestNavigation(() => emit('close')) }
+watch(() => props.activeSection, id => { if (id) requestSection(id) })
+defineExpose({ requestNavigation: draftGuard.requestNavigation, requestSection })
 
 // Local mirrors of draft inputs so editing doesn't mutate parent state per keystroke.
 const projectNameInput = ref(props.projectNameDraft)
@@ -178,13 +200,53 @@ const projectColorKey = ref<CoreProjectColorKey>(props.project.colorKey)
 const pendingName = ref<string | null>(null)
 const pendingVisual = ref<string | null>(null)
 const agentsDraft = ref(props.agentsContent)
+const rulesDraft = useSettingsDraft({
+  guard: draftGuard,
+  section: 'project', label: () => t('项目规则'), read: () => agentsDraft.value,
+  restore: value => { agentsDraft.value = value }, save: saveRules,
+  busy: computed(() => Boolean(props.agentsSaving)),
+  error: computed(() => props.agentsError),
+})
+const nameDraft = useSettingsDraft({
+  guard: draftGuard,
+  section: 'project', label: () => t('项目名称'), read: () => projectNameInput.value,
+  restore: value => { projectNameInput.value = value },
+  busy: computed(() => props.projectActionLoading),
+  error: computed(() => props.projectActionError),
+  save: async () => {
+    const name = projectNameInput.value.trim()
+    if (!name || !props.persistName || !await props.persistName(name)) return false
+    projectNameInput.value = name
+    nameDraft.accept(name)
+    return true
+  },
+})
+async function saveRules() {
+  const content = agentsDraft.value
+  if (props.persistAgents) {
+    if (!await props.persistAgents(content)) return false
+  } else emit('save-agents', content)
+  rulesDraft.accept(content)
+  return true
+}
 const copiedSessionId = ref(false)
 let copiedSessionIdTimer: ReturnType<typeof setTimeout> | null = null
 
-watch(() => props.projectNameDraft, (value) => { projectNameInput.value = value })
+watch(() => props.projectNameDraft, value => {
+  if (!nameDraft.dirty.value) projectNameInput.value = value
+})
 watch(() => props.project.iconKey, (value) => { projectIconKey.value = value })
 watch(() => props.project.colorKey, (value) => { projectColorKey.value = value })
-watch(() => props.agentsContent, (value) => { agentsDraft.value = value })
+watch(() => props.agentsContent, (value) => {
+  if (!rulesDraft.dirty.value || props.agentsSaving || props.agentsLoading) {
+    agentsDraft.value = value
+    rulesDraft.accept()
+  }
+})
+watch(() => props.project.name, value => {
+  nameDraft.accept(value)
+  projectNameInput.value = value
+})
 watch(() => props.sessionId, () => {
   copiedSessionId.value = false
   if (copiedSessionIdTimer) clearTimeout(copiedSessionIdTimer)
@@ -203,6 +265,8 @@ watch(() => props.project.id, () => {
   pendingName.value = null
   pendingVisual.value = null
   agentsDraft.value = props.agentsContent
+  rulesDraft.accept()
+  nameDraft.accept()
 })
 
 function commitProjectName(): void {
@@ -290,7 +354,7 @@ const settingsThemeStyle = computed(() => {
 })
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('close')
+  if (e.key === 'Escape' && !draftGuard.open.value) requestClose()
 }
 
 onMounted(() => document.addEventListener('keydown', onKeydown))

@@ -1819,6 +1819,14 @@ fn start_backend(
     Ok(api_base)
 }
 
+fn configure_internal_backend_access(command: &mut Command) {
+    // Desktop's API must not inherit standalone LAN configuration/credentials.
+    command
+        .env("LAMCORE_HOST", "127.0.0.1")
+        .env_remove("LAMTOOLS_CORE_ALLOW_LAN")
+        .env_remove("LAMTOOLS_CORE_API_TOKEN");
+}
+
 fn dev_backend_command(port: u16) -> Result<Command, Box<dyn std::error::Error>> {
     // Resolve core/ from core/desktop/src-tauri.
     let core_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1849,6 +1857,7 @@ fn dev_backend_command(port: u16) -> Result<Command, Box<dyn std::error::Error>>
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
+    configure_internal_backend_access(&mut cmd);
     hide_console(&mut cmd);
     Ok(cmd)
 }
@@ -1914,6 +1923,7 @@ fn prod_backend_command(
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
+    configure_internal_backend_access(&mut cmd);
     hide_console(&mut cmd);
     Ok(cmd)
 }
@@ -2910,6 +2920,19 @@ mod desktop_window_tests {
         MAX_DESKTOP_DROP_FILE_BYTES, MAX_DESKTOP_DROP_TOTAL_BYTES,
     };
     use std::path::Path;
+
+    #[test]
+    fn internal_backend_overrides_inherited_lan_configuration() {
+        let mut command = std::process::Command::new("not-executed");
+        command.env("LAMCORE_HOST", "0.0.0.0");
+        command.env("LAMTOOLS_CORE_ALLOW_LAN", "1");
+        command.env("LAMTOOLS_CORE_API_TOKEN", "standalone-secret");
+        super::configure_internal_backend_access(&mut command);
+        let environment: std::collections::HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(environment[std::ffi::OsStr::new("LAMCORE_HOST")], Some(std::ffi::OsStr::new("127.0.0.1")));
+        assert_eq!(environment[std::ffi::OsStr::new("LAMTOOLS_CORE_ALLOW_LAN")], None);
+        assert_eq!(environment[std::ffi::OsStr::new("LAMTOOLS_CORE_API_TOKEN")], None);
+    }
 
     #[test]
     fn backend_executable_name_is_platform_aware() {

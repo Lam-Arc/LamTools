@@ -22,6 +22,7 @@ import {
   type CoreAppEvent,
   type CoreAppServerRuntimeClient,
   type CoreAppSnapshot,
+  type CoreAppServerThreadSwitchOptions,
   type CoreSyncChangeNotification,
   type CoreWorkbenchTurnStatus,
 } from '../appServer'
@@ -33,7 +34,7 @@ import {
   useCorePendingGuidance,
   useCoreWorkbenchProjectionController,
 } from '../composables'
-import type { CoreInputItem, CoreSessionListItem } from '../types'
+import type { CoreInputItem, CoreSessionListItem, CoreSubAgentDurableRecord } from '../types'
 import {
   readComposerDraft,
   resolveComposerDraftStorage,
@@ -304,10 +305,42 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   // Session activity is derived once (see selectCoreSessionActivity): state (a)
   // main agent running, state (b) main stopped with sub-agents still pending.
   // Every busy/disabled decision reads these, never the raw status ad hoc.
+  const subAgentRecords = shallowRef<{ threadId: string; records: Record<string, CoreSubAgentDurableRecord> } | null>(null)
+  function setSubAgentRecords(threadId: string, records: Record<string, CoreSubAgentDurableRecord>): void {
+    if (threadId === activeSessionId.value) subAgentRecords.value = { threadId, records }
+  }
   const sessionActivity = computed(() => selectCoreSessionActivity(snapshot.value, {
     messages: projectionController.messages.value,
+    memberRecords: subAgentRecords.value?.threadId === activeSessionId.value ? subAgentRecords.value.records : undefined,
   }))
   const sessionPhase = computed(() => sessionActivity.value.phase)
+
+  /** Fold a lifecycle-op response into the same record map the polling fills. */
+  function mergeSubAgentRecords(threadId: string, items: unknown): void {
+    const existing = subAgentRecords.value?.threadId === threadId ? subAgentRecords.value.records : {}
+    const records = { ...existing }
+    for (const item of Array.isArray(items) ? items : []) {
+      if (!item || typeof item !== 'object') continue
+      const name = String((item as { name?: unknown }).name || '').trim().toLowerCase()
+      if (name) records[name] = item as CoreSubAgentDurableRecord
+    }
+    setSubAgentRecords(threadId, records)
+  }
+
+  /**
+   * Child-directed Stop/Resume. These act on the members themselves: the parent
+   * turn is neither restarted nor re-cancelled to control them, so a parent
+   * turn that already ended stays ended.
+   */
+  async function interruptSubAgents(threadId: string): Promise<void> {
+    const response = await requestRpc('sub_agent.interrupt', { thread_id: threadId })
+    mergeSubAgentRecords(threadId, (response as { items?: unknown })?.items)
+  }
+
+  async function resumeSubAgents(threadId: string): Promise<void> {
+    const response = await requestRpc('sub_agent.resume', { thread_id: threadId })
+    mergeSubAgentRecords(threadId, (response as { items?: unknown })?.items)
+  }
 
   // Sidebar status is a projection of the canonical session snapshot, not a
   // one-time value captured when turn/start is accepted.
@@ -385,9 +418,30 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     }
   }
 
+  // The turn a Continue press would continue: the paused one. A terminated
+  // turn is final, so it offers nothing.
+  const resumableTurnId = computed(() => {
+    const turns = Object.values(snapshot.value?.turns ?? {})
+    const latest = turns.at(-1)
+    return runtime.client?.capabilities?.same_turn_resume === true && latest?.status === 'paused'
+      ? latest.turn_id : ''
+  })
+
+  // A paused session owns its members too: their own Continue buttons stay
+  // disabled until the session continues as a whole.
+  const sessionPaused = computed(() => Boolean(resumableTurnId.value))
+
   const liveComposerController = useCoreLiveComposerController({
     activeThreadId: activeSessionId,
     activeTurnId,
+    resumableTurnId,
+    sessionPaused,
+    resumeTurn: (threadId, turnId, input) => runtimeController.resumeTurn(threadId, turnId, input),
+    interruptibleSubAgents: computed(() => sessionActivity.value.interruptibleSubAgentNames),
+    resumableSubAgents: computed(() => sessionActivity.value.resumableSubAgentNames),
+    subAgentControl: computed(() => runtime.client?.capabilities?.sub_agent_control === true),
+    interruptSubAgents,
+    resumeSubAgents,
     connectedThreadId: computed(() => runtime.activeThreadId),
     connectionState,
     text: composerText,
@@ -404,6 +458,8 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       runtimeController.startTurn(threadId, input, workRoot, turnOptions, clientMessageId)
     ),
     interruptTurn: (threadId, turnId) => runtimeController.interruptTurn(threadId, turnId),
+    pauseTurn: (threadId, turnId) => runtimeController.pauseTurn(threadId, turnId),
+    terminateTurn: (threadId, turnId) => runtimeController.terminateTurn(threadId, turnId),
     forceResetTurn: (threadId, turnId) => runtimeController.forceResetTurn(threadId, turnId),
     steerTurn: async (threadId, turnId, input) => {
       const outcome = await runtimeController.steerTurn(threadId, turnId, input)
@@ -607,6 +663,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     activeTurnId,
     turnActive,
     sessionActivity,
+    setSubAgentRecords,
     sessionPhase,
     composerText,
     composerCursor,
@@ -630,7 +687,9 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     handleComposerKeyup: liveComposerController.handleKeyup,
     selectCommand: liveComposerController.selectCommand,
     runCommand: liveComposerController.runCommand,
-    connect: (threadId?: string) => runtimeController.connect(threadId),
+    connect: (threadId?: string, switchOptions?: CoreAppServerThreadSwitchOptions) => (
+      runtimeController.connect(threadId, switchOptions)
+    ),
     switchThread: runtimeController.switchThread,
     disconnect: runtimeController.disconnect,
     selectSession,
@@ -653,6 +712,8 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     },
     startTurn: runtimeController.startTurn,
     interruptTurn: runtimeController.interruptTurn,
+    pauseTurn: runtimeController.pauseTurn,
+    terminateTurn: runtimeController.terminateTurn,
     forceResetTurn: runtimeController.forceResetTurn,
     steerTurn: runtimeController.steerTurn,
     updateQueueInput: runtimeController.updateQueueInput,

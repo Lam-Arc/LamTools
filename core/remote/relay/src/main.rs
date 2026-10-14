@@ -1,6 +1,7 @@
 mod backup;
 mod control;
 mod push;
+mod pairing_abuse;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -62,6 +63,7 @@ struct RelayState {
     desktops: RwLock<HashMap<String, DesktopRoute>>,
     mobiles: RwLock<HashMap<String, MobileRoute>>,
     pairings: RwLock<HashMap<String, PairingRoute>>,
+    pairing_abuse: pairing_abuse::PairingAbuseGuard,
     metrics: Metrics,
     push: Arc<dyn PushProvider>,
 }
@@ -232,6 +234,7 @@ async fn run_server() {
         desktops: RwLock::new(HashMap::new()),
         mobiles: RwLock::new(HashMap::new()),
         pairings: RwLock::new(HashMap::new()),
+        pairing_abuse: Default::default(),
         metrics: Metrics::default(),
         push: Arc::new(DisabledPushProvider),
     });
@@ -972,11 +975,10 @@ async fn register_pairing(
     connection_id: &str,
     registration: PairingRegistration,
 ) {
-    let is_current_connection = state
-        .desktops
-        .read()
-        .await
-        .get(device_id)
+    // Hold the route guard through registration so a replaced socket cannot
+    // publish stale metadata after reconnect cleanup has already run.
+    let desktops = state.desktops.read().await;
+    let is_current_connection = desktops.get(device_id)
         .is_some_and(|route| route.connection_id == connection_id);
     if !is_current_connection
         || registration.desktop_device_id != device_id
@@ -986,6 +988,7 @@ async fn register_pairing(
         || registration.desktop_public_key.trim().is_empty()
         || registration.gateway_url.trim().is_empty()
         || registration.expires_at_ms <= now_ms()
+        || registration.expires_at_ms > now_ms().saturating_add(360_000)
         || registration.protocol != "lamtools-remote"
         || registration.version != 1
     {
@@ -995,7 +998,15 @@ async fn register_pairing(
 
     let mut pairings = state.pairings.write().await;
     let now = now_ms();
+    if registration.expires_at_ms <= now {
+        state.metrics.errors.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     pairings.retain(|_, route| route.expires_at_ms > now);
+    if pairings.get(&registration.pairing_id).is_some_and(|route| route.desktop_device_id != device_id) {
+        state.metrics.errors.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     if pairings.values().any(|route| {
         route.desktop_device_id != device_id
             && constant_time_eq(route.code.as_bytes(), registration.code.as_bytes())
@@ -1176,15 +1187,23 @@ async fn resolve_pairing(
         ));
     };
     let code = request.code.trim();
+    if !state.pairing_abuse.admit(&auth.user_id, now_ms()) {
+        let mut response = json_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            serde_json::json!({"error": "配对尝试过多，请稍后再试", "code": "PAIRING_RATE_LIMITED"}),
+        );
+        response.headers_mut().insert(header::RETRY_AFTER, "300".parse().expect("constant header"));
+        return response;
+    }
     if !is_valid_pairing_code(code) {
         return json_response(
             StatusCode::BAD_REQUEST,
             serde_json::json!({"error": "配对码必须是六位数字"}),
         );
     }
-    let now = now_ms();
     let pairing = {
         let mut pairings = state.pairings.write().await;
+        let now = now_ms();
         pairings.retain(|_, route| route.expires_at_ms > now);
         pairings
             .values()
@@ -1442,6 +1461,7 @@ mod tests {
             desktops: RwLock::new(std::collections::HashMap::new()),
             mobiles: RwLock::new(std::collections::HashMap::new()),
             pairings: RwLock::new(std::collections::HashMap::new()),
+            pairing_abuse: Default::default(),
             metrics: Metrics::default(),
             push: Arc::new(DisabledPushProvider),
         })
@@ -1557,6 +1577,7 @@ mod tests {
             )])),
             mobiles: RwLock::new(std::collections::HashMap::new()),
             pairings: RwLock::new(std::collections::HashMap::new()),
+            pairing_abuse: Default::default(),
             metrics: Metrics::default(),
             push: Arc::new(DisabledPushProvider),
         });
@@ -1789,6 +1810,26 @@ mod tests {
         .await;
         assert!(malformed.starts_with("HTTP/1.1 400"));
 
+        // Expiry is authoritative even if the host remains online.
+        state.pairings.write().await.get_mut("pairing-resolve").unwrap().expires_at_ms = super::now_ms() - 1;
+        let authorization = format!("Bearer {}", setup.mobile_token);
+        let headers = [("Authorization", authorization.as_str()), ("Content-Type", "application/json")];
+        let expired = reqwest_like_request(&resolve_url, "POST", &headers, r#"{"code":"012345"}"#).await;
+        assert!(expired.starts_with("HTTP/1.1 404"));
+        assert!(!expired.contains("relayTicket"));
+
+        // Replacing the desktop socket must not replenish the lookup budget.
+        let (mut replacement, _) = connect_async(authorized_ws_request(&desktop_url, &setup.desktop_token)).await.unwrap();
+        for _ in 0..2 {
+            let failed = reqwest_like_request(&resolve_url, "POST", &headers, r#"{"code":"999999"}"#).await;
+            assert!(failed.starts_with("HTTP/1.1 404"));
+        }
+        let limited = reqwest_like_request(&resolve_url, "POST", &headers, r#"{"code":"012345"}"#).await;
+        assert!(limited.starts_with("HTTP/1.1 429"));
+        assert!(limited.to_lowercase().contains("retry-after: 300"));
+        assert!(limited.contains("PAIRING_RATE_LIMITED"));
+        let _ = replacement.close(None).await;
+
         let _ = desktop.close(None).await;
         server.abort();
         let _ = server.await;
@@ -1852,6 +1893,65 @@ mod tests {
         let _ = new_desktop.close(None).await;
         server.abort();
         let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_http_guesses_and_rotated_tokens_share_the_same_budget() {
+        let setup = test_setup();
+        let state = test_state(&setup);
+        let (address, server) = start_server(state).await;
+        let endpoint = format!("http://{address}/v1/pairing/resolve");
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..24 {
+            let endpoint = endpoint.clone();
+            let authorization = format!("Bearer {}", setup.mobile_token);
+            tasks.spawn(async move {
+                reqwest_like_request(&endpoint, "POST", &[("Authorization", authorization.as_str()), ("Content-Type", "application/json")], r#"{"code":"999999"}"#).await
+            });
+        }
+        let mut misses = 0;
+        let mut blocked = 0;
+        while let Some(response) = tasks.join_next().await {
+            let response = response.unwrap();
+            if response.starts_with("HTTP/1.1 404") { misses += 1; }
+            else { assert!(response.starts_with("HTTP/1.1 429")); blocked += 1; }
+        }
+        assert_eq!((misses, blocked), (5, 19));
+        let fresh_login = setup.control.login("relay-owner", "correct horse battery").unwrap();
+        let fresh_session = setup.control.bind_node_session(&fresh_login.access_token, "mobile-test").unwrap();
+        let authorization = format!("Bearer {}", fresh_session.access_token);
+        let response = reqwest_like_request(&endpoint, "POST", &[("Authorization", authorization.as_str()), ("Content-Type", "application/json")], r#"{"code":"999999"}"#).await;
+        assert!(response.starts_with("HTTP/1.1 429"));
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn registrations_cannot_hijack_ids_outlive_ttl_or_replace_newer_connections() {
+        let setup = test_setup();
+        let state = test_state(&setup);
+        let (sender, _receiver) = mpsc::channel(10);
+        for (device, connection) in [("desktop-test", "old"), ("other-desktop", "other")] {
+            state.desktops.write().await.insert(device.to_string(), DesktopRoute { connection_id: connection.to_string(), sender: sender.clone() });
+        }
+        let registration = |device: &str, id: &str, code: &str, expiry| super::PairingRegistration {
+            pairing_id: id.to_string(), code: code.to_string(), desktop_device_id: device.to_string(),
+            desktop_public_key: "public-key".to_string(), gateway_url: "ws://192.168.1.20:4000".to_string(),
+            relay_url: None, expires_at_ms: expiry, protocol: "lamtools-remote".to_string(), version: 1,
+        };
+        super::register_pairing(&state, "desktop-test", "old", registration("desktop-test", "owned", "012345", super::now_ms() + 300_000)).await;
+        super::register_pairing(&state, "other-desktop", "other", registration("other-desktop", "owned", "999999", super::now_ms() + 300_000)).await;
+        assert_eq!(state.pairings.read().await["owned"].desktop_device_id, "desktop-test");
+        for expiry in [super::now_ms() - 1, super::now_ms() + 3_600_000] {
+            super::register_pairing(&state, "desktop-test", "old", registration("desktop-test", "bad-ttl", "012345", expiry)).await;
+            assert!(!state.pairings.read().await.contains_key("bad-ttl"));
+        }
+        state.desktops.write().await.get_mut("desktop-test").unwrap().connection_id = "new".to_string();
+        super::clear_pairings_for_desktop(&state, "desktop-test").await;
+        super::register_pairing(&state, "desktop-test", "new", registration("desktop-test", "fresh", "012345", super::now_ms() + 300_000)).await;
+        super::register_pairing(&state, "desktop-test", "old", registration("desktop-test", "stale", "123456", super::now_ms() + 300_000)).await;
+        assert!(state.pairings.read().await.contains_key("fresh"));
+        assert!(!state.pairings.read().await.contains_key("stale"));
     }
 
     #[tokio::test]

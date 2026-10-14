@@ -2,13 +2,12 @@
 
 LamTools' backend binds to a loopback port and is reachable from the browser.
 A malicious web page could otherwise drive the local agent through cross-site
-requests (CSRF / DNS-rebinding style).  We cannot rely on a token alone for
-non-browser clients (CLI, member processes), so the baseline defence is:
+requests (CSRF / DNS-rebinding style). Origin filtering supplements the
+socket-peer/bearer access policy in ``api_access.py``:
 
 * every browser-style request (one carrying an ``Origin`` header) must come
   from an allowed local origin (dev vite servers, Tauri WebView);
-* requests without an ``Origin`` header (CLI / Python clients / same-origin
-  static assets) are trusted as local callers.
+* absence of ``Origin`` only skips this browser check; it does not grant access.
 
 ``LAMTOOLS_CORE_ALLOWED_ORIGINS`` (comma separated) can extend the list for
 member products that run their own frontend on a different port.

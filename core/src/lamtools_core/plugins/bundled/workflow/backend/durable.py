@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from .persistence import WorkflowPersistenceError, finish_commit
+
 
 AttemptStatus = Literal["started", "completed", "failed", "timed_out", "interrupted"]
 
@@ -289,13 +291,13 @@ class WorkflowRunEventStore:
 
     def _read_sync(self, run_id: str) -> list[WorkflowRunEvent]:
         path = self.event_path(run_id)
-        if not path.is_file():
-            return []
         events: list[WorkflowRunEvent] = []
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError:
+        except FileNotFoundError:
             return []
+        except OSError as exc:
+            raise WorkflowPersistenceError("read run journal", path, exc) from exc
         for line in lines:
             try:
                 raw = json.loads(line)
@@ -320,7 +322,10 @@ class WorkflowRunEventStore:
             duplicate = next((item for item in existing if item.event_id == event.event_id), None)
             if duplicate is not None:
                 return duplicate
-            return await asyncio.to_thread(self._append_coordinated_sync, event)
+            try:
+                return await finish_commit(asyncio.to_thread(self._append_coordinated_sync, event))
+            except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+                raise WorkflowPersistenceError("append run journal", self.event_path(event.run_id), exc) from exc
 
     def _append_coordinated_sync(self, event: WorkflowRunEvent) -> WorkflowRunEvent:
         """Allocate and append while a SQLite write transaction fences writers."""

@@ -1,0 +1,5 @@
+STOP_UTC=2026-10-13T09:34:29Z
+MATCH pid=930421 cmd=curl -fLsS --retry 4 --retry-delay 3 --retry-all-errors -m 1800 -o /var/tmp/Sunday-desktop-0.3.17-20261013.upload.exe https://github.com/Lam-Arc/LamTools/releases/download/v0.3.17/Sunday_0.3.17_x64-setup.exe 
+MATCHES_STOPPED=1
+STAGE_AFTER_STOP size=6496256 mtime=2026-10-13 17:34:29.093428967 +0800
+STOP_UTC_END=2026-10-13T09:34:32Z

@@ -42,7 +42,7 @@
 
     <div class="subhead">
       <span class="muted">{{ loading ? t("加载中…") : t('共 {0} 个 · 已启用 {1}', { 0: plugins.length, 1: enabledCount }) }}</span>
-      <button class="text-btn" type="button" @click="fetchPlugins">{{ t("刷新") }}</button>
+      <button class="text-btn" type="button" @click="fetchPlugins()">{{ t("刷新") }}</button>
     </div>
 
     <!-- 插件列表 -->
@@ -64,6 +64,8 @@
                 <span class="plugin-version">{{ plugin.version }}</span>
               </button>
               <span>{{ plugin.description }}</span>
+              <span v-if="plugin.backend" role="status">{{ backendLabel(plugin) }}</span>
+              <span v-if="plugin.backend?.error" class="skill-error" role="alert">{{ plugin.backend.error.message }}</span>
               <span class="plugin-meta">
                 <span class="hook-status" :class="depsClass(plugin)">{{ depsLabel(plugin) }}</span>
                 <span class="hook-status is-plugins-tools">{{ toolCount(plugin) }} {{ t("工具") }}</span>
@@ -72,6 +74,7 @@
               </span>
             </div>
             <div class="row-actions">
+              <button v-if="plugin.enabled && plugin.backend?.state === 'failed'" class="text-btn" type="button" @click="toggleEnabled(plugin, true)">{{ t("重试启动") }}</button>
               <button
                 class="text-btn toggle-btn"
                 :class="{ 'is-on': plugin.enabled }"
@@ -301,7 +304,7 @@
 <script setup lang="ts">
 import { t } from '../i18n/index'
 
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Settings, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
 import FolderBrowserDialog from './FolderBrowserDialog.vue'
 import CoreConfirmDialog from './CoreConfirmDialog.vue'
@@ -324,6 +327,8 @@ interface PluginItem {
   description: string
   root: string
   enabled: boolean
+  available?: boolean
+  backend?: { state: string; available: boolean; error?: { message: string; code?: string } | null }
   /** 平台分类：desktop / mobile / universal（未声明按 universal 处理）。 */
   platforms?: string
   skills: string[]
@@ -512,29 +517,39 @@ function depsClass(plugin: PluginItem): string {
   return 'is-pending-text'
 }
 
-async function fetchPlugins() {
-  loading.value = true
-  error.value = ''
+function backendLabel(plugin: PluginItem): string {
+  if (!plugin.enabled) return t('已禁用')
+  const labels: Record<string, string> = { starting: '启动中', ready: '已就绪', failed: '启动或运行失败', stopping: '停止中', stopped: '已停止', not_loaded: '未加载' }
+  return t(labels[plugin.backend?.state || ''] || (plugin.available ? '已就绪' : '不可用'))
+}
+
+async function fetchPlugins(silent = false) {
+  if (!silent) {
+    loading.value = true
+    error.value = ''
+  }
   try {
     const result = await props.requestRpc('plugin.list')
     plugins.value = (result.plugins as PluginItem[]) || []
     errors.value = (result.errors as { name: string; error: string }[]) || []
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    if (!silent) error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
-async function toggleEnabled(plugin: PluginItem) {
-  const next = !plugin.enabled
+async function toggleEnabled(plugin: PluginItem, retry = false) {
+  const next = retry || !plugin.enabled
   try {
-    await props.requestRpc(next ? 'plugin.enable' : 'plugin.disable', { name: plugin.name })
-    const idx = plugins.value.findIndex((p) => p.name === plugin.name)
-    if (idx >= 0) plugins.value[idx] = { ...plugins.value[idx], enabled: next }
-    emit('changed', plugin.name === 'emotion-ball-pet')
+    const result = await props.requestRpc(next ? 'plugin.enable' : 'plugin.disable', { name: plugin.name })
+    if (result.error) throw new Error(String(result.error))
+    await fetchPlugins()
   } catch (e) {
+    await fetchPlugins(true)
     error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    emit('changed', plugin.name === 'emotion-ball-pet')
   }
 }
 
@@ -844,7 +859,12 @@ function modelListId(prop: SchemaProp): string {
   return `plugin-model-${prop.key}`
 }
 
-onMounted(fetchPlugins)
+let statusTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  void fetchPlugins()
+  statusTimer = setInterval(() => { if (!loading.value) void fetchPlugins(true) }, 2000)
+})
+onBeforeUnmount(() => { if (statusTimer) clearInterval(statusTimer) })
 </script>
 
 <style scoped>

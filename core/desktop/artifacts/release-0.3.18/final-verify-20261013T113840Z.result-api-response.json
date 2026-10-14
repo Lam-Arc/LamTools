@@ -1,0 +1,42 @@
+{
+  "RequestId": "01A1350F-4C5D-5FD2-8F7A-36BA5CE68F87",
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "OssOutputDelivery": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputErrorCode": "",
+          "ExitCode": 16,
+          "FinishedTime": "2026-10-13T11:39:15Z",
+          "OssOutputUri": "",
+          "OssOutputStatus": "",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Output": "RklOQUxfVkVSSUZZX1VUQ19CRUdJTj0yMDI2LTEwLTEzVDExOjM4OjQwWgphY3RpdmUKYWN0aXZlCk1BTklGRVNUX0NVUlJFTlRfQU5EX1JPTExCQUNLX09LIDAuMy4xOCAwLjMuMTcgMC4zLjE3CnB1Ymxpc2hlZCBjaGFubmVsOiBkZXNrdG9wIDAuMy4xOCwgbW9iaWxlIDAuMS40OCwgTGludXggMC4zLjE3CnB1YmxpYyBzaXRlIGFscmVhZHkgaW4gc3RlcApQVUJMSUNfTUFOSUZFU1RfT0sgMC4zLjE4IDAuMy4xNyBiODY4MWU2NjI0MzYzNDY1NGI5OGI3MDI3NGFlZTNjZWU3ZTZmZDY5MjQxZGRmMWY5OTIxOWNlYzYzMzRhNWY3ClBVQkxJQ19XSU5ET1dTX1ZFUlNJT05FRCBodHRwPTIwMApQVUJMSUNfV0lORE9XU19MQVRFU1QgaHR0cD0yMDAKY3VybDogKDE2KSBFcnJvciBpbiB0aGUgSFRUUDIgZnJhbWluZyBsYXllcgpHSVRIVUJfTElOVVhfQVBQSU1BR0VfMDMxNyBodHRwPTMwMgo=",
+          "InvokeId": "t-hz06zwv5qeezv28",
+          "Tags": {
+            "Tag": []
+          },
+          "StopTime": "",
+          "Dropped": 0,
+          "InvocationStatus": "Failed",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "ErrorInfo": "The command execution exit code is not zero.",
+          "StartTime": "2026-10-13T11:38:41Z",
+          "Repeats": 1,
+          "InvokeRecordStatus": "Finished",
+          "Username": "root",
+          "Launcher": "",
+          "CommandId": "c-hz06zwv5qe2idc0",
+          "ErrorCode": "ExitCodeNonzero",
+          "TerminationMode": "Process"
+        }
+      ]
+    },
+    "TotalCount": 1,
+    "NextToken": "",
+    "PageSize": 10,
+    "PageNumber": 1
+  }
+}

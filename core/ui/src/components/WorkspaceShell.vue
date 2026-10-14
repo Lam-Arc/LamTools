@@ -181,6 +181,8 @@
             :stop-label="composerStopLabel"
             :send-title="defaultUiText(composerSendTitle, '发送')"
             :stop-title="defaultUiText(composerStopTitle, '停止运行')"
+            :hold-enabled="composerHoldEnabled"
+            @terminate="emit('composer-terminate')"
           />
         </slot>
       </template>
@@ -261,11 +263,12 @@ const props = withDefaults(
     composerPlaceholder?: string
     composerDisabled?: boolean
     composerSendDisabled?: boolean
-    composerActionMode?: 'send' | 'stop'
+    composerActionMode?: 'send' | 'stop' | 'resume'
     composerSendLabel?: string
     composerStopLabel?: string
     composerSendTitle?: string
     composerStopTitle?: string
+    composerHoldEnabled?: boolean
     showRightPanel?: boolean
     hideComposer?: boolean
     /** 整界面切走：为真时会话栏整列退场（最左竖栏仍常驻）。 */
@@ -310,6 +313,7 @@ const props = withDefaults(
     composerStopLabel: 'stop',
     composerSendTitle: '发送',
     composerStopTitle: '停止运行',
+    composerHoldEnabled: true,
     showRightPanel: true,
     hideMainHeader: false,
     emptySession: false,
@@ -327,7 +331,8 @@ const emit = defineEmits<{
   settings: []
   plugins: []
   search: []
-  'composer-submit': []
+  'composer-submit': [],
+  'composer-terminate': []
   'composer-drop': [event: DragEvent]
 }>()
 

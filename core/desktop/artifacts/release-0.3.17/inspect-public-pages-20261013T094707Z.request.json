@@ -1,0 +1,14 @@
+{
+  "purpose": "inspect-public-pages",
+  "commandName": "sunday-desktop-0317-inspect-public-pages-20261013T094707Z",
+  "description": "Read-only inspect served HTML references and version-label locations to target public asset assertions correctly after the landing page did not expose version text inline",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "inspect-public-pages.sh",
+  "commandSha256": "e2ea3e98cb054363b5aa31e937da1fe5d8b8f536e0bc85f441296857f6fbecba",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T09:47:07Z",
+  "clientToken": "sunday-desktop-0317-inspect-public-pages-20261013T094707Z"
+}

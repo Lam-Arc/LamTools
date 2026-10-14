@@ -1,6 +1,7 @@
 import type {
   CoreMessage,
   CoreSubAgentStatus,
+  CoreSubAgentDurableRecord,
   CoreSubAgentRun,
   MessagePart,
   MessagePartStatus,
@@ -343,7 +344,8 @@ function isNewSubAgentLifecycle(
 }
 
 function isTerminalStatus(status: CoreSubAgentStatus | undefined): boolean {
-  return status === 'completed' || status === 'error'
+  return status === 'completed' || status === 'error' || status === 'interrupted'
+    || status === 'idle' || status === 'closed'
 }
 
 function taskMessage(subSessionId: string, task: string, timestamp: string): CoreMessage {
@@ -461,6 +463,12 @@ function subAgentProjectedStatus(part: MessagePart, previous?: CoreSubAgentRun):
   ).toLowerCase()
   const childParts = subAgentTimelineParts(part).filter(item => !isUserTimelinePart(item))
   const childStatus = subAgentLatestChildStatus(part, childParts)
+  // A child's own durable terminal fact outranks stale nested activity. Parent
+  // turn completion is deliberately not used here: children may outlive it.
+  if (durableStatus) {
+    const terminal = normalizeSubAgentStatus(durableStatus)
+    if (terminal === 'interrupted' || terminal === 'error' || terminal === 'closed') return terminal
+  }
   const statuses = [part.status, childStatus]
   if (statuses.includes('running')) return 'running'
   if (statuses.includes('pending')) return 'pending'
@@ -628,11 +636,104 @@ function isUserTimelinePart(part: MessagePart): boolean {
 
 function isSubAgentPart(part: MessagePart): boolean {
   const toolName = String(part.toolName || part.label || '').toLowerCase()
+  const metadata = record(part.metadata)
+  if (metadata.sub_agent_terminal === true && Object.keys(record(metadata.sub_agent)).length > 0) return true
   if (part.partType === 'sub_line') return true
   if (toolName === 'sub_agent_message' || toolName === 'sub_agent_receive') return true
   if (toolName === 'sub_agent' || toolName === 'subagent') return true
   if (part.partType === 'agent_summary') return !toolName
   return false
+}
+
+/** Resolve the newest child lifecycle evidence, independently of its parent
+ * turn. A terminal fact beats stale running activity; a newer child start can
+ * legitimately reopen the member. Both card and pane use this same resolver. */
+type StatusRecord = Partial<CoreSubAgentDurableRecord>
+type PublishedStatus = string | StatusRecord | undefined
+
+interface StatusEvidence {
+  status: CoreSubAgentStatus
+  at: number
+  priority: number
+  record?: StatusRecord
+}
+
+function recordTime(value: unknown): number {
+  const seconds = Number(value)
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : Number.NaN
+}
+
+function resolveSubAgentEvidence(
+  run: CoreSubAgentRun, published: PublishedStatus, durable: StatusRecord | null | undefined,
+): StatusEvidence {
+  const startedAt = Date.parse(run.startedAt || '')
+  const candidates: StatusEvidence[] = [{
+    status: run.status, priority: 0,
+    at: isTerminalStatus(run.status) ? Date.parse(run.completedAt || run.updatedAt || '') : startedAt,
+  }]
+  const publishedRecord = typeof published === 'object' ? published : undefined
+  for (const [record, priority] of [[publishedRecord, 1], [durable, 2]] as const) {
+    if (!record?.status) continue
+    const status = normalizeSubAgentStatus(record.status)
+    const completedAt = recordTime(record.completed_at)
+    // A prior lifecycle's terminal must not close a newly resumed child.
+    if (isTerminalStatus(status) && Number.isFinite(completedAt) && completedAt < startedAt) continue
+    candidates.push({ status, priority, record,
+      at: Number.isFinite(completedAt) ? completedAt : recordTime(record.started_at) })
+  }
+  if (typeof published === 'string' && published.trim()) {
+    const status = normalizeSubAgentStatus(published)
+    const durableEnd = recordTime(durable?.completed_at)
+    const staleTerminal = isTerminalStatus(status) && durable?.status
+      && normalizeSubAgentStatus(durable.status) === status && durableEnd < startedAt
+    if (!staleTerminal) candidates.push({ status, at: startedAt, priority: 1 })
+  }
+  return candidates.reduce((latest, candidate) => {
+    if (Number.isFinite(latest.at) && Number.isFinite(candidate.at) && latest.at !== candidate.at) {
+      return candidate.at > latest.at ? candidate : latest
+    }
+    // Without a complete timestamp, prefer the explicit lifecycle record.
+    return candidate.priority > latest.priority ? candidate : latest
+  })
+}
+
+export function resolveCoreSubAgentStatus(
+  run: CoreSubAgentRun, published: PublishedStatus,
+  durable: StatusRecord | null | undefined,
+): CoreSubAgentStatus {
+  return resolveSubAgentEvidence(run, published, durable).status
+}
+
+/** Reconcile the status and its timing together so grouping, timers, deletion
+ * controls, and navigation cannot retain a separate stale lifecycle. */
+export function reconcileCoreSubAgentRun(
+  run: CoreSubAgentRun, published?: PublishedStatus, durable?: StatusRecord | null,
+): CoreSubAgentRun {
+  const evidence = resolveSubAgentEvidence(run, published, durable)
+  const start = recordTime(evidence.record?.started_at)
+  const end = recordTime(evidence.record?.completed_at)
+  const elapsed = evidence.record?.elapsed_ms
+  return {
+    ...run, status: evidence.status,
+    startedAt: Number.isFinite(start) ? new Date(start).toISOString() : run.startedAt,
+    completedAt: isTerminalStatus(evidence.status)
+      ? Number.isFinite(end) ? new Date(end).toISOString() : run.completedAt : undefined,
+    elapsedMs: typeof elapsed === 'number' && Number.isFinite(elapsed) ? Math.max(0, elapsed) : run.elapsedMs,
+  }
+}
+/** Merge live and polled lifecycle records once for all surfaces, including
+ * the session's background-work indicator. Names are scoped by the host thread. */
+export function reconcileCoreSubAgentRecords(
+  published: Record<string, CoreSubAgentDurableRecord>, durable: Record<string, CoreSubAgentDurableRecord>,
+): Record<string, CoreSubAgentDurableRecord> {
+  const merged: Record<string, CoreSubAgentDurableRecord> = {}
+  for (const name of new Set([...Object.keys(published), ...Object.keys(durable)])) {
+    const run: CoreSubAgentRun = { id: name, name, subSessionId: '', task: '', modelId: '',
+      status: 'pending', startedAt: '', updatedAt: '', timeline: [], sourcePartIds: [] }
+    const evidence = resolveSubAgentEvidence(run, published[name], durable[name])
+    if (evidence.record) merged[name] = { ...evidence.record, name, status: evidence.status }
+  }
+  return merged
 }
 
 function subAgentSessionId(part: MessagePart): string {
@@ -1047,7 +1148,8 @@ function subAgentConclusion(part: MessagePart): string {
 function subAgentStatusLabel(status: CoreSubAgentStatus): string {
   if (status === 'running') return '运行中'
   if (status === 'pending') return '等待中'
-  if (status === 'paused') return '已暂停'
+  if (status === 'paused') return '等待回答'
+  if (status === 'suspended') return '已暂停'
   if (status === 'interrupted') return '已中断'
   if (status === 'closed') return '已关闭'
   if (status === 'idle') return '空闲'

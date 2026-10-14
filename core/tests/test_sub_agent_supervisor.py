@@ -68,7 +68,7 @@ class FakeRunner:
         self.calls.append(kwargs)
         self.started.set()
         await self.release.wait()
-        self.guidance.extend(kwargs["guidance_source"]())
+        self.guidance.extend(item["content"] for item in kwargs["guidance_source"]())
         identity = current_child_identity()
         assert identity is not None
         await identity[0].child_message("evidence ready", message_id="message-1")

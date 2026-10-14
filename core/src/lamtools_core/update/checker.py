@@ -19,8 +19,11 @@ import logging
 import os
 import platform
 import re
+import socket
+import time
 from itertools import zip_longest
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from lamtools_core import __version__
 from lamtools_core.config.network import httpx_client_kwargs
@@ -121,20 +124,66 @@ def compare_versions(a: str, b: str) -> int:
     return 0
 
 
+def _diagnostic_url(url: str) -> str:
+    """Keep endpoint details without credentials, query tokens or fragments."""
+    parsed = urlsplit(url)
+    return urlunsplit((parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "", ""))
+
+
+def _log_request_failure(url: str, routing: dict[str, Any], exc: Exception, elapsed: float) -> None:
+    """Record the original DNS failure without performing a second lookup."""
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    dns = next((error for error in chain if isinstance(error, socket.gaierror)), None)
+    # Some transports retain only the OS error text rather than its type.
+    dns_reported = dns is not None or any(
+        "getaddrinfo failed" in str(error).lower()
+        or "name or service not known" in str(error).lower()
+        or "temporary failure in name resolution" in str(error).lower()
+        for error in chain
+    )
+    proxy = str(routing.get("proxy") or "")
+    _log.warning(
+        "Update request failed: stage=%s url=%s hostname=%s route=%s proxy=%s "
+        "elapsed_ms=%.1f timeout_seconds=%s exception_chain=%s dns_errno=%s dns_message=%s",
+        "dns" if dns_reported else "request",
+        _diagnostic_url(url),
+        urlsplit(url).hostname or "",
+        "proxy" if proxy else "direct",
+        _diagnostic_url(proxy) if proxy else "none",
+        elapsed * 1000,
+        REQUEST_TIMEOUT_SECONDS,
+        " -> ".join(type(error).__name__ for error in chain),
+        dns.errno if dns is not None else "unavailable",
+        dns.strerror if dns is not None else "unavailable",
+    )
+
+
 def _http_get_json(url: str) -> dict[str, Any]:
     """GET ``url`` and parse it as JSON, raising on any failure."""
     import httpx
 
     accept = "application/vnd.github+json" if "api.github.com" in url else "application/json"
-    with httpx.Client(
-        timeout=REQUEST_TIMEOUT_SECONDS,
-        follow_redirects=True,
-        headers={"User-Agent": _USER_AGENT, "Accept": accept},
-        **httpx_client_kwargs(url),
-    ) as client:
-        response = client.get(url)
-        response.raise_for_status()
-        data = response.json()
+    routing = httpx_client_kwargs(url)
+    started = time.monotonic()
+    try:
+        with httpx.Client(
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers={"User-Agent": _USER_AGENT, "Accept": accept},
+            **routing,
+        ) as client:
+            response = client.get(url)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:
+        _log_request_failure(url, routing, exc, time.monotonic() - started)
+        raise
     if not isinstance(data, dict):
         raise ValueError(f"expected a JSON object, got {type(data).__name__}")
     return data

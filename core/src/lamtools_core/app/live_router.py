@@ -929,6 +929,11 @@ class CoreLiveConnection:
                 {
                     "protocolVersion": self.adapter.protocol_version,
                     "serverInfo": {"name": self.adapter.server_name, "title": self.adapter.server_title},
+                    # sub_agent_control: child-directed Stop/Resume
+                    # (sub_agent.interrupt / sub_agent.resume) is a Core
+                    # runtime operation; runtimes without it (embedded
+                    # mobile standalone) must not offer the control.
+                    "capabilities": {"same_turn_resume": True, "sub_agent_control": True},
                 },
             )
         )
@@ -980,9 +985,17 @@ def _normalize_method(method: str) -> str:
         "thread/history": "thread.history",
         "thread/outline": "thread.outline",
         "turn/start": "turn.start",
+        "turn/resume": "turn.resume",
+        "turn/pause": "turn.pause",
+        "turn/paused": "turn.pause",
         "turn/cancel": "turn.cancel",
+        # ``turn/interrupt`` keeps its terminal meaning for the clients that
+        # still send it (mobile). The desktop's single click sends
+        # ``turn/pause`` and its long-press confirm sends ``turn/terminate``.
         "turn/interrupt": "turn.cancel",
         "turn.interrupt": "turn.cancel",
+        "turn/terminate": "turn.terminate",
+        "turn/stop": "turn.terminate",
         "turn/force_reset": "turn.force_reset",
         "turn/force-reset": "turn.force_reset",
         "turn.force_reset": "turn.force_reset",

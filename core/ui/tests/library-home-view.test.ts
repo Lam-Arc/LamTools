@@ -68,7 +68,7 @@ describe('LibraryHomeView', () => {
 
     // 资料 = 资料库版式的资料区（成果数据同一份，版式按资料库来）。
     expect(wrapper.find('[data-materials-view]').exists()).toBe(true)
-    expect(wrapper.emitted('heading')?.[0]).toEqual([{ title: '资料库 › 资料', subtitle: '项目里进出的文件 — 用户上传、中间产物与最终产物。' }])
+    expect(wrapper.emitted('heading')?.[0]).toEqual([{ title: '库 › 资料', subtitle: '项目里进出的文件 — 用户上传、中间产物与最终产物。' }])
     wrapper.unmount()
   })
 
@@ -87,8 +87,8 @@ describe('LibraryHomeView', () => {
     expect(client.listPlanLibrary).toHaveBeenCalledWith('proj-1')
 
     const headings = (wrapper.emitted('heading') as Array<Array<{ title: string }>>).map(entry => entry[0].title)
-    expect(headings).toContain('资料库 › 记忆')
-    expect(headings[headings.length - 1].startsWith('资料库 › 方案')).toBe(true)
+    expect(headings).toContain('库 › 记忆')
+    expect(headings[headings.length - 1].startsWith('库 › 方案')).toBe(true)
     wrapper.unmount()
   })
 

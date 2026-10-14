@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 import httpx
 
 from lamtools_core.config.network import httpx_client_kwargs
+from lamtools_core.llm.forensics import recorded_request
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
 from lamtools_core.tool.workspace import is_within_path
 
@@ -178,7 +179,10 @@ async def _run_generate(
     payload: dict[str, Any] = {"prompt": prompt, "n": count, "size": size}
     if model:
         payload["model"] = model
-    resp = await client.post(f"{api_url}/{_GENERATE_ENDPOINT}", json=payload)
+    async with recorded_request(client, "POST", f"{api_url}/{_GENERATE_ENDPOINT}",
+                                context={"model": model, "provider": "image-generation", "retry_index": 0},
+                                json=payload) as resp:
+        pass
     resp.raise_for_status()
     body = resp.json()
     items = body.get("data") or []
@@ -219,7 +223,10 @@ async def _run_edit(
     data: dict[str, Any] = {"prompt": prompt, "n": 1}
     if model:
         data["model"] = model
-    resp = await client.post(f"{api_url}/{_EDIT_ENDPOINT}", files=files, data=data)
+    async with recorded_request(client, "POST", f"{api_url}/{_EDIT_ENDPOINT}",
+                                context={"model": model, "provider": "image-edit", "retry_index": 0},
+                                files=files, data=data) as resp:
+        pass
     resp.raise_for_status()
     body = resp.json()
     items = body.get("data") or []

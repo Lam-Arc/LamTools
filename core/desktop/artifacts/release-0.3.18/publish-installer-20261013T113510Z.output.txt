@@ -1,0 +1,23 @@
+PUBLISH_INSTALLER_UTC_BEGIN=2026-10-13T11:35:11Z
+active
+active
+CURRENT_MANIFEST_OK 0.3.17 d25a030599b148d52c44021a89b487f4ccf1a695d7b7d19bedd4c1a7ab3015b1
+STAGED_MANIFEST_OK
+MANIFEST_CURRENT_OK 0.3.18 0.3.17
+MANIFEST_ROLLBACK_OK 0.3.17 d25a030599b148d52c44021a89b487f4ccf1a695d7b7d19bedd4c1a7ab3015b1
+PUBLISHED_INSTALLER_SHA=b8681e66243634654b98b70274aee3cee7e6fd69241ddf1f99219cec6334a5f7  /var/www/lamtools/Sunday_0.3.18_x64-setup.exe
+b8681e66243634654b98b70274aee3cee7e6fd69241ddf1f99219cec6334a5f7  /var/www/lamtools/Sunday-latest-x64-setup.exe
+d25a030599b148d52c44021a89b487f4ccf1a695d7b7d19bedd4c1a7ab3015b1  /var/www/lamtools/Sunday-latest-x64-setup-0.3.17-before-0.3.18-20261013.exe
+PUBLISHED_MANIFEST={
+  "version": "0.3.18",
+  "download_url": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.18_x64-setup.exe",
+  "release_url": "https://47.114.43.99.nip.io/#download",
+  "release_notes": "Sunday 0.3.18",
+  "published_at": "2026-10-13T11:30:54Z",
+  "sha256": "b8681e66243634654b98b70274aee3cee7e6fd69241ddf1f99219cec6334a5f7",
+  "size": 95007704,
+  "linux_version": "0.3.17"
+}
+PUBLIC_VERSIONED=http=200 bytes=95007704
+PUBLIC_LATEST=http=200 bytes=95007704
+PUBLISH_INSTALLER_UTC_END=2026-10-13T11:35:33Z

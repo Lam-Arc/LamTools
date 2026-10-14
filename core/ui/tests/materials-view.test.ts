@@ -398,8 +398,8 @@ describe('MaterialsView', () => {
     const { wrapper } = mountView([], { uploadFiles })
     await settle()
 
-    expect(wrapper.get('[data-materials-usage]').text()).toBe('资料库还是空的')
-    expect(wrapper.get('[data-materials-empty]').text()).toContain('资料库还是空的')
+    expect(wrapper.get('[data-materials-usage]').text()).toBe('库还是空的')
+    expect(wrapper.get('[data-materials-empty]').text()).toContain('库还是空的')
     await wrapper.get('[data-materials-empty-upload]').trigger('click')
     expect(uploadFiles).toHaveBeenCalledWith('')
     wrapper.unmount()

@@ -24,7 +24,7 @@ dependency inventories belong to the package manifests and module documents.
   Workbench. Desktop uses DirectTransport; Capacitor mobile uses RemoteTransport
   over a Noise-secured tunnel selected by ConnectionManager.
 - The bundled Workflow backend provides a versioned document/adapter boundary,
-  durable run engine, SQLite-backed queue, append-only event journal and
+  durable run engine, JSON-file queue, append-only JSONL event journal and
   snapshot projector, expression AST evaluator, DataPacket/Attachment
   contracts, credential references, capability gates, and Arrange-backed
   activations.
@@ -72,8 +72,8 @@ dependency inventories belong to the package manifests and module documents.
   request overrides are merged provider first and model second, so model
   configuration wins over provider configuration.
 - MCP is an optional integration surface for external tools.
-- Update checking queries GitHub's latest-release API; downloading/installing
-  remains user-guided.
+- Update checking reads the official website manifest with GitHub latest-release
+  fallback. User-confirmed downloads are digest-verified before installation.
 - The desktop packages the backend for Windows and Linux so the installed app
   does not require a separate Python or Node runtime. Linux mutable state uses
   Tauri `app_data_dir()`/XDG paths, hooks use `XDG_CONFIG_HOME`, and the
@@ -106,8 +106,10 @@ dependency inventories belong to the package manifests and module documents.
 - Workflow runs pin an immutable definition revision. Durable execution records
   distinguish Workflow, Version, Run, NodeRun, and Attempt; retries, timeouts,
   cancellation, wait/signal, idempotency, and cache policy are engine contracts.
-  The current single-flight guard is process-local, so cross-process execution
-  still requires a transactional claim/lock layer.
+  Durable runner claims use SQLite leases and fencing in addition to local
+  single-flight guards. Queue record updates remain JSON-file writes guarded
+  only within each store instance; external side effects require executor
+  idempotency rather than an exactly-once guarantee from runner claims.
 - Workflow data is item-oriented and reference-based: large binary values travel
   through Attachment/Artifact references, and resolved credential secrets remain
   attempt-local and are excluded from event history, snapshots, logs, metadata,

@@ -23,6 +23,7 @@ class SubAgentEventForwardingSink:
         model_id: str = "",
         reasoning_level: str = "",
         started_at: float | None = None,
+        invocation_id: str = "",
     ) -> None:
         self._parent_sink = parent_sink
         self._parent_session_id = parent_session_id
@@ -35,12 +36,19 @@ class SubAgentEventForwardingSink:
         self._model_id = model_id
         self._reasoning_level = reasoning_level
         self._started_at = started_at or time.time()
-        self._invocation_id = uuid.uuid4().hex
+        # A continuation of an existing child run reuses that run's scope so its
+        # events update the items the run already created (an answered question
+        # resolves the card that asked it instead of orphaning it).
+        self._invocation_id = str(invocation_id or "").strip() or uuid.uuid4().hex
         self._events: list[CoreEvent] = []
 
     @property
     def events(self) -> list[CoreEvent]:
         return list(self._events)
+
+    @property
+    def invocation_id(self) -> str:
+        return self._invocation_id
 
     async def emit(self, event: CoreEvent) -> None:
         self._events.append(event)

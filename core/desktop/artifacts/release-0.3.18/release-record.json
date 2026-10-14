@@ -1,0 +1,277 @@
+{
+  "releaseVersion": "0.3.18",
+  "status": "published_and_synced",
+  "sourceCommit": "f046409ac5e43b2403ea261407204330e77bc458",
+  "completedAtUtc": "2026-10-13T11:46:54Z",
+  "cli": {
+    "resolvedBy": "Get-Command aliyun.exe after adding install directory to current process PATH",
+    "source": "E:\\阿里云服务\\aliyun-cli\\aliyun.exe",
+    "version": "3.5.0"
+  },
+  "artifacts": {
+    "installer": {
+      "path": "core/desktop/src-tauri/target/release/bundle/inno/Sunday_0.3.18_x64-setup.exe",
+      "bytes": 95007704,
+      "sha256": "b8681e66243634654b98b70274aee3cee7e6fd69241ddf1f99219cec6334a5f7"
+    },
+    "siteArchive": {
+      "path": "core/desktop/artifacts/release-0.3.18/site-0.3.18.tar.gz",
+      "bytes": 4826049,
+      "sha256": "7937108279626799e883bb0a87567984fe56f5271c83113ebbc98f4b7874615a"
+    },
+    "desktopManifest": {
+      "version": "0.3.18",
+      "linux_version": "0.3.17",
+      "installerSha256": "b8681e66243634654b98b70274aee3cee7e6fd69241ddf1f99219cec6334a5f7"
+    }
+  },
+  "publication": {
+    "installerVersionedUrl": "https://47.114.43.99.nip.io/downloads/Sunday_0.3.18_x64-setup.exe",
+    "installerLatestUrl": "https://47.114.43.99.nip.io/downloads/Sunday-latest-x64-setup.exe",
+    "installerHttpChecks": "HTTP 200; 95007704 bytes for both URLs",
+    "sitePointer": "/var/www/lamtools/site-releases/0.3.18-mobile-0.1.48-20261013",
+    "publicDomain": "ainarit.com Sunday 0.3.18 / Mobile 0.1.48; Linux AppImage and .deb remain 0.3.17",
+    "publicPreview": "/preview/assets/preview-qrvOXrLc.js",
+    "syncCheck": "passed before and after cleanup",
+    "services": "caddy-lamtools and lamtools-relay active; no restart performed",
+    "githubLinuxAssets": {
+      "latestRelease": "v0.3.17",
+      "appImage": {
+        "name": "Sunday_0.3.17_amd64.AppImage",
+        "bytes": 189483512,
+        "url": "https://github.com/Lam-Arc/LamTools/releases/download/v0.3.17/Sunday_0.3.17_amd64.AppImage"
+      },
+      "deb": {
+        "name": "Sunday_0.3.17_amd64.deb",
+        "bytes": 123274156,
+        "url": "https://github.com/Lam-Arc/LamTools/releases/download/v0.3.17/Sunday_0.3.17_amd64.deb"
+      },
+      "directHead": "stopped after 90-second connection timeout; GitHub API confirmed both assets exist and website sync verified links"
+    }
+  },
+  "rollback": {
+    "previousSitePointer": "/var/www/lamtools/site-releases/0.3.17-mobile-0.1.48-20261013",
+    "previousLatestInstaller": "/var/www/lamtools/Sunday-latest-x64-setup-0.3.17-before-0.3.18-20261013.exe",
+    "previousDesktopManifest": "/var/www/lamtools/desktop-update-0.3.17-before-0.3.18-20261013.json",
+    "previousSyncHelper": "/usr/local/bin/sync-public-site.sh-0.3.17-before-0.3.18-20261013",
+    "ainaritBackups": [
+      "/var/backups/ainarit/sunday-before-20261013T113750Z.tar.gz",
+      "/var/backups/ainarit/ainarit-preview-before-20261013T113750Z.tar.gz"
+    ]
+  },
+  "temporarySftpKey": {
+    "serverAuthorization": "revoked; authorized_keys restored to one baseline line",
+    "localPrivateKeyPath": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\sunday-desktop-0318-upload-7e1c480efb814820bdad544b442c57f3\\sftp_ed25519",
+    "localPrivateKeyCleanup": "not completed: automatic review rejected deletion twice with reason \"blocked by policy\"; key is revoked server-side"
+  },
+  "excludedChecks": "No tests, smoke checks, installer acceptance, GitHub tags, CI, or service restarts were run.",
+  "incidents": [
+    "Initial SFTP batch collapsed three commands onto one line; server stage verification caught missing manifest/site tar before publication. Reuploaded each file separately, then all sizes and SHA256 values passed.",
+    "A read-only GitHub HEAD check failed at the CDN with HTTP/2 framing/90-second connect timeout; the verification invocation was stopped. GitHub API confirmed v0.3.17 and both Linux assets."
+  ],
+  "cloudAssistantCommands": [
+    {
+      "purpose": "authorize-sftp",
+      "commandName": "sunday-desktop-0318-authorize-sftp-20261013T113102Z",
+      "startedAtUtc": "2026-10-13T11:31:02Z",
+      "completedAtUtc": "2026-10-13T11:31:05Z",
+      "commandId": "c-hz06zwuh863jeo0",
+      "invokeId": "t-hz06zwuh86g0we8",
+      "runCommandRequestId": "01A13507-BD04-5125-AEF5-1C1A973E6251",
+      "resultRequestId": "01A13507-C783-52D2-B836-5430B6E02578",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "authorize-sftp-20261013T113102Z.output.txt"
+    },
+    {
+      "purpose": "final-confirmation",
+      "commandName": "sunday-desktop-0318-final-confirmation-20261013T114649Z",
+      "startedAtUtc": "2026-10-13T11:46:49Z",
+      "completedAtUtc": "2026-10-13T11:46:54Z",
+      "commandId": "c-hz06zwvvx1s1og0",
+      "invokeId": "t-hz06zwvvx1x1h4w",
+      "runCommandRequestId": "01A13516-309F-5995-A55C-8045564C0680",
+      "resultRequestId": "01A13516-44D6-587E-82AB-32C140FB40AA",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "final-confirmation-20261013T114649Z.output.txt"
+    },
+    {
+      "purpose": "final-verify",
+      "commandName": "sunday-desktop-0318-final-verify-20261013T113840Z",
+      "startedAtUtc": "2026-10-13T11:38:40Z",
+      "completedAtUtc": "2026-10-13T11:39:18Z",
+      "commandId": "c-hz06zwv5qe2idc0",
+      "invokeId": "t-hz06zwv5qeezv28",
+      "runCommandRequestId": "01A1350E-B95F-59B7-BB4B-23A6E89CF894",
+      "resultRequestId": "01A1350F-4C5D-5FD2-8F7A-36BA5CE68F87",
+      "invocationStatus": "Failed",
+      "exitCode": 16,
+      "outputFile": "final-verify-20261013T113840Z.output.txt"
+    },
+    {
+      "purpose": "install-sync-helper",
+      "commandName": "sunday-desktop-0318-install-sync-helper-20261013T113620Z",
+      "startedAtUtc": "2026-10-13T11:36:20Z",
+      "completedAtUtc": "2026-10-13T11:36:23Z",
+      "commandId": "c-hz06zwuy9d3p4w0",
+      "invokeId": "t-hz06zwuy9ddoq9s",
+      "runCommandRequestId": "01A1350C-982C-5857-8A20-C33C8CBB8CF2",
+      "resultRequestId": "01A1350C-A2BB-5129-B512-10D6A39089DC",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "install-sync-helper-20261013T113620Z.output.txt"
+    },
+    {
+      "purpose": "preflight",
+      "commandName": "sunday-desktop-0317-preflight-20261013T105305Z",
+      "startedAtUtc": "2026-10-13T10:53:05Z",
+      "completedAtUtc": "2026-10-13T10:53:08Z",
+      "commandId": "c-hz06zwr3d2m1534",
+      "invokeId": "t-hz06zwr3d2yimtc",
+      "runCommandRequestId": "01A134E4-FEA6-516E-83EA-6DBC84221E81",
+      "resultRequestId": "01A134E5-0997-5B6E-A9A3-389EA49C8808",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "preflight-20261013T105305Z.output.txt"
+    },
+    {
+      "purpose": "preflight",
+      "commandName": "sunday-desktop-0318-preflight-20261013T112909Z",
+      "startedAtUtc": "2026-10-13T11:29:09Z",
+      "completedAtUtc": "2026-10-13T11:29:12Z",
+      "commandId": "c-hz06zwub66zim80",
+      "invokeId": "t-hz06zwub674ieww",
+      "runCommandRequestId": "01A13506-029C-5973-801F-D3FDE146D699",
+      "resultRequestId": "01A13506-0D8B-51DF-926E-3AFDA347BC97",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "preflight-20261013T112909Z.output.txt"
+    },
+    {
+      "purpose": "preflight",
+      "commandName": "sunday-desktop-0318-preflight-20261013T113000Z",
+      "startedAtUtc": "2026-10-13T11:30:00Z",
+      "completedAtUtc": "2026-10-13T11:30:04Z",
+      "commandId": "c-hz06zwudxxxjm68",
+      "invokeId": "t-hz06zwudxycj08w",
+      "runCommandRequestId": "01A13506-CD57-5C82-A3F4-D4E91C629CE7",
+      "resultRequestId": "01A13506-D87D-52EB-966F-50F0E0D1B77F",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "preflight-20261013T113000Z.output.txt"
+    },
+    {
+      "purpose": "publish-installer",
+      "commandName": "sunday-desktop-0318-publish-installer-20261013T113510Z",
+      "startedAtUtc": "2026-10-13T11:35:10Z",
+      "completedAtUtc": "2026-10-13T11:35:34Z",
+      "commandId": "c-hz06zwuuj68khz4",
+      "invokeId": "t-hz06zwuuj6l1zpc",
+      "runCommandRequestId": "01A1350B-87FA-5C88-8EBC-C2D484C33D3E",
+      "resultRequestId": "01A1350B-E427-569E-80DD-2BAE0B9F1B5C",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "publish-installer-20261013T113510Z.output.txt"
+    },
+    {
+      "purpose": "publish-site",
+      "commandName": "sunday-desktop-0318-publish-site-20261013T113719Z",
+      "startedAtUtc": "2026-10-13T11:37:19Z",
+      "completedAtUtc": "2026-10-13T11:37:22Z",
+      "commandId": "c-hz06zwv1fmdhts0",
+      "invokeId": "t-hz06zwv1fmpzbi8",
+      "runCommandRequestId": "01A1350D-7FCD-51CD-A9E2-682D92C07B4E",
+      "resultRequestId": "01A1350D-8A4E-5ADF-A294-3F2D5332B05C",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "publish-site-20261013T113719Z.output.txt"
+    },
+    {
+      "purpose": "revoke-and-clean-stages",
+      "commandName": "sunday-desktop-0318-revoke-and-clean-stages-20261013T114322Z",
+      "startedAtUtc": "2026-10-13T11:43:22Z",
+      "completedAtUtc": "2026-10-13T11:43:25Z",
+      "commandId": "c-hz06zwvku5vri80",
+      "invokeId": "t-hz06zwvku688zy8",
+      "runCommandRequestId": "01A13513-07D9-5996-BA01-86EB2690DFE0",
+      "resultRequestId": "01A13513-1261-5E53-A80F-7CB52DEE0250",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "revoke-and-clean-stages-20261013T114322Z.output.txt"
+    },
+    {
+      "purpose": "sync-public-domain",
+      "commandName": "sunday-desktop-0318-sync-public-domain-20261013T113750Z",
+      "startedAtUtc": "2026-10-13T11:37:50Z",
+      "completedAtUtc": "2026-10-13T11:37:53Z",
+      "commandId": "c-hz06zwv3258cykg",
+      "invokeId": "t-hz06zwv325dcr9c",
+      "runCommandRequestId": "01A1350D-F67E-5AFA-9477-DA10F4BA1B89",
+      "resultRequestId": "01A1350E-01A7-5774-8692-23249C31E68F",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "sync-public-domain-20261013T113750Z.output.txt"
+    },
+    {
+      "purpose": "verify-linux-assets",
+      "commandName": "sunday-desktop-0318-verify-linux-assets-20261013T114000Z",
+      "startedAtUtc": "2026-10-13T11:40:00Z",
+      "completedAtUtc": "2026-10-13T11:47:13Z",
+      "commandId": "c-hz06zwva089e4n4",
+      "invokeId": "t-hz06zwva08edxc0",
+      "runCommandRequestId": "01A1350F-F129-5C71-B20C-4AA3CBD8646D",
+      "resultRequestId": "01A13516-8E3C-5ED7-866E-62E4C55C11AF",
+      "invocationStatus": "Terminated",
+      "exitCode": null,
+      "outputFile": "verify-linux-assets-20261013T114000Z.output.txt"
+    },
+    {
+      "purpose": "verify-stages",
+      "commandName": "sunday-desktop-0318-verify-stages-20261013T113218Z",
+      "startedAtUtc": "2026-10-13T11:32:18Z",
+      "completedAtUtc": "2026-10-13T11:32:21Z",
+      "commandId": "c-hz06zwula054mio",
+      "invokeId": "t-hz06zwula0hm48w",
+      "runCommandRequestId": "01A13508-E498-5993-A0CC-6C317D632F9F",
+      "resultRequestId": "01A13508-EF22-5B2A-BFB1-B40E78370E9B",
+      "invocationStatus": "Failed",
+      "exitCode": 1,
+      "outputFile": "verify-stages-20261013T113218Z.output.txt"
+    },
+    {
+      "purpose": "verify-stages",
+      "commandName": "sunday-desktop-0318-verify-stages-20261013T113335Z",
+      "startedAtUtc": "2026-10-13T11:33:35Z",
+      "completedAtUtc": "2026-10-13T11:33:38Z",
+      "commandId": "c-hz06zwupei4bchs",
+      "invokeId": "t-hz06zwupei9b56o",
+      "runCommandRequestId": "01A1350A-119F-57C2-8AED-E6386EF50424",
+      "resultRequestId": "01A1350A-1C60-5813-91AC-05CD71CE586F",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "verify-stages-20261013T113335Z.output.txt"
+    },
+    {
+      "purpose": "verify-sync-helper-stage",
+      "commandName": "sunday-desktop-0318-verify-sync-helper-stage-20261013T113604Z",
+      "startedAtUtc": "2026-10-13T11:36:04Z",
+      "completedAtUtc": "2026-10-13T11:36:07Z",
+      "commandId": "c-hz06zwuxdm85wxs",
+      "invokeId": "t-hz06zwuxdmd5pmo",
+      "runCommandRequestId": "01A1350C-57BE-52FC-BA90-2E60AFC0C890",
+      "resultRequestId": "01A1350C-6228-52E5-AC55-7265772D3831",
+      "invocationStatus": "Success",
+      "exitCode": 0,
+      "outputFile": "verify-sync-helper-stage-20261013T113604Z.output.txt"
+    }
+  ],
+  "stopInvocation": {
+    "invokeId": "t-hz06zwva08edxc0",
+    "commandId": "c-hz06zwva089e4n4",
+    "stopRequestId": "01A13512-43A9-5406-94B5-3421A8B154FE",
+    "confirmationRequestId": "01A13512-7949-578F-9AF1-C2A9BFED18B1",
+    "finalCommandResultRequestId": "01A13515-1A1B-575E-8885-DCBBC9124971",
+    "terminalStatus": "Terminated/Stopped"
+  }
+}

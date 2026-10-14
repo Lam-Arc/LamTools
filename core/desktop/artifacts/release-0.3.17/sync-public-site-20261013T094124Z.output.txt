@@ -1,0 +1,14 @@
+SYNC_UTC_BEGIN=2026-10-13T09:41:25Z
+published channel: desktop 0.3.17, mobile 0.1.48
+backups: /var/backups/ainarit/sunday-before-20261013T094125Z.tar.gz /var/backups/ainarit/ainarit-preview-before-20261013T094125Z.tar.gz
+page stamped for desktop 0.3.17 / mobile 0.1.48: sunday.html
+active
+active
+live: https://ainarit.com/sunday.html reads 0.3.17 / 0.1.48; /preview/ serves /preview/assets/preview-0DVyVsmS.js
+published channel: desktop 0.3.17, mobile 0.1.48
+public site already in step
+SYNC_CHECK_OK
+SITE=/var/www/lamtools/site-releases/0.3.17-mobile-0.1.48-20261013
+active
+active
+SYNC_UTC_END=2026-10-13T09:41:26Z

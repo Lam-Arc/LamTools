@@ -1,0 +1,14 @@
+{
+  "purpose": "verify-stages",
+  "commandName": "sunday-desktop-0318-verify-stages-20261013T113218Z",
+  "description": "Read-only verify SFTP stage sizes/digests, manifest desktop/Linux versions, rollback pointer, latest installer, and sync-helper baseline",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "verify-stages.sh",
+  "commandSha256": "a63ed5b26ac7e8ef136d5e8b0fa2a0e35a322e2989c1dbc7debe51879aeee54a",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T11:32:18Z",
+  "clientToken": "sunday-desktop-0318-verify-stages-20261013T113218Z"
+}

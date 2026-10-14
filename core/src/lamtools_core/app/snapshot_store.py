@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -17,12 +17,21 @@ from lamtools_core.snapshot import (
     apply_run_item_event_in_place,
     empty_thread_snapshot,
     reconcile_terminal_requests,
+    recompute_thread_status,
 )
 
 from .event_store import CORE_RUN_ITEM_METHOD, AppEventEnvelope
 
 TERMINAL_ERROR_STATUSES = {"failed", "cancelled", "error"}
 TERMINAL_TURN_STATUSES = {"completed", *TERMINAL_ERROR_STATUSES}
+
+#: Byte budget for one bounded conversation-page item read. The page builder
+#: caps a served page at ``MAX_THREAD_HISTORY_PAGE_BYTES`` (3 MiB), so this
+#: leaves headroom to fill a page while never materializing a whole thread.
+DEFAULT_PAGE_ITEM_BYTES = 6 * 1024 * 1024
+
+#: Row cap for the same read: a count guard for threads made of tiny items.
+MAX_PAGE_ITEM_ROWS = 4000
 
 
 @dataclass
@@ -198,6 +207,14 @@ class CoreAppSnapshotProjector:
         turn["last_seq"] = event.seq
         turn["last_method"] = event.method
         state["status"] = "running"
+        if payload.get("resumed") is True:
+            # Only explicit Resume reopens a terminal turn. Ordinary late
+            # runtime frames retain the existing terminal-state protection.
+            core = state.setdefault("core", empty_thread_snapshot(event.thread_id))
+            core_turn = core.setdefault("turns", {}).setdefault(turn_id, {"turn_id": turn_id, "items": []})
+            core_turn.update({"status": "running", "run_id": payload.get("run_id"), "last_seq": event.seq})
+            core["status"] = "running"
+            core.pop("last_error", None)
 
     def _apply_item_started(self, state: dict[str, Any], event: AppEventEnvelope) -> None:
         payload = dict(event.payload or {})
@@ -403,22 +420,16 @@ class CoreAppSnapshotProjector:
             ]
 
     def _recompute_thread_status(self, state: dict[str, Any]) -> None:
-        requests = state.get("requests")
-        if isinstance(requests, dict) and any(
-            isinstance(request, dict) and request.get("status") == "open" for request in requests.values()
-        ):
-            state["status"] = "waiting"
-            return
-        turns = [turn for turn in (state.get("turns") or {}).values() if isinstance(turn, dict)]
-        if any(str(turn.get("status") or "") in {"running", "waiting", "interrupting"} for turn in turns):
-            state["status"] = "running"
-            return
-        if turns:
-            turns.sort(key=lambda turn: int(turn.get("last_seq") or turn.get("seq") or 0), reverse=True)
-            latest = str(turns[0].get("status") or "")
-            state["status"] = "failed" if latest in {"failed", "error"} else latest
-            return
-        state["status"] = "idle"
+        """Delegate to the one canonical derivation.
+
+        This used to be a second copy, and the copies drifted: the local one
+        tested the open requests before the turns, so a paused turn that still
+        held an unanswered question read back as ``waiting`` on every load. The
+        client reads that container status, kept believing the session was
+        active, and (before the client-side escalation was removed) terminated
+        the turn the user had just paused (2026-10-14).
+        """
+        recompute_thread_status(state)
 
     def _sync_status_from_core(self, state: dict[str, Any]) -> None:
         self.sync_status_from_core(state)
@@ -449,7 +460,11 @@ class CoreAppSnapshotProjector:
         if not core_status:
             return
         status = str(core_status)
-        if status == "cancelled":
+        if status == "paused":
+            # A paused turn owns the session: the list, the composer and the
+            # sidebar all read the flattened status, so it has to say paused.
+            state["status"] = "paused"
+        elif status == "cancelled":
             state["status"] = "cancelled"
         elif status in TERMINAL_ERROR_STATUSES:
             state["status"] = "failed"
@@ -538,7 +553,7 @@ class SqlAlchemyThreadSnapshotStore:
             state["core"] = core
         core["items"] = items
         core["item_order"] = order
-        return _strip_inline_image_copies(self.projector.reconcile_status(state))
+        return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
 
     async def load_metadata(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
         """Load only the metadata row: turns/queue/requests/registry/item_order.
@@ -561,7 +576,137 @@ class SqlAlchemyThreadSnapshotStore:
             state["core"] = core
         core.setdefault("items", {})
         core.setdefault("item_order", [])
-        return _strip_inline_image_copies(self.projector.reconcile_status(state))
+        return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
+
+    async def load_page(
+        self,
+        db: AsyncSession,
+        thread_id: str,
+        *,
+        before_seq: int | None = None,
+        before_item_id: str | None = None,
+        item_byte_budget: int = DEFAULT_PAGE_ITEM_BYTES,
+    ) -> dict[str, Any]:
+        """Metadata plus only the item rows one conversation page needs.
+
+        The item table holds one row per item, and long threads run to thousands
+        of rows of conversation content. Assembling every row to answer the first
+        screen is what made a session open cost tens of seconds on a cold cache,
+        so this read walks the ``(thread_id, seq)`` index backwards from the
+        cursor and stops once the accumulated ``item_json`` bytes reach
+        ``item_byte_budget``. ``core.item_order`` keeps the full metadata order
+        (every item id, loaded or not), so the caller can still report
+        ``history_page.total_items`` / ``has_more`` from the metadata alone.
+
+        Top-level (user) items live inside the metadata row, so they are always
+        present; only the per-item conversation rows are bounded.
+        """
+        state, core = await self._page_state(db, thread_id)
+        if state is None:
+            return self.projector.empty(thread_id)
+        if before_seq is None and before_item_id:
+            before_seq = await self._item_seq(db, thread_id, before_item_id)
+        loaded = await self._load_item_rows(
+            db, thread_id, before_seq=before_seq, item_byte_budget=item_byte_budget
+        )
+        core["items"] = loaded
+        core["_page_has_older_items"] = await self._has_older_items(
+            db, thread_id, loaded, before_seq=before_seq
+        )
+        return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
+
+    async def _page_state(
+        self, db: AsyncSession, thread_id: str
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Shared front half of the bounded reads: metadata row + core container."""
+        row = await db.get(self.snapshot_model, thread_id)
+        if row is None:
+            return None, {}
+        state = dict(row.snapshot_json or self.projector.empty(thread_id))
+        state["snapshot_seq"] = row.snapshot_seq
+        state["revision"] = _row_revision(row, state)
+        await self._hydrate_resource_usage(db, state, thread_id)
+        core = state.get("core")
+        if not isinstance(core, dict):
+            core = empty_thread_snapshot(thread_id)
+            state["core"] = core
+        core.setdefault("item_order", [])
+        return state, core
+
+    async def _has_older_items(
+        self,
+        db: AsyncSession,
+        thread_id: str,
+        loaded: dict[str, Any],
+        *,
+        before_seq: int | None,
+    ) -> bool:
+        """Whether any item row exists older than what this read materialized.
+
+        One index probe, so the caller can report ``has_more`` correctly without
+        loading the rest of the thread. An empty read (nothing newer than the
+        cursor) means nothing is left.
+        """
+        if not loaded:
+            return False
+        oldest = min(int(item.get("seq") or 0) for item in loaded.values())
+        stmt = select(self.item_model.item_id).where(
+            self.item_model.thread_id == thread_id,
+            self.item_model.seq < oldest,
+        )
+        if before_seq is not None:
+            stmt = stmt.where(self.item_model.seq < int(before_seq))
+        result = await db.execute(stmt.limit(1))
+        return result.scalar() is not None
+
+    async def _item_seq(self, db: AsyncSession, thread_id: str, item_id: str) -> int | None:
+        result = await db.execute(
+            select(self.item_model.seq).where(
+                self.item_model.thread_id == thread_id,
+                self.item_model.item_id == item_id,
+            )
+        )
+        value = result.scalar()
+        return int(value) if value is not None else None
+
+    async def _load_item_rows(
+        self,
+        db: AsyncSession,
+        thread_id: str,
+        *,
+        before_seq: int | None,
+        item_byte_budget: int,
+    ) -> dict[str, Any]:
+        """Newest-first item rows up to the byte budget (streamed, not buffered).
+
+        Streaming matters: the budget exists so one screen never materializes a
+        whole thread, and a buffered ``all()`` would fetch every row the LIMIT
+        allows before the budget could stop it.
+        """
+        budget = max(1, int(item_byte_budget))
+        stmt = select(self.item_model, func.length(self.item_model.item_json)).where(
+            self.item_model.thread_id == thread_id
+        )
+        if before_seq is not None:
+            stmt = stmt.where(self.item_model.seq < int(before_seq))
+        stmt = stmt.order_by(
+            self.item_model.seq.desc(), self.item_model.item_id.desc()
+        ).limit(MAX_PAGE_ITEM_ROWS)
+        items: dict[str, Any] = {}
+        total = 0
+        result = await db.stream(stmt)
+        try:
+            async for item_row, size in result:
+                item = dict(item_row.item_json or {})
+                item["seq"] = item_row.seq
+                items[str(item_row.item_id)] = item
+                total += int(size or 0)
+                if total >= budget:
+                    break
+        finally:
+            await result.close()
+        return items
+
 
     async def _hydrate_resource_usage(self, db: AsyncSession, state: dict[str, Any], thread_id: str) -> None:
         """Recover per-call usage from the journal for pre-history snapshots only."""
@@ -988,6 +1133,79 @@ def _strip_inline_image_metadata(metadata: Any) -> Any:
     if isinstance(metadata, dict) and _INLINE_IMAGE_METADATA_KEY in metadata:
         return {k: v for k, v in metadata.items() if k != _INLINE_IMAGE_METADATA_KEY}
     return metadata
+
+
+def prune_orphan_turns(state: dict[str, Any]) -> dict[str, Any]:
+    """Drop an invented turn and settle the thread status (read-time repair).
+
+    An approval response used to name a turn derived from a delegated child's
+    run, which created a turn nothing owns and nothing closes: it stayed
+    `running` forever, so a session whose work had finished kept reading as
+    running. New rows cannot be created any more (the emitter names the answered
+    turn and the projector only resumes turns that exist); this removes the ones
+    already stored, on every read, so a reload shows the truth. The rule is
+    deliberately narrow: only an active turn with no items whose last event was
+    an approval response can match, and no real turn looks like that.
+
+    The two containers hold the same turn id with different fields (the core
+    copy carries ``last_kind``), so the evidence is merged per turn id before
+    the test and both copies are dropped together.
+    """
+    turns = state.get("turns")
+    core = state.get("core")
+    core_turns = core.get("turns") if isinstance(core, dict) else None
+    containers = [item for item in (turns, core_turns) if isinstance(item, dict)]
+    active = {"running", "waiting", "interrupting"}
+    evidence: dict[str, dict[str, Any]] = {}
+    for container in containers:
+        for turn_id, turn in container.items():
+            if not isinstance(turn, dict):
+                continue
+            merged = evidence.setdefault(str(turn_id), {"statuses": set(), "kinds": set(), "items": 0})
+            status = str(turn.get("status") or "")
+            if status:
+                merged["statuses"].add(status)
+            kind = str(turn.get("last_kind") or "")
+            if kind:
+                merged["kinds"].add(kind)
+            merged["items"] += len(turn.get("items") or ())
+    for turn_id, merged in evidence.items():
+        statuses = merged["statuses"]
+        if not statuses or any(status not in active for status in statuses):
+            continue
+        if merged["items"]:
+            continue
+        if merged["kinds"] != {"approval_response"}:
+            continue
+        for container in containers:
+            container.pop(turn_id, None)
+    if _no_active_turn(turns) and _no_active_turn(core_turns):
+        latest = None
+        for container in (turns, core_turns):
+            if not isinstance(container, dict):
+                continue
+            for turn in container.values():
+                if not isinstance(turn, dict):
+                    continue
+                if latest is None or int(turn.get("last_seq") or 0) >= int(latest.get("last_seq") or 0):
+                    latest = turn
+        status = str((latest or {}).get("status") or "")
+        settled = {"completed": "completed", "cancelled": "cancelled", "failed": "failed"}.get(status)
+        if settled and str(state.get("status") or "") in {"running", "waiting", "interrupting"}:
+            state["status"] = settled
+            if isinstance(core, dict):
+                core["status"] = settled
+    return state
+
+
+def _no_active_turn(container: Any) -> bool:
+    if not isinstance(container, dict):
+        return True
+    return not any(
+        str((turn or {}).get("status") or "") in {"running", "waiting", "interrupting"}
+        for turn in container.values()
+        if isinstance(turn, dict)
+    )
 
 
 def _strip_inline_image_copies(state: dict[str, Any]) -> dict[str, Any]:

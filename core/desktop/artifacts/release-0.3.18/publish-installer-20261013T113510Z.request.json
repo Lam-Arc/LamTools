@@ -1,0 +1,14 @@
+{
+  "purpose": "publish-installer",
+  "commandName": "sunday-desktop-0318-publish-installer-20261013T113510Z",
+  "description": "Publish verified Sunday 0.3.18 installer and desktop manifest with linux_version 0.3.17; preserve 0.3.17 rollback copies",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "publish-installer.sh",
+  "commandSha256": "696ebba24429a93a1536d8e618352df927486caaa9c5039c0cd35d14e0487916",
+  "timeoutSeconds": 600,
+  "startedAtUtc": "2026-10-13T11:35:10Z",
+  "clientToken": "sunday-desktop-0318-publish-installer-20261013T113510Z"
+}

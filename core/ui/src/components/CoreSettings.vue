@@ -11,16 +11,14 @@
           :initial-section="props.section"
           :settings-theme-style="settingsThemeStyle"
           :hide-nav="props.hideNav"
-          :active-section="props.activeSection"
+          :active-section="resolvedSection"
+          :before-section-change="beforeSectionChange"
           @close="requestCloseSettings"
-          @section-change="$emit('section-change', $event)"
+          @section-change="onSectionChange"
         >
           <template #default="{ activeSection }">
       <section v-if="activeSection === 'general'" class="settings-panel">
-        <!-- KeepAlive: switching sections must not wipe an unsaved draft. -->
-        <KeepAlive>
-          <CoreGeneralEditor :request-rpc="requestRpc || defaultRequestRpc" :platform="commandShellPlatform" />
-        </KeepAlive>
+        <CoreGeneralEditor :request-rpc="requestRpc || defaultRequestRpc" :platform="commandShellPlatform" />
       </section>
 
       <section v-if="activeSection === 'models'" class="settings-panel models-panel">
@@ -353,9 +351,7 @@
         <!-- KeepAlive: switching sections must not destroy editor draft
              state (audit 17 S3 — the SettingsShell :key remount used to
              wipe every unsaved draft). -->
-        <KeepAlive>
-          <CoreLoadToolsEditor :request-rpc="requestRpc || defaultRequestRpc" />
-        </KeepAlive>
+        <CoreLoadToolsEditor :request-rpc="requestRpc || defaultRequestRpc" />
       </section>
 
       <section v-if="activeSection === 'permissions'" class="settings-panel permissions-panel">
@@ -520,7 +516,7 @@
               <span v-else class="subhead-sub">AGENTS.md · .lam/core/config/</span>
             </span>
             <div class="subhead-actions">
-              <button class="text-btn" type="button" :disabled="agentsLoading" @click="fetchGlobalAgentsMd">{{ t("刷新") }}</button>
+              <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="agentsSettingsDraft.requestReplace(() => void fetchGlobalAgentsMd())">{{ t("刷新") }}</button>
               <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="saveGlobalAgentsMd">{{ t("保存") }}</button>
             </div>
           </div>
@@ -530,7 +526,7 @@
             rows="10"
             spellcheck="false"
             :placeholder="agentsLoading ? t('加载中…') : t('# 全局约束\n对所有项目生效的指令。项目级 AGENTS.md 会在此基础上叠加…')"
-            :disabled="agentsLoading"
+            :disabled="agentsLoading || agentsSaving"
           />
           <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
           <p v-if="commandShellPlatform === 'mobile'" class="hook-meta">{{ t("保存在此设备的应用私有 SQLite 配置中。项目级规则请在「项目设置 → 项目」内编辑，两者会相加注入系统提示词。") }}</p>
@@ -543,7 +539,7 @@
               <span v-else class="subhead-sub">load_context.jsonc · .lam/core/config/</span>
             </span>
             <div class="subhead-actions">
-              <button class="text-btn" type="button" :disabled="contextLoading" @click="fetchLoadContext">{{ t("刷新") }}</button>
+              <button class="text-btn" type="button" :disabled="contextLoading || contextSaving" @click="contextSettingsDraft.requestReplace(() => void fetchLoadContext())">{{ t("刷新") }}</button>
               <button class="text-btn" type="button" :disabled="contextLoading || contextSaving" @click="saveLoadContext">{{ t("保存") }}</button>
             </div>
           </div>
@@ -551,19 +547,19 @@
           <div class="lc-block">
             <div class="lc-label">{{ t("追加加载的文件（addition）") }}</div>
             <div v-for="(item, index) in contextAdditions" :key="index" class="lc-row">
-              <input v-model="item.name" class="lc-input lc-name" spellcheck="false" :placeholder="t('文件名（如 TEAM_RULES.md）')" :disabled="contextLoading" />
-              <input v-model.number="item.priority" type="number" class="lc-input lc-priority" :title="t('注入优先级（越小越靠前）')" :disabled="contextLoading" />
+              <input v-model="item.name" class="lc-input lc-name" spellcheck="false" :placeholder="t('文件名（如 TEAM_RULES.md）')" :disabled="contextLoading || contextSaving" />
+              <input v-model.number="item.priority" type="number" class="lc-input lc-priority" :title="t('注入优先级（越小越靠前）')" :disabled="contextLoading || contextSaving" />
               <UiSelect
                 :model-value="item.kind"
                 :options="lcKindOptions"
                 class="lc-kind"
-                :disabled="contextLoading"
+                :disabled="contextLoading || contextSaving"
                 :aria-label="t('加载类型')"
                 @update:model-value="item.kind = $event"
               />
               <button class="text-btn danger" type="button" :disabled="contextSaving" @click="contextAdditions.splice(index, 1)">{{ t("移除") }}</button>
             </div>
-            <button class="small-btn quiet" type="button" :disabled="contextLoading" @click="contextAdditions.push({ name: '', priority: 50, kind: 'system' })">{{ t("＋ 追加文件") }}</button>
+            <button class="small-btn quiet" type="button" :disabled="contextLoading || contextSaving" @click="contextAdditions.push({ name: '', priority: 50, kind: 'system' })">{{ t("＋ 追加文件") }}</button>
           </div>
 
           <div class="lc-block">
@@ -582,10 +578,10 @@
                 class="lc-input lc-name"
                 spellcheck="false"
                 :placeholder="t('如 AGENTS.md / CONTEXT.md')"
-                :disabled="contextLoading"
+                :disabled="contextLoading || contextSaving"
                 @keydown.enter.prevent="addContextExcept"
               />
-              <button class="small-btn quiet" type="button" :disabled="contextLoading || !contextExceptDraft.trim()" @click="addContextExcept">{{ t("添加") }}</button>
+              <button class="small-btn quiet" type="button" :disabled="contextLoading || contextSaving || !contextExceptDraft.trim()" @click="addContextExcept">{{ t("添加") }}</button>
             </div>
           </div>
 
@@ -603,8 +599,8 @@
                 class="text-btn"
                 type="button"
                 data-context-compaction-refresh
-                :disabled="contextCompactionLoading"
-                @click="fetchContextCompactionSettings"
+                :disabled="contextCompactionLoading || contextCompactionSaving"
+                @click="compactionSettingsDraft.requestReplace(() => void fetchContextCompactionSettings())"
               >{{ t("刷新") }}</button>
             </div>
           </div>
@@ -619,8 +615,7 @@
               min="0"
               max="100"
               step="1"
-              :disabled="contextCompactionLoading"
-              @input="markSettingsDirty"
+              :disabled="contextCompactionLoading || contextCompactionSaving"
             />
             <button
               class="small-btn quiet"
@@ -637,9 +632,7 @@
       </section>
 
       <section v-if="activeSection === 'subagent'" class="settings-panel">
-        <KeepAlive>
-          <CoreSubAgentEditor :request-rpc="requestRpc || defaultRequestRpc" :models="models" />
-        </KeepAlive>
+        <CoreSubAgentEditor :request-rpc="requestRpc || defaultRequestRpc" :models="models" />
       </section>
 
       <section v-if="activeSection === 'about'" class="settings-panel">
@@ -730,6 +723,7 @@
            没有更大的遮罩层，浮层只盖住这一栏内容）。 -->
       <div v-if="providerEditor || modelEditor || modelGroupEditor || groupMembersEditor" ref="editorOverlayEl" class="editor-overlay">
           <div ref="editorPopoverEl" class="editor-popover" :class="{ 'editor-popover--model': Boolean(modelEditor) }">
+            <fieldset class="settings-editor-fields" :disabled="catalogSaving">
             <!-- Validation errors must render INSIDE the popover — the outer
                  noticeText sits behind the overlay's dim/blur and was
                  invisible to the user (audit 17 S3). -->
@@ -741,14 +735,14 @@
                   <h3>{{ modelGroupEditor.mode === 'create' ? t("新建模型组") : t("重命名模型组") }}</h3>
                   <p>{{ t("模型可同时存在于多个组；删除组不会删除模型。") }}</p>
                 </div>
-                <button type="button" class="editor-popover-close" @click="modelGroupEditor = null">
+                <button type="button" class="editor-popover-close" @click="requestCloseEditors">
                   <X :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
               <label class="field field-wide">{{ t("名称") }}<input v-model.trim="modelGroupEditor.name" data-model-group-name required maxlength="80" :placeholder="t('例如：Free')" />
               </label>
               <div class="editor-actions field-wide">
-                <button type="button" class="small-btn quiet" @click="modelGroupEditor = null">{{ t("取消") }}</button>
+                <button type="button" class="small-btn quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
                 <button class="small-btn primary" type="submit">{{ t("保存") }}</button>
               </div>
             </form>
@@ -760,7 +754,7 @@
                   <h3>{{ t("添加已有模型") }}</h3>
                   <p>{{ t("选择要放入") }}{{ selectedModelGroup?.name || t("当前组") }}{{ t("的模型。") }}</p>
                 </div>
-                <button type="button" class="editor-popover-close" @click="groupMembersEditor = null">
+                <button type="button" class="editor-popover-close" @click="requestCloseEditors">
                   <X :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
@@ -772,20 +766,20 @@
                 <span v-if="!models.length" class="muted">{{ t("暂无可添加的模型") }}</span>
               </div>
               <div class="editor-actions field-wide">
-                <button type="button" class="small-btn quiet" @click="groupMembersEditor = null">{{ t("取消") }}</button>
+                <button type="button" class="small-btn quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
                 <button class="small-btn primary" type="submit">{{ t("保存成员") }}</button>
               </div>
             </form>
 
             <!-- Provider editor -->
-            <form v-else-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider" @input="markSettingsDirty">
+            <form v-else-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider">
               <div class="editor-popover-head field-wide">
                 <div>
                   <span class="editor-overline">{{ t("供应商配置") }}</span>
                   <h3>{{ providerEditor.mode === 'create' ? t("新增供应商") : t("编辑供应商") }}</h3>
                   <p>{{ providerEditor.mode === 'create' ? t("连接一个可用的模型服务。") : t("更新连接信息，已有密钥不会被覆盖。") }}</p>
                 </div>
-                <button type="button" class="editor-popover-close" @click="providerEditor = null">
+                <button type="button" class="editor-popover-close" @click="requestCloseEditors">
                   <X :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
@@ -859,20 +853,20 @@
                 </div>
               </details>
               <div class="editor-actions field-wide">
-                <button type="button" class="small-btn quiet" @click="providerEditor = null">{{ t("取消") }}</button>
+                <button type="button" class="small-btn quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
                 <button class="small-btn primary" type="submit">{{ providerEditor.mode === 'create' ? t("添加供应商") : t("保存供应商") }}</button>
               </div>
             </form>
 
             <!-- Model editor -->
-            <form v-else-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form model-editor-form" @submit.prevent="submitModel" @input="markSettingsDirty">
+            <form v-else-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form model-editor-form" @submit.prevent="submitModel">
               <div class="editor-popover-head field-wide">
                 <div>
                   <span class="editor-overline">{{ t("模型配置") }}</span>
                   <h3>{{ modelEditor.mode === 'create' ? t("新增模型") : t("编辑模型") }}</h3>
                   <p>{{ modelEditor.mode === 'create' ? t("为供应商添加一个可调用的模型。") : t("更新模型标识、能力和运行参数。") }}</p>
                 </div>
-                <button type="button" class="editor-popover-close" @click="modelEditor = null">
+                <button type="button" class="editor-popover-close" @click="requestCloseEditors">
                   <X :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
@@ -971,22 +965,17 @@
                 </div>
               </details>
               <div class="editor-actions field-wide">
-                <button type="button" class="small-btn quiet" @click="modelEditor = null">{{ t("取消") }}</button>
+                <button type="button" class="small-btn quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
                 <button class="small-btn primary" type="submit">{{ modelEditor.mode === 'create' ? t("添加模型") : t("保存模型") }}</button>
               </div>
             </form>
+            </fieldset>
           </div>
         </div>
       <!-- 必须留在根节点内部：整版界面把 full-area-view / full-area-wide 挂在
            这个组件的根元素上，多出一个并列根节点 Vue 会静默丢弃这些属性，
            设置页就再也铺不满主卡、也滚不动（0.3.11 起的回归）。 -->
-      <CoreConfirmDialog
-        :open="pendingCloseSettings"
-        :title="t('关闭设置？')"
-        :detail="t('有未保存的修改')"
-        @cancel="pendingCloseSettings = false"
-        @confirm="confirmCloseSettings"
-      />
+      <SettingsDraftDialog :guard="draftGuard" />
   </div>
   </template>
 
@@ -995,6 +984,7 @@ import { t } from '../i18n/index'
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
+import { createSettingsDraftGuard, useSettingsDraft } from '../composables/useSettingsDraftGuard'
 import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
 import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
@@ -1032,7 +1022,7 @@ import MobileControlPanel, {
 } from './MobileControlPanel.vue'
 import UiSelect from './UiSelect.vue'
 import CoreModelCatalogViewToggle from './CoreModelCatalogViewToggle.vue'
-import CoreConfirmDialog from './CoreConfirmDialog.vue'
+import SettingsDraftDialog from './SettingsDraftDialog.vue'
 import {
   readUpdateAutoCheck,
   setUpdateAutoCheck,
@@ -1041,6 +1031,7 @@ import {
 } from '../composables'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
+export type SettingsCatalogMutation = 'create-provider' | 'update-provider' | 'create-model' | 'update-model' | 'create-model-group' | 'update-model-group' | 'set-model-group-members' | 'create-model-with-provider'
 
 export interface CoreSettingsModel {
   id: string
@@ -1127,6 +1118,8 @@ const props = withDefaults(defineProps<{
   permissionPreset?: CorePermissionPreset
   allowAccessOutsideWorkdir?: boolean
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
+  /** Await the host's existing persistence/revision handling before closing. */
+  persistCatalog?: (operation: SettingsCatalogMutation, payload: Record<string, unknown>) => Promise<void>
   updateState?: CoreUpdateState
   remoteGatewayStatus?: MobileControlGatewayStatus | null
   remotePairing?: MobileControlPairing | null
@@ -1187,6 +1180,21 @@ const emit = defineEmits<{
 }>()
 
 const sections = CORE_SETTINGS_SECTIONS
+const draftGuard = createSettingsDraftGuard()
+const resolvedSection = ref(props.activeSection || props.section || sections[0]?.id || '')
+function beforeSectionChange(_id: string, proceed: () => void) {
+  draftGuard.requestNavigation(proceed, { section: resolvedSection.value })
+}
+function onSectionChange(id: string) {
+  if (resolvedSection.value === 'models' && id !== 'models') closeEditors()
+  resolvedSection.value = id
+  emit('section-change', id)
+}
+function requestSection(id: string) {
+  if (id === resolvedSection.value) return
+  beforeSectionChange(id, () => onSectionChange(id))
+}
+watch(() => props.activeSection, id => { if (id) requestSection(id) })
 
 // ── Update check state (共享实例由 App.vue 传入以便启动时自动检查；缺省自建) ──
 const updateAutoCheck = ref(readUpdateAutoCheck())
@@ -1293,11 +1301,68 @@ const noticeText = ref('')
 // Validation feedback shown INSIDE the editor overlay — noticeText renders
 // behind the overlay and was invisible while editing (audit 17 S3).
 const editorError = ref('')
+const catalogSaving = ref(false)
+const catalogDraft = useSettingsDraft({
+  guard: draftGuard,
+  section: 'models', label: () => t('模型与供应商'),
+  read: () => ({ provider: providerEditor.value, model: modelEditor.value, group: modelGroupEditor.value,
+    members: groupMembersEditor.value ? { ...groupMembersEditor.value, model_ids: [...groupMembersEditor.value.model_ids].sort() } : null }),
+  restore: saved => {
+    providerEditor.value = saved.provider
+    modelEditor.value = saved.model
+    modelGroupEditor.value = saved.group
+    groupMembersEditor.value = saved.members
+    editorError.value = ''
+  },
+  busy: catalogSaving,
+  error: editorError,
+  save: async () => {
+    const form = editorPopoverEl.value?.querySelector('form')
+    if (form && !form.reportValidity()) {
+      editorError.value = t('请填写必填项并检查输入格式。')
+      return false
+    }
+    if (providerEditor.value) return submitProvider()
+    if (modelEditor.value) return submitModel()
+    if (modelGroupEditor.value) return submitModelGroup()
+    if (groupMembersEditor.value) return submitGroupMembers()
+    return true
+  },
+})
+watch([providerEditor, modelEditor, modelGroupEditor, groupMembersEditor], () => catalogDraft.accept(), { flush: 'sync' })
+
+async function persistCatalog(operation: SettingsCatalogMutation, payload: object): Promise<boolean> {
+  if (catalogSaving.value) return false
+  catalogSaving.value = true
+  editorError.value = ''
+  try {
+    if (props.persistCatalog) await props.persistCatalog(operation, payload as Record<string, unknown>)
+    else {
+      // Compatibility for event-driven embedders. The application supplies
+      // persistCatalog so a failed write never dismisses its editor.
+      const notify = emit as (event: SettingsCatalogMutation, payload: object) => void
+      notify(operation, payload)
+    }
+    closeEditors()
+    return true
+  } catch (cause) {
+    editorError.value = cause instanceof Error ? cause.message : String(cause)
+    return false
+  } finally {
+    catalogSaving.value = false
+  }
+}
 // ── Global AGENTS.md (项目规则) editor state ──
 const agentsDraft = ref('')
 const agentsLoading = ref(false)
 const agentsSaving = ref(false)
 const agentsError = ref('')
+const agentsSettingsDraft = useSettingsDraft({
+  guard: draftGuard,
+  section: 'agents', label: () => t('全局约束'), read: () => agentsDraft.value,
+  restore: value => { agentsDraft.value = value; agentsError.value = '' },
+  save: saveGlobalAgentsMd, busy: agentsSaving, error: agentsError,
+})
 
 async function fetchGlobalAgentsMd() {
   const rpc = props.requestRpc || defaultRequestRpc
@@ -1307,6 +1372,7 @@ async function fetchGlobalAgentsMd() {
     const result = await rpc('config.agents_md.get')
     const agentsMd = result.agents_md as { content?: string; exists?: boolean } | undefined
     agentsDraft.value = agentsMd?.content ?? ''
+    agentsSettingsDraft.accept()
   } catch (e) {
     agentsError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -1319,10 +1385,14 @@ async function saveGlobalAgentsMd() {
   agentsSaving.value = true
   agentsError.value = ''
   try {
-    await rpc('config.agents_md.set', { content: agentsDraft.value })
+    const content = agentsDraft.value
+    await rpc('config.agents_md.set', { content })
+    agentsSettingsDraft.accept(content)
     await fetchGlobalAgentsMd()
+    return true
   } catch (e) {
     agentsError.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
     agentsSaving.value = false
   }
@@ -1341,6 +1411,15 @@ const contextExceptDraft = ref('')
 const contextLoading = ref(false)
 const contextSaving = ref(false)
 const contextError = ref('')
+const contextSettingsDraft = useSettingsDraft({
+  guard: draftGuard,
+  section: 'agents', label: () => t('全局上下文加载'),
+  read: () => ({ addition: contextAdditions.value, except: contextExcept.value, pendingExcept: contextExceptDraft.value }),
+  restore: value => {
+    contextAdditions.value = value.addition; contextExcept.value = value.except
+    contextExceptDraft.value = value.pendingExcept; contextError.value = ''
+  }, save: saveLoadContext, busy: contextSaving, error: contextError,
+})
 
 function addContextExcept() {
   const name = contextExceptDraft.value.trim()
@@ -1364,6 +1443,8 @@ async function fetchLoadContext() {
     contextExcept.value = Array.isArray(result.except)
       ? result.except.map(item => String(item))
       : []
+    contextExceptDraft.value = ''
+    contextSettingsDraft.accept()
   } catch (e) {
     contextError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -1376,15 +1457,19 @@ async function saveLoadContext() {
   contextSaving.value = true
   contextError.value = ''
   try {
+    addContextExcept()
     await rpc('config.load_context.set', {
       addition: contextAdditions.value
         .filter(item => item.name.trim())
         .map(item => ({ name: item.name.trim(), priority: Number(item.priority) || 50, kind: item.kind })),
       except: contextExcept.value.filter(name => name.trim()),
     })
+    contextSettingsDraft.accept()
     await fetchLoadContext()
+    return true
   } catch (e) {
     contextError.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
     contextSaving.value = false
   }
@@ -1399,6 +1484,12 @@ const contextCompactionRetainedSteps = ref(CONTEXT_COMPACTION_DEFAULT_RETAINED_S
 const contextCompactionLoading = ref(false)
 const contextCompactionSaving = ref(false)
 const contextCompactionError = ref('')
+const compactionSettingsDraft = useSettingsDraft({
+  guard: draftGuard,
+  section: 'agents', label: () => t('上下文压缩'), read: () => contextCompactionRetainedSteps.value,
+  restore: value => { contextCompactionRetainedSteps.value = value; contextCompactionError.value = '' },
+  save: saveContextCompactionSettings, busy: contextCompactionSaving, error: contextCompactionError,
+})
 
 function normalizeContextCompactionRetainedSteps(value: unknown): number {
   if (value === null || value === undefined || (typeof value === 'string' && !value.trim())) {
@@ -1420,6 +1511,7 @@ async function fetchContextCompactionSettings() {
     const result = await rpc('settings.get', { namespace: 'core.contextCompaction' })
     const value = (result.value ?? {}) as Record<string, unknown>
     contextCompactionRetainedSteps.value = normalizeContextCompactionRetainedSteps(value.retained_steps)
+    compactionSettingsDraft.accept()
   } catch (e) {
     contextCompactionError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -1440,7 +1532,7 @@ async function saveContextCompactionSettings() {
       namespace: 'core.contextCompaction',
       value: { retained_steps: retainedSteps },
     })
-    settingsDirty.value = false
+    compactionSettingsDraft.accept(retainedSteps)
     return true
   } catch (e) {
     contextCompactionError.value = e instanceof Error ? e.message : String(e)
@@ -1685,35 +1777,41 @@ function modelsForProvider(providerId: string): CoreSettingsModel[] {
 }
 
 function startProviderCreate() {
-  providerEditor.value = {
-    mode: 'create',
-    preset_id: '',
-    name: '',
-    api_type: 'openai',
-    base_url: '',
-    api_key: '',
-    extra: {},
-    extra_json: '{}',
-    models: [],
-  }
+  catalogDraft.requestReplace(() => {
+    closeEditors()
+    providerEditor.value = {
+      mode: 'create',
+      preset_id: '',
+      name: '',
+      api_type: 'openai',
+      base_url: '',
+      api_key: '',
+      extra: {},
+      extra_json: '{}',
+      models: [],
+    }
+  })
 }
 
 function startProviderUpdate(provider: CoreSettingsProvider) {
-  providerEditor.value = {
-    mode: 'update',
-    preset_id: '',
-    provider_id: provider.id,
-    name: provider.name || '',
-    api_type: provider.api_type || 'openai',
-    base_url: provider.base_url || '',
-    api_key: '',
-    extra: provider.extra || {},
-    extra_json: JSON.stringify(provider.extra || {}, null, 2),
-    models: [],
-  }
+  catalogDraft.requestReplace(() => {
+    closeEditors()
+    providerEditor.value = {
+      mode: 'update',
+      preset_id: '',
+      provider_id: provider.id,
+      name: provider.name || '',
+      api_type: provider.api_type || 'openai',
+      base_url: provider.base_url || '',
+      api_key: '',
+      extra: provider.extra || {},
+      extra_json: JSON.stringify(provider.extra || {}, null, 2),
+      models: [],
+    }
+  })
 }
 
-function submitProvider() {
+async function submitProvider() {
   const editor = providerEditor.value
   if (!editor) return
   const extra = parseExtraJson(editor.extra_json)
@@ -1748,12 +1846,7 @@ function submitProvider() {
       }))
     }
   }
-  if (editor.mode === 'create') emit('create-provider', payload)
-  else emit('update-provider', payload)
-  providerEditor.value = null
-  // The parent handles persistence; a submitted editor counts as saved so
-  // the close guard does not nag on a clean state (audit 17 S3).
-  settingsDirty.value = false
+  return persistCatalog(editor.mode === 'create' ? 'create-provider' : 'update-provider', payload)
 }
 
 function applyProviderPreset() {
@@ -1780,51 +1873,61 @@ function startSelectedModelCreate() {
 }
 
 function startModelCreateForProvider(provider: CoreSettingsProvider) {
-  modelEditor.value = {
-    mode: 'create',
-    provider_id: provider?.id || '',
-    provider_name: provider?.name || '',
-    model_id: '',
-    display_name: '',
-    context_window: 128000,
-    max_output_tokens: 16384,
-    thinking_supported: false,
-    thinking_budget: 10000,
-    temperature: 0.7,
-    capability: '',
-    notes: '',
-    extra: {},
-    extra_json: '{}',
-  }
+  catalogDraft.requestReplace(() => {
+    closeEditors()
+    modelEditor.value = {
+      mode: 'create',
+      provider_id: provider?.id || '',
+      provider_name: provider?.name || '',
+      model_id: '',
+      display_name: '',
+      context_window: 128000,
+      max_output_tokens: 16384,
+      thinking_supported: false,
+      thinking_budget: 10000,
+      temperature: 0.7,
+      capability: '',
+      notes: '',
+      extra: {},
+      extra_json: '{}',
+    }
+  })
 }
 
 function startModelGroupCreate() {
-  modelGroupEditor.value = { mode: 'create', name: '' }
+  catalogDraft.requestReplace(() => {
+    closeEditors()
+    modelGroupEditor.value = { mode: 'create', name: '' }
+  })
 }
 
 function startModelGroupUpdate(group: CoreSettingsModelGroup) {
-  modelGroupEditor.value = { mode: 'update', group_id: group.id, name: group.name }
+  catalogDraft.requestReplace(() => {
+    closeEditors()
+    modelGroupEditor.value = { mode: 'update', group_id: group.id, name: group.name }
+  })
 }
 
-function submitModelGroup() {
+async function submitModelGroup() {
   const editor = modelGroupEditor.value
   if (!editor?.name.trim()) return
-  if (editor.mode === 'create') emit('create-model-group', { name: editor.name.trim() })
-  else emit('update-model-group', { group_id: editor.group_id || '', name: editor.name.trim() })
-  modelGroupEditor.value = null
+  return persistCatalog(editor.mode === 'create' ? 'create-model-group' : 'update-model-group',
+    editor.mode === 'create' ? { name: editor.name.trim() } : { group_id: editor.group_id || '', name: editor.name.trim() })
 }
 
 function startGroupMembersEdit() {
-  const group = selectedModelGroup.value
-  if (!group) return
-  groupMembersEditor.value = { group_id: group.id, model_ids: [...group.model_ids] }
+  catalogDraft.requestReplace(() => {
+    closeEditors()
+    const group = selectedModelGroup.value
+    if (!group) return
+    groupMembersEditor.value = { group_id: group.id, model_ids: [...group.model_ids] }
+  })
 }
 
-function submitGroupMembers() {
+async function submitGroupMembers() {
   const editor = groupMembersEditor.value
   if (!editor) return
-  emit('set-model-group-members', { group_id: editor.group_id, model_ids: [...new Set(editor.model_ids)] })
-  groupMembersEditor.value = null
+  return persistCatalog('set-model-group-members', { group_id: editor.group_id, model_ids: [...new Set(editor.model_ids)] })
 }
 
 function removeModelFromSelectedGroup(modelId: string) {
@@ -1837,31 +1940,34 @@ function removeModelFromSelectedGroup(modelId: string) {
 }
 
 function startGroupModelCreate() {
-  const group = selectedModelGroup.value
-  if (!group) return
-  const provider = props.providers[0]
-  modelEditor.value = {
-    mode: 'create',
-    origin_group_id: group.id,
-    provider_mode: provider ? 'existing' : 'new',
-    provider_id: provider?.id || '__new__',
-    provider_name: provider?.name || '',
-    base_url: provider?.base_url || '',
-    new_provider_name: '',
-    new_provider_api_type: 'openai',
-    new_provider_api_key: '',
-    model_id: '',
-    display_name: '',
-    context_window: 128000,
-    max_output_tokens: 16384,
-    thinking_supported: false,
-    thinking_budget: 10000,
-    temperature: 0.7,
-    capability: '',
-    notes: '',
-    extra: {},
-    extra_json: '{}',
-  }
+  catalogDraft.requestReplace(() => {
+    closeEditors()
+    const group = selectedModelGroup.value
+    if (!group) return
+    const provider = props.providers[0]
+    modelEditor.value = {
+      mode: 'create',
+      origin_group_id: group.id,
+      provider_mode: provider ? 'existing' : 'new',
+      provider_id: provider?.id || '__new__',
+      provider_name: provider?.name || '',
+      base_url: provider?.base_url || '',
+      new_provider_name: '',
+      new_provider_api_type: 'openai',
+      new_provider_api_key: '',
+      model_id: '',
+      display_name: '',
+      context_window: 128000,
+      max_output_tokens: 16384,
+      thinking_supported: false,
+      thinking_budget: 10000,
+      temperature: 0.7,
+      capability: '',
+      notes: '',
+      extra: {},
+      extra_json: '{}',
+    }
+  })
 }
 
 function onModelProviderChange(providerId: string) {
@@ -1882,29 +1988,32 @@ function onModelProviderChange(providerId: string) {
 }
 
 function startModelUpdate(model: CoreSettingsModel) {
-  modelEditor.value = {
-    mode: 'update',
-    model_record_id: model.id,
-    provider_id: model.provider_id || '',
-    provider_name: model.provider_name || '',
-    model_id: model.model_id || '',
-    display_name: model.display_name || '',
-    // `??` — a legitimate 0 (e.g. thinking_budget=0 disables the reasoning
-    // budget) must round-trip instead of silently becoming the default
-    // (audit 17 S3).
-    context_window: model.context_window ?? 128000,
-    max_output_tokens: model.max_output_tokens ?? 16384,
-    thinking_supported: model.thinking_supported === true,
-    thinking_budget: model.thinking_budget ?? 10000,
-    temperature: model.temperature ?? 0.7,
-    capability: model.capability || '',
-    notes: model.notes || '',
-    extra: model.extra || {},
-    extra_json: JSON.stringify(model.extra || {}, null, 2),
-  }
+  catalogDraft.requestReplace(() => {
+    closeEditors()
+    modelEditor.value = {
+      mode: 'update',
+      model_record_id: model.id,
+      provider_id: model.provider_id || '',
+      provider_name: model.provider_name || '',
+      model_id: model.model_id || '',
+      display_name: model.display_name || '',
+      // `??` — a legitimate 0 (e.g. thinking_budget=0 disables the reasoning
+      // budget) must round-trip instead of silently becoming the default
+      // (audit 17 S3).
+      context_window: model.context_window ?? 128000,
+      max_output_tokens: model.max_output_tokens ?? 16384,
+      thinking_supported: model.thinking_supported === true,
+      thinking_budget: model.thinking_budget ?? 10000,
+      temperature: model.temperature ?? 0.7,
+      capability: model.capability || '',
+      notes: model.notes || '',
+      extra: model.extra || {},
+      extra_json: JSON.stringify(model.extra || {}, null, 2),
+    }
+  })
 }
 
-function submitModel() {
+async function submitModel() {
   const editor = modelEditor.value
   if (!editor) return
   editorError.value = ''
@@ -1946,7 +2055,7 @@ function submitModel() {
       editorError.value = t("新供应商需要填写名称和 API Key")
       return
     }
-    emit('create-model-with-provider', {
+    return persistCatalog('create-model-with-provider', {
       group_id: editor.origin_group_id,
       model: {
         model_id: editor.model_id,
@@ -1975,10 +2084,8 @@ function submitModel() {
             base_url: editor.base_url.trim(),
           },
     })
-  } else if (editor.mode === 'create') emit('create-model', payload)
-  else emit('update-model', payload)
-  modelEditor.value = null
-  settingsDirty.value = false
+  }
+  return persistCatalog(editor.mode === 'create' ? 'create-model' : 'update-model', payload)
 }
 
 function parseExtraJson(value: string): Record<string, unknown> | null {
@@ -2012,39 +2119,24 @@ function getTextColor(area: ThemeArea): string {
 
 const presets = THEME_PRESETS
 
-// ── Unsaved-changes guard (audit 17 S3) ─────────────────────────
-// Any open editor, or a settings form (such as context compaction) touched
-// after the last save, makes a close without confirmation
-// risky (Esc / backdrop click / header close all discard silently today).
-const settingsDirty = ref(false)
+// All exits share actual draft comparisons, including the host's rail.
 const editorOverlayEl = ref<HTMLElement | null>(null)
 const editorPopoverEl = ref<HTMLElement | null>(null)
 
-
-function markSettingsDirty() {
-  settingsDirty.value = true
+function requestCloseSettings() {
+  draftGuard.requestNavigation(() => emit('close'))
+}
+function requestCloseEditors() {
+  catalogDraft.requestReplace(closeEditors)
 }
 
-const pendingCloseSettings = ref(false)
-
-function requestCloseSettings(): void {
-  if (settingsDirty.value) {
-    pendingCloseSettings.value = true
-    return
-  }
-  emit('close')
-}
-
-function confirmCloseSettings(): void {
-  pendingCloseSettings.value = false
-  emit('close')
-}
+defineExpose({ requestNavigation: draftGuard.requestNavigation, requestSection })
 
 useOutsidePointerDismiss({
   overlay: editorOverlayEl,
   card: editorPopoverEl,
-  isActive: () => Boolean(providerEditor.value || modelEditor.value || modelGroupEditor.value || groupMembersEditor.value),
-  onDismiss: closeEditors,
+  isActive: () => !draftGuard.open.value && Boolean(providerEditor.value || modelEditor.value || modelGroupEditor.value || groupMembersEditor.value),
+  onDismiss: requestCloseEditors,
 })
 
 // 就地渲染后设置只有主卡宽：窗口宽度与这一栏的可用宽度不是一回事，而 WebView
@@ -2059,7 +2151,7 @@ function measureSettingsSurface(): void {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') {
+  if (e.key === 'Escape' && !draftGuard.open.value) {
     requestCloseSettings()
   }
 }
@@ -2084,6 +2176,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.settings-editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
 /* ── 上下文与记忆 (global context) editor ── */
 .lc-block {
   margin-top: 12px;

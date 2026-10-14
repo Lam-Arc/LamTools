@@ -196,7 +196,9 @@
               :title="statusLabel(s.status || '')"
               :aria-label="t('状态：{0}', { 0: statusLabel(s.status || '') })"
               role="img"
-            ></span>
+            >
+              <Pause v-if="statusClass(s.status || '') === 'paused'" :size="11" :stroke-width="2.4" aria-hidden="true" />
+            </span>
             <button
               v-if="showSessionActions && editingSessionId !== s.id"
               class="conversation-action session-menu-button"
@@ -321,6 +323,7 @@ import {
   ChevronUp,
   MessageSquarePlus,
   MoreHorizontal,
+  Pause,
   Pencil,
   Pin,
   PinOff,
@@ -1277,6 +1280,7 @@ function isGroupActive(group: ProjectGroup): boolean {
 function statusClass(status: string): string {
   const s = status.toLowerCase()
   if (s === 'running') return 'running'
+  if (s === 'paused') return 'paused'
   if (s === 'completed' || s === 'done') return 'completed'
   if (s === 'failed' || s === 'error') return 'failed'
   if (s === 'waiting' || s === 'pending') return 'waiting'
@@ -1292,6 +1296,7 @@ function shouldShowStatus(session: SessionItem): boolean {
     || status === 'waiting'
     || status === 'pending'
     || status === 'sub_agents'
+    || status === 'paused'
     || status === 'failed'
     || status === 'error'
 }
@@ -1299,6 +1304,7 @@ function shouldShowStatus(session: SessionItem): boolean {
 function statusLabel(status: string): string {
   const s = status.toLowerCase()
   if (s === 'running') return t("运行中")
+  if (s === 'paused') return t("已暂停")
   if (s === 'completed' || s === 'done') return t("已完成")
   if (s === 'failed' || s === 'error') return t("失败")
   if (s === 'waiting' || s === 'pending') return t("等待中")

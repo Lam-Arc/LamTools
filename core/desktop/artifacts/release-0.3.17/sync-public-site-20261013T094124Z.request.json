@@ -1,0 +1,14 @@
+{
+  "purpose": "sync-public-site",
+  "commandName": "sunday-desktop-0317-sync-public-site-20261013T094124Z",
+  "description": "Run the installed public-site synchronization to update the official download labels and preview from the published 0.3.17 site bundle, then run its read-only drift check",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "sync-public-site.sh",
+  "commandSha256": "1535e3dc86bb922398fa355a68cf584bcb93cbdc54d44cc2c961caafe496b34a",
+  "timeoutSeconds": 600,
+  "startedAtUtc": "2026-10-13T09:41:24Z",
+  "clientToken": "sunday-desktop-0317-sync-public-site-20261013T094124Z"
+}

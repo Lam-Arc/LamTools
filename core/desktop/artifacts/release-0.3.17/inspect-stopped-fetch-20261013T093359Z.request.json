@@ -1,0 +1,14 @@
+{
+  "purpose": "inspect-stopped-fetch",
+  "commandName": "sunday-desktop-0317-inspect-stopped-fetch-20261013T093359Z",
+  "description": "Read-only confirm the terminated installer fetch has stopped, its partial staging file is stable, and no matching curl process remains",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "inspect-stopped-fetch.sh",
+  "commandSha256": "d2a58a5dd4ba08f29b605306e95c4cca4b66dff263136f8dd4531acc8704cfab",
+  "timeoutSeconds": 120,
+  "startedAtUtc": "2026-10-13T09:33:59Z",
+  "clientToken": "sunday-desktop-0317-inspect-stopped-fetch-20261013T093359Z"
+}

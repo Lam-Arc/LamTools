@@ -1,0 +1,12 @@
+{
+  "purpose": "SFTP upload of verified website package",
+  "startedAtUtc": "2026-10-13T09:40:24Z",
+  "completedAtUtc": "2026-10-13T09:40:26Z",
+  "host": "47.114.43.99",
+  "remoteStage": "/var/tmp/Sunday-site-mobile-0.3.17-20261013.upload.tar.gz",
+  "localFile": "site-0.3.17.tar.gz",
+  "bytes": 4826025,
+  "sha256": "e8806876f2f7a204a51c67e12790d3e04a43c986f91b79df43d8a9e30d152be2",
+  "exitCode": 0,
+  "outputFile": "site-upload-sftp.output.txt"
+}

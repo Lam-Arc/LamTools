@@ -409,6 +409,69 @@ function runningTurnWithStaleThreadStatus(threadId: string): CoreAppSnapshot {
 }
 
 describe('shared Workbench runtime', () => {
+  it.each([true, false])('offers Resume only when the runtime supports it (%s)', async (supported) => {
+    const calls: string[] = []
+    const stopped = snapshot('thread-1')
+    // A pause is what offers Continue now; a terminated turn is final.
+    stopped.status = 'paused'
+    stopped.turns = { 'turn-1': { turn_id: 'turn-1', status: 'paused', items: [] } }
+    stopped.core!.status = 'paused'
+    stopped.core!.turns = stopped.turns
+    const scope = effectScope()
+    const runtime = scope.run(() => createWorkbench({
+      transport: new FakeTransport(),
+      sessions: { listSessions: async () => [{ id: 'thread-1', title: 'One', createdAt: '' }] },
+      clientFactory: { createClient: ({ onConnectionState }) => ({
+        capabilities: { same_turn_resume: supported },
+        connect: async () => { onConnectionState('open') },
+        request: async (method, params) => {
+          calls.push(method)
+          if (method === 'turn/resume') {
+            expect(params?.turn_id).toBe('turn-1')
+            expect(params?.input).toBeUndefined()
+            return {}
+          }
+          return { snapshot: stopped }
+        },
+        respondServerRequest: () => false, close: () => undefined,
+      }) },
+    }))!
+    try {
+      await runtime.refreshSessions()
+      await runtime.selectSession('thread-1')
+      expect(runtime.actionMode.value).toBe(supported ? 'resume' : 'send')
+      if (supported) {
+        await runtime.composer.submit()
+        expect(calls).toContain('turn/resume')
+        expect(calls).not.toContain('turn/start')
+      }
+    } finally { scope.stop() }
+  })
+
+  it('shares registry lifecycle status with background indicators and rejects another thread record', async () => {
+    const scope = effectScope()
+    const runtime = scope.run(() => createWorkbench({ transport: new FakeTransport(),
+      sessions: { listSessions: async () => [{ id: 'thread-1', title: 'One', createdAt: '' }] },
+      clientFactory: { createClient: ({ onConnectionState }) => new AwaitingSubAgentClient('thread-1', onConnectionState) },
+    }))!
+    try {
+      await runtime.refreshSessions()
+      await runtime.selectSession('thread-1')
+      expect(runtime.sessionActivity.value.awaitingSubAgents).toBe(true)
+      runtime.setSubAgentRecords('other-thread', { worker: { name: 'worker', status: 'interrupted' } })
+      expect(runtime.sessionActivity.value.awaitingSubAgents).toBe(true)
+      runtime.setSubAgentRecords('thread-1', { worker: { name: 'worker', status: 'interrupted' } })
+      expect(runtime.sessionActivity.value.awaitingSubAgents).toBe(false)
+      expect(runtime.sessionActivity.value.memberStatuses.worker).toBe('interrupted')
+      expect(runtime.sessionActivity.value.pendingSubAgentNames).toEqual([])
+      await nextTick()
+      expect(runtime.sessions.value[0].status).toBe('completed')
+      runtime.setSubAgentRecords('thread-1', { worker: { name: 'worker', status: 'running', started_at: 1791897188 } })
+      expect(runtime.sessionActivity.value.awaitingSubAgents).toBe(true)
+      expect(runtime.sessionActivity.value.pendingSubAgentNames).toEqual(['worker'])
+    } finally { scope.stop() }
+  })
+
   it('owns session selection while shells only provide presentation', async () => {
     const sessions: CoreSessionListItem[] = [
       { id: 'thread-1', title: 'One', createdAt: '' },

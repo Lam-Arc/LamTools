@@ -72,14 +72,14 @@ import RightSidebarRag from './RightSidebarRag.vue'
 import RightSidebarProcesses from './RightSidebarProcesses.vue'
 import CoreResourceStats from './CoreResourceStats.vue'
 import CoreSubAgentPanel from './CoreSubAgentPanel.vue'
-import { selectCoreSubAgentRuns } from '../agents/subAgentProjection'
+import { reconcileCoreSubAgentRun, selectCoreSubAgentRuns } from '../agents/subAgentProjection'
 import { subAgentRunIdentity } from '../agents/subAgentDisplay'
 import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
 import type {
   RightSidebarPluginContribution,
   RightSidebarRpc,
 } from '../right-sidebar/types'
-import type { CoreMessage, CoreSubAgentRun } from '../types'
+import type { CoreMessage, CoreSubAgentRun, CoreSubAgentDurableRecord } from '../types'
 import type { LamToolsTransport } from '../transport'
 
 // 竖栏悬停出卡：图标竖栏常驻贴边，指针进入竖栏（图标或图标之间的空白）即在其
@@ -92,6 +92,9 @@ const props = defineProps<{
   requestRpc?: RightSidebarRpc
   transport?: LamToolsTransport
   messages?: CoreMessage[]
+  memberStatuses?: Record<string, string>
+  memberStatusRecords?: Record<string, CoreSubAgentDurableRecord>
+  subAgentDurableRecords?: Record<string, CoreSubAgentDurableRecord>
   contextWindow?: number | null
   processSignal?: unknown
   activePluginId?: string | null
@@ -203,7 +206,11 @@ watch(cardVisible, (visible) => emit('hover-change', visible))
 
 const subAgentRuns = computed(() => {
   const hidden = props.hiddenSubAgentIdentities ?? []
-  const runs = selectCoreSubAgentRuns(props.messages ?? [])
+  const runs = selectCoreSubAgentRuns(props.messages ?? []).map(run => {
+    const name = run.name.trim().toLowerCase()
+    return reconcileCoreSubAgentRun(run, props.memberStatusRecords?.[name] ?? props.memberStatuses?.[name],
+      props.subAgentDurableRecords?.[name])
+  })
   if (hidden.length === 0) return runs
   const dismissed = new Set(hidden)
   return runs.filter(run => !dismissed.has(subAgentRunIdentity(run)))

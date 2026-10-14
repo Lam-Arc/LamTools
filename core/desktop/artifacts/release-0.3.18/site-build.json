@@ -1,0 +1,32 @@
+{
+  "releaseVersion": "0.3.18",
+  "sourceCommit": "f046409a",
+  "builtAtUtc": "2026-10-13T11:02:53Z",
+  "command": "npm run build",
+  "workingDirectory": "website",
+  "buildResult": "success",
+  "nodeVersion": "24.19.0",
+  "npmVersion": "11.17.0",
+  "viteVersion": "8.2.1",
+  "mainEntry": "website/dist/assets/main-C5cVl7D0.js",
+  "mainBundleContainsReleaseVersion": true,
+  "previewSource": "website/preview.html -> website/src/preview-main.ts -> @ui/app/LamToolsApp.vue",
+  "previewRuntime": "createWebsiteMockRuntime",
+  "previewEntry": "website/dist/assets/preview-qrvOXrLc.js",
+  "previewStaticChecks": {
+    "releaseVersion": true,
+    "LamToolsApp": true,
+    "websiteMockRuntimeSource": true,
+    "rootHtmlHasPreviewEntry": true,
+    "rootHtmlHasPreviewCss": true,
+    "referencedFilesExist": true
+  },
+  "archive": "core/desktop/artifacts/release-0.3.18/site-0.3.18.tar.gz",
+  "archiveBytes": 4826049,
+  "archiveSha256": "7937108279626799e883bb0a87567984fe56f5271c83113ebbc98f4b7874615a",
+  "archiveHasRootIndexAndPreview": true,
+  "archiveFileCount": 224,
+  "buildExitCode": 0,
+  "linuxVersion": "0.3.17",
+  "mainBundleContainsLinuxVersion": true
+}

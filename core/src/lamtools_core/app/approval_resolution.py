@@ -60,8 +60,24 @@ class ApprovalResolutionLifecycle:
             event_id=_stable_event_id(self.thread_id, self.request_id, "decision"),
             session_id=self.thread_id,
             run_id=self.state.run_id,
+            # This row lands on the thread that renders the card, so it must name
+            # that thread's turn. A delegated child's own state carries the
+            # child's run, and deriving a turn from it invented a turn nobody
+            # owns: it stayed `running` forever and pinned the session to
+            # "running" long after everything had finished (2026-10-14).
+            turn_id=self.answered_turn_id(),
             tags=["approval", "resolved"],
         )
+
+    def answered_turn_id(self) -> str:
+        """The turn whose card this response answers (empty when unknown)."""
+        metadata = self.state.metadata if isinstance(self.state.metadata, dict) else {}
+        delegated = metadata.get("delegated_session")
+        if isinstance(delegated, dict):
+            parent_turn = str(delegated.get("parent_turn_id") or "").strip()
+            if parent_turn:
+                return parent_turn
+        return str(metadata.get("turn_id") or self.state.run_id or "").strip()
 
     async def persist_decision(self) -> OperationResult | None:
         self.decision_run_items = self.run_items_from_events([self.decision_event])

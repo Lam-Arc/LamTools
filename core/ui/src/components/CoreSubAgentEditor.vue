@@ -20,7 +20,7 @@
         :model-value="defaultMmModel"
         class="mm-select"
         :options="mmModelOptions"
-        :disabled="settingsLoading"
+        :disabled="settingsLoading || settingsSaving"
         :aria-label="t('默认多模态解析模型')"
         @update:model-value="defaultMmModel = $event"
       />
@@ -189,7 +189,7 @@
       <div class="subhead">
         <span class="muted">{{ loading ? t("加载中…") : statusLabel }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading" @click="fetchGuide">{{ t("刷新") }}</button>
+          <button class="text-btn" type="button" :disabled="loading || saving" @click="guideSettingsDraft.requestReplace(() => void fetchGuide())">{{ t("刷新") }}</button>
           <button class="text-btn" type="button" :disabled="loading || saving" @click="saveGuide">{{ t("保存") }}</button>
         </div>
       </div>
@@ -217,6 +217,7 @@ import { computed, onMounted, ref } from 'vue'
 import UiSelect from './UiSelect.vue'
 import type { CoreSettingsModel } from './CoreSettings.vue'
 import { CORE_THINKING_LABELS, type CoreThinkingMode } from '../composer/execution'
+import { useSettingsDraft } from '../composables/useSettingsDraftGuard'
 
 type RoleAssignmentType = 'consider' | 'execute'
 type DelegationStrategy = 'forbidden' | 'low' | 'medium' | 'high'
@@ -294,6 +295,7 @@ async function fetchGuide() {
   try {
     const result = await props.requestRpc('config.subagent.guide.get', withScope({}))
     draft.value = String(result.content ?? '')
+    guideSettingsDraft.accept()
     isBuiltin.value = result.is_builtin !== false
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -309,9 +311,12 @@ async function saveGuide() {
     await props.requestRpc('config.subagent.guide.set', withScope({
       content: draft.value,
     }))
+    guideSettingsDraft.accept()
     await fetchGuide()
+    return true
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
     saving.value = false
   }
@@ -332,6 +337,24 @@ const roleAssignments = ref<RoleAssignmentDraft[]>([])
 const effectiveRoleAssignments = ref<RoleAssignmentPayload[]>([])
 const roleAssignmentsInherited = ref(false)
 let nextRoleAssignmentKey = 1
+const guideSettingsDraft = useSettingsDraft({
+  section: 'subagent', label: () => t('子代理指南'), read: () => draft.value,
+  restore: value => { draft.value = value; error.value = '' }, save: saveGuide, busy: saving, error,
+})
+const mmSettingsDraft = useSettingsDraft({
+  section: 'subagent', label: () => t('默认多模态解析模型'), read: () => defaultMmModel.value,
+  restore: value => { defaultMmModel.value = value; error.value = '' }, save: saveSettings, busy: settingsSaving, error,
+})
+const strategySettingsDraft = useSettingsDraft({
+  section: 'subagent', label: () => t('子代理委派策略'), read: () => delegationStrategy.value,
+  restore: value => { delegationStrategy.value = value; error.value = '' }, save: saveDelegationStrategy, busy: delegationStrategySaving, error,
+})
+const rolesSettingsDraft = useSettingsDraft({
+  section: 'subagent', label: () => t('角色分配'),
+  read: () => roleAssignments.value.map(({ key: _key, ...assignment }) => assignment),
+  restore: value => { roleAssignments.value = value.map(toRoleAssignmentDraft); roleAssignmentError.value = '' },
+  save: saveRoleAssignments, busy: roleAssignmentsSaving, error: roleAssignmentError,
+})
 
 const roleTypeOptions = [
   { value: 'consider', label: 'consider' },
@@ -575,6 +598,7 @@ async function fetchSettings(options: {
     const settings = result.settings as Record<string, unknown> | undefined
     if (!options.preserveDefaultMm) {
       defaultMmModel.value = String(settings?.default_multimodal_model ?? '')
+      mmSettingsDraft.accept()
     }
     const effectiveStrategy = parseDelegationStrategy(
       result.effective_delegation_strategy,
@@ -590,10 +614,12 @@ async function fetchSettings(options: {
       delegationStrategy.value = props.scope === 'project' && delegationStrategyInherited.value
         ? 'inherit'
         : parseDelegationStrategy(settings?.delegation_strategy, effectiveStrategy)
+      strategySettingsDraft.accept()
     }
     if (!options.preserveRoleAssignments) {
       roleAssignments.value = parseRoleAssignments(settings?.role_assignments).map(toRoleAssignmentDraft)
       roleAssignmentError.value = ''
+      rolesSettingsDraft.accept()
     }
     effectiveRoleAssignments.value = parseRoleAssignments(result.effective_role_assignments)
     roleAssignmentsInherited.value = result.role_assignments_inherited === true
@@ -606,16 +632,19 @@ async function fetchSettings(options: {
 
 async function saveRoleAssignments() {
   const normalized = validatedRoleAssignments()
-  if (!normalized) return
+  if (!normalized) return false
   roleAssignmentsSaving.value = true
   roleAssignmentError.value = ''
   try {
     await props.requestRpc('config.subagent.settings.set', withScope({
       settings: { role_assignments: normalized },
     }))
+    rolesSettingsDraft.accept()
     await fetchSettings({ preserveDefaultMm: true, preserveDelegationStrategy: true })
+    return true
   } catch (e) {
     roleAssignmentError.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
     roleAssignmentsSaving.value = false
   }
@@ -632,9 +661,12 @@ async function saveDelegationStrategy() {
           : delegationStrategy.value,
       },
     }))
+    strategySettingsDraft.accept()
     await fetchSettings({ preserveDefaultMm: true, preserveRoleAssignments: true })
+    return true
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
     delegationStrategySaving.value = false
   }
@@ -647,9 +679,12 @@ async function saveSettings() {
     await props.requestRpc('config.subagent.settings.set', withScope({
       settings: { default_multimodal_model: defaultMmModel.value },
     }))
+    mmSettingsDraft.accept()
     await fetchSettings({ preserveDelegationStrategy: true, preserveRoleAssignments: true })
+    return true
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
     settingsSaving.value = false
   }

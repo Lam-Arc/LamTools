@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from lamtools_core import cli as core_cli
+from lamtools_core.app.api_access import CoreApiAccessPolicy
 from lamtools_core.app.core_db import CoreHandoffContext, CoreHistoryEntry, open_core_app_db
 from lamtools_core.export import build_handoff_context
 from lamtools_core.cli import CoreCliRunOptions, build_parser, load_llm_config, main, run_core_cli_task
@@ -935,9 +936,10 @@ async def test_core_cli_serve_builds_core_http_app_and_runs_uvicorn(monkeypatch,
 
     assert await args.func(args) == 0
     assert seen["app"] == "core-app"
-    assert seen["run_options"] == {"host": "127.0.0.2", "port": 7123, "reload": False}
+    assert seen["run_options"] == {"host": "127.0.0.2", "port": 7123, "reload": False, "proxy_headers": False}
     assert seen["served"] is True
     assert seen["app_options"] == {
+        "access_policy": CoreApiAccessPolicy(),
         "model_id": "model-1", "core_db": str(tmp_path / "core.db"),
         "data_dir": str(tmp_path / "data"), "work_root": str(tmp_path), "thinking_enabled": False,
         "thinking_budget": 512, "max_tokens": 1024, "temperature": 0.4,
@@ -1287,7 +1289,9 @@ async def test_core_cli_run_uses_core_kernel_tool_loop(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_core_cli_persists_user_message_before_model_execution(tmp_path: Path) -> None:
+async def test_core_cli_persists_user_message_before_model_execution(
+    tmp_path: Path, instant_model_retry_sleep,
+) -> None:
     core_db = tmp_path / "core.db"
 
     summary = await run_core_cli_task(
@@ -1304,6 +1308,8 @@ async def test_core_cli_persists_user_message_before_model_execution(tmp_path: P
     )
 
     assert summary["result"]["decision"] == "failed"
+
+    instant_model_retry_sleep.assert_awaited()
 
     with sqlite3.connect(core_db) as con:
         payloads = [

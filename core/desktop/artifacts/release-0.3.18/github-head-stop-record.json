@@ -1,0 +1,11 @@
+{
+  "purpose": "stop stalled read-only GitHub Linux asset HEAD verification",
+  "commandId": "c-hz06zwva089e4n4",
+  "invokeId": "t-hz06zwva08edxc0",
+  "stopInvocationAtUtc": "2026-10-13T11:42:32Z",
+  "stopRequestId": "01A13512-43A9-5406-94B5-3421A8B154FE",
+  "confirmationRequestId": "01A13512-7949-578F-9AF1-C2A9BFED18B1",
+  "terminalStatus": "Terminated",
+  "invokeRecordStatus": "Stopped",
+  "reason": "GitHub API confirmed both expected v0.3.17 assets; CDN HEAD check hung until 90-second connect timeout."
+}

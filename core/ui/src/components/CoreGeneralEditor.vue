@@ -23,7 +23,7 @@
       <div class="subhead">
         <span class="muted subhead-title">{{ t("HTTP 代理") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading" @click="fetchConfig">{{ t("刷新") }}</button>
+          <button class="text-btn" type="button" :disabled="loading || busy" @click="refreshNetwork">{{ t("刷新") }}</button>
           <button class="text-btn" type="button" :disabled="loading || busy" @click="saveField('proxy')">{{ t("保存") }}</button>
         </div>
       </div>
@@ -146,7 +146,7 @@
       <div class="subhead">
         <span class="muted subhead-title">{{ t("内存中断自动续跑") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading || memoryResumeBusy" @click="fetchMemoryResume">{{ t("刷新") }}</button>
+          <button class="text-btn" type="button" :disabled="loading || memoryResumeBusy" @click="thresholdSettingsDraft.requestReplace(() => void fetchMemoryResume())">{{ t("刷新") }}</button>
           <button class="text-btn" type="button" :disabled="loading || memoryResumeBusy" @click="saveMemoryThreshold">{{ t("保存") }}</button>
         </div>
       </div>
@@ -195,6 +195,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { Check, ToggleLeft, ToggleRight } from 'lucide-vue-next'
 import UiSelect from './UiSelect.vue'
 import { UI_LANGUAGES, uiLanguage, saveUiLanguage } from '../i18n'
+import { useSettingsDraft } from '../composables/useSettingsDraftGuard'
 
 const languageOptions = [...UI_LANGUAGES]
 const languageSaving = ref(false)
@@ -239,6 +240,7 @@ const askAutoContinue = ref(false)
 const askAutoContinueSaving = ref(false)
 const memoryResume = ref(true)
 const memoryResumeSaving = ref(false)
+const memoryResumeLoading = ref(false)
 const memoryThresholdDraft = ref(String(MEMORY_RESUME_DEFAULT_THRESHOLD_GB))
 const memoryResumeSaved = ref(false)
 
@@ -248,7 +250,21 @@ const keepAwakeSupported = computed(() => (props.platform ?? 'other') === 'windo
 const memoryResumeSupported = computed(
   () => (props.platform ?? 'other') === 'windows' || (props.platform ?? 'other') === 'linux',
 )
-const memoryResumeBusy = computed(() => memoryResumeSaving.value || busy.value)
+const memoryResumeBusy = computed(() => memoryResumeLoading.value || memoryResumeSaving.value || busy.value)
+const navigationBusy = computed(() => busy.value || memoryResumeSaving.value || languageSaving.value)
+const networkDrafts = Object.fromEntries((['proxy', 'no_proxy', 'ca_cert'] as const).map(key => [key, useSettingsDraft({
+  section: 'general', label: () => ({ proxy: t('代理地址'), no_proxy: t('直连地址'), ca_cert: t('CA 证书') })[key],
+  read: () => form[key], restore: value => { form[key] = value; error.value = '' },
+  save: () => saveField(key), busy: navigationBusy, error,
+})])) as Record<FieldKey, ReturnType<typeof useSettingsDraft<string>>>
+const thresholdSettingsDraft = useSettingsDraft({
+  section: 'general', label: () => t('自动恢复阈值'), read: () => String(memoryThresholdDraft.value),
+  restore: value => { memoryThresholdDraft.value = value; error.value = '' },
+  save: saveMemoryThreshold, busy: navigationBusy, error,
+})
+function refreshNetwork() {
+  networkDrafts.proxy.requestReplace(() => void fetchConfig(), Object.values(networkDrafts).map(item => item.draft))
+}
 
 function readValue(result: Record<string, unknown>): Record<string, unknown> {
   const value = result.value
@@ -264,6 +280,7 @@ async function fetchConfig() {
     form.proxy = String(value.proxy ?? '')
     form.no_proxy = String(value.no_proxy ?? '')
     form.ca_cert = String(value.ca_cert ?? '')
+    for (const draft of Object.values(networkDrafts)) draft.accept()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -272,7 +289,7 @@ async function fetchConfig() {
 }
 
 async function saveField(key: FieldKey) {
-  if (loading.value || busy.value) return
+  if (loading.value || busy.value) return false
   const next = form[key].trim()
   const previous = form[key]
   form[key] = next
@@ -281,12 +298,15 @@ async function saveField(key: FieldKey) {
   busyKeys.value = [...busyKeys.value, key]
   try {
     await props.requestRpc('settings.update', { namespace: NAMESPACE, value: { [key]: next } })
+    networkDrafts[key].accept(next)
     savedField.value = key
+    return true
   } catch (e) {
     // The backend validates the field; restore the last known-good value and
     // never claim the draft was stored.
     error.value = e instanceof Error ? e.message : String(e)
     form[key] = previous
+    return false
   } finally {
     busyKeys.value = busyKeys.value.filter((item) => item !== key)
   }
@@ -371,6 +391,7 @@ function readMemoryThreshold(value: Record<string, unknown>): number {
 
 async function fetchMemoryResume() {
   if (!memoryResumeSupported.value) return
+  memoryResumeLoading.value = true
   error.value = ''
   memoryResumeSaved.value = false
   try {
@@ -378,8 +399,11 @@ async function fetchMemoryResume() {
     // Absent namespace = the backend default (on, 4 GB), not "off".
     memoryResume.value = value.enabled === undefined ? true : !!value.enabled
     memoryThresholdDraft.value = String(readMemoryThreshold(value))
+    thresholdSettingsDraft.accept()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    memoryResumeLoading.value = false
   }
 }
 
@@ -405,11 +429,11 @@ async function toggleMemoryResume() {
 }
 
 async function saveMemoryThreshold() {
-  if (!memoryResumeSupported.value || memoryResumeBusy.value) return
+  if (!memoryResumeSupported.value || memoryResumeBusy.value) return false
   const parsed = Number(memoryThresholdDraft.value)
   if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 1024) {
     error.value = t("阈值需要是 0.5 到 1024 之间的数字（GB）")
-    return
+    return false
   }
   const previous = memoryThresholdDraft.value
   memoryResumeSaving.value = true
@@ -421,12 +445,15 @@ async function saveMemoryThreshold() {
       value: { threshold_gb: parsed },
     })
     memoryThresholdDraft.value = String(parsed)
+    thresholdSettingsDraft.accept()
     memoryResumeSaved.value = true
+    return true
   } catch (e) {
     // The backend validates; keep the last known-good value rather than
     // pretending the draft was stored.
     memoryThresholdDraft.value = previous
     error.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
     memoryResumeSaving.value = false
   }

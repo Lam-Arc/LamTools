@@ -58,6 +58,7 @@ struct RefreshedTokens {
 fn relay_host_endpoint(base_url: &str) -> Result<String, String> {
     let mut endpoint =
         url::Url::parse(base_url.trim()).map_err(|_| "Relay 服务器地址无效".to_string())?;
+    require_secure_relay_url(&endpoint)?;
     endpoint.set_path("/v1/relay/host");
     endpoint.set_query(None);
     endpoint.set_fragment(None);
@@ -77,6 +78,7 @@ fn relay_host_endpoint(base_url: &str) -> Result<String, String> {
 fn refresh_endpoint(base_url: &str) -> Result<String, String> {
     let mut endpoint =
         url::Url::parse(base_url.trim()).map_err(|_| "Relay 服务器地址无效".to_string())?;
+    require_secure_relay_url(&endpoint)?;
     match endpoint.scheme() {
         "https" | "http" => {}
         "wss" => endpoint
@@ -99,6 +101,22 @@ fn now_ms() -> i64 {
         .unwrap_or_default()
         .as_millis()
         .min(i64::MAX as u128) as i64
+}
+
+fn require_secure_relay_url(endpoint: &url::Url) -> Result<(), String> {
+    let local = match endpoint.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain("localhost")) => true,
+        _ => false,
+    };
+    if matches!(endpoint.scheme(), "http" | "ws") && !local {
+        return Err("Relay 控制面包含配对码和账号凭据，非回环服务器必须使用 HTTPS/WSS".to_string());
+    }
+    if !endpoint.username().is_empty() || endpoint.password().is_some() {
+        return Err("Relay 地址不得包含凭据".to_string());
+    }
+    Ok(())
 }
 
 fn access_token_needs_refresh(session: &DesktopAccountSession) -> bool {
@@ -691,6 +709,19 @@ mod tests {
             deliver_bridge_packet(&sender, vec![2]),
             Err("relay bridge queue is full")
         );
+    }
+
+    #[test]
+    fn pairing_and_credentials_cannot_use_plaintext_public_relay() {
+        for base in ["http://relay.example", "ws://192.168.1.20:8787", "http://[2001:db8::1]"] {
+            assert!(relay_host_endpoint(base).is_err());
+            assert!(refresh_endpoint(base).is_err());
+        }
+        for base in ["http://127.0.0.1:8787", "ws://[::1]:8787", "https://relay.example"] {
+            assert!(relay_host_endpoint(base).is_ok());
+            assert!(refresh_endpoint(base).is_ok());
+        }
+        assert!(relay_host_endpoint("https://user:secret@relay.example").is_err());
     }
 
     #[test]

@@ -1,0 +1,5 @@
+GITHUB_LINUX_VERIFY_UTC_BEGIN=2026-10-13T11:40:00Z
+LATEST_RELEASE v0.3.17
+LINUX_ASSET Sunday_0.3.17_amd64.AppImage 189483512 https://github.com/Lam-Arc/LamTools/releases/download/v0.3.17/Sunday_0.3.17_amd64.AppImage
+LINUX_ASSET Sunday_0.3.17_amd64.deb 123274156 https://github.com/Lam-Arc/LamTools/releases/download/v0.3.17/Sunday_0.3.17_amd64.deb
+curl: (28) Connection timed out after 90000 milliseconds

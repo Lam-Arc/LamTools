@@ -429,6 +429,14 @@ def build_plugin_operation_catalog(
         )
         context.set_service("plugin.runtime_manager", runtime_manager)
 
+    def available(name: str) -> bool:
+        if runtime_manager is not None:
+            return runtime_manager.is_enabled(name)
+        return any(plugin.name == name and plugin.enabled for plugin in plugin_registry.discover())
+
+    def backend_status(name: str) -> dict[str, Any]:
+        return runtime_manager.status(name) if runtime_manager is not None else {"state": "unmanaged", "available": available(name), "error": None}
+
     async def plugin_list(request: OperationRequest) -> OperationResult:
         from .tools import load_plugin_tools
 
@@ -470,6 +478,8 @@ def build_plugin_operation_catalog(
                     "manifest_version": item.manifest_version,
                     "root": str(item.root),
                     "enabled": item.enabled,
+                    "available": available(item.name),
+                    "backend": backend_status(item.name),
                     # 平台分类（desktop/mobile/universal）：插件页按它分组，
                     # 也说明这个插件为什么只在某些宿主上出现。
                     "platforms": item.platforms,
@@ -542,7 +552,7 @@ def build_plugin_operation_catalog(
         views: list[dict[str, Any]] = []
         widgets: list[dict[str, Any]] = []
         for item in plugin_registry.discover():
-            if not item.enabled or item.ui is None:
+            if not available(item.name) or item.ui is None:
                 continue
             for mode in item.ui.modes:
                 modes.append(
@@ -583,7 +593,7 @@ def build_plugin_operation_catalog(
         candidates: dict[str, list[tuple[Any, Any]]] = {}
         plugin_ids: dict[str, list[str]] = {}
         for plugin in plugin_registry.discover():
-            if not plugin.enabled or plugin.ui is None:
+            if not available(plugin.name) or plugin.ui is None:
                 continue
             canonical_id = plugin.id or plugin.name
             plugin_ids.setdefault(canonical_id, []).append(plugin.name)
@@ -745,8 +755,17 @@ def build_plugin_operation_catalog(
         plugin_state_store.set_enabled(name, True)
         started = True
         if runtime_manager is not None:
-            started = await runtime_manager.start(name)
-        return OperationResult(name=request.name, payload={"name": name, "enabled": True})
+            from .lifecycle import PluginLifecycleError
+            try:
+                started = await runtime_manager.start(name)
+            except PluginLifecycleError as exc:
+                return OperationResult(name=request.name, status="error", payload={
+                    "name": name, "enabled": True, "available": False,
+                    "error": str(exc), "code": exc.code, "backend": backend_status(name),
+                })
+        if not started:
+            return OperationResult(name=request.name, status="error", payload={"name": name, "enabled": True, "available": False, "error": "Plugin backend did not become ready", "backend": backend_status(name)})
+        return OperationResult(name=request.name, payload={"name": name, "enabled": True, "available": available(name), "backend": backend_status(name)})
 
     async def plugin_disable(request: OperationRequest) -> OperationResult:
         name = str(request.payload.get("name") or "").strip()
@@ -758,8 +777,12 @@ def build_plugin_operation_catalog(
         plugin_state_store.set_enabled(name, False)
         stopped = False
         if runtime_manager is not None:
-            stopped = await runtime_manager.stop(name)
-        return OperationResult(name=request.name, payload={"name": name, "enabled": False})
+            from .lifecycle import PluginLifecycleError
+            try:
+                stopped = await runtime_manager.stop(name)
+            except PluginLifecycleError as exc:
+                return OperationResult(name=request.name, status="error", payload={"name": name, "enabled": False, "available": False, "error": str(exc), "code": exc.code, "backend": backend_status(name)})
+        return OperationResult(name=request.name, payload={"name": name, "enabled": False, "available": False, "backend": backend_status(name)})
 
     async def hook_list(request: OperationRequest) -> OperationResult:
         hooks = hook_registry_factory().load()
@@ -1697,10 +1720,9 @@ def build_plugin_operation_catalog(
                 work_root=_work_root,
                 data_dir=_data_dir,
                 context=context,
-                availability=lambda name=item.name: any(
-                    plugin.name == name and plugin.enabled
-                    for plugin in plugin_registry.discover()
-                ),
+                availability=lambda name=item.name: available(name),
+                defer_import=not available(item.name),
+                plugin_root=item.root,
             )
         )
     catalog.plugin_operation_errors = operation_errors

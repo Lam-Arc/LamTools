@@ -1,0 +1,2 @@
+put "E:/LamTools/core/desktop/src-tauri/target/release/bundle/inno/desktop-update.json" /var/tmp/Sunday-desktop-0.3.18-20261013.desktop-update.json
+quit

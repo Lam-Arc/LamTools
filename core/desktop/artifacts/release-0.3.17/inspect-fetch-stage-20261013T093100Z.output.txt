@@ -1,0 +1,5 @@
+INSPECT_UTC_BEGIN=2026-10-13T09:31:00Z
+STAGE_PRESENT path=/var/tmp/Sunday-desktop-0.3.17-20261013.upload.exe bytes=4599808 mode=644 mtime=2026-10-13 17:31:00.851733506 +0800
+bd3debff2bbc7ac88dffabacaf6c9d1fd0c315d7cbae7a5c7f0d613c56d3e7f9  /var/tmp/Sunday-desktop-0.3.17-20261013.upload.exe
+CURL_PIDS=curl(pid=930421,ppid=930411,state=S,elapsed=08:36) 
+INSPECT_UTC_END=2026-10-13T09:31:00Z

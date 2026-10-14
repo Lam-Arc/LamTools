@@ -58,6 +58,8 @@ from lamtools_core.llm import (
     LLMStreamEvent,
     LLMToolCall,
 )
+from lamtools_core.llm.cache_diagnostics import record_cache_observation
+from lamtools_core.llm.forensics import runtime_context as forensic_runtime_context
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
 from lamtools_core.llm.image_payload import MESSAGE_ADDED_AT_STEP
 from lamtools_core.llm.policy import RetryPolicy
@@ -109,10 +111,6 @@ _TOOL_INPUT_PROGRESS_CHARS = 512
 _STREAM_TEXT_PROGRESS_CHARS = 128
 # Bound on how many rounds the tool-progress gate may force a continuation
 # while the model keeps emitting text+tools without the required structure —
-# after this the gate yields to the Kit's verdict (audit 05 S3: unbounded
-# forced continue was an infinite-loop entry).
-TOOL_PROGRESS_INCOMPLETE_ROUND_LIMIT = 3
-
 # 成员事件一律不在回合内消费：父回合产出最终答复即结束，成员结果由 member-wake
 # watchdog 作为**下一个回合**投递（见 _announce_active_members 与
 # app/memory_resume_supervisor.py）。这样成员结果永远不会被本回合的最终总结
@@ -137,6 +135,30 @@ def _new_run_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def _json_safe_metadata(value: Any) -> Any:
+    """Metadata that can be handed to a plugin hook or a provider.
+
+    Hook events and provider requests are serialized, so a live callback that
+    reached the turn metadata fails the run before its first model call
+    ("Object of type function is not JSON serializable"). Dropping only what
+    cannot be serialized keeps the rest of the metadata usable instead of
+    losing the whole run (2026-10-14).
+    """
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe_metadata(item)
+            for key, item in value.items()
+            if not callable(item)
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_metadata(item) for item in value if not callable(item)]
+    if isinstance(value, (set, frozenset)):
+        return [_json_safe_metadata(item) for item in value]
+    if callable(value):
+        return None
+    return value
+
+
 def _status_from_decision(decision: LoopDecision) -> str:
     mapping = {
         "continue": "running",
@@ -145,6 +167,17 @@ def _status_from_decision(decision: LoopDecision) -> str:
         "failed": "failed",
     }
     return mapping.get(decision, "failed")
+
+
+class _KernelPause(Exception):
+    """Internal signal: the app layer asked this run to pause.
+
+    Raised from inside the streaming loop (where a half-received model answer
+    must be dropped instead of committed) and caught by the step loop, which
+    ends the run with the non-terminal ``paused`` status. Distinct from
+    :class:`asyncio.CancelledError` so a pause can never be mistaken for the
+    external-cancel path, which converges on the terminal ``cancelled`` state.
+    """
 
 
 def _chat_message_from_dict(value: Any) -> ChatMessage | None:
@@ -398,6 +431,19 @@ class CoreLoopKernel:
     # on a slow/streaming response. None for sub-agent kernels (no external
     # cancel). See live_operations.handle_turn_cancel_operation.
     cancel_event_source: asyncio.Event | None = field(default=None, repr=False)
+    # External pause signal source (e.g. RuntimeTaskRegistry.get_pause_event).
+    # A pause is the cooperative sibling of the cancel signal above: the run
+    # stops, drops the step it was in the middle of, and leaves a resumable
+    # state behind instead of a terminal one. None for sub-agent kernels that
+    # answer to no session-level pause.
+    pause_event_source: asyncio.Event | None = field(default=None, repr=False)
+    # Sticky record of "a pause was requested during this run". The event source
+    # can be cleared (or belong to a registry that another run reset) while the
+    # task is still unwinding, and the CancelledError handler must still tell
+    # a pause apart from a terminate.
+    _pause_requested: bool = field(default=False, init=False, repr=False)
+    #: Reason reported by the pause request that stopped this run.
+    _pause_reason: str = field(default="", init=False, repr=False)
     _base_event_sink: EventSink = field(init=False, repr=False)
     # The in-memory conversation list of the run currently executing. Assistant
     # replies and tool results live here until loop exit, so the external-cancel
@@ -441,6 +487,24 @@ class CoreLoopKernel:
             return True
         return self._cancel_event.is_set()
 
+    def _external_pause_requested(self) -> bool:
+        """Whether the app layer asked this run to pause instead of to stop.
+
+        Cancel wins when both are set: an explicit terminate must never be
+        downgraded into a pause by a pause request that raced it.
+        """
+        if self._cancel_event.is_set():
+            return False
+        if self.cancel_event_source is not None and self.cancel_event_source.is_set():
+            return False
+        if self.pause_event_source is not None and self.pause_event_source.is_set():
+            self._pause_requested = True
+            reason = str(getattr(self.pause_event_source, "pause_reason", "") or "").strip()
+            if reason:
+                self._pause_reason = reason
+            return True
+        return False
+
     async def run(self, turn_input: RuntimeTurnInput) -> KernelResult:
         try:
             return await self._run(turn_input)
@@ -453,7 +517,16 @@ class CoreLoopKernel:
             history = self._live_history
             run_span = self._run_span
             self._run_span = None
-            self._spawn_external_cancel_persist(turn_input, history, run_span)
+            # A pause request tears down a tool that cannot check the pause
+            # event (a long-running command, a blocking write). That is still a
+            # pause: the durable state must stay resumable, not become a
+            # cancellation the user never asked for.
+            if self._is_external_cancelled():
+                self._spawn_external_cancel_persist(turn_input, history, run_span)
+            elif self._external_pause_requested() or self._pause_requested:
+                self._spawn_external_pause_persist(turn_input, history, run_span)
+            else:
+                self._spawn_external_cancel_persist(turn_input, history, run_span)
             raise
         finally:
             self._live_history = None
@@ -468,13 +541,34 @@ class CoreLoopKernel:
         task = asyncio.get_running_loop().create_task(
             self._persist_external_cancellation(turn_input, history=history, run_span=run_span)
         )
+        self._track_background_finalizer(task, turn_input, label="external-cancel")
+
+    def _spawn_external_pause_persist(
+        self,
+        turn_input: RuntimeTurnInput,
+        history: list[ChatMessage] | None,
+        run_span: Any | None,
+    ) -> None:
+        task = asyncio.get_running_loop().create_task(
+            self._persist_external_pause(turn_input, history=history, run_span=run_span)
+        )
+        self._track_background_finalizer(task, turn_input, label="external-pause")
+
+    def _track_background_finalizer(
+        self,
+        task: asyncio.Task[None],
+        turn_input: RuntimeTurnInput,
+        *,
+        label: str,
+    ) -> None:
         self._background_finalizers.add(task)
 
         def _done(done: asyncio.Task[None]) -> None:
             self._background_finalizers.discard(done)
             if not done.cancelled() and done.exception() is not None:
                 _logger.error(
-                    "[kernel] external-cancel persistence failed sid=%s: %s",
+                    "[kernel] %s persistence failed sid=%s: %s",
+                    label,
                     str(turn_input.metadata.get("session_id") or ""),
                     done.exception(),
                 )
@@ -525,6 +619,10 @@ class CoreLoopKernel:
 
         # Reset cancel event for this run
         self._cancel_event.clear()
+        # A run starts unpaused; the app layer sets its own pause event before
+        # the kernel is handed the turn, and a fresh run must not inherit the
+        # previous run's pause.
+        self._pause_requested = False
 
         # 1. Load or create state
         state: RuntimeState
@@ -645,6 +743,7 @@ class CoreLoopKernel:
         # dropping these keys here cannot break pending-approval recovery.
         state.metadata.pop("pending_approval", None)
         state.metadata.pop("pending_waiting_request", None)
+        state.metadata.pop("cancellation_reason", None)
         state.metadata["runtime_audit"] = build_kernel_audit(
             policy=self.policy,
             kernel_module_path=__file__,
@@ -683,6 +782,12 @@ class CoreLoopKernel:
             new_messages = await self._begin_run(state, turn_input, history)
             # _begin_run appended (and persisted) this turn's input rows.
             self._persisted_len = len(history)
+            await self._acknowledge_guidance(
+                turn_input, [
+                    *list(turn_input.metadata.get("initial_guidance_ids") or []),
+                    *list(turn_input.metadata.get("input_acknowledgement_ids") or []),
+                ]
+            )
         except Exception as exc:  # noqa: BLE001 — the run still needs a terminal state
             _logger.exception("[kernel:_run] run setup failed sid=%s", state.session_id)
             state.status = _status_from_decision("failed")
@@ -716,8 +821,8 @@ class CoreLoopKernel:
         consecutive_failure_rounds = 0
         tool_only_rounds = 0
         tool_progress_pending = False
+        tool_progress_prompted = False
         tool_progress_blocked_rounds = 0
-        tool_progress_incomplete_rounds = 0
 
         # Emit runtime.started event
         await self._emit_state_event(state, "runtime.started", "run started")
@@ -754,6 +859,20 @@ class CoreLoopKernel:
                     step.error = error_msg
                     final_decision = "failed"
                     break
+                if self._external_pause_requested():
+                    # The user asked to pause. Stop before starting another step
+                    # and leave the turn resumable: the model answer of this step
+                    # was never received, so there is nothing to commit for it.
+                    error_msg = "paused"
+                    step.error = error_msg
+                    final_decision = "failed"
+                    _logger.info(
+                        "[kernel:_run] paused before step=%d sid=%s reason=%s",
+                        index,
+                        state.session_id,
+                        str(state.metadata.get("pause_reason") or self._pause_reason or "user_pause"),
+                    )
+                    break
 
                 await self._consume_guidance(state, turn_input, history, index)
 
@@ -782,6 +901,8 @@ class CoreLoopKernel:
 
                 # 5.3 Build model request
                 request = await self.kit.build_model_request(state, context)
+                request.metadata.update(_runtime_session_id=state.session_id,
+                                        _runtime_run_id=state.run_id, _runtime_step=index)
                 await self._compact_request_if_needed(state, request, history=history)
                 # Strip internal bookkeeping metadata (history seq / resume
                 # marker) before the request reaches the model — the shared
@@ -838,6 +959,27 @@ class CoreLoopKernel:
                 usage_payload["usage_available"] = response.usage is not None
                 usage_payload["usage_status"] = "reported" if response.usage is not None else "missing"
                 usage_payload["usage_source"] = "provider"
+                try:
+                    response_metadata = response.metadata if isinstance(response.metadata, dict) else {}
+                    cache_diagnostic = record_cache_observation(
+                        state.session_id,
+                        request,
+                        response.usage,
+                        response_metadata.get("cache_diagnostic_route"),
+                    )
+                    if cache_diagnostic is not None:
+                        usage_payload["cache_diagnostic"] = cache_diagnostic
+                        _logger.warning(
+                            "[cache-diagnostic] sid=%s %s",
+                            state.session_id,
+                            json.dumps(cache_diagnostic, ensure_ascii=False, sort_keys=True),
+                        )
+                except Exception:  # noqa: BLE001 — diagnostics must never break a turn
+                    _logger.exception(
+                        "[cache-diagnostic] recording failed sid=%s step=%d",
+                        state.session_id,
+                        index,
+                    )
                 await self.event_sink.emit(CoreEvent(
                     name="runtime.usage",
                     category="usage",
@@ -902,25 +1044,10 @@ class CoreLoopKernel:
                         "split it into smaller calls."
                     )
                 step.turn = turn
-                tool_progress_structured = (
-                    tool_progress_pending
-                    and bool(turn.reply.strip())
-                    and self._has_tool_progress_structure(turn.reply)
-                )
-                tool_progress_completed = (
-                    tool_progress_pending
-                    and bool(turn.reply.strip())
-                    and (
-                        not turn.tool_calls
-                        or tool_progress_structured
-                    )
-                )
-                tool_progress_incomplete = (
-                    tool_progress_pending
-                    and bool(turn.reply.strip())
-                    and bool(turn.tool_calls)
-                    and not tool_progress_completed
-                )
+                # A text reply acknowledges a pending progress request. Do not
+                # enforce a particular heading structure or ask the model to
+                # fill in missing sections.
+                tool_progress_acknowledged = tool_progress_pending and bool(turn.reply.strip())
 
                 # Kernel-level natural-stop signal (OpenAI-style): model
                 # produced a text reply with no tool calls. Kit MAY consume
@@ -1149,7 +1276,7 @@ class CoreLoopKernel:
                     for call in turn.tool_calls:
                         await self._emit_tool_started(state, call, response_index=index)
                     executable_calls = [call for call in turn.tool_calls if call.id not in blocked_results]
-                    executed_results = await self._execute_tools_parallel(state, executable_calls) if executable_calls else []
+                    executed_results = await self._execute_tools_parallel(state, executable_calls, forensic_step=index) if executable_calls else []
                     # PostToolUse / PostToolUseFailure hooks for parallel execution
                     executed_results = [
                         await self._apply_post_tool_hook(state, call, result)
@@ -1174,7 +1301,7 @@ class CoreLoopKernel:
                         if call.id in blocked_results:
                             result = blocked_results[call.id]
                         else:
-                            result = await self._execute_tool(state, call)
+                            result = await self._execute_tool(state, call, forensic_step=index)
                             # PostToolUse / PostToolUseFailure hook
                             result = await self._apply_post_tool_hook(state, call, result)
                         tool_results.append(result)
@@ -1193,7 +1320,7 @@ class CoreLoopKernel:
                         # behind it (2026-09-27: every steered sub-agent died with
                         # "Messages with role 'tool' must be a response to a
                         # preceding message with 'tool_calls'").
-                        guidance = self._collect_guidance(turn_input)
+                        guidance = await self._collect_guidance(turn_input)
                         if not guidance:
                             continue
                         remaining_calls = turn.tool_calls[call_index + 1:]
@@ -1218,6 +1345,10 @@ class CoreLoopKernel:
                             step.metadata["guidance_interrupted_tool_batch"] = True
                             await self._save_checkpoint(state)
                         await self._apply_guidance(state, history, index, guidance)
+                        await self._acknowledge_guidance(turn_input, [
+                            str(metadata["guidance_id"]) for _, metadata in guidance
+                            if metadata.get("guidance_id")
+                        ])
                         break
 
                 payload_reassessment_required = False
@@ -1344,35 +1475,28 @@ class CoreLoopKernel:
                     await self._save_checkpoint(state)
 
                 if (
-                    tool_progress_completed
+                    tool_progress_acknowledged
                     and not payload_reassessment_required
-                    and not duplicate_payload_blocked
                 ):
                     tool_progress_pending = False
                     tool_only_rounds = 0
+                    tool_progress_prompted = False
                     tool_progress_blocked_rounds = 0
-                    tool_progress_incomplete_rounds = 0
-                    step.metadata["tool_progress_completed"] = True
+                    step.metadata["tool_progress_acknowledged"] = True
                     state.metadata["tool_progress"] = {
-                        "status": "completed",
+                        "status": "acknowledged",
                         "response_index": index,
                     }
-                    await self._save_checkpoint(state)
-                elif tool_progress_incomplete:
-                    history.append(ChatMessage(
-                        role="user",
-                        content=(
-                            "[TOOL_PROGRESS_INCOMPLETE] Respond with these three headings before more tools: "
-                            "[已确认事实] [剩余不确定性] [下一步]. Keep it concise and reuse existing evidence."
-                        ),
-                        metadata={"key": "tool_progress_incomplete", "internal": True},
-                    ))
-                    step.metadata["tool_progress_incomplete"] = True
                     await self._save_checkpoint(state)
                 elif turn.tool_calls and not turn.reply.strip() and executed_tool_round:
                     tool_only_rounds += 1
                     limit = self.policy.max_tool_only_rounds_without_progress
-                    if limit is not None and limit > 0 and tool_only_rounds >= limit:
+                    if (
+                        limit is not None
+                        and limit > 0
+                        and tool_only_rounds >= limit
+                        and not tool_progress_prompted
+                    ):
                         history.append(ChatMessage(
                             role="user",
                             content=(
@@ -1383,6 +1507,8 @@ class CoreLoopKernel:
                             metadata={"key": "tool_progress_required", "internal": True},
                         ))
                         step.metadata["tool_progress_required"] = True
+                        tool_progress_pending = True
+                        tool_progress_prompted = True
                         state.metadata["tool_progress"] = {
                             "status": "required",
                             "response_index": index,
@@ -1391,6 +1517,8 @@ class CoreLoopKernel:
                         await self._save_checkpoint(state)
                 elif turn.reply.strip():
                     tool_only_rounds = 0
+                    tool_progress_prompted = False
+                    tool_progress_blocked_rounds = 0
 
                 failed_pairs = [
                     (call, result)
@@ -1450,26 +1578,7 @@ class CoreLoopKernel:
 
                 # 5.11 Decide next
                 decision = await self.kit.decide_next(state, turn, verification, step)
-                if tool_progress_incomplete or (tool_progress_completed and tool_progress_structured):
-                    # The progress gate may only force a continuation while the
-                    # Kit itself wants to keep going (continue/done); overriding
-                    # a terminal Kit verdict (wait/failed) would defeat it
-                    # (audit 05 S3).  A model that keeps replying text+tools
-                    # without the required structure gets a bounded number of
-                    # forced rounds, then we stop forcing and surface a wait.
-                    if tool_progress_incomplete:
-                        if decision in {"continue", "done"}:
-                            tool_progress_incomplete_rounds += 1
-                            if tool_progress_incomplete_rounds >= TOOL_PROGRESS_INCOMPLETE_ROUND_LIMIT:
-                                decision = "wait"
-                                step.metadata["tool_progress_no_progress"] = True
-                                state.metadata["tool_progress_no_progress"] = True
-                            else:
-                                decision = "continue"
-                                step.metadata["tool_progress_retry_required"] = True
-                    elif decision in {"continue", "done"}:
-                        decision = "continue"
-                elif turn.tool_calls and decision == "done":
+                if turn.tool_calls and decision == "done":
                     # OpenAI/Claude-style loop contract: tool use is not a
                     # terminal answer. A run may only complete after the model
                     # returns a no-tool final response.
@@ -1484,7 +1593,7 @@ class CoreLoopKernel:
                     state.metadata["done_without_final_text"] = True
 
                 if decision == "done" and not turn.tool_calls:
-                    if await self._consume_guidance(state, turn_input, history, index, finalize=True):
+                    if await self._consume_guidance(state, turn_input, history, index):
                         decision = "continue"
                         step.metadata["guidance_force_continue"] = True
                     # Members are NOT consumed here, and the members-running fact
@@ -1529,6 +1638,12 @@ class CoreLoopKernel:
                                 await self._save_checkpoint(state)
                                 decision = "continue"
 
+                # Completion verification can continue the run. Seal guidance
+                # only after it passes, and catch input arriving while it awaits.
+                if decision == "done" and not turn.tool_calls:
+                    if await self._consume_guidance(state, turn_input, history, index, finalize=True):
+                        decision = "continue"
+                        step.metadata["guidance_force_continue"] = True
                 step.decision = decision
                 final_decision = decision
 
@@ -1586,6 +1701,16 @@ class CoreLoopKernel:
                 step.error = error_msg
                 final_decision = "failed"
                 break
+            except _KernelPause:
+                # The pause was requested while this step was streaming. The
+                # step leaves no trace of its own (no answer, no tool result);
+                # everything already committed stays, which is what the resumed
+                # run continues from.
+                error_msg = "paused"
+                step.error = error_msg
+                step.decision = "paused"
+                final_decision = "failed"
+                break
             except Exception as e:
                 _logger.exception("[kernel:_run] unexpected error sid=%s step=%d",
                                   state.session_id, index)
@@ -1609,7 +1734,26 @@ class CoreLoopKernel:
         # decision-matching (which expects only continue/wait/done/failed).
         if error_msg == "cancelled":
             state.status = "cancelled"
-        state.loop_state = final_decision
+        elif error_msg == "paused":
+            # A pause is not a failure: the turn keeps its place and the user
+            # continues it later. ``loop_state`` carries the same word so the
+            # runtime store tells a paused turn apart from a waiting one.
+            state.status = "paused"
+            state.loop_state = "paused"
+        elif str(state.metadata.get("failure_code") or "") == HOST_MEMORY_EXHAUSTED:
+            # Running out of host memory parks the turn rather than failing it:
+            # the resume watchdog continues it once memory is available again.
+            # The reason rides the metadata so the log can tell this pause apart
+            # from a user pause while the interface shows one paused state.
+            state.status = "paused"
+            state.loop_state = "paused"
+            state.metadata["pause_reason"] = "host_memory"
+            _logger.warning(
+                "[kernel:_run] paused after host memory exhaustion sid=%s",
+                state.session_id,
+            )
+        else:
+            state.loop_state = final_decision
         if str(state.metadata.get("failure_code") or "") != HOST_MEMORY_EXHAUSTED:
             # This turn did not end in memory exhaustion, so the chain of
             # consecutive memory interruptions is broken: the next one gets the
@@ -1728,8 +1872,9 @@ class CoreLoopKernel:
         )
         # UserPromptSubmit hook（先于消息入历史——hook 的
         # additional_context 注入用户消息并随历史持久化，C2 共识）。
-        hook_user_content = await self._apply_user_prompt_submit_hook(
-            state, turn_input, current_user_content
+        hook_user_content = (
+            None if turn_input.metadata.get("origin") == "turn_resume"
+            else await self._apply_user_prompt_submit_hook(state, turn_input, current_user_content)
         )
         if hook_user_content:
             current_user_content = hook_user_content
@@ -1740,7 +1885,7 @@ class CoreLoopKernel:
                 or turn_input.metadata.get("turn_origin")
                 or ""
             ).strip()
-            if turn_origin == "member_wake":
+            if turn_origin in {"member_wake", "turn_resume"}:
                 # The live transcript already records this input as the
                 # systemMessage item. Keep the model-visible copy as one
                 # marked system entry at the history tail so OpenAI-style
@@ -1760,9 +1905,18 @@ class CoreLoopKernel:
                     },
                 )
             else:
-                user_msg = ChatMessage(role="user", content=current_user_content)
-            history.append(user_msg)
-            new_messages.append(user_msg)
+                user_msg = ChatMessage(role="user", content=current_user_content,
+                                       metadata={"turn_id": str(state.metadata.get("turn_id") or state.run_id)})
+            initial_ids = list(turn_input.metadata.get("initial_guidance_ids") or [])
+            if initial_ids:
+                user_msg.metadata["guidance_ids"] = initial_ids
+            known_ids = {
+                str(message_id) for message in history
+                for message_id in message.metadata.get("guidance_ids", [])
+            }
+            if not initial_ids or not set(initial_ids).issubset(known_ids):
+                history.append(user_msg)
+                new_messages.append(user_msg)
         await self._append_history_checkpoint(state, new_messages)
         _logger.info("[kernel:_run] checkpoint saved sid=%s", state.session_id)
         return new_messages
@@ -1844,6 +1998,67 @@ class CoreLoopKernel:
             steps=[],
             state=state,
             error="cancelled",
+        )
+        await self._finalize_run(state, result, run_span)
+        self._run_span = None
+
+    async def _persist_external_pause(
+        self,
+        turn_input: RuntimeTurnInput,
+        *,
+        history: list[ChatMessage] | None,
+        run_span: Any | None,
+    ) -> None:
+        """Converge a run that was torn down for a pause instead of a cancel.
+
+        The pause request sets the registry pause event, and any in-flight tool
+        that cannot check it is aborted with ``task.cancel()``; both roads must
+        end in the resumable ``paused`` state, never in ``cancelled``. Otherwise
+        the shape mirrors the cancellation path, including persisting the live
+        history tail so the resumed run keeps every finished step.
+        """
+        state = turn_input.state
+        if state is None:
+            session_id = str(turn_input.metadata.get("session_id") or "")
+            state = await self.state_store.get(session_id) if session_id else None
+        if state is None:
+            return
+        expected_run_id = str(turn_input.run_id or "").strip()
+        if expected_run_id and state.run_id != expected_run_id:
+            return
+        state.status = "paused"
+        state.loop_state = "paused"
+        # The parked approval/question descriptors belong to a run that is no
+        # longer executing; the resumed run rebuilds them from the committed
+        # request rows.
+        state.metadata.pop("pending_approval", None)
+        state.metadata.pop("pending_waiting_request", None)
+        if history is None:
+            history = await self._load_history(state.session_id)
+        try:
+            await self._persist_history_tail(state, history)
+        except Exception:
+            # The app layer settles the paused state itself before this detached
+            # writer runs, so its own write wins and this one can be refused by
+            # the owner guard. That is a race between two writers of the same
+            # parked state, not a failure: only report it when the stored state
+            # does not already say paused.
+            stored = await self.state_store.get(state.session_id)
+            if stored is None or str(getattr(stored, "status", "") or "") != "paused":
+                raise
+            _logger.info(
+                "[kernel] pause state already settled by the app layer sid=%s",
+                state.session_id,
+            )
+
+        result = KernelResult(
+            session_id=state.session_id,
+            run_id=state.run_id,
+            decision="failed",
+            message="",
+            steps=[],
+            state=state,
+            error="paused",
         )
         await self._finalize_run(state, result, run_span)
         self._run_span = None
@@ -1946,20 +2161,6 @@ class CoreLoopKernel:
             "Do not repeat the exact failing call with the same arguments.\n"
             f"Failure evidence:\n{json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)}"
         )
-
-    @staticmethod
-    def _has_tool_progress_structure(reply: str) -> bool:
-        raw_text = str(reply or "").strip()
-        text = raw_text.lower()
-        required_groups = (
-            ("已确认事实", "confirmed facts"),
-            ("剩余不确定性", "remaining uncertainty"),
-            ("下一步", "next action", "next step"),
-        )
-        if all(any(marker in text for marker in group) for group in required_groups):
-            return True
-        substantive_lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-        return len(raw_text) >= 80 and len(substantive_lines) >= 3
 
     def _observe_repeated_tool_failures(
         self,
@@ -2254,6 +2455,7 @@ class CoreLoopKernel:
         stream_finish_reason: str | None = None
         terminal_tool_calls: list[LLMToolCall] = []
         provider_state: Any = None
+        cache_diagnostic_route: dict[str, Any] | None = None
         # Time-to-first-event is measured from here: constructing the generator
         # sends nothing, the first __anext__ is what crosses the network.  A
         # stalled gateway shows up as a large ttft, never as a large elapsed.
@@ -2281,6 +2483,18 @@ class CoreLoopKernel:
                 # nothing (the 2b34c636 "stop 无效" symptom).
                 if self._is_external_cancelled():
                     raise asyncio.CancelledError()
+                if self._external_pause_requested():
+                    # Abort the stream and drop everything received so far: a
+                    # paused step keeps no half-written answer, so the resumed
+                    # run asks the model for that step again.
+                    _logger.info(
+                        "[kernel:_stream_model] paused mid-stream sid=%s step=%s chars=%d reason=%s",
+                        state.session_id,
+                        response_index,
+                        len(accumulated),
+                        str(state.metadata.get("pause_reason") or self._pause_reason or "user_pause"),
+                    )
+                    raise _KernelPause()
                 event_finish_reason = event.finish_reason or (
                     event.metadata.get("finish_reason") if event.metadata else None
                 )
@@ -2292,6 +2506,9 @@ class CoreLoopKernel:
                     pending_usage = event.usage
                 if event.provider_state is not None:
                     provider_state = copy.deepcopy(event.provider_state)
+                route = event.metadata.get("cache_diagnostic_route") if isinstance(event.metadata, dict) else None
+                if isinstance(route, dict):
+                    cache_diagnostic_route = dict(route)
                 if event.kind == "content_delta" and event.content:
                     accumulated += event.content
                     await self.event_sink.emit(CoreEvent(
@@ -2446,6 +2663,8 @@ class CoreLoopKernel:
         except Exception as exc:
             await self._emit_stream_fallback(state, str(exc) or exc.__class__.__name__)
             return None  # fall back to non-streaming
+        finally:
+            await stream.aclose()
 
         # Stream ended without a done event — build response from accumulated data
         merged_tool_calls = terminal_tool_calls or (
@@ -2496,16 +2715,21 @@ class CoreLoopKernel:
             tool_calls=merged_tool_calls,
             usage=pending_usage,
             finish_reason=stream_finish_reason or "stop",
+            metadata=(
+                {"cache_diagnostic_route": cache_diagnostic_route}
+                if cache_diagnostic_route is not None
+                else {}
+            ),
             provider_state=copy.deepcopy(provider_state),
         )
 
-    def _collect_guidance(
+    async def _collect_guidance(
         self,
         turn_input: RuntimeTurnInput,
         *,
         finalize: bool = False,
     ) -> list[tuple[str, dict[str, Any]]]:
-        """Drain pending guidance into normalized ``(content, metadata)`` pairs.
+        """Read pending guidance into normalized ``(content, metadata)`` pairs.
 
         Draining is split from :meth:`_apply_guidance` so callers that must
         finish writing back the current tool batch before the guidance lands in
@@ -2516,6 +2740,8 @@ class CoreLoopKernel:
         else:
             source = turn_input.guidance_source
             guidance_items = source() if source is not None else []
+        if inspect.isawaitable(guidance_items):
+            guidance_items = await guidance_items or []
         guidance: list[tuple[str, dict[str, Any]]] = []
         for item in guidance_items:
             if isinstance(item, dict):
@@ -2536,9 +2762,23 @@ class CoreLoopKernel:
         guidance: list[tuple[str, dict[str, Any]]],
     ) -> None:
         """Append already-collected guidance to history and announce it."""
+        known_ids = {
+            str(message_id)
+            for message in history
+            for message_id in message.metadata.get("guidance_ids", [])
+        }
+        received_events: list[CoreEvent] = []
         for content, metadata in guidance:
-            history.append(ChatMessage(role="user", content=content))
-            await self.event_sink.emit(CoreEvent(
+            guidance_id = str(metadata.get("guidance_id") or "")
+            if guidance_id and guidance_id in known_ids:
+                continue
+            history.append(ChatMessage(
+                role="user", content=content,
+                metadata={"guidance_ids": [guidance_id]} if guidance_id else {},
+            ))
+            if guidance_id:
+                known_ids.add(guidance_id)
+            received_events.append(CoreEvent(
                 name="runtime.guidance_received",
                 category="message",
                 payload={
@@ -2551,6 +2791,16 @@ class CoreLoopKernel:
                 tags=["guidance"],
             ))
         await self._save_checkpoint(state)
+        for event in received_events:
+            await self.event_sink.emit(event)
+
+    @staticmethod
+    async def _acknowledge_guidance(turn_input: RuntimeTurnInput, ids: list[str]) -> None:
+        acknowledger = turn_input.guidance_acknowledger or getattr(turn_input.guidance_source, "acknowledger", None)
+        if ids and acknowledger is not None:
+            result = acknowledger(ids)
+            if inspect.isawaitable(result):
+                await result
 
     async def _consume_guidance(
         self,
@@ -2561,10 +2811,14 @@ class CoreLoopKernel:
         *,
         finalize: bool = False,
     ) -> bool:
-        guidance = self._collect_guidance(turn_input, finalize=finalize)
+        guidance = await self._collect_guidance(turn_input, finalize=finalize)
         if not guidance:
             return False
         await self._apply_guidance(state, history, response_index, guidance)
+        await self._acknowledge_guidance(turn_input, [
+            str(metadata["guidance_id"]) for _, metadata in guidance
+            if metadata.get("guidance_id")
+        ])
         return True
 
     # ── 子代理事件：只上报”仍在运行”，绝不在此消费 ──────────────────
@@ -2959,7 +3213,9 @@ class CoreLoopKernel:
             tags=["progress"],
         ))
 
-    async def _execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+    async def _execute_tool(
+        self, state: RuntimeState, call: ToolCall, *, forensic_step: int | None = None,
+    ) -> ToolResult:
         """Execute a single tool call via Kit.
 
         Approval-required calls are intercepted by the main loop before this
@@ -2975,6 +3231,10 @@ class CoreLoopKernel:
                 error="Tool requires approval and was not routed through a waiting request.",
                 metadata={"approval_contract_violation": True},
             )
+        forensic_token = forensic_runtime_context.set({
+            "session_id": state.session_id, "run_id": state.run_id,
+            "step": forensic_step,
+        })
         execution = self.kit.execute_tool(state, call)
         timeout = self.policy.tool_timeout_seconds
         try:
@@ -2999,6 +3259,8 @@ class CoreLoopKernel:
                     "error_type": type(exc).__name__,
                 },
             )
+        finally:
+            forensic_runtime_context.reset(forensic_token)
 
     def _refresh_live_approval_requirements(
         self,
@@ -3220,7 +3482,7 @@ class CoreLoopKernel:
             run_id=state.run_id,
             cwd=cwd,
             project_root=project_root,
-            metadata=dict(turn_input.metadata),
+            metadata=_json_safe_metadata(dict(turn_input.metadata)),
         ))
         if decision.status_message:
             await self._emit_hook_status(state, "", decision.status_message)
@@ -3270,7 +3532,7 @@ class CoreLoopKernel:
             run_id=state.run_id,
             cwd=cwd,
             project_root=project_root,
-            metadata=dict(turn_input.metadata),
+            metadata=_json_safe_metadata(dict(turn_input.metadata)),
             user_message=user_content or "",
         ))
         if decision.status_message:
@@ -3409,7 +3671,7 @@ class CoreLoopKernel:
             )
 
     async def _execute_tools_parallel(
-        self, state: RuntimeState, calls: list[ToolCall]
+        self, state: RuntimeState, calls: list[ToolCall], *, forensic_step: int | None = None,
     ) -> list[ToolResult]:
         """Execute multiple tool calls concurrently with optional cap.
 
@@ -3422,10 +3684,10 @@ class CoreLoopKernel:
 
             async def _bounded(c: ToolCall) -> ToolResult:
                 async with sem:
-                    return await self._execute_tool(state, c)
+                    return await self._execute_tool(state, c, forensic_step=forensic_step)
 
             return list(await asyncio.gather(*(_bounded(c) for c in calls)))
-        return list(await asyncio.gather(*(self._execute_tool(state, c) for c in calls)))
+        return list(await asyncio.gather(*(self._execute_tool(state, c, forensic_step=forensic_step) for c in calls)))
 
     def _copy_state(self, state: RuntimeState) -> RuntimeState:
         return RuntimeState(
@@ -3632,9 +3894,9 @@ class CoreLoopKernel:
             # wholesale and leaves the session unable to compact.
             model_output_tokens=request.max_tokens,
             safety_margin_tokens=self.policy.compact_safety_margin_tokens,
-            request_metadata={
-                "_runtime_session_id": request.metadata["_runtime_session_id"]
-            } if request.metadata.get("_runtime_session_id") else {},
+            request_metadata={key: request.metadata[key] for key in
+                              ("_runtime_session_id", "_runtime_run_id", "_runtime_step")
+                              if key in request.metadata},
             on_model_retry=lambda retry: self._emit_model_retry_from_event(
                 retry,
                 state=state,
@@ -4493,6 +4755,25 @@ class CoreLoopKernel:
                 session_id=state.session_id,
                 run_id=state.run_id,
                 tags=["cancel"],
+            )
+        elif state.status == "paused":
+            # The turn stopped on the user's request and is resumable, so this
+            # is a decision event rather than a terminal one: the projected turn
+            # status becomes "paused" and the composer offers Continue. The
+            # duration is frozen at the pause instant so the row stops counting.
+            event = CoreEvent(
+                name="runtime.paused",
+                category="decision",
+                payload={
+                    "message": result.message or "已暂停。",
+                    "duration_ms": duration_ms,
+                    "pause_reason": str(state.metadata.get("pause_reason") or self._pause_reason or "user_pause"),
+                    **failure_detail,
+                    **({"runtime_metrics": runtime_metrics} if runtime_metrics else {}),
+                },
+                session_id=state.session_id,
+                run_id=state.run_id,
+                tags=["decision", "pause"],
             )
         elif result.decision == "failed":
             event = CoreEvent(

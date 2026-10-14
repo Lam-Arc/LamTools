@@ -347,7 +347,9 @@ describe('CoreSubAgentPane', () => {
 describe('sub-agent display helpers', () => {
   it('labels durable run statuses for every surface', () => {
     expect(subAgentStatusLabel('running')).toBe('运行中')
-    expect(subAgentStatusLabel('paused')).toBe('已暂停')
+    // 等待回答 = 成员停在提问这个人类边界；已暂停 = 用户暂停了整个会话。
+    expect(subAgentStatusLabel('paused')).toBe('等待回答')
+    expect(subAgentStatusLabel('suspended')).toBe('已暂停')
     expect(subAgentStatusLabel('interrupted')).toBe('已中断')
     expect(subAgentStatusLabel('closed')).toBe('已关闭')
     expect(subAgentStatusLabel('idle')).toBe('空闲')

@@ -225,6 +225,12 @@ class MemoryResumeSupervisor:
     async def tick(self) -> int:
         """One pass: repair orphaned turns, resume what memory can afford, then
         wake a session whose finished members were never delivered."""
+        if self._sub_agent_data_dir is not None:
+            from .sub_agent_recovery import reconcile_sub_agent_state
+            try:
+                await reconcile_sub_agent_state(context=self._context, data_dir=self._sub_agent_data_dir)
+            except Exception:
+                _logger.exception("[member-reconcile] pass failed")
         try:
             await reconcile_terminal_turns(context=self._context)
         except BaseException:
@@ -288,10 +294,21 @@ class MemoryResumeSupervisor:
             return False
         # Guard 1: an explicit user stop wins. A cancelled turn is the durable
         # record of "the user stopped this on purpose"; the wake must not undo it.
-        if str(getattr(state, "status", "") or "") == "cancelled":
+        if (str(getattr(state, "status", "") or "") == "cancelled"
+                and state.metadata.get("cancellation_reason") != "unexpected_shutdown"):
             _logger.info(
                 "[member-wake] safely skipping user-cancelled thread_id=%s; "
                 "member events remain unclaimed for a later user-owned turn",
+                thread_id,
+            )
+            return False
+        # Guard 1b: a paused session is waiting for the user, not for us. Its
+        # member events stay queued and are delivered by the resumed turn, so an
+        # automatic wake can never undo the pause the user just asked for.
+        if str(getattr(state, "status", "") or "") == "paused":
+            _logger.info(
+                "[member-wake] session is paused thread_id=%s; "
+                "member events queue for the resumed turn",
                 thread_id,
             )
             return False

@@ -1,0 +1,1 @@
+passed; Tauri main-app launch/user acceptance pending

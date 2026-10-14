@@ -1,39 +1,20 @@
 ﻿<#
 .SYNOPSIS
-  Run tests for LamTools Core.
+  Run the complete Core backend and UI test suites concurrently.
 .DESCRIPTION
-  Usage:
-    .\scripts\test.ps1 [core|all]
+  Usage: .\scripts\test.ps1 [core|all] [-Serial]
+  -Serial runs the same suites sequentially for diagnosis or timing comparison.
 #>
 param(
-    [Parameter(Position=0)][string]$Component = "all"
+    [Parameter(Position=0)][ValidateSet("core", "all")][string]$Component = "all",
+    [switch]$Serial
 )
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$CoreSrc = Join-Path $Root "core\src"
-$env:PYTHONPATH = if ($env:PYTHONPATH) { "$CoreSrc;$env:PYTHONPATH" } else { $CoreSrc }
-
-function Test-Component {
-    param([string]$Comp)
-
-    switch ($Comp) {
-        "core" {
-            Write-Host "[core] py -3.14 -m pytest" -ForegroundColor Cyan
-            & py -3.14 -m pytest "$Root\core\tests"
-            if ($LASTEXITCODE -ne 0) { Write-Host "[core] TESTS FAILED" -ForegroundColor Red; exit 1 }
-            Write-Host "[core-ui] npm run test:contract" -ForegroundColor Cyan
-            & npm.cmd --prefix "$Root\core\ui" run test:contract
-            if ($LASTEXITCODE -ne 0) { Write-Host "[core-ui] TESTS FAILED" -ForegroundColor Red; exit 1 }
-        }
-        default { Write-Host "Unknown component: $Comp. Use: core, or all" -ForegroundColor Red; exit 1 }
-    }
-}
-
-if ($Component -eq "all") {
-    Test-Component "core"
-} else {
-    Test-Component $Component
-}
-
-Write-Host "`nAll tests passed." -ForegroundColor Green
+$RunnerArgs = @("$Root\scripts\run-tests.py", $Component)
+if ($Serial) { $RunnerArgs += "--serial" }
+& py -3.14 @RunnerArgs
+exit $LASTEXITCODE

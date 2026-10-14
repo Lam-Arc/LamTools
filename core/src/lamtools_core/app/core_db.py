@@ -111,6 +111,8 @@ class CoreAppEvent(CoreDbBase):
     __tablename__ = "core_app_events"
     __table_args__ = (
         UniqueConstraint("thread_id", "seq", name="uq_core_app_events_thread_seq"),
+        Index("idx_core_events_client_message", "thread_id", "client_message_id", "seq",
+              sqlite_where=text("client_message_id IS NOT NULL")),
     )
 
     event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -1914,6 +1916,12 @@ async def open_core_app_db(
                 # 版本号已经是当前值、但库来自旧代码或旧备份时，缺的列照样要补上。
                 async with _database_startup_phase("late-column checks and repairs"):
                     await _ensure_late_columns(connection)
+                # create_all does not add indexes to an already existing table.
+                async with _database_startup_phase("client message lookup index"):
+                    await connection.run_sync(lambda conn: next(
+                        index for index in CoreAppEvent.__table__.indexes
+                        if index.name == "idx_core_events_client_message"
+                    ).create(conn, checkfirst=True))
     finally:
         await connection.close()
 
@@ -2191,20 +2199,21 @@ async def _thread_revision_repair_is_needed(connection: Any) -> bool:
 
 
 async def _ensure_thread_revision_repair(connection: Any, *, column_added: bool) -> None:
-    """Apply the thread-revision repair once, decided from metadata, not data.
+    """Repair legacy snapshot revisions without scanning healthy event logs.
 
     ``_repair_thread_revisions`` scans ``core_app_events`` per thread and on a
     large database takes minutes, yet it is almost always a no-op. It is only
     needed while upgrading a database whose ``revision`` column was just added,
     or one left by an older code version with the default-0 signature. Once it
-    has run, or once a schema-only probe shows nothing to repair, a marker is
-    recorded and later boots skip the scan entirely — so the boot path is
-    independent of row count.
+    has run, a marker is recorded. Later boots probe only snapshots so restored
+    legacy rows still get repaired, while healthy boots skip the event scan.
     """
-    if await _metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER):
-        return
+    # Restored/imported rows can carry the legacy signature even after the
+    # marker was written. Probe snapshots on every boot, never the event log.
+    marked = await _metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER)
     if not column_added and not await _thread_revision_repair_is_needed(connection):
-        await _set_metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER)
+        if not marked:
+            await _set_metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER)
         return
     await _repair_thread_revisions(connection)
     await _set_metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER)

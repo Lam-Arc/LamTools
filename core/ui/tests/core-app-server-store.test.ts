@@ -16,6 +16,26 @@ import {
 import { TransportRpcError } from '../src/transport'
 
 describe('core appServer runtime store', () => {
+  it('explicit Resume reopens the same turn while preserving completed items', () => {
+    const initial = snapshot(2, 'cancelled')
+    initial.turns = { 'turn-1': { turn_id: 'turn-1', status: 'cancelled', items: ['complete'] } }
+    initial.core!.turns = { 'turn-1': { turn_id: 'turn-1', status: 'cancelled', items: ['complete'] } }
+    initial.core!.items = {
+      complete: { item_id: 'complete', type: 'message', status: 'completed', content: 'kept' },
+      partial: { item_id: 'partial', type: 'message', status: 'cancelled', content: 'incomplete' },
+    }
+    const next = applyCoreAppEvent(initial, {
+      event_id: 'resume-1', seq: 3, thread_id: 'thread-1', turn_id: 'turn-1',
+      method: 'turn/started', created_at: '', payload: { resumed: true, status: 'running', run_id: 'execution-2' },
+    })
+    expect(Object.keys(next.turns!)).toEqual(['turn-1'])
+    expect(next.turns!['turn-1'].status).toBe('running')
+    expect(next.core!.turns!['turn-1'].status).toBe('running')
+    expect(next.core!.items!.complete.content).toBe('kept')
+    expect(next.core!.items!.complete.status).toBe('completed')
+    expect(next.core!.items!.partial.status).toBe('cancelled')
+  })
+
   it('preserves custom snapshot fields through hydrate and history-page merge', async () => {
     interface ExtendedSnapshot extends CoreAppSnapshot {
       extension: { owner: string }

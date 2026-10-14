@@ -37,13 +37,14 @@
           <span class="core-confirm__spacer" aria-hidden="true"></span>
           <span class="core-confirm__actions">
             <button type="button" class="core-confirm__cancel" :disabled="loading" @click="cancel">{{ t("取消") }}</button>
+            <button v-if="discardLabel" type="button" class="core-confirm__cancel" :disabled="loading" @click="$emit('discard')">{{ discardLabel }}</button>
             <button
               ref="confirmButtonEl"
               type="button"
               class="core-confirm__submit"
               :disabled="loading || confirmDisabled"
               @click="confirm"
-            >{{ t("确认") }}</button>
+            >{{ confirmLabel || t("确认") }}</button>
           </span>
         </section>
       </div>
@@ -71,6 +72,8 @@ const props = withDefaults(defineProps<{
   confirmDisabled?: boolean
   loading?: boolean
   error?: string
+  confirmLabel?: string
+  discardLabel?: string
 }>(), {
   detail: '',
   input: false,
@@ -84,6 +87,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   confirm: []
   cancel: []
+  discard: []
   'update:inputValue': [value: string]
 }>()
 
@@ -238,6 +242,24 @@ useOutsidePointerDismiss({
 
 .core-confirm__actions button:disabled {
   opacity: .45;
+}
+
+/* A draft decision has three actions; keep all choices readable on narrow
+   settings surfaces without changing the compact default confirmation. */
+@media (max-width: 640px) {
+  .core-confirm:has(.core-confirm__actions button:nth-child(3)) {
+    flex-wrap: wrap;
+    border-radius: var(--radius);
+    padding: var(--space-3);
+  }
+  .core-confirm:has(.core-confirm__actions button:nth-child(3)) .core-confirm__detail {
+    flex: 1 1 100%;
+    white-space: normal;
+  }
+  .core-confirm:has(.core-confirm__actions button:nth-child(3)) .core-confirm__actions {
+    margin-left: auto;
+    flex-wrap: wrap;
+  }
 }
 
 .core-confirm-enter-active,

@@ -1,0 +1,2 @@
+put "E:/LamTools/scripts/sync-public-site.sh" /var/tmp/sync-public-site-0.3.18-20261013.upload.sh
+quit

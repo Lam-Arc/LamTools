@@ -52,7 +52,7 @@ export interface CoreHistoryPage {
   next_before_seq?: number | null
 }
 
-export type CoreAppThreadStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
+export type CoreAppThreadStatus = 'idle' | 'running' | 'waiting' | 'paused' | 'completed' | 'failed' | 'cancelled'
 
 export interface CoreTextInputItem {
   type: 'text'

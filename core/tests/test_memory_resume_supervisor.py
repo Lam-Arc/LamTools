@@ -383,6 +383,22 @@ async def test_interruption_alone_does_not_restart_the_parent(
 
 
 @pytest.mark.asyncio
+async def test_recovery_cancelled_parent_can_receive_finished_member(
+    tmp_path: Path, recorded_starts: list[dict[str, Any]]
+) -> None:
+    state = _member_state(status="cancelled")
+    state.metadata["cancellation_reason"] = "unexpected_shutdown"
+    db, context, store, data_dir = await _open_members(tmp_path, state=state)
+    try:
+        runner = supervisor.MemoryResumeSupervisor(context=context, sub_agent_data_dir=data_dir)
+        assert await runner.tick() == 1
+        assert len(recorded_starts) == 1
+        assert "已完成" in recorded_starts[0]["input"][0]["text"]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_user_cancelled_session_is_not_woken(
     tmp_path: Path, recorded_starts: list[dict[str, Any]], caplog: pytest.LogCaptureFixture
 ) -> None:

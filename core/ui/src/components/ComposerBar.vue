@@ -70,7 +70,7 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   textareaAriaLabel?: string
   disabled?: boolean
-  actionMode?: 'send' | 'stop'
+  actionMode?: 'send' | 'stop' | 'resume'
   variant?: 'floating' | 'embedded'
   sendLabel?: string
   stopLabel?: string

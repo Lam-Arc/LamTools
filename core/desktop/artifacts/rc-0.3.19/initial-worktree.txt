@@ -1,0 +1,129 @@
+ M .github/workflows/ci.yml
+ M agent_docs/project_core_tech.md
+ M agent_docs/project_overview.md
+ M core/desktop/src-tauri/src/main.rs
+ M core/desktop/src-tauri/src/remote/gateway.rs
+ M core/desktop/src-tauri/src/remote/pairing.rs
+ M core/desktop/src-tauri/src/remote/relay.rs
+ M core/desktop_backend.py
+ M core/remote/relay/DEPLOYMENT.md
+ M core/remote/relay/README.md
+ M core/remote/relay/src/control.rs
+ M core/remote/relay/src/main.rs
+ M core/runtime-rs/src/image_gen.rs
+ M core/runtime-rs/src/lib.rs
+ M core/runtime-rs/src/provider.rs
+ M core/skills/create-plugin/SKILL.md
+ M core/src/lamtools_core/app/base_agent.py
+ M core/src/lamtools_core/app/default_agent.py
+ M core/src/lamtools_core/app/factory.py
+ M core/src/lamtools_core/app/http_agent_app.py
+ M core/src/lamtools_core/app/live_client.py
+ M core/src/lamtools_core/app/live_operations.py
+ M core/src/lamtools_core/app/live_router.py
+ M core/src/lamtools_core/app/memory_resume_supervisor.py
+ M core/src/lamtools_core/app/operation_groups.py
+ M core/src/lamtools_core/app/security.py
+ M core/src/lamtools_core/app/snapshot_store.py
+ M core/src/lamtools_core/cli.py
+ M core/src/lamtools_core/event/runtime_projection.py
+ M core/src/lamtools_core/kernel/loop.py
+ M core/src/lamtools_core/llm/retry.py
+ M core/src/lamtools_core/plugins/__init__.py
+ M core/src/lamtools_core/plugins/bundled/workflow/backend/__init__.py
+ M core/src/lamtools_core/plugins/bundled/workflow/backend/cache.py
+ M core/src/lamtools_core/plugins/bundled/workflow/backend/durable.py
+ M core/src/lamtools_core/plugins/bundled/workflow/backend/operations.py
+ M core/src/lamtools_core/plugins/bundled/workflow/backend/queue.py
+ M core/src/lamtools_core/plugins/bundled/workflow/backend/runtime.py
+ M core/src/lamtools_core/plugins/bundled/workflow/backend/snapshots.py
+ M core/src/lamtools_core/plugins/bundled/workflow/backend/store.py
+ M core/src/lamtools_core/plugins/lifecycle.py
+ M core/src/lamtools_core/plugins/operations.py
+ M core/src/lamtools_core/plugins/operations_loader.py
+ M core/src/lamtools_core/runtime/__init__.py
+ M core/src/lamtools_core/sub_agent_supervisor.py
+ M core/src/lamtools_core/tool/image_tools.py
+ M core/src/lamtools_core/tool/sub_agent_runner.py
+ M core/src/lamtools_core/update/checker.py
+ M core/tests/conftest.py
+ M core/tests/test_core_cli.py
+ M core/tests/test_core_live.py
+ M core/tests/test_core_live_recovery.py
+ M core/tests/test_core_sub_agent_runner.py
+ M core/tests/test_kernel.py
+ M core/tests/test_memory_resume_supervisor.py
+ M core/tests/test_runtime_projection.py
+ M core/tests/test_sub_agent_supervisor.py
+ M core/tests/test_update_check.py
+ M core/ui/src/agents/subAgentProjection.ts
+ M core/ui/src/app/LamToolsApp.vue
+ M core/ui/src/appServer/client.ts
+ M core/ui/src/appServer/store.ts
+ M core/ui/src/appServer/workbenchActions.ts
+ M core/ui/src/components/ComposerBar.vue
+ M core/ui/src/components/CoreConfirmDialog.vue
+ M core/ui/src/components/CoreGeneralEditor.vue
+ M core/ui/src/components/CoreLoadToolsEditor.vue
+ M core/ui/src/components/CorePluginsEditor.vue
+ M core/ui/src/components/CoreProjectSettings.vue
+ M core/ui/src/components/CoreSendStopButton.vue
+ M core/ui/src/components/CoreSettings.vue
+ M core/ui/src/components/CoreSubAgentEditor.vue
+ M core/ui/src/components/CoreSubAgentPane.vue
+ M core/ui/src/components/SettingsShell.vue
+ M core/ui/src/components/WorkspaceShell.vue
+ M core/ui/src/composables/useCoreLiveComposerController.ts
+ M core/ui/src/i18n/locales/en.json
+ M core/ui/src/i18n/locales/ja.json
+ M core/ui/src/i18n/locales/zh-CN.json
+ M core/ui/src/i18n/locales/zh-TW.json
+ M core/ui/src/workbench/createWorkbench.ts
+ M core/ui/src/workbench/types.ts
+ M core/ui/tests/core-app-server-store.test.ts
+ M core/ui/tests/core-live-composer-controller.test.ts
+ M core/ui/tests/core-send-stop-button.test.ts
+ M core/ui/tests/core-settings.test.ts
+ M core/ui/tests/full-area-views.test.ts
+ M core/ui/tests/workbench-runtime.test.ts
+ M core/ui/tests/workflow-runtime-services.test.ts
+ M docs/cli-guide.md
+ M docs/plugin-dev-guide.md
+ M scripts/test.ps1
+?? core/desktop/artifacts/rc-0.3.19/
+?? core/desktop/artifacts/release-0.3.17/
+?? core/desktop/artifacts/release-0.3.18/
+?? core/docs/architecture/06-review/architecture-task-0-2026-10-13.md
+?? core/docs/architecture/06-review/core-task-1-sub-agent-consistency-2026-10-13.md
+?? core/docs/architecture/06-review/core-task-1a-steering-alignment-2026-10-13.md
+?? core/docs/architecture/06-review/core-task-7-same-turn-resume-2026-10-13.md
+?? core/docs/architecture/06-review/evidence/
+?? core/docs/core-api-access.md
+?? core/docs/pairing-security.md
+?? core/docs/plugin-lifecycle.md
+?? core/docs/workflow-persistence.md
+?? core/examples/
+?? core/remote/relay/src/pairing_abuse.rs
+?? core/runtime-rs/src/forensics.rs
+?? core/src/lamtools_core/app/api_access.py
+?? core/src/lamtools_core/app/steering.py
+?? core/src/lamtools_core/app/sub_agent_recovery.py
+?? core/src/lamtools_core/llm/cache_diagnostics.py
+?? core/src/lamtools_core/llm/forensics.py
+?? core/src/lamtools_core/plugins/bundled/workflow/backend/persistence.py
+?? core/tests/test_core_api_access.py
+?? core/tests/test_llm_forensics.py
+?? core/tests/test_plugin_startup_state.py
+?? core/tests/test_relay_transport_security.py
+?? core/tests/test_same_turn_resume.py
+?? core/tests/test_steering_alignment.py
+?? core/tests/test_sub_agent_state_consistency.py
+?? core/tests/test_test_workflow_runner.py
+?? core/tests/test_workflow_persistence.py
+?? core/ui/src/components/SettingsDraftDialog.vue
+?? core/ui/src/composables/useSettingsDraftGuard.ts
+?? core/ui/tests/plugin-startup-state.test.ts
+?? core/ui/tests/settings-draft-protection.test.ts
+?? core/ui/tests/sub-agent-state-consistency.test.ts
+?? docs/llm-forensic-recording.md
+?? scripts/run-tests.py

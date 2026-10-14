@@ -13,7 +13,7 @@
           :class="{ active: activeSection === section.id }"
           :aria-current="activeSection === section.id ? 'page' : undefined"
           :data-settings-section="section.id"
-          @click="activeSection = section.id; $emit('section-change', section.id)"
+          @click="requestSection(section.id)"
         >
           <span class="settings-nav-icon">
             <component
@@ -40,9 +40,8 @@
     <!-- Main content (the page's own scroller) -->
     <main ref="settingsMainEl" class="settings-main" :class="{ 'settings-main--models': activeSection === 'models' }">
       <slot name="notice" />
-      <!-- No :key remount here — sections are kept alive (v-show in the
-           parent slot) so draft state in child editors survives switching
-           back and forth (audit 17 S3). -->
+      <!-- The owning settings surface guards section changes before its
+           conditional editors are unmounted. -->
       <div ref="settingsContentEl" class="settings-content">
         <slot :activeSection="activeSection" />
       </div>
@@ -81,6 +80,7 @@ const props = withDefaults(
     hideNav?: boolean
     /** Controlled section from the host's drawer nav; synced one-way in. */
     activeSection?: string
+    beforeSectionChange?: (id: string, proceed: () => void) => void
   }>(),
   {
     get title() { return t("设置") },
@@ -105,6 +105,16 @@ const settingsPageEl = ref<HTMLElement | null>(null)
 const settingsNavEl = ref<HTMLElement | null>(null)
 const settingsMainEl = ref<HTMLElement | null>(null)
 const settingsContentEl = ref<HTMLElement | null>(null)
+
+function requestSection(id: string) {
+  if (id === activeSection.value) return
+  const proceed = () => {
+    activeSection.value = id
+    emit('section-change', id)
+  }
+  if (props.beforeSectionChange) props.beforeSectionChange(id, proceed)
+  else proceed()
+}
 
 /**
  * 打开一页设置（或换分区）时回到顶部：滚动容器在前一版布局/上一分区里留下的

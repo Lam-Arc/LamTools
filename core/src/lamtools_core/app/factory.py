@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..member import MemberManifest, MemberRegistry
 from .security import allowed_origins, is_allowed_origin, is_same_server_origin
+from .api_access import CoreApiAccessMiddleware, CoreApiAccessPolicy
 
 
 @asynccontextmanager
@@ -47,6 +48,7 @@ def create_app(
     enable_core_routes: bool = False,
     health_payload: dict[str, Any] | Callable[[], dict[str, Any]] | None = None,
     frontend_dir: Path | str | None = None,
+    access_policy: CoreApiAccessPolicy | None = None,
 ) -> FastAPI:
     """Create and configure the LamTools Core FastAPI application.
 
@@ -67,10 +69,13 @@ def create_app(
             unmatched path falls back to ``index.html`` so that client-side
             routing (Vue Router history mode) works correctly.  API routes
             always take precedence over the catch-all.
+        access_policy: Local-only or explicitly authenticated LAN policy.
+            Defaults to the validated process environment configuration.
 
     Returns:
         Configured FastAPI application instance.
     """
+    policy = access_policy if access_policy is not None else CoreApiAccessPolicy.from_env()
     registry = MemberRegistry()
 
     # Register all members
@@ -93,11 +98,13 @@ def create_app(
         version=version,
         lifespan=lambda app: _lifespan(app, startup_hooks, shutdown_hooks),
     )
+    app.state.core_api_access_policy = policy
 
     # Explicit origin allow-list: the backend is bound to loopback, so any
     # browser page carrying an Origin header must be one of our own (dev vite
-    # servers or the Tauri WebView).  Requests without an Origin (CLI / Python
-    # clients) are trusted as local callers.  A wildcard + credentials combo
+    # servers or the Tauri WebView). Origin is a browser CSRF defence, not
+    # authentication; CoreApiAccessMiddleware independently checks access.
+    # A wildcard + credentials combo
     # would let any web page read responses and drive the local agent.
     origins = allowed_origins()
     app.add_middleware(
@@ -110,8 +117,7 @@ def create_app(
 
     @app.middleware("http")
     async def _check_request_origin(request: Request, call_next: Callable) -> Any:
-        # Origin is only present on browser-style (cross-site) requests;
-        # non-browser clients omit it and stay trusted.
+        # Origin filtering supplements, rather than replaces, access control.
         origin = request.headers.get("origin")
         if (
             origin is not None
@@ -147,6 +153,10 @@ def create_app(
             response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
             response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
         return response
+
+    # Last added is outermost: do not let CORS preflight, static files, docs,
+    # future routers or WebSockets bypass the listener's access policy.
+    app.add_middleware(CoreApiAccessMiddleware, policy=policy)
 
     # --- Core routes ---
     if health_payload is not None:

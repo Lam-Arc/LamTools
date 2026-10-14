@@ -75,10 +75,10 @@ class LoopPolicy:
     # classify every possible failure; model-visible diagnosis handles that.
     max_identical_tool_results: int | None = 10
     identical_tool_result_window: int = 12
-    # Periodic evidence-convergence checkpoint for long tool-only streaks.
-    # This does not classify tool semantics or stop the run; it only requires
-    # a concise visible progress note before more tools are allowed.
-    max_tool_only_rounds_without_progress: int | None = 8
+    # Ask for one concise progress report after this many consecutive
+    # tool-only rounds. The request is repeated only after a text reply resets
+    # the streak and a new tool-only streak reaches the threshold.
+    max_tool_only_rounds_without_progress: int | None = 12
     # One-shot failure diagnosis hint: after N consecutive rounds each
     # containing at least one failed tool call, inject a single diagnostic
     # prompt and reset. No blocking, no state tracking, no reply validation.

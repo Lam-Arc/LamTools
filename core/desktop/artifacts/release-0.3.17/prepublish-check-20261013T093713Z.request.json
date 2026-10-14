@@ -1,0 +1,14 @@
+{
+  "purpose": "prepublish-check",
+  "commandName": "sunday-desktop-0317-prepublish-check-20261013T093713Z",
+  "description": "Read-only confirm current service health, 0.3.16 update-channel baseline, absent 0.3.17 publication targets, and staged installer digest before publishing 0.3.17",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "prepublish-check.sh",
+  "commandSha256": "78efbcbf60d5919df33aea6daa577bc1be8c40f0793c5cd20105bbb94a272876",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T09:37:13Z",
+  "clientToken": "sunday-desktop-0317-prepublish-check-20261013T093713Z"
+}

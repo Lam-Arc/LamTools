@@ -1,0 +1,14 @@
+{
+  "purpose": "final-confirmation",
+  "commandName": "sunday-desktop-0318-final-confirmation-20261013T114649Z",
+  "description": "Final read-only confirmation after cleanup: verify channel, rollback files, public sync, active services, no transfer stages, and revoked upload key",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "final-confirmation.sh",
+  "commandSha256": "f9ebd8302c33ce22cc3a9aeeda90c0fe51dc6ad0264e88e84ccc59b5c39c76c5",
+  "timeoutSeconds": 300,
+  "startedAtUtc": "2026-10-13T11:46:49Z",
+  "clientToken": "sunday-desktop-0318-final-confirmation-20261013T114649Z"
+}

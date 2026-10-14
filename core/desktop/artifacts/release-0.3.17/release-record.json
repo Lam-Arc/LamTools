@@ -1,0 +1,18 @@
+{
+  "releaseVersion": "0.3.17",
+  "sourceCommit": "7e22e2607918b588aba483562643c6b66f517939",
+  "dateTagUtc": "20261013",
+  "mobileVersion": "0.1.48",
+  "websiteTarball": "site-0.3.17.tar.gz",
+  "websiteTarballBytes": 4826025,
+  "websiteTarballSha256": "e8806876f2f7a204a51c67e12790d3e04a43c986f91b79df43d8a9e30d152be2",
+  "preflightPurpose": "Read-only; no server file, service, symlink, manifest or SSH grant changes",
+  "plannedSiteReleaseDir": "/var/www/lamtools/site-releases/0.3.17-mobile-0.1.48-20261013",
+  "expectedPreviousSiteReleaseDir": "/var/www/lamtools/site-releases/0.3.16-mobile-0.1.48-20261009",
+  "installerTarget": "/var/www/lamtools/Sunday_0.3.17_x64-setup.exe",
+  "installerStage": "/var/tmp/Sunday-desktop-0.3.17-20261013.upload.exe",
+  "manifestStage": "/var/tmp/Sunday-desktop-0.3.17-20261013.desktop-update.json",
+  "siteTarStage": "/var/tmp/Sunday-site-mobile-0.3.17-20261013.upload.tar.gz",
+  "preflightRunner": "py -3.14 deploy.py preflight",
+  "cloudAssistantKeepCommand": true
+}

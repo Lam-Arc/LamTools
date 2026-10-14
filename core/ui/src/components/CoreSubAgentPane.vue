@@ -131,6 +131,7 @@
 import { t } from '../i18n/index'
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { reconcileCoreSubAgentRun } from '../agents/subAgentProjection'
 import { ArrowDown, ArrowLeft, LoaderCircle } from 'lucide-vue-next'
 import type { CoreSubAgentDurableRecord, CoreSubAgentRun } from '../types'
 import type { LamToolsTransport } from '../transport'
@@ -159,6 +160,7 @@ const props = withDefaults(defineProps<{
   /** 运行时按成员发布的实时状态（名字小写 → 归一化状态）。回合还没结束时也会发，
    *  比监督者记录的下一次轮询更准。 */
   memberStatuses?: Record<string, string>
+  memberStatusRecords?: Record<string, CoreSubAgentDurableRecord>
 }>(), {
   get emptyText() { return t("这个子代理还没有产生过程记录。") },
   teleportTo: '.workspace-shell',
@@ -332,22 +334,14 @@ function toggleProcess(messageId: string): void {
   collapsedMessageIds.value = next
 }
 
-/**
- * 状态标签的取值顺序：
- * 1. 运行时按成员发布的实时状态——它就是这个成员自己的生命周期状态，且回合还没结束
- *    时就随每次变化发布，不必等回合终结或监督者记录的下一次轮询；
- * 2. 监督者的持久记录（续跑过的子代理，投影看不到它的运行边界）；
- * 3. 最后才是消息投影推出来的状态。
- */
-const effectiveStatus = computed<string>(() => {
-  const published = props.memberStatuses?.[String(props.run.name || '').trim().toLowerCase()]
-  if (published) return published
-  const raw = String(props.durableRecord?.status || '').trim().toLowerCase()
-  if (!raw) return props.run.status
-  if (raw === 'failed') return 'error'
-  if (raw === 'completed') return 'completed'
-  return raw
+/** 卡片与分屏共享按子代理生命周期时间戳解析的状态与耗时。
+ * 新的子代理启动可以续跑；主代理回合状态不能替代子代理的终态。 */
+const effectiveRun = computed(() => {
+  const name = String(props.run.name || '').trim().toLowerCase()
+  const published = props.memberStatusRecords?.[name] ?? props.memberStatuses?.[name]
+  return reconcileCoreSubAgentRun(props.run, published, props.durableRecord)
 })
+const effectiveStatus = computed(() => effectiveRun.value.status)
 
 const statusLabel = computed(() => subAgentStatusLabel(effectiveStatus.value))
 
@@ -409,31 +403,17 @@ function syncElapsedTimer(): void {
  *  有监督者记录时以记录为准（续跑过的子代理，消息部件上看不出运行边界）；
  *  历史快照里的运行可能只有起止时间而没带时长——那就不显示，不要编一个 0ms 出来。 */
 const elapsedLabel = computed(() => {
-  const record = props.durableRecord
-  if (record) {
-    const recordStatus = String(record.status || '').toLowerCase()
-    if (recordStatus === 'running') {
-      const start = (record.started_at ?? 0) * 1000
-      return start > 0 ? formatSubAgentElapsed(Math.max(0, nowTick.value - start)) : ''
-    }
-    if (typeof record.elapsed_ms === 'number' && record.elapsed_ms > 0) {
-      return formatSubAgentElapsed(record.elapsed_ms)
-    }
-    return ''
-  }
-  const recorded = typeof props.run.elapsedMs === 'number' && Number.isFinite(props.run.elapsedMs) && props.run.elapsedMs > 0
-    ? props.run.elapsedMs
-    : undefined
-  const start = Date.parse(String(props.run.startedAt || ''))
-  const completed = Date.parse(String(props.run.completedAt || ''))
-  if (props.run.status === 'running') {
+  const run = effectiveRun.value
+  const start = Date.parse(run.startedAt || '')
+  if (run.status === 'running') {
     return Number.isFinite(start) ? formatSubAgentElapsed(Math.max(0, nowTick.value - start)) : ''
   }
-  if (recorded !== undefined) return formatSubAgentElapsed(recorded)
-  if (Number.isFinite(start) && Number.isFinite(completed) && completed > start) {
-    return formatSubAgentElapsed(completed - start)
+  if (typeof run.elapsedMs === 'number' && Number.isFinite(run.elapsedMs) && run.elapsedMs > 0) {
+    return formatSubAgentElapsed(run.elapsedMs)
   }
-  return ''
+  const completed = Date.parse(run.completedAt || '')
+  return Number.isFinite(start) && Number.isFinite(completed) && completed > start
+    ? formatSubAgentElapsed(completed - start) : ''
 })
 
 // 换一个子代理 = 全新的一屏：折叠状态、时间线窗口与滚动位置都不该继承上一个。

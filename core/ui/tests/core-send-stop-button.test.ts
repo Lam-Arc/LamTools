@@ -39,6 +39,17 @@ describe('CoreSendStopButton composer action colors', () => {
     document.body.innerHTML = ''
   })
 
+  it('shows an accessible Resume state after Stop', async () => {
+    const wrapper = mount(CoreSendStopButton, { attachTo: document.body, props: { actionMode: 'stop' } })
+    try {
+      await wrapper.setProps({ actionMode: 'resume' })
+      expect(wrapper.get('button').attributes('data-state')).toBe('resume')
+      expect(wrapper.get('button').attributes('aria-label')).toBeTruthy()
+      expect(wrapper.text()).toBe('resume')
+      expect(wrapper.get('button').classes()).not.toContain('core-send-stop-button--stop')
+    } finally { wrapper.unmount() }
+  })
+
   it('uses the composer text surface and composer background glyph in both CSS states', () => {
     const source = readFileSync(componentPath, 'utf8')
     expect(source).not.toContain('--theme-control')

@@ -5,7 +5,7 @@ import inspect
 import logging
 import time as time_module
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TypeVar
 
 from lamtools_core.llm import LLMClient, LLMRequest, LLMResponse, LLMStreamEvent
@@ -154,8 +154,13 @@ async def complete_with_retry(
     on_retry: ModelRetrySink | None = None,
     sleep: SleepFn | None = None,
 ) -> LLMResponse:
+    attempt = 0
+
     async def operation() -> LLMResponse:
-        call = llm_client.complete(request)
+        nonlocal attempt
+        current = replace(request, metadata={**request.metadata, "_forensic_retry_index": attempt})
+        attempt += 1
+        call = llm_client.complete(current)
         timeout = request.timeout if request.timeout is not None else timeout_seconds
         if timeout is not None and timeout > 0:
             return await asyncio.wait_for(call, timeout=timeout)
@@ -190,7 +195,9 @@ async def stream_with_retry(
     for attempt in range(attempts):
         emitted = False
         try:
-            stream = llm_client.stream(request)
+            stream = llm_client.stream(replace(
+                request, metadata={**request.metadata, "_forensic_retry_index": attempt},
+            ))
             if inspect.isawaitable(stream):
                 stream = await stream
             if not hasattr(stream, "__aiter__"):
@@ -200,11 +207,16 @@ async def stream_with_retry(
             # contradicts the per-event idle semantics of
             # model_stream_idle_timeout_seconds (audit 10 S3). Idle detection
             # is the caller's job (kernel._next_stream_event).
-            async for event in stream:
-                if event.kind == "error":
-                    raise RuntimeError(event.error or "model stream failed")
-                emitted = True
-                yield event
+            try:
+                async for event in stream:
+                    if event.kind == "error":
+                        raise RuntimeError(event.error or "model stream failed")
+                    emitted = True
+                    yield event
+            finally:
+                close = getattr(stream, "aclose", None)
+                if close is not None:
+                    await close()
             return
         except (AttributeError, NotImplementedError):
             raise

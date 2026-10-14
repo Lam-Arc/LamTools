@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Iterable
 from dataclasses import replace
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Awaitable, Callable, Mapping
 
 from lamtools_core.agent import (
     SUB_AGENT_CHILD_MESSAGE_TOOL_NAME,
@@ -33,6 +34,7 @@ from lamtools_core.tool.approval_continuation import (
     ApprovedToolExecution,
     approved_tool_continuation_prompt,
     approved_tool_failure_continuation_prompt,
+    question_answer_continuation_prompt,
 )
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
 from lamtools_core.tool.loadtools import LoadTools, mode_names
@@ -41,6 +43,19 @@ from lamtools_core.tool.permission import AUTO_ALLOW
 
 # Type alias for the attachment-lookup protocol (duck-typed AttachmentService.get).
 AttachmentServiceLike = Any
+
+
+def _state_invocation_id(state: Any) -> str:
+    """Projection scope of the run that owns ``state`` (empty when unknown).
+
+    An empty value makes the sink mint a fresh scope, which is right for a new
+    invocation; continuations of an existing run pass the recorded scope so the
+    items they touch are the ones that run already created.
+    """
+    metadata = getattr(state, "metadata", None)
+    if not isinstance(metadata, dict):
+        return ""
+    return str(metadata.get("sub_invocation_id") or "")
 
 
 _WORKFLOW_CONTEXT_KEYS = (
@@ -279,6 +294,14 @@ class KernelSubAgentRunner:
         # keeps the dict bounded by the number of distinct agent names.
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._owned_mcp_registry: Any | None = None
+        # Session-level pause signal shared with the supervisor that drives
+        # this runner's children. A child kernel polls it and ends in the
+        # resumable ``paused`` state, so a paused session never turns into a
+        # killed child.
+        self._pause_event: asyncio.Event | None = None
+
+    def set_pause_event(self, event: "asyncio.Event | None") -> None:
+        self._pause_event = event
 
     async def create_supervisor_runner(self) -> "KernelSubAgentRunner":
         """Clone with an MCP registry whose lifecycle belongs to the supervisor."""
@@ -516,8 +539,10 @@ class KernelSubAgentRunner:
         allowed_tools: list[str] | None = None,
         execution_context: Any | None = None,
         late_context: str = "",
-        guidance_source: Callable[[], list[str]] | None = None,
-        guidance_finalizer: Callable[[], list[str] | None] | None = None,
+        guidance_source: Callable[[], list[Any]] | None = None,
+        guidance_finalizer: Callable[[], list[Any] | None | Awaitable[list[Any] | None]] | None = None,
+        guidance_acknowledger: Callable[[list[str]], Any] | None = None,
+        initial_guidance_ids: list[str] | None = None,
     ) -> SubAgentRunResult:
         agent_name = normalize_sub_session_agent_name(agent)
         lock = self._session_locks.setdefault(
@@ -540,6 +565,8 @@ class KernelSubAgentRunner:
                 late_context=late_context,
                 guidance_source=guidance_source,
                 guidance_finalizer=guidance_finalizer,
+                guidance_acknowledger=guidance_acknowledger,
+                initial_guidance_ids=initial_guidance_ids,
             )
 
     async def _run_locked(
@@ -547,6 +574,7 @@ class KernelSubAgentRunner:
         *,
         task: str,
         agent: str = "",
+        invocation_id: str = "",
         model: str = "",
         reasoning_level: str | None = None,
         reasoning_effort: str | None = None,
@@ -558,8 +586,10 @@ class KernelSubAgentRunner:
         allowed_tools: list[str] | None = None,
         execution_context: Any | None = None,
         late_context: str = "",
-        guidance_source: Callable[[], list[str]] | None = None,
-        guidance_finalizer: Callable[[], list[str] | None] | None = None,
+        guidance_source: Callable[[], list[Any]] | None = None,
+        guidance_finalizer: Callable[[], list[Any] | None | Awaitable[list[Any] | None]] | None = None,
+        guidance_acknowledger: Callable[[list[str]], Any] | None = None,
+        initial_guidance_ids: list[str] | None = None,
     ) -> SubAgentRunResult:
         # Resolve model early: the LLM may pass a display_name (e.g. "Kimi-K2.6")
         # instead of a model_id (e.g. "xopkimik26"). Translate to canonical
@@ -600,6 +630,7 @@ class KernelSubAgentRunner:
             type=effective_mode or "execute",
             model_id=effective_model,
             reasoning_level=effective_reasoning_level,
+            invocation_id=invocation_id,
         )
         kernel = self._build_kernel(
             toolbox=toolbox,
@@ -626,6 +657,7 @@ class KernelSubAgentRunner:
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
                     "actor_kind": "sub_agent",
+                    "initial_guidance_ids": list(initial_guidance_ids or []),
                     "delegated_session": {
                         "session_id": f"{self.session_prefix}:sub:{agent_name}",
                         "parent_thread_id": self.session_prefix,
@@ -651,6 +683,7 @@ class KernelSubAgentRunner:
                 },
                 guidance_source=guidance_source,
                 guidance_finalizer=guidance_finalizer,
+                guidance_acknowledger=guidance_acknowledger,
             )
         )
         delegated_session = {
@@ -668,6 +701,11 @@ class KernelSubAgentRunner:
         }
         result.state.metadata["actor_kind"] = "sub_agent"
         result.state.metadata["delegated_session"] = delegated_session
+        # The scope its items were projected under. A continuation of this same
+        # run (an answered question or approval) must reuse it: the waiting item
+        # and its resolution then share one item id, so the card resolves in
+        # place instead of leaving a stale waiting card behind.
+        result.state.metadata["sub_invocation_id"] = child_sink.invocation_id
         pending_approval = result.state.metadata.get("pending_approval")
         if isinstance(pending_approval, dict):
             result.state.metadata["pending_approval"] = {
@@ -710,6 +748,7 @@ class KernelSubAgentRunner:
             checkpoint_coordinator=self.checkpoint_coordinator,
             policy=self._member_loop_policy(),
             retry_policy=self._retry_policy(),
+            pause_event_source=self._pause_event,
             model_context_sink=self.model_context_sink,
         )
 
@@ -914,6 +953,7 @@ class KernelSubAgentRunner:
             type=effective_mode or "execute",
             model_id=effective_model,
             reasoning_level=effective_reasoning_level,
+            invocation_id=_state_invocation_id(state),
         )
         await child_sink.emit(CoreEvent(
             name="runtime.approval_response",
@@ -1023,6 +1063,7 @@ class KernelSubAgentRunner:
                 attachments=attachments,
                 execution_context=execution_context,
                 late_context=resume_late_context,
+                invocation_id=_state_invocation_id(state),
             )
 
         if supervisor is None:
@@ -1034,14 +1075,244 @@ class KernelSubAgentRunner:
                 resumed = await continue_child()
         return replace(resumed, tool_call_count=resumed.tool_call_count + 1)
 
+    async def resume_question(
+        self,
+        *,
+        session_id: str,
+        pending_call: dict[str, Any],
+        task: str,
+        agent: str,
+        parent_call_id: str,
+        answer: str,
+        question: str = "",
+        parent_run_id: str = "",
+        parent_turn_id: str = "",
+        model: str = "",
+        reasoning_level: str | None = None,
+        reasoning_effort: str | None = None,
+        mode: str = "",
+        attachments: list[str] | None = None,
+        execution_context: Any | None = None,
+        supervisor: Any | None = None,
+    ) -> SubAgentRunResult:
+        """Continue a child whose ``question`` tool waited for the user's answer.
+
+        The answer is the child's own tool result: it is persisted in the child
+        session's history (never the parent's) and forwarded to the parent
+        timeline through the child's identity, so the waiting card resolves with
+        the answer the user actually gave. The child keeps its logical turn and
+        run; only the answer arrives.
+        """
+        state = await self.state_store.get(session_id)
+        if state is None:
+            raise ValueError("Sub-agent runtime state not found")
+        call_id = str(pending_call.get("id") or "")
+        effective_model = _resolve_model_id_for_capability(
+            (model or "").strip() or self.model_id
+        )
+        explicit_reasoning = (
+            str(reasoning_level or "").strip()
+            or str(reasoning_effort or "").strip()
+        )
+        effective_reasoning_level = (
+            normalize_reasoning_level(explicit_reasoning, self.reasoning_level)
+            if explicit_reasoning
+            else self.reasoning_level
+        )
+        effective_mode = self._resolve_mode(mode)
+        child_sink = SubAgentEventForwardingSink(
+            parent_sink=self.parent_event_sink,
+            parent_session_id=self.session_prefix,
+            agent=normalize_sub_session_agent_name(agent),
+            task=task,
+            parent_call_id=parent_call_id,
+            parent_run_id=parent_run_id,
+            parent_turn_id=parent_turn_id,
+            type=effective_mode or "execute",
+            model_id=effective_model,
+            reasoning_level=effective_reasoning_level,
+            invocation_id=_state_invocation_id(state),
+        )
+        await child_sink.emit(CoreEvent(
+            name="runtime.tool.finished",
+            category="tool",
+            payload={
+                "tool_name": "question",
+                "call_id": call_id,
+                "status": "ok",
+                "content": answer,
+                "error": "",
+                "artifacts": [],
+                "metadata": {"question": question, "answer": answer},
+            },
+            session_id=session_id,
+            run_id=state.run_id,
+            tags=["tool"],
+        ))
+        state.metadata.pop("pending_approval", None)
+        state.metadata.pop("pending_waiting_request", None)
+        state.status = "running"
+        state.loop_state = "continue"
+        question_message = ChatMessage(
+            role="tool",
+            name="question",
+            tool_call_id=call_id,
+            content=answer,
+        ).to_dict()
+        if isinstance(self.state_store, RuntimeCheckpointStore):
+            await self.state_store.append_history(session_id, [question_message])
+            await self.state_store.save(state)
+        else:
+            await self.state_store.save(state)
+        continuation = question_answer_continuation_prompt(
+            original_task=task,
+            question=question,
+            answer=answer,
+        )
+
+        async def continue_child() -> SubAgentRunResult:
+            resume_late_context = (
+                await supervisor.request_local_context(agent)
+                if supervisor is not None
+                else (
+                    "[Request-local sub-agent context]\n"
+                    f"name: {normalize_sub_session_agent_name(agent)}\n"
+                    f"type: {effective_mode or 'execute'}\n"
+                    f"model_id: {effective_model}\n"
+                    f"reasoning_level: {effective_reasoning_level}\n"
+                    "summary: (none)"
+                )
+            )
+            return await self._run_turn(
+                task=continuation,
+                agent=agent,
+                parent_call_id=parent_call_id,
+                session_id=session_id,
+                state=state,
+                parent_run_id=parent_run_id,
+                parent_turn_id=parent_turn_id,
+                model=model,
+                reasoning_level=reasoning_level,
+                reasoning_effort=reasoning_effort,
+                mode=mode,
+                attachments=attachments,
+                execution_context=execution_context,
+                late_context=resume_late_context,
+                invocation_id=_state_invocation_id(state),
+            )
+
+        if supervisor is None:
+            resumed = await continue_child()
+        else:
+            from lamtools_core.sub_agent_supervisor import bound_child_identity
+
+            with bound_child_identity(supervisor, effective_mode or "execute", agent):
+                resumed = await continue_child()
+        return replace(resumed, tool_call_count=resumed.tool_call_count + 1)
+
+    async def resume_interrupted(
+        self,
+        *,
+        session_id: str,
+        agent: str,
+        parent_call_id: str = "",
+        parent_run_id: str = "",
+        parent_turn_id: str = "",
+        model: str = "",
+        reasoning_level: str | None = None,
+        reasoning_effort: str | None = None,
+        mode: str = "",
+        attachments: list[str] | None = None,
+        execution_context: Any | None = None,
+        supervisor: Any | None = None,
+        prompt: str | None = None,
+    ) -> SubAgentRunResult:
+        """Continue a stopped child from its committed runtime state.
+
+        ``prompt`` overrides the continuation text. The default names the
+        interruption because a crash-interrupted child benefits from knowing
+        that; a user pause passes ``""`` for a pure continuation, because the
+        committed history already says everything and the resumed child must
+        not be re-narrated by a synthetic message.
+        """
+        state = await self.state_store.get(session_id)
+        if state is None:
+            raise ValueError("Sub-agent runtime state not found")
+        delegated = state.metadata.get("delegated_session") if isinstance(state.metadata, dict) else None
+        original_task = (
+            str(delegated.get("task") or "").strip()
+            if isinstance(delegated, dict)
+            else ""
+        )
+        effective_model = _resolve_model_id_for_capability(
+            (model or "").strip() or self.model_id
+        )
+        explicit_reasoning = str(reasoning_level or "").strip() or str(reasoning_effort or "").strip()
+        effective_reasoning_level = (
+            normalize_reasoning_level(explicit_reasoning, self.reasoning_level)
+            if explicit_reasoning
+            else self.reasoning_level
+        )
+        effective_mode = self._resolve_mode(mode)
+        resume_late_context = (
+            await supervisor.request_local_context(agent)
+            if supervisor is not None
+            else (
+                "[Request-local sub-agent context]\n"
+                f"name: {normalize_sub_session_agent_name(agent)}\n"
+                f"type: {effective_mode or 'execute'}\n"
+                f"model_id: {effective_model}\n"
+                f"reasoning_level: {effective_reasoning_level}\n"
+                "summary: (none)"
+            )
+        )
+        continuation = prompt if prompt is not None else (
+            "Continue the interrupted sub-agent task using committed conversation history. "
+            "Preserve completed work and do not repeat completed tool executions. "
+            "Tools without a recorded result may have uncertain side effects."
+        )
+        turn_id = str((state.metadata or {}).get("turn_id") or state.run_id or "")
+        if not turn_id:
+            raise ValueError("Sub-agent logical turn id is missing")
+        run_id = uuid.uuid4().hex
+        kwargs = {
+            "task": continuation,
+            "delegated_task": original_task,
+            "agent": agent,
+            "parent_call_id": parent_call_id,
+            "session_id": session_id,
+            "state": state,
+            "run_id": run_id,
+            "turn_id": turn_id,
+            "origin": "turn_resume",
+            "parent_run_id": parent_run_id,
+            "parent_turn_id": parent_turn_id,
+            "model": effective_model,
+            "reasoning_level": effective_reasoning_level,
+            "mode": effective_mode or "",
+            "attachments": attachments,
+            "execution_context": execution_context,
+            "late_context": resume_late_context,
+        }
+        if supervisor is None:
+            return await self._run_turn(**kwargs)
+        from lamtools_core.sub_agent_supervisor import bound_child_identity
+
+        with bound_child_identity(supervisor, effective_mode or "execute", agent):
+            return await self._run_turn(**kwargs)
+
     async def _run_turn(
         self,
         *,
         task: str,
+        delegated_task: str | None = None,
         agent: str,
         parent_call_id: str,
         session_id: str,
         state: Any,
+        run_id: str = "",
+        turn_id: str = "",
+        origin: str = "",
         parent_run_id: str = "",
         parent_turn_id: str = "",
         model: str = "",
@@ -1051,6 +1322,7 @@ class KernelSubAgentRunner:
         attachments: list[str] | None = None,
         execution_context: Any | None = None,
         late_context: str = "",
+        invocation_id: str = "",
     ) -> SubAgentRunResult:
         # Same early resolution as run() — translate display_name to model_id.
         effective_model = _resolve_model_id_for_capability(
@@ -1071,13 +1343,14 @@ class KernelSubAgentRunner:
             parent_sink=self.parent_event_sink,
             parent_session_id=self.session_prefix,
             agent=agent_name,
-            task=task,
+            task=delegated_task or task,
             parent_call_id=parent_call_id,
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
             type=effective_mode or "execute",
             model_id=effective_model,
             reasoning_level=effective_reasoning_level,
+            invocation_id=invocation_id,
         )
         kernel = self._build_kernel(
             toolbox=toolbox,
@@ -1091,12 +1364,14 @@ class KernelSubAgentRunner:
             execution_context,
             attachments=list(attachments or []),
         )
+        state.metadata["sub_invocation_id"] = child_sink.invocation_id
         result = await kernel.run(
             RuntimeTurnInput(
                 user_message=task,
                 user_content=user_content if user_content is not task else None,
                 state=state,
-                run_id=state.run_id,
+                run_id=run_id or state.run_id,
+                turn_id=turn_id,
                 metadata={
                     **deepcopy(workflow_metadata),
                     "session_id": session_id,
@@ -1106,11 +1381,12 @@ class KernelSubAgentRunner:
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
                     "actor_kind": "sub_agent",
+                    **({"origin": origin} if origin else {}),
                     "delegated_session": {
                         "session_id": session_id,
                         "parent_thread_id": self.session_prefix,
                         "agent": agent_name,
-                        "task": task,
+                        "task": delegated_task or task,
                         "model": effective_model,
                         "mode": effective_mode or "execute",
                         "reasoning_level": effective_reasoning_level,

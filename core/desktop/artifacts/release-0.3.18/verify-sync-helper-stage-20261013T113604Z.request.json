@@ -1,0 +1,14 @@
+{
+  "purpose": "verify-sync-helper-stage",
+  "commandName": "sunday-desktop-0318-verify-sync-helper-stage-20261013T113604Z",
+  "description": "Read-only verify uploaded version-split sync helper and current 0.3.18 manifest before installing helper",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "verify-sync-helper-stage.sh",
+  "commandSha256": "282a982983162bd787c1dfaccfbccabcbccdaf50449eba5b6629e9781f537bdf",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T11:36:04Z",
+  "clientToken": "sunday-desktop-0318-verify-sync-helper-stage-20261013T113604Z"
+}

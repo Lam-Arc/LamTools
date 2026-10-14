@@ -1,0 +1,14 @@
+{
+  "purpose": "authorize-sftp",
+  "commandName": "sunday-desktop-0318-authorize-sftp-20261013T113102Z",
+  "description": "Authorize one uniquely tagged internal-sftp-only key after checking 0.3.17 rollback and transfer baselines",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "authorize-sftp.sh",
+  "commandSha256": "08643bac8c7a0d88c4191de9b50250b5130209aff2990a60d363c17e5dc30ff9",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T11:31:02Z",
+  "clientToken": "sunday-desktop-0318-authorize-sftp-20261013T113102Z"
+}

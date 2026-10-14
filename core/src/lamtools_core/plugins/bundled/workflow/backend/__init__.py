@@ -219,6 +219,12 @@ class WorkflowPluginRuntime:
             work_root=scoped_context.work_root,
         )()
 
+    @property
+    def lifecycle_tasks(self) -> list[Any]:
+        """Explicitly expose the critical loops whose exit makes us unavailable."""
+        tasks = [getattr(self.watcher, "_task", None), getattr(self.queue, "_worker", None)]
+        return [task for task in tasks if task is not None]
+
     async def start(self, context: PluginContext | None = None) -> None:
         context = context or self.context
         self._enabled = True

@@ -1,0 +1,85 @@
+# Plugin backend readiness and recovery
+
+An installed plugin and its enabled preference are not evidence that its backend
+is running. `plugin.list` preserves `enabled` and adds `available` plus a `backend`
+object: `state`, `available`, `managed`, `attempts`, `error`, and `last_error`.
+Errors retain a code, lifecycle phase, exception type, message and UTC timestamp;
+the backend log retains the traceback. Diagnostics are process-local, not stored
+in the installation/configuration ledger.
+
+Managed backends move through `starting → ready`, or `failed` on load, startup,
+health or cleanup errors. Stop revokes availability and services before awaiting
+cleanup. A failed descriptor remains inspectable; it is not a working backend.
+Backend-dependent tools, operations, UI modes/widgets, desktop entries and newly
+assembled skills/hooks/MCP contributions require readiness. Declaration inventories
+in plugin.list remain visible for diagnosis. Ordinary tool input/operation errors
+do not by themselves mean the entire backend crashed.
+
+`plugin.enable` also retries failed startup. Failure returns an operation error
+with `available: false`, a lifecycle error code, and backend diagnostics. The
+enabled preference remains the user's intent; failure does not rewrite it to
+disabled. `plugin.disable` stops the backend and retains configuration/data.
+Successful retries clear the current error but preserve `last_error`.
+
+## Backend contract
+
+Use a synchronous `create_plugin(context)` factory. `create_runtime(context)` and
+module-level hooks remain compatible. Async initialization belongs in optional
+`start(context)` / `on_load(context)`; cleanup belongs in `stop()` / `on_unload()`.
+Hooks may return any awaitable. Services are published only after managed startup
+and the initial health probe succeed.
+
+Optional runtime members:
+
+- `health_check()`: synchronous or asynchronous; return `True` or
+  `{"ready": true}` when healthy, `False` / `{"ready": false, "error": "…"}` or
+  raise on failure. It runs at startup and approximately once per second.
+- `lifecycle_tasks`: an iterable of explicitly owned **critical** asyncio
+  tasks/futures. Any completion, exception or unexpected cancellation means the
+  backend is no longer available. Do not include finite work or request tasks.
+- `lifecycle_processes`: explicitly owned `asyncio.subprocess.Process` or
+  `subprocess.Popen` instances. Exit of any member revokes availability. Stop
+  terminates/waits remaining registered processes; never register a process
+  shared with another plugin or the host.
+
+Resource inventories may be properties, allowing a restart to expose replacement
+tasks/processes. Stop hooks should be idempotent and cooperate with cancellation.
+Workflow exposes its watcher and queue loops through this contract.
+
+The host's PluginContext services `plugin.lifecycle.start_timeout`,
+`plugin.lifecycle.health_timeout`, and `plugin.lifecycle.stop_timeout` set
+positive finite deadlines (30 seconds each by default). Timeout revokes readiness
+immediately and requests cancellation. A callback that continues after cancellation
+is tracked; retry is refused until prior lifecycle work terminates and cleanup
+succeeds. Late completion cannot promote the backend to ready.
+
+HTTP startup joins isolated plugin startup tasks before reporting backend ready;
+one failed plugin does not prevent other plugins or Sunday from starting. Direct
+synchronous assembly retains the historical `start_lifecycle=False` factory-only
+mode: its successfully constructed runtime is usable with `managed: false`, and
+startup hooks are intentionally not run. Hosts opting into managed lifecycle must
+await `await_plugin_backends(handles)` before advertising readiness.
+
+## Task 3 coordination and limits
+
+Task 2 does not replace installation directories or implement transactional
+updates. Task 3 must stop/revoke the old runtime and await termination **before**
+replacing code, invalidate cached/stopped handles and imported modules, rebuild
+affected operation/tool registrations, then start and verify the replacement.
+Reusing a stopped runtime here is intentional for disable/enable compatibility;
+it is not a code-update mechanism. A readiness check alone cannot validate an
+update transaction or refresh already-bound handlers.
+
+Deadlines bound awaitable hooks; synchronous Python callbacks that block the
+event loop cannot be forcibly interrupted. Unregistered tasks/processes and
+internal failures without an observable health check cannot be inferred safely.
+Critical resource checks happen on availability queries and during the periodic
+probe; the plugin panel refreshes status every two seconds. Already loaded prompt
+text is not retracted from active conversations. No automatic restart loop is
+introduced: the user explicitly retries after inspecting the error.
+
+The standalone [lifecycle example](../examples/plugins/lifecycle-demo/README.md)
+demonstrates the factory, service, task inventory, health probe, native tool and
+RPC operation together. Regression coverage is in
+`core/tests/test_plugin_startup_state.py` and
+`core/ui/tests/plugin-startup-state.test.ts`.

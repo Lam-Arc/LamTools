@@ -20,6 +20,7 @@ pub mod plugin_catalog;
 mod profiles;
 pub mod project_tools;
 pub mod provider;
+mod forensics;
 pub mod skills;
 pub mod study;
 pub mod tool_catalog;
@@ -632,13 +633,14 @@ where
         });
         messages.extend(request.history);
         self.report("runtime_compaction_start");
-        let (messages, compaction) = compaction::compact_if_needed(
+        let (messages, compaction) = forensics::CONTEXT.scope(
+            forensics::identity(&request.hook_context, &request.turn_id, 0),
+            compaction::compact_if_needed(
             &self.model,
             &request.model_record_id,
             messages,
             &request.options,
-        )
-        .await;
+        )).await;
         self.report("runtime_compaction_done");
         let mut continuation = TurnContinuation {
             turn_id: request.turn_id,
@@ -932,15 +934,14 @@ where
             }
 
             self.report("runtime_model_start");
-            let model_turn = self
-                .model
-                .complete(
+            let model_turn = forensics::CONTEXT.scope(
+                forensics::identity(&continuation.hook_context, &continuation.turn_id, continuation.tool_rounds),
+                self.model.complete(
                     &continuation.model_record_id,
                     &continuation.messages,
                     definitions,
                     &continuation.options,
-                )
-                .await?;
+                )).await?;
             self.report("runtime_model_done");
             match model_turn {
                 ModelTurn::Text {
@@ -1047,15 +1048,14 @@ where
             ),
         });
         self.report("runtime_model_start");
-        let turn = self
-            .model
-            .complete(
+        let turn = forensics::CONTEXT.scope(
+            forensics::identity(&continuation.hook_context, &continuation.turn_id, continuation.tool_rounds),
+            self.model.complete(
                 &continuation.model_record_id,
                 &continuation.messages,
                 &[],
                 &continuation.options,
-            )
-            .await?;
+            )).await?;
         self.report("runtime_model_done");
         let stop_decision = self
             .run_hook(hooks::HookEvent::new(
@@ -1106,7 +1106,9 @@ where
         if let Some(observer) = &self.tool_observer {
             observer.started(call);
         }
-        let (mut result, event_name, error, error_type) = match self.tools.execute(call).await {
+        let (mut result, event_name, error, error_type) = match forensics::CONTEXT.scope(
+            forensics::identity(&continuation.hook_context, &continuation.turn_id, continuation.tool_rounds),
+            self.tools.execute(call)).await {
             Ok(result) => (
                 result,
                 hooks::EVENT_POST_TOOL_USE,

@@ -77,6 +77,7 @@ from .registry import WorkflowNodeRegistry
 from .credentials import CredentialError, CredentialRef, is_credential_ref
 from .data_packet import WorkflowDataPacket, is_data_packet, packet_to_legacy
 from .snapshots import WorkflowSnapshotStore
+from .persistence import WorkflowPersistenceError
 from .durable import (
     NodeExecutionPolicy,
     WorkflowRunEvent,
@@ -1922,11 +1923,8 @@ class WorkflowRunner:
         previous = self._run_snapshots.get(key)
         snapshot_envelope: dict[str, Any] | None = None
         if previous is None and self.snapshot_store is not None:
-            try:
-                snapshot_envelope = await self.snapshot_store.get_dict(effective_thread_id, effective_run_id)
-                previous = await self.snapshot_store.get(effective_thread_id, effective_run_id)
-            except Exception:  # noqa: BLE001 - damaged snapshots are disposable
-                previous = None
+            snapshot_envelope = await self.snapshot_store.get_dict(effective_thread_id, effective_run_id)
+            previous = await self.snapshot_store.get(effective_thread_id, effective_run_id)
         if snapshot_envelope:
             pinned_id = str(snapshot_envelope.get("workflow_id") or (previous.workflow_id if previous else ""))
             has_revision = "workflow_revision" in snapshot_envelope or bool(previous and previous.workflow_revision)
@@ -2209,15 +2207,6 @@ class WorkflowRunner:
             result.workflow_id = workflow_identity
             result.workflow_revision = workflow_revision
             result.definition_digest = workflow_digest
-            if self.emit_lifecycle_events and result.status in {"completed", "failed", "cancelled"}:
-                await self._emit_run_status(
-                    result.status,
-                    effective_thread_id,
-                    effective_run_id,
-                    workflow_id=workflow.id,
-                    node_id="",
-                    error=result.error,
-                )
             result.started_at = previous.started_at if previous and previous.started_at else started_at
             result.finished_at = None if result.status == "paused" else self.clock()
             await self._append_durable_event(
@@ -2247,6 +2236,15 @@ class WorkflowRunner:
                         await self.snapshot_store.delete(effective_thread_id, effective_run_id)
                     except Exception:  # noqa: BLE001 - cleanup is best effort
                         pass
+            if self.emit_lifecycle_events and result.status in {"completed", "failed", "cancelled"}:
+                await self._emit_run_status(
+                    result.status,
+                    effective_thread_id,
+                    effective_run_id,
+                    workflow_id=workflow.id,
+                    node_id="",
+                    error=result.error,
+                )
             return result
         except asyncio.CancelledError:
             if _pause_requested(execution_context):
@@ -2270,6 +2268,30 @@ class WorkflowRunner:
             self._run_snapshots.pop(key, None)
             self._remember_terminal(key, result)
             return result
+        except WorkflowPersistenceError as exc:
+            # Persist a terminal failure in the independent journal when it
+            # remains available. A stale checkpoint must not replay completed
+            # side effects after a required snapshot commit fails.
+            active = self._active_runs.get(key)
+            failed = WorkflowRunResult(
+                status="failed", error=str(exc), run_id=effective_run_id,
+                node_states=dict(active.node_states) if active else {},
+                values=dict(active.values) if active else {},
+                workflow_id=workflow_identity, workflow_revision=workflow_revision,
+                definition_digest=workflow_digest,
+            )
+            if self.event_store is not None:
+                try:
+                    await self._append_durable_event(WorkflowRunEvent(
+                        event_id=f"{effective_run_id}:run:failed", run_id=effective_run_id,
+                        kind="run.failed", workflow_id=workflow_identity,
+                        workflow_revision=workflow_revision,
+                        payload={"error": failed.error, "result": failed.to_dict()},
+                    ))
+                except WorkflowPersistenceError:
+                    pass  # Preserve the original failure; never report success.
+            self._remember_terminal(key, failed)
+            raise
         finally:
             await self._flow_control_release(
                 flow_control_store,
@@ -2291,23 +2313,20 @@ class WorkflowRunner:
         """Persist the latest resumable state when a store is configured."""
         if self.snapshot_store is None:
             return
-        try:
-            await self.snapshot_store.save(
-                thread_id,
-                run_id,
-                result,
-                workflow_id=workflow.id,
-                workflow_name=workflow.name,
-                workflow_revision=max(0, int(workflow.revision)),
-                definition_digest=definition_digest(workflow.to_dict()),
-                workflow_definition={
-                    **workflow.to_dict(),
-                    **({"document": _json_copy(workflow.document)} if workflow.document is not None else {}),
-                },
-                inputs=inputs,
-            )
-        except Exception:  # noqa: BLE001 - snapshot persistence is non-fatal
-            pass
+        await self.snapshot_store.save(
+            thread_id,
+            run_id,
+            result,
+            workflow_id=workflow.id,
+            workflow_name=workflow.name,
+            workflow_revision=max(0, int(workflow.revision)),
+            definition_digest=definition_digest(workflow.to_dict()),
+            workflow_definition={
+                **workflow.to_dict(),
+                **({"document": _json_copy(workflow.document)} if workflow.document is not None else {}),
+            },
+            inputs=inputs,
+        )
 
     async def _append_durable_event(self, event: WorkflowRunEvent) -> None:
         """Append before/after side effects when durable journaling is enabled.
@@ -2712,6 +2731,8 @@ class WorkflowRunner:
                     run_id=run_id,
                     steps_remaining=len(order) - steps_taken - 1,
                 )
+            except WorkflowPersistenceError:
+                raise
             except Exception as exc:  # retries exhausted
                 error_msg = str(exc) or type(exc).__name__
                 on_error = node.config.get("on_error") or {}
@@ -3528,6 +3549,10 @@ class WorkflowRunner:
             except asyncio.CancelledError:
                 attempt_record["status"] = "interrupted"
                 attempt_record["finished_at"] = self.clock().isoformat()
+                raise
+            except WorkflowPersistenceError:
+                # A journal/checkpoint failure is not an executor failure and
+                # must never cause a second side-effecting attempt.
                 raise
             except Exception as exc:  # noqa: BLE001 — retry boundary
                 timed_out = isinstance(exc, TimeoutError)

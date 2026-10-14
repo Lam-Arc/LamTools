@@ -1,0 +1,14 @@
+{
+  "purpose": "authorize-site-upload",
+  "commandName": "sunday-desktop-0317-authorize-site-upload-20261013T094010Z",
+  "description": "Temporarily add one restricted internal-sftp-only public key for uploading the verified 0.3.17 website package, after rechecking server and site publication baselines",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "authorize-site-upload.sh",
+  "commandSha256": "42b0cdc0d1a89f27a8e99984fd8c9393a7f844539b056bba3c29edd751e632a1",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T09:40:10Z",
+  "clientToken": "sunday-desktop-0317-authorize-site-upload-20261013T094010Z"
+}

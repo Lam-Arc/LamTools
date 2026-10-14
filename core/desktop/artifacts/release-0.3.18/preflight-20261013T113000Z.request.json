@@ -1,0 +1,14 @@
+{
+  "purpose": "preflight",
+  "commandName": "sunday-desktop-0318-preflight-20261013T113000Z",
+  "description": "Final read-only preflight before temporary SFTP authorization: confirm rollback state, deployment paths, SSH baseline, and sync-helper hash",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "preflight.sh",
+  "commandSha256": "0890f9dd22f3566f7e532a76e359aea871ab1e19bf6c122af7e6cca45ac659e2",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T11:30:00Z",
+  "clientToken": "sunday-desktop-0318-preflight-20261013T113000Z"
+}

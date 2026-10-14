@@ -1328,7 +1328,10 @@ async def test_turn_steer_persists_consumed_guidance_after_locked_commit_retry(t
         assert result["reason"] == ""
         assert [event["method"] for event in result["events"]] == ["turn/steered"]
         assert accepted_statuses == ["accepted", "duplicate"]
-        assert consumed == ["use the safer path"]
+        assert consumed == []  # transaction failure must not expose uncommitted guidance
+        offered = context.runtime_task_registry.offer_guidance("thread-steer-consumed-retry", run_id=turn_id)
+        assert [item["content"] for item in offered] == ["use the safer path"]
+        assert offered[0]["metadata"]["guidance_id"] == "steer-consumed-retry"
 
         async with context.session_factory() as db:
             events = await context.persistence.list_thread(db, thread_id="thread-steer-consumed-retry")
@@ -1337,6 +1340,45 @@ async def test_turn_steer_persists_consumed_guidance_after_locked_commit_retry(t
         assert snapshot["snapshot_seq"] == events[-1].seq
     finally:
         task = context.runtime_task_registry.task("thread-steer-consumed-retry")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_committed_steer_retry_reactivates_same_id_after_activation_failure(tmp_path, monkeypatch):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    thread_id = "thread-steer-activation"
+    try:
+        started = await handle_turn_start_operation(request_id=1, params={
+            "thread_id": thread_id, "input": [{"type": "text", "text": "start"}],
+        }, context=context)
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        params = {"thread_id": thread_id, "turn_id": turn_id, "client_message_id": "activation-id",
+                  "input": [{"type": "text", "text": "durable text"}]}
+        publish = context.runtime_task_registry.publish_guidance
+        def fail_activation(*_args, **_kwargs):
+            raise RuntimeError("activation failed after commit")
+        monkeypatch.setattr(context.runtime_task_registry, "publish_guidance", fail_activation)
+        with pytest.raises(RuntimeError, match="activation failed"):
+            await handle_turn_steer_operation(request_id=2, params=params, context=context)
+        assert context.runtime_task_registry.offer_guidance(thread_id, run_id=turn_id) == []
+        monkeypatch.setattr(context.runtime_task_registry, "publish_guidance", publish)
+        retried = await handle_turn_steer_operation(request_id=3, params={
+            **params, "input": [{"type": "text", "text": "must not replace durable text"}],
+        }, context=context)
+        assert retried.response["result"]["reason"] == "already_applied"
+        offered = context.runtime_task_registry.offer_guidance(thread_id, run_id=turn_id)
+        assert [item["content"] for item in offered] == ["durable text"]
+        assert offered[0]["metadata"]["guidance_id"] == "activation-id"
+        context.runtime_task_registry.acknowledge_guidance(thread_id, run_id=turn_id, guidance_ids=["activation-id"])
+        assert context.runtime_task_registry.offer_guidance(thread_id, run_id=turn_id) == []
+        async with context.session_factory() as db:
+            assert sum(event.method == "turn/steered" for event in await context.persistence.list_thread(db, thread_id=thread_id)) == 1
+    finally:
+        task = context.runtime_task_registry.task(thread_id)
         release.set()
         if task is not None:
             await task
@@ -1414,7 +1456,10 @@ async def test_queue_guidance_persists_consumed_guidance_after_locked_commit_ret
         # above the response that is still streaming (2026-09-28).
         assert [event["method"] for event in result["events"]] == ["turn/steered", "queue/itemDeleted"]
         assert accepted_statuses == ["accepted", "duplicate"]
-        assert consumed == ["queued guidance"]
+        assert consumed == []
+        offered = context.runtime_task_registry.offer_guidance("thread-queue-consumed-retry", run_id=turn_id)
+        assert [item["content"] for item in offered] == ["queued guidance"]
+        assert offered[0]["metadata"]["guidance_id"] == "queue-guide-consumed-retry"
 
         async with context.session_factory() as db:
             events = await context.persistence.list_thread(db, thread_id="thread-queue-consumed-retry")
@@ -1464,18 +1509,22 @@ async def test_consumed_guidance_survives_exhausted_commit_retries_for_client_re
             handler = handle_queue_guidance_operation
 
         original_commit = AsyncSession.commit
-        consumed = False
+        consumed: list[str] = []
 
         async def fail_every_commit_after_consumption(db):
-            nonlocal consumed
-            if not consumed:
-                consumed = True
-                context.runtime_task_registry.consume_guidance(thread_id, run_id=turn_id)
+            consumed.extend(context.runtime_task_registry.consume_guidance(thread_id, run_id=turn_id))
             raise OperationalError("COMMIT core_app_events", {}, Exception("database is locked"))
 
         monkeypatch.setattr(AsyncSession, "commit", fail_every_commit_after_consumption)
         with pytest.raises(OperationalError, match="database is locked"):
             await handler(request_id=3, params=params, context=context)
+        assert consumed == []
+        assert context.runtime_task_registry.offer_guidance(thread_id, run_id=turn_id) == []
+        async with context.session_factory() as db:
+            before_retry = await context.persistence.list_thread(db, thread_id=thread_id)
+            assert not any(event.method == "turn/steered" for event in before_retry)
+            if operation_name == "queue.guide":
+                assert len((await context.persistence.load(db, thread_id))["queue"]) == 1
 
         monkeypatch.setattr(AsyncSession, "commit", original_commit)
         retried = await handler(request_id=4, params=params, context=context)
@@ -1489,6 +1538,9 @@ async def test_consumed_guidance_survives_exhausted_commit_retries_for_client_re
             # (2026-09-28).
             expected_methods = ["turn/steered", "queue/itemDeleted"]
         assert [event["method"] for event in result["events"]] == expected_methods
+        offered = context.runtime_task_registry.offer_guidance(thread_id, run_id=turn_id)
+        assert len(offered) == 1
+        assert offered[0]["metadata"]["guidance_id"] == client_message_id
 
         async with context.session_factory() as db:
             events = await context.persistence.list_thread(db, thread_id=thread_id)
@@ -2825,6 +2877,33 @@ async def test_turn_start_releases_registry_claim_before_trailing_cleanup(tmp_pa
         )
     finally:
         live_operations_module._dispatch_next_queue_item = original_dispatch
+        context.runtime_task_registry.clear()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_setup_error_is_terminal_and_does_not_block_next_turn(tmp_path):
+    engine, context = await _context(tmp_path)
+    async def fail_setup(request):
+        return OperationResult(name=request.name, status="error", payload={"error": "model not found: missing"})
+    context.operations.register("turn.start", fail_setup)
+    try:
+        for index in (1, 2):
+            accepted = await handle_turn_start_operation(
+                request_id=index, params={"thread_id": "setup-error", "input": [{"type": "text", "text": "try"}]}, context=context,
+            )
+            assert "result" in accepted.response, accepted.response
+            turn_id = accepted.runtime_start["turn_id"]
+            task = context.runtime_task_registry.task("setup-error")
+            if task is not None:
+                await task
+            async with context.session_factory() as session:
+                snapshot = await context.persistence.load(session, "setup-error")
+                events = await context.persistence.list_after(session, thread_id="setup-error", after_seq=0)
+            assert snapshot["turns"][turn_id]["status"] == "failed"
+            assert any(e.turn_id == turn_id and e.payload.get("payload", {}).get("message") == "model not found: missing" for e in events)
+            assert not context.runtime_task_registry.is_running("setup-error")
+    finally:
         context.runtime_task_registry.clear()
         await engine.dispose()
 

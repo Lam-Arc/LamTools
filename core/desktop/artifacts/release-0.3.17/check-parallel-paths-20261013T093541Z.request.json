@@ -1,0 +1,14 @@
+{
+  "purpose": "check-parallel-paths",
+  "commandName": "sunday-desktop-0317-check-parallel-paths-20261013T093541Z",
+  "description": "Read-only confirm unique temporary paths for the verified v0.3.17 parallel installer transfer are absent before creation",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "check-parallel-paths.sh",
+  "commandSha256": "24892b37359c7cb00e1ac8c46504dd9eb52261802092581160399ee5ee3bfb93",
+  "timeoutSeconds": 120,
+  "startedAtUtc": "2026-10-13T09:35:41Z",
+  "clientToken": "sunday-desktop-0317-check-parallel-paths-20261013T093541Z"
+}

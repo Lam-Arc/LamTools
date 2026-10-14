@@ -1,7 +1,10 @@
 # LamTools Relay
 
-Relay 只转发 Noise 加密后的隧道帧，不保存项目、会话、消息、文件或
-Agent 内容。生产模式使用账号认证和一次性 Connection Ticket，不使用部署级共享 Token。
+Relay 的应用数据通道转发 Noise 加密后的隧道帧，不保存项目、会话、消息、文件或
+Agent 内容。控制面并非端到端加密：兼容六位数字 WAN 查找会把配对码、
+设备公钥、网关地址和到期时间发送给 Relay，存放在进程内存中直到清理或到期。
+因此 Relay 是配对目录的信任方，不能声称它不知道配对码或设备元数据。
+生产模式使用现有账号认证和一次性 Connection Ticket，不使用部署级共享 Token。
 
 环境变量：
 
@@ -25,7 +28,10 @@ cargo run --manifest-path core/remote/relay/Cargo.toml
 5. 连接 `WSS /v1/relay/connect`，携带 `role=mobile`、`device_id`、`target` 和 `ticket`。
 
 桌面 Host 使用账号绑定的 Access Token 建立长期 Relay presence，不能使用未绑定设备的账号会话。
-桌面端的六位数字配对仍可通过 LAN、VPN 或手动网关完成；Relay 仅提供已认证账号下的设备/Workspace 控制面。
+桌面端的六位数字配对可通过 LAN、VPN 或手动网关完成，不要求账号。
+现有 WAN 查找使用账号绑定的 Node 会话和短期一次性 Ticket；本次加固未新增账号系统。
+详细信任边界、尝试限制、兼容性和残余风险见
+[配对安全说明](../../docs/pairing-security.md)。
 
 健康检查、指标和 presence：`/health`、`/metrics`、`/v1/presence/:device_id`。
 

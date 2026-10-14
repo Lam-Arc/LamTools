@@ -1,0 +1,14 @@
+{
+  "purpose": "final-cleanup-confirmation",
+  "commandName": "sunday-desktop-0317-final-cleanup-confirmation-20261013T103853Z",
+  "description": "Read-only confirm this release temporary SFTP key is absent, authorized_keys is at its baseline, services are healthy, published 0.3.17 is unchanged and all named temporary stages are gone",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "final-cleanup-confirmation.sh",
+  "commandSha256": "8dff59706a42fb83372506d4b3c18ab7bd19c8e4f15904cc91652b84a2ef21ca",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T10:38:53Z",
+  "clientToken": "sunday-desktop-0317-final-cleanup-confirmation-20261013T103853Z"
+}

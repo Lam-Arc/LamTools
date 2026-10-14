@@ -1,0 +1,6 @@
+PREFLIGHT_UTC_BEGIN=2026-10-13T09:22:24Z
+active
+active
+/var/www/lamtools/Sunday-latest-x64-setup.exe: OK
+/var/www/lamtools/desktop-update.json: OK
+GITHUB_ASSET Sunday_0.3.17_x64-setup.exe size=58717198 sha256=d25a030599b148d52c44021a89b487f4ccf1a695d7b7d19bedd4c1a7ab3015b1

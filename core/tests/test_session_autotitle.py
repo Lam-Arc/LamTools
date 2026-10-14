@@ -178,6 +178,7 @@ class TestGenerateSessionTitle:
         assert request.metadata == {
             "thinking_enabled": False,
             "reasoning_level": "off",
+            "_forensic_retry_index": 0,
         }
 
 

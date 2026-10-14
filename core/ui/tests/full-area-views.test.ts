@@ -21,7 +21,8 @@ describe('full-area views (搜索 / 资料库 / 定时任务)', () => {
     expect(appSource).toMatch(/type FullAreaViewId = 'library' \| 'search' \| 'arrange' \| 'settings' \| 'plugins' \| 'account' \| 'project'/)
     expect(appSource).toMatch(/const fullAreaView = ref<FullAreaViewId \| null>\(null\)/)
     expect(appSource).toMatch(/function openFullArea\(view: FullAreaViewId\): void \{[\s\S]*?fullAreaView\.value = fullAreaView\.value === view \? null : view/)
-    expect(appSource).toMatch(/function closeFullArea\(\): void \{\s*fullAreaView\.value = null/)
+    expect(appSource).toMatch(/function closeFullArea\(\): void \{\s*requestSettingsNavigation\(\(\) => \{ fullAreaView\.value = null \}\)/)
+    expect(appSource).toMatch(/function requestSettingsNavigation[\s\S]*?showSettings\.value && settingsRef\.value[\s\S]*?settingsRef\.value\.requestNavigation\(proceed\)[\s\S]*?showProjectView\.value && projectSettingsRef\.value[\s\S]*?projectSettingsRef\.value\.requestNavigation\(proceed\)/)
 
     // The views mount inside #main-content, mutually exclusive by the ref.
     expect(appSource).toMatch(/<template v-if="fullAreaView">[\s\S]*?<CoreArrangeManager[\s\S]*?v-if="showArrange"[\s\S]*?<SearchShell[\s\S]*?v-else-if="showSearch"[\s\S]*?<LibraryHomeView[\s\S]*?v-else-if="showLibrary"[\s\S]*?<CoreSettings[\s\S]*?v-else-if="showSettings"[\s\S]*?<PluginsShell[\s\S]*?v-else-if="showPlugins"[\s\S]*?<AccountShell[\s\S]*?v-else-if="showAccount"/)
@@ -46,7 +47,7 @@ describe('full-area views (搜索 / 资料库 / 定时任务)', () => {
 
     expect(appSource).toMatch(/data-mobile-footer-library @click="openLibrary"/)
     // 设置 / 插件 / 账号也走同一族整版界面。
-    expect(appSource).toMatch(/function openSettings\(section\?: string\): void \{[\s\S]*?openFullArea\('settings'\)/)
+    expect(appSource).toMatch(/function openSettings\(section\?: string\): void \{[\s\S]*?settingsRef\.value\?\.requestSection\(section\)[\s\S]*?requestSettingsNavigation\(\(\) => \{[\s\S]*?fullAreaView\.value = fullAreaView\.value === 'settings' \? null : 'settings'/)
     expect(appSource).toMatch(/function openPlugins\(section\?: string\): void \{[\s\S]*?openFullArea\('plugins'\)/)
     expect(appSource).toMatch(/function openAccount\(\): void \{[\s\S]*?openFullArea\('account'\)/)
     expect(topBarSource).toMatch(/data-mobile-library-button @click="runAction\('open-library'\)"/)
@@ -155,9 +156,9 @@ describe('settings/plugins/project borrow the session drawer as their left nav',
     expect(appSource).toMatch(/v-if="!sidebarNavView && appRuntime.platform !== 'mobile'"[\s\S]*?class="core-sidebar-search-entry"/)
     expect(appSource).toContain('<div v-if="!sidebarNavView" class="core-project-primary-row">')
     // 会话栏主体换成竖排分区导航（同一份分区清单，不带描述小字）。
-    expect(appSource).toMatch(/<FullAreaSidebarNav[\s\S]*?v-if="sidebarNavView === 'settings'"[\s\S]*?:sections="CORE_SETTINGS_SECTIONS"[\s\S]*?:active-id="settingsSection"[\s\S]*?@select="settingsSection = \$event"/)
+    expect(appSource).toMatch(/<FullAreaSidebarNav[\s\S]*?v-if="sidebarNavView === 'settings'"[\s\S]*?:sections="CORE_SETTINGS_SECTIONS"[\s\S]*?:active-id="settingsSection"[\s\S]*?@select="settingsRef\?\.requestSection\(\$event\)"/)
     expect(appSource).toMatch(/<FullAreaSidebarNav[\s\S]*?v-else-if="sidebarNavView === 'plugins'"[\s\S]*?:sections="PLUGIN_SHELL_SECTIONS"[\s\S]*?:active-id="pluginsSection"/)
-    expect(appSource).toMatch(/<FullAreaSidebarNav[\s\S]*?v-else-if="sidebarNavView === 'project'"[\s\S]*?:sections="PROJECT_SETTINGS_SECTIONS"[\s\S]*?:active-id="projectSettingsSection"[\s\S]*?@select="projectSettingsSection = \$event"/)
+    expect(appSource).toMatch(/<FullAreaSidebarNav[\s\S]*?v-else-if="sidebarNavView === 'project'"[\s\S]*?:sections="PROJECT_SETTINGS_SECTIONS"[\s\S]*?:active-id="projectSettingsSection"[\s\S]*?@select="projectSettingsRef\?\.requestSection\(\$event\)"/)
   })
 
   it('drives the shells from one shared section list and hides their built-in nav on desktop', () => {
@@ -179,7 +180,12 @@ describe('settings/plugins/project borrow the session drawer as their left nav',
     expect(shellSource).toMatch(/if \(activeSection\.value\) emit\('section-change', activeSection\.value\)/)
     for (const pageSource of [settingsSource, pluginsSource, projectSource]) {
       expect(pageSource).toContain(':hide-nav="props.hideNav"')
-      expect(pageSource).toContain("@section-change=\"$emit('section-change', $event)\"")
+    }
+    expect(pluginsSource).toContain("@section-change=\"$emit('section-change', $event)\"")
+    for (const pageSource of [settingsSource, projectSource]) {
+      expect(pageSource).toContain(':before-section-change="beforeSectionChange"')
+      expect(pageSource).toContain('@section-change="onSectionChange"')
+      expect(pageSource).toMatch(/function onSectionChange\(id: string\) \{[\s\S]*?emit\('section-change', id\)/)
     }
     // 主卡不再为标题条留那条高度：内容直接顶到页面顶部（只留一点上沿留白）。
     expect(appSource).toContain(':hide-main-header="Boolean(sidebarNavView)"')
@@ -206,7 +212,7 @@ describe('settings/plugins/project borrow the session drawer as their left nav',
     // 入口变成整版界面：不再有独立的浮窗开关，打开即切走整个界面。
     expect(appSource).toMatch(/v-else-if="showProjectView && selectedProject && !activePluginMode"/)
     expect(appSource).not.toContain('showProjectSettings')
-    expect(appSource).toMatch(/function openProjectActions\(projectId: string\) \{[\s\S]*?openFullArea\('project'\)/)
+    expect(appSource).toMatch(/function openProjectActions\(projectId: string\) \{\s*requestSettingsNavigation\(\(\) => \{[\s\S]*?selectedProjectId\.value = project\.id[\s\S]*?fullAreaView\.value = 'project'/)
     // 项目设置是聊天项目的内页：竖栏仍停在聊天区。
     expect(appSource).toMatch(/view === 'search' \|\| view === 'project'\) return 'chat'/)
   })

@@ -5,16 +5,19 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import tempfile
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 from lamtools_core.event.run_item import RunItemEvent
+
+from .persistence import WorkflowPersistenceError, finish_commit
 
 from .runtime import (
     WorkflowDef,
@@ -35,6 +38,7 @@ QueueStatus = Literal[
 ]
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 QUEUE_STORE_VERSION = 3
+_logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -242,38 +246,41 @@ class WorkflowQueueStore:
     def _load_sync(self) -> None:
         if self._loaded:
             return
-        self._loaded = True
-        if not self.path.is_file():
-            return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(raw, (Mapping, list)):
+                raise ValueError("queue store must be an object or legacy array")
             values = raw.get("items", raw) if isinstance(raw, Mapping) else []
-            if isinstance(values, list):
-                self._items = {
-                    item.queue_id: item
-                    for value in values
-                    if isinstance(value, Mapping)
-                    for item in [WorkflowQueueItem.from_dict(value)]
-                }
-                # Priority was added after the original queue wire shape.
-                # Rewrite the same file atomically on first load so a process
-                # restart cannot lose the migrated default.  No legacy file
-                # is deleted or moved, and a failed rewrite still leaves the
-                # in-memory compatibility projection usable.
+            if isinstance(raw, list):
+                values = raw
+            if not isinstance(values, list) or any(not isinstance(value, Mapping) for value in values):
+                raise ValueError("queue store must contain an items array of objects")
+            loaded = {
+                item.queue_id: item
+                for value in values
+                for item in [WorkflowQueueItem.from_dict(value)]
+            }
+            self._items = loaded
+            # Old records remain usable if an optional migration rewrite fails.
+            try:
+                raw_version = int(raw.get("version", 0) or 0) if isinstance(raw, Mapping) else 0
+            except (TypeError, ValueError):
+                raw_version = 0
+            if (
+                raw_version < QUEUE_STORE_VERSION
+                or any("priority" not in value for value in values)
+            ):
                 try:
-                    raw_version = int(raw.get("version", 0) or 0) if isinstance(raw, Mapping) else 0
-                except (TypeError, ValueError):
-                    raw_version = 0
-                if (
-                    raw_version < QUEUE_STORE_VERSION
-                    or any("priority" not in value for value in values if isinstance(value, Mapping))
-                ):
-                    try:
-                        self._write_sync()
-                    except OSError:
-                        pass
-        except (OSError, ValueError, TypeError):
+                    self._write_sync()
+                except OSError:
+                    # Migration is not a new queue acceptance: the original
+                    # committed file remains readable and is upgraded on save.
+                    pass
+        except FileNotFoundError:
             self._items = {}
+        except (OSError, ValueError, TypeError) as exc:
+            raise WorkflowPersistenceError("read queue", self.path, exc) from exc
+        self._loaded = True
 
     def _write_sync(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -293,19 +300,24 @@ class WorkflowQueueStore:
 
     async def load(self) -> None:
         async with self._lock:
-            await asyncio.to_thread(self._load_sync)
+            await finish_commit(asyncio.to_thread(self._load_sync))
 
     async def save(self, item: WorkflowQueueItem) -> WorkflowQueueItem:
         async with self._lock:
             self._load_sync()
-            self._items[item.queue_id] = item
-            try:
-                await asyncio.to_thread(self._write_sync)
-            except OSError:
-                # Queue operation still returns the in-memory item; callers can
-                # observe an explicit persistence flag from the service.
-                pass
+            candidate = dict(self._items)
+            candidate[item.queue_id] = WorkflowQueueItem.from_dict(item.to_storage_dict())
+            await finish_commit(self._commit(candidate, "save queue"))
         return item
+
+    async def _commit(self, candidate: dict[str, WorkflowQueueItem], operation: str) -> None:
+        previous = self._items
+        self._items = candidate
+        try:
+            await asyncio.to_thread(self._write_sync)
+        except Exception as exc:
+            self._items = previous
+            raise WorkflowPersistenceError(operation, self.path, exc) from exc
 
     async def get(self, queue_id: str) -> WorkflowQueueItem | None:
         async with self._lock:
@@ -323,11 +335,9 @@ class WorkflowQueueStore:
             self._load_sync()
             if str(queue_id or "") not in self._items:
                 return False
-            del self._items[str(queue_id)]
-            try:
-                await asyncio.to_thread(self._write_sync)
-            except OSError:
-                pass
+            candidate = dict(self._items)
+            del candidate[str(queue_id)]
+            await finish_commit(self._commit(candidate, "delete queue item"))
             return True
 
     async def clear(self, *, predicate: Callable[[WorkflowQueueItem], bool], confirm: bool = False) -> int:
@@ -336,13 +346,9 @@ class WorkflowQueueStore:
         async with self._lock:
             self._load_sync()
             removed = [key for key, item in self._items.items() if predicate(item)]
-            for key in removed:
-                self._items.pop(key, None)
             if removed:
-                try:
-                    await asyncio.to_thread(self._write_sync)
-                except OSError:
-                    pass
+                candidate = {key: item for key, item in self._items.items() if key not in removed}
+                await finish_commit(self._commit(candidate, "clear queue"))
             return len(removed)
 
 
@@ -382,15 +388,26 @@ class WorkflowRunQueue:
         self._active_tasks: dict[str, asyncio.Task[Any]] = {}
         self._waiters: dict[str, list[asyncio.Future[WorkflowQueueItem]]] = {}
         self._lock = asyncio.Lock()
+        # Retain post-execution updates for write-only retry. Never rerun a
+        # finished executor just because its queue/history commit failed.
+        self._pending_updates: dict[str, WorkflowQueueItem] = {}
+        self._persistence_failures: dict[str, tuple[WorkflowQueueItem, WorkflowPersistenceError]] = {}
+        self._cancel_requested: set[str] = set()
+        self._lifecycle_lock = asyncio.Lock()
 
     @property
     def queue_path(self) -> Path:
         return self.store.path
 
     async def start(self) -> None:
+        async with self._lifecycle_lock:
+            await self._start_locked()
+
+    async def _start_locked(self) -> None:
         if self._started:
             return
         await self.store.load()
+        await self._flush_pending_updates()
         # A process that exited while executing leaves a running/paused item.
         # Requeue it with the same IDs; WorkflowRunner's durable snapshot will
         # supply the last completed value table on the next attempt.
@@ -416,6 +433,10 @@ class WorkflowRunQueue:
         self._wake.set()
 
     async def stop(self) -> None:
+        async with self._lifecycle_lock:
+            await self._stop_locked()
+
+    async def _stop_locked(self) -> None:
         self._stop_requested.set()
         self._stopping = True
         self._started = False
@@ -424,6 +445,8 @@ class WorkflowRunQueue:
         # This covers adapters that do not observe the pause token themselves;
         # the normal WorkflowRunner also writes the same snapshot idempotently.
         for queue_id in active_ids:
+            if queue_id in self._pending_updates:
+                continue
             item = await self.store.get(queue_id)
             if item is None or item.status != "running":
                 continue
@@ -443,9 +466,10 @@ class WorkflowRunQueue:
         # Any active operation is persisted as paused/interrupted.  Its
         # snapshot remains available for continuation after a fresh process
         # starts.  Do not silently convert it to terminal cancellation.
+        await self._flush_pending_updates()
         for queue_id in active_ids:
             item = await self.store.get(queue_id)
-            if item is not None and item.status in {"running", "cancelled"}:
+            if item is not None and item.status == "running":
                 await self._mark_interrupted(item)
         self._active_tasks.clear()
 
@@ -521,7 +545,13 @@ class WorkflowRunQueue:
         await self._emit_status(item, "queued")
         should_start = self.auto_start if auto_start is None else bool(auto_start)
         if should_start and self.manager is not None and self.runner is not None:
-            await self.start()
+            try:
+                await self.start()
+            except WorkflowPersistenceError as exc:
+                # Acceptance itself committed; let callers identify the task
+                # even when recovering earlier work prevented worker startup.
+                exc.queue_id, exc.run_id = item.queue_id, item.run_id
+                raise
             self._wake.set()
         return item
 
@@ -535,7 +565,7 @@ class WorkflowRunQueue:
         include_history: bool = True,
         limit: int | None = None,
     ) -> list[WorkflowQueueItem]:
-        items = await self.store.values()
+        items = [self._public_item(item) for item in await self.store.values()]
         statuses = {str(value) for value in status} if isinstance(status, (list, tuple, set, frozenset)) else ({str(status)} if status else None)
         root = str(Path(work_root).expanduser().resolve()) if work_root else ""
         values = [
@@ -544,7 +574,7 @@ class WorkflowRunQueue:
             and (not root or _same_root(item.work_root, root))
             and (not workflow_id or item.workflow_id == workflow_id)
             and (not workflow_name or item.workflow_name == workflow_name)
-            and (include_history or item.status not in TERMINAL_STATUSES)
+            and (include_history or item.status not in TERMINAL_STATUSES or "persistence_error" in item.metadata)
         ]
         # Queue consumers claim queued work in this order.  Applying the same
         # deterministic order to a queued-only listing makes the contract
@@ -584,14 +614,17 @@ class WorkflowRunQueue:
         if queue_id:
             item = await self.store.get(queue_id)
             if item is not None:
-                return item
+                return self._public_item(item)
         if run_id:
             for item in await self.store.values():
                 if item.run_id == run_id:
-                    return item
+                    return self._public_item(item)
         return None
 
     async def cancel(self, queue_id: str = "", *, run_id: str = "") -> WorkflowQueueItem | None:
+        target = await self.get(queue_id, run_id=run_id)
+        if target is not None and target.queue_id in self._persistence_failures:
+            raise self._persistence_failures[target.queue_id][1]
         item = await self.get(queue_id, run_id=run_id)
         if item is None:
             return None
@@ -608,8 +641,12 @@ class WorkflowRunQueue:
         if item.status == "running":
             task = self._active_tasks.get(item.queue_id)
             if task is not None and not task.done():
+                self._cancel_requested.add(item.queue_id)
                 task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+                outcomes = await asyncio.gather(task, return_exceptions=True)
+                self._cancel_requested.discard(item.queue_id)
+                if outcomes and isinstance(outcomes[0], WorkflowPersistenceError):
+                    raise outcomes[0]
             else:
                 registry = getattr(self.runner, "runtime_task_registry", None)
                 cancel = getattr(registry, "cancel", None)
@@ -645,7 +682,8 @@ class WorkflowRunQueue:
         if all_items and not confirm:
             raise ValueError("clearing all workflow queue/history requires confirm=True")
         root = str(Path(work_root).expanduser().resolve()) if work_root else ""
-        return await self.store.clear(
+        await self._flush_pending_updates()
+        removed = await self.store.clear(
             confirm=True,
             predicate=lambda item: (
                 (all_items or item.status in TERMINAL_STATUSES)
@@ -654,15 +692,32 @@ class WorkflowRunQueue:
                 and (not workflow_name or item.workflow_name == workflow_name)
             ),
         )
+        remaining = {item.queue_id for item in await self.store.values()}
+        self._persistence_failures = {
+            key: failure for key, failure in self._persistence_failures.items() if key in remaining
+        }
+        return removed
 
     async def wait(self, queue_id: str, *, timeout: float | None = None) -> WorkflowQueueItem | None:
         item = await self.get(queue_id)
+        if queue_id in self._persistence_failures:
+            raise self._persistence_failures[queue_id][1]
         if item is None or item.status in TERMINAL_STATUSES or item.status == "paused":
             return item
         loop = asyncio.get_running_loop()
         future: asyncio.Future[WorkflowQueueItem] = loop.create_future()
         self._waiters.setdefault(queue_id, []).append(future)
         try:
+            # Completion may race the first read and waiter registration.
+            current = await self.get(queue_id)
+            if queue_id in self._persistence_failures:
+                if not future.done():
+                    future.set_exception(self._persistence_failures[queue_id][1])
+            elif current is None:
+                if not future.done():
+                    future.set_result(None)
+            elif current.status in TERMINAL_STATUSES or current.status == "paused":
+                self._resolve_waiters(current)
             return await asyncio.wait_for(future, timeout=timeout) if timeout is not None else await future
         finally:
             waiters = self._waiters.get(queue_id, [])
@@ -670,26 +725,6 @@ class WorkflowRunQueue:
                 waiters.remove(future)
             if not waiters:
                 self._waiters.pop(queue_id, None)
-
-    async def update_from_result(self, run_id: str, result: WorkflowRunResult) -> WorkflowQueueItem | None:
-        """Synchronize a paused queue record after out-of-band signal resume."""
-        item = await self.get(run_id=run_id)
-        if item is None:
-            return None
-        item.result = result
-        item.status = result.status  # type: ignore[assignment]
-        item.error = result.error
-        item.updated_at = _utcnow()
-        if result.status == "paused":
-            item.prior_values = dict(result.values)
-            item.prior_node_states = dict(result.node_states)
-            item.finished_at = None
-        else:
-            item.finished_at = item.finished_at or _utcnow()
-        await self.store.save(item)
-        await self._emit_status(item, result.status, result=result)
-        self._resolve_waiters(item)
-        return item
 
     async def update_from_result(self, run_id: str, result: WorkflowRunResult) -> WorkflowQueueItem | None:
         """Synchronize a paused queue record after an out-of-band signal."""
@@ -703,14 +738,21 @@ class WorkflowRunQueue:
         item.prior_values = dict(result.values)
         item.prior_node_states = dict(result.node_states)
         item.finished_at = None if result.status == "paused" else _utcnow()
-        await self.store.save(item)
+        await self._save_execution_update(item)
         await self._emit_status(item, result.status, result=result)
         self._resolve_waiters(item)
         return item
 
     async def _worker_loop(self) -> None:
         while not self._stopping:
-            items = await self.list(status="queued", include_history=False)
+            try:
+                await self._flush_pending_updates()
+                items = [item for item in await self.store.values() if item.status == "queued"]
+                items.sort(key=lambda item: (-item.priority, item.created_at, item.queue_id))
+            except WorkflowPersistenceError as exc:
+                _logger.warning("Workflow queue storage unavailable: %s", exc)
+                await asyncio.sleep(1.0)
+                continue
             if not items:
                 self._wake.clear()
                 try:
@@ -726,6 +768,10 @@ class WorkflowRunQueue:
             except asyncio.CancelledError:
                 if self._stopping:
                     raise
+            except WorkflowPersistenceError:
+                # _execute_item has exposed the failure to waiters and the UI.
+                # Keep the worker alive, then retry storage rather than work.
+                await asyncio.sleep(1.0)
             finally:
                 self._active_tasks.pop(item.queue_id, None)
 
@@ -737,7 +783,8 @@ class WorkflowRunQueue:
         item.status = "running"
         item.started_at = item.started_at or _utcnow()
         item.updated_at = _utcnow()
-        await self.store.save(item)
+        if not await self._save_execution_update(item, retry=False):
+            return
         await self._emit_status(item, "running")
         if self.manager is None or self.runner is None:
             item.status = "failed"
@@ -745,10 +792,11 @@ class WorkflowRunQueue:
             item.finished_at = _utcnow()
             item.updated_at = item.finished_at
             item.result = WorkflowRunResult(status="failed", error=item.error, run_id=item.run_id)
-            await self.store.save(item)
+            await self._save_execution_update(item)
             await self._emit_status(item, "failed")
             self._resolve_waiters(item)
             return
+        execution_started = False
         try:
             definition = _definition_from_pin(item.workflow_definition)
             if definition is None:
@@ -783,6 +831,7 @@ class WorkflowRunQueue:
                     if isinstance(item.metadata, Mapping) and key in item.metadata
                 },
             }
+            execution_started = True
             result = await self.runner.run(
                 definition,
                 inputs=dict(item.inputs),
@@ -814,6 +863,12 @@ class WorkflowRunQueue:
                 ),
             )
             item.result = result
+            if self._stopping and result.status == "cancelled" and item.queue_id not in self._cancel_requested:
+                await self._mark_interrupted(item)
+                return
+            if item.queue_id in self._cancel_requested and result.status == "paused":
+                result.status = "cancelled"
+                result.error = "cancelled"
             item.error = result.error or ("cancelled" if result.status == "cancelled" else "")
             item.status = result.status  # type: ignore[assignment]
             item.updated_at = _utcnow()
@@ -825,12 +880,18 @@ class WorkflowRunQueue:
                 item.finished_at = None
             else:
                 item.finished_at = item.finished_at or _utcnow()
-            await self.store.save(item)
+            await self._save_execution_update(item)
             await self._emit_status(item, result.status)
             await self._emit_status(item, "progress", result=result)
             self._resolve_waiters(item)
         except asyncio.CancelledError:
-            if self._stopping:
+            pending = self._pending_updates.get(item.queue_id)
+            if pending is not None and pending.status in TERMINAL_STATUSES | {"paused"}:
+                # Cancellation during an already-finished commit does not
+                # turn completed side effects into resumable work.
+                await self._flush_pending_updates()
+                return
+            if self._stopping and item.queue_id not in self._cancel_requested:
                 await self._mark_interrupted(item)
                 return
             item.status = "cancelled"
@@ -838,23 +899,36 @@ class WorkflowRunQueue:
             item.finished_at = _utcnow()
             item.updated_at = item.finished_at
             item.result = WorkflowRunResult(status="cancelled", error="cancelled", run_id=item.run_id)
-            await self.store.save(item)
+            await self._save_execution_update(item)
             await self._emit_status(item, "cancelled")
             self._resolve_waiters(item)
+        except WorkflowPersistenceError as exc:
+            if item.queue_id not in self._pending_updates:
+                # A failed pre-execution pin can safely be retried. An error
+                # inside the runner may follow side effects; fail explicitly
+                # instead of silently restarting an ambiguous attempt.
+                item.status = "failed" if execution_started else "queued"
+                item.error = str(exc)
+                if execution_started:
+                    item.result = WorkflowRunResult(status="failed", error=item.error, run_id=item.run_id)
+                    item.finished_at = _utcnow()
+                self._pending_updates[item.queue_id] = WorkflowQueueItem.from_dict(item.to_storage_dict())
+                await self._record_persistence_failure(item, exc)
+            raise
         except Exception as exc:  # noqa: BLE001 - queue boundary
             item.status = "failed"
             item.error = str(exc) or type(exc).__name__
             item.finished_at = _utcnow()
             item.updated_at = item.finished_at
             item.result = WorkflowRunResult(status="failed", error=item.error, run_id=item.run_id)
-            await self.store.save(item)
+            await self._save_execution_update(item)
             await self._emit_status(item, "failed")
             self._resolve_waiters(item)
 
     async def _mark_interrupted(self, item: WorkflowQueueItem) -> WorkflowQueueItem:
         """Persist a paused queue record while preserving runner progress."""
         current = await self.store.get(item.queue_id) or item
-        result: WorkflowRunResult | None = None
+        result = WorkflowRunResult.from_dict(item.result.to_dict()) if item.result is not None else None
         interrupt = getattr(self.runner, "interrupt", None)
         if callable(interrupt):
             try:
@@ -908,10 +982,61 @@ class WorkflowRunQueue:
         current.result = result
         current.prior_values = dict(result.values)
         current.prior_node_states = dict(result.node_states)
-        await self.store.save(current)
+        await self._save_execution_update(current)
         await self._emit_status(current, "paused")
         self._resolve_waiters(current)
         return current
+
+    def _public_item(self, item: WorkflowQueueItem) -> WorkflowQueueItem:
+        failure = self._persistence_failures.get(item.queue_id)
+        if failure is None:
+            return item
+        projected = WorkflowQueueItem.from_dict(item.to_storage_dict())
+        projected.status = "failed"
+        projected.error = str(failure[1])
+        projected.result = None
+        projected.metadata["persistence_error"] = {
+            "code": failure[1].code,
+            "persisted_status": item.status,
+            "retry_pending": True,
+        }
+        return projected
+
+    async def _record_persistence_failure(self, item: WorkflowQueueItem, error: WorkflowPersistenceError) -> None:
+        first = item.queue_id not in self._persistence_failures
+        self._persistence_failures[item.queue_id] = (item, error)
+        for future in self._waiters.pop(item.queue_id, []):
+            if not future.done():
+                future.set_exception(error)
+        if first:
+            committed = await self.store.get(item.queue_id)
+            await self._emit_status(self._public_item(committed or item), "failed")
+
+    async def _save_execution_update(self, item: WorkflowQueueItem, *, retry: bool = True) -> bool:
+        async with self._lock:
+            if not retry:
+                current = await self.store.get(item.queue_id)
+                if current is None or current.status != "queued":
+                    return False
+            if retry:
+                self._pending_updates[item.queue_id] = WorkflowQueueItem.from_dict(item.to_storage_dict())
+            try:
+                await self.store.save(item)
+            except WorkflowPersistenceError as exc:
+                await self._record_persistence_failure(item, exc)
+                raise
+            self._persistence_failures.pop(item.queue_id, None)
+            self._pending_updates.pop(item.queue_id, None)
+            return True
+
+    async def _flush_pending_updates(self) -> None:
+        async with self._lock:
+            for queue_id, item in list(self._pending_updates.items()):
+                await self.store.save(item)
+                self._pending_updates.pop(queue_id, None)
+                self._persistence_failures.pop(queue_id, None)
+                await self._emit_status(item, item.status, result=item.result)
+                self._resolve_waiters(item)
 
     async def _emit_status(self, item: WorkflowQueueItem, status: str, *, result: WorkflowRunResult | None = None) -> None:
         if self.emit is None:
@@ -930,7 +1055,10 @@ class WorkflowRunQueue:
             "thread_id": item.thread_id,
             "status": status,
             "workflow_name": item.workflow_name,
+            "error": item.error,
         }
+        if item.metadata.get("persistence_error"):
+            payload["persistence_error"] = item.metadata["persistence_error"]
         correlation_keys = ("parent_session_id", "parent_run_id", "parent_turn_id", "parent_call_id", "trace_id", "correlation_id")
         for key in correlation_keys:
             if isinstance(item.metadata, Mapping) and item.metadata.get(key):

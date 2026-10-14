@@ -42,6 +42,19 @@ function agentPart(status: MessagePartStatus): NonNullable<CoreMessage['parts']>
 }
 
 describe('selectCoreSessionActivity', () => {
+  it('uses the thread registry to settle a child outside the latest parent turn', () => {
+    const snapshot = snapshotWithStatus('completed')
+    const messages = [assistantMessage('old-parent', [agentPart('running')])]
+    expect(selectCoreSessionActivity(snapshot, { messages }).awaitingSubAgents).toBe(true)
+    const settled = selectCoreSessionActivity(snapshot, { messages,
+      memberRecords: { worker: { name: 'worker', status: 'interrupted' } } })
+    expect(settled.awaitingSubAgents).toBe(false)
+    expect(settled.memberStatuses.worker).toBe('interrupted')
+    expect(settled.memberStatusRecords.worker.status).toBe('interrupted')
+    expect(settled.phase).toBe('idle')
+    expect(snapshot.status).toBe('completed')
+  })
+
   it('is idle for a null snapshot', () => {
     const activity = selectCoreSessionActivity(null)
     expect(activity.status).toBe('idle')

@@ -6,12 +6,15 @@ import type {
   CoreAppQueueItem,
   CoreAppRequestState,
   CoreAppSnapshot,
+  CoreAppTurn,
   CoreRuntimeItem,
   CoreRuntimeSnapshot,
   CoreAppThreadStatus,
 } from './protocol.ts'
 import { TransportRpcError } from '../transport'
 import type { CoreSyncChangeNotification, CoreThreadGapNotification } from './client.ts'
+import { CoreRequestAcceptanceUnknownError } from './client.ts'
+import { TransportRequestTimeoutError } from '../transport'
 import {
   CoreSessionStateStore,
   isStaleSnapshot,
@@ -20,6 +23,7 @@ import {
 } from './sessionState.ts'
 
 export interface CoreAppServerRuntimeClient {
+  capabilities?: Record<string, unknown>
   connect(params?: { threadId?: string; lastSeenSeq?: number }): Promise<void>
   request(method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
   respondServerRequest(requestId: string, result: Record<string, unknown>): boolean
@@ -129,6 +133,7 @@ export function createCoreAppServerRuntimeController<
   // Threads with a gap-driven resume in flight. Non-reactive on purpose: it
   // only guards the reaction, never the rendered state.
   const gapResyncs = new Set<string>()
+  const uncertainResumes = new Map<string, string>()
   let threadSwitchQueue: Promise<void> = Promise.resolve()
   let threadSelectionGeneration = 0
 
@@ -155,6 +160,28 @@ export function createCoreAppServerRuntimeController<
     // A failed stale switch must not poison the next selection.
     threadSwitchQueue = task.catch(() => undefined)
     return task
+  }
+
+  /**
+   * One bounded retry for a transcript read that timed out.
+   *
+   * A timeout is not a failed read: the server answered a moment later, and the
+   * retry hits the now-warm pages. Without this, a slow first open of a long
+   * thread ended as "load failed" and the transcript stayed blank until the user
+   * switched away and back.
+   */
+  async function requestWithTimeoutRetry(
+    client: Client,
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
+  ): Promise<Record<string, unknown>> {
+    try {
+      return await client.request(method, params, timeoutMs)
+    } catch (error) {
+      if (!(error instanceof TransportRequestTimeoutError)) throw error
+      return await client.request(method, params, timeoutMs)
+    }
   }
 
   async function switchThreadNow(
@@ -200,7 +227,8 @@ export function createCoreAppServerRuntimeController<
       return
     }
 
-    const response = await client.request(
+    const response = await requestWithTimeoutRetry(
+      client,
       'thread/resume',
       {
         thread_id: threadId,
@@ -224,7 +252,9 @@ export function createCoreAppServerRuntimeController<
     isCurrent: () => boolean,
   ): Promise<boolean> {
     try {
-      const response = await client.request('thread/read', { thread_id: threadId }, 60_000)
+      const response = await requestWithTimeoutRetry(
+        client, 'thread/read', { thread_id: threadId }, 60_000
+      )
       if (!isCurrent()) return false
       applyResponse(response)
       return true
@@ -247,7 +277,7 @@ export function createCoreAppServerRuntimeController<
   ): void {
     void (async () => {
       try {
-        const response = await client.request('thread/resume', {
+        const response = await requestWithTimeoutRetry(client, 'thread/resume', {
           thread_id: threadId,
           last_seen_seq: switchOptions.lastSeenSeq ?? 0,
         }, 60_000)
@@ -477,6 +507,10 @@ export function createCoreAppServerRuntimeController<
   }
 
   function enqueueEvent(event: CoreAppEvent) {
+    if (event.method === 'turn/started' && event.client_message_id && event.turn_id) {
+      const key = JSON.stringify([event.thread_id, event.turn_id])
+      if (uncertainResumes.get(key) === event.client_message_id) uncertainResumes.delete(key)
+    }
     // `thread/gap` is a control signal from the server's reliable lane, not an
     // event: it must never enter the event queue or the projection, it only
     // triggers a resync from our own last applied sequence.
@@ -504,7 +538,7 @@ export function createCoreAppServerRuntimeController<
       return
     }
     // Apply turn/accepted and item/started directly to the top-level snapshot
-    if (event.method === 'turn/accepted' || event.method === 'item/started') {
+    if (event.method === 'turn/accepted' || event.method === 'turn/started' || event.method === 'item/started') {
       if (!runtime.state) {
         // Same hold-and-replay rule as flushFrame: never drop events that
         // arrived before the first snapshot (audit 16 S2).
@@ -747,6 +781,29 @@ export function createCoreAppServerRuntimeController<
     return { applied: false, queued: false, reason, message }
   }
 
+  /** Pause the session's live turn. Single click on the stop button. */
+  async function pauseTurn(threadId: string, turnId?: string, reason = 'user_pause') {
+    await ensureClient()
+    const response = await requestMutation('turn/pause', {
+      thread_id: threadId,
+      ...(turnId ? { turn_id: turnId } : {}),
+      reason,
+      include_snapshot: false,
+    }, threadId)
+    applyResponse(response)
+  }
+
+  /** Terminate for good: the long-press confirm on the same button. */
+  async function terminateTurn(threadId: string, turnId?: string) {
+    await ensureClient()
+    const response = await requestMutation('turn/terminate', {
+      thread_id: threadId,
+      ...(turnId ? { turn_id: turnId } : {}),
+      include_snapshot: true,
+    }, threadId)
+    applyResponse(response)
+  }
+
   async function interruptTurn(threadId: string, turnId?: string) {
     await ensureClient()
     const response = await requestMutation('turn/interrupt', {
@@ -755,6 +812,27 @@ export function createCoreAppServerRuntimeController<
       include_snapshot: false,
     }, threadId)
     applyResponse(response)
+  }
+
+  async function resumeTurn(threadId: string, turnId: string, input?: CoreAppInputItem[]) {
+    await ensureClient()
+    const key = JSON.stringify([threadId, turnId])
+    const clientId = uncertainResumes.get(key) || crypto.randomUUID()
+    try {
+      const response = await requestMutation('turn/resume', {
+        thread_id: threadId, turn_id: turnId, include_snapshot: false,
+        client_message_id: clientId,
+        // Text typed while the turn was paused rides the same continue press as
+        // a supplementary input for the same turn.
+        ...(input && input.length > 0 ? { input } : {}),
+      }, threadId)
+      uncertainResumes.delete(key)
+      applyResponse(response)
+    } catch (error) {
+      if (error instanceof CoreRequestAcceptanceUnknownError) uncertainResumes.set(key, clientId)
+      else uncertainResumes.delete(key)
+      throw error
+    }
   }
 
   async function forceResetTurn(threadId: string, turnId?: string) {
@@ -861,6 +939,9 @@ export function createCoreAppServerRuntimeController<
     guideQueueInput,
     hydrate,
     interruptTurn,
+    pauseTurn,
+    terminateTurn,
+    resumeTurn,
     lastSeenSeq,
     listCommands,
     mergeSnapshotPage,
@@ -965,6 +1046,13 @@ function coalesceRunItemEvents(events: CoreAppEvent[]): CoreAppEvent[] {
   return result
 }
 
+/** Whether an item belongs to a delegated member's timeline (server parity). */
+function isSubAgentChildItem(item: CoreRuntimeItem): boolean {
+  if (item.parent_item_id) return true
+  const payload = isRecord(item.payload) ? item.payload : {}
+  return isRecord(payload.sub_agent)
+}
+
 function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppSnapshot {
   const value = event.payload
   const itemId = typeof value.item_id === 'string' ? value.item_id : event.item_id || ''
@@ -1045,6 +1133,13 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
       for (const itemId of turns[turnId]?.items ?? []) {
         const item = items?.[itemId]
         if (!item || isTerminalItemStatus(item.status)) continue
+        // A member's timeline outlives the parent turn that started it. The
+        // server projection keeps those rows alone (`_close_turn_items` skips
+        // `_is_sub_agent_child_item`), and the live client must agree: closing a
+        // child's still-waiting question here marked it answered, so the card
+        // vanished the moment the main agent finished and the user could never
+        // answer it.
+        if (isSubAgentChildItem(item)) continue
         if (!closedItems) closedItems = { ...(items ?? {}) }
         closedItems[itemId] = { ...item, status }
       }
@@ -1087,6 +1182,15 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     }
     return {
       ...snapshot,
+      // The flattened status follows the runtime, exactly like the server's
+      // `sync_status_from_core`: the composer, the sidebar and the session list
+      // read the top-level value, and a paused turn must not keep reading as
+      // running there (2026-10-14).
+      status: threadStatus,
+      // The outer turn map follows the runtime map for the same reason the
+      // server's `_sync_turns_from_core` does: the composer and the session row
+      // read the outer one, and it must not disagree with the runtime.
+      turns: { ...(snapshot.turns ?? {}), ...(turns as Record<string, CoreAppTurn>) },
       core: {
         ...currentCore,
         seen_event_ids: seen,
@@ -1193,14 +1297,37 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
   // A late event must not revive a turn the runtime already closed: only a
   // non-terminal turn can be `waiting`.
   const promotesWaiting = item.status === 'waiting' && !terminalTurnStatus
+  // Resolving a server request resumes the turn that rendered the card; it does
+  // not complete it. The server projector applies the same rule, so an answer
+  // keeps the client and the stored snapshot in agreement.
+  const answersExistingTurn = kind === 'approval_response' && turnId
+    ? turns[turnId]
+    : undefined
+  // A paused turn is not revived by an answer: its run has ended, and reviving
+  // it left the session reading running with nothing running (2026-10-14).
+  const resumesTurn = answersExistingTurn !== undefined
+    && !['failed', 'cancelled', 'skipped', 'paused'].includes(String(answersExistingTurn.status ?? ''))
   if (turnId) {
-    const turn = turns[turnId] ?? { turn_id: turnId, status: 'running', items: [] }
+    const existingTurn = turns[turnId]
+    // Only an existing turn may be resumed by an answer, and a member's row may
+    // only join a turn that exists. Inventing one here (default status
+    // `running`) left a phantom turn nothing ever closes, so the session read as
+    // running long after its work had finished (2026-10-14). The server
+    // projector applies the same two rules.
+    const inventsTurn = !existingTurn && (kind === 'approval_response' || isSubAgentChildItem(item))
+    if (inventsTurn) {
+      return {
+        ...snapshot,
+        core: { ...currentCore, seen_event_ids: seen, items, item_order: itemOrder },
+      }
+    }
+    const turn = existingTurn ?? { turn_id: turnId, status: 'running', items: [] }
     const turnItems = [...(turn.items ?? [])]
     if (!turnItems.includes(itemId)) turnItems.push(itemId)
     turns[turnId] = {
       ...turn,
       items: turnItems,
-      ...(promotesWaiting ? { status: 'waiting' } : {}),
+      ...(promotesWaiting ? { status: 'waiting' } : resumesTurn ? { status: 'running' } : {}),
     }
   }
   return {
@@ -1212,7 +1339,7 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
       items,
       item_order: itemOrder,
       ...(artifacts !== currentCore.artifacts ? { artifacts } : {}),
-      ...(promotesWaiting ? { status: 'waiting' } : {}),
+      ...(promotesWaiting ? { status: 'waiting' } : resumesTurn ? { status: 'running' } : {}),
     },
   }
 }
@@ -1277,7 +1404,7 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
   const turnId = event.turn_id || (typeof payload.turn_id === 'string' ? payload.turn_id : '') || ''
   const itemId = event.item_id || (typeof payload.item_id === 'string' ? payload.item_id : '') || ''
 
-  if (event.method === 'turn/accepted') {
+  if (event.method === 'turn/accepted' || event.method === 'turn/started') {
     if (!turnId) return snapshot
     const turns = { ...(snapshot.turns ?? {}) }
     const turn = turns[turnId] ?? { turn_id: turnId, items: [] }
@@ -1296,7 +1423,18 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
         ? { runtime_snapshot: payload.runtime_snapshot }
         : {}),
     }
-    return { ...snapshot, turns, status: 'running' }
+    const core = snapshot.core && event.method === 'turn/started' && payload.resumed === true
+      ? {
+          ...snapshot.core,
+          status: 'running' as const,
+          last_error: undefined,
+          turns: { ...snapshot.core.turns, [turnId]: {
+            ...snapshot.core.turns?.[turnId], turn_id: turnId, status: 'running' as const,
+            run_id: String(payload.run_id || ''), last_seq: event.seq,
+          } },
+        }
+      : snapshot.core
+    return { ...snapshot, core, turns, status: 'running' }
   }
 
   if (event.method === 'item/started') {
@@ -1645,6 +1783,11 @@ function isCoreAppThreadStatus(value: unknown): value is CoreAppThreadStatus {
   return value === 'idle'
     || value === 'running'
     || value === 'waiting'
+    // A paused turn is a status of its own. Without it here the live pause
+    // event fell back to the previous status, the composer kept believing the
+    // turn was running, and its 3 s stop-grace timer force-reset the turn the
+    // user had just paused (2026-10-14).
+    || value === 'paused'
     || value === 'completed'
     || value === 'failed'
     || value === 'cancelled'

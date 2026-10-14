@@ -1,0 +1,9 @@
+STAGE_VERIFY_UTC_BEGIN=2026-10-13T11:33:35Z
+active
+active
+/var/tmp/Sunday-desktop-0.3.18-20261013.upload.exe: OK
+/var/tmp/Sunday-desktop-0.3.18-20261013.desktop-update.json: OK
+MANIFEST_OK 0.3.18 0.3.17 b8681e66243634654b98b70274aee3cee7e6fd69241ddf1f99219cec6334a5f7 95007704
+/var/tmp/Sunday-site-mobile-0.3.18-20261013.upload.tar.gz: OK
+STAGED_SITE_SHA=7937108279626799e883bb0a87567984fe56f5271c83113ebbc98f4b7874615a  /var/tmp/Sunday-site-mobile-0.3.18-20261013.upload.tar.gz
+STAGE_VERIFY_UTC_END=2026-10-13T11:33:36Z

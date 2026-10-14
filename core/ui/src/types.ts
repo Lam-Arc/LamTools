@@ -139,7 +139,11 @@ export type MessagePartStatus = 'pending' | 'running' | 'completed' | 'error';
 export type CoreSubAgentStatus =
   | MessagePartStatus
   | 'idle'
+  // 'paused' is a member parked at a human boundary (it asked a question);
+  // 'suspended' is a member the user paused with the session. Two different
+  // states, two different labels.
   | 'paused'
+  | 'suspended'
   | 'closed'
   | 'interrupted';
 

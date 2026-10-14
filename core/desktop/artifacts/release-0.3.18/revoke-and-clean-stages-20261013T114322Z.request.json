@@ -1,0 +1,14 @@
+{
+  "purpose": "revoke-and-clean-stages",
+  "commandName": "sunday-desktop-0318-revoke-and-clean-stages-20261013T114322Z",
+  "description": "Revoke only the temporary 0.3.18 SFTP key, remove exact transfer/public-check stages, and verify final channel, site sync, and services",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "revoke-and-clean-stages.sh",
+  "commandSha256": "b205a1bf97a24a8475083c4137bd8c8753f047715cae885c88977f123a9ba4f3",
+  "timeoutSeconds": 300,
+  "startedAtUtc": "2026-10-13T11:43:22Z",
+  "clientToken": "sunday-desktop-0318-revoke-and-clean-stages-20261013T114322Z"
+}

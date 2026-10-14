@@ -1,0 +1,14 @@
+{
+  "purpose": "fetch-installer-parallel",
+  "commandName": "sunday-desktop-0317-fetch-installer-parallel-20261013T093555Z",
+  "description": "Fetch the published v0.3.17 installer in eight verified byte ranges into a unique temporary stage, checking GitHub asset size and SHA-256 before use",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "fetch-installer-parallel.sh",
+  "commandSha256": "8a5bc71bbd55c64290c37a01128cc1d71e6ed414d795b0ec6b914f781abd46eb",
+  "timeoutSeconds": 1900,
+  "startedAtUtc": "2026-10-13T09:35:55Z",
+  "clientToken": "sunday-desktop-0317-fetch-installer-parallel-20261013T093555Z"
+}

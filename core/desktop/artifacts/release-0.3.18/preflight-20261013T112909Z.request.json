@@ -1,0 +1,14 @@
+{
+  "purpose": "preflight",
+  "commandName": "sunday-desktop-0318-preflight-20261013T112909Z",
+  "description": "Fresh read-only preflight: verify 0.3.17 rollback pointer, published desktop/mobile manifests, server health, transfer baselines, and 0.3.18 targets",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "preflight.sh",
+  "commandSha256": "85834bc97fc65e92cb2dc080b906c475d264e06f340aff9efa368b00541943c5",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T11:29:09Z",
+  "clientToken": "sunday-desktop-0318-preflight-20261013T112909Z"
+}

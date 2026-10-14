@@ -1,0 +1,12 @@
+FINAL_CONFIRM_UTC_BEGIN=2026-10-13T11:46:49Z
+active
+active
+CHANNEL_AND_MANIFEST_ROLLBACK_OK 0.3.18 0.3.17 0.3.17
+published channel: desktop 0.3.18, mobile 0.1.48, Linux 0.3.17
+public site already in step
+FINAL_LATEST_SHA=b8681e66243634654b98b70274aee3cee7e6fd69241ddf1f99219cec6334a5f7  /var/www/lamtools/Sunday-latest-x64-setup.exe
+FINAL_SITE_POINTER=/var/www/lamtools/site-releases/0.3.18-mobile-0.1.48-20261013
+AUTHORIZED_KEYS_LINES=1
+active
+active
+FINAL_CONFIRM_UTC_END=2026-10-13T11:46:51Z

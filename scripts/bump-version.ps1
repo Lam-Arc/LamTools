@@ -101,6 +101,6 @@ Write-Host ""
 Write-Host "=== Done. Next steps ===" -ForegroundColor Cyan
 Write-Host "  1. Review:  git diff"
 Write-Host "  2. Commit:  git commit -am \"chore: bump version to $NewVersion\""
-Write-Host "  3. Release: git tag v$NewVersion && git push origin main --tags"
+Write-Host "  3. Release (after approval): git tag v$NewVersion && git push origin v$NewVersion"
 Write-Host "     (release.yml 会自动校验 tag 与 5 处版本号一致后构建发布)"
 

@@ -81,6 +81,28 @@ async def _append_turn_start(db: Any, *, session_id: str, turn_id: str, text: st
     await db.persistence.write(write)
 
 
+@pytest.mark.asyncio
+async def test_startup_reaper_preserves_a_turn_owned_by_another_live_process(tmp_path):
+    from lamtools_core.runtime_owner import owner_token
+    db = await open_core_app_db(tmp_path / "core.db")
+    store = InMemoryRuntimeStateStore()
+    thread_id = "parent:sub:worker"
+    turn_id = f"{thread_id}:turn:owned"
+    await store.save(RuntimeState(session_id=thread_id, run_id=turn_id, status="running",
+                                  metadata={"runtime_owner": owner_token()}))
+    context = CoreLiveContext(operations=OperationCatalog(), session_factory=db.session_factory,
+                              persistence=db.persistence, runtime_state_store=store, hub=CoreAppEventHub())
+    try:
+        await _append_turn_start(db, session_id=thread_id, turn_id=turn_id, text="working")
+        assert await recover_stale_active_turns(context=context) == 0
+        assert (await store.get(thread_id)).status == "running"
+        async with db.session_factory() as session:
+            snapshot = await db.persistence.load(session, thread_id)
+        assert snapshot["core"]["turns"][turn_id]["status"] == "running"
+    finally:
+        await db.close()
+
+
 async def _append_turn_waiting(db: Any, *, session_id: str, turn_id: str, text: str) -> None:
     """Seed a turn parked on tool approval ('waiting') — the other active status
     a crash can leave behind."""

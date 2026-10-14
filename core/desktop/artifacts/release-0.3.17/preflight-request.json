@@ -1,0 +1,10 @@
+{
+  "name": "sunday-desktop-0317-preflight-20261013T091026Z",
+  "description": "Read-only inspect official site health, active site release, installer channel, 0.3.17 publication targets and SSH grant baseline before Sunday desktop 0.3.17 publish",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "preflight.sh",
+  "startedAtUtc": "2026-10-13T09:10:26Z"
+}

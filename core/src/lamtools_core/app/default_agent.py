@@ -72,6 +72,25 @@ from .runtime_permissions import (
 )
 
 
+def _runtime_metadata(metadata: Any) -> dict[str, Any]:
+    """Operation metadata that may travel into a runtime turn input.
+
+    The app layer passes live callbacks through operation metadata (for example
+    ``approval_decision_durable``, which hands the continuation a way to claim
+    the next run). Those callbacks must never reach the turn metadata: it is
+    merged into the runtime state and serialized by plugin hooks and providers,
+    and a function there fails the whole run with "Object of type function is
+    not JSON serializable" before the first model call (2026-10-14).
+    """
+    if not isinstance(metadata, dict):
+        return {}
+    return {
+        key: value
+        for key, value in metadata.items()
+        if not callable(value) and not str(key).startswith("_")
+    }
+
+
 @dataclass(frozen=True)
 class CoreAgentSpec:
     id: str = "core-agent"
@@ -164,6 +183,7 @@ def create_kernel(
     compact_retained_steps: int | None = None,
     parallel_tool_names: tuple[str, ...] = ("sub_agent",),
     cancel_event_source: "asyncio.Event | None" = None,
+    pause_event_source: "asyncio.Event | None" = None,
     model_context_sink: Callable[[Any, Any], Awaitable[None] | None] | None = None,
     **extra_policy_kwargs: Any,
 ) -> CoreLoopKernel:
@@ -176,7 +196,9 @@ def create_kernel(
     ``cancel_event_source`` is the ``RuntimeTaskRegistry`` cancel event for
     the owning thread; when set, the kernel can abort a blocked streaming
     model call cooperatively (see ``CoreLoopKernel._is_external_cancelled``).
-    Pass None for sub-agent kernels — they do not respond to external Stop.
+    ``pause_event_source`` is that registry's pause event, which ends the run
+    in the resumable ``paused`` state instead of the terminal ``cancelled``
+    one. Pass None for kernels that answer to no external Stop.
 
     Retry knobs default to ``{config_dir}/model_retry.jsonc``
     (``config.retry_store.load_model_retry_config``); explicitly passed
@@ -220,6 +242,7 @@ def create_kernel(
         checkpoint_coordinator=checkpoint_coordinator,
         completion_gate=completion_gate,
         cancel_event_source=cancel_event_source,
+        pause_event_source=pause_event_source,
         model_context_sink=model_context_sink,
     )
 
@@ -328,7 +351,10 @@ def create_core_agent_operations(
         registry = getattr(plugin_operations, "plugin_registry", None)
         if registry is None:
             return []
-        return list(registry.discover())
+        from lamtools_core.plugins.lifecycle import plugin_backend_available
+
+        handles = getattr(plugin_operations, "plugin_runtimes", [])
+        return [plugin for plugin in registry.discover() if plugin_backend_available(plugin, handles)]
 
     # The live input hooks and command.catalog must resolve skills from the
     # same roots.  Keep the factory on the operation catalog as a small seam
@@ -381,6 +407,10 @@ def create_core_agent_operations(
         effective_turn_id = requested_turn_id or (
             f"{thread_id}:turn:{requested_run_id}" if requested_run_id else ""
         )
+        guidance_run_id = (
+            effective_turn_id if request.payload.get("origin") == "turn_resume"
+            else requested_run_id or effective_turn_id
+        )
         goal_id = str(
             request.payload.get("goal_id")
             or request.payload.get("goalId")
@@ -389,7 +419,13 @@ def create_core_agent_operations(
         ).strip()
         if not thread_id:
             return OperationResult(name=request.name, status="error", payload={"error": "thread_id is required"})
-        if not message and not request.payload.get("attachment_ids"):
+        # A continuation of a paused turn starts from the committed history and
+        # deliberately carries no new text; queued member events are appended
+        # below, so it is only empty when there is genuinely nothing to run on.
+        is_continuation = str(
+            request.payload.get("origin") or request.payload.get("turn_origin") or ""
+        ).strip() == "turn_resume"
+        if not message and not is_continuation and not request.payload.get("attachment_ids"):
             return OperationResult(name=request.name, status="error", payload={"error": "message is required"})
         from lamtools_core.sub_agent_supervisor import (
             acknowledge_parent_mailbox,
@@ -407,6 +443,35 @@ def create_core_agent_operations(
                 f"[sub-agent {item['name']}] {item['body']}" for item in child_messages
             )
             message = f"{message}\n\n[Sub-agent guidance]\n{guidance}"
+        from lamtools_core.sub_agent_supervisor import (
+            peek_member_events, member_event_is_reportable, member_wake_prompt,
+            mark_member_events_delivered,
+        )
+        member_events = []
+        if str(request.payload.get("origin") or request.payload.get("turn_origin") or "") != "member_wake":
+            member_events = [
+                item for item in peek_member_events(sub_agent_database, thread_id)
+                if member_event_is_reportable(item.get("payload") or {})
+            ]
+            if member_events:
+                message = f"{message}\n\n[Sub-agent lifecycle events]\n{member_wake_prompt(member_events)}"
+
+        def acknowledge_input(ids: list[str]) -> None:
+            from lamtools_core.sub_agent_supervisor import acknowledge_parent_guidance
+            mark_member_events_delivered(sub_agent_database, ids)
+            acknowledge_parent_mailbox(sub_agent_database, thread_id, ids)
+            acknowledge_parent_guidance(sub_agent_database, thread_id, ids)
+            runtime_task_registry.acknowledge_guidance(
+                thread_id, run_id=guidance_run_id,
+                guidance_ids=ids,
+            )
+        recovered_steering = []
+        if db_session_factory is not None:
+            from .steering import pending_steering
+            recovered_steering = await pending_steering(db_session_factory, thread_id)
+            if recovered_steering:
+                prior = "\n\n".join(item["content"] for item in recovered_steering)
+                message = f"[Previously accepted steering not yet checkpointed]\n{prior}\n\n[Current user input]\n{message}"
         if goal_id:
             if goal_manager is None:
                 return OperationResult(
@@ -550,6 +615,13 @@ def create_core_agent_operations(
                     session_metadata = dict(raw_session_metadata)
             except Exception:  # noqa: BLE001 — metadata is optional context
                 session_metadata = {}
+            def parent_guidance_sink(parent_id, run_id, text, guidance_id, metadata=None):
+                return runtime_task_registry.inject_guidance(
+                    parent_id, text,
+                    run_id=runtime_task_registry.active_run_id(parent_id) or run_id,
+                    guidance_id=guidance_id, metadata=metadata,
+                )
+            parent_guidance_sink.acknowledges_after_checkpoint = True
             toolbox, mcp_registry = await _build_core_runtime_toolbox(
                 work_root=runtime_work_root,
                 artifact_store=artifact_store,
@@ -586,16 +658,11 @@ def create_core_agent_operations(
                 attachment_service=attachment_service,
                 imagegen_config=imagegen_config,
                 allow_access_outside_workdir=allow_access_outside_workdir,
-                parent_guidance_sink=lambda parent_id, run_id, text, guidance_id, metadata=None: runtime_task_registry.inject_guidance(
-                    parent_id,
-                    text,
-                    run_id=runtime_task_registry.active_run_id(parent_id) or run_id,
-                    guidance_id=guidance_id,
-                    metadata=metadata,
-                ),
+                parent_guidance_sink=parent_guidance_sink,
             )
             _mcp_count = len(mcp_registry._tools_by_name) if mcp_registry is not None else 0
             _logger.info("[default:turn_start] toolbox built thread_id=%s mcp_tools=%d", thread_id, _mcp_count)
+            kernel = None
             try:
                 kernel = create_kernel(
                     kit=CoreBaseAgentKit(
@@ -634,6 +701,7 @@ def create_core_agent_operations(
                         runtime_options.model_id,
                     ),
                     cancel_event_source=runtime_task_registry.get_cancel_event(thread_id),
+                    pause_event_source=runtime_task_registry.get_pause_event(thread_id),
                     model_context_sink=model_context_sink,
                 )
                 _logger.info("[default:turn_start] kernel created, starting run thread_id=%s model=%s",
@@ -656,18 +724,23 @@ def create_core_agent_operations(
                         turn_id=effective_turn_id,
                         guidance_source=runtime_task_registry.guidance_source(
                             thread_id,
-                            run_id=requested_run_id or effective_turn_id,
+                            run_id=guidance_run_id,
                             include_metadata=True,
                         ),
                         guidance_finalizer=runtime_task_registry.guidance_finalizer(
                             thread_id,
-                            run_id=requested_run_id or effective_turn_id,
+                            run_id=guidance_run_id,
                             include_metadata=True,
                         ),
                         metadata={
-                            **request.metadata,
+                            **_runtime_metadata(request.metadata),
                             **dict(request.payload.get("metadata") or {}),
                             "session_id": thread_id,
+                            "input_acknowledgement_ids": [
+                                *[str(item["id"]) for item in member_events],
+                                *[str(item["id"]) for item in child_messages],
+                            ],
+                            "initial_guidance_ids": [item["id"] for item in recovered_steering],
                             "session_metadata": session_metadata,
                             **(
                                 {
@@ -735,6 +808,7 @@ def create_core_agent_operations(
                                 else {}
                             ),
                         },
+                        guidance_acknowledger=acknowledge_input,
                     )
                 )
                 if child_messages:
@@ -744,6 +818,10 @@ def create_core_agent_operations(
                         [str(item.get("id") or "") for item in child_messages],
                     )
             finally:
+                # Keep execution ownership until Stop has committed its history
+                # and terminal state; Resume must never race detached writeback.
+                if kernel is not None:
+                    await kernel.await_background_persistence()
                 await _close_mcp_registry(mcp_registry)
             _kernel_elapsed = time_module.time() - _kernel_start_ts
             _logger.info("[default:turn_start] kernel.run returned thread_id=%s decision=%s error=%s steps=%d elapsed=%.2fs",
@@ -784,7 +862,7 @@ def create_core_agent_operations(
                 run_id=requested_run_id,
                 turn_id=effective_turn_id,
                 metadata={
-                    **request.metadata,
+                    **_runtime_metadata(request.metadata),
                     **dict(request.payload.get("metadata") or {}),
                     "data_dir": str(paths.data_dir),
                     "work_root": str(runtime_work_root),
@@ -797,6 +875,8 @@ def create_core_agent_operations(
                 thread_id,
                 [str(item.get("id") or "") for item in child_messages],
             )
+        if member_events:
+            mark_member_events_delivered(sub_agent_database, [str(item["id"]) for item in member_events])
         return OperationResult(
             name=request.name,
             payload={
@@ -1041,16 +1121,34 @@ def create_core_agent_operations(
                 return decision_failure
             decision_durable = request.metadata.get("approval_decision_durable")
             if callable(decision_durable):
-                durable_result = decision_durable({
-                    "thread_id": event_thread_id,
-                    "run_id": state.run_id,
-                    "turn_id": str(state.metadata.get("turn_id") or state.run_id),
-                    "work_root": str(runtime_work_root),
-                    "decision": decision.action,
-                    "snapshot": lifecycle.decision_snapshot,
-                })
-                if inspect.isawaitable(durable_result):
-                    await durable_result
+                resolved_is_child = bool(
+                    isinstance(state.metadata, dict)
+                    and state.metadata.get("actor_kind") == "sub_agent"
+                )
+                try:
+                    durable_result = decision_durable({
+                        "thread_id": event_thread_id,
+                        "run_id": state.run_id,
+                        "turn_id": str(state.metadata.get("turn_id") or state.run_id),
+                        "work_root": str(runtime_work_root),
+                        "decision": decision.action,
+                        "snapshot": lifecycle.decision_snapshot,
+                        # Child continuations are admitted per child session.
+                        "claim_thread_id": str(state.session_id) if resolved_is_child else "",
+                    })
+                    if inspect.isawaitable(durable_result):
+                        await durable_result
+                except BaseException:
+                    # The claim mark above is ours. If the continuation is
+                    # refused (another run still holds the claim), leaving it set
+                    # would make every later attempt fail as "approval already
+                    # resolving" — the question must stay answerable instead.
+                    await _release_refused_claim(
+                        state_store=runtime_state_store,
+                        session_id=str(state.session_id or ""),
+                        request_id=expected_request_id or approval_request_id,
+                    )
+                    raise
 
             original_task = str(state.metadata.get("original_user_message") or "")
             tool_name = str(pending_call.get("name") or "")
@@ -1078,9 +1176,23 @@ def create_core_agent_operations(
 
             # question tool: inject the user's answer as the tool result and
             # continue the loop with a question-specific continuation prompt.
+            # An answered question resumes the child that asked it: the answer
+            # is that child's own tool result, persisted in the child session
+            # (by the child runner), never in the thread that renders the card.
+            child_question = bool(
+                tool_name == "question"
+                and isinstance(delegated_session, dict)
+                and isinstance(state.metadata, dict)
+                and state.metadata.get("actor_kind") == "sub_agent"
+            )
             if tool_name == "question":
                 if decision.action == "guide":
                     answer = decision.guidance_text
+                elif decision.action == "approve":
+                    # An option click is delivered as an approval decision with
+                    # the option text in the guidance payload. A question is
+                    # answered, not executed: the option text IS the answer.
+                    answer = decision.guidance_text.strip() or "用户未提供具体回答。"
                 question_text = str(tool_args.get("question") or "")
                 question_events: list[CoreEvent] = [
                     CoreEvent(
@@ -1101,14 +1213,18 @@ def create_core_agent_operations(
                     ),
                 ]
                 try:
-                    await lifecycle.persist_tool_history(
-                        ChatMessage(
-                            role="tool",
-                            name="question",
-                            tool_call_id=str(pending_call.get("id") or ""),
-                            content=answer,
+                    if not child_question:
+                        # A child's history row is written by the child runner
+                        # with the child's identity and session; writing it here
+                        # would put a child tool result in the parent's history.
+                        await lifecycle.persist_tool_history(
+                            ChatMessage(
+                                role="tool",
+                                name="question",
+                                tool_call_id=str(pending_call.get("id") or ""),
+                                content=answer,
+                            )
                         )
-                    )
                     continuation = question_answer_continuation_prompt(
                         original_task=original_task,
                         question=question_text,
@@ -1118,7 +1234,7 @@ def create_core_agent_operations(
                     return await lifecycle.finalize_failure(exc)
                 approval_events = question_events
 
-            if isinstance(delegated_session, dict) and decision.action == "approve":
+            if child_question or (isinstance(delegated_session, dict) and decision.action == "approve"):
                 async def delegated_live_callback(event: Any) -> None:
                     await _persist_core_event_live(
                         event,
@@ -1187,6 +1303,8 @@ def create_core_agent_operations(
                     sub_agent_runner = toolbox.sub_agent_runner
                     if sub_agent_runner is None or not hasattr(sub_agent_runner, "resume_approved"):
                         raise RuntimeError("Sub-agent approval continuation is unavailable")
+                    if child_question and not hasattr(sub_agent_runner, "resume_question"):
+                        raise RuntimeError("Sub-agent question continuation is unavailable")
                     from lamtools_core.sub_agent_supervisor import get_sub_agent_supervisor
 
                     supervisor = await get_sub_agent_supervisor(
@@ -1194,24 +1312,44 @@ def create_core_agent_operations(
                         runner=sub_agent_runner,
                         data_dir=paths.data_dir,
                     )
-                    child_result = await sub_agent_runner.resume_approved(
-                        session_id=str(delegated_session.get("session_id") or ""),
-                        pending_call=pending_call,
-                        task=str(delegated_session.get("task") or ""),
-                        agent=str(delegated_session.get("agent") or ""),
-                        parent_call_id=str(delegated_session.get("parent_call_id") or ""),
-                        parent_run_id=str(delegated_session.get("parent_run_id") or state.run_id),
-                        parent_turn_id=str(
+                    continuation_kwargs = {
+                        "session_id": str(
+                            delegated_session.get("session_id") or state.session_id or ""
+                        ),
+                        "pending_call": pending_call,
+                        "task": str(delegated_session.get("task") or ""),
+                        "agent": str(delegated_session.get("agent") or ""),
+                        "parent_call_id": str(delegated_session.get("parent_call_id") or ""),
+                        "parent_run_id": str(delegated_session.get("parent_run_id") or state.run_id),
+                        "parent_turn_id": str(
                             delegated_session.get("parent_turn_id")
                             or state.metadata.get("turn_id")
                             or state.run_id
                         ),
-                        model=str(delegated_session.get("model") or ""),
-                        reasoning_level=str(delegated_session.get("reasoning_level") or ""),
-                        mode=str(delegated_session.get("mode") or ""),
-                        attachments=list(delegated_session.get("attachments") or []) or None,
-                        supervisor=supervisor,
+                        "model": str(delegated_session.get("model") or ""),
+                        "reasoning_level": str(delegated_session.get("reasoning_level") or ""),
+                        "mode": str(delegated_session.get("mode") or ""),
+                        "attachments": list(delegated_session.get("attachments") or []) or None,
+                        "supervisor": supervisor,
+                    }
+                    # The continuation runs inline in this request; track it as
+                    # member work so a user Stop can pause it like any other.
+                    supervisor.track_inline_task(
+                        delegated_session.get("agent"), asyncio.current_task()
                     )
+                    try:
+                        if child_question:
+                            child_result = await sub_agent_runner.resume_question(
+                                **continuation_kwargs,
+                                answer=answer,
+                                question=str(tool_args.get("question") or ""),
+                            )
+                        else:
+                            child_result = await sub_agent_runner.resume_approved(
+                                **continuation_kwargs,
+                            )
+                    finally:
+                        supervisor.track_inline_task(delegated_session.get("agent"), None)
                     if child_result.decision == "wait" and child_result.pending_approval:
                         await _close_mcp_registry(mcp_registry)
                         mcp_registry = None
@@ -1377,7 +1515,7 @@ def create_core_agent_operations(
                             run_id=state.run_id,
                             turn_id=str(state.metadata.get("turn_id") or ""),
                             metadata={
-                                **request.metadata,
+                                **_runtime_metadata(request.metadata),
                                 **dict(request.payload.get("metadata") or {}),
                                 "session_id": thread_id,
                                 "goal_id": str(state.metadata.get("goal_id") or ""),
@@ -1729,7 +1867,7 @@ def create_core_agent_operations(
                         run_id=lifecycle.state.run_id,
                         turn_id=str(lifecycle.state.metadata.get("turn_id") or ""),
                         metadata={
-                            **request.metadata,
+                            **_runtime_metadata(request.metadata),
                             **dict(request.payload.get("metadata") or {}),
                             "session_id": thread_id,
                             "goal_id": str(lifecycle.state.metadata.get("goal_id") or ""),
@@ -2182,6 +2320,42 @@ def _session_runtime_permissions_provider(
 
     return current
 
+
+
+async def _release_refused_claim(
+    *,
+    state_store: Any,
+    session_id: str,
+    request_id: str,
+) -> None:
+    """Put a claimed-but-refused approval back to ``waiting`` (best effort).
+
+    Only the exact request that was just claimed is rolled back, and only while
+    it still reads ``executing``: a concurrent resolution that already moved on
+    must not be undone.
+    """
+    if not session_id or state_store is None:
+        return
+    try:
+        current = await state_store.get(session_id)
+    except BaseException:
+        return
+    if current is None or not isinstance(current.metadata, dict):
+        return
+    pending = current.metadata.get("pending_approval")
+    if not isinstance(pending, dict) or str(pending.get("status") or "") != "executing":
+        return
+    call = pending.get("tool_call") if isinstance(pending.get("tool_call"), dict) else {}
+    if request_id and str(pending.get("request_id") or call.get("id") or "") != request_id:
+        return
+    restored = dict(pending)
+    restored["status"] = "waiting"
+    restored.pop("decision", None)
+    current.metadata["pending_approval"] = restored
+    try:
+        await state_store.save(current)
+    except BaseException:
+        return
 
 def _runtime_snapshot_from_payload(payload: Mapping[str, Any]) -> dict[str, Any] | None:
     """Normalize the accepted turn snapshot before live permission overlays.

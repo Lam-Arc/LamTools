@@ -27,6 +27,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from .persistence import WorkflowPersistenceError
+
 from lamtools_core.config.root import lam_home
 from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowDef,
@@ -370,19 +372,15 @@ class WorkflowStore:
         return False
 
     async def _remove_entry(self, path: Path) -> bool:
-        removed = False
-        if path.is_dir():
-            await asyncio.to_thread(shutil.rmtree, path, True)
-            removed = True
-        else:
-            try:
+        try:
+            if path.is_dir():
+                await asyncio.to_thread(shutil.rmtree, path)
+            else:
                 await asyncio.to_thread(path.unlink, True)
-                removed = True
-            except OSError:
-                pass
-        if removed:
-            self._cached.clear()
-        return removed
+        except OSError as exc:
+            raise WorkflowPersistenceError("delete workflow", path, exc) from exc
+        self._cached.clear()
+        return True
 
     # -- internals --------------------------------------------------------
 

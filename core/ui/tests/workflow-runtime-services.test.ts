@@ -18,6 +18,26 @@ import {
 describe('workflow runtime service contracts', () => {
   beforeEach(() => localStorage.clear())
 
+  it('rejects persistence failures for queue mutations without normalizing them as success', async () => {
+    const failure = {
+      error: 'Workflow persistence failed (save queue): disk full',
+      code: 'WORKFLOW_PERSISTENCE_FAILED',
+      retryable: true,
+    }
+    const rpc = vi.fn().mockResolvedValue(failure)
+    const api = createWorkflowApi(rpc)
+    for (const request of [
+      () => api.enqueue('demo'),
+      () => api.cancelQueue('q1'),
+      () => api.clearQueue({ confirm: true }),
+      () => api.listQueue(),
+    ]) {
+      await expect(request()).rejects.toMatchObject({
+        message: failure.error, code: failure.code, data: failure,
+      })
+    }
+  })
+
   it('reads ComfyUI-style schema fields and derives ports without dropping explicit ports', () => {
     const schema = {
       name: 'demo', display_name: 'Demo', category: 'workflow/test',

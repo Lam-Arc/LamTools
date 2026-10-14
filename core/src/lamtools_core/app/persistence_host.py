@@ -247,6 +247,29 @@ class AppPersistenceHost:
         """
         return await self.snapshot_store.load_metadata(db, thread_id)
 
+    async def load_page(
+        self,
+        db: AsyncSession,
+        thread_id: str,
+        *,
+        before_seq: int | None = None,
+        before_item_id: str | None = None,
+        item_byte_budget: int | None = None,
+    ) -> dict[str, Any]:
+        """Load one conversation page: metadata + only the newest item rows.
+
+        ``core.item_order`` still lists every item id, so the caller can report
+        the paging envelope; ``core.items`` holds only the loaded rows.
+        """
+        kwargs: dict[str, Any] = {
+            "before_seq": before_seq,
+            "before_item_id": before_item_id,
+        }
+        if item_byte_budget is not None:
+            kwargs["item_byte_budget"] = int(item_byte_budget)
+        return await self.snapshot_store.load_page(db, thread_id, **kwargs)
+
+
     async def list_thread_ids(self, db: AsyncSession) -> list[str]:
         return await self.snapshot_store.list_thread_ids(db)
 

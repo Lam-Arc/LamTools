@@ -1,0 +1,42 @@
+{
+  "RequestId": "01A134A9-5813-57F8-B60A-C957AD826516",
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "OssOutputDelivery": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputErrorCode": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-10-13T09:47:55Z",
+          "OssOutputUri": "",
+          "OssOutputStatus": "",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Output": "UFVCTElDX1ZFUklGWV9VVENfQkVHSU49MjAyNi0xMC0xM1QwOTo0Nzo0NFoKZDI1YTAzMDU5OWIxNDhkNTJjNDQwMjFhODliNDg3ZjRjY2YxYTY5NWQ3YjdkMTliZWRkNGMxYTdhYjMwMTViMSAgL3RtcC9zdW5kYXktMDMxNy1wdWJsaWMtdmVyc2lvbmVkLTIwMjYxMDEzLmV4ZQpkMjVhMDMwNTk5YjE0OGQ1MmM0NDAyMWE4OWI0ODdmNGNjZjFhNjk1ZDdiN2QxOWJlZGQ0YzFhN2FiMzAxNWIxICAvdG1wL3N1bmRheS0wMzE3LXB1YmxpYy1sYXRlc3QtMjAyNjEwMTMuZXhlCnsKICAidmVyc2lvbiI6ICIwLjMuMTciLAogICJkb3dubG9hZF91cmwiOiAiaHR0cHM6Ly80Ny4xMTQuNDMuOTkubmlwLmlvL2Rvd25sb2Fkcy9TdW5kYXlfMC4zLjE3X3g2NC1zZXR1cC5leGUiLAogICJyZWxlYXNlX3VybCI6ICJodHRwczovLzQ3LjExNC40My45OS5uaXAuaW8vI2Rvd25sb2FkIiwKICAicmVsZWFzZV9ub3RlcyI6ICJTdW5kYXkgMC4zLjE3IiwKICAicHVibGlzaGVkX2F0IjogIjIwMjYtMTAtMTNUMDk6Mzg6MDNaIiwKICAic2hhMjU2IjogImQyNWEwMzA1OTliMTQ4ZDUyYzQ0MDIxYTg5YjQ4N2Y0Y2NmMWE2OTVkN2I3ZDE5YmVkZDRjMWE3YWIzMDE1YjEiLAogICJzaXplIjogNTg3MTcxOTgKfQpNQU5JRkVTVF9PSwpvZmZpY2lhbF9hc3NldD1hc3NldHMvbWFpbi1DZW50M3c1Ri5qcyBjYXJyaWVzIDAuMy4xNwphaW5hcml0X3BhZ2VfdmVyc2lvbnM9MC4zLjE3LDAuMS40OApwcmV2aWV3X3Jlc291cmNlPS9wcmV2aWV3L2Fzc2V0cy9wcmV2aWV3LTBEVnlWc21TLmpzIGNhcnJpZXMgMC4zLjE3CmFjdGl2ZQphY3RpdmUKUFVCTElDX1ZFUklGWV9VVENfRU5EPTIwMjYtMTAtMTNUMDk6NDc6NTVaCg==",
+          "InvokeId": "t-hz06zwl9hfgsj5s",
+          "Tags": {
+            "Tag": []
+          },
+          "StopTime": "",
+          "Dropped": 0,
+          "InvocationStatus": "Success",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "ErrorInfo": "",
+          "StartTime": "2026-10-13T09:47:45Z",
+          "Repeats": 1,
+          "InvokeRecordStatus": "Finished",
+          "Username": "root",
+          "Launcher": "",
+          "CommandId": "c-hz06zwl9hf4b1fk",
+          "ErrorCode": "",
+          "TerminationMode": "Process"
+        }
+      ]
+    },
+    "TotalCount": 1,
+    "NextToken": "",
+    "PageSize": 10,
+    "PageNumber": 1
+  }
+}

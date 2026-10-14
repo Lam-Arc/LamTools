@@ -21,8 +21,9 @@ from .core_db import (
     CoreGoal, CoreHandoffContext, CoreHistoryEntry, CoreRestoreOperation, CoreRuntimeSession,
     CoreProject, CoreThreadSnapshot, CoreThreadSnapshotItem, CoreWorkspaceManifest,
 )
+from .queue_state import effective_thread_status
 from .session_autotitle import is_default_title
-from .snapshot_store import CoreAppSnapshotProjector, slim_registry_inline_images
+from .snapshot_store import CoreAppSnapshotProjector, prune_orphan_turns, slim_registry_inline_images
 from .runtime_permissions import (
     merge_session_runtime_preferences,
     session_runtime_preferences,
@@ -683,14 +684,20 @@ async def delete_session_records(connection, session_ids: list[str]) -> None:
 
 
 def session_record_from_snapshot(row: CoreThreadSnapshot) -> SessionRecord:
-    state = dict(row.snapshot_json or {})
+    # The session list reads its status straight off the stored snapshot, so the
+    # read-time repair has to run here too. Without it a session whose snapshot
+    # carried an invented turn kept showing as running in the sidebar long after
+    # the thread itself read completed (2026-10-14).
+    state = prune_orphan_turns(dict(row.snapshot_json or {}))
     session = state.get("session") if isinstance(state.get("session"), dict) else {}
     updated_at = row.updated_at or datetime.now()
     return SessionRecord(
         id=str(row.thread_id),
         member_id=str(session.get("member_id") or "core"),
         title=str(session.get("title") or row.thread_id),
-        status=str(state.get("status") or "idle"),
+        # The runtime's own view wins: a pause written by an older build only
+        # updated the core container, and the sidebar must still read it.
+        status=effective_thread_status(state),
         metadata=dict(session.get("metadata") or {}),
         created_at=_datetime(session.get("created_at"), fallback=updated_at),
         updated_at=updated_at,

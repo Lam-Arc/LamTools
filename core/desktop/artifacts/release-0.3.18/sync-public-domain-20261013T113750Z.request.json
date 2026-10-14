@@ -1,0 +1,14 @@
+{
+  "purpose": "sync-public-domain",
+  "commandName": "sunday-desktop-0318-sync-public-domain-20261013T113750Z",
+  "description": "Synchronize ainarit.com desktop/mobile labels, Linux 0.3.17 links, and product preview from the newly published site; verify with --check",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "sync-public-domain.sh",
+  "commandSha256": "d5fa68a179f0ad696d1f8392b0931b132e5415a78a96d29d084ca17171e02738",
+  "timeoutSeconds": 600,
+  "startedAtUtc": "2026-10-13T11:37:50Z",
+  "clientToken": "sunday-desktop-0318-sync-public-domain-20261013T113750Z"
+}

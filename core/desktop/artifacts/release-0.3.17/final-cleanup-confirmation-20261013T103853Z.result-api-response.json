@@ -1,0 +1,42 @@
+{
+  "RequestId": "01A134D8-0A48-58A9-93A5-FEC0238709D2",
+  "Invocation": {
+    "InvocationResults": {
+      "InvocationResult": [
+        {
+          "OssOutputDelivery": "",
+          "OssOutputErrorInfo": "",
+          "OssOutputErrorCode": "",
+          "ExitCode": 0,
+          "FinishedTime": "2026-10-13T10:38:55Z",
+          "OssOutputUri": "",
+          "OssOutputStatus": "",
+          "ContainerId": "",
+          "ContainerName": "",
+          "Output": "RklOQUxfQ09ORklSTV9VVEM9MjAyNi0xMC0xM1QxMDozODo1NFoKQVVUSE9SSVpFRF9LRVlTX0xJTkVTPTEKVEVNUF9LRVlfUkVWT0tFRAphY3RpdmUKYWN0aXZlClNJVEU9L3Zhci93d3cvbGFtdG9vbHMvc2l0ZS1yZWxlYXNlcy8wLjMuMTctbW9iaWxlLTAuMS40OC0yMDI2MTAxMwpNQU5JRkVTVF9WRVJTSU9OPTAuMy4xNwpJTlNUQUxMRVJfU0hBPWQyNWEwMzA1OTliMTQ4ZDUyYzQ0MDIxYTg5YjQ4N2Y0Y2NmMWE2OTVkN2I3ZDE5YmVkZDRjMWE3YWIzMDE1YjEgIC92YXIvd3d3L2xhbXRvb2xzL1N1bmRheV8wLjMuMTdfeDY0LXNldHVwLmV4ZQpTVEFHRV9BQlNFTlQgL3Zhci90bXAvU3VuZGF5LWRlc2t0b3AtMC4zLjE3LTIwMjYxMDEzLnVwbG9hZC5leGUKU1RBR0VfQUJTRU5UIC92YXIvdG1wL1N1bmRheS1kZXNrdG9wLTAuMy4xNy0yMDI2MTAxMy5wYXJhbGxlbC5leGUKU1RBR0VfQUJTRU5UIC92YXIvdG1wL1N1bmRheS1zaXRlLW1vYmlsZS0wLjMuMTctMjAyNjEwMTMudXBsb2FkLnRhci5negpTVEFHRV9BQlNFTlQgL3Zhci90bXAvZGwtMC4zLjE3LTIwMjYxMDEzVDA5MzUKU1RBR0VfQUJTRU5UIC90bXAvc3VuZGF5LTAzMTctcHVibGljLXZlcnNpb25lZC0yMDI2MTAxMy5leGUKU1RBR0VfQUJTRU5UIC90bXAvc3VuZGF5LTAzMTctcHVibGljLWxhdGVzdC0yMDI2MTAxMy5leGUKRklOQUxfQ09ORklSTV9VVENfRU5EPTIwMjYtMTAtMTNUMTA6Mzg6NTRaCg==",
+          "InvokeId": "t-hz06zwptrt1bklc",
+          "Tags": {
+            "Tag": []
+          },
+          "StopTime": "",
+          "Dropped": 0,
+          "InvocationStatus": "Success",
+          "InstanceId": "i-bp10t7y63rvbncmjstpm",
+          "ErrorInfo": "",
+          "StartTime": "2026-10-13T10:38:54Z",
+          "Repeats": 1,
+          "InvokeRecordStatus": "Finished",
+          "Username": "root",
+          "Launcher": "",
+          "CommandId": "c-hz06zwptrswbrwg",
+          "ErrorCode": "",
+          "TerminationMode": "Process"
+        }
+      ]
+    },
+    "TotalCount": 1,
+    "NextToken": "",
+    "PageSize": 10,
+    "PageNumber": 1
+  }
+}

@@ -59,8 +59,8 @@ toggle; the selected classification is persisted in `settings.jsonc`.
 Sunday Workflow is a local-first durable subsystem under the bundled workflow
 plugin. Its canonical V2 document is compiled into a canvas-free execution
 prompt and a compact semantic graph; ComfyUI import/export is an adapter at this
-boundary. Runs use a persistent SQLite-backed queue, an append-only event
-journal, derived snapshots, and separate Workflow/Version/Run/NodeRun/Attempt
+boundary. Runs use a file-backed JSON queue, an append-only JSONL event
+journal, SQLite-backed execution claims, derived snapshots, and separate Workflow/Version/Run/NodeRun/Attempt
 records. The engine owns retry, timeout, cancellation, wait/signal, activation,
 idempotency, and cache policy, while Core Arrange remains the scheduler for
 activations. Data packets carry item JSON plus Attachment/Artifact references;
@@ -85,11 +85,19 @@ without sharing implicit runtime state.
   operations receive scoped context, validate schemas and ownership, require
   confirmation for dangerous actions, and require idempotency keys for
   mutations.
-- Check GitHub releases for updates and guide the user to download them; the
-  product does not silently install updates.
+- Check the official website update manifest with GitHub fallback; after user
+  confirmation, verify the download digest and invoke the platform installer.
 - Pair mobile devices once, store secrets separately from device metadata, and
-  keep session/event truth in Core while desktop and mobile act as parallel
-  clients.
+  keep session/event truth in the desktop Core when mobile connects remotely.
+  Standalone mobile uses its own local stores and embedded Rust execution.
+
+## Current Architecture Assessment
+
+The evidence-based [Architecture task 0 review](../core/docs/architecture/06-review/architecture-task-0-2026-10-13.md)
+maps the current working-tree boundaries, data flows, structural debt and
+prioritized recommendations. It distinguishes desktop Python execution from
+standalone mobile execution and records queue durability and pairing admission
+risks. This is an initial review; no refactoring was performed.
 
 ## Desktop Distribution
 

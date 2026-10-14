@@ -2,7 +2,7 @@ import type { CoreCommandCatalogItem, CoreInputItem, MessagePart } from '../type
 import { buildCoreComposerInputItems } from '../composer/inputItems.ts'
 import { parseComposerInput, resolveComposerCommandKind } from '../composer/syntax.ts'
 
-export type CoreComposerActionMode = 'send' | 'stop'
+export type CoreComposerActionMode = 'send' | 'stop' | 'resume'
 export type CoreWorkbenchTurnStatus = 'idle' | 'running' | 'waiting' | 'interrupting' | 'completed' | 'failed' | string
 
 /** Outcome of a start-turn attempt. `busy` marks the runtime's "session has an
@@ -87,6 +87,12 @@ export type CoreDecisionSelectionPlan =
 
 export function isCoreActiveTurnStatus(status: CoreWorkbenchTurnStatus): boolean {
   return status === 'running' || status === 'waiting' || status === 'interrupting'
+}
+
+/** A turn the user paused. It owns the session, but nothing is executing, so it
+ *  is not active; it stays resumable until the user continues or terminates. */
+export function isCorePausedTurnStatus(status: CoreWorkbenchTurnStatus): boolean {
+  return status === 'paused'
 }
 
 export function isCoreGuidableTurnStatus(status: CoreWorkbenchTurnStatus): boolean {

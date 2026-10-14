@@ -1,0 +1,15 @@
+FINAL_CONFIRM_UTC=2026-10-13T10:38:54Z
+AUTHORIZED_KEYS_LINES=1
+TEMP_KEY_REVOKED
+active
+active
+SITE=/var/www/lamtools/site-releases/0.3.17-mobile-0.1.48-20261013
+MANIFEST_VERSION=0.3.17
+INSTALLER_SHA=d25a030599b148d52c44021a89b487f4ccf1a695d7b7d19bedd4c1a7ab3015b1  /var/www/lamtools/Sunday_0.3.17_x64-setup.exe
+STAGE_ABSENT /var/tmp/Sunday-desktop-0.3.17-20261013.upload.exe
+STAGE_ABSENT /var/tmp/Sunday-desktop-0.3.17-20261013.parallel.exe
+STAGE_ABSENT /var/tmp/Sunday-site-mobile-0.3.17-20261013.upload.tar.gz
+STAGE_ABSENT /var/tmp/dl-0.3.17-20261013T0935
+STAGE_ABSENT /tmp/sunday-0317-public-versioned-20261013.exe
+STAGE_ABSENT /tmp/sunday-0317-public-latest-20261013.exe
+FINAL_CONFIRM_UTC_END=2026-10-13T10:38:54Z

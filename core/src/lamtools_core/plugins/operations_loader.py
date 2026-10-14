@@ -115,6 +115,8 @@ def register_plugin_operations(
     data_dir: Path | None = None,
     context: Any | None = None,
     availability: Callable[[], bool] | None = None,
+    defer_import: bool = False,
+    plugin_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """把插件 operations 注册进 catalog；返回错误列表（hard_block/导入失败/同名冲突）。
 
@@ -131,6 +133,23 @@ def register_plugin_operations(
                     "error": "operation is hard_blocked by manifest",
                 }
             )
+            continue
+        if defer_import:
+            async def deferred(request: OperationRequest, declaration: PluginOperationSpec = spec) -> OperationResult:
+                # Disabled/starting/failed backends must not execute module
+                # initialization while the catalog reserves their RPC names.
+                import sys
+
+                if plugin_root is not None and str(plugin_root) not in sys.path:
+                    sys.path.append(str(plugin_root))
+                loaded = import_plugin_operation_handler(declaration)
+                if loaded is None:
+                    return OperationResult(name=request.name, status="error", payload={"error": f"handler import failed: {declaration.handler}"})
+                return await _bind_operation_handler(loaded, context=context, work_root=work_root, data_dir=data_dir)(request)
+            try:
+                catalog.register(spec.name, deferred, owner=plugin_name, availability=availability)
+            except ValueError as exc:
+                errors.append({"name": spec.name, "error": str(exc)})
             continue
         handler = import_plugin_operation_handler(spec)
         if handler is None:

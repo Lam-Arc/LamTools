@@ -1,0 +1,13 @@
+{
+  "tools": [{
+    "name": "lifecycle_echo",
+    "description": "Echo a message while the demo backend is available",
+    "input_schema": {
+      "type": "object",
+      "properties": {"message": {"type": "string"}},
+      "required": ["message"]
+    },
+    "permission": "auto_allow",
+    "handler": "sunday_lifecycle_demo.handlers:echo"
+  }]
+}

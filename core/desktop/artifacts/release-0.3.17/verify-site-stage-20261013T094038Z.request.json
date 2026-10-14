@@ -1,0 +1,14 @@
+{
+  "purpose": "verify-site-stage",
+  "commandName": "sunday-desktop-0317-verify-site-stage-20261013T094038Z",
+  "description": "Read-only verify uploaded website archive size, SHA-256, expected package structure, and inspect the installed public-site synchronization procedure before extraction",
+  "instanceId": "i-bp10t7y63rvbncmjstpm",
+  "region": "cn-hangzhou",
+  "keepCommand": true,
+  "contentEncoding": "Base64",
+  "commandFile": "verify-site-stage.sh",
+  "commandSha256": "3f7a28cc263a724da843b76ed5e706e201049d62b0b124e31d927daa1a5f1c7c",
+  "timeoutSeconds": 180,
+  "startedAtUtc": "2026-10-13T09:40:38Z",
+  "clientToken": "sunday-desktop-0317-verify-site-stage-20261013T094038Z"
+}

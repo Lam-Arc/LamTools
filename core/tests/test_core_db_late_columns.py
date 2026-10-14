@@ -79,7 +79,7 @@ async def test_late_columns_boot_path_is_independent_of_row_count(tmp_path):
     # The exact statement stream is identical for a 20x row increase.
     assert small == large
     # And nothing in it reads the event log at all.
-    assert not any("core_app_events" in statement for statement in large)
+    assert not any("core_app_events" in statement and not statement.startswith("PRAGMA") for statement in large)
 
 
 @pytest.mark.asyncio
@@ -89,7 +89,7 @@ async def test_late_columns_records_marker_and_skips_the_event_scan(tmp_path):
     async with engine.connect() as conn:
         await _ensure_late_columns(conn)
         await conn.commit()
-    assert not any("core_app_events" in statement for statement in statements)
+    assert not any("core_app_events" in statement and not statement.startswith("PRAGMA") for statement in statements)
     assert not any("MAX(revision)" in statement for statement in statements)
 
     async with engine.connect() as conn:
@@ -103,7 +103,7 @@ async def test_late_columns_records_marker_and_skips_the_event_scan(tmp_path):
     async with engine.connect() as conn:
         await _ensure_late_columns(conn)
         await conn.commit()
-    assert not any("core_app_events" in statement for statement in statements)
+    assert not any("core_app_events" in statement and not statement.startswith("PRAGMA") for statement in statements)
     await engine.dispose()
 
 
@@ -131,7 +131,7 @@ async def test_late_columns_still_repairs_a_legacy_default_revision_row(tmp_path
     async with engine.connect() as conn:
         await _ensure_late_columns(conn)
         await conn.commit()
-    assert not any("core_app_events" in statement for statement in statements)
+    assert not any("core_app_events" in statement and not statement.startswith("PRAGMA") for statement in statements)
     await engine.dispose()
 
 

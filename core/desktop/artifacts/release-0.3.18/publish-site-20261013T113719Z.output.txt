@@ -1,0 +1,10 @@
+SITE_PUBLISH_UTC_BEGIN=2026-10-13T11:37:20Z
+active
+active
+MANIFEST_FOR_SITE_OK 0.3.18 0.3.17
+/var/tmp/Sunday-site-mobile-0.3.18-20261013.upload.tar.gz: OK
+PUBLIC_MAIN_ASSET=main-C5cVl7D0.js
+SITE_POINTER=/var/www/lamtools/site-releases/0.3.18-mobile-0.1.48-20261013
+active
+active
+SITE_PUBLISH_UTC_END=2026-10-13T11:37:20Z

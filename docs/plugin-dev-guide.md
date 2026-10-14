@@ -152,6 +152,15 @@ async def rag_search(call) -> ToolResult:
 
 ## 5. 生命周期
 
+安装/启用偏好与后端就绪是不同状态。`plugin.list` 现在同时返回 `enabled`、
+`available` 和 `backend`（状态、当前/上次错误、启动次数）。启动或健康检查失败时
+保留启用偏好，撤销后端可用性；`plugin.enable` / 插件页“重试启动”可重试。
+后端通过同步 `create_plugin(context)` 工厂、可选 `start` / `stop`、
+`health_check` 和显式 `lifecycle_tasks` / `lifecycle_processes` 接入。
+完整合同、兼容性及 Task 3 更新边界见
+[`core/docs/plugin-lifecycle.md`](../core/docs/plugin-lifecycle.md)，可运行示例见
+[`lifecycle-demo`](../core/examples/plugins/lifecycle-demo/README.md)。
+
 | 操作 | 入口 | 说明 |
 |---|---|---|
 | 安装 | UI 插件页（侧边栏「插件」入口，与设置同级）/ `plugin.install` / `cli plugin install` | 本地目录 / zip / GitHub Release URL / CC / Codex 适配；复制到插件根（默认用户级）|
@@ -177,6 +186,10 @@ handler 由 core 显式装配（半声明式 tools.jsonc 引用 core 常量按�
 handler 由 core 显式装配（`_bundled_plugin_handler` 按工具名查表），不走动态导入。
 
 ## 8. 测试
+
+需要持久化的操作必须在写入成功后返回成功；不得吞掉存储错误并返回内存中的新状态。
+Workflow 的队列、快照、后台重试和错误返回合同见
+[`core/docs/workflow-persistence.md`](../core/docs/workflow-persistence.md)。
 
 `core/tests/test_plugin_*.py` 覆盖：声明解析 / spec 补全 / 注入与执行 / 惰性暴露 /
 冲突 / timeout / 导入失败 / 依赖缺失占位 / 权限档位 / 安装卸载配置全链 / 适配器翻译 /
