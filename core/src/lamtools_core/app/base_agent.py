@@ -701,6 +701,12 @@ class CoreBaseAgentKit:
             effective_instructions = _bundled_study_system_prompt() or effective_instructions
         return study_mode, effective_instructions
 
+    def _apply_plugin_agent_approval(self, approval: str | None) -> None:
+        """Let the active plugin agent decide its own approval stance."""
+        gate = getattr(self.toolbox, "approval_gate", None)
+        if gate is not None and hasattr(gate, "plugin_approval"):
+            gate.plugin_approval = approval
+
     def _compose_system_prompt(
         self,
         state: RuntimeState,
@@ -743,6 +749,11 @@ class CoreBaseAgentKit:
                     if plan is not None and plan.agent.tools is not None
                     else None
                 )
+            # user:“插件可以自定义整个 Agent”+提示词和工具之外，
+            # 审批口径也跟随同一个生效的插件 Agent。
+            self._apply_plugin_agent_approval(
+                plan.agent.approval if plan is not None else None
+            )
         push(effective_instructions)
         record("instructions", "instructions", effective_instructions)
 

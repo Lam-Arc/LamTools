@@ -173,6 +173,7 @@ class ApprovalGate:
         manifest_tool_permissions: dict[str, PermissionTier] | None = None,
         manifest_hard_block_tools: set[str] | None = None,
         resource_roots: Callable[[], Iterable[Path]] | Iterable[Path] | None = None,
+        plugin_approval: str | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.tool_permissions = dict(tool_permissions)
@@ -191,6 +192,12 @@ class ApprovalGate:
         self.manifest_tool_permissions = dict(manifest_tool_permissions or {})
         self.manifest_hard_block_tools = set(manifest_hard_block_tools or set())
         self.resource_roots = resource_roots
+        # user:“插件可以自定义整个 Agent”+审批策略也由当前生效的插件 Agent
+        # 声明接管：ask 保持现状，auto 免去确认，block 拒绝需要确认的调用。
+        # 它只作用于“要问用户”的那一类调用，硬边界和敏感路径拦截不因此放开。
+        self.plugin_approval = (
+            plugin_approval if plugin_approval in {"ask", "auto", "block"} else None
+        )
 
     def allowed_roots(self) -> tuple[Path, ...]:
         """Workspace plus caller-provided resource roots (loaded skill folders).
@@ -238,6 +245,32 @@ class ApprovalGate:
                 )
             if decision.allowed and not decision.auto_approved:
                 return replace(decision, auto_approved=True)
+        return self._apply_plugin_approval(decision)
+
+    def _apply_plugin_approval(
+        self, decision: ToolApprovalDecision
+    ) -> ToolApprovalDecision:
+        """Apply the active plugin agent approval stance last."""
+        if decision.blocked or self.plugin_approval is None:
+            return decision
+        if self.plugin_approval == "auto" and decision.requires_approval:
+            return replace(
+                decision,
+                allowed=True,
+                requires_approval=False,
+                command_confirmation=False,
+                auto_approved=True,
+                reason="Auto-approved by plugin agent",
+            )
+        if self.plugin_approval == "block" and decision.requires_approval:
+            return replace(
+                decision,
+                allowed=False,
+                requires_approval=False,
+                command_confirmation=False,
+                blocked=True,
+                reason="Blocked by plugin agent approval policy",
+            )
         return decision
 
     def _check_decision(self, tool_name: str, params: dict[str, Any] | None = None) -> ToolApprovalDecision:

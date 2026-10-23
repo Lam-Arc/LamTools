@@ -337,7 +337,19 @@ def create_core_agent_operations(
         from lamtools_core.plugins.lifecycle import plugin_backend_available
 
         handles = getattr(plugin_operations, "plugin_runtimes", [])
-        return [plugin for plugin in registry.discover() if plugin_backend_available(plugin, handles)]
+        manifests = [
+            plugin
+            for plugin in registry.discover()
+            if plugin_backend_available(plugin, handles)
+        ]
+        # user:“五类是斜杠命令”+v2 插件声明的命令和旧插件进同一张命令表，
+        # 沿用 operation 执行通道，不另开一套。
+        v2_host = getattr(catalog, "plugin_system_host", None)
+        if v2_host is not None:
+            from lamtools_core.plugin_system.commands import composer_plugin_handles
+
+            manifests.extend(composer_plugin_handles(v2_host))
+        return manifests
 
     # The live input hooks and command.catalog must resolve skills from the
     # same roots.  Keep the factory on the operation catalog as a small seam
