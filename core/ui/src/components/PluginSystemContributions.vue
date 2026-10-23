@@ -58,6 +58,7 @@ const props = defineProps<{
 // Styles are page-scoped: inject once per URL, never remove on unmount so two
 // hosts on the same page cannot unstyle each other.
 const injectedStyles = new Set<string>()
+const injectedScripts = new Set<string>()
 
 const regions = ref<PluginRegionContribution[]>([])
 
@@ -71,11 +72,31 @@ function injectStyle(url: string): void {
   injectedStyles.add(url)
 }
 
+// user:“全局脚本”+声明了 ui.script 的插件在同一个页面里执行自己的脚本，
+// 每个地址只注入一次，重复挂载不会跑第二遍。
+function injectScript(url: string): void {
+  if (!url || injectedScripts.has(url)) return
+  if (document.querySelector(`script[data-plugin-system-script="${url}"]`)) {
+    injectedScripts.add(url)
+    return
+  }
+  const script = document.createElement('script')
+  script.type = 'module'
+  script.src = url
+  script.dataset.pluginSystemScript = url
+  document.head.appendChild(script)
+  injectedScripts.add(url)
+}
+
 async function fetchUi(): Promise<void> {
   try {
     const payload = await props.requestRpc('plugin.system.ui', {})
     const styles = Array.isArray(payload.styles) ? (payload.styles as PluginStyleEntry[]) : []
     for (const style of styles) injectStyle(String(style.url || ''))
+    const scripts = Array.isArray(payload.scripts)
+      ? (payload.scripts as PluginStyleEntry[])
+      : []
+    for (const script of scripts) injectScript(String(script.url || ''))
     const all = Array.isArray(payload.regions)
       ? (payload.regions as PluginRegionContribution[])
       : []

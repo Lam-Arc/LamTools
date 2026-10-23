@@ -8,7 +8,7 @@ function makeRpc() {
     if (method !== 'plugin.system.ui') return {}
     return {
       styles: [{ plugin: 'demo', url: '/api/core/plugin-system/demo/assets/style.css' }],
-      scripts: [],
+      scripts: [{ plugin: 'demo', url: '/api/core/plugin-system/demo/assets/panel.js' }],
       regions: [
         {
           plugin: 'demo',
@@ -48,6 +48,9 @@ afterEach(() => {
   document.head
     .querySelectorAll('link[data-plugin-system-style]')
     .forEach((node) => node.remove())
+  document.head
+    .querySelectorAll('script[data-plugin-system-script]')
+    .forEach((node) => node.remove())
 })
 
 describe('plugin system contributions', () => {
@@ -65,6 +68,10 @@ describe('plugin system contributions', () => {
     expect(link).not.toBeNull()
     expect(link?.getAttribute('href')).toBe(
       '/api/core/plugin-system/demo/assets/style.css',
+    )
+    const script = document.head.querySelector('script[data-plugin-system-script]')
+    expect(script?.getAttribute('src')).toBe(
+      '/api/core/plugin-system/demo/assets/panel.js',
     )
   })
 })
