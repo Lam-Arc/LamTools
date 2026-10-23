@@ -231,3 +231,22 @@ def test_a_broken_plugin_does_not_block_the_healthy_one(tmp_path: Path) -> None:
 
     assert [region.plugin for region in assembly.regions] == ["healthy"]
     assert assembly.errors[0]["plugin"] == "broken"
+
+
+def test_two_replace_regions_on_the_same_target_conflict(tmp_path: Path) -> None:
+    first = make_plugin(
+        tmp_path,
+        "first",
+        manifest={"ui": {"regions": [{"region": "main", "replace": True, "blocks": []}]}},
+    )
+    second = make_plugin(
+        tmp_path,
+        "second",
+        manifest={"ui": {"regions": [{"region": "main", "replace": True, "blocks": []}]}},
+    )
+
+    assembly = assemble_ui([load_manifest(first), load_manifest(second)])
+
+    assert [region.plugin for region in assembly.regions] == ["first"]
+    assert assembly.errors[0]["plugin"] == "second"
+    assert "already replaced" in assembly.errors[0]["error"]

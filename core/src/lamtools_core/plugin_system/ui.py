@@ -248,6 +248,7 @@ def read_ui(manifest: PluginManifest) -> PluginUISpec:
 def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
     """Flatten enabled plugins' UI declarations with explicit errors."""
     assembly = UIAssembly()
+    replaced: dict[str, str] = {}
     for manifest in manifests:
         if not manifest.enabled:
             continue
@@ -260,7 +261,19 @@ def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
         assembly.styles.extend(spec.styles)
         if spec.script is not None:
             assembly.scripts.append(spec.script)
-        assembly.regions.extend(spec.regions)
+        for region in spec.regions:
+            if region.replace:
+                owner = replaced.get(region.region)
+                if owner is not None:
+                    assembly.errors.append(
+                        {
+                            "plugin": manifest.name,
+                            "error": f"region '{region.region}' is already replaced by plugin '{owner}'",
+                        }
+                    )
+                    continue
+                replaced[region.region] = manifest.name
+            assembly.regions.append(region)
     assembly.regions.sort(key=lambda item: (item.order, item.plugin, item.region))
     return assembly
 
