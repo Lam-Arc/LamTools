@@ -51,6 +51,7 @@ class PluginToolSpec:
     skill: str = ""
     timeout: float | None = None
     plugin: str = ""
+    plugin_root: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class PluginSkillSpec:
     description: str
     location: Path
     plugin: str = ""
+    root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -197,9 +199,17 @@ def _read_tools(manifest: PluginManifest) -> list[PluginToolSpec]:
                     skill=skill,
                     timeout=timeout,
                     plugin=manifest.name,
+                    plugin_root=str(manifest.root),
                 )
             )
     return tools
+
+
+def _skill_root(location: Path, roots: list[Path]) -> Path:
+    for root in roots:
+        if location.is_relative_to(root):
+            return root
+    return location.parent
 
 
 def _read_skills(manifest: PluginManifest) -> list[PluginSkillSpec]:
@@ -219,6 +229,7 @@ def _read_skills(manifest: PluginManifest) -> list[PluginSkillSpec]:
                 description=skill.description,
                 location=skill.location,
                 plugin=manifest.name,
+                root=_skill_root(skill.location, roots),
             )
         )
     return skills

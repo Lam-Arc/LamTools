@@ -25,6 +25,7 @@ from .manifest import (
     PluginManifestError,
     load_manifest,
 )
+from .runtime import PluginSystemRuntime, RuntimeArtifacts
 from .state import PluginStateStore
 
 __all__ = [
@@ -41,7 +42,9 @@ __all__ = [
     "PluginManifestError",
     "PluginSkillSpec",
     "PluginStateStore",
+    "PluginSystemRuntime",
     "PluginToolSpec",
+    "RuntimeArtifacts",
     "assemble_capabilities",
     "load_manifest",
     "read_capabilities",
