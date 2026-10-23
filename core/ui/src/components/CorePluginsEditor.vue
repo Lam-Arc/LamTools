@@ -40,6 +40,8 @@
       <p v-if="installNotice" class="install-notice">{{ installNotice }}</p>
     </article>
 
+    <CorePluginSystemEditor :request-rpc="props.requestRpc" />
+
     <div class="subhead">
       <span class="muted">{{ loading ? t("加载中…") : t('共 {0} 个 · 已启用 {1}', { 0: plugins.length, 1: enabledCount }) }}</span>
       <button class="text-btn" type="button" @click="fetchPlugins()">{{ t("刷新") }}</button>
@@ -303,6 +305,7 @@
 
 <script setup lang="ts">
 import { t } from '../i18n/index'
+import CorePluginSystemEditor from './CorePluginSystemEditor.vue'
 
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Settings, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'

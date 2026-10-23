@@ -2496,6 +2496,22 @@ def create_core_agent_operations(
                 else None
             ),
         )
+    # The redesigned plugin system runs alongside the legacy catalog during the
+    # rewrite. Its ledger is separate so the preview page cannot flip the
+    # enablement of a plugin the legacy system is still assembling.
+    from lamtools_core.app.base_agent import default_core_agent_plugin_roots
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugin_system.operations import register_plugin_system_operations
+
+    plugin_system_host = PluginHost(
+        roots=(
+            [Path(item) for item in plugin_roots]
+            if plugin_roots
+            else default_core_agent_plugin_roots(paths.work_root)
+        ),
+        state_path=Path(paths.data_dir) / "plugin-system.jsonc",
+    )
+    register_plugin_system_operations(catalog, plugin_system_host)
     catalog.plugin_context = plugin_context
     catalog.plugin_runtimes = getattr(plugin_operations, "plugin_runtimes", [])
     catalog.plugin_registry = getattr(plugin_operations, "plugin_registry", None)
