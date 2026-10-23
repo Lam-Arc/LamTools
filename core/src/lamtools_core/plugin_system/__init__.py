@@ -26,6 +26,7 @@ from .capabilities import (
     assemble_capabilities,
     read_capabilities,
 )
+from .engine import PluginEngine, check_engine, host_engine_info, read_engine
 from .host import PluginHost
 from .manifest import (
     MANIFEST_FILENAME,
@@ -42,6 +43,7 @@ from .overrides import (
     override_paths,
     read_overrides,
 )
+from .settings import PluginConfigSpec, read_config
 from .state import PluginStateStore
 from .ui import (
     PluginAssetSpec,
@@ -64,6 +66,12 @@ __all__ = [
     "assemble_agents",
     "read_agent",
     "resolve_agent_plan",
+    "PluginConfigSpec",
+    "read_config",
+    "PluginEngine",
+    "check_engine",
+    "host_engine_info",
+    "read_engine",
     "CapabilityAssembly",
     "CapabilityError",
     "PluginCapabilities",

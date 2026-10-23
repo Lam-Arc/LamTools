@@ -216,3 +216,50 @@ async def test_agent_operation_returns_the_winning_plan(tmp_path: Path) -> None:
     assert plan["plugin"] == "focus"
     assert plan["prompt"] == "Focused."
     assert result.payload["errors"] == []
+
+
+async def test_install_operation_installs_a_local_plugin(tmp_path: Path) -> None:
+    root = tmp_path / "plugins"
+    staging = tmp_path / "staging" / "hello"
+    staging.mkdir(parents=True)
+    (staging / "plugin.json").write_text(
+        json.dumps({"name": "hello", "version": "1.0.0"}), encoding="utf-8"
+    )
+    host = PluginHost(roots=[root], state_path=tmp_path / "plugin-system.jsonc")
+    catalog = OperationCatalog()
+    register_plugin_system_operations(catalog, host)
+
+    result = await catalog.execute(
+        "plugin.system.install", {"source": "local", "path": str(staging)}
+    )
+
+    assert result.status == "ok"
+    assert result.payload["installed"] is True
+    listed = await catalog.execute("plugin.system.list", {})
+    assert [plugin["name"] for plugin in listed.payload["plugins"]] == ["hello"]
+
+
+async def test_install_operation_rejects_an_unmet_engine(tmp_path: Path) -> None:
+    root = tmp_path / "plugins"
+    staging = tmp_path / "staging" / "future"
+    staging.mkdir(parents=True)
+    (staging / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "future",
+                "version": "1.0.0",
+                "engine": {"python": ">=3.99"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    host = PluginHost(roots=[root], state_path=tmp_path / "plugin-system.jsonc")
+    catalog = OperationCatalog()
+    register_plugin_system_operations(catalog, host)
+
+    result = await catalog.execute(
+        "plugin.system.install", {"source": "local", "path": str(staging)}
+    )
+
+    assert result.status == "error"
+    assert "python" in result.payload["error"]

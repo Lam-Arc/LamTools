@@ -6,11 +6,16 @@ user:“一个只有名字和版本的文件夹，装上去就能用”+发现�
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
+import tempfile
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from .engine import check_engine, read_engine
 from .manifest import MANIFEST_FILENAME, PluginManifest, PluginManifestError, load_manifest
 from .state import PluginStateStore
 
@@ -96,6 +101,11 @@ class PluginHost:
         if not manifest_path.is_file():
             raise PluginManifestError(manifest_path, "plugin.json is missing")
         manifest = load_manifest(manifest_path)
+        problems = check_engine(read_engine(manifest))
+        if problems:
+            raise ValueError(
+                f"plugin '{manifest.name}' cannot run on this host: {'; '.join(problems)}"
+            )
         root = Path(target_root) if target_root is not None else (
             self.roots[0] if self.roots else None
         )
@@ -129,6 +139,99 @@ class PluginHost:
         else:
             shutil.rmtree(manifest.root)
         self.state.forget(name)
+
+
+    def update_from_directory(self, source: Path | str) -> Path:
+        """Replace code and resources while keeping the plugin's ``data/``."""
+        source_path = Path(source).resolve()
+        manifest_path = source_path / MANIFEST_FILENAME
+        if not manifest_path.is_file():
+            raise PluginManifestError(manifest_path, "plugin.json is missing")
+        incoming = load_manifest(manifest_path)
+        problems = check_engine(read_engine(incoming))
+        if problems:
+            raise ValueError(
+                f"plugin '{incoming.name}' cannot run on this host: {'; '.join(problems)}"
+            )
+        existing = self.get(incoming.name)
+        if existing is None:
+            raise ValueError(
+                f"plugin '{incoming.name}' is not installed; update cannot change the name"
+            )
+        target = existing.root
+        staging = target.parent / f".update-{incoming.name}-{os.getpid()}"
+        if staging.exists():
+            shutil.rmtree(staging)
+        shutil.copytree(source_path, staging)
+        data = target / "data"
+        if data.is_dir():
+            staged_data = staging / "data"
+            if staged_data.exists():
+                shutil.rmtree(staged_data)
+            shutil.move(str(data), str(staged_data))
+        backup = target.parent / f".backup-{incoming.name}-{os.getpid()}"
+        if backup.exists():
+            shutil.rmtree(backup)
+        os.replace(target, backup)
+        try:
+            os.replace(staging, target)
+        except BaseException:
+            os.replace(backup, target)
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+        return target.resolve()
+
+    def install_from_zip(
+        self,
+        archive: Path | str,
+        *,
+        target_root: Path | str | None = None,
+    ) -> Path:
+        """Extract one plugin root from a zip and install it."""
+        archive_path = Path(archive).resolve()
+        staging_root = Path(tempfile.mkdtemp(prefix="lamtools-plugin-")).resolve()
+        try:
+            with zipfile.ZipFile(archive_path) as bundle:
+                names = bundle.namelist()
+                for name in names:
+                    normalized = name.replace("\\", "/")
+                    if (
+                        normalized.startswith("/")
+                        or re.match(r"^[A-Za-z]:", normalized)
+                        or ".." in Path(normalized).parts
+                    ):
+                        raise ValueError(f"zip contains a path traversal entry: {name}")
+                manifests = [
+                    name for name in names if name.replace("\\", "/").endswith("plugin.json")
+                ]
+                if not manifests:
+                    raise ValueError("zip contains no plugin.json")
+                shallowest = min(manifests, key=lambda item: item.count("/"))
+                prefix = shallowest.replace("\\", "/")[: -len("plugin.json")]
+                for name in names:
+                    normalized = name.replace("\\", "/")
+                    if not normalized.startswith(prefix):
+                        continue
+                    relative = normalized[len(prefix):]
+                    if not relative or normalized.endswith("/"):
+                        continue
+                    destination = (staging_root / relative).resolve()
+                    if not destination.is_relative_to(staging_root):
+                        raise ValueError(f"zip contains a path traversal entry: {name}")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with bundle.open(name) as source, open(destination, "wb") as out:
+                        shutil.copyfileobj(source, out)
+            return self.install_from_directory(staging_root, target_root=target_root)
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
+
+    def logs_dir(self, name: str) -> Path:
+        manifest = self.get(name)
+        if manifest is None:
+            raise KeyError(f"plugin '{name}' is not installed")
+        path = (manifest.root / "data" / "logs").resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
 
 __all__ = ["PluginHost"]

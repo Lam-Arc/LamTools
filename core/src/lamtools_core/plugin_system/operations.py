@@ -199,6 +199,63 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
             },
         )
 
+    async def install_plugin(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        source = str(payload.get("source") or "local").strip().lower()
+        path = str(payload.get("path") or "").strip()
+        if not path:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": "path is required"}
+            )
+        try:
+            if source == "local":
+                installed = host.install_from_directory(path)
+            elif source == "zip":
+                installed = host.install_from_zip(path)
+            else:
+                return OperationResult(
+                    name=request.name,
+                    status="error",
+                    payload={"error": "source must be local or zip"},
+                )
+        except (OSError, ValueError) as exc:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": str(exc)}
+            )
+        return OperationResult(
+            name=request.name,
+            payload={
+                "installed": True,
+                "name": installed.name,
+                "root": str(installed),
+            },
+        )
+
+    async def update_plugin(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        source = str(payload.get("source") or "local").strip().lower()
+        path = str(payload.get("path") or "").strip()
+        if source != "local":
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "update currently supports local directories"},
+            )
+        if not path:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": "path is required"}
+            )
+        try:
+            updated = host.update_from_directory(path)
+        except (OSError, ValueError) as exc:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": str(exc)}
+            )
+        return OperationResult(
+            name=request.name,
+            payload={"updated": True, "name": updated.name, "root": str(updated)},
+        )
+
     async def set_enabled(request: OperationRequest, enabled: bool) -> OperationResult:
         name = str(request.payload.get("name") or "").strip()
         if not name:
@@ -242,6 +299,8 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
     catalog.register("plugin.system.list", list_plugins, owner=OWNER)
     catalog.register("plugin.system.ui", list_ui, owner=OWNER)
     catalog.register("plugin.system.agent", get_agent, owner=OWNER)
+    catalog.register("plugin.system.install", install_plugin, owner=OWNER)
+    catalog.register("plugin.system.update", update_plugin, owner=OWNER)
     catalog.register("plugin.system.enable", enable_plugin, owner=OWNER)
     catalog.register("plugin.system.disable", disable_plugin, owner=OWNER)
     catalog.register("plugin.system.uninstall", uninstall_plugin, owner=OWNER)
