@@ -35,7 +35,7 @@ server = ["uvicorn[standard]>=0.49.0", "fastapi>=0.137.2"]
 desktop = ["uvicorn[standard]>=0.49.0", "fastapi>=0.137.2"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/lamtools_core"]
+packages = ["src/lamtools_core", "src/lamtools_boot"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "config/command" = "lamtools_core/resources/config/command"

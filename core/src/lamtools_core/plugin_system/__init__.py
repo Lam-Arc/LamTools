@@ -27,6 +27,13 @@ from .manifest import (
     load_manifest,
 )
 from .runtime import PluginSystemRuntime, RuntimeArtifacts
+from .overrides import (
+    OverrideAssembly,
+    PluginOverrideSpec,
+    assemble_overrides,
+    override_paths,
+    read_overrides,
+)
 from .state import PluginStateStore
 from .ui import (
     PluginAssetSpec,
@@ -51,6 +58,11 @@ __all__ = [
     "PluginHost",
     "PluginManifest",
     "PluginManifestError",
+    "OverrideAssembly",
+    "PluginOverrideSpec",
+    "assemble_overrides",
+    "read_overrides",
+    "override_paths",
     "PluginAssetSpec",
     "PluginUIAction",
     "PluginUIBlock",

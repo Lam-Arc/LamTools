@@ -73,6 +73,12 @@ def _run() -> None:
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w")
 
+    # Module overrides must be installed before the first lamtools_core import.
+    # lamtools_boot is standard-library only for exactly this reason.
+    from lamtools_boot.overrides import apply_boot_overrides
+
+    apply_boot_overrides()
+
     port = int(os.environ.get("LAMCORE_PORT", "5172"))
     host = os.environ.get("LAMCORE_HOST", "127.0.0.1")
     from lamtools_core.app.api_access import CoreApiAccessPolicy

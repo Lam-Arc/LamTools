@@ -151,6 +151,10 @@ for _plugin_dir in sorted(_BUNDLED_PLUGINS_ROOT.iterdir()):
 #  the explicit list below is what the spec actually pins)
 # ---------------------------------------------------------------------------
 _hiddenimports = [
+    # === bootstrap (imported before lamtools_core) ===
+    "lamtools_boot",
+    "lamtools_boot.import_hook",
+    "lamtools_boot.overrides",
     # === 3rd-party runtime dependencies ===
     "httpx",
     "httpcore",
