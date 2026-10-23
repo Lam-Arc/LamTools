@@ -36,17 +36,23 @@ async def test_list_returns_minimal_plugin(tmp_path: Path) -> None:
     result = await catalog.execute("plugin.system.list", {})
 
     assert result.status == "ok"
-    assert result.payload["plugins"] == [
-        {
-            "name": "hello",
-            "version": "0.1.0",
-            "description": "",
-            "enabled": True,
-            "scope": "global",
-            "root": str((tmp_path / "plugins" / "hello").resolve()),
-        }
-    ]
+    plugin = result.payload["plugins"][0]
+    assert plugin["name"] == "hello"
+    assert plugin["version"] == "0.1.0"
+    assert plugin["enabled"] is True
+    assert plugin["scope"] == "global"
+    assert plugin["root"] == str((tmp_path / "plugins" / "hello").resolve())
+    assert plugin["capabilities"] == {
+        "tools": [],
+        "skills": [],
+        "hooks": [],
+        "mcp": [],
+        "commands": [],
+        "context": [],
+    }
+    assert "capability_error" not in plugin
     assert result.payload["errors"] == []
+    assert result.payload["capability_errors"] == []
 
 
 async def test_disable_and_enable_round_trip(tmp_path: Path) -> None:

@@ -32,6 +32,9 @@
         </div>
         <p v-if="plugin.description" class="preview-desc">{{ plugin.description }}</p>
         <code class="preview-root">{{ plugin.root }}</code>
+        <span class="preview-capabilities" :class="{ 'is-error': plugin.capability_error }">
+          {{ capabilitySummary(plugin) }}
+        </span>
         <div class="preview-actions">
           <button
             class="small-btn"
@@ -65,6 +68,15 @@ import { onMounted, ref } from 'vue'
 
 import { t } from '../i18n/index'
 
+interface PluginSystemCapabilities {
+  tools: string[]
+  skills: string[]
+  hooks: string[]
+  mcp: string[]
+  commands: string[]
+  context: string[]
+}
+
 interface PluginSystemEntry {
   name: string
   version: string
@@ -72,6 +84,8 @@ interface PluginSystemEntry {
   enabled: boolean
   scope: string
   root: string
+  capabilities?: PluginSystemCapabilities
+  capability_error?: string
 }
 
 interface PluginSystemError {
@@ -93,6 +107,27 @@ const loading = ref(true)
 const busy = ref('')
 const error = ref('')
 const notice = ref('')
+
+const CAPABILITY_LABELS: Array<[keyof PluginSystemCapabilities, string]> = [
+  ['tools', '工具'],
+  ['skills', '技能'],
+  ['hooks', '钩子'],
+  ['mcp', 'MCP'],
+  ['commands', '命令'],
+  ['context', '上下文'],
+]
+
+function capabilitySummary(plugin: PluginSystemEntry): string {
+  if (plugin.capability_error) {
+    return t("声明错误：{0}", { 0: plugin.capability_error })
+  }
+  const capabilities = plugin.capabilities
+  if (!capabilities) return t("没有声明能力")
+  const parts = CAPABILITY_LABELS
+    .filter(([key]) => (capabilities[key] || []).length > 0)
+    .map(([key, label]) => `${label} ${capabilities[key].length}`)
+  return parts.length ? parts.join(" · ") : t("没有声明能力")
+}
 
 async function fetchPlugins(): Promise<void> {
   loading.value = true
@@ -220,6 +255,16 @@ onMounted(fetchPlugins)
   font-size: 11px;
   opacity: 0.6;
   word-break: break-all;
+}
+
+.preview-capabilities {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.preview-capabilities.is-error {
+  color: var(--red);
+  opacity: 1;
 }
 
 .preview-actions {

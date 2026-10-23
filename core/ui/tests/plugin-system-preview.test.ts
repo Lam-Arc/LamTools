@@ -42,4 +42,37 @@ describe('plugin system preview', () => {
     expect(rpc).toHaveBeenCalledWith('plugin.system.disable', { name: 'hello' })
     expect(rpc.mock.calls.filter(([method]) => method === 'plugin.system.list')).toHaveLength(2)
   })
+
+  it('summarizes declared capabilities and declaration errors', async () => {
+    const rpc = vi.fn(async (method: string) => {
+      if (method !== 'plugin.system.list') return {}
+      return {
+        plugins: [
+          {
+            ...PLUGIN,
+            capabilities: {
+              tools: ['demo_echo'],
+              skills: ['demo-skill'],
+              hooks: [],
+              mcp: [],
+              commands: [],
+              context: [],
+            },
+          },
+          {
+            ...PLUGIN,
+            name: 'broken',
+            capability_error: 'tool is missing handler',
+          },
+        ],
+        errors: [],
+      }
+    })
+    const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: rpc } })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('工具 1 · 技能 1')
+    expect(wrapper.text()).toContain('声明错误')
+  })
 })
