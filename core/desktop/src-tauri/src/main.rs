@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuEvent, MenuItem},
     tray::TrayIconBuilder,
-    Emitter, Manager, WebviewWindow, WebviewWindowBuilder,
+    Emitter, Manager, Url, WebviewWindow, WebviewWindowBuilder, WebviewUrl,
 };
 
 mod remote;
@@ -1007,6 +1007,33 @@ fn hide_current_window(window: tauri::WebviewWindow, app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn open_plugin_window(
+    app: tauri::AppHandle,
+    label: String,
+    url: String,
+    title: String,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let label = label.trim();
+    if label.is_empty() || label.len() > 120 {
+        return Err("invalid plugin window label".to_string());
+    }
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    let parsed = Url::parse(&url).map_err(|error| error.to_string())?;
+    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(parsed))
+        .title(title)
+        .inner_size(width.max(160.0), height.max(160.0))
+        .build()
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn show_current_window(window: tauri::WebviewWindow, app: tauri::AppHandle) {
     let _ = window.show();
     sync_pet_tray_item(&app);
@@ -1742,6 +1769,7 @@ fn main() {
             hide_current_window,
             show_current_window,
             show_desktop_plugin_window,
+            open_plugin_window,
             reload_desktop_plugin_window,
             configure_desktop_plugin_window,
             show_main_window,

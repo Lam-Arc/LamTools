@@ -45,6 +45,15 @@
             {{ plugin.enabled ? t("禁用") : t("启用") }}
           </button>
           <button
+            v-for="window in windowsFor(plugin.name)"
+            :key="window.id"
+            class="small-btn"
+            type="button"
+            @click="openWindow(window)"
+          >
+            {{ t("打开窗口 {0}", { 0: window.title }) }}
+          </button>
+          <button
             class="text-btn danger"
             type="button"
             :disabled="busy === plugin.name"
@@ -68,6 +77,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 
+import { openPluginWindow, type PluginWindowTarget } from '../helpers/pluginWindow'
 import { t } from '../i18n/index'
 import PluginSystemContributions from './PluginSystemContributions.vue'
 
@@ -97,6 +107,15 @@ interface PluginSystemError {
   error: string
 }
 
+interface PluginSystemWindow {
+  plugin: string
+  id: string
+  title: string
+  url: string
+  width: number
+  height: number
+}
+
 type PluginSystemRpc = (
   method: string,
   params?: Record<string, unknown>,
@@ -105,6 +124,7 @@ type PluginSystemRpc = (
 const props = defineProps<{ requestRpc: PluginSystemRpc }>()
 
 const plugins = ref<PluginSystemEntry[]>([])
+const windows = ref<PluginSystemWindow[]>([])
 const loadErrors = ref<PluginSystemError[]>([])
 const loading = ref(true)
 const busy = ref('')
@@ -132,6 +152,31 @@ function capabilitySummary(plugin: PluginSystemEntry): string {
   return parts.length ? parts.join(" · ") : t("没有声明能力")
 }
 
+function windowsFor(pluginName: string): PluginSystemWindow[] {
+  return windows.value.filter((window) => window.plugin === pluginName)
+}
+
+async function openWindow(target: PluginSystemWindow): Promise<void> {
+  notice.value = ''
+  try {
+    const opened = await openPluginWindow(target as PluginWindowTarget)
+    if (!opened) notice.value = t("当前环境没有桌面窗口，插件窗口只能在桌面端打开。")
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
+async function fetchWindows(): Promise<void> {
+  try {
+    const payload = await props.requestRpc('plugin.system.ui', {})
+    windows.value = Array.isArray(payload.windows)
+      ? (payload.windows as PluginSystemWindow[])
+      : []
+  } catch {
+    windows.value = []
+  }
+}
+
 async function fetchPlugins(): Promise<void> {
   loading.value = true
   error.value = ''
@@ -143,6 +188,7 @@ async function fetchPlugins(): Promise<void> {
     loadErrors.value = Array.isArray(result.errors)
       ? (result.errors as PluginSystemError[])
       : []
+    await fetchWindows()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
