@@ -43,6 +43,18 @@ describe('plugin system preview', () => {
     expect(rpc.mock.calls.filter(([method]) => method === 'plugin.system.list')).toHaveLength(2)
   })
 
+  it('opens the config panel from the plugin row', async () => {
+    const rpc = makeRpc()
+    const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: rpc } })
+    await flushPromises()
+
+    await wrapper.find('button[data-config-for="hello"]').trigger('click')
+    await flushPromises()
+
+    expect(rpc).toHaveBeenCalledWith('plugin.system.config.get', { name: 'hello' })
+    expect(wrapper.text()).toContain('这个插件没有可配置项')
+  })
+
   it('summarizes declared capabilities and declaration errors', async () => {
     const rpc = vi.fn(async (method: string) => {
       if (method !== 'plugin.system.list') return {}

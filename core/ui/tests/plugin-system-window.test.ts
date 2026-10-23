@@ -68,7 +68,7 @@ describe('plugin system windows', () => {
     await flushPromises()
 
     const labels = wrapper.findAll('button.small-btn').map((item) => item.text())
-    expect(labels).toEqual(['禁用'])
+    expect(labels).toEqual(['禁用', '配置'])
   })
 
   it('keeps working without a desktop host and reports the limitation', async () => {

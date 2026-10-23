@@ -287,9 +287,15 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
             name=request.name,
             payload={
                 "name": name,
+                "version": manifest.version,
+                "description": manifest.description,
                 "config": read_config_values(manifest),
                 "schema": read_schema(manifest, spec),
                 "has_schema": spec.schema is not None,
+                # user:“每一个插件都应该有配置面板”+自定义面板按插件自己的脚本
+                # 挂载，没有脚本时前端用默认表单；两种情况身份信息都由宿主补。
+                "panel_url": _asset_url(name, manifest.root, spec.panel),
+                "has_panel": spec.panel is not None,
             },
         )
 

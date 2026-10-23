@@ -132,6 +132,42 @@ async def test_config_operation_rejects_invalid_values(tmp_path: Path) -> None:
     assert "string" in result.payload["error"]
 
 
+async def test_config_get_reports_the_panel_and_identity(tmp_path: Path) -> None:
+    root = tmp_path / "plugins"
+    make_plugin(
+        root,
+        "demo",
+        manifest={
+            "description": "demo plugin",
+            "config": {"schema": "./config/schema.jsonc", "panel": "./config/panel.js"},
+        },
+        files={
+            "config/schema.jsonc": SCHEMA,
+            "config/panel.js": "window.LamToolsPluginPanels = window.LamToolsPluginPanels || {};",
+        },
+    )
+    catalog, _host = make_catalog(tmp_path, root)
+
+    result = await catalog.execute("plugin.system.config.get", {"name": "demo"})
+
+    assert result.payload["version"] == "1.0.0"
+    assert result.payload["description"] == "demo plugin"
+    assert result.payload["has_panel"] is True
+    assert result.payload["panel_url"] == "/api/core/plugin-system/demo/assets/config/panel.js"
+
+
+async def test_plugin_without_panel_falls_back_to_the_default_form(tmp_path: Path) -> None:
+    root = tmp_path / "plugins"
+    make_plugin(root, "plain")
+    catalog, _host = make_catalog(tmp_path, root)
+
+    result = await catalog.execute("plugin.system.config.get", {"name": "plain"})
+
+    assert result.payload["has_panel"] is False
+    assert result.payload["panel_url"] == ""
+    assert result.payload["has_schema"] is False
+
+
 async def test_plugin_without_schema_accepts_any_object(tmp_path: Path) -> None:
     root = tmp_path / "plugins"
     make_plugin(root, "plain")

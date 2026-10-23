@@ -54,6 +54,14 @@
             {{ t("打开窗口 {0}", { 0: window.title }) }}
           </button>
           <button
+            class="small-btn"
+            type="button"
+            :data-config-for="plugin.name"
+            @click="toggleConfig(plugin)"
+          >
+            {{ configuring === plugin.name ? t("收起配置") : t("配置") }}
+          </button>
+          <button
             class="text-btn danger"
             type="button"
             :disabled="busy === plugin.name"
@@ -62,6 +70,13 @@
             {{ t("卸载") }}
           </button>
         </div>
+        <PluginConfigPanel
+          v-if="configuring === plugin.name"
+          :plugin-name="plugin.name"
+          :version="plugin.version"
+          :description="plugin.description"
+          :request-rpc="props.requestRpc"
+        />
       </div>
     </div>
 
@@ -79,6 +94,7 @@ import { onMounted, ref } from 'vue'
 
 import { openPluginWindow, type PluginWindowTarget } from '../helpers/pluginWindow'
 import { t } from '../i18n/index'
+import PluginConfigPanel from './PluginConfigPanel.vue'
 import PluginSystemContributions from './PluginSystemContributions.vue'
 
 interface PluginSystemCapabilities {
@@ -125,6 +141,7 @@ const props = defineProps<{ requestRpc: PluginSystemRpc }>()
 
 const plugins = ref<PluginSystemEntry[]>([])
 const windows = ref<PluginSystemWindow[]>([])
+const configuring = ref('')
 const loadErrors = ref<PluginSystemError[]>([])
 const loading = ref(true)
 const busy = ref('')
@@ -154,6 +171,10 @@ function capabilitySummary(plugin: PluginSystemEntry): string {
 
 function windowsFor(pluginName: string): PluginSystemWindow[] {
   return windows.value.filter((window) => window.plugin === pluginName)
+}
+
+function toggleConfig(plugin: PluginSystemEntry): void {
+  configuring.value = configuring.value === plugin.name ? '' : plugin.name
 }
 
 async function openWindow(target: PluginSystemWindow): Promise<void> {
